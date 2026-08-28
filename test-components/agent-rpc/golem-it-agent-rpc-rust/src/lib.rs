@@ -1,3 +1,5 @@
+use bytes::Bytes;
+use golem_rust::agentic::{AgentStream, spawn_local};
 use golem_rust::bindings::golem::agent::host::{Datetime, RpcError, WasmRpc};
 use golem_rust::{
     FromSchema, IntoSchema, PromiseId, SchemaValue, Uuid, agent_definition, agent_implementation,
@@ -226,6 +228,446 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
 
     fn get_global_value(&self) -> u64 {
         self.global
+    }
+}
+
+fn agent_stream<T: IntoSchema + 'static>(values: Vec<T>) -> AgentStream<T> {
+    let (mut writer, stream) = AgentStream::new();
+    spawn_local(async move {
+        let _ = writer.write_all(values).await;
+    });
+    stream
+}
+
+fn agent_error_stream() -> AgentStream<u32> {
+    let (mut writer, output) = golem_rust::schema::wit::new_schema_value_stream();
+    spawn_local(async move {
+        let first = encode_schema_value(&SchemaValue::U32(1))
+            .expect("failed to encode value before producer error");
+        if writer.write_one(first).await.is_some() {
+            return;
+        }
+        let _ = writer
+            .write_one(golem_rust::schema::wit::wire::SchemaValueTree {
+                value_nodes: Vec::new(),
+                root: 0,
+            })
+            .await;
+    });
+    AgentStream::from_raw(output)
+}
+
+#[derive(IntoSchema, FromSchema)]
+pub struct NestedStreamInput {
+    pub labels: AgentStream<String>,
+    pub values: Option<AgentStream<u32>>,
+}
+
+#[derive(IntoSchema, FromSchema)]
+pub struct NestedStreamItem {
+    pub label: String,
+    pub values: AgentStream<u32>,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
+pub struct StreamingRpcReport {
+    pub input_only: Vec<u32>,
+    pub output_only: Vec<u32>,
+    pub simultaneous: Vec<u32>,
+    pub nested_labels: Vec<String>,
+    pub nested_values: Vec<u32>,
+    pub nested_item_labels: Vec<String>,
+    pub nested_item_values: Vec<Vec<u32>>,
+    pub first_sibling: Vec<String>,
+    pub second_sibling: Vec<u32>,
+    pub after_consumer_drop: u64,
+}
+
+#[agent_definition]
+pub trait StreamingRpcTarget {
+    fn new(name: String) -> Self;
+
+    async fn consume(&self, input: AgentStream<u32>) -> Vec<u32>;
+    async fn consume_strings(&self, input: AgentStream<String>) -> Vec<String>;
+    async fn drop_input(&self, input: AgentStream<u32>) -> u64;
+    async fn hold_input(&self, input: AgentStream<u32>) -> u64;
+    fn produce(&self, values: Vec<u32>) -> AgentStream<u32>;
+    fn transform(&self, input: AgentStream<u32>) -> AgentStream<u32>;
+    async fn consume_bytes(&self, input: AgentStream<u8>) -> Vec<u8>;
+    fn produce_bytes(&self, values: Vec<u8>) -> AgentStream<u8>;
+    fn produce_byte_then_wait(&self) -> AgentStream<u8>;
+    fn produce_many_bytes(&self, count: u32) -> AgentStream<u8>;
+    fn transform_bytes(&self, input: AgentStream<u8>) -> AgentStream<u8>;
+    fn transform_binary(&self, input: AgentStream<Bytes>) -> AgentStream<Bytes>;
+    async fn consume_binary_chunks(&self, input: AgentStream<Bytes>) -> Vec<u64>;
+    async fn consume_nested(&self, input: NestedStreamInput) -> (Vec<String>, Vec<u32>);
+    fn produce_scalar_and_stream(&self) -> (String, AgentStream<u32>);
+    fn produce_nested_items(&self) -> AgentStream<NestedStreamItem>;
+    fn produce_nested_siblings(
+        &self,
+    ) -> (AgentStream<NestedStreamItem>, AgentStream<NestedStreamItem>);
+    fn produce_siblings(&self) -> (AgentStream<String>, AgentStream<u32>);
+    fn produce_sibling_error(&self) -> (AgentStream<u32>, AgentStream<u32>);
+    fn produce_error(&self) -> AgentStream<u32>;
+    fn ping(&self) -> u64;
+    fn increment_scalar(&mut self) -> u64;
+    fn noop(&self);
+}
+
+struct StreamingRpcTargetImpl {
+    _name: String,
+    scalar: u64,
+}
+
+#[agent_implementation]
+impl StreamingRpcTarget for StreamingRpcTargetImpl {
+    fn new(name: String) -> Self {
+        Self {
+            _name: name,
+            scalar: 0,
+        }
+    }
+
+    async fn consume(&self, input: AgentStream<u32>) -> Vec<u32> {
+        input
+            .collect()
+            .await
+            .expect("failed to consume input stream")
+    }
+
+    async fn consume_strings(&self, input: AgentStream<String>) -> Vec<String> {
+        input
+            .collect()
+            .await
+            .expect("failed to consume string input stream")
+    }
+
+    async fn drop_input(&self, input: AgentStream<u32>) -> u64 {
+        drop(input);
+        42
+    }
+
+    async fn hold_input(&self, input: AgentStream<u32>) -> u64 {
+        let _input = input;
+        std::future::pending().await
+    }
+
+    fn produce(&self, values: Vec<u32>) -> AgentStream<u32> {
+        agent_stream(values)
+    }
+
+    fn transform(&self, mut input: AgentStream<u32>) -> AgentStream<u32> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            while let Some(value) = input
+                .next()
+                .await
+                .expect("failed to consume transform input")
+            {
+                writer
+                    .write_one(value * 10)
+                    .await
+                    .expect("failed to write transformed value");
+            }
+        });
+        output
+    }
+
+    async fn consume_bytes(&self, input: AgentStream<u8>) -> Vec<u8> {
+        input
+            .collect()
+            .await
+            .expect("failed to consume byte input stream")
+    }
+
+    fn produce_bytes(&self, values: Vec<u8>) -> AgentStream<u8> {
+        agent_stream(values)
+    }
+
+    fn produce_byte_then_wait(&self) -> AgentStream<u8> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            writer
+                .write_one(1)
+                .await
+                .expect("failed to write byte before waiting");
+            std::future::pending::<()>().await;
+        });
+        output
+    }
+
+    fn produce_many_bytes(&self, count: u32) -> AgentStream<u8> {
+        agent_stream((0..count).map(|value| value as u8).collect())
+    }
+
+    fn transform_bytes(&self, mut input: AgentStream<u8>) -> AgentStream<u8> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            while let Some(value) = input
+                .next()
+                .await
+                .expect("failed to consume byte transform input")
+            {
+                writer
+                    .write_one(value)
+                    .await
+                    .expect("failed to write transformed byte");
+            }
+        });
+        output
+    }
+
+    fn transform_binary(&self, mut input: AgentStream<Bytes>) -> AgentStream<Bytes> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            while let Some(value) = input
+                .next()
+                .await
+                .expect("failed to consume binary transform input")
+            {
+                writer
+                    .write_one(value)
+                    .await
+                    .expect("failed to write transformed binary value");
+            }
+        });
+        output
+    }
+
+    async fn consume_binary_chunks(&self, input: AgentStream<Bytes>) -> Vec<u64> {
+        input
+            .collect()
+            .await
+            .expect("failed to consume binary input")
+            .into_iter()
+            .map(|chunk| chunk.len() as u64)
+            .collect()
+    }
+
+    async fn consume_nested(&self, input: NestedStreamInput) -> (Vec<String>, Vec<u32>) {
+        let labels = input
+            .labels
+            .collect()
+            .await
+            .expect("failed to consume nested labels");
+        let values = match input.values {
+            Some(values) => values
+                .collect()
+                .await
+                .expect("failed to consume nested values"),
+            None => Vec::new(),
+        };
+        (labels, values)
+    }
+
+    fn produce_scalar_and_stream(&self) -> (String, AgentStream<u32>) {
+        ("metadata".to_string(), agent_stream(vec![11, 12]))
+    }
+
+    fn produce_nested_items(&self) -> AgentStream<NestedStreamItem> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            writer
+                .write_one(NestedStreamItem {
+                    label: "first".to_string(),
+                    values: agent_stream(vec![1, 2]),
+                })
+                .await
+                .expect("failed to write first nested stream item");
+            writer
+                .write_one(NestedStreamItem {
+                    label: "second".to_string(),
+                    values: agent_stream(vec![3, 4, 5]),
+                })
+                .await
+                .expect("failed to write second nested stream item");
+        });
+        output
+    }
+
+    fn produce_nested_siblings(
+        &self,
+    ) -> (AgentStream<NestedStreamItem>, AgentStream<NestedStreamItem>) {
+        let (mut left_writer, left) = AgentStream::new();
+        let (mut right_writer, right) = AgentStream::new();
+        spawn_local(async move {
+            left_writer
+                .write_one(NestedStreamItem {
+                    label: "left".to_string(),
+                    values: agent_stream(vec![1, 2]),
+                })
+                .await
+                .expect("failed to write left nested sibling");
+        });
+        spawn_local(async move {
+            right_writer
+                .write_one(NestedStreamItem {
+                    label: "right".to_string(),
+                    values: agent_stream(vec![10, 20, 30]),
+                })
+                .await
+                .expect("failed to write right nested sibling");
+        });
+        (left, right)
+    }
+
+    fn produce_siblings(&self) -> (AgentStream<String>, AgentStream<u32>) {
+        (
+            agent_stream(vec!["a".to_string(), "b".to_string()]),
+            agent_stream((0..64).collect()),
+        )
+    }
+
+    fn produce_sibling_error(&self) -> (AgentStream<u32>, AgentStream<u32>) {
+        (agent_error_stream(), agent_stream((0..64).collect()))
+    }
+
+    fn produce_error(&self) -> AgentStream<u32> {
+        agent_error_stream()
+    }
+
+    fn ping(&self) -> u64 {
+        42
+    }
+
+    fn increment_scalar(&mut self) -> u64 {
+        self.scalar += 1;
+        self.scalar
+    }
+
+    fn noop(&self) {}
+}
+
+#[agent_definition]
+pub trait StreamingRpcCaller {
+    fn new(name: String) -> Self;
+
+    async fn run(&self) -> StreamingRpcReport;
+    fn create_input_gate(&self) -> PromiseId;
+    async fn recover_input_after_caller_crash(&self, gate: PromiseId) -> Vec<u32>;
+    async fn call_producer_error(&self) -> Vec<u32>;
+    async fn call_stream_free(&self) -> u64;
+}
+
+struct StreamingRpcCallerImpl {
+    name: String,
+}
+
+#[agent_implementation]
+impl StreamingRpcCaller for StreamingRpcCallerImpl {
+    fn new(name: String) -> Self {
+        Self { name }
+    }
+
+    async fn run(&self) -> StreamingRpcReport {
+        let mut target = StreamingRpcTargetClient::get(self.name.clone());
+
+        let input_only = target.consume(agent_stream(vec![1, 2, 3])).await;
+        let output_only = target
+            .produce(vec![4, 5, 6])
+            .await
+            .collect()
+            .await
+            .expect("failed to consume output-only stream");
+        let simultaneous = target
+            .transform(agent_stream(vec![7, 8, 9]))
+            .await
+            .collect()
+            .await
+            .expect("failed to consume simultaneous input/output stream");
+
+        let (nested_labels, nested_values) = target
+            .consume_nested(NestedStreamInput {
+                labels: agent_stream(vec!["left".to_string(), "right".to_string()]),
+                values: Some(agent_stream(vec![10, 11])),
+            })
+            .await;
+
+        let mut nested_items = target.produce_nested_items().await;
+        let mut nested_item_labels = Vec::new();
+        let mut nested_item_values = Vec::new();
+        while let Some(item) = nested_items
+            .next()
+            .await
+            .expect("failed to consume outer nested-item stream")
+        {
+            nested_item_labels.push(item.label);
+            nested_item_values.push(
+                item.values
+                    .collect()
+                    .await
+                    .expect("failed to consume stream inside streamed item"),
+            );
+        }
+
+        let (first, second) = target.produce_siblings().await;
+        let first_sibling = first
+            .collect()
+            .await
+            .expect("failed to consume first sibling stream");
+        let second_sibling = second
+            .collect()
+            .await
+            .expect("failed to consume second sibling stream");
+
+        let mut dropped = target.produce(vec![20, 21, 22]).await;
+        assert_eq!(dropped.next().await.unwrap(), Some(20));
+        drop(dropped);
+        let after_consumer_drop = target.ping().await;
+
+        StreamingRpcReport {
+            input_only,
+            output_only,
+            simultaneous,
+            nested_labels,
+            nested_values,
+            nested_item_labels,
+            nested_item_values,
+            first_sibling,
+            second_sibling,
+            after_consumer_drop,
+        }
+    }
+
+    fn create_input_gate(&self) -> PromiseId {
+        golem_rust::create_promise()
+    }
+
+    async fn recover_input_after_caller_crash(&self, gate: PromiseId) -> Vec<u32> {
+        let target = StreamingRpcTargetClient::get(self.name.clone());
+        let (mut writer, input) = AgentStream::new();
+        spawn_local(async move {
+            writer
+                .write_one(1)
+                .await
+                .expect("failed to write input before caller recovery gate");
+            golem_rust::await_promise(&gate).await;
+            writer
+                .write_all(vec![2, 3])
+                .await
+                .expect("failed to write input after caller recovery gate");
+        });
+        target
+            .transform(input)
+            .await
+            .collect()
+            .await
+            .expect("failed to collect transformed input after caller recovery")
+    }
+
+    async fn call_producer_error(&self) -> Vec<u32> {
+        let mut target = StreamingRpcTargetClient::get(self.name.clone());
+        target
+            .produce_error()
+            .await
+            .collect()
+            .await
+            .expect("producer stream must fail")
+    }
+
+    async fn call_stream_free(&self) -> u64 {
+        let mut target = StreamingRpcTargetClient::get(self.name.clone());
+        target.increment_scalar().await
     }
 }
 

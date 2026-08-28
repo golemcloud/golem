@@ -315,6 +315,12 @@ interface oplog {
         payload: typed-schema-value,
     }
 
+    /// A public durable-stream producer record rendered as a typed schema value.
+    record durable-stream-record-parameters {
+        timestamp: datetime,
+        %record: typed-schema-value,
+    }
+
     record end-atomic-region-parameters {
         timestamp: datetime,
         begin-index: oplog-index
@@ -643,6 +649,12 @@ interface oplog {
         payload: oplog-payload,
     }
 
+    /// A raw durable-stream producer record, stored inline or in external payload storage.
+    record raw-durable-stream-record-parameters {
+        timestamp: datetime,
+        %record: oplog-payload,
+    }
+
     record raw-agent-invocation-started-parameters {
         timestamp: datetime,
         idempotency-key: string,
@@ -855,6 +867,16 @@ interface oplog {
         /// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
         /// attached to the durable host call identified by its start entry's index
         host-stream-frame(raw-host-stream-frame-parameters),
+        /// Registers a durable stream before exposing its handle
+        stream-registered(raw-durable-stream-record-parameters),
+        /// Records committed durable stream values or a packed-u8 batch
+        stream-items(raw-durable-stream-record-parameters),
+        /// Records a durable stream end terminal
+        stream-end(raw-durable-stream-record-parameters),
+        /// Records a durable stream cancellation terminal
+        stream-cancel(raw-durable-stream-record-parameters),
+        /// Records durable Stream Session state and consumer-journal facts
+        stream-session(raw-durable-stream-record-parameters),
         /// The successful completion of the durable host call started by the matching `start`
         /// was persisted, but its response was never delivered to the agent (the agent dropped
         /// the completion future after the `end` was recorded)
@@ -967,6 +989,16 @@ interface oplog {
         /// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
         /// attached to the durable host call identified by its start entry's index
         host-stream-frame(host-stream-frame-parameters),
+        /// Registers a durable stream before exposing its handle
+        stream-registered(durable-stream-record-parameters),
+        /// Records committed durable stream values or a packed-u8 batch
+        stream-items(durable-stream-record-parameters),
+        /// Records a durable stream end terminal
+        stream-end(durable-stream-record-parameters),
+        /// Records a durable stream cancellation terminal
+        stream-cancel(durable-stream-record-parameters),
+        /// Records durable Stream Session state and consumer-journal facts
+        stream-session(durable-stream-record-parameters),
         /// The successful completion of the durable host call started by the matching `start`
         /// was persisted, but its response was never delivered to the agent (the agent dropped
         /// the completion future after the `end` was recorded)

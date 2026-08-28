@@ -499,6 +499,24 @@ object SchemaModelSpec extends ZIOSpecDefault {
           assert(res)(isFailure(isSubtype[SchemaDecodeError](anything))) && assertTrue(!h.isPresent)
         }
       ),
+      suite("schema value stream affine semantics")(
+        test("decoding rejects distinct wrappers for the same owned stream resource") {
+          val raw    = new Object
+          val first  = GuestSchemaValueStreamHandle.wrapped(raw, () => throw new AssertionError("must not unwrap"))
+          val second = GuestSchemaValueStreamHandle.wrapped(raw, () => throw new AssertionError("must not unwrap"))
+          val bad    = WitSchemaValueTree(
+            Vector(
+              WitSchemaValueNode.TupleValue(Vector(1, 2)),
+              WitSchemaValueNode.StreamValue(first),
+              WitSchemaValueNode.StreamValue(second)
+            ),
+            0
+          )
+          val res = Try(SchemaWire.schemaValueFromWit(bad))
+          assert(res)(isFailure(isSubtype[SchemaDecodeError](anything))) &&
+          assertTrue(!first.isPresent, !second.isPresent)
+        }
+      ),
       suite("permission-card handle affine semantics")(
         test("a nested permission-card handle round-trips preserving handle identity") {
           import SchemaValue._

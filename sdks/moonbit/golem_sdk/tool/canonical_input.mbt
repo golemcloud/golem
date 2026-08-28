@@ -2,6 +2,7 @@
 pub(all) struct CanonicalInputField {
   name : String
   aliases : Array[String]
+  short : Char?
   type_ : @model.SchemaGraph
 } derive(Eq)
 
@@ -9,6 +10,7 @@ pub(all) struct CanonicalInputField {
 pub(all) struct CanonicalInputValue {
   name : String
   aliases : Array[String]
+  short : Char?
   type_ : @model.SchemaGraph
   value : @model.SchemaValue
 } derive(Eq)
@@ -18,6 +20,16 @@ pub(all) struct CanonicalInputModel {
   fields : Array[CanonicalInputField]
   record_graph : @model.SchemaGraph
 } derive(Eq)
+
+///|
+fn release_canonical_input_values(
+  fields : Array[CanonicalInputValue],
+  drops : @model.SchemaValueResourceDrops,
+) -> Unit {
+  for field in fields {
+    field.value.release_resources(drops)
+  }
+}
 
 ///|
 pub fn ToolDef::command_index_by_path(
@@ -176,6 +188,7 @@ pub fn ToolDef::canonical_input_fields(
       fields.push({
         name: positional.name,
         aliases: [],
+        short: None,
         type_: positional.type_,
       })
     }
@@ -183,6 +196,7 @@ pub fn ToolDef::canonical_input_fields(
       fields.push({
         name: tail.name,
         aliases: [],
+        short: None,
         type_: list_graph(tail.item_type),
       })
     }
@@ -227,7 +241,7 @@ fn OptionSpecDef::canonical_field(self : OptionSpecDef) -> CanonicalInputField {
     RepeatableList(shape) => list_graph(shape.item_type)
     RepeatableMap(shape) => shape.map_type
   }
-  { name: self.long, aliases: self.aliases, type_ }
+  { name: self.long, aliases: self.aliases, short: self.short, type_ }
 }
 
 ///|
@@ -240,7 +254,12 @@ fn @toolCommon.FlagSpec::canonical_field(
     @toolCommon.FlagShape::CountFlag(_) =>
       @model.schema_type(@model.SchemaTypeBody::U32(None))
   }
-  { name: self.long, aliases: self.aliases, type_: { defs: [], root } }
+  {
+    name: self.long,
+    aliases: self.aliases,
+    short: self.short,
+    type_: { defs: [], root },
+  }
 }
 
 ///|
@@ -281,48 +300,75 @@ pub fn decode_canonical_input(
   input : @types.TypedSchemaValue,
   context : String,
 ) -> Array[CanonicalInputValue] raise @toolCommon.ToolError {
+  decode_canonical_input_with_resource_drops(
+    def,
+    command_index,
+    input,
+    context,
+    @model_host.resource_drops(),
+  )
+}
+
+///|
+fn decode_canonical_input_with_resource_drops(
+  def : ToolDef,
+  command_index : Int,
+  input : @types.TypedSchemaValue,
+  context : String,
+  drops : @model.SchemaValueResourceDrops,
+) -> Array[CanonicalInputValue] raise @toolCommon.ToolError {
   let model = def.canonical_input_model(command_index) catch {
     error =>
       raise @toolCommon.ToolError::InvalidInput(
         "\{context}: invalid canonical input model: \{to_repr(error)}",
       )
   }
-  let typed = @model.typed_schema_value_from_wit(input) catch {
+  let typed = @model.typed_schema_value_from_wit(input, drops) catch {
     error =>
       raise @toolCommon.ToolError::InvalidInput(
         "\{context}: invalid typed schema value input: \{error}",
       )
   }
-  if typed.graph != model.record_graph {
-    raise @toolCommon.ToolError::InvalidInput(
-      "\{context}: input schema does not match the canonical input schema",
-    )
+  try {
+    if typed.graph != model.record_graph {
+      raise @toolCommon.ToolError::InvalidInput(
+        "\{context}: input schema does not match the canonical input schema",
+      )
+    }
+    if !value_matches_type(
+        model.record_graph,
+        model.record_graph.root,
+        typed.value,
+      ) {
+      raise @toolCommon.ToolError::InvalidInput(
+        "\{context}: input value does not match the canonical input schema",
+      )
+    }
+    guard typed.value is @model.SchemaValue::Record(values) else {
+      raise @toolCommon.ToolError::InvalidInput(
+        "\{context}: canonical input must be a record",
+      )
+    }
+    let result : Array[CanonicalInputValue] = []
+    for i = 0; i < model.fields.length(); i = i + 1 {
+      let field = model.fields[i]
+      result.push({
+        name: field.name,
+        aliases: field.aliases,
+        short: field.short,
+        type_: field.type_,
+        value: values[i],
+      })
+    }
+    result
+  } catch {
+    error => {
+      typed.value.release_resources(drops)
+      raise error
+    }
+  } noraise {
+    result => result
   }
-  if !value_matches_type(
-      model.record_graph,
-      model.record_graph.root,
-      typed.value,
-    ) {
-    raise @toolCommon.ToolError::InvalidInput(
-      "\{context}: input value does not match the canonical input schema",
-    )
-  }
-  guard typed.value is @model.SchemaValue::Record(values) else {
-    raise @toolCommon.ToolError::InvalidInput(
-      "\{context}: canonical input must be a record",
-    )
-  }
-  let result : Array[CanonicalInputValue] = []
-  for i = 0; i < model.fields.length(); i = i + 1 {
-    let field = model.fields[i]
-    result.push({
-      name: field.name,
-      aliases: field.aliases,
-      type_: field.type_,
-      value: values[i],
-    })
-  }
-  result
 }
 
 ///|
@@ -331,29 +377,51 @@ pub fn[T : @schema.IntoSchema + @schema.FromSchema] decode_canonical_field(
   name : String,
   context : String,
 ) -> T raise @toolCommon.ToolError {
+  decode_canonical_field_with_resource_drops(
+    fields,
+    name,
+    context,
+    @model_host.resource_drops(),
+  )
+}
+
+///|
+fn[T : @schema.IntoSchema + @schema.FromSchema] decode_canonical_field_with_resource_drops(
+  fields : Array[CanonicalInputValue],
+  name : String,
+  context : String,
+  drops : @model.SchemaValueResourceDrops,
+) -> T raise @toolCommon.ToolError {
   for field in fields {
     if field.name == name || field.aliases.contains(name) {
       let tag : @schema.TypeTag[T] = @schema.type_tag()
       let expected = @schema.into_schema_graph(tag) catch {
-        error =>
+        error => {
+          release_canonical_input_values(fields, drops)
           raise @toolCommon.ToolError::InvalidInput(
             "\{context}: failed building the SDK schema for canonical field `\{name}`: \{error}",
           )
+        }
       }
       let value = canonical_value_for_sdk(expected, expected.root, field.value) catch {
-        error =>
+        error => {
+          release_canonical_input_values(fields, drops)
           raise @toolCommon.ToolError::InvalidInput(
             "\{context}: failed adapting canonical field `\{name}` to its SDK type: \{to_repr(error)}",
           )
+        }
       }
       return @schema.from_value_as(value) catch {
-        error =>
+        error => {
+          release_canonical_input_values(fields, drops)
           raise @toolCommon.ToolError::InvalidInput(
             "\{context}: failed decoding canonical field `\{name}`: \{error}",
           )
+        }
       }
     }
   }
+  release_canonical_input_values(fields, drops)
   raise @toolCommon.ToolError::InvalidInput(
     "\{context}: canonical field `\{name}` was not found",
   )
@@ -457,14 +525,33 @@ pub fn forward_canonical_input(
   let params : Array[(String, @model.SchemaValue)] = []
   for target in model.fields {
     let mut found : CanonicalInputValue? = None
+    let mut found_rank = 0
     for candidate in fields {
-      if candidate.name == target.name ||
-        candidate.aliases.contains(target.name) ||
-        target.aliases.contains(candidate.name) ||
-        target.aliases.any(surface_alias => {
+      let rank = if candidate.name == target.name {
+        4
+      } else if target.aliases.contains(candidate.name) {
+        3
+      } else if candidate.aliases.contains(target.name) {
+        2
+      } else if target.aliases.any(surface_alias => {
           candidate.aliases.contains(surface_alias)
         }) {
+        1
+      } else {
+        0
+      }
+      if rank > found_rank {
         found = Some(candidate)
+        found_rank = rank
+      }
+    }
+    if found is None {
+      for candidate in fields {
+        if candidate.short is Some(candidate_short) &&
+          target.short == Some(candidate_short) {
+          found = Some(candidate)
+          break
+        }
       }
     }
     guard found is Some(found) else {

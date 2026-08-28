@@ -55,10 +55,16 @@ else
     export WASM_RQUICKJS_VERSION=0.4.1
     export GOLEM_BENCHMARK_RESULTS_PATH="$results"
 
-    if [[ "${GOLEM_BENCHMARK_RECLAIM_SPACE:-true}" == "true" ]]; then
-        rm -rf target/debug
-        docker container prune --force
+    cargo clean
+
+    mapfile -t postgres_containers < <(
+        docker ps --all --quiet --filter ancestor=postgres:17.7
+    )
+    if ((${#postgres_containers[@]})); then
+        docker rm --force --volumes "${postgres_containers[@]}"
     fi
+    docker container prune --force
+    docker volume prune --force
 
     # The SDK build currently caches generated output without tracking its source revision.
     cargo make clean-sdk-ts

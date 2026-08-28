@@ -9771,10 +9771,10 @@ pub fn make_agent_id(
 
   let ptr = mbt_ffi_str2ptr(agent_type_name)
 
-  let address68 = mbt_ffi_malloc(input.value_nodes.length() * 32)
-  for index69 = 0; index69 < input.value_nodes.length(); index69 = index69 + 1 {
-    let iter_elem : @types.SchemaValueNode = input.value_nodes[index69]
-    let iter_base = address68 + index69 * 32
+  let address70 = mbt_ffi_malloc(input.value_nodes.length() * 32)
+  for index71 = 0; index71 < input.value_nodes.length(); index71 = index71 + 1 {
+    let iter_elem : @types.SchemaValueNode = input.value_nodes[index71]
+    let iter_base = address70 + index71 * 32
 
     match iter_elem {
       BoolValue(payload) => {
@@ -10181,32 +10181,40 @@ pub fn make_agent_id(
 
         ()
       }
+      StreamValue(payload68) => {
+        mbt_ffi_store8(iter_base + 0, 34)
+
+        let @types.SchemaValueStream(handle69) = payload68
+        mbt_ffi_store32(iter_base + 8, handle69)
+
+        ()
+      }
     }
   }
 
-  let (lowered, lowered72, lowered73) = match phantom_id {
+  let (lowered, lowered74, lowered75) = match phantom_id {
     None => (0, 0L, 0L)
-    Some(payload71) =>
+    Some(payload73) =>
       (
         1,
-        payload71.high_bits.reinterpret_as_int64(),
-        payload71.low_bits.reinterpret_as_int64(),
+        payload73.high_bits.reinterpret_as_int64(),
+        payload73.low_bits.reinterpret_as_int64(),
       )
   }
   let return_area = mbt_ffi_malloc(40)
   wasmImportMakeAgentId(
     ptr,
     agent_type_name.length(),
-    address68,
+    address70,
     input.value_nodes.length(),
     input.root,
     lowered,
-    lowered72,
-    lowered73,
+    lowered74,
+    lowered75,
     return_area,
   )
 
-  let lifted311 = match mbt_ffi_load8_u(return_area + 0) {
+  let lifted313 = match mbt_ffi_load8_u(return_area + 0) {
     0 => {
       let result = mbt_ffi_ptr2str(
         mbt_ffi_load32(return_area + 4),
@@ -10216,55 +10224,55 @@ pub fn make_agent_id(
       Result::Ok(result)
     }
     1 => {
-      let lifted310 = match mbt_ffi_load8_u(return_area + 4) {
+      let lifted312 = match mbt_ffi_load8_u(return_area + 4) {
         0 => {
-          let result74 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(return_area + 8),
-            mbt_ffi_load32(return_area + 12),
-          )
-
-          @common.AgentError::InvalidInput(result74)
-        }
-        1 => {
-          let result75 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(return_area + 8),
-            mbt_ffi_load32(return_area + 12),
-          )
-
-          @common.AgentError::InvalidMethod(result75)
-        }
-        2 => {
           let result76 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          @common.AgentError::InvalidType(result76)
+          @common.AgentError::InvalidInput(result76)
         }
-        3 => {
+        1 => {
           let result77 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          @common.AgentError::InvalidAgentId(result77)
+          @common.AgentError::InvalidMethod(result77)
+        }
+        2 => {
+          let result78 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
+          )
+
+          @common.AgentError::InvalidType(result78)
+        }
+        3 => {
+          let result79 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
+          )
+
+          @common.AgentError::InvalidAgentId(result79)
         }
         4 => {
-          let array272 : Array[@types.SchemaTypeNode] = []
-          for index273 = 0
-              index273 < mbt_ffi_load32(return_area + 12)
-              index273 = index273 + 1 {
-            let iter_base = mbt_ffi_load32(return_area + 8) + index273 * 144
+          let array274 : Array[@types.SchemaTypeNode] = []
+          for index275 = 0
+              index275 < mbt_ffi_load32(return_area + 12)
+              index275 = index275 + 1 {
+            let iter_base = mbt_ffi_load32(return_area + 8) + index275 * 144
 
-            let lifted258 = match mbt_ffi_load8_u(iter_base + 0) {
+            let lifted260 = match mbt_ffi_load8_u(iter_base + 0) {
               0 => @types.SchemaTypeBody::RefType(mbt_ffi_load32(iter_base + 8))
               1 => @types.SchemaTypeBody::BoolType
               2 => {
-                let lifted83 : @types.NumericRestrictions? = match
+                let lifted85 : @types.NumericRestrictions? = match
                   mbt_ffi_load8_u(iter_base + 8) {
                   0 => Option::None
                   1 => {
-                    let lifted78 : @types.NumericBound? = match
+                    let lifted80 : @types.NumericBound? = match
                       mbt_ffi_load8_u(iter_base + 16) {
                       0 => Option::None
                       1 => {
@@ -10289,11 +10297,11 @@ pub fn make_agent_id(
                       _ => panic()
                     }
 
-                    let lifted80 : @types.NumericBound? = match
+                    let lifted82 : @types.NumericBound? = match
                       mbt_ffi_load8_u(iter_base + 40) {
                       0 => Option::None
                       1 => {
-                        let lifted79 = match mbt_ffi_load8_u(iter_base + 48) {
+                        let lifted81 = match mbt_ffi_load8_u(iter_base + 48) {
                           0 =>
                             @types.NumericBound::Signed(
                               mbt_ffi_load64(iter_base + 56),
@@ -10309,46 +10317,46 @@ pub fn make_agent_id(
                           _ => panic()
                         }
 
-                        Option::Some(lifted79)
+                        Option::Some(lifted81)
                       }
                       _ => panic()
                     }
 
-                    let lifted82 : String? = match
+                    let lifted84 : String? = match
                       mbt_ffi_load8_u(iter_base + 64) {
                       0 => Option::None
                       1 => {
-                        let result81 = mbt_ffi_ptr2str(
+                        let result83 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 68),
                           mbt_ffi_load32(iter_base + 72),
                         )
 
-                        Option::Some(result81)
+                        Option::Some(result83)
                       }
                       _ => panic()
                     }
 
                     Option::Some(@types.NumericRestrictions::{
-                      min: lifted78,
-                      max: lifted80,
-                      unit: lifted82,
+                      min: lifted80,
+                      max: lifted82,
+                      unit: lifted84,
                     })
                   }
                   _ => panic()
                 }
 
-                @types.SchemaTypeBody::S8Type(lifted83)
+                @types.SchemaTypeBody::S8Type(lifted85)
               }
               3 => {
-                let lifted90 : @types.NumericRestrictions? = match
+                let lifted92 : @types.NumericRestrictions? = match
                   mbt_ffi_load8_u(iter_base + 8) {
                   0 => Option::None
                   1 => {
-                    let lifted85 : @types.NumericBound? = match
+                    let lifted87 : @types.NumericBound? = match
                       mbt_ffi_load8_u(iter_base + 16) {
                       0 => Option::None
                       1 => {
-                        let lifted84 = match mbt_ffi_load8_u(iter_base + 24) {
+                        let lifted86 = match mbt_ffi_load8_u(iter_base + 24) {
                           0 =>
                             @types.NumericBound::Signed(
                               mbt_ffi_load64(iter_base + 32),
@@ -10360,31 +10368,6 @@ pub fn make_agent_id(
                           2 =>
                             @types.NumericBound::FloatBits(
                               mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                            )
-                          _ => panic()
-                        }
-
-                        Option::Some(lifted84)
-                      }
-                      _ => panic()
-                    }
-
-                    let lifted87 : @types.NumericBound? = match
-                      mbt_ffi_load8_u(iter_base + 40) {
-                      0 => Option::None
-                      1 => {
-                        let lifted86 = match mbt_ffi_load8_u(iter_base + 48) {
-                          0 =>
-                            @types.NumericBound::Signed(
-                              mbt_ffi_load64(iter_base + 56),
-                            )
-                          1 =>
-                            @types.NumericBound::Unsigned(
-                              mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
-                            )
-                          2 =>
-                            @types.NumericBound::FloatBits(
-                              mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
                             )
                           _ => panic()
                         }
@@ -10394,66 +10377,11 @@ pub fn make_agent_id(
                       _ => panic()
                     }
 
-                    let lifted89 : String? = match
-                      mbt_ffi_load8_u(iter_base + 64) {
-                      0 => Option::None
-                      1 => {
-                        let result88 = mbt_ffi_ptr2str(
-                          mbt_ffi_load32(iter_base + 68),
-                          mbt_ffi_load32(iter_base + 72),
-                        )
-
-                        Option::Some(result88)
-                      }
-                      _ => panic()
-                    }
-
-                    Option::Some(@types.NumericRestrictions::{
-                      min: lifted85,
-                      max: lifted87,
-                      unit: lifted89,
-                    })
-                  }
-                  _ => panic()
-                }
-
-                @types.SchemaTypeBody::S16Type(lifted90)
-              }
-              4 => {
-                let lifted97 : @types.NumericRestrictions? = match
-                  mbt_ffi_load8_u(iter_base + 8) {
-                  0 => Option::None
-                  1 => {
-                    let lifted92 : @types.NumericBound? = match
-                      mbt_ffi_load8_u(iter_base + 16) {
-                      0 => Option::None
-                      1 => {
-                        let lifted91 = match mbt_ffi_load8_u(iter_base + 24) {
-                          0 =>
-                            @types.NumericBound::Signed(
-                              mbt_ffi_load64(iter_base + 32),
-                            )
-                          1 =>
-                            @types.NumericBound::Unsigned(
-                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                            )
-                          2 =>
-                            @types.NumericBound::FloatBits(
-                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                            )
-                          _ => panic()
-                        }
-
-                        Option::Some(lifted91)
-                      }
-                      _ => panic()
-                    }
-
-                    let lifted94 : @types.NumericBound? = match
+                    let lifted89 : @types.NumericBound? = match
                       mbt_ffi_load8_u(iter_base + 40) {
                       0 => Option::None
                       1 => {
-                        let lifted93 = match mbt_ffi_load8_u(iter_base + 48) {
+                        let lifted88 = match mbt_ffi_load8_u(iter_base + 48) {
                           0 =>
                             @types.NumericBound::Signed(
                               mbt_ffi_load64(iter_base + 56),
@@ -10465,6 +10393,61 @@ pub fn make_agent_id(
                           2 =>
                             @types.NumericBound::FloatBits(
                               mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                            )
+                          _ => panic()
+                        }
+
+                        Option::Some(lifted88)
+                      }
+                      _ => panic()
+                    }
+
+                    let lifted91 : String? = match
+                      mbt_ffi_load8_u(iter_base + 64) {
+                      0 => Option::None
+                      1 => {
+                        let result90 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 68),
+                          mbt_ffi_load32(iter_base + 72),
+                        )
+
+                        Option::Some(result90)
+                      }
+                      _ => panic()
+                    }
+
+                    Option::Some(@types.NumericRestrictions::{
+                      min: lifted87,
+                      max: lifted89,
+                      unit: lifted91,
+                    })
+                  }
+                  _ => panic()
+                }
+
+                @types.SchemaTypeBody::S16Type(lifted92)
+              }
+              4 => {
+                let lifted99 : @types.NumericRestrictions? = match
+                  mbt_ffi_load8_u(iter_base + 8) {
+                  0 => Option::None
+                  1 => {
+                    let lifted94 : @types.NumericBound? = match
+                      mbt_ffi_load8_u(iter_base + 16) {
+                      0 => Option::None
+                      1 => {
+                        let lifted93 = match mbt_ffi_load8_u(iter_base + 24) {
+                          0 =>
+                            @types.NumericBound::Signed(
+                              mbt_ffi_load64(iter_base + 32),
+                            )
+                          1 =>
+                            @types.NumericBound::Unsigned(
+                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                            )
+                          2 =>
+                            @types.NumericBound::FloatBits(
+                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                             )
                           _ => panic()
                         }
@@ -10474,66 +10457,11 @@ pub fn make_agent_id(
                       _ => panic()
                     }
 
-                    let lifted96 : String? = match
-                      mbt_ffi_load8_u(iter_base + 64) {
-                      0 => Option::None
-                      1 => {
-                        let result95 = mbt_ffi_ptr2str(
-                          mbt_ffi_load32(iter_base + 68),
-                          mbt_ffi_load32(iter_base + 72),
-                        )
-
-                        Option::Some(result95)
-                      }
-                      _ => panic()
-                    }
-
-                    Option::Some(@types.NumericRestrictions::{
-                      min: lifted92,
-                      max: lifted94,
-                      unit: lifted96,
-                    })
-                  }
-                  _ => panic()
-                }
-
-                @types.SchemaTypeBody::S32Type(lifted97)
-              }
-              5 => {
-                let lifted104 : @types.NumericRestrictions? = match
-                  mbt_ffi_load8_u(iter_base + 8) {
-                  0 => Option::None
-                  1 => {
-                    let lifted99 : @types.NumericBound? = match
-                      mbt_ffi_load8_u(iter_base + 16) {
-                      0 => Option::None
-                      1 => {
-                        let lifted98 = match mbt_ffi_load8_u(iter_base + 24) {
-                          0 =>
-                            @types.NumericBound::Signed(
-                              mbt_ffi_load64(iter_base + 32),
-                            )
-                          1 =>
-                            @types.NumericBound::Unsigned(
-                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                            )
-                          2 =>
-                            @types.NumericBound::FloatBits(
-                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                            )
-                          _ => panic()
-                        }
-
-                        Option::Some(lifted98)
-                      }
-                      _ => panic()
-                    }
-
-                    let lifted101 : @types.NumericBound? = match
+                    let lifted96 : @types.NumericBound? = match
                       mbt_ffi_load8_u(iter_base + 40) {
                       0 => Option::None
                       1 => {
-                        let lifted100 = match mbt_ffi_load8_u(iter_base + 48) {
+                        let lifted95 = match mbt_ffi_load8_u(iter_base + 48) {
                           0 =>
                             @types.NumericBound::Signed(
                               mbt_ffi_load64(iter_base + 56),
@@ -10545,6 +10473,61 @@ pub fn make_agent_id(
                           2 =>
                             @types.NumericBound::FloatBits(
                               mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                            )
+                          _ => panic()
+                        }
+
+                        Option::Some(lifted95)
+                      }
+                      _ => panic()
+                    }
+
+                    let lifted98 : String? = match
+                      mbt_ffi_load8_u(iter_base + 64) {
+                      0 => Option::None
+                      1 => {
+                        let result97 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 68),
+                          mbt_ffi_load32(iter_base + 72),
+                        )
+
+                        Option::Some(result97)
+                      }
+                      _ => panic()
+                    }
+
+                    Option::Some(@types.NumericRestrictions::{
+                      min: lifted94,
+                      max: lifted96,
+                      unit: lifted98,
+                    })
+                  }
+                  _ => panic()
+                }
+
+                @types.SchemaTypeBody::S32Type(lifted99)
+              }
+              5 => {
+                let lifted106 : @types.NumericRestrictions? = match
+                  mbt_ffi_load8_u(iter_base + 8) {
+                  0 => Option::None
+                  1 => {
+                    let lifted101 : @types.NumericBound? = match
+                      mbt_ffi_load8_u(iter_base + 16) {
+                      0 => Option::None
+                      1 => {
+                        let lifted100 = match mbt_ffi_load8_u(iter_base + 24) {
+                          0 =>
+                            @types.NumericBound::Signed(
+                              mbt_ffi_load64(iter_base + 32),
+                            )
+                          1 =>
+                            @types.NumericBound::Unsigned(
+                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                            )
+                          2 =>
+                            @types.NumericBound::FloatBits(
+                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                             )
                           _ => panic()
                         }
@@ -10554,66 +10537,11 @@ pub fn make_agent_id(
                       _ => panic()
                     }
 
-                    let lifted103 : String? = match
-                      mbt_ffi_load8_u(iter_base + 64) {
-                      0 => Option::None
-                      1 => {
-                        let result102 = mbt_ffi_ptr2str(
-                          mbt_ffi_load32(iter_base + 68),
-                          mbt_ffi_load32(iter_base + 72),
-                        )
-
-                        Option::Some(result102)
-                      }
-                      _ => panic()
-                    }
-
-                    Option::Some(@types.NumericRestrictions::{
-                      min: lifted99,
-                      max: lifted101,
-                      unit: lifted103,
-                    })
-                  }
-                  _ => panic()
-                }
-
-                @types.SchemaTypeBody::S64Type(lifted104)
-              }
-              6 => {
-                let lifted111 : @types.NumericRestrictions? = match
-                  mbt_ffi_load8_u(iter_base + 8) {
-                  0 => Option::None
-                  1 => {
-                    let lifted106 : @types.NumericBound? = match
-                      mbt_ffi_load8_u(iter_base + 16) {
-                      0 => Option::None
-                      1 => {
-                        let lifted105 = match mbt_ffi_load8_u(iter_base + 24) {
-                          0 =>
-                            @types.NumericBound::Signed(
-                              mbt_ffi_load64(iter_base + 32),
-                            )
-                          1 =>
-                            @types.NumericBound::Unsigned(
-                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                            )
-                          2 =>
-                            @types.NumericBound::FloatBits(
-                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                            )
-                          _ => panic()
-                        }
-
-                        Option::Some(lifted105)
-                      }
-                      _ => panic()
-                    }
-
-                    let lifted108 : @types.NumericBound? = match
+                    let lifted103 : @types.NumericBound? = match
                       mbt_ffi_load8_u(iter_base + 40) {
                       0 => Option::None
                       1 => {
-                        let lifted107 = match mbt_ffi_load8_u(iter_base + 48) {
+                        let lifted102 = match mbt_ffi_load8_u(iter_base + 48) {
                           0 =>
                             @types.NumericBound::Signed(
                               mbt_ffi_load64(iter_base + 56),
@@ -10625,6 +10553,61 @@ pub fn make_agent_id(
                           2 =>
                             @types.NumericBound::FloatBits(
                               mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                            )
+                          _ => panic()
+                        }
+
+                        Option::Some(lifted102)
+                      }
+                      _ => panic()
+                    }
+
+                    let lifted105 : String? = match
+                      mbt_ffi_load8_u(iter_base + 64) {
+                      0 => Option::None
+                      1 => {
+                        let result104 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 68),
+                          mbt_ffi_load32(iter_base + 72),
+                        )
+
+                        Option::Some(result104)
+                      }
+                      _ => panic()
+                    }
+
+                    Option::Some(@types.NumericRestrictions::{
+                      min: lifted101,
+                      max: lifted103,
+                      unit: lifted105,
+                    })
+                  }
+                  _ => panic()
+                }
+
+                @types.SchemaTypeBody::S64Type(lifted106)
+              }
+              6 => {
+                let lifted113 : @types.NumericRestrictions? = match
+                  mbt_ffi_load8_u(iter_base + 8) {
+                  0 => Option::None
+                  1 => {
+                    let lifted108 : @types.NumericBound? = match
+                      mbt_ffi_load8_u(iter_base + 16) {
+                      0 => Option::None
+                      1 => {
+                        let lifted107 = match mbt_ffi_load8_u(iter_base + 24) {
+                          0 =>
+                            @types.NumericBound::Signed(
+                              mbt_ffi_load64(iter_base + 32),
+                            )
+                          1 =>
+                            @types.NumericBound::Unsigned(
+                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                            )
+                          2 =>
+                            @types.NumericBound::FloatBits(
+                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                             )
                           _ => panic()
                         }
@@ -10634,66 +10617,11 @@ pub fn make_agent_id(
                       _ => panic()
                     }
 
-                    let lifted110 : String? = match
-                      mbt_ffi_load8_u(iter_base + 64) {
-                      0 => Option::None
-                      1 => {
-                        let result109 = mbt_ffi_ptr2str(
-                          mbt_ffi_load32(iter_base + 68),
-                          mbt_ffi_load32(iter_base + 72),
-                        )
-
-                        Option::Some(result109)
-                      }
-                      _ => panic()
-                    }
-
-                    Option::Some(@types.NumericRestrictions::{
-                      min: lifted106,
-                      max: lifted108,
-                      unit: lifted110,
-                    })
-                  }
-                  _ => panic()
-                }
-
-                @types.SchemaTypeBody::U8Type(lifted111)
-              }
-              7 => {
-                let lifted118 : @types.NumericRestrictions? = match
-                  mbt_ffi_load8_u(iter_base + 8) {
-                  0 => Option::None
-                  1 => {
-                    let lifted113 : @types.NumericBound? = match
-                      mbt_ffi_load8_u(iter_base + 16) {
-                      0 => Option::None
-                      1 => {
-                        let lifted112 = match mbt_ffi_load8_u(iter_base + 24) {
-                          0 =>
-                            @types.NumericBound::Signed(
-                              mbt_ffi_load64(iter_base + 32),
-                            )
-                          1 =>
-                            @types.NumericBound::Unsigned(
-                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                            )
-                          2 =>
-                            @types.NumericBound::FloatBits(
-                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                            )
-                          _ => panic()
-                        }
-
-                        Option::Some(lifted112)
-                      }
-                      _ => panic()
-                    }
-
-                    let lifted115 : @types.NumericBound? = match
+                    let lifted110 : @types.NumericBound? = match
                       mbt_ffi_load8_u(iter_base + 40) {
                       0 => Option::None
                       1 => {
-                        let lifted114 = match mbt_ffi_load8_u(iter_base + 48) {
+                        let lifted109 = match mbt_ffi_load8_u(iter_base + 48) {
                           0 =>
                             @types.NumericBound::Signed(
                               mbt_ffi_load64(iter_base + 56),
@@ -10705,6 +10633,61 @@ pub fn make_agent_id(
                           2 =>
                             @types.NumericBound::FloatBits(
                               mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                            )
+                          _ => panic()
+                        }
+
+                        Option::Some(lifted109)
+                      }
+                      _ => panic()
+                    }
+
+                    let lifted112 : String? = match
+                      mbt_ffi_load8_u(iter_base + 64) {
+                      0 => Option::None
+                      1 => {
+                        let result111 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 68),
+                          mbt_ffi_load32(iter_base + 72),
+                        )
+
+                        Option::Some(result111)
+                      }
+                      _ => panic()
+                    }
+
+                    Option::Some(@types.NumericRestrictions::{
+                      min: lifted108,
+                      max: lifted110,
+                      unit: lifted112,
+                    })
+                  }
+                  _ => panic()
+                }
+
+                @types.SchemaTypeBody::U8Type(lifted113)
+              }
+              7 => {
+                let lifted120 : @types.NumericRestrictions? = match
+                  mbt_ffi_load8_u(iter_base + 8) {
+                  0 => Option::None
+                  1 => {
+                    let lifted115 : @types.NumericBound? = match
+                      mbt_ffi_load8_u(iter_base + 16) {
+                      0 => Option::None
+                      1 => {
+                        let lifted114 = match mbt_ffi_load8_u(iter_base + 24) {
+                          0 =>
+                            @types.NumericBound::Signed(
+                              mbt_ffi_load64(iter_base + 32),
+                            )
+                          1 =>
+                            @types.NumericBound::Unsigned(
+                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                            )
+                          2 =>
+                            @types.NumericBound::FloatBits(
+                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                             )
                           _ => panic()
                         }
@@ -10714,66 +10697,11 @@ pub fn make_agent_id(
                       _ => panic()
                     }
 
-                    let lifted117 : String? = match
-                      mbt_ffi_load8_u(iter_base + 64) {
-                      0 => Option::None
-                      1 => {
-                        let result116 = mbt_ffi_ptr2str(
-                          mbt_ffi_load32(iter_base + 68),
-                          mbt_ffi_load32(iter_base + 72),
-                        )
-
-                        Option::Some(result116)
-                      }
-                      _ => panic()
-                    }
-
-                    Option::Some(@types.NumericRestrictions::{
-                      min: lifted113,
-                      max: lifted115,
-                      unit: lifted117,
-                    })
-                  }
-                  _ => panic()
-                }
-
-                @types.SchemaTypeBody::U16Type(lifted118)
-              }
-              8 => {
-                let lifted125 : @types.NumericRestrictions? = match
-                  mbt_ffi_load8_u(iter_base + 8) {
-                  0 => Option::None
-                  1 => {
-                    let lifted120 : @types.NumericBound? = match
-                      mbt_ffi_load8_u(iter_base + 16) {
-                      0 => Option::None
-                      1 => {
-                        let lifted119 = match mbt_ffi_load8_u(iter_base + 24) {
-                          0 =>
-                            @types.NumericBound::Signed(
-                              mbt_ffi_load64(iter_base + 32),
-                            )
-                          1 =>
-                            @types.NumericBound::Unsigned(
-                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                            )
-                          2 =>
-                            @types.NumericBound::FloatBits(
-                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                            )
-                          _ => panic()
-                        }
-
-                        Option::Some(lifted119)
-                      }
-                      _ => panic()
-                    }
-
-                    let lifted122 : @types.NumericBound? = match
+                    let lifted117 : @types.NumericBound? = match
                       mbt_ffi_load8_u(iter_base + 40) {
                       0 => Option::None
                       1 => {
-                        let lifted121 = match mbt_ffi_load8_u(iter_base + 48) {
+                        let lifted116 = match mbt_ffi_load8_u(iter_base + 48) {
                           0 =>
                             @types.NumericBound::Signed(
                               mbt_ffi_load64(iter_base + 56),
@@ -10785,6 +10713,61 @@ pub fn make_agent_id(
                           2 =>
                             @types.NumericBound::FloatBits(
                               mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                            )
+                          _ => panic()
+                        }
+
+                        Option::Some(lifted116)
+                      }
+                      _ => panic()
+                    }
+
+                    let lifted119 : String? = match
+                      mbt_ffi_load8_u(iter_base + 64) {
+                      0 => Option::None
+                      1 => {
+                        let result118 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 68),
+                          mbt_ffi_load32(iter_base + 72),
+                        )
+
+                        Option::Some(result118)
+                      }
+                      _ => panic()
+                    }
+
+                    Option::Some(@types.NumericRestrictions::{
+                      min: lifted115,
+                      max: lifted117,
+                      unit: lifted119,
+                    })
+                  }
+                  _ => panic()
+                }
+
+                @types.SchemaTypeBody::U16Type(lifted120)
+              }
+              8 => {
+                let lifted127 : @types.NumericRestrictions? = match
+                  mbt_ffi_load8_u(iter_base + 8) {
+                  0 => Option::None
+                  1 => {
+                    let lifted122 : @types.NumericBound? = match
+                      mbt_ffi_load8_u(iter_base + 16) {
+                      0 => Option::None
+                      1 => {
+                        let lifted121 = match mbt_ffi_load8_u(iter_base + 24) {
+                          0 =>
+                            @types.NumericBound::Signed(
+                              mbt_ffi_load64(iter_base + 32),
+                            )
+                          1 =>
+                            @types.NumericBound::Unsigned(
+                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                            )
+                          2 =>
+                            @types.NumericBound::FloatBits(
+                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                             )
                           _ => panic()
                         }
@@ -10794,66 +10777,11 @@ pub fn make_agent_id(
                       _ => panic()
                     }
 
-                    let lifted124 : String? = match
-                      mbt_ffi_load8_u(iter_base + 64) {
-                      0 => Option::None
-                      1 => {
-                        let result123 = mbt_ffi_ptr2str(
-                          mbt_ffi_load32(iter_base + 68),
-                          mbt_ffi_load32(iter_base + 72),
-                        )
-
-                        Option::Some(result123)
-                      }
-                      _ => panic()
-                    }
-
-                    Option::Some(@types.NumericRestrictions::{
-                      min: lifted120,
-                      max: lifted122,
-                      unit: lifted124,
-                    })
-                  }
-                  _ => panic()
-                }
-
-                @types.SchemaTypeBody::U32Type(lifted125)
-              }
-              9 => {
-                let lifted132 : @types.NumericRestrictions? = match
-                  mbt_ffi_load8_u(iter_base + 8) {
-                  0 => Option::None
-                  1 => {
-                    let lifted127 : @types.NumericBound? = match
-                      mbt_ffi_load8_u(iter_base + 16) {
-                      0 => Option::None
-                      1 => {
-                        let lifted126 = match mbt_ffi_load8_u(iter_base + 24) {
-                          0 =>
-                            @types.NumericBound::Signed(
-                              mbt_ffi_load64(iter_base + 32),
-                            )
-                          1 =>
-                            @types.NumericBound::Unsigned(
-                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                            )
-                          2 =>
-                            @types.NumericBound::FloatBits(
-                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                            )
-                          _ => panic()
-                        }
-
-                        Option::Some(lifted126)
-                      }
-                      _ => panic()
-                    }
-
-                    let lifted129 : @types.NumericBound? = match
+                    let lifted124 : @types.NumericBound? = match
                       mbt_ffi_load8_u(iter_base + 40) {
                       0 => Option::None
                       1 => {
-                        let lifted128 = match mbt_ffi_load8_u(iter_base + 48) {
+                        let lifted123 = match mbt_ffi_load8_u(iter_base + 48) {
                           0 =>
                             @types.NumericBound::Signed(
                               mbt_ffi_load64(iter_base + 56),
@@ -10865,6 +10793,61 @@ pub fn make_agent_id(
                           2 =>
                             @types.NumericBound::FloatBits(
                               mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                            )
+                          _ => panic()
+                        }
+
+                        Option::Some(lifted123)
+                      }
+                      _ => panic()
+                    }
+
+                    let lifted126 : String? = match
+                      mbt_ffi_load8_u(iter_base + 64) {
+                      0 => Option::None
+                      1 => {
+                        let result125 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 68),
+                          mbt_ffi_load32(iter_base + 72),
+                        )
+
+                        Option::Some(result125)
+                      }
+                      _ => panic()
+                    }
+
+                    Option::Some(@types.NumericRestrictions::{
+                      min: lifted122,
+                      max: lifted124,
+                      unit: lifted126,
+                    })
+                  }
+                  _ => panic()
+                }
+
+                @types.SchemaTypeBody::U32Type(lifted127)
+              }
+              9 => {
+                let lifted134 : @types.NumericRestrictions? = match
+                  mbt_ffi_load8_u(iter_base + 8) {
+                  0 => Option::None
+                  1 => {
+                    let lifted129 : @types.NumericBound? = match
+                      mbt_ffi_load8_u(iter_base + 16) {
+                      0 => Option::None
+                      1 => {
+                        let lifted128 = match mbt_ffi_load8_u(iter_base + 24) {
+                          0 =>
+                            @types.NumericBound::Signed(
+                              mbt_ffi_load64(iter_base + 32),
+                            )
+                          1 =>
+                            @types.NumericBound::Unsigned(
+                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                            )
+                          2 =>
+                            @types.NumericBound::FloatBits(
+                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                             )
                           _ => panic()
                         }
@@ -10874,66 +10857,11 @@ pub fn make_agent_id(
                       _ => panic()
                     }
 
-                    let lifted131 : String? = match
-                      mbt_ffi_load8_u(iter_base + 64) {
-                      0 => Option::None
-                      1 => {
-                        let result130 = mbt_ffi_ptr2str(
-                          mbt_ffi_load32(iter_base + 68),
-                          mbt_ffi_load32(iter_base + 72),
-                        )
-
-                        Option::Some(result130)
-                      }
-                      _ => panic()
-                    }
-
-                    Option::Some(@types.NumericRestrictions::{
-                      min: lifted127,
-                      max: lifted129,
-                      unit: lifted131,
-                    })
-                  }
-                  _ => panic()
-                }
-
-                @types.SchemaTypeBody::U64Type(lifted132)
-              }
-              10 => {
-                let lifted139 : @types.NumericRestrictions? = match
-                  mbt_ffi_load8_u(iter_base + 8) {
-                  0 => Option::None
-                  1 => {
-                    let lifted134 : @types.NumericBound? = match
-                      mbt_ffi_load8_u(iter_base + 16) {
-                      0 => Option::None
-                      1 => {
-                        let lifted133 = match mbt_ffi_load8_u(iter_base + 24) {
-                          0 =>
-                            @types.NumericBound::Signed(
-                              mbt_ffi_load64(iter_base + 32),
-                            )
-                          1 =>
-                            @types.NumericBound::Unsigned(
-                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                            )
-                          2 =>
-                            @types.NumericBound::FloatBits(
-                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                            )
-                          _ => panic()
-                        }
-
-                        Option::Some(lifted133)
-                      }
-                      _ => panic()
-                    }
-
-                    let lifted136 : @types.NumericBound? = match
+                    let lifted131 : @types.NumericBound? = match
                       mbt_ffi_load8_u(iter_base + 40) {
                       0 => Option::None
                       1 => {
-                        let lifted135 = match mbt_ffi_load8_u(iter_base + 48) {
+                        let lifted130 = match mbt_ffi_load8_u(iter_base + 48) {
                           0 =>
                             @types.NumericBound::Signed(
                               mbt_ffi_load64(iter_base + 56),
@@ -10945,6 +10873,61 @@ pub fn make_agent_id(
                           2 =>
                             @types.NumericBound::FloatBits(
                               mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                            )
+                          _ => panic()
+                        }
+
+                        Option::Some(lifted130)
+                      }
+                      _ => panic()
+                    }
+
+                    let lifted133 : String? = match
+                      mbt_ffi_load8_u(iter_base + 64) {
+                      0 => Option::None
+                      1 => {
+                        let result132 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 68),
+                          mbt_ffi_load32(iter_base + 72),
+                        )
+
+                        Option::Some(result132)
+                      }
+                      _ => panic()
+                    }
+
+                    Option::Some(@types.NumericRestrictions::{
+                      min: lifted129,
+                      max: lifted131,
+                      unit: lifted133,
+                    })
+                  }
+                  _ => panic()
+                }
+
+                @types.SchemaTypeBody::U64Type(lifted134)
+              }
+              10 => {
+                let lifted141 : @types.NumericRestrictions? = match
+                  mbt_ffi_load8_u(iter_base + 8) {
+                  0 => Option::None
+                  1 => {
+                    let lifted136 : @types.NumericBound? = match
+                      mbt_ffi_load8_u(iter_base + 16) {
+                      0 => Option::None
+                      1 => {
+                        let lifted135 = match mbt_ffi_load8_u(iter_base + 24) {
+                          0 =>
+                            @types.NumericBound::Signed(
+                              mbt_ffi_load64(iter_base + 32),
+                            )
+                          1 =>
+                            @types.NumericBound::Unsigned(
+                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                            )
+                          2 =>
+                            @types.NumericBound::FloatBits(
+                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                             )
                           _ => panic()
                         }
@@ -10954,66 +10937,11 @@ pub fn make_agent_id(
                       _ => panic()
                     }
 
-                    let lifted138 : String? = match
-                      mbt_ffi_load8_u(iter_base + 64) {
-                      0 => Option::None
-                      1 => {
-                        let result137 = mbt_ffi_ptr2str(
-                          mbt_ffi_load32(iter_base + 68),
-                          mbt_ffi_load32(iter_base + 72),
-                        )
-
-                        Option::Some(result137)
-                      }
-                      _ => panic()
-                    }
-
-                    Option::Some(@types.NumericRestrictions::{
-                      min: lifted134,
-                      max: lifted136,
-                      unit: lifted138,
-                    })
-                  }
-                  _ => panic()
-                }
-
-                @types.SchemaTypeBody::F32Type(lifted139)
-              }
-              11 => {
-                let lifted146 : @types.NumericRestrictions? = match
-                  mbt_ffi_load8_u(iter_base + 8) {
-                  0 => Option::None
-                  1 => {
-                    let lifted141 : @types.NumericBound? = match
-                      mbt_ffi_load8_u(iter_base + 16) {
-                      0 => Option::None
-                      1 => {
-                        let lifted140 = match mbt_ffi_load8_u(iter_base + 24) {
-                          0 =>
-                            @types.NumericBound::Signed(
-                              mbt_ffi_load64(iter_base + 32),
-                            )
-                          1 =>
-                            @types.NumericBound::Unsigned(
-                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                            )
-                          2 =>
-                            @types.NumericBound::FloatBits(
-                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                            )
-                          _ => panic()
-                        }
-
-                        Option::Some(lifted140)
-                      }
-                      _ => panic()
-                    }
-
-                    let lifted143 : @types.NumericBound? = match
+                    let lifted138 : @types.NumericBound? = match
                       mbt_ffi_load8_u(iter_base + 40) {
                       0 => Option::None
                       1 => {
-                        let lifted142 = match mbt_ffi_load8_u(iter_base + 48) {
+                        let lifted137 = match mbt_ffi_load8_u(iter_base + 48) {
                           0 =>
                             @types.NumericBound::Signed(
                               mbt_ffi_load64(iter_base + 56),
@@ -11029,316 +10957,396 @@ pub fn make_agent_id(
                           _ => panic()
                         }
 
-                        Option::Some(lifted142)
+                        Option::Some(lifted137)
                       }
                       _ => panic()
                     }
 
-                    let lifted145 : String? = match
+                    let lifted140 : String? = match
                       mbt_ffi_load8_u(iter_base + 64) {
                       0 => Option::None
                       1 => {
-                        let result144 = mbt_ffi_ptr2str(
+                        let result139 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 68),
                           mbt_ffi_load32(iter_base + 72),
                         )
 
-                        Option::Some(result144)
+                        Option::Some(result139)
                       }
                       _ => panic()
                     }
 
                     Option::Some(@types.NumericRestrictions::{
-                      min: lifted141,
-                      max: lifted143,
-                      unit: lifted145,
+                      min: lifted136,
+                      max: lifted138,
+                      unit: lifted140,
                     })
                   }
                   _ => panic()
                 }
 
-                @types.SchemaTypeBody::F64Type(lifted146)
+                @types.SchemaTypeBody::F32Type(lifted141)
+              }
+              11 => {
+                let lifted148 : @types.NumericRestrictions? = match
+                  mbt_ffi_load8_u(iter_base + 8) {
+                  0 => Option::None
+                  1 => {
+                    let lifted143 : @types.NumericBound? = match
+                      mbt_ffi_load8_u(iter_base + 16) {
+                      0 => Option::None
+                      1 => {
+                        let lifted142 = match mbt_ffi_load8_u(iter_base + 24) {
+                          0 =>
+                            @types.NumericBound::Signed(
+                              mbt_ffi_load64(iter_base + 32),
+                            )
+                          1 =>
+                            @types.NumericBound::Unsigned(
+                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                            )
+                          2 =>
+                            @types.NumericBound::FloatBits(
+                              mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                            )
+                          _ => panic()
+                        }
+
+                        Option::Some(lifted142)
+                      }
+                      _ => panic()
+                    }
+
+                    let lifted145 : @types.NumericBound? = match
+                      mbt_ffi_load8_u(iter_base + 40) {
+                      0 => Option::None
+                      1 => {
+                        let lifted144 = match mbt_ffi_load8_u(iter_base + 48) {
+                          0 =>
+                            @types.NumericBound::Signed(
+                              mbt_ffi_load64(iter_base + 56),
+                            )
+                          1 =>
+                            @types.NumericBound::Unsigned(
+                              mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                            )
+                          2 =>
+                            @types.NumericBound::FloatBits(
+                              mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                            )
+                          _ => panic()
+                        }
+
+                        Option::Some(lifted144)
+                      }
+                      _ => panic()
+                    }
+
+                    let lifted147 : String? = match
+                      mbt_ffi_load8_u(iter_base + 64) {
+                      0 => Option::None
+                      1 => {
+                        let result146 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 68),
+                          mbt_ffi_load32(iter_base + 72),
+                        )
+
+                        Option::Some(result146)
+                      }
+                      _ => panic()
+                    }
+
+                    Option::Some(@types.NumericRestrictions::{
+                      min: lifted143,
+                      max: lifted145,
+                      unit: lifted147,
+                    })
+                  }
+                  _ => panic()
+                }
+
+                @types.SchemaTypeBody::F64Type(lifted148)
               }
               12 => @types.SchemaTypeBody::CharType
               13 => @types.SchemaTypeBody::StringType
               14 => {
-                let array160 : Array[@types.NamedFieldType] = []
-                for index161 = 0
-                    index161 < mbt_ffi_load32(iter_base + 12)
-                    index161 = index161 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index161 * 68
+                let array162 : Array[@types.NamedFieldType] = []
+                for index163 = 0
+                    index163 < mbt_ffi_load32(iter_base + 12)
+                    index163 = index163 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index163 * 68
 
-                  let result147 = mbt_ffi_ptr2str(
+                  let result149 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  let lifted149 : String? = match
+                  let lifted151 : String? = match
                     mbt_ffi_load8_u(iter_base + 12) {
                     0 => Option::None
                     1 => {
-                      let result148 = mbt_ffi_ptr2str(
+                      let result150 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 16),
                         mbt_ffi_load32(iter_base + 20),
                       )
 
-                      Option::Some(result148)
+                      Option::Some(result150)
                     }
                     _ => panic()
                   }
 
                   let array : Array[String] = []
-                  for index151 = 0
-                      index151 < mbt_ffi_load32(iter_base + 28)
-                      index151 = index151 + 1 {
+                  for index153 = 0
+                      index153 < mbt_ffi_load32(iter_base + 28)
+                      index153 = index153 + 1 {
                     let iter_base = mbt_ffi_load32(iter_base + 24) +
-                      index151 * 8
-
-                    let result150 = mbt_ffi_ptr2str(
-                      mbt_ffi_load32(iter_base + 0),
-                      mbt_ffi_load32(iter_base + 4),
-                    )
-
-                    array.push(result150)
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
-
-                  let array153 : Array[String] = []
-                  for index154 = 0
-                      index154 < mbt_ffi_load32(iter_base + 36)
-                      index154 = index154 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 32) +
-                      index154 * 8
+                      index153 * 8
 
                     let result152 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 0),
                       mbt_ffi_load32(iter_base + 4),
                     )
 
-                    array153.push(result152)
+                    array.push(result152)
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
+
+                  let array155 : Array[String] = []
+                  for index156 = 0
+                      index156 < mbt_ffi_load32(iter_base + 36)
+                      index156 = index156 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 32) +
+                      index156 * 8
+
+                    let result154 = mbt_ffi_ptr2str(
+                      mbt_ffi_load32(iter_base + 0),
+                      mbt_ffi_load32(iter_base + 4),
+                    )
+
+                    array155.push(result154)
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
 
-                  let lifted156 : String? = match
+                  let lifted158 : String? = match
                     mbt_ffi_load8_u(iter_base + 40) {
                     0 => Option::None
                     1 => {
-                      let result155 = mbt_ffi_ptr2str(
+                      let result157 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 44),
                         mbt_ffi_load32(iter_base + 48),
                       )
 
-                      Option::Some(result155)
+                      Option::Some(result157)
                     }
                     _ => panic()
                   }
 
-                  let lifted159 : @types.Role? = match
+                  let lifted161 : @types.Role? = match
                     mbt_ffi_load8_u(iter_base + 52) {
                     0 => Option::None
                     1 => {
-                      let lifted158 = match mbt_ffi_load8_u(iter_base + 56) {
+                      let lifted160 = match mbt_ffi_load8_u(iter_base + 56) {
                         0 => @types.Role::Multimodal
                         1 => @types.Role::UnstructuredText
                         2 => @types.Role::UnstructuredBinary
                         3 => {
-                          let result157 = mbt_ffi_ptr2str(
+                          let result159 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 60),
                             mbt_ffi_load32(iter_base + 64),
                           )
 
-                          @types.Role::Other(result157)
+                          @types.Role::Other(result159)
                         }
                         _ => panic()
                       }
 
-                      Option::Some(lifted158)
+                      Option::Some(lifted160)
                     }
                     _ => panic()
                   }
 
-                  array160.push(@types.NamedFieldType::{
-                    name: result147,
+                  array162.push(@types.NamedFieldType::{
+                    name: result149,
                     body: mbt_ffi_load32(iter_base + 8),
                     metadata: @types.MetadataEnvelope::{
-                      doc: lifted149,
+                      doc: lifted151,
                       aliases: array,
-                      examples: array153,
-                      deprecated: lifted156,
-                      role: lifted159,
+                      examples: array155,
+                      deprecated: lifted158,
+                      role: lifted161,
                     },
                   })
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.SchemaTypeBody::RecordType(array160)
+                @types.SchemaTypeBody::RecordType(array162)
               }
               15 => {
-                let array177 : Array[@types.VariantCaseType] = []
-                for index178 = 0
-                    index178 < mbt_ffi_load32(iter_base + 12)
-                    index178 = index178 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index178 * 72
+                let array179 : Array[@types.VariantCaseType] = []
+                for index180 = 0
+                    index180 < mbt_ffi_load32(iter_base + 12)
+                    index180 = index180 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index180 * 72
 
-                  let result162 = mbt_ffi_ptr2str(
+                  let result164 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  let lifted163 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
+                  let lifted165 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
                     0 => Option::None
                     1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                     _ => panic()
                   }
 
-                  let lifted165 : String? = match
+                  let lifted167 : String? = match
                     mbt_ffi_load8_u(iter_base + 16) {
                     0 => Option::None
                     1 => {
-                      let result164 = mbt_ffi_ptr2str(
+                      let result166 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 20),
                         mbt_ffi_load32(iter_base + 24),
                       )
 
-                      Option::Some(result164)
+                      Option::Some(result166)
                     }
                     _ => panic()
                   }
 
-                  let array167 : Array[String] = []
-                  for index168 = 0
-                      index168 < mbt_ffi_load32(iter_base + 32)
-                      index168 = index168 + 1 {
+                  let array169 : Array[String] = []
+                  for index170 = 0
+                      index170 < mbt_ffi_load32(iter_base + 32)
+                      index170 = index170 + 1 {
                     let iter_base = mbt_ffi_load32(iter_base + 28) +
-                      index168 * 8
+                      index170 * 8
 
-                    let result166 = mbt_ffi_ptr2str(
+                    let result168 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 0),
                       mbt_ffi_load32(iter_base + 4),
                     )
 
-                    array167.push(result166)
+                    array169.push(result168)
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
-                  let array170 : Array[String] = []
-                  for index171 = 0
-                      index171 < mbt_ffi_load32(iter_base + 40)
-                      index171 = index171 + 1 {
+                  let array172 : Array[String] = []
+                  for index173 = 0
+                      index173 < mbt_ffi_load32(iter_base + 40)
+                      index173 = index173 + 1 {
                     let iter_base = mbt_ffi_load32(iter_base + 36) +
-                      index171 * 8
+                      index173 * 8
 
-                    let result169 = mbt_ffi_ptr2str(
+                    let result171 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 0),
                       mbt_ffi_load32(iter_base + 4),
                     )
 
-                    array170.push(result169)
+                    array172.push(result171)
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
 
-                  let lifted173 : String? = match
+                  let lifted175 : String? = match
                     mbt_ffi_load8_u(iter_base + 44) {
                     0 => Option::None
                     1 => {
-                      let result172 = mbt_ffi_ptr2str(
+                      let result174 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 48),
                         mbt_ffi_load32(iter_base + 52),
                       )
 
-                      Option::Some(result172)
+                      Option::Some(result174)
                     }
                     _ => panic()
                   }
 
-                  let lifted176 : @types.Role? = match
+                  let lifted178 : @types.Role? = match
                     mbt_ffi_load8_u(iter_base + 56) {
                     0 => Option::None
                     1 => {
-                      let lifted175 = match mbt_ffi_load8_u(iter_base + 60) {
+                      let lifted177 = match mbt_ffi_load8_u(iter_base + 60) {
                         0 => @types.Role::Multimodal
                         1 => @types.Role::UnstructuredText
                         2 => @types.Role::UnstructuredBinary
                         3 => {
-                          let result174 = mbt_ffi_ptr2str(
+                          let result176 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 64),
                             mbt_ffi_load32(iter_base + 68),
                           )
 
-                          @types.Role::Other(result174)
+                          @types.Role::Other(result176)
                         }
                         _ => panic()
                       }
 
-                      Option::Some(lifted175)
+                      Option::Some(lifted177)
                     }
                     _ => panic()
                   }
 
-                  array177.push(@types.VariantCaseType::{
-                    name: result162,
-                    payload: lifted163,
+                  array179.push(@types.VariantCaseType::{
+                    name: result164,
+                    payload: lifted165,
                     metadata: @types.MetadataEnvelope::{
-                      doc: lifted165,
-                      aliases: array167,
-                      examples: array170,
-                      deprecated: lifted173,
-                      role: lifted176,
+                      doc: lifted167,
+                      aliases: array169,
+                      examples: array172,
+                      deprecated: lifted175,
+                      role: lifted178,
                     },
                   })
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.SchemaTypeBody::VariantType(array177)
+                @types.SchemaTypeBody::VariantType(array179)
               }
               16 => {
-                let array180 : Array[String] = []
-                for index181 = 0
-                    index181 < mbt_ffi_load32(iter_base + 12)
-                    index181 = index181 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index181 * 8
+                let array182 : Array[String] = []
+                for index183 = 0
+                    index183 < mbt_ffi_load32(iter_base + 12)
+                    index183 = index183 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index183 * 8
 
-                  let result179 = mbt_ffi_ptr2str(
+                  let result181 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  array180.push(result179)
+                  array182.push(result181)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.SchemaTypeBody::EnumType(array180)
+                @types.SchemaTypeBody::EnumType(array182)
               }
               17 => {
-                let array183 : Array[String] = []
-                for index184 = 0
-                    index184 < mbt_ffi_load32(iter_base + 12)
-                    index184 = index184 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index184 * 8
-
-                  let result182 = mbt_ffi_ptr2str(
-                    mbt_ffi_load32(iter_base + 0),
-                    mbt_ffi_load32(iter_base + 4),
-                  )
-
-                  array183.push(result182)
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-                @types.SchemaTypeBody::FlagsType(array183)
-              }
-              18 => {
-                let array185 : Array[Int] = []
+                let array185 : Array[String] = []
                 for index186 = 0
                     index186 < mbt_ffi_load32(iter_base + 12)
                     index186 = index186 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index186 * 4
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index186 * 8
 
-                  array185.push(mbt_ffi_load32(iter_base + 0))
+                  let result184 = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(iter_base + 0),
+                    mbt_ffi_load32(iter_base + 4),
+                  )
+
+                  array185.push(result184)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.SchemaTypeBody::TupleType(array185)
+                @types.SchemaTypeBody::FlagsType(array185)
+              }
+              18 => {
+                let array187 : Array[Int] = []
+                for index188 = 0
+                    index188 < mbt_ffi_load32(iter_base + 12)
+                    index188 = index188 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index188 * 4
+
+                  array187.push(mbt_ffi_load32(iter_base + 0))
+                }
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                @types.SchemaTypeBody::TupleType(array187)
               }
               19 =>
                 @types.SchemaTypeBody::ListType(mbt_ffi_load32(iter_base + 8))
@@ -11355,50 +11363,50 @@ pub fn make_agent_id(
               22 =>
                 @types.SchemaTypeBody::OptionType(mbt_ffi_load32(iter_base + 8))
               23 => {
-                let lifted187 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
+                let lifted189 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
                   0 => Option::None
                   1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                   _ => panic()
                 }
 
-                let lifted188 : Int? = match mbt_ffi_load8_u(iter_base + 16) {
+                let lifted190 : Int? = match mbt_ffi_load8_u(iter_base + 16) {
                   0 => Option::None
                   1 => Option::Some(mbt_ffi_load32(iter_base + 20))
                   _ => panic()
                 }
 
                 @types.SchemaTypeBody::ResultType(@types.ResultSpec::{
-                  ok: lifted187,
-                  err: lifted188,
+                  ok: lifted189,
+                  err: lifted190,
                 })
               }
               24 => {
-                let lifted192 : Array[String]? = match
+                let lifted194 : Array[String]? = match
                   mbt_ffi_load8_u(iter_base + 8) {
                   0 => Option::None
                   1 => {
-                    let array190 : Array[String] = []
-                    for index191 = 0
-                        index191 < mbt_ffi_load32(iter_base + 16)
-                        index191 = index191 + 1 {
+                    let array192 : Array[String] = []
+                    for index193 = 0
+                        index193 < mbt_ffi_load32(iter_base + 16)
+                        index193 = index193 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 12) +
-                        index191 * 8
+                        index193 * 8
 
-                      let result189 = mbt_ffi_ptr2str(
+                      let result191 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      array190.push(result189)
+                      array192.push(result191)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
 
-                    Option::Some(array190)
+                    Option::Some(array192)
                   }
                   _ => panic()
                 }
 
-                let lifted193 : UInt? = match mbt_ffi_load8_u(iter_base + 20) {
+                let lifted195 : UInt? = match mbt_ffi_load8_u(iter_base + 20) {
                   0 => Option::None
                   1 =>
                     Option::Some(
@@ -11407,7 +11415,7 @@ pub fn make_agent_id(
                   _ => panic()
                 }
 
-                let lifted194 : UInt? = match mbt_ffi_load8_u(iter_base + 28) {
+                let lifted196 : UInt? = match mbt_ffi_load8_u(iter_base + 28) {
                   0 => Option::None
                   1 =>
                     Option::Some(
@@ -11416,54 +11424,54 @@ pub fn make_agent_id(
                   _ => panic()
                 }
 
-                let lifted196 : String? = match
+                let lifted198 : String? = match
                   mbt_ffi_load8_u(iter_base + 36) {
                   0 => Option::None
                   1 => {
-                    let result195 = mbt_ffi_ptr2str(
+                    let result197 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 40),
                       mbt_ffi_load32(iter_base + 44),
                     )
 
-                    Option::Some(result195)
+                    Option::Some(result197)
                   }
                   _ => panic()
                 }
 
                 @types.SchemaTypeBody::TextType(@types.TextRestrictions::{
-                  languages: lifted192,
-                  min_length: lifted193,
-                  max_length: lifted194,
-                  regex: lifted196,
+                  languages: lifted194,
+                  min_length: lifted195,
+                  max_length: lifted196,
+                  regex: lifted198,
                 })
               }
               25 => {
-                let lifted200 : Array[String]? = match
+                let lifted202 : Array[String]? = match
                   mbt_ffi_load8_u(iter_base + 8) {
                   0 => Option::None
                   1 => {
-                    let array198 : Array[String] = []
-                    for index199 = 0
-                        index199 < mbt_ffi_load32(iter_base + 16)
-                        index199 = index199 + 1 {
+                    let array200 : Array[String] = []
+                    for index201 = 0
+                        index201 < mbt_ffi_load32(iter_base + 16)
+                        index201 = index201 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 12) +
-                        index199 * 8
+                        index201 * 8
 
-                      let result197 = mbt_ffi_ptr2str(
+                      let result199 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      array198.push(result197)
+                      array200.push(result199)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
 
-                    Option::Some(array198)
+                    Option::Some(array200)
                   }
                   _ => panic()
                 }
 
-                let lifted201 : UInt? = match mbt_ffi_load8_u(iter_base + 20) {
+                let lifted203 : UInt? = match mbt_ffi_load8_u(iter_base + 20) {
                   0 => Option::None
                   1 =>
                     Option::Some(
@@ -11472,7 +11480,7 @@ pub fn make_agent_id(
                   _ => panic()
                 }
 
-                let lifted202 : UInt? = match mbt_ffi_load8_u(iter_base + 28) {
+                let lifted204 : UInt? = match mbt_ffi_load8_u(iter_base + 28) {
                   0 => Option::None
                   1 =>
                     Option::Some(
@@ -11482,58 +11490,58 @@ pub fn make_agent_id(
                 }
 
                 @types.SchemaTypeBody::BinaryType(@types.BinaryRestrictions::{
-                  mime_types: lifted200,
-                  min_bytes: lifted201,
-                  max_bytes: lifted202,
+                  mime_types: lifted202,
+                  min_bytes: lifted203,
+                  max_bytes: lifted204,
                 })
               }
               26 => {
-                let lifted206 : Array[String]? = match
+                let lifted208 : Array[String]? = match
                   mbt_ffi_load8_u(iter_base + 12) {
                   0 => Option::None
                   1 => {
-                    let array204 : Array[String] = []
-                    for index205 = 0
-                        index205 < mbt_ffi_load32(iter_base + 20)
-                        index205 = index205 + 1 {
+                    let array206 : Array[String] = []
+                    for index207 = 0
+                        index207 < mbt_ffi_load32(iter_base + 20)
+                        index207 = index207 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 16) +
-                        index205 * 8
+                        index207 * 8
 
-                      let result203 = mbt_ffi_ptr2str(
+                      let result205 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      array204.push(result203)
+                      array206.push(result205)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
-                    Option::Some(array204)
+                    Option::Some(array206)
                   }
                   _ => panic()
                 }
 
-                let lifted210 : Array[String]? = match
+                let lifted212 : Array[String]? = match
                   mbt_ffi_load8_u(iter_base + 24) {
                   0 => Option::None
                   1 => {
-                    let array208 : Array[String] = []
-                    for index209 = 0
-                        index209 < mbt_ffi_load32(iter_base + 32)
-                        index209 = index209 + 1 {
+                    let array210 : Array[String] = []
+                    for index211 = 0
+                        index211 < mbt_ffi_load32(iter_base + 32)
+                        index211 = index211 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 28) +
-                        index209 * 8
+                        index211 * 8
 
-                      let result207 = mbt_ffi_ptr2str(
+                      let result209 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      array208.push(result207)
+                      array210.push(result209)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
-                    Option::Some(array208)
+                    Option::Some(array210)
                   }
                   _ => panic()
                 }
@@ -11543,94 +11551,94 @@ pub fn make_agent_id(
                     mbt_ffi_load8_u(iter_base + 8),
                   ),
                   kind: @types.PathKind::from(mbt_ffi_load8_u(iter_base + 9)),
-                  allowed_mime_types: lifted206,
-                  allowed_extensions: lifted210,
+                  allowed_mime_types: lifted208,
+                  allowed_extensions: lifted212,
                 })
               }
               27 => {
-                let lifted214 : Array[String]? = match
+                let lifted216 : Array[String]? = match
                   mbt_ffi_load8_u(iter_base + 8) {
                   0 => Option::None
                   1 => {
-                    let array212 : Array[String] = []
-                    for index213 = 0
-                        index213 < mbt_ffi_load32(iter_base + 16)
-                        index213 = index213 + 1 {
+                    let array214 : Array[String] = []
+                    for index215 = 0
+                        index215 < mbt_ffi_load32(iter_base + 16)
+                        index215 = index215 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 12) +
-                        index213 * 8
+                        index215 * 8
 
-                      let result211 = mbt_ffi_ptr2str(
+                      let result213 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      array212.push(result211)
+                      array214.push(result213)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
 
-                    Option::Some(array212)
+                    Option::Some(array214)
                   }
                   _ => panic()
                 }
 
-                let lifted218 : Array[String]? = match
+                let lifted220 : Array[String]? = match
                   mbt_ffi_load8_u(iter_base + 20) {
                   0 => Option::None
                   1 => {
-                    let array216 : Array[String] = []
-                    for index217 = 0
-                        index217 < mbt_ffi_load32(iter_base + 28)
-                        index217 = index217 + 1 {
+                    let array218 : Array[String] = []
+                    for index219 = 0
+                        index219 < mbt_ffi_load32(iter_base + 28)
+                        index219 = index219 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 24) +
-                        index217 * 8
+                        index219 * 8
 
-                      let result215 = mbt_ffi_ptr2str(
+                      let result217 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      array216.push(result215)
+                      array218.push(result217)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
 
-                    Option::Some(array216)
+                    Option::Some(array218)
                   }
                   _ => panic()
                 }
 
                 @types.SchemaTypeBody::UrlType(@types.UrlRestrictions::{
-                  allowed_schemes: lifted214,
-                  allowed_hosts: lifted218,
+                  allowed_schemes: lifted216,
+                  allowed_hosts: lifted220,
                 })
               }
               28 => @types.SchemaTypeBody::DatetimeType
               29 => @types.SchemaTypeBody::DurationType
               30 => {
-                let result219 = mbt_ffi_ptr2str(
+                let result221 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 8),
                   mbt_ffi_load32(iter_base + 12),
                 )
 
-                let array221 : Array[String] = []
-                for index222 = 0
-                    index222 < mbt_ffi_load32(iter_base + 20)
-                    index222 = index222 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 16) + index222 * 8
+                let array223 : Array[String] = []
+                for index224 = 0
+                    index224 < mbt_ffi_load32(iter_base + 20)
+                    index224 = index224 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 16) + index224 * 8
 
-                  let result220 = mbt_ffi_ptr2str(
+                  let result222 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  array221.push(result220)
+                  array223.push(result222)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
-                let lifted224 : @types.QuantityValue? = match
+                let lifted226 : @types.QuantityValue? = match
                   mbt_ffi_load8_u(iter_base + 24) {
                   0 => Option::None
                   1 => {
-                    let result223 = mbt_ffi_ptr2str(
+                    let result225 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 44),
                       mbt_ffi_load32(iter_base + 48),
                     )
@@ -11638,17 +11646,17 @@ pub fn make_agent_id(
                     Option::Some(@types.QuantityValue::{
                       mantissa: mbt_ffi_load64(iter_base + 32),
                       scale: mbt_ffi_load32(iter_base + 40),
-                      unit: result223,
+                      unit: result225,
                     })
                   }
                   _ => panic()
                 }
 
-                let lifted226 : @types.QuantityValue? = match
+                let lifted228 : @types.QuantityValue? = match
                   mbt_ffi_load8_u(iter_base + 56) {
                   0 => Option::None
                   1 => {
-                    let result225 = mbt_ffi_ptr2str(
+                    let result227 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 76),
                       mbt_ffi_load32(iter_base + 80),
                     )
@@ -11656,230 +11664,211 @@ pub fn make_agent_id(
                     Option::Some(@types.QuantityValue::{
                       mantissa: mbt_ffi_load64(iter_base + 64),
                       scale: mbt_ffi_load32(iter_base + 72),
-                      unit: result225,
+                      unit: result227,
                     })
                   }
                   _ => panic()
                 }
 
                 @types.SchemaTypeBody::QuantityType(@types.QuantitySpec::{
-                  base_unit: result219,
-                  allowed_suffixes: array221,
-                  min: lifted224,
-                  max: lifted226,
+                  base_unit: result221,
+                  allowed_suffixes: array223,
+                  min: lifted226,
+                  max: lifted228,
                 })
               }
               31 => {
-                let array250 : Array[@types.UnionBranch] = []
-                for index251 = 0
-                    index251 < mbt_ffi_load32(iter_base + 12)
-                    index251 = index251 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index251 * 92
+                let array252 : Array[@types.UnionBranch] = []
+                for index253 = 0
+                    index253 < mbt_ffi_load32(iter_base + 12)
+                    index253 = index253 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index253 * 92
 
-                  let result227 = mbt_ffi_ptr2str(
+                  let result229 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  let lifted236 = match mbt_ffi_load8_u(iter_base + 12) {
+                  let lifted238 = match mbt_ffi_load8_u(iter_base + 12) {
                     0 => {
-                      let result228 = mbt_ffi_ptr2str(
-                        mbt_ffi_load32(iter_base + 16),
-                        mbt_ffi_load32(iter_base + 20),
-                      )
-
-                      @types.DiscriminatorRule::Prefix(result228)
-                    }
-                    1 => {
-                      let result229 = mbt_ffi_ptr2str(
-                        mbt_ffi_load32(iter_base + 16),
-                        mbt_ffi_load32(iter_base + 20),
-                      )
-
-                      @types.DiscriminatorRule::Suffix(result229)
-                    }
-                    2 => {
                       let result230 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 16),
                         mbt_ffi_load32(iter_base + 20),
                       )
 
-                      @types.DiscriminatorRule::Contains(result230)
+                      @types.DiscriminatorRule::Prefix(result230)
                     }
-                    3 => {
+                    1 => {
                       let result231 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 16),
                         mbt_ffi_load32(iter_base + 20),
                       )
 
-                      @types.DiscriminatorRule::Regex(result231)
+                      @types.DiscriminatorRule::Suffix(result231)
                     }
-                    4 => {
+                    2 => {
                       let result232 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 16),
                         mbt_ffi_load32(iter_base + 20),
                       )
 
-                      let lifted234 : String? = match
+                      @types.DiscriminatorRule::Contains(result232)
+                    }
+                    3 => {
+                      let result233 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 16),
+                        mbt_ffi_load32(iter_base + 20),
+                      )
+
+                      @types.DiscriminatorRule::Regex(result233)
+                    }
+                    4 => {
+                      let result234 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 16),
+                        mbt_ffi_load32(iter_base + 20),
+                      )
+
+                      let lifted236 : String? = match
                         mbt_ffi_load8_u(iter_base + 24) {
                         0 => Option::None
                         1 => {
-                          let result233 = mbt_ffi_ptr2str(
+                          let result235 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 28),
                             mbt_ffi_load32(iter_base + 32),
                           )
 
-                          Option::Some(result233)
+                          Option::Some(result235)
                         }
                         _ => panic()
                       }
 
                       @types.DiscriminatorRule::FieldEquals(@types.FieldDiscriminator::{
-                        field_name: result232,
-                        literal: lifted234,
+                        field_name: result234,
+                        literal: lifted236,
                       })
                     }
                     5 => {
-                      let result235 = mbt_ffi_ptr2str(
+                      let result237 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 16),
                         mbt_ffi_load32(iter_base + 20),
                       )
 
-                      @types.DiscriminatorRule::FieldAbsent(result235)
+                      @types.DiscriminatorRule::FieldAbsent(result237)
                     }
                     _ => panic()
                   }
 
-                  let lifted238 : String? = match
+                  let lifted240 : String? = match
                     mbt_ffi_load8_u(iter_base + 36) {
                     0 => Option::None
                     1 => {
-                      let result237 = mbt_ffi_ptr2str(
+                      let result239 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 40),
                         mbt_ffi_load32(iter_base + 44),
                       )
 
-                      Option::Some(result237)
+                      Option::Some(result239)
                     }
                     _ => panic()
                   }
 
-                  let array240 : Array[String] = []
-                  for index241 = 0
-                      index241 < mbt_ffi_load32(iter_base + 52)
-                      index241 = index241 + 1 {
+                  let array242 : Array[String] = []
+                  for index243 = 0
+                      index243 < mbt_ffi_load32(iter_base + 52)
+                      index243 = index243 + 1 {
                     let iter_base = mbt_ffi_load32(iter_base + 48) +
-                      index241 * 8
+                      index243 * 8
 
-                    let result239 = mbt_ffi_ptr2str(
+                    let result241 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 0),
                       mbt_ffi_load32(iter_base + 4),
                     )
 
-                    array240.push(result239)
+                    array242.push(result241)
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
 
-                  let array243 : Array[String] = []
-                  for index244 = 0
-                      index244 < mbt_ffi_load32(iter_base + 60)
-                      index244 = index244 + 1 {
+                  let array245 : Array[String] = []
+                  for index246 = 0
+                      index246 < mbt_ffi_load32(iter_base + 60)
+                      index246 = index246 + 1 {
                     let iter_base = mbt_ffi_load32(iter_base + 56) +
-                      index244 * 8
+                      index246 * 8
 
-                    let result242 = mbt_ffi_ptr2str(
+                    let result244 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 0),
                       mbt_ffi_load32(iter_base + 4),
                     )
 
-                    array243.push(result242)
+                    array245.push(result244)
                   }
                   mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
 
-                  let lifted246 : String? = match
+                  let lifted248 : String? = match
                     mbt_ffi_load8_u(iter_base + 64) {
                     0 => Option::None
                     1 => {
-                      let result245 = mbt_ffi_ptr2str(
+                      let result247 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 68),
                         mbt_ffi_load32(iter_base + 72),
                       )
 
-                      Option::Some(result245)
+                      Option::Some(result247)
                     }
                     _ => panic()
                   }
 
-                  let lifted249 : @types.Role? = match
+                  let lifted251 : @types.Role? = match
                     mbt_ffi_load8_u(iter_base + 76) {
                     0 => Option::None
                     1 => {
-                      let lifted248 = match mbt_ffi_load8_u(iter_base + 80) {
+                      let lifted250 = match mbt_ffi_load8_u(iter_base + 80) {
                         0 => @types.Role::Multimodal
                         1 => @types.Role::UnstructuredText
                         2 => @types.Role::UnstructuredBinary
                         3 => {
-                          let result247 = mbt_ffi_ptr2str(
+                          let result249 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 84),
                             mbt_ffi_load32(iter_base + 88),
                           )
 
-                          @types.Role::Other(result247)
+                          @types.Role::Other(result249)
                         }
                         _ => panic()
                       }
 
-                      Option::Some(lifted248)
+                      Option::Some(lifted250)
                     }
                     _ => panic()
                   }
 
-                  array250.push(@types.UnionBranch::{
-                    tag: result227,
+                  array252.push(@types.UnionBranch::{
+                    tag: result229,
                     body: mbt_ffi_load32(iter_base + 8),
-                    discriminator: lifted236,
+                    discriminator: lifted238,
                     metadata: @types.MetadataEnvelope::{
-                      doc: lifted238,
-                      aliases: array240,
-                      examples: array243,
-                      deprecated: lifted246,
-                      role: lifted249,
+                      doc: lifted240,
+                      aliases: array242,
+                      examples: array245,
+                      deprecated: lifted248,
+                      role: lifted251,
                     },
                   })
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
                 @types.SchemaTypeBody::UnionType(@types.UnionSpec::{
-                  branches: array250,
+                  branches: array252,
                 })
               }
               32 => {
-                let lifted253 : String? = match
+                let lifted255 : String? = match
                   mbt_ffi_load8_u(iter_base + 12) {
                   0 => Option::None
                   1 => {
-                    let result252 = mbt_ffi_ptr2str(
+                    let result254 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 16),
                       mbt_ffi_load32(iter_base + 20),
-                    )
-
-                    Option::Some(result252)
-                  }
-                  _ => panic()
-                }
-
-                @types.SchemaTypeBody::SecretType(@types.SecretSpec::{
-                  inner: mbt_ffi_load32(iter_base + 8),
-                  category: lifted253,
-                })
-              }
-              33 => {
-                let lifted255 : String? = match mbt_ffi_load8_u(iter_base + 8) {
-                  0 => Option::None
-                  1 => {
-                    let result254 = mbt_ffi_ptr2str(
-                      mbt_ffi_load32(iter_base + 12),
-                      mbt_ffi_load32(iter_base + 16),
                     )
 
                     Option::Some(result254)
@@ -11887,8 +11876,27 @@ pub fn make_agent_id(
                   _ => panic()
                 }
 
+                @types.SchemaTypeBody::SecretType(@types.SecretSpec::{
+                  inner: mbt_ffi_load32(iter_base + 8),
+                  category: lifted255,
+                })
+              }
+              33 => {
+                let lifted257 : String? = match mbt_ffi_load8_u(iter_base + 8) {
+                  0 => Option::None
+                  1 => {
+                    let result256 = mbt_ffi_ptr2str(
+                      mbt_ffi_load32(iter_base + 12),
+                      mbt_ffi_load32(iter_base + 16),
+                    )
+
+                    Option::Some(result256)
+                  }
+                  _ => panic()
+                }
+
                 @types.SchemaTypeBody::QuotaTokenType(@types.QuotaTokenSpec::{
-                  resource_name: lifted255,
+                  resource_name: lifted257,
                 })
               }
               34 =>
@@ -11896,158 +11904,158 @@ pub fn make_agent_id(
                   polymorphic: mbt_ffi_load8_u(iter_base + 8) != 0,
                 })
               35 => {
-                let lifted256 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
+                let lifted258 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
                   0 => Option::None
                   1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                   _ => panic()
                 }
 
-                @types.SchemaTypeBody::FutureType(lifted256)
+                @types.SchemaTypeBody::FutureType(lifted258)
               }
               36 => {
-                let lifted257 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
+                let lifted259 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
                   0 => Option::None
                   1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                   _ => panic()
                 }
 
-                @types.SchemaTypeBody::StreamType(lifted257)
+                @types.SchemaTypeBody::StreamType(lifted259)
               }
               _ => panic()
             }
 
-            let lifted260 : String? = match mbt_ffi_load8_u(iter_base + 88) {
+            let lifted262 : String? = match mbt_ffi_load8_u(iter_base + 88) {
               0 => Option::None
               1 => {
-                let result259 = mbt_ffi_ptr2str(
+                let result261 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 92),
                   mbt_ffi_load32(iter_base + 96),
                 )
 
-                Option::Some(result259)
+                Option::Some(result261)
               }
               _ => panic()
             }
 
-            let array262 : Array[String] = []
-            for index263 = 0
-                index263 < mbt_ffi_load32(iter_base + 104)
-                index263 = index263 + 1 {
-              let iter_base = mbt_ffi_load32(iter_base + 100) + index263 * 8
+            let array264 : Array[String] = []
+            for index265 = 0
+                index265 < mbt_ffi_load32(iter_base + 104)
+                index265 = index265 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 100) + index265 * 8
 
-              let result261 = mbt_ffi_ptr2str(
+              let result263 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 0),
                 mbt_ffi_load32(iter_base + 4),
               )
 
-              array262.push(result261)
+              array264.push(result263)
             }
             mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
 
-            let array265 : Array[String] = []
-            for index266 = 0
-                index266 < mbt_ffi_load32(iter_base + 112)
-                index266 = index266 + 1 {
-              let iter_base = mbt_ffi_load32(iter_base + 108) + index266 * 8
+            let array267 : Array[String] = []
+            for index268 = 0
+                index268 < mbt_ffi_load32(iter_base + 112)
+                index268 = index268 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 108) + index268 * 8
 
-              let result264 = mbt_ffi_ptr2str(
+              let result266 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 0),
                 mbt_ffi_load32(iter_base + 4),
               )
 
-              array265.push(result264)
+              array267.push(result266)
             }
             mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
 
-            let lifted268 : String? = match mbt_ffi_load8_u(iter_base + 116) {
+            let lifted270 : String? = match mbt_ffi_load8_u(iter_base + 116) {
               0 => Option::None
               1 => {
-                let result267 = mbt_ffi_ptr2str(
+                let result269 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 120),
                   mbt_ffi_load32(iter_base + 124),
                 )
 
-                Option::Some(result267)
+                Option::Some(result269)
               }
               _ => panic()
             }
 
-            let lifted271 : @types.Role? = match
+            let lifted273 : @types.Role? = match
               mbt_ffi_load8_u(iter_base + 128) {
               0 => Option::None
               1 => {
-                let lifted270 = match mbt_ffi_load8_u(iter_base + 132) {
+                let lifted272 = match mbt_ffi_load8_u(iter_base + 132) {
                   0 => @types.Role::Multimodal
                   1 => @types.Role::UnstructuredText
                   2 => @types.Role::UnstructuredBinary
                   3 => {
-                    let result269 = mbt_ffi_ptr2str(
+                    let result271 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 136),
                       mbt_ffi_load32(iter_base + 140),
                     )
 
-                    @types.Role::Other(result269)
+                    @types.Role::Other(result271)
                   }
                   _ => panic()
                 }
 
-                Option::Some(lifted270)
+                Option::Some(lifted272)
               }
               _ => panic()
             }
 
-            array272.push(@types.SchemaTypeNode::{
-              body: lifted258,
+            array274.push(@types.SchemaTypeNode::{
+              body: lifted260,
               metadata: @types.MetadataEnvelope::{
-                doc: lifted260,
-                aliases: array262,
-                examples: array265,
-                deprecated: lifted268,
-                role: lifted271,
+                doc: lifted262,
+                aliases: array264,
+                examples: array267,
+                deprecated: lifted270,
+                role: lifted273,
               },
             })
           }
           mbt_ffi_free(mbt_ffi_load32(return_area + 8))
 
-          let array277 : Array[@types.SchemaTypeDef] = []
-          for index278 = 0
-              index278 < mbt_ffi_load32(return_area + 20)
-              index278 = index278 + 1 {
-            let iter_base = mbt_ffi_load32(return_area + 16) + index278 * 24
+          let array279 : Array[@types.SchemaTypeDef] = []
+          for index280 = 0
+              index280 < mbt_ffi_load32(return_area + 20)
+              index280 = index280 + 1 {
+            let iter_base = mbt_ffi_load32(return_area + 16) + index280 * 24
 
-            let result274 = mbt_ffi_ptr2str(
+            let result276 = mbt_ffi_ptr2str(
               mbt_ffi_load32(iter_base + 0),
               mbt_ffi_load32(iter_base + 4),
             )
 
-            let lifted276 : String? = match mbt_ffi_load8_u(iter_base + 8) {
+            let lifted278 : String? = match mbt_ffi_load8_u(iter_base + 8) {
               0 => Option::None
               1 => {
-                let result275 = mbt_ffi_ptr2str(
+                let result277 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 12),
                   mbt_ffi_load32(iter_base + 16),
                 )
 
-                Option::Some(result275)
+                Option::Some(result277)
               }
               _ => panic()
             }
 
-            array277.push(@types.SchemaTypeDef::{
-              id: result274,
-              name: lifted276,
+            array279.push(@types.SchemaTypeDef::{
+              id: result276,
+              name: lifted278,
               body: mbt_ffi_load32(iter_base + 20),
             })
           }
           mbt_ffi_free(mbt_ffi_load32(return_area + 16))
 
-          let array308 : Array[@types.SchemaValueNode] = []
-          for index309 = 0
-              index309 < mbt_ffi_load32(return_area + 32)
-              index309 = index309 + 1 {
-            let iter_base = mbt_ffi_load32(return_area + 28) + index309 * 32
+          let array310 : Array[@types.SchemaValueNode] = []
+          for index311 = 0
+              index311 < mbt_ffi_load32(return_area + 32)
+              index311 = index311 + 1 {
+            let iter_base = mbt_ffi_load32(return_area + 28) + index311 * 32
 
-            let lifted307 = match mbt_ffi_load8_u(iter_base + 0) {
+            let lifted309 = match mbt_ffi_load8_u(iter_base + 0) {
               0 =>
                 @types.SchemaValueNode::BoolValue(
                   mbt_ffi_load8_u(iter_base + 8) != 0,
@@ -12086,28 +12094,28 @@ pub fn make_agent_id(
                   Int::unsafe_to_char(mbt_ffi_load32(iter_base + 8)),
                 )
               12 => {
-                let result279 = mbt_ffi_ptr2str(
+                let result281 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 8),
                   mbt_ffi_load32(iter_base + 12),
                 )
 
-                @types.SchemaValueNode::StringValue(result279)
+                @types.SchemaValueNode::StringValue(result281)
               }
               13 => {
-                let array280 : Array[Int] = []
-                for index281 = 0
-                    index281 < mbt_ffi_load32(iter_base + 12)
-                    index281 = index281 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index281 * 4
+                let array282 : Array[Int] = []
+                for index283 = 0
+                    index283 < mbt_ffi_load32(iter_base + 12)
+                    index283 = index283 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index283 * 4
 
-                  array280.push(mbt_ffi_load32(iter_base + 0))
+                  array282.push(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.SchemaValueNode::RecordValue(array280)
+                @types.SchemaValueNode::RecordValue(array282)
               }
               14 => {
-                let lifted282 : Int? = match mbt_ffi_load8_u(iter_base + 12) {
+                let lifted284 : Int? = match mbt_ffi_load8_u(iter_base + 12) {
                   0 => Option::None
                   1 => Option::Some(mbt_ffi_load32(iter_base + 16))
                   _ => panic()
@@ -12115,7 +12123,7 @@ pub fn make_agent_id(
 
                 @types.SchemaValueNode::VariantValue(@types.VariantValuePayload::{
                   case: mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
-                  payload: lifted282,
+                  payload: lifted284,
                 })
               }
               15 =>
@@ -12123,32 +12131,19 @@ pub fn make_agent_id(
                   mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
                 )
               16 => {
-                let array283 : Array[Bool] = []
-                for index284 = 0
-                    index284 < mbt_ffi_load32(iter_base + 12)
-                    index284 = index284 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index284 * 1
-
-                  array283.push(mbt_ffi_load8_u(iter_base + 0) != 0)
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-                @types.SchemaValueNode::FlagsValue(array283)
-              }
-              17 => {
-                let array285 : Array[Int] = []
+                let array285 : Array[Bool] = []
                 for index286 = 0
                     index286 < mbt_ffi_load32(iter_base + 12)
                     index286 = index286 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index286 * 4
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index286 * 1
 
-                  array285.push(mbt_ffi_load32(iter_base + 0))
+                  array285.push(mbt_ffi_load8_u(iter_base + 0) != 0)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.SchemaValueNode::TupleValue(array285)
+                @types.SchemaValueNode::FlagsValue(array285)
               }
-              18 => {
+              17 => {
                 let array287 : Array[Int] = []
                 for index288 = 0
                     index288 < mbt_ffi_load32(iter_base + 12)
@@ -12159,9 +12154,9 @@ pub fn make_agent_id(
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.SchemaValueNode::ListValue(array287)
+                @types.SchemaValueNode::TupleValue(array287)
               }
-              19 => {
+              18 => {
                 let array289 : Array[Int] = []
                 for index290 = 0
                     index290 < mbt_ffi_load32(iter_base + 12)
@@ -12172,125 +12167,138 @@ pub fn make_agent_id(
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.SchemaValueNode::FixedListValue(array289)
+                @types.SchemaValueNode::ListValue(array289)
               }
-              20 => {
-                let array291 : Array[@types.MapEntry] = []
+              19 => {
+                let array291 : Array[Int] = []
                 for index292 = 0
                     index292 < mbt_ffi_load32(iter_base + 12)
                     index292 = index292 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index292 * 8
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index292 * 4
 
-                  array291.push(@types.MapEntry::{
+                  array291.push(mbt_ffi_load32(iter_base + 0))
+                }
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                @types.SchemaValueNode::FixedListValue(array291)
+              }
+              20 => {
+                let array293 : Array[@types.MapEntry] = []
+                for index294 = 0
+                    index294 < mbt_ffi_load32(iter_base + 12)
+                    index294 = index294 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index294 * 8
+
+                  array293.push(@types.MapEntry::{
                     key: mbt_ffi_load32(iter_base + 0),
                     value: mbt_ffi_load32(iter_base + 4),
                   })
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.SchemaValueNode::MapValue(array291)
+                @types.SchemaValueNode::MapValue(array293)
               }
               21 => {
-                let lifted293 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
+                let lifted295 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
                   0 => Option::None
                   1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                   _ => panic()
                 }
 
-                @types.SchemaValueNode::OptionValue(lifted293)
+                @types.SchemaValueNode::OptionValue(lifted295)
               }
               22 => {
-                let lifted296 = match mbt_ffi_load8_u(iter_base + 8) {
+                let lifted298 = match mbt_ffi_load8_u(iter_base + 8) {
                   0 => {
-                    let lifted294 : Int? = match
+                    let lifted296 : Int? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 16))
                       _ => panic()
                     }
 
-                    @types.ResultValuePayload::OkValue(lifted294)
+                    @types.ResultValuePayload::OkValue(lifted296)
                   }
                   1 => {
-                    let lifted295 : Int? = match
+                    let lifted297 : Int? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 16))
                       _ => panic()
                     }
 
-                    @types.ResultValuePayload::ErrValue(lifted295)
+                    @types.ResultValuePayload::ErrValue(lifted297)
                   }
                   _ => panic()
                 }
 
-                @types.SchemaValueNode::ResultValue(lifted296)
+                @types.SchemaValueNode::ResultValue(lifted298)
               }
               23 => {
-                let result297 = mbt_ffi_ptr2str(
+                let result299 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 8),
                   mbt_ffi_load32(iter_base + 12),
                 )
 
-                let lifted299 : String? = match
+                let lifted301 : String? = match
                   mbt_ffi_load8_u(iter_base + 16) {
                   0 => Option::None
                   1 => {
-                    let result298 = mbt_ffi_ptr2str(
+                    let result300 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 20),
                       mbt_ffi_load32(iter_base + 24),
                     )
 
-                    Option::Some(result298)
+                    Option::Some(result300)
                   }
                   _ => panic()
                 }
 
                 @types.SchemaValueNode::TextValue(@types.TextValuePayload::{
-                  text: result297,
-                  language: lifted299,
+                  text: result299,
+                  language: lifted301,
                 })
               }
               24 => {
-                let result300 = mbt_ffi_ptr2bytes(
+                let result302 = mbt_ffi_ptr2bytes(
                   mbt_ffi_load32(iter_base + 8),
                   mbt_ffi_load32(iter_base + 12),
                 )
 
-                let lifted302 : String? = match
+                let lifted304 : String? = match
                   mbt_ffi_load8_u(iter_base + 16) {
                   0 => Option::None
                   1 => {
-                    let result301 = mbt_ffi_ptr2str(
+                    let result303 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 20),
                       mbt_ffi_load32(iter_base + 24),
                     )
 
-                    Option::Some(result301)
+                    Option::Some(result303)
                   }
                   _ => panic()
                 }
 
                 @types.SchemaValueNode::BinaryValue(@types.BinaryValuePayload::{
-                  bytes: result300,
-                  mime_type: lifted302,
+                  bytes: result302,
+                  mime_type: lifted304,
                 })
               }
               25 => {
-                let result303 = mbt_ffi_ptr2str(
+                let result305 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 8),
                   mbt_ffi_load32(iter_base + 12),
                 )
 
-                @types.SchemaValueNode::PathValue(result303)
+                @types.SchemaValueNode::PathValue(result305)
               }
               26 => {
-                let result304 = mbt_ffi_ptr2str(
+                let result306 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 8),
                   mbt_ffi_load32(iter_base + 12),
                 )
 
-                @types.SchemaValueNode::UrlValue(result304)
+                @types.SchemaValueNode::UrlValue(result306)
               }
               27 =>
                 @types.SchemaValueNode::DatetimeValue(@types.Datetime::{
@@ -12302,7 +12310,7 @@ pub fn make_agent_id(
                   nanoseconds: mbt_ffi_load64(iter_base + 8),
                 })
               29 => {
-                let result305 = mbt_ffi_ptr2str(
+                let result307 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 20),
                   mbt_ffi_load32(iter_base + 24),
                 )
@@ -12310,17 +12318,17 @@ pub fn make_agent_id(
                 @types.SchemaValueNode::QuantityValueNode(@types.QuantityValue::{
                   mantissa: mbt_ffi_load64(iter_base + 8),
                   scale: mbt_ffi_load32(iter_base + 16),
-                  unit: result305,
+                  unit: result307,
                 })
               }
               30 => {
-                let result306 = mbt_ffi_ptr2str(
+                let result308 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 8),
                   mbt_ffi_load32(iter_base + 12),
                 )
 
                 @types.SchemaValueNode::UnionValue(@types.UnionValuePayload::{
-                  tag: result306,
+                  tag: result308,
                   body: mbt_ffi_load32(iter_base + 16),
                 })
               }
@@ -12338,21 +12346,27 @@ pub fn make_agent_id(
                     mbt_ffi_load32(iter_base + 8),
                   ),
                 )
+              34 =>
+                @types.SchemaValueNode::StreamValue(
+                  @types.SchemaValueStream::SchemaValueStream(
+                    mbt_ffi_load32(iter_base + 8),
+                  ),
+                )
               _ => panic()
             }
 
-            array308.push(lifted307)
+            array310.push(lifted309)
           }
           mbt_ffi_free(mbt_ffi_load32(return_area + 28))
 
           @common.AgentError::CustomError(@types.TypedSchemaValue::{
             graph: @types.SchemaGraph::{
-              type_nodes: array272,
-              defs: array277,
+              type_nodes: array274,
+              defs: array279,
               root: mbt_ffi_load32(return_area + 24),
             },
             value: @types.SchemaValueTree::{
-              value_nodes: array308,
+              value_nodes: array310,
               root: mbt_ffi_load32(return_area + 36),
             },
           })
@@ -12360,13 +12374,13 @@ pub fn make_agent_id(
         _ => panic()
       }
 
-      Result::Err(lifted310)
+      Result::Err(lifted312)
     }
     _ => panic()
   }
-  let ret = lifted311
+  let ret = lifted313
   mbt_ffi_free(ptr)
-  mbt_ffi_free(address68)
+  mbt_ffi_free(address70)
   mbt_ffi_free(return_area)
 
   cleanup_list.each(mbt_ffi_free)
@@ -14435,6 +14449,12 @@ pub fn parse_agent_id(
           33 =>
             @types.SchemaValueNode::PermissionCardHandle(
               @types.PermissionCard::PermissionCard(
+                mbt_ffi_load32(iter_base + 8),
+              ),
+            )
+          34 =>
+            @types.SchemaValueNode::StreamValue(
+              @types.SchemaValueStream::SchemaValueStream(
                 mbt_ffi_load32(iter_base + 8),
               ),
             )
@@ -16596,6 +16616,12 @@ pub fn parse_agent_id(
                     mbt_ffi_load32(iter_base + 8),
                   ),
                 )
+              34 =>
+                @types.SchemaValueNode::StreamValue(
+                  @types.SchemaValueStream::SchemaValueStream(
+                    mbt_ffi_load32(iter_base + 8),
+                  ),
+                )
               _ => panic()
             }
 
@@ -16691,12 +16717,12 @@ pub fn WasmRpc::wasm_rpc(
 
   let ptr = mbt_ffi_str2ptr(agent_type_name)
 
-  let address68 = mbt_ffi_malloc(constructor_.value_nodes.length() * 32)
-  for index69 = 0
-      index69 < constructor_.value_nodes.length()
-      index69 = index69 + 1 {
-    let iter_elem : @types.SchemaValueNode = constructor_.value_nodes[index69]
-    let iter_base = address68 + index69 * 32
+  let address70 = mbt_ffi_malloc(constructor_.value_nodes.length() * 32)
+  for index71 = 0
+      index71 < constructor_.value_nodes.length()
+      index71 = index71 + 1 {
+    let iter_elem : @types.SchemaValueNode = constructor_.value_nodes[index71]
+    let iter_base = address70 + index71 * 32
 
     match iter_elem {
       BoolValue(payload) => {
@@ -17103,50 +17129,58 @@ pub fn WasmRpc::wasm_rpc(
 
         ()
       }
+      StreamValue(payload68) => {
+        mbt_ffi_store8(iter_base + 0, 34)
+
+        let @types.SchemaValueStream(handle69) = payload68
+        mbt_ffi_store32(iter_base + 8, handle69)
+
+        ()
+      }
     }
   }
 
-  let (lowered, lowered72, lowered73) = match phantom_id {
+  let (lowered, lowered74, lowered75) = match phantom_id {
     None => (0, 0L, 0L)
-    Some(payload71) =>
+    Some(payload73) =>
       (
         1,
-        payload71.high_bits.reinterpret_as_int64(),
-        payload71.low_bits.reinterpret_as_int64(),
+        payload73.high_bits.reinterpret_as_int64(),
+        payload73.low_bits.reinterpret_as_int64(),
       )
   }
 
-  let address521 = mbt_ffi_malloc(agent_config.length() * 40)
-  for index522 = 0; index522 < agent_config.length(); index522 = index522 + 1 {
-    let iter_elem : @common.TypedAgentConfigValue = agent_config[index522]
-    let iter_base = address521 + index522 * 40
+  let address525 = mbt_ffi_malloc(agent_config.length() * 40)
+  for index526 = 0; index526 < agent_config.length(); index526 = index526 + 1 {
+    let iter_elem : @common.TypedAgentConfigValue = agent_config[index526]
+    let iter_base = address525 + index526 * 40
 
-    let address75 = mbt_ffi_malloc(iter_elem.path.length() * 8)
-    for index76 = 0; index76 < iter_elem.path.length(); index76 = index76 + 1 {
-      let iter_elem : String = iter_elem.path[index76]
-      let iter_base = address75 + index76 * 8
+    let address77 = mbt_ffi_malloc(iter_elem.path.length() * 8)
+    for index78 = 0; index78 < iter_elem.path.length(); index78 = index78 + 1 {
+      let iter_elem : String = iter_elem.path[index78]
+      let iter_base = address77 + index78 * 8
 
-      let ptr74 = mbt_ffi_str2ptr(iter_elem)
+      let ptr76 = mbt_ffi_str2ptr(iter_elem)
       mbt_ffi_store32(iter_base + 4, iter_elem.length())
-      mbt_ffi_store32(iter_base + 0, ptr74)
-      cleanup_list.push(ptr74)
+      mbt_ffi_store32(iter_base + 0, ptr76)
+      cleanup_list.push(ptr76)
     }
     mbt_ffi_store32(iter_base + 4, iter_elem.path.length())
-    mbt_ffi_store32(iter_base + 0, address75)
+    mbt_ffi_store32(iter_base + 0, address77)
 
-    let address439 = mbt_ffi_malloc(
+    let address441 = mbt_ffi_malloc(
       iter_elem.value.graph.type_nodes.length() * 144,
     )
-    for index440 = 0
-        index440 < iter_elem.value.graph.type_nodes.length()
-        index440 = index440 + 1 {
-      let iter_elem : @types.SchemaTypeNode = iter_elem.value.graph.type_nodes[index440]
-      let iter_base = address439 + index440 * 144
+    for index442 = 0
+        index442 < iter_elem.value.graph.type_nodes.length()
+        index442 = index442 + 1 {
+      let iter_elem : @types.SchemaTypeNode = iter_elem.value.graph.type_nodes[index442]
+      let iter_base = address441 + index442 * 144
 
       match iter_elem.body {
-        RefType(payload77) => {
+        RefType(payload79) => {
           mbt_ffi_store8(iter_base + 0, 0)
-          mbt_ffi_store32(iter_base + 8, payload77)
+          mbt_ffi_store32(iter_base + 8, payload79)
 
           ()
         }
@@ -17155,48 +17189,48 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        S8Type(payload79) => {
+        S8Type(payload81) => {
           mbt_ffi_store8(iter_base + 0, 2)
 
-          match payload79 {
+          match payload81 {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload81) => {
+            Some(payload83) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              match payload81.min {
+              match payload83.min {
                 None => {
                   mbt_ffi_store8(iter_base + 16, 0)
 
                   ()
                 }
-                Some(payload83) => {
+                Some(payload85) => {
                   mbt_ffi_store8(iter_base + 16, 1)
 
-                  match payload83 {
-                    Signed(payload84) => {
+                  match payload85 {
+                    Signed(payload86) => {
                       mbt_ffi_store8(iter_base + 24, 0)
-                      mbt_ffi_store64(iter_base + 32, payload84)
+                      mbt_ffi_store64(iter_base + 32, payload86)
 
                       ()
                     }
-                    Unsigned(payload85) => {
+                    Unsigned(payload87) => {
                       mbt_ffi_store8(iter_base + 24, 1)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload85.reinterpret_as_int64(),
+                        payload87.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload86) => {
+                    FloatBits(payload88) => {
                       mbt_ffi_store8(iter_base + 24, 2)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload86.reinterpret_as_int64(),
+                        payload88.reinterpret_as_int64(),
                       )
 
                       ()
@@ -17207,36 +17241,36 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload81.max {
+              match payload83.max {
                 None => {
                   mbt_ffi_store8(iter_base + 40, 0)
 
                   ()
                 }
-                Some(payload88) => {
+                Some(payload90) => {
                   mbt_ffi_store8(iter_base + 40, 1)
 
-                  match payload88 {
-                    Signed(payload89) => {
+                  match payload90 {
+                    Signed(payload91) => {
                       mbt_ffi_store8(iter_base + 48, 0)
-                      mbt_ffi_store64(iter_base + 56, payload89)
+                      mbt_ffi_store64(iter_base + 56, payload91)
 
                       ()
                     }
-                    Unsigned(payload90) => {
+                    Unsigned(payload92) => {
                       mbt_ffi_store8(iter_base + 48, 1)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload90.reinterpret_as_int64(),
+                        payload92.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload91) => {
+                    FloatBits(payload93) => {
                       mbt_ffi_store8(iter_base + 48, 2)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload91.reinterpret_as_int64(),
+                        payload93.reinterpret_as_int64(),
                       )
 
                       ()
@@ -17247,19 +17281,19 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload81.unit {
+              match payload83.unit {
                 None => {
                   mbt_ffi_store8(iter_base + 64, 0)
 
                   ()
                 }
-                Some(payload93) => {
+                Some(payload95) => {
                   mbt_ffi_store8(iter_base + 64, 1)
 
-                  let ptr94 = mbt_ffi_str2ptr(payload93)
-                  mbt_ffi_store32(iter_base + 72, payload93.length())
-                  mbt_ffi_store32(iter_base + 68, ptr94)
-                  cleanup_list.push(ptr94)
+                  let ptr96 = mbt_ffi_str2ptr(payload95)
+                  mbt_ffi_store32(iter_base + 72, payload95.length())
+                  mbt_ffi_store32(iter_base + 68, ptr96)
+                  cleanup_list.push(ptr96)
 
                   ()
                 }
@@ -17271,48 +17305,48 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        S16Type(payload95) => {
+        S16Type(payload97) => {
           mbt_ffi_store8(iter_base + 0, 3)
 
-          match payload95 {
+          match payload97 {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload97) => {
+            Some(payload99) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              match payload97.min {
+              match payload99.min {
                 None => {
                   mbt_ffi_store8(iter_base + 16, 0)
 
                   ()
                 }
-                Some(payload99) => {
+                Some(payload101) => {
                   mbt_ffi_store8(iter_base + 16, 1)
 
-                  match payload99 {
-                    Signed(payload100) => {
+                  match payload101 {
+                    Signed(payload102) => {
                       mbt_ffi_store8(iter_base + 24, 0)
-                      mbt_ffi_store64(iter_base + 32, payload100)
+                      mbt_ffi_store64(iter_base + 32, payload102)
 
                       ()
                     }
-                    Unsigned(payload101) => {
+                    Unsigned(payload103) => {
                       mbt_ffi_store8(iter_base + 24, 1)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload101.reinterpret_as_int64(),
+                        payload103.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload102) => {
+                    FloatBits(payload104) => {
                       mbt_ffi_store8(iter_base + 24, 2)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload102.reinterpret_as_int64(),
+                        payload104.reinterpret_as_int64(),
                       )
 
                       ()
@@ -17323,36 +17357,36 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload97.max {
+              match payload99.max {
                 None => {
                   mbt_ffi_store8(iter_base + 40, 0)
 
                   ()
                 }
-                Some(payload104) => {
+                Some(payload106) => {
                   mbt_ffi_store8(iter_base + 40, 1)
 
-                  match payload104 {
-                    Signed(payload105) => {
+                  match payload106 {
+                    Signed(payload107) => {
                       mbt_ffi_store8(iter_base + 48, 0)
-                      mbt_ffi_store64(iter_base + 56, payload105)
+                      mbt_ffi_store64(iter_base + 56, payload107)
 
                       ()
                     }
-                    Unsigned(payload106) => {
+                    Unsigned(payload108) => {
                       mbt_ffi_store8(iter_base + 48, 1)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload106.reinterpret_as_int64(),
+                        payload108.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload107) => {
+                    FloatBits(payload109) => {
                       mbt_ffi_store8(iter_base + 48, 2)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload107.reinterpret_as_int64(),
+                        payload109.reinterpret_as_int64(),
                       )
 
                       ()
@@ -17363,19 +17397,19 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload97.unit {
+              match payload99.unit {
                 None => {
                   mbt_ffi_store8(iter_base + 64, 0)
 
                   ()
                 }
-                Some(payload109) => {
+                Some(payload111) => {
                   mbt_ffi_store8(iter_base + 64, 1)
 
-                  let ptr110 = mbt_ffi_str2ptr(payload109)
-                  mbt_ffi_store32(iter_base + 72, payload109.length())
-                  mbt_ffi_store32(iter_base + 68, ptr110)
-                  cleanup_list.push(ptr110)
+                  let ptr112 = mbt_ffi_str2ptr(payload111)
+                  mbt_ffi_store32(iter_base + 72, payload111.length())
+                  mbt_ffi_store32(iter_base + 68, ptr112)
+                  cleanup_list.push(ptr112)
 
                   ()
                 }
@@ -17387,48 +17421,48 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        S32Type(payload111) => {
+        S32Type(payload113) => {
           mbt_ffi_store8(iter_base + 0, 4)
 
-          match payload111 {
+          match payload113 {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload113) => {
+            Some(payload115) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              match payload113.min {
+              match payload115.min {
                 None => {
                   mbt_ffi_store8(iter_base + 16, 0)
 
                   ()
                 }
-                Some(payload115) => {
+                Some(payload117) => {
                   mbt_ffi_store8(iter_base + 16, 1)
 
-                  match payload115 {
-                    Signed(payload116) => {
+                  match payload117 {
+                    Signed(payload118) => {
                       mbt_ffi_store8(iter_base + 24, 0)
-                      mbt_ffi_store64(iter_base + 32, payload116)
+                      mbt_ffi_store64(iter_base + 32, payload118)
 
                       ()
                     }
-                    Unsigned(payload117) => {
+                    Unsigned(payload119) => {
                       mbt_ffi_store8(iter_base + 24, 1)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload117.reinterpret_as_int64(),
+                        payload119.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload118) => {
+                    FloatBits(payload120) => {
                       mbt_ffi_store8(iter_base + 24, 2)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload118.reinterpret_as_int64(),
+                        payload120.reinterpret_as_int64(),
                       )
 
                       ()
@@ -17439,36 +17473,36 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload113.max {
+              match payload115.max {
                 None => {
                   mbt_ffi_store8(iter_base + 40, 0)
 
                   ()
                 }
-                Some(payload120) => {
+                Some(payload122) => {
                   mbt_ffi_store8(iter_base + 40, 1)
 
-                  match payload120 {
-                    Signed(payload121) => {
+                  match payload122 {
+                    Signed(payload123) => {
                       mbt_ffi_store8(iter_base + 48, 0)
-                      mbt_ffi_store64(iter_base + 56, payload121)
+                      mbt_ffi_store64(iter_base + 56, payload123)
 
                       ()
                     }
-                    Unsigned(payload122) => {
+                    Unsigned(payload124) => {
                       mbt_ffi_store8(iter_base + 48, 1)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload122.reinterpret_as_int64(),
+                        payload124.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload123) => {
+                    FloatBits(payload125) => {
                       mbt_ffi_store8(iter_base + 48, 2)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload123.reinterpret_as_int64(),
+                        payload125.reinterpret_as_int64(),
                       )
 
                       ()
@@ -17479,19 +17513,19 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload113.unit {
+              match payload115.unit {
                 None => {
                   mbt_ffi_store8(iter_base + 64, 0)
 
                   ()
                 }
-                Some(payload125) => {
+                Some(payload127) => {
                   mbt_ffi_store8(iter_base + 64, 1)
 
-                  let ptr126 = mbt_ffi_str2ptr(payload125)
-                  mbt_ffi_store32(iter_base + 72, payload125.length())
-                  mbt_ffi_store32(iter_base + 68, ptr126)
-                  cleanup_list.push(ptr126)
+                  let ptr128 = mbt_ffi_str2ptr(payload127)
+                  mbt_ffi_store32(iter_base + 72, payload127.length())
+                  mbt_ffi_store32(iter_base + 68, ptr128)
+                  cleanup_list.push(ptr128)
 
                   ()
                 }
@@ -17503,48 +17537,48 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        S64Type(payload127) => {
+        S64Type(payload129) => {
           mbt_ffi_store8(iter_base + 0, 5)
 
-          match payload127 {
+          match payload129 {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload129) => {
+            Some(payload131) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              match payload129.min {
+              match payload131.min {
                 None => {
                   mbt_ffi_store8(iter_base + 16, 0)
 
                   ()
                 }
-                Some(payload131) => {
+                Some(payload133) => {
                   mbt_ffi_store8(iter_base + 16, 1)
 
-                  match payload131 {
-                    Signed(payload132) => {
+                  match payload133 {
+                    Signed(payload134) => {
                       mbt_ffi_store8(iter_base + 24, 0)
-                      mbt_ffi_store64(iter_base + 32, payload132)
+                      mbt_ffi_store64(iter_base + 32, payload134)
 
                       ()
                     }
-                    Unsigned(payload133) => {
+                    Unsigned(payload135) => {
                       mbt_ffi_store8(iter_base + 24, 1)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload133.reinterpret_as_int64(),
+                        payload135.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload134) => {
+                    FloatBits(payload136) => {
                       mbt_ffi_store8(iter_base + 24, 2)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload134.reinterpret_as_int64(),
+                        payload136.reinterpret_as_int64(),
                       )
 
                       ()
@@ -17555,36 +17589,36 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload129.max {
+              match payload131.max {
                 None => {
                   mbt_ffi_store8(iter_base + 40, 0)
 
                   ()
                 }
-                Some(payload136) => {
+                Some(payload138) => {
                   mbt_ffi_store8(iter_base + 40, 1)
 
-                  match payload136 {
-                    Signed(payload137) => {
+                  match payload138 {
+                    Signed(payload139) => {
                       mbt_ffi_store8(iter_base + 48, 0)
-                      mbt_ffi_store64(iter_base + 56, payload137)
+                      mbt_ffi_store64(iter_base + 56, payload139)
 
                       ()
                     }
-                    Unsigned(payload138) => {
+                    Unsigned(payload140) => {
                       mbt_ffi_store8(iter_base + 48, 1)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload138.reinterpret_as_int64(),
+                        payload140.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload139) => {
+                    FloatBits(payload141) => {
                       mbt_ffi_store8(iter_base + 48, 2)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload139.reinterpret_as_int64(),
+                        payload141.reinterpret_as_int64(),
                       )
 
                       ()
@@ -17595,19 +17629,19 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload129.unit {
+              match payload131.unit {
                 None => {
                   mbt_ffi_store8(iter_base + 64, 0)
 
                   ()
                 }
-                Some(payload141) => {
+                Some(payload143) => {
                   mbt_ffi_store8(iter_base + 64, 1)
 
-                  let ptr142 = mbt_ffi_str2ptr(payload141)
-                  mbt_ffi_store32(iter_base + 72, payload141.length())
-                  mbt_ffi_store32(iter_base + 68, ptr142)
-                  cleanup_list.push(ptr142)
+                  let ptr144 = mbt_ffi_str2ptr(payload143)
+                  mbt_ffi_store32(iter_base + 72, payload143.length())
+                  mbt_ffi_store32(iter_base + 68, ptr144)
+                  cleanup_list.push(ptr144)
 
                   ()
                 }
@@ -17619,48 +17653,48 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        U8Type(payload143) => {
+        U8Type(payload145) => {
           mbt_ffi_store8(iter_base + 0, 6)
 
-          match payload143 {
+          match payload145 {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload145) => {
+            Some(payload147) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              match payload145.min {
+              match payload147.min {
                 None => {
                   mbt_ffi_store8(iter_base + 16, 0)
 
                   ()
                 }
-                Some(payload147) => {
+                Some(payload149) => {
                   mbt_ffi_store8(iter_base + 16, 1)
 
-                  match payload147 {
-                    Signed(payload148) => {
+                  match payload149 {
+                    Signed(payload150) => {
                       mbt_ffi_store8(iter_base + 24, 0)
-                      mbt_ffi_store64(iter_base + 32, payload148)
+                      mbt_ffi_store64(iter_base + 32, payload150)
 
                       ()
                     }
-                    Unsigned(payload149) => {
+                    Unsigned(payload151) => {
                       mbt_ffi_store8(iter_base + 24, 1)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload149.reinterpret_as_int64(),
+                        payload151.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload150) => {
+                    FloatBits(payload152) => {
                       mbt_ffi_store8(iter_base + 24, 2)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload150.reinterpret_as_int64(),
+                        payload152.reinterpret_as_int64(),
                       )
 
                       ()
@@ -17671,36 +17705,36 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload145.max {
+              match payload147.max {
                 None => {
                   mbt_ffi_store8(iter_base + 40, 0)
 
                   ()
                 }
-                Some(payload152) => {
+                Some(payload154) => {
                   mbt_ffi_store8(iter_base + 40, 1)
 
-                  match payload152 {
-                    Signed(payload153) => {
+                  match payload154 {
+                    Signed(payload155) => {
                       mbt_ffi_store8(iter_base + 48, 0)
-                      mbt_ffi_store64(iter_base + 56, payload153)
+                      mbt_ffi_store64(iter_base + 56, payload155)
 
                       ()
                     }
-                    Unsigned(payload154) => {
+                    Unsigned(payload156) => {
                       mbt_ffi_store8(iter_base + 48, 1)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload154.reinterpret_as_int64(),
+                        payload156.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload155) => {
+                    FloatBits(payload157) => {
                       mbt_ffi_store8(iter_base + 48, 2)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload155.reinterpret_as_int64(),
+                        payload157.reinterpret_as_int64(),
                       )
 
                       ()
@@ -17711,19 +17745,19 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload145.unit {
+              match payload147.unit {
                 None => {
                   mbt_ffi_store8(iter_base + 64, 0)
 
                   ()
                 }
-                Some(payload157) => {
+                Some(payload159) => {
                   mbt_ffi_store8(iter_base + 64, 1)
 
-                  let ptr158 = mbt_ffi_str2ptr(payload157)
-                  mbt_ffi_store32(iter_base + 72, payload157.length())
-                  mbt_ffi_store32(iter_base + 68, ptr158)
-                  cleanup_list.push(ptr158)
+                  let ptr160 = mbt_ffi_str2ptr(payload159)
+                  mbt_ffi_store32(iter_base + 72, payload159.length())
+                  mbt_ffi_store32(iter_base + 68, ptr160)
+                  cleanup_list.push(ptr160)
 
                   ()
                 }
@@ -17735,48 +17769,48 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        U16Type(payload159) => {
+        U16Type(payload161) => {
           mbt_ffi_store8(iter_base + 0, 7)
 
-          match payload159 {
+          match payload161 {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload161) => {
+            Some(payload163) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              match payload161.min {
+              match payload163.min {
                 None => {
                   mbt_ffi_store8(iter_base + 16, 0)
 
                   ()
                 }
-                Some(payload163) => {
+                Some(payload165) => {
                   mbt_ffi_store8(iter_base + 16, 1)
 
-                  match payload163 {
-                    Signed(payload164) => {
+                  match payload165 {
+                    Signed(payload166) => {
                       mbt_ffi_store8(iter_base + 24, 0)
-                      mbt_ffi_store64(iter_base + 32, payload164)
+                      mbt_ffi_store64(iter_base + 32, payload166)
 
                       ()
                     }
-                    Unsigned(payload165) => {
+                    Unsigned(payload167) => {
                       mbt_ffi_store8(iter_base + 24, 1)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload165.reinterpret_as_int64(),
+                        payload167.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload166) => {
+                    FloatBits(payload168) => {
                       mbt_ffi_store8(iter_base + 24, 2)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload166.reinterpret_as_int64(),
+                        payload168.reinterpret_as_int64(),
                       )
 
                       ()
@@ -17787,36 +17821,36 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload161.max {
+              match payload163.max {
                 None => {
                   mbt_ffi_store8(iter_base + 40, 0)
 
                   ()
                 }
-                Some(payload168) => {
+                Some(payload170) => {
                   mbt_ffi_store8(iter_base + 40, 1)
 
-                  match payload168 {
-                    Signed(payload169) => {
+                  match payload170 {
+                    Signed(payload171) => {
                       mbt_ffi_store8(iter_base + 48, 0)
-                      mbt_ffi_store64(iter_base + 56, payload169)
+                      mbt_ffi_store64(iter_base + 56, payload171)
 
                       ()
                     }
-                    Unsigned(payload170) => {
+                    Unsigned(payload172) => {
                       mbt_ffi_store8(iter_base + 48, 1)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload170.reinterpret_as_int64(),
+                        payload172.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload171) => {
+                    FloatBits(payload173) => {
                       mbt_ffi_store8(iter_base + 48, 2)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload171.reinterpret_as_int64(),
+                        payload173.reinterpret_as_int64(),
                       )
 
                       ()
@@ -17827,19 +17861,19 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload161.unit {
+              match payload163.unit {
                 None => {
                   mbt_ffi_store8(iter_base + 64, 0)
 
                   ()
                 }
-                Some(payload173) => {
+                Some(payload175) => {
                   mbt_ffi_store8(iter_base + 64, 1)
 
-                  let ptr174 = mbt_ffi_str2ptr(payload173)
-                  mbt_ffi_store32(iter_base + 72, payload173.length())
-                  mbt_ffi_store32(iter_base + 68, ptr174)
-                  cleanup_list.push(ptr174)
+                  let ptr176 = mbt_ffi_str2ptr(payload175)
+                  mbt_ffi_store32(iter_base + 72, payload175.length())
+                  mbt_ffi_store32(iter_base + 68, ptr176)
+                  cleanup_list.push(ptr176)
 
                   ()
                 }
@@ -17851,48 +17885,48 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        U32Type(payload175) => {
+        U32Type(payload177) => {
           mbt_ffi_store8(iter_base + 0, 8)
 
-          match payload175 {
+          match payload177 {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload177) => {
+            Some(payload179) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              match payload177.min {
+              match payload179.min {
                 None => {
                   mbt_ffi_store8(iter_base + 16, 0)
 
                   ()
                 }
-                Some(payload179) => {
+                Some(payload181) => {
                   mbt_ffi_store8(iter_base + 16, 1)
 
-                  match payload179 {
-                    Signed(payload180) => {
+                  match payload181 {
+                    Signed(payload182) => {
                       mbt_ffi_store8(iter_base + 24, 0)
-                      mbt_ffi_store64(iter_base + 32, payload180)
+                      mbt_ffi_store64(iter_base + 32, payload182)
 
                       ()
                     }
-                    Unsigned(payload181) => {
+                    Unsigned(payload183) => {
                       mbt_ffi_store8(iter_base + 24, 1)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload181.reinterpret_as_int64(),
+                        payload183.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload182) => {
+                    FloatBits(payload184) => {
                       mbt_ffi_store8(iter_base + 24, 2)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload182.reinterpret_as_int64(),
+                        payload184.reinterpret_as_int64(),
                       )
 
                       ()
@@ -17903,36 +17937,36 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload177.max {
+              match payload179.max {
                 None => {
                   mbt_ffi_store8(iter_base + 40, 0)
 
                   ()
                 }
-                Some(payload184) => {
+                Some(payload186) => {
                   mbt_ffi_store8(iter_base + 40, 1)
 
-                  match payload184 {
-                    Signed(payload185) => {
+                  match payload186 {
+                    Signed(payload187) => {
                       mbt_ffi_store8(iter_base + 48, 0)
-                      mbt_ffi_store64(iter_base + 56, payload185)
+                      mbt_ffi_store64(iter_base + 56, payload187)
 
                       ()
                     }
-                    Unsigned(payload186) => {
+                    Unsigned(payload188) => {
                       mbt_ffi_store8(iter_base + 48, 1)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload186.reinterpret_as_int64(),
+                        payload188.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload187) => {
+                    FloatBits(payload189) => {
                       mbt_ffi_store8(iter_base + 48, 2)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload187.reinterpret_as_int64(),
+                        payload189.reinterpret_as_int64(),
                       )
 
                       ()
@@ -17943,19 +17977,19 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload177.unit {
+              match payload179.unit {
                 None => {
                   mbt_ffi_store8(iter_base + 64, 0)
 
                   ()
                 }
-                Some(payload189) => {
+                Some(payload191) => {
                   mbt_ffi_store8(iter_base + 64, 1)
 
-                  let ptr190 = mbt_ffi_str2ptr(payload189)
-                  mbt_ffi_store32(iter_base + 72, payload189.length())
-                  mbt_ffi_store32(iter_base + 68, ptr190)
-                  cleanup_list.push(ptr190)
+                  let ptr192 = mbt_ffi_str2ptr(payload191)
+                  mbt_ffi_store32(iter_base + 72, payload191.length())
+                  mbt_ffi_store32(iter_base + 68, ptr192)
+                  cleanup_list.push(ptr192)
 
                   ()
                 }
@@ -17967,48 +18001,48 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        U64Type(payload191) => {
+        U64Type(payload193) => {
           mbt_ffi_store8(iter_base + 0, 9)
 
-          match payload191 {
+          match payload193 {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload193) => {
+            Some(payload195) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              match payload193.min {
+              match payload195.min {
                 None => {
                   mbt_ffi_store8(iter_base + 16, 0)
 
                   ()
                 }
-                Some(payload195) => {
+                Some(payload197) => {
                   mbt_ffi_store8(iter_base + 16, 1)
 
-                  match payload195 {
-                    Signed(payload196) => {
+                  match payload197 {
+                    Signed(payload198) => {
                       mbt_ffi_store8(iter_base + 24, 0)
-                      mbt_ffi_store64(iter_base + 32, payload196)
+                      mbt_ffi_store64(iter_base + 32, payload198)
 
                       ()
                     }
-                    Unsigned(payload197) => {
+                    Unsigned(payload199) => {
                       mbt_ffi_store8(iter_base + 24, 1)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload197.reinterpret_as_int64(),
+                        payload199.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload198) => {
+                    FloatBits(payload200) => {
                       mbt_ffi_store8(iter_base + 24, 2)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload198.reinterpret_as_int64(),
+                        payload200.reinterpret_as_int64(),
                       )
 
                       ()
@@ -18019,36 +18053,36 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload193.max {
+              match payload195.max {
                 None => {
                   mbt_ffi_store8(iter_base + 40, 0)
 
                   ()
                 }
-                Some(payload200) => {
+                Some(payload202) => {
                   mbt_ffi_store8(iter_base + 40, 1)
 
-                  match payload200 {
-                    Signed(payload201) => {
+                  match payload202 {
+                    Signed(payload203) => {
                       mbt_ffi_store8(iter_base + 48, 0)
-                      mbt_ffi_store64(iter_base + 56, payload201)
+                      mbt_ffi_store64(iter_base + 56, payload203)
 
                       ()
                     }
-                    Unsigned(payload202) => {
+                    Unsigned(payload204) => {
                       mbt_ffi_store8(iter_base + 48, 1)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload202.reinterpret_as_int64(),
+                        payload204.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload203) => {
+                    FloatBits(payload205) => {
                       mbt_ffi_store8(iter_base + 48, 2)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload203.reinterpret_as_int64(),
+                        payload205.reinterpret_as_int64(),
                       )
 
                       ()
@@ -18059,19 +18093,19 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload193.unit {
+              match payload195.unit {
                 None => {
                   mbt_ffi_store8(iter_base + 64, 0)
 
                   ()
                 }
-                Some(payload205) => {
+                Some(payload207) => {
                   mbt_ffi_store8(iter_base + 64, 1)
 
-                  let ptr206 = mbt_ffi_str2ptr(payload205)
-                  mbt_ffi_store32(iter_base + 72, payload205.length())
-                  mbt_ffi_store32(iter_base + 68, ptr206)
-                  cleanup_list.push(ptr206)
+                  let ptr208 = mbt_ffi_str2ptr(payload207)
+                  mbt_ffi_store32(iter_base + 72, payload207.length())
+                  mbt_ffi_store32(iter_base + 68, ptr208)
+                  cleanup_list.push(ptr208)
 
                   ()
                 }
@@ -18083,48 +18117,48 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        F32Type(payload207) => {
+        F32Type(payload209) => {
           mbt_ffi_store8(iter_base + 0, 10)
 
-          match payload207 {
+          match payload209 {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload209) => {
+            Some(payload211) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              match payload209.min {
+              match payload211.min {
                 None => {
                   mbt_ffi_store8(iter_base + 16, 0)
 
                   ()
                 }
-                Some(payload211) => {
+                Some(payload213) => {
                   mbt_ffi_store8(iter_base + 16, 1)
 
-                  match payload211 {
-                    Signed(payload212) => {
+                  match payload213 {
+                    Signed(payload214) => {
                       mbt_ffi_store8(iter_base + 24, 0)
-                      mbt_ffi_store64(iter_base + 32, payload212)
+                      mbt_ffi_store64(iter_base + 32, payload214)
 
                       ()
                     }
-                    Unsigned(payload213) => {
+                    Unsigned(payload215) => {
                       mbt_ffi_store8(iter_base + 24, 1)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload213.reinterpret_as_int64(),
+                        payload215.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload214) => {
+                    FloatBits(payload216) => {
                       mbt_ffi_store8(iter_base + 24, 2)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload214.reinterpret_as_int64(),
+                        payload216.reinterpret_as_int64(),
                       )
 
                       ()
@@ -18135,36 +18169,36 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload209.max {
+              match payload211.max {
                 None => {
                   mbt_ffi_store8(iter_base + 40, 0)
 
                   ()
                 }
-                Some(payload216) => {
+                Some(payload218) => {
                   mbt_ffi_store8(iter_base + 40, 1)
 
-                  match payload216 {
-                    Signed(payload217) => {
+                  match payload218 {
+                    Signed(payload219) => {
                       mbt_ffi_store8(iter_base + 48, 0)
-                      mbt_ffi_store64(iter_base + 56, payload217)
+                      mbt_ffi_store64(iter_base + 56, payload219)
 
                       ()
                     }
-                    Unsigned(payload218) => {
+                    Unsigned(payload220) => {
                       mbt_ffi_store8(iter_base + 48, 1)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload218.reinterpret_as_int64(),
+                        payload220.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload219) => {
+                    FloatBits(payload221) => {
                       mbt_ffi_store8(iter_base + 48, 2)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload219.reinterpret_as_int64(),
+                        payload221.reinterpret_as_int64(),
                       )
 
                       ()
@@ -18175,19 +18209,19 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload209.unit {
+              match payload211.unit {
                 None => {
                   mbt_ffi_store8(iter_base + 64, 0)
 
                   ()
                 }
-                Some(payload221) => {
+                Some(payload223) => {
                   mbt_ffi_store8(iter_base + 64, 1)
 
-                  let ptr222 = mbt_ffi_str2ptr(payload221)
-                  mbt_ffi_store32(iter_base + 72, payload221.length())
-                  mbt_ffi_store32(iter_base + 68, ptr222)
-                  cleanup_list.push(ptr222)
+                  let ptr224 = mbt_ffi_str2ptr(payload223)
+                  mbt_ffi_store32(iter_base + 72, payload223.length())
+                  mbt_ffi_store32(iter_base + 68, ptr224)
+                  cleanup_list.push(ptr224)
 
                   ()
                 }
@@ -18199,48 +18233,48 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        F64Type(payload223) => {
+        F64Type(payload225) => {
           mbt_ffi_store8(iter_base + 0, 11)
 
-          match payload223 {
+          match payload225 {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload225) => {
+            Some(payload227) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              match payload225.min {
+              match payload227.min {
                 None => {
                   mbt_ffi_store8(iter_base + 16, 0)
 
                   ()
                 }
-                Some(payload227) => {
+                Some(payload229) => {
                   mbt_ffi_store8(iter_base + 16, 1)
 
-                  match payload227 {
-                    Signed(payload228) => {
+                  match payload229 {
+                    Signed(payload230) => {
                       mbt_ffi_store8(iter_base + 24, 0)
-                      mbt_ffi_store64(iter_base + 32, payload228)
+                      mbt_ffi_store64(iter_base + 32, payload230)
 
                       ()
                     }
-                    Unsigned(payload229) => {
+                    Unsigned(payload231) => {
                       mbt_ffi_store8(iter_base + 24, 1)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload229.reinterpret_as_int64(),
+                        payload231.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload230) => {
+                    FloatBits(payload232) => {
                       mbt_ffi_store8(iter_base + 24, 2)
                       mbt_ffi_store64(
                         iter_base + 32,
-                        payload230.reinterpret_as_int64(),
+                        payload232.reinterpret_as_int64(),
                       )
 
                       ()
@@ -18251,36 +18285,36 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload225.max {
+              match payload227.max {
                 None => {
                   mbt_ffi_store8(iter_base + 40, 0)
 
                   ()
                 }
-                Some(payload232) => {
+                Some(payload234) => {
                   mbt_ffi_store8(iter_base + 40, 1)
 
-                  match payload232 {
-                    Signed(payload233) => {
+                  match payload234 {
+                    Signed(payload235) => {
                       mbt_ffi_store8(iter_base + 48, 0)
-                      mbt_ffi_store64(iter_base + 56, payload233)
+                      mbt_ffi_store64(iter_base + 56, payload235)
 
                       ()
                     }
-                    Unsigned(payload234) => {
+                    Unsigned(payload236) => {
                       mbt_ffi_store8(iter_base + 48, 1)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload234.reinterpret_as_int64(),
+                        payload236.reinterpret_as_int64(),
                       )
 
                       ()
                     }
-                    FloatBits(payload235) => {
+                    FloatBits(payload237) => {
                       mbt_ffi_store8(iter_base + 48, 2)
                       mbt_ffi_store64(
                         iter_base + 56,
-                        payload235.reinterpret_as_int64(),
+                        payload237.reinterpret_as_int64(),
                       )
 
                       ()
@@ -18291,19 +18325,19 @@ pub fn WasmRpc::wasm_rpc(
                 }
               }
 
-              match payload225.unit {
+              match payload227.unit {
                 None => {
                   mbt_ffi_store8(iter_base + 64, 0)
 
                   ()
                 }
-                Some(payload237) => {
+                Some(payload239) => {
                   mbt_ffi_store8(iter_base + 64, 1)
 
-                  let ptr238 = mbt_ffi_str2ptr(payload237)
-                  mbt_ffi_store32(iter_base + 72, payload237.length())
-                  mbt_ffi_store32(iter_base + 68, ptr238)
-                  cleanup_list.push(ptr238)
+                  let ptr240 = mbt_ffi_str2ptr(payload239)
+                  mbt_ffi_store32(iter_base + 72, payload239.length())
+                  mbt_ffi_store32(iter_base + 68, ptr240)
+                  cleanup_list.push(ptr240)
 
                   ()
                 }
@@ -18325,19 +18359,19 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        RecordType(payload241) => {
+        RecordType(payload243) => {
           mbt_ffi_store8(iter_base + 0, 14)
 
-          let address262 = mbt_ffi_malloc(payload241.length() * 68)
-          for index263 = 0
-              index263 < payload241.length()
-              index263 = index263 + 1 {
-            let iter_elem : @types.NamedFieldType = payload241[index263]
-            let iter_base = address262 + index263 * 68
+          let address264 = mbt_ffi_malloc(payload243.length() * 68)
+          for index265 = 0
+              index265 < payload243.length()
+              index265 = index265 + 1 {
+            let iter_elem : @types.NamedFieldType = payload243[index265]
+            let iter_base = address264 + index265 * 68
 
-            let ptr242 = mbt_ffi_str2ptr(iter_elem.name)
+            let ptr244 = mbt_ffi_str2ptr(iter_elem.name)
             mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-            mbt_ffi_store32(iter_base + 0, ptr242)
+            mbt_ffi_store32(iter_base + 0, ptr244)
             mbt_ffi_store32(iter_base + 8, iter_elem.body)
 
             match iter_elem.metadata.doc {
@@ -18346,54 +18380,54 @@ pub fn WasmRpc::wasm_rpc(
 
                 ()
               }
-              Some(payload244) => {
+              Some(payload246) => {
                 mbt_ffi_store8(iter_base + 12, 1)
 
-                let ptr245 = mbt_ffi_str2ptr(payload244)
-                mbt_ffi_store32(iter_base + 20, payload244.length())
-                mbt_ffi_store32(iter_base + 16, ptr245)
-                cleanup_list.push(ptr245)
+                let ptr247 = mbt_ffi_str2ptr(payload246)
+                mbt_ffi_store32(iter_base + 20, payload246.length())
+                mbt_ffi_store32(iter_base + 16, ptr247)
+                cleanup_list.push(ptr247)
 
                 ()
               }
             }
 
-            let address247 = mbt_ffi_malloc(
+            let address249 = mbt_ffi_malloc(
               iter_elem.metadata.aliases.length() * 8,
             )
-            for index248 = 0
-                index248 < iter_elem.metadata.aliases.length()
-                index248 = index248 + 1 {
-              let iter_elem : String = iter_elem.metadata.aliases[index248]
-              let iter_base = address247 + index248 * 8
+            for index250 = 0
+                index250 < iter_elem.metadata.aliases.length()
+                index250 = index250 + 1 {
+              let iter_elem : String = iter_elem.metadata.aliases[index250]
+              let iter_base = address249 + index250 * 8
 
-              let ptr246 = mbt_ffi_str2ptr(iter_elem)
+              let ptr248 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr246)
-              cleanup_list.push(ptr246)
+              mbt_ffi_store32(iter_base + 0, ptr248)
+              cleanup_list.push(ptr248)
             }
             mbt_ffi_store32(iter_base + 28, iter_elem.metadata.aliases.length())
-            mbt_ffi_store32(iter_base + 24, address247)
+            mbt_ffi_store32(iter_base + 24, address249)
 
-            let address250 = mbt_ffi_malloc(
+            let address252 = mbt_ffi_malloc(
               iter_elem.metadata.examples.length() * 8,
             )
-            for index251 = 0
-                index251 < iter_elem.metadata.examples.length()
-                index251 = index251 + 1 {
-              let iter_elem : String = iter_elem.metadata.examples[index251]
-              let iter_base = address250 + index251 * 8
+            for index253 = 0
+                index253 < iter_elem.metadata.examples.length()
+                index253 = index253 + 1 {
+              let iter_elem : String = iter_elem.metadata.examples[index253]
+              let iter_base = address252 + index253 * 8
 
-              let ptr249 = mbt_ffi_str2ptr(iter_elem)
+              let ptr251 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr249)
-              cleanup_list.push(ptr249)
+              mbt_ffi_store32(iter_base + 0, ptr251)
+              cleanup_list.push(ptr251)
             }
             mbt_ffi_store32(
               iter_base + 36,
               iter_elem.metadata.examples.length(),
             )
-            mbt_ffi_store32(iter_base + 32, address250)
+            mbt_ffi_store32(iter_base + 32, address252)
 
             match iter_elem.metadata.deprecated {
               None => {
@@ -18401,13 +18435,13 @@ pub fn WasmRpc::wasm_rpc(
 
                 ()
               }
-              Some(payload253) => {
+              Some(payload255) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                let ptr254 = mbt_ffi_str2ptr(payload253)
-                mbt_ffi_store32(iter_base + 48, payload253.length())
-                mbt_ffi_store32(iter_base + 44, ptr254)
-                cleanup_list.push(ptr254)
+                let ptr256 = mbt_ffi_str2ptr(payload255)
+                mbt_ffi_store32(iter_base + 48, payload255.length())
+                mbt_ffi_store32(iter_base + 44, ptr256)
+                cleanup_list.push(ptr256)
 
                 ()
               }
@@ -18419,10 +18453,10 @@ pub fn WasmRpc::wasm_rpc(
 
                 ()
               }
-              Some(payload256) => {
+              Some(payload258) => {
                 mbt_ffi_store8(iter_base + 52, 1)
 
-                match payload256 {
+                match payload258 {
                   Multimodal => {
                     mbt_ffi_store8(iter_base + 56, 0)
 
@@ -18438,13 +18472,13 @@ pub fn WasmRpc::wasm_rpc(
 
                     ()
                   }
-                  Other(payload260) => {
+                  Other(payload262) => {
                     mbt_ffi_store8(iter_base + 56, 3)
 
-                    let ptr261 = mbt_ffi_str2ptr(payload260)
-                    mbt_ffi_store32(iter_base + 64, payload260.length())
-                    mbt_ffi_store32(iter_base + 60, ptr261)
-                    cleanup_list.push(ptr261)
+                    let ptr263 = mbt_ffi_str2ptr(payload262)
+                    mbt_ffi_store32(iter_base + 64, payload262.length())
+                    mbt_ffi_store32(iter_base + 60, ptr263)
+                    cleanup_list.push(ptr263)
 
                     ()
                   }
@@ -18453,29 +18487,29 @@ pub fn WasmRpc::wasm_rpc(
                 ()
               }
             }
-            cleanup_list.push(ptr242)
-            cleanup_list.push(address247)
-            cleanup_list.push(address250)
+            cleanup_list.push(ptr244)
+            cleanup_list.push(address249)
+            cleanup_list.push(address252)
           }
-          mbt_ffi_store32(iter_base + 12, payload241.length())
-          mbt_ffi_store32(iter_base + 8, address262)
-          cleanup_list.push(address262)
+          mbt_ffi_store32(iter_base + 12, payload243.length())
+          mbt_ffi_store32(iter_base + 8, address264)
+          cleanup_list.push(address264)
 
           ()
         }
-        VariantType(payload264) => {
+        VariantType(payload266) => {
           mbt_ffi_store8(iter_base + 0, 15)
 
-          let address287 = mbt_ffi_malloc(payload264.length() * 72)
-          for index288 = 0
-              index288 < payload264.length()
-              index288 = index288 + 1 {
-            let iter_elem : @types.VariantCaseType = payload264[index288]
-            let iter_base = address287 + index288 * 72
+          let address289 = mbt_ffi_malloc(payload266.length() * 72)
+          for index290 = 0
+              index290 < payload266.length()
+              index290 = index290 + 1 {
+            let iter_elem : @types.VariantCaseType = payload266[index290]
+            let iter_base = address289 + index290 * 72
 
-            let ptr265 = mbt_ffi_str2ptr(iter_elem.name)
+            let ptr267 = mbt_ffi_str2ptr(iter_elem.name)
             mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-            mbt_ffi_store32(iter_base + 0, ptr265)
+            mbt_ffi_store32(iter_base + 0, ptr267)
 
             match iter_elem.payload {
               None => {
@@ -18483,9 +18517,9 @@ pub fn WasmRpc::wasm_rpc(
 
                 ()
               }
-              Some(payload267) => {
+              Some(payload269) => {
                 mbt_ffi_store8(iter_base + 8, 1)
-                mbt_ffi_store32(iter_base + 12, payload267)
+                mbt_ffi_store32(iter_base + 12, payload269)
 
                 ()
               }
@@ -18497,54 +18531,54 @@ pub fn WasmRpc::wasm_rpc(
 
                 ()
               }
-              Some(payload269) => {
+              Some(payload271) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                let ptr270 = mbt_ffi_str2ptr(payload269)
-                mbt_ffi_store32(iter_base + 24, payload269.length())
-                mbt_ffi_store32(iter_base + 20, ptr270)
-                cleanup_list.push(ptr270)
+                let ptr272 = mbt_ffi_str2ptr(payload271)
+                mbt_ffi_store32(iter_base + 24, payload271.length())
+                mbt_ffi_store32(iter_base + 20, ptr272)
+                cleanup_list.push(ptr272)
 
                 ()
               }
             }
 
-            let address272 = mbt_ffi_malloc(
+            let address274 = mbt_ffi_malloc(
               iter_elem.metadata.aliases.length() * 8,
             )
-            for index273 = 0
-                index273 < iter_elem.metadata.aliases.length()
-                index273 = index273 + 1 {
-              let iter_elem : String = iter_elem.metadata.aliases[index273]
-              let iter_base = address272 + index273 * 8
+            for index275 = 0
+                index275 < iter_elem.metadata.aliases.length()
+                index275 = index275 + 1 {
+              let iter_elem : String = iter_elem.metadata.aliases[index275]
+              let iter_base = address274 + index275 * 8
 
-              let ptr271 = mbt_ffi_str2ptr(iter_elem)
+              let ptr273 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr271)
-              cleanup_list.push(ptr271)
+              mbt_ffi_store32(iter_base + 0, ptr273)
+              cleanup_list.push(ptr273)
             }
             mbt_ffi_store32(iter_base + 32, iter_elem.metadata.aliases.length())
-            mbt_ffi_store32(iter_base + 28, address272)
+            mbt_ffi_store32(iter_base + 28, address274)
 
-            let address275 = mbt_ffi_malloc(
+            let address277 = mbt_ffi_malloc(
               iter_elem.metadata.examples.length() * 8,
             )
-            for index276 = 0
-                index276 < iter_elem.metadata.examples.length()
-                index276 = index276 + 1 {
-              let iter_elem : String = iter_elem.metadata.examples[index276]
-              let iter_base = address275 + index276 * 8
+            for index278 = 0
+                index278 < iter_elem.metadata.examples.length()
+                index278 = index278 + 1 {
+              let iter_elem : String = iter_elem.metadata.examples[index278]
+              let iter_base = address277 + index278 * 8
 
-              let ptr274 = mbt_ffi_str2ptr(iter_elem)
+              let ptr276 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr274)
-              cleanup_list.push(ptr274)
+              mbt_ffi_store32(iter_base + 0, ptr276)
+              cleanup_list.push(ptr276)
             }
             mbt_ffi_store32(
               iter_base + 40,
               iter_elem.metadata.examples.length(),
             )
-            mbt_ffi_store32(iter_base + 36, address275)
+            mbt_ffi_store32(iter_base + 36, address277)
 
             match iter_elem.metadata.deprecated {
               None => {
@@ -18552,13 +18586,13 @@ pub fn WasmRpc::wasm_rpc(
 
                 ()
               }
-              Some(payload278) => {
+              Some(payload280) => {
                 mbt_ffi_store8(iter_base + 44, 1)
 
-                let ptr279 = mbt_ffi_str2ptr(payload278)
-                mbt_ffi_store32(iter_base + 52, payload278.length())
-                mbt_ffi_store32(iter_base + 48, ptr279)
-                cleanup_list.push(ptr279)
+                let ptr281 = mbt_ffi_str2ptr(payload280)
+                mbt_ffi_store32(iter_base + 52, payload280.length())
+                mbt_ffi_store32(iter_base + 48, ptr281)
+                cleanup_list.push(ptr281)
 
                 ()
               }
@@ -18570,10 +18604,10 @@ pub fn WasmRpc::wasm_rpc(
 
                 ()
               }
-              Some(payload281) => {
+              Some(payload283) => {
                 mbt_ffi_store8(iter_base + 56, 1)
 
-                match payload281 {
+                match payload283 {
                   Multimodal => {
                     mbt_ffi_store8(iter_base + 60, 0)
 
@@ -18589,13 +18623,13 @@ pub fn WasmRpc::wasm_rpc(
 
                     ()
                   }
-                  Other(payload285) => {
+                  Other(payload287) => {
                     mbt_ffi_store8(iter_base + 60, 3)
 
-                    let ptr286 = mbt_ffi_str2ptr(payload285)
-                    mbt_ffi_store32(iter_base + 68, payload285.length())
-                    mbt_ffi_store32(iter_base + 64, ptr286)
-                    cleanup_list.push(ptr286)
+                    let ptr288 = mbt_ffi_str2ptr(payload287)
+                    mbt_ffi_store32(iter_base + 68, payload287.length())
+                    mbt_ffi_store32(iter_base + 64, ptr288)
+                    cleanup_list.push(ptr288)
 
                     ()
                   }
@@ -18604,130 +18638,130 @@ pub fn WasmRpc::wasm_rpc(
                 ()
               }
             }
-            cleanup_list.push(ptr265)
-            cleanup_list.push(address272)
-            cleanup_list.push(address275)
+            cleanup_list.push(ptr267)
+            cleanup_list.push(address274)
+            cleanup_list.push(address277)
           }
-          mbt_ffi_store32(iter_base + 12, payload264.length())
-          mbt_ffi_store32(iter_base + 8, address287)
-          cleanup_list.push(address287)
+          mbt_ffi_store32(iter_base + 12, payload266.length())
+          mbt_ffi_store32(iter_base + 8, address289)
+          cleanup_list.push(address289)
 
           ()
         }
-        EnumType(payload289) => {
+        EnumType(payload291) => {
           mbt_ffi_store8(iter_base + 0, 16)
 
-          let address291 = mbt_ffi_malloc(payload289.length() * 8)
-          for index292 = 0
-              index292 < payload289.length()
-              index292 = index292 + 1 {
-            let iter_elem : String = payload289[index292]
-            let iter_base = address291 + index292 * 8
+          let address293 = mbt_ffi_malloc(payload291.length() * 8)
+          for index294 = 0
+              index294 < payload291.length()
+              index294 = index294 + 1 {
+            let iter_elem : String = payload291[index294]
+            let iter_base = address293 + index294 * 8
 
-            let ptr290 = mbt_ffi_str2ptr(iter_elem)
+            let ptr292 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr290)
-            cleanup_list.push(ptr290)
+            mbt_ffi_store32(iter_base + 0, ptr292)
+            cleanup_list.push(ptr292)
           }
-          mbt_ffi_store32(iter_base + 12, payload289.length())
-          mbt_ffi_store32(iter_base + 8, address291)
-          cleanup_list.push(address291)
+          mbt_ffi_store32(iter_base + 12, payload291.length())
+          mbt_ffi_store32(iter_base + 8, address293)
+          cleanup_list.push(address293)
 
           ()
         }
-        FlagsType(payload293) => {
+        FlagsType(payload295) => {
           mbt_ffi_store8(iter_base + 0, 17)
 
-          let address295 = mbt_ffi_malloc(payload293.length() * 8)
-          for index296 = 0
-              index296 < payload293.length()
-              index296 = index296 + 1 {
-            let iter_elem : String = payload293[index296]
-            let iter_base = address295 + index296 * 8
+          let address297 = mbt_ffi_malloc(payload295.length() * 8)
+          for index298 = 0
+              index298 < payload295.length()
+              index298 = index298 + 1 {
+            let iter_elem : String = payload295[index298]
+            let iter_base = address297 + index298 * 8
 
-            let ptr294 = mbt_ffi_str2ptr(iter_elem)
+            let ptr296 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr294)
-            cleanup_list.push(ptr294)
+            mbt_ffi_store32(iter_base + 0, ptr296)
+            cleanup_list.push(ptr296)
           }
-          mbt_ffi_store32(iter_base + 12, payload293.length())
-          mbt_ffi_store32(iter_base + 8, address295)
-          cleanup_list.push(address295)
+          mbt_ffi_store32(iter_base + 12, payload295.length())
+          mbt_ffi_store32(iter_base + 8, address297)
+          cleanup_list.push(address297)
 
           ()
         }
-        TupleType(payload297) => {
+        TupleType(payload299) => {
           mbt_ffi_store8(iter_base + 0, 18)
 
-          let address298 = mbt_ffi_malloc(payload297.length() * 4)
-          for index299 = 0
-              index299 < payload297.length()
-              index299 = index299 + 1 {
-            let iter_elem : Int = payload297[index299]
-            let iter_base = address298 + index299 * 4
+          let address300 = mbt_ffi_malloc(payload299.length() * 4)
+          for index301 = 0
+              index301 < payload299.length()
+              index301 = index301 + 1 {
+            let iter_elem : Int = payload299[index301]
+            let iter_base = address300 + index301 * 4
             mbt_ffi_store32(iter_base + 0, iter_elem)
           }
-          mbt_ffi_store32(iter_base + 12, payload297.length())
-          mbt_ffi_store32(iter_base + 8, address298)
-          cleanup_list.push(address298)
+          mbt_ffi_store32(iter_base + 12, payload299.length())
+          mbt_ffi_store32(iter_base + 8, address300)
+          cleanup_list.push(address300)
 
           ()
         }
-        ListType(payload300) => {
+        ListType(payload302) => {
           mbt_ffi_store8(iter_base + 0, 19)
-          mbt_ffi_store32(iter_base + 8, payload300)
+          mbt_ffi_store32(iter_base + 8, payload302)
 
           ()
         }
-        FixedListType(payload301) => {
+        FixedListType(payload303) => {
           mbt_ffi_store8(iter_base + 0, 20)
-          mbt_ffi_store32(iter_base + 8, payload301.element)
+          mbt_ffi_store32(iter_base + 8, payload303.element)
           mbt_ffi_store32(
             iter_base + 12,
-            payload301.length.reinterpret_as_int(),
+            payload303.length.reinterpret_as_int(),
           )
 
           ()
         }
-        MapType(payload302) => {
+        MapType(payload304) => {
           mbt_ffi_store8(iter_base + 0, 21)
-          mbt_ffi_store32(iter_base + 8, payload302.key)
-          mbt_ffi_store32(iter_base + 12, payload302.value)
+          mbt_ffi_store32(iter_base + 8, payload304.key)
+          mbt_ffi_store32(iter_base + 12, payload304.value)
 
           ()
         }
-        OptionType(payload303) => {
+        OptionType(payload305) => {
           mbt_ffi_store8(iter_base + 0, 22)
-          mbt_ffi_store32(iter_base + 8, payload303)
+          mbt_ffi_store32(iter_base + 8, payload305)
 
           ()
         }
-        ResultType(payload304) => {
+        ResultType(payload306) => {
           mbt_ffi_store8(iter_base + 0, 23)
 
-          match payload304.ok {
+          match payload306.ok {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload306) => {
+            Some(payload308) => {
               mbt_ffi_store8(iter_base + 8, 1)
-              mbt_ffi_store32(iter_base + 12, payload306)
+              mbt_ffi_store32(iter_base + 12, payload308)
 
               ()
             }
           }
 
-          match payload304.err {
+          match payload306.err {
             None => {
               mbt_ffi_store8(iter_base + 16, 0)
 
               ()
             }
-            Some(payload308) => {
+            Some(payload310) => {
               mbt_ffi_store8(iter_base + 16, 1)
-              mbt_ffi_store32(iter_base + 20, payload308)
+              mbt_ffi_store32(iter_base + 20, payload310)
 
               ()
             }
@@ -18735,79 +18769,79 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        TextType(payload309) => {
+        TextType(payload311) => {
           mbt_ffi_store8(iter_base + 0, 24)
 
-          match payload309.languages {
+          match payload311.languages {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload311) => {
+            Some(payload313) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              let address313 = mbt_ffi_malloc(payload311.length() * 8)
-              for index314 = 0
-                  index314 < payload311.length()
-                  index314 = index314 + 1 {
-                let iter_elem : String = payload311[index314]
-                let iter_base = address313 + index314 * 8
+              let address315 = mbt_ffi_malloc(payload313.length() * 8)
+              for index316 = 0
+                  index316 < payload313.length()
+                  index316 = index316 + 1 {
+                let iter_elem : String = payload313[index316]
+                let iter_base = address315 + index316 * 8
 
-                let ptr312 = mbt_ffi_str2ptr(iter_elem)
+                let ptr314 = mbt_ffi_str2ptr(iter_elem)
                 mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr312)
-                cleanup_list.push(ptr312)
+                mbt_ffi_store32(iter_base + 0, ptr314)
+                cleanup_list.push(ptr314)
               }
-              mbt_ffi_store32(iter_base + 16, payload311.length())
-              mbt_ffi_store32(iter_base + 12, address313)
-              cleanup_list.push(address313)
+              mbt_ffi_store32(iter_base + 16, payload313.length())
+              mbt_ffi_store32(iter_base + 12, address315)
+              cleanup_list.push(address315)
 
               ()
             }
           }
 
-          match payload309.min_length {
+          match payload311.min_length {
             None => {
               mbt_ffi_store8(iter_base + 20, 0)
 
               ()
             }
-            Some(payload316) => {
+            Some(payload318) => {
               mbt_ffi_store8(iter_base + 20, 1)
-              mbt_ffi_store32(iter_base + 24, payload316.reinterpret_as_int())
+              mbt_ffi_store32(iter_base + 24, payload318.reinterpret_as_int())
 
               ()
             }
           }
 
-          match payload309.max_length {
+          match payload311.max_length {
             None => {
               mbt_ffi_store8(iter_base + 28, 0)
 
               ()
             }
-            Some(payload318) => {
+            Some(payload320) => {
               mbt_ffi_store8(iter_base + 28, 1)
-              mbt_ffi_store32(iter_base + 32, payload318.reinterpret_as_int())
+              mbt_ffi_store32(iter_base + 32, payload320.reinterpret_as_int())
 
               ()
             }
           }
 
-          match payload309.regex {
+          match payload311.regex {
             None => {
               mbt_ffi_store8(iter_base + 36, 0)
 
               ()
             }
-            Some(payload320) => {
+            Some(payload322) => {
               mbt_ffi_store8(iter_base + 36, 1)
 
-              let ptr321 = mbt_ffi_str2ptr(payload320)
-              mbt_ffi_store32(iter_base + 44, payload320.length())
-              mbt_ffi_store32(iter_base + 40, ptr321)
-              cleanup_list.push(ptr321)
+              let ptr323 = mbt_ffi_str2ptr(payload322)
+              mbt_ffi_store32(iter_base + 44, payload322.length())
+              mbt_ffi_store32(iter_base + 40, ptr323)
+              cleanup_list.push(ptr323)
 
               ()
             }
@@ -18815,61 +18849,61 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        BinaryType(payload322) => {
+        BinaryType(payload324) => {
           mbt_ffi_store8(iter_base + 0, 25)
 
-          match payload322.mime_types {
+          match payload324.mime_types {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload324) => {
+            Some(payload326) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              let address326 = mbt_ffi_malloc(payload324.length() * 8)
-              for index327 = 0
-                  index327 < payload324.length()
-                  index327 = index327 + 1 {
-                let iter_elem : String = payload324[index327]
-                let iter_base = address326 + index327 * 8
+              let address328 = mbt_ffi_malloc(payload326.length() * 8)
+              for index329 = 0
+                  index329 < payload326.length()
+                  index329 = index329 + 1 {
+                let iter_elem : String = payload326[index329]
+                let iter_base = address328 + index329 * 8
 
-                let ptr325 = mbt_ffi_str2ptr(iter_elem)
+                let ptr327 = mbt_ffi_str2ptr(iter_elem)
                 mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr325)
-                cleanup_list.push(ptr325)
+                mbt_ffi_store32(iter_base + 0, ptr327)
+                cleanup_list.push(ptr327)
               }
-              mbt_ffi_store32(iter_base + 16, payload324.length())
-              mbt_ffi_store32(iter_base + 12, address326)
-              cleanup_list.push(address326)
+              mbt_ffi_store32(iter_base + 16, payload326.length())
+              mbt_ffi_store32(iter_base + 12, address328)
+              cleanup_list.push(address328)
 
               ()
             }
           }
 
-          match payload322.min_bytes {
+          match payload324.min_bytes {
             None => {
               mbt_ffi_store8(iter_base + 20, 0)
 
               ()
             }
-            Some(payload329) => {
+            Some(payload331) => {
               mbt_ffi_store8(iter_base + 20, 1)
-              mbt_ffi_store32(iter_base + 24, payload329.reinterpret_as_int())
+              mbt_ffi_store32(iter_base + 24, payload331.reinterpret_as_int())
 
               ()
             }
           }
 
-          match payload322.max_bytes {
+          match payload324.max_bytes {
             None => {
               mbt_ffi_store8(iter_base + 28, 0)
 
               ()
             }
-            Some(payload331) => {
+            Some(payload333) => {
               mbt_ffi_store8(iter_base + 28, 1)
-              mbt_ffi_store32(iter_base + 32, payload331.reinterpret_as_int())
+              mbt_ffi_store32(iter_base + 32, payload333.reinterpret_as_int())
 
               ()
             }
@@ -18877,64 +18911,64 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        PathType(payload332) => {
+        PathType(payload334) => {
           mbt_ffi_store8(iter_base + 0, 26)
-          mbt_ffi_store8(iter_base + 8, payload332.direction.ordinal())
-          mbt_ffi_store8(iter_base + 9, payload332.kind.ordinal())
+          mbt_ffi_store8(iter_base + 8, payload334.direction.ordinal())
+          mbt_ffi_store8(iter_base + 9, payload334.kind.ordinal())
 
-          match payload332.allowed_mime_types {
+          match payload334.allowed_mime_types {
             None => {
               mbt_ffi_store8(iter_base + 12, 0)
 
               ()
             }
-            Some(payload334) => {
+            Some(payload336) => {
               mbt_ffi_store8(iter_base + 12, 1)
 
-              let address336 = mbt_ffi_malloc(payload334.length() * 8)
-              for index337 = 0
-                  index337 < payload334.length()
-                  index337 = index337 + 1 {
-                let iter_elem : String = payload334[index337]
-                let iter_base = address336 + index337 * 8
+              let address338 = mbt_ffi_malloc(payload336.length() * 8)
+              for index339 = 0
+                  index339 < payload336.length()
+                  index339 = index339 + 1 {
+                let iter_elem : String = payload336[index339]
+                let iter_base = address338 + index339 * 8
 
-                let ptr335 = mbt_ffi_str2ptr(iter_elem)
+                let ptr337 = mbt_ffi_str2ptr(iter_elem)
                 mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr335)
-                cleanup_list.push(ptr335)
+                mbt_ffi_store32(iter_base + 0, ptr337)
+                cleanup_list.push(ptr337)
               }
-              mbt_ffi_store32(iter_base + 20, payload334.length())
-              mbt_ffi_store32(iter_base + 16, address336)
-              cleanup_list.push(address336)
+              mbt_ffi_store32(iter_base + 20, payload336.length())
+              mbt_ffi_store32(iter_base + 16, address338)
+              cleanup_list.push(address338)
 
               ()
             }
           }
 
-          match payload332.allowed_extensions {
+          match payload334.allowed_extensions {
             None => {
               mbt_ffi_store8(iter_base + 24, 0)
 
               ()
             }
-            Some(payload339) => {
+            Some(payload341) => {
               mbt_ffi_store8(iter_base + 24, 1)
 
-              let address341 = mbt_ffi_malloc(payload339.length() * 8)
-              for index342 = 0
-                  index342 < payload339.length()
-                  index342 = index342 + 1 {
-                let iter_elem : String = payload339[index342]
-                let iter_base = address341 + index342 * 8
+              let address343 = mbt_ffi_malloc(payload341.length() * 8)
+              for index344 = 0
+                  index344 < payload341.length()
+                  index344 = index344 + 1 {
+                let iter_elem : String = payload341[index344]
+                let iter_base = address343 + index344 * 8
 
-                let ptr340 = mbt_ffi_str2ptr(iter_elem)
+                let ptr342 = mbt_ffi_str2ptr(iter_elem)
                 mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr340)
-                cleanup_list.push(ptr340)
+                mbt_ffi_store32(iter_base + 0, ptr342)
+                cleanup_list.push(ptr342)
               }
-              mbt_ffi_store32(iter_base + 32, payload339.length())
-              mbt_ffi_store32(iter_base + 28, address341)
-              cleanup_list.push(address341)
+              mbt_ffi_store32(iter_base + 32, payload341.length())
+              mbt_ffi_store32(iter_base + 28, address343)
+              cleanup_list.push(address343)
 
               ()
             }
@@ -18942,62 +18976,62 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        UrlType(payload343) => {
+        UrlType(payload345) => {
           mbt_ffi_store8(iter_base + 0, 27)
 
-          match payload343.allowed_schemes {
+          match payload345.allowed_schemes {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload345) => {
+            Some(payload347) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              let address347 = mbt_ffi_malloc(payload345.length() * 8)
-              for index348 = 0
-                  index348 < payload345.length()
-                  index348 = index348 + 1 {
-                let iter_elem : String = payload345[index348]
-                let iter_base = address347 + index348 * 8
+              let address349 = mbt_ffi_malloc(payload347.length() * 8)
+              for index350 = 0
+                  index350 < payload347.length()
+                  index350 = index350 + 1 {
+                let iter_elem : String = payload347[index350]
+                let iter_base = address349 + index350 * 8
 
-                let ptr346 = mbt_ffi_str2ptr(iter_elem)
+                let ptr348 = mbt_ffi_str2ptr(iter_elem)
                 mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr346)
-                cleanup_list.push(ptr346)
+                mbt_ffi_store32(iter_base + 0, ptr348)
+                cleanup_list.push(ptr348)
               }
-              mbt_ffi_store32(iter_base + 16, payload345.length())
-              mbt_ffi_store32(iter_base + 12, address347)
-              cleanup_list.push(address347)
+              mbt_ffi_store32(iter_base + 16, payload347.length())
+              mbt_ffi_store32(iter_base + 12, address349)
+              cleanup_list.push(address349)
 
               ()
             }
           }
 
-          match payload343.allowed_hosts {
+          match payload345.allowed_hosts {
             None => {
               mbt_ffi_store8(iter_base + 20, 0)
 
               ()
             }
-            Some(payload350) => {
+            Some(payload352) => {
               mbt_ffi_store8(iter_base + 20, 1)
 
-              let address352 = mbt_ffi_malloc(payload350.length() * 8)
-              for index353 = 0
-                  index353 < payload350.length()
-                  index353 = index353 + 1 {
-                let iter_elem : String = payload350[index353]
-                let iter_base = address352 + index353 * 8
+              let address354 = mbt_ffi_malloc(payload352.length() * 8)
+              for index355 = 0
+                  index355 < payload352.length()
+                  index355 = index355 + 1 {
+                let iter_elem : String = payload352[index355]
+                let iter_base = address354 + index355 * 8
 
-                let ptr351 = mbt_ffi_str2ptr(iter_elem)
+                let ptr353 = mbt_ffi_str2ptr(iter_elem)
                 mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr351)
-                cleanup_list.push(ptr351)
+                mbt_ffi_store32(iter_base + 0, ptr353)
+                cleanup_list.push(ptr353)
               }
-              mbt_ffi_store32(iter_base + 28, payload350.length())
-              mbt_ffi_store32(iter_base + 24, address352)
-              cleanup_list.push(address352)
+              mbt_ffi_store32(iter_base + 28, payload352.length())
+              mbt_ffi_store32(iter_base + 24, address354)
+              cleanup_list.push(address354)
 
               ()
             }
@@ -19015,102 +19049,92 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        QuantityType(payload356) => {
+        QuantityType(payload358) => {
           mbt_ffi_store8(iter_base + 0, 30)
 
-          let ptr357 = mbt_ffi_str2ptr(payload356.base_unit)
-          mbt_ffi_store32(iter_base + 12, payload356.base_unit.length())
-          mbt_ffi_store32(iter_base + 8, ptr357)
+          let ptr359 = mbt_ffi_str2ptr(payload358.base_unit)
+          mbt_ffi_store32(iter_base + 12, payload358.base_unit.length())
+          mbt_ffi_store32(iter_base + 8, ptr359)
 
-          let address359 = mbt_ffi_malloc(
-            payload356.allowed_suffixes.length() * 8,
+          let address361 = mbt_ffi_malloc(
+            payload358.allowed_suffixes.length() * 8,
           )
-          for index360 = 0
-              index360 < payload356.allowed_suffixes.length()
-              index360 = index360 + 1 {
-            let iter_elem : String = payload356.allowed_suffixes[index360]
-            let iter_base = address359 + index360 * 8
+          for index362 = 0
+              index362 < payload358.allowed_suffixes.length()
+              index362 = index362 + 1 {
+            let iter_elem : String = payload358.allowed_suffixes[index362]
+            let iter_base = address361 + index362 * 8
 
-            let ptr358 = mbt_ffi_str2ptr(iter_elem)
+            let ptr360 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr358)
-            cleanup_list.push(ptr358)
+            mbt_ffi_store32(iter_base + 0, ptr360)
+            cleanup_list.push(ptr360)
           }
-          mbt_ffi_store32(iter_base + 20, payload356.allowed_suffixes.length())
-          mbt_ffi_store32(iter_base + 16, address359)
+          mbt_ffi_store32(iter_base + 20, payload358.allowed_suffixes.length())
+          mbt_ffi_store32(iter_base + 16, address361)
 
-          match payload356.min {
+          match payload358.min {
             None => {
               mbt_ffi_store8(iter_base + 24, 0)
 
               ()
             }
-            Some(payload362) => {
+            Some(payload364) => {
               mbt_ffi_store8(iter_base + 24, 1)
-              mbt_ffi_store64(iter_base + 32, payload362.mantissa)
-              mbt_ffi_store32(iter_base + 40, payload362.scale)
+              mbt_ffi_store64(iter_base + 32, payload364.mantissa)
+              mbt_ffi_store32(iter_base + 40, payload364.scale)
 
-              let ptr363 = mbt_ffi_str2ptr(payload362.unit)
-              mbt_ffi_store32(iter_base + 48, payload362.unit.length())
-              mbt_ffi_store32(iter_base + 44, ptr363)
-              cleanup_list.push(ptr363)
+              let ptr365 = mbt_ffi_str2ptr(payload364.unit)
+              mbt_ffi_store32(iter_base + 48, payload364.unit.length())
+              mbt_ffi_store32(iter_base + 44, ptr365)
+              cleanup_list.push(ptr365)
 
               ()
             }
           }
 
-          match payload356.max {
+          match payload358.max {
             None => {
               mbt_ffi_store8(iter_base + 56, 0)
 
               ()
             }
-            Some(payload365) => {
+            Some(payload367) => {
               mbt_ffi_store8(iter_base + 56, 1)
-              mbt_ffi_store64(iter_base + 64, payload365.mantissa)
-              mbt_ffi_store32(iter_base + 72, payload365.scale)
+              mbt_ffi_store64(iter_base + 64, payload367.mantissa)
+              mbt_ffi_store32(iter_base + 72, payload367.scale)
 
-              let ptr366 = mbt_ffi_str2ptr(payload365.unit)
-              mbt_ffi_store32(iter_base + 80, payload365.unit.length())
-              mbt_ffi_store32(iter_base + 76, ptr366)
-              cleanup_list.push(ptr366)
+              let ptr368 = mbt_ffi_str2ptr(payload367.unit)
+              mbt_ffi_store32(iter_base + 80, payload367.unit.length())
+              mbt_ffi_store32(iter_base + 76, ptr368)
+              cleanup_list.push(ptr368)
 
               ()
             }
           }
-          cleanup_list.push(ptr357)
-          cleanup_list.push(address359)
+          cleanup_list.push(ptr359)
+          cleanup_list.push(address361)
 
           ()
         }
-        UnionType(payload367) => {
+        UnionType(payload369) => {
           mbt_ffi_store8(iter_base + 0, 31)
 
-          let address403 = mbt_ffi_malloc(payload367.branches.length() * 92)
-          for index404 = 0
-              index404 < payload367.branches.length()
-              index404 = index404 + 1 {
-            let iter_elem : @types.UnionBranch = payload367.branches[index404]
-            let iter_base = address403 + index404 * 92
+          let address405 = mbt_ffi_malloc(payload369.branches.length() * 92)
+          for index406 = 0
+              index406 < payload369.branches.length()
+              index406 = index406 + 1 {
+            let iter_elem : @types.UnionBranch = payload369.branches[index406]
+            let iter_base = address405 + index406 * 92
 
-            let ptr368 = mbt_ffi_str2ptr(iter_elem.tag)
+            let ptr370 = mbt_ffi_str2ptr(iter_elem.tag)
             mbt_ffi_store32(iter_base + 4, iter_elem.tag.length())
-            mbt_ffi_store32(iter_base + 0, ptr368)
+            mbt_ffi_store32(iter_base + 0, ptr370)
             mbt_ffi_store32(iter_base + 8, iter_elem.body)
 
             match iter_elem.discriminator {
-              Prefix(payload369) => {
+              Prefix(payload371) => {
                 mbt_ffi_store8(iter_base + 12, 0)
-
-                let ptr370 = mbt_ffi_str2ptr(payload369)
-                mbt_ffi_store32(iter_base + 20, payload369.length())
-                mbt_ffi_store32(iter_base + 16, ptr370)
-                cleanup_list.push(ptr370)
-
-                ()
-              }
-              Suffix(payload371) => {
-                mbt_ffi_store8(iter_base + 12, 1)
 
                 let ptr372 = mbt_ffi_str2ptr(payload371)
                 mbt_ffi_store32(iter_base + 20, payload371.length())
@@ -19119,8 +19143,8 @@ pub fn WasmRpc::wasm_rpc(
 
                 ()
               }
-              Contains(payload373) => {
-                mbt_ffi_store8(iter_base + 12, 2)
+              Suffix(payload373) => {
+                mbt_ffi_store8(iter_base + 12, 1)
 
                 let ptr374 = mbt_ffi_str2ptr(payload373)
                 mbt_ffi_store32(iter_base + 20, payload373.length())
@@ -19129,8 +19153,8 @@ pub fn WasmRpc::wasm_rpc(
 
                 ()
               }
-              Regex(payload375) => {
-                mbt_ffi_store8(iter_base + 12, 3)
+              Contains(payload375) => {
+                mbt_ffi_store8(iter_base + 12, 2)
 
                 let ptr376 = mbt_ffi_str2ptr(payload375)
                 mbt_ffi_store32(iter_base + 20, payload375.length())
@@ -19139,41 +19163,51 @@ pub fn WasmRpc::wasm_rpc(
 
                 ()
               }
-              FieldEquals(payload377) => {
+              Regex(payload377) => {
+                mbt_ffi_store8(iter_base + 12, 3)
+
+                let ptr378 = mbt_ffi_str2ptr(payload377)
+                mbt_ffi_store32(iter_base + 20, payload377.length())
+                mbt_ffi_store32(iter_base + 16, ptr378)
+                cleanup_list.push(ptr378)
+
+                ()
+              }
+              FieldEquals(payload379) => {
                 mbt_ffi_store8(iter_base + 12, 4)
 
-                let ptr378 = mbt_ffi_str2ptr(payload377.field_name)
-                mbt_ffi_store32(iter_base + 20, payload377.field_name.length())
-                mbt_ffi_store32(iter_base + 16, ptr378)
+                let ptr380 = mbt_ffi_str2ptr(payload379.field_name)
+                mbt_ffi_store32(iter_base + 20, payload379.field_name.length())
+                mbt_ffi_store32(iter_base + 16, ptr380)
 
-                match payload377.literal {
+                match payload379.literal {
                   None => {
                     mbt_ffi_store8(iter_base + 24, 0)
 
                     ()
                   }
-                  Some(payload380) => {
+                  Some(payload382) => {
                     mbt_ffi_store8(iter_base + 24, 1)
 
-                    let ptr381 = mbt_ffi_str2ptr(payload380)
-                    mbt_ffi_store32(iter_base + 32, payload380.length())
-                    mbt_ffi_store32(iter_base + 28, ptr381)
-                    cleanup_list.push(ptr381)
+                    let ptr383 = mbt_ffi_str2ptr(payload382)
+                    mbt_ffi_store32(iter_base + 32, payload382.length())
+                    mbt_ffi_store32(iter_base + 28, ptr383)
+                    cleanup_list.push(ptr383)
 
                     ()
                   }
                 }
-                cleanup_list.push(ptr378)
+                cleanup_list.push(ptr380)
 
                 ()
               }
-              FieldAbsent(payload382) => {
+              FieldAbsent(payload384) => {
                 mbt_ffi_store8(iter_base + 12, 5)
 
-                let ptr383 = mbt_ffi_str2ptr(payload382)
-                mbt_ffi_store32(iter_base + 20, payload382.length())
-                mbt_ffi_store32(iter_base + 16, ptr383)
-                cleanup_list.push(ptr383)
+                let ptr385 = mbt_ffi_str2ptr(payload384)
+                mbt_ffi_store32(iter_base + 20, payload384.length())
+                mbt_ffi_store32(iter_base + 16, ptr385)
+                cleanup_list.push(ptr385)
 
                 ()
               }
@@ -19185,54 +19219,54 @@ pub fn WasmRpc::wasm_rpc(
 
                 ()
               }
-              Some(payload385) => {
+              Some(payload387) => {
                 mbt_ffi_store8(iter_base + 36, 1)
 
-                let ptr386 = mbt_ffi_str2ptr(payload385)
-                mbt_ffi_store32(iter_base + 44, payload385.length())
-                mbt_ffi_store32(iter_base + 40, ptr386)
-                cleanup_list.push(ptr386)
+                let ptr388 = mbt_ffi_str2ptr(payload387)
+                mbt_ffi_store32(iter_base + 44, payload387.length())
+                mbt_ffi_store32(iter_base + 40, ptr388)
+                cleanup_list.push(ptr388)
 
                 ()
               }
             }
 
-            let address388 = mbt_ffi_malloc(
+            let address390 = mbt_ffi_malloc(
               iter_elem.metadata.aliases.length() * 8,
             )
-            for index389 = 0
-                index389 < iter_elem.metadata.aliases.length()
-                index389 = index389 + 1 {
-              let iter_elem : String = iter_elem.metadata.aliases[index389]
-              let iter_base = address388 + index389 * 8
+            for index391 = 0
+                index391 < iter_elem.metadata.aliases.length()
+                index391 = index391 + 1 {
+              let iter_elem : String = iter_elem.metadata.aliases[index391]
+              let iter_base = address390 + index391 * 8
 
-              let ptr387 = mbt_ffi_str2ptr(iter_elem)
+              let ptr389 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr387)
-              cleanup_list.push(ptr387)
+              mbt_ffi_store32(iter_base + 0, ptr389)
+              cleanup_list.push(ptr389)
             }
             mbt_ffi_store32(iter_base + 52, iter_elem.metadata.aliases.length())
-            mbt_ffi_store32(iter_base + 48, address388)
+            mbt_ffi_store32(iter_base + 48, address390)
 
-            let address391 = mbt_ffi_malloc(
+            let address393 = mbt_ffi_malloc(
               iter_elem.metadata.examples.length() * 8,
             )
-            for index392 = 0
-                index392 < iter_elem.metadata.examples.length()
-                index392 = index392 + 1 {
-              let iter_elem : String = iter_elem.metadata.examples[index392]
-              let iter_base = address391 + index392 * 8
+            for index394 = 0
+                index394 < iter_elem.metadata.examples.length()
+                index394 = index394 + 1 {
+              let iter_elem : String = iter_elem.metadata.examples[index394]
+              let iter_base = address393 + index394 * 8
 
-              let ptr390 = mbt_ffi_str2ptr(iter_elem)
+              let ptr392 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr390)
-              cleanup_list.push(ptr390)
+              mbt_ffi_store32(iter_base + 0, ptr392)
+              cleanup_list.push(ptr392)
             }
             mbt_ffi_store32(
               iter_base + 60,
               iter_elem.metadata.examples.length(),
             )
-            mbt_ffi_store32(iter_base + 56, address391)
+            mbt_ffi_store32(iter_base + 56, address393)
 
             match iter_elem.metadata.deprecated {
               None => {
@@ -19240,13 +19274,13 @@ pub fn WasmRpc::wasm_rpc(
 
                 ()
               }
-              Some(payload394) => {
+              Some(payload396) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr395 = mbt_ffi_str2ptr(payload394)
-                mbt_ffi_store32(iter_base + 72, payload394.length())
-                mbt_ffi_store32(iter_base + 68, ptr395)
-                cleanup_list.push(ptr395)
+                let ptr397 = mbt_ffi_str2ptr(payload396)
+                mbt_ffi_store32(iter_base + 72, payload396.length())
+                mbt_ffi_store32(iter_base + 68, ptr397)
+                cleanup_list.push(ptr397)
 
                 ()
               }
@@ -19258,10 +19292,10 @@ pub fn WasmRpc::wasm_rpc(
 
                 ()
               }
-              Some(payload397) => {
+              Some(payload399) => {
                 mbt_ffi_store8(iter_base + 76, 1)
 
-                match payload397 {
+                match payload399 {
                   Multimodal => {
                     mbt_ffi_store8(iter_base + 80, 0)
 
@@ -19277,13 +19311,13 @@ pub fn WasmRpc::wasm_rpc(
 
                     ()
                   }
-                  Other(payload401) => {
+                  Other(payload403) => {
                     mbt_ffi_store8(iter_base + 80, 3)
 
-                    let ptr402 = mbt_ffi_str2ptr(payload401)
-                    mbt_ffi_store32(iter_base + 88, payload401.length())
-                    mbt_ffi_store32(iter_base + 84, ptr402)
-                    cleanup_list.push(ptr402)
+                    let ptr404 = mbt_ffi_str2ptr(payload403)
+                    mbt_ffi_store32(iter_base + 88, payload403.length())
+                    mbt_ffi_store32(iter_base + 84, ptr404)
+                    cleanup_list.push(ptr404)
 
                     ()
                   }
@@ -19292,33 +19326,33 @@ pub fn WasmRpc::wasm_rpc(
                 ()
               }
             }
-            cleanup_list.push(ptr368)
-            cleanup_list.push(address388)
-            cleanup_list.push(address391)
+            cleanup_list.push(ptr370)
+            cleanup_list.push(address390)
+            cleanup_list.push(address393)
           }
-          mbt_ffi_store32(iter_base + 12, payload367.branches.length())
-          mbt_ffi_store32(iter_base + 8, address403)
-          cleanup_list.push(address403)
+          mbt_ffi_store32(iter_base + 12, payload369.branches.length())
+          mbt_ffi_store32(iter_base + 8, address405)
+          cleanup_list.push(address405)
 
           ()
         }
-        SecretType(payload405) => {
+        SecretType(payload407) => {
           mbt_ffi_store8(iter_base + 0, 32)
-          mbt_ffi_store32(iter_base + 8, payload405.inner)
+          mbt_ffi_store32(iter_base + 8, payload407.inner)
 
-          match payload405.category {
+          match payload407.category {
             None => {
               mbt_ffi_store8(iter_base + 12, 0)
 
               ()
             }
-            Some(payload407) => {
+            Some(payload409) => {
               mbt_ffi_store8(iter_base + 12, 1)
 
-              let ptr408 = mbt_ffi_str2ptr(payload407)
-              mbt_ffi_store32(iter_base + 20, payload407.length())
-              mbt_ffi_store32(iter_base + 16, ptr408)
-              cleanup_list.push(ptr408)
+              let ptr410 = mbt_ffi_str2ptr(payload409)
+              mbt_ffi_store32(iter_base + 20, payload409.length())
+              mbt_ffi_store32(iter_base + 16, ptr410)
+              cleanup_list.push(ptr410)
 
               ()
             }
@@ -19326,22 +19360,22 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        QuotaTokenType(payload409) => {
+        QuotaTokenType(payload411) => {
           mbt_ffi_store8(iter_base + 0, 33)
 
-          match payload409.resource_name {
+          match payload411.resource_name {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload411) => {
+            Some(payload413) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              let ptr412 = mbt_ffi_str2ptr(payload411)
-              mbt_ffi_store32(iter_base + 16, payload411.length())
-              mbt_ffi_store32(iter_base + 12, ptr412)
-              cleanup_list.push(ptr412)
+              let ptr414 = mbt_ffi_str2ptr(payload413)
+              mbt_ffi_store32(iter_base + 16, payload413.length())
+              mbt_ffi_store32(iter_base + 12, ptr414)
+              cleanup_list.push(ptr414)
 
               ()
             }
@@ -19349,11 +19383,11 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        PermissionCardType(payload413) => {
+        PermissionCardType(payload415) => {
           mbt_ffi_store8(iter_base + 0, 34)
           mbt_ffi_store8(
             iter_base + 8,
-            if payload413.polymorphic {
+            if payload415.polymorphic {
               1
             } else {
               0
@@ -19362,18 +19396,18 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        FutureType(payload414) => {
+        FutureType(payload416) => {
           mbt_ffi_store8(iter_base + 0, 35)
 
-          match payload414 {
+          match payload416 {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload416) => {
+            Some(payload418) => {
               mbt_ffi_store8(iter_base + 8, 1)
-              mbt_ffi_store32(iter_base + 12, payload416)
+              mbt_ffi_store32(iter_base + 12, payload418)
 
               ()
             }
@@ -19381,18 +19415,18 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        StreamType(payload417) => {
+        StreamType(payload419) => {
           mbt_ffi_store8(iter_base + 0, 36)
 
-          match payload417 {
+          match payload419 {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload419) => {
+            Some(payload421) => {
               mbt_ffi_store8(iter_base + 8, 1)
-              mbt_ffi_store32(iter_base + 12, payload419)
+              mbt_ffi_store32(iter_base + 12, payload421)
 
               ()
             }
@@ -19408,47 +19442,47 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        Some(payload421) => {
+        Some(payload423) => {
           mbt_ffi_store8(iter_base + 88, 1)
 
-          let ptr422 = mbt_ffi_str2ptr(payload421)
-          mbt_ffi_store32(iter_base + 96, payload421.length())
-          mbt_ffi_store32(iter_base + 92, ptr422)
-          cleanup_list.push(ptr422)
+          let ptr424 = mbt_ffi_str2ptr(payload423)
+          mbt_ffi_store32(iter_base + 96, payload423.length())
+          mbt_ffi_store32(iter_base + 92, ptr424)
+          cleanup_list.push(ptr424)
 
           ()
         }
       }
 
-      let address424 = mbt_ffi_malloc(iter_elem.metadata.aliases.length() * 8)
-      for index425 = 0
-          index425 < iter_elem.metadata.aliases.length()
-          index425 = index425 + 1 {
-        let iter_elem : String = iter_elem.metadata.aliases[index425]
-        let iter_base = address424 + index425 * 8
+      let address426 = mbt_ffi_malloc(iter_elem.metadata.aliases.length() * 8)
+      for index427 = 0
+          index427 < iter_elem.metadata.aliases.length()
+          index427 = index427 + 1 {
+        let iter_elem : String = iter_elem.metadata.aliases[index427]
+        let iter_base = address426 + index427 * 8
 
-        let ptr423 = mbt_ffi_str2ptr(iter_elem)
+        let ptr425 = mbt_ffi_str2ptr(iter_elem)
         mbt_ffi_store32(iter_base + 4, iter_elem.length())
-        mbt_ffi_store32(iter_base + 0, ptr423)
-        cleanup_list.push(ptr423)
+        mbt_ffi_store32(iter_base + 0, ptr425)
+        cleanup_list.push(ptr425)
       }
       mbt_ffi_store32(iter_base + 104, iter_elem.metadata.aliases.length())
-      mbt_ffi_store32(iter_base + 100, address424)
+      mbt_ffi_store32(iter_base + 100, address426)
 
-      let address427 = mbt_ffi_malloc(iter_elem.metadata.examples.length() * 8)
-      for index428 = 0
-          index428 < iter_elem.metadata.examples.length()
-          index428 = index428 + 1 {
-        let iter_elem : String = iter_elem.metadata.examples[index428]
-        let iter_base = address427 + index428 * 8
+      let address429 = mbt_ffi_malloc(iter_elem.metadata.examples.length() * 8)
+      for index430 = 0
+          index430 < iter_elem.metadata.examples.length()
+          index430 = index430 + 1 {
+        let iter_elem : String = iter_elem.metadata.examples[index430]
+        let iter_base = address429 + index430 * 8
 
-        let ptr426 = mbt_ffi_str2ptr(iter_elem)
+        let ptr428 = mbt_ffi_str2ptr(iter_elem)
         mbt_ffi_store32(iter_base + 4, iter_elem.length())
-        mbt_ffi_store32(iter_base + 0, ptr426)
-        cleanup_list.push(ptr426)
+        mbt_ffi_store32(iter_base + 0, ptr428)
+        cleanup_list.push(ptr428)
       }
       mbt_ffi_store32(iter_base + 112, iter_elem.metadata.examples.length())
-      mbt_ffi_store32(iter_base + 108, address427)
+      mbt_ffi_store32(iter_base + 108, address429)
 
       match iter_elem.metadata.deprecated {
         None => {
@@ -19456,13 +19490,13 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        Some(payload430) => {
+        Some(payload432) => {
           mbt_ffi_store8(iter_base + 116, 1)
 
-          let ptr431 = mbt_ffi_str2ptr(payload430)
-          mbt_ffi_store32(iter_base + 124, payload430.length())
-          mbt_ffi_store32(iter_base + 120, ptr431)
-          cleanup_list.push(ptr431)
+          let ptr433 = mbt_ffi_str2ptr(payload432)
+          mbt_ffi_store32(iter_base + 124, payload432.length())
+          mbt_ffi_store32(iter_base + 120, ptr433)
+          cleanup_list.push(ptr433)
 
           ()
         }
@@ -19474,10 +19508,10 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        Some(payload433) => {
+        Some(payload435) => {
           mbt_ffi_store8(iter_base + 128, 1)
 
-          match payload433 {
+          match payload435 {
             Multimodal => {
               mbt_ffi_store8(iter_base + 132, 0)
 
@@ -19493,13 +19527,13 @@ pub fn WasmRpc::wasm_rpc(
 
               ()
             }
-            Other(payload437) => {
+            Other(payload439) => {
               mbt_ffi_store8(iter_base + 132, 3)
 
-              let ptr438 = mbt_ffi_str2ptr(payload437)
-              mbt_ffi_store32(iter_base + 140, payload437.length())
-              mbt_ffi_store32(iter_base + 136, ptr438)
-              cleanup_list.push(ptr438)
+              let ptr440 = mbt_ffi_str2ptr(payload439)
+              mbt_ffi_store32(iter_base + 140, payload439.length())
+              mbt_ffi_store32(iter_base + 136, ptr440)
+              cleanup_list.push(ptr440)
 
               ()
             }
@@ -19508,22 +19542,22 @@ pub fn WasmRpc::wasm_rpc(
           ()
         }
       }
-      cleanup_list.push(address424)
-      cleanup_list.push(address427)
+      cleanup_list.push(address426)
+      cleanup_list.push(address429)
     }
     mbt_ffi_store32(iter_base + 12, iter_elem.value.graph.type_nodes.length())
-    mbt_ffi_store32(iter_base + 8, address439)
+    mbt_ffi_store32(iter_base + 8, address441)
 
-    let address445 = mbt_ffi_malloc(iter_elem.value.graph.defs.length() * 24)
-    for index446 = 0
-        index446 < iter_elem.value.graph.defs.length()
-        index446 = index446 + 1 {
-      let iter_elem : @types.SchemaTypeDef = iter_elem.value.graph.defs[index446]
-      let iter_base = address445 + index446 * 24
+    let address447 = mbt_ffi_malloc(iter_elem.value.graph.defs.length() * 24)
+    for index448 = 0
+        index448 < iter_elem.value.graph.defs.length()
+        index448 = index448 + 1 {
+      let iter_elem : @types.SchemaTypeDef = iter_elem.value.graph.defs[index448]
+      let iter_base = address447 + index448 * 24
 
-      let ptr441 = mbt_ffi_str2ptr(iter_elem.id)
+      let ptr443 = mbt_ffi_str2ptr(iter_elem.id)
       mbt_ffi_store32(iter_base + 4, iter_elem.id.length())
-      mbt_ffi_store32(iter_base + 0, ptr441)
+      mbt_ffi_store32(iter_base + 0, ptr443)
 
       match iter_elem.name {
         None => {
@@ -19531,146 +19565,146 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        Some(payload443) => {
+        Some(payload445) => {
           mbt_ffi_store8(iter_base + 8, 1)
 
-          let ptr444 = mbt_ffi_str2ptr(payload443)
-          mbt_ffi_store32(iter_base + 16, payload443.length())
-          mbt_ffi_store32(iter_base + 12, ptr444)
-          cleanup_list.push(ptr444)
+          let ptr446 = mbt_ffi_str2ptr(payload445)
+          mbt_ffi_store32(iter_base + 16, payload445.length())
+          mbt_ffi_store32(iter_base + 12, ptr446)
+          cleanup_list.push(ptr446)
 
           ()
         }
       }
       mbt_ffi_store32(iter_base + 20, iter_elem.body)
-      cleanup_list.push(ptr441)
+      cleanup_list.push(ptr443)
     }
     mbt_ffi_store32(iter_base + 20, iter_elem.value.graph.defs.length())
-    mbt_ffi_store32(iter_base + 16, address445)
+    mbt_ffi_store32(iter_base + 16, address447)
     mbt_ffi_store32(iter_base + 24, iter_elem.value.graph.root)
 
-    let address519 = mbt_ffi_malloc(
+    let address523 = mbt_ffi_malloc(
       iter_elem.value.value.value_nodes.length() * 32,
     )
-    for index520 = 0
-        index520 < iter_elem.value.value.value_nodes.length()
-        index520 = index520 + 1 {
-      let iter_elem : @types.SchemaValueNode = iter_elem.value.value.value_nodes[index520]
-      let iter_base = address519 + index520 * 32
+    for index524 = 0
+        index524 < iter_elem.value.value.value_nodes.length()
+        index524 = index524 + 1 {
+      let iter_elem : @types.SchemaValueNode = iter_elem.value.value.value_nodes[index524]
+      let iter_base = address523 + index524 * 32
 
       match iter_elem {
-        BoolValue(payload447) => {
+        BoolValue(payload449) => {
           mbt_ffi_store8(iter_base + 0, 0)
-          mbt_ffi_store8(iter_base + 8, if payload447 { 1 } else { 0 })
+          mbt_ffi_store8(iter_base + 8, if payload449 { 1 } else { 0 })
 
           ()
         }
-        S8Value(payload448) => {
+        S8Value(payload450) => {
           mbt_ffi_store8(iter_base + 0, 1)
-          mbt_ffi_store8(iter_base + 8, mbt_ffi_extend8(payload448))
+          mbt_ffi_store8(iter_base + 8, mbt_ffi_extend8(payload450))
 
           ()
         }
-        S16Value(payload449) => {
+        S16Value(payload451) => {
           mbt_ffi_store8(iter_base + 0, 2)
-          mbt_ffi_store16(iter_base + 8, mbt_ffi_extend16(payload449))
+          mbt_ffi_store16(iter_base + 8, mbt_ffi_extend16(payload451))
 
           ()
         }
-        S32Value(payload450) => {
+        S32Value(payload452) => {
           mbt_ffi_store8(iter_base + 0, 3)
-          mbt_ffi_store32(iter_base + 8, payload450)
+          mbt_ffi_store32(iter_base + 8, payload452)
 
           ()
         }
-        S64Value(payload451) => {
+        S64Value(payload453) => {
           mbt_ffi_store8(iter_base + 0, 4)
-          mbt_ffi_store64(iter_base + 8, payload451)
+          mbt_ffi_store64(iter_base + 8, payload453)
 
           ()
         }
-        U8Value(payload452) => {
+        U8Value(payload454) => {
           mbt_ffi_store8(iter_base + 0, 5)
-          mbt_ffi_store8(iter_base + 8, payload452.to_int())
+          mbt_ffi_store8(iter_base + 8, payload454.to_int())
 
           ()
         }
-        U16Value(payload453) => {
+        U16Value(payload455) => {
           mbt_ffi_store8(iter_base + 0, 6)
-          mbt_ffi_store16(iter_base + 8, payload453.reinterpret_as_int())
+          mbt_ffi_store16(iter_base + 8, payload455.reinterpret_as_int())
 
           ()
         }
-        U32Value(payload454) => {
+        U32Value(payload456) => {
           mbt_ffi_store8(iter_base + 0, 7)
-          mbt_ffi_store32(iter_base + 8, payload454.reinterpret_as_int())
+          mbt_ffi_store32(iter_base + 8, payload456.reinterpret_as_int())
 
           ()
         }
-        U64Value(payload455) => {
+        U64Value(payload457) => {
           mbt_ffi_store8(iter_base + 0, 8)
-          mbt_ffi_store64(iter_base + 8, payload455.reinterpret_as_int64())
+          mbt_ffi_store64(iter_base + 8, payload457.reinterpret_as_int64())
 
           ()
         }
-        F32Value(payload456) => {
+        F32Value(payload458) => {
           mbt_ffi_store8(iter_base + 0, 9)
-          mbt_ffi_storef32(iter_base + 8, payload456)
+          mbt_ffi_storef32(iter_base + 8, payload458)
 
           ()
         }
-        F64Value(payload457) => {
+        F64Value(payload459) => {
           mbt_ffi_store8(iter_base + 0, 10)
-          mbt_ffi_storef64(iter_base + 8, payload457)
+          mbt_ffi_storef64(iter_base + 8, payload459)
 
           ()
         }
-        CharValue(payload458) => {
+        CharValue(payload460) => {
           mbt_ffi_store8(iter_base + 0, 11)
-          mbt_ffi_store32(iter_base + 8, payload458.to_int())
+          mbt_ffi_store32(iter_base + 8, payload460.to_int())
 
           ()
         }
-        StringValue(payload459) => {
+        StringValue(payload461) => {
           mbt_ffi_store8(iter_base + 0, 12)
 
-          let ptr460 = mbt_ffi_str2ptr(payload459)
-          mbt_ffi_store32(iter_base + 12, payload459.length())
-          mbt_ffi_store32(iter_base + 8, ptr460)
-          cleanup_list.push(ptr460)
+          let ptr462 = mbt_ffi_str2ptr(payload461)
+          mbt_ffi_store32(iter_base + 12, payload461.length())
+          mbt_ffi_store32(iter_base + 8, ptr462)
+          cleanup_list.push(ptr462)
 
           ()
         }
-        RecordValue(payload461) => {
+        RecordValue(payload463) => {
           mbt_ffi_store8(iter_base + 0, 13)
 
-          let address462 = mbt_ffi_malloc(payload461.length() * 4)
-          for index463 = 0
-              index463 < payload461.length()
-              index463 = index463 + 1 {
-            let iter_elem : Int = payload461[index463]
-            let iter_base = address462 + index463 * 4
+          let address464 = mbt_ffi_malloc(payload463.length() * 4)
+          for index465 = 0
+              index465 < payload463.length()
+              index465 = index465 + 1 {
+            let iter_elem : Int = payload463[index465]
+            let iter_base = address464 + index465 * 4
             mbt_ffi_store32(iter_base + 0, iter_elem)
           }
-          mbt_ffi_store32(iter_base + 12, payload461.length())
-          mbt_ffi_store32(iter_base + 8, address462)
-          cleanup_list.push(address462)
+          mbt_ffi_store32(iter_base + 12, payload463.length())
+          mbt_ffi_store32(iter_base + 8, address464)
+          cleanup_list.push(address464)
 
           ()
         }
-        VariantValue(payload464) => {
+        VariantValue(payload466) => {
           mbt_ffi_store8(iter_base + 0, 14)
-          mbt_ffi_store32(iter_base + 8, payload464.case.reinterpret_as_int())
+          mbt_ffi_store32(iter_base + 8, payload466.case.reinterpret_as_int())
 
-          match payload464.payload {
+          match payload466.payload {
             None => {
               mbt_ffi_store8(iter_base + 12, 0)
 
               ()
             }
-            Some(payload466) => {
+            Some(payload468) => {
               mbt_ffi_store8(iter_base + 12, 1)
-              mbt_ffi_store32(iter_base + 16, payload466)
+              mbt_ffi_store32(iter_base + 16, payload468)
 
               ()
             }
@@ -19678,110 +19712,110 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        EnumValue(payload467) => {
+        EnumValue(payload469) => {
           mbt_ffi_store8(iter_base + 0, 15)
-          mbt_ffi_store32(iter_base + 8, payload467.reinterpret_as_int())
+          mbt_ffi_store32(iter_base + 8, payload469.reinterpret_as_int())
 
           ()
         }
-        FlagsValue(payload468) => {
+        FlagsValue(payload470) => {
           mbt_ffi_store8(iter_base + 0, 16)
 
-          let address469 = mbt_ffi_malloc(payload468.length() * 1)
-          for index470 = 0
-              index470 < payload468.length()
-              index470 = index470 + 1 {
-            let iter_elem : Bool = payload468[index470]
-            let iter_base = address469 + index470 * 1
+          let address471 = mbt_ffi_malloc(payload470.length() * 1)
+          for index472 = 0
+              index472 < payload470.length()
+              index472 = index472 + 1 {
+            let iter_elem : Bool = payload470[index472]
+            let iter_base = address471 + index472 * 1
             mbt_ffi_store8(iter_base + 0, if iter_elem { 1 } else { 0 })
           }
-          mbt_ffi_store32(iter_base + 12, payload468.length())
-          mbt_ffi_store32(iter_base + 8, address469)
-          cleanup_list.push(address469)
+          mbt_ffi_store32(iter_base + 12, payload470.length())
+          mbt_ffi_store32(iter_base + 8, address471)
+          cleanup_list.push(address471)
 
           ()
         }
-        TupleValue(payload471) => {
+        TupleValue(payload473) => {
           mbt_ffi_store8(iter_base + 0, 17)
 
-          let address472 = mbt_ffi_malloc(payload471.length() * 4)
-          for index473 = 0
-              index473 < payload471.length()
-              index473 = index473 + 1 {
-            let iter_elem : Int = payload471[index473]
-            let iter_base = address472 + index473 * 4
+          let address474 = mbt_ffi_malloc(payload473.length() * 4)
+          for index475 = 0
+              index475 < payload473.length()
+              index475 = index475 + 1 {
+            let iter_elem : Int = payload473[index475]
+            let iter_base = address474 + index475 * 4
             mbt_ffi_store32(iter_base + 0, iter_elem)
           }
-          mbt_ffi_store32(iter_base + 12, payload471.length())
-          mbt_ffi_store32(iter_base + 8, address472)
-          cleanup_list.push(address472)
+          mbt_ffi_store32(iter_base + 12, payload473.length())
+          mbt_ffi_store32(iter_base + 8, address474)
+          cleanup_list.push(address474)
 
           ()
         }
-        ListValue(payload474) => {
+        ListValue(payload476) => {
           mbt_ffi_store8(iter_base + 0, 18)
 
-          let address475 = mbt_ffi_malloc(payload474.length() * 4)
-          for index476 = 0
-              index476 < payload474.length()
-              index476 = index476 + 1 {
-            let iter_elem : Int = payload474[index476]
-            let iter_base = address475 + index476 * 4
+          let address477 = mbt_ffi_malloc(payload476.length() * 4)
+          for index478 = 0
+              index478 < payload476.length()
+              index478 = index478 + 1 {
+            let iter_elem : Int = payload476[index478]
+            let iter_base = address477 + index478 * 4
             mbt_ffi_store32(iter_base + 0, iter_elem)
           }
-          mbt_ffi_store32(iter_base + 12, payload474.length())
-          mbt_ffi_store32(iter_base + 8, address475)
-          cleanup_list.push(address475)
+          mbt_ffi_store32(iter_base + 12, payload476.length())
+          mbt_ffi_store32(iter_base + 8, address477)
+          cleanup_list.push(address477)
 
           ()
         }
-        FixedListValue(payload477) => {
+        FixedListValue(payload479) => {
           mbt_ffi_store8(iter_base + 0, 19)
 
-          let address478 = mbt_ffi_malloc(payload477.length() * 4)
-          for index479 = 0
-              index479 < payload477.length()
-              index479 = index479 + 1 {
-            let iter_elem : Int = payload477[index479]
-            let iter_base = address478 + index479 * 4
+          let address480 = mbt_ffi_malloc(payload479.length() * 4)
+          for index481 = 0
+              index481 < payload479.length()
+              index481 = index481 + 1 {
+            let iter_elem : Int = payload479[index481]
+            let iter_base = address480 + index481 * 4
             mbt_ffi_store32(iter_base + 0, iter_elem)
           }
-          mbt_ffi_store32(iter_base + 12, payload477.length())
-          mbt_ffi_store32(iter_base + 8, address478)
-          cleanup_list.push(address478)
+          mbt_ffi_store32(iter_base + 12, payload479.length())
+          mbt_ffi_store32(iter_base + 8, address480)
+          cleanup_list.push(address480)
 
           ()
         }
-        MapValue(payload480) => {
+        MapValue(payload482) => {
           mbt_ffi_store8(iter_base + 0, 20)
 
-          let address481 = mbt_ffi_malloc(payload480.length() * 8)
-          for index482 = 0
-              index482 < payload480.length()
-              index482 = index482 + 1 {
-            let iter_elem : @types.MapEntry = payload480[index482]
-            let iter_base = address481 + index482 * 8
+          let address483 = mbt_ffi_malloc(payload482.length() * 8)
+          for index484 = 0
+              index484 < payload482.length()
+              index484 = index484 + 1 {
+            let iter_elem : @types.MapEntry = payload482[index484]
+            let iter_base = address483 + index484 * 8
             mbt_ffi_store32(iter_base + 0, iter_elem.key)
             mbt_ffi_store32(iter_base + 4, iter_elem.value)
           }
-          mbt_ffi_store32(iter_base + 12, payload480.length())
-          mbt_ffi_store32(iter_base + 8, address481)
-          cleanup_list.push(address481)
+          mbt_ffi_store32(iter_base + 12, payload482.length())
+          mbt_ffi_store32(iter_base + 8, address483)
+          cleanup_list.push(address483)
 
           ()
         }
-        OptionValue(payload483) => {
+        OptionValue(payload485) => {
           mbt_ffi_store8(iter_base + 0, 21)
 
-          match payload483 {
+          match payload485 {
             None => {
               mbt_ffi_store8(iter_base + 8, 0)
 
               ()
             }
-            Some(payload485) => {
+            Some(payload487) => {
               mbt_ffi_store8(iter_base + 8, 1)
-              mbt_ffi_store32(iter_base + 12, payload485)
+              mbt_ffi_store32(iter_base + 12, payload487)
 
               ()
             }
@@ -19789,22 +19823,22 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        ResultValue(payload486) => {
+        ResultValue(payload488) => {
           mbt_ffi_store8(iter_base + 0, 22)
 
-          match payload486 {
-            OkValue(payload487) => {
+          match payload488 {
+            OkValue(payload489) => {
               mbt_ffi_store8(iter_base + 8, 0)
 
-              match payload487 {
+              match payload489 {
                 None => {
                   mbt_ffi_store8(iter_base + 12, 0)
 
                   ()
                 }
-                Some(payload489) => {
+                Some(payload491) => {
                   mbt_ffi_store8(iter_base + 12, 1)
-                  mbt_ffi_store32(iter_base + 16, payload489)
+                  mbt_ffi_store32(iter_base + 16, payload491)
 
                   ()
                 }
@@ -19812,18 +19846,18 @@ pub fn WasmRpc::wasm_rpc(
 
               ()
             }
-            ErrValue(payload490) => {
+            ErrValue(payload492) => {
               mbt_ffi_store8(iter_base + 8, 1)
 
-              match payload490 {
+              match payload492 {
                 None => {
                   mbt_ffi_store8(iter_base + 12, 0)
 
                   ()
                 }
-                Some(payload492) => {
+                Some(payload494) => {
                   mbt_ffi_store8(iter_base + 12, 1)
-                  mbt_ffi_store32(iter_base + 16, payload492)
+                  mbt_ffi_store32(iter_base + 16, payload494)
 
                   ()
                 }
@@ -19835,75 +19869,65 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        TextValue(payload493) => {
+        TextValue(payload495) => {
           mbt_ffi_store8(iter_base + 0, 23)
 
-          let ptr494 = mbt_ffi_str2ptr(payload493.text)
-          mbt_ffi_store32(iter_base + 12, payload493.text.length())
-          mbt_ffi_store32(iter_base + 8, ptr494)
+          let ptr496 = mbt_ffi_str2ptr(payload495.text)
+          mbt_ffi_store32(iter_base + 12, payload495.text.length())
+          mbt_ffi_store32(iter_base + 8, ptr496)
 
-          match payload493.language {
+          match payload495.language {
             None => {
               mbt_ffi_store8(iter_base + 16, 0)
 
               ()
             }
-            Some(payload496) => {
+            Some(payload498) => {
               mbt_ffi_store8(iter_base + 16, 1)
 
-              let ptr497 = mbt_ffi_str2ptr(payload496)
-              mbt_ffi_store32(iter_base + 24, payload496.length())
-              mbt_ffi_store32(iter_base + 20, ptr497)
-              cleanup_list.push(ptr497)
+              let ptr499 = mbt_ffi_str2ptr(payload498)
+              mbt_ffi_store32(iter_base + 24, payload498.length())
+              mbt_ffi_store32(iter_base + 20, ptr499)
+              cleanup_list.push(ptr499)
 
               ()
             }
           }
-          cleanup_list.push(ptr494)
+          cleanup_list.push(ptr496)
 
           ()
         }
-        BinaryValue(payload498) => {
+        BinaryValue(payload500) => {
           mbt_ffi_store8(iter_base + 0, 24)
 
-          let ptr499 = mbt_ffi_bytes2ptr(payload498.bytes)
+          let ptr501 = mbt_ffi_bytes2ptr(payload500.bytes)
 
-          mbt_ffi_store32(iter_base + 12, payload498.bytes.length())
-          mbt_ffi_store32(iter_base + 8, ptr499)
+          mbt_ffi_store32(iter_base + 12, payload500.bytes.length())
+          mbt_ffi_store32(iter_base + 8, ptr501)
 
-          match payload498.mime_type {
+          match payload500.mime_type {
             None => {
               mbt_ffi_store8(iter_base + 16, 0)
 
               ()
             }
-            Some(payload501) => {
+            Some(payload503) => {
               mbt_ffi_store8(iter_base + 16, 1)
 
-              let ptr502 = mbt_ffi_str2ptr(payload501)
-              mbt_ffi_store32(iter_base + 24, payload501.length())
-              mbt_ffi_store32(iter_base + 20, ptr502)
-              cleanup_list.push(ptr502)
+              let ptr504 = mbt_ffi_str2ptr(payload503)
+              mbt_ffi_store32(iter_base + 24, payload503.length())
+              mbt_ffi_store32(iter_base + 20, ptr504)
+              cleanup_list.push(ptr504)
 
               ()
             }
           }
-          cleanup_list.push(ptr499)
+          cleanup_list.push(ptr501)
 
           ()
         }
-        PathValue(payload503) => {
+        PathValue(payload505) => {
           mbt_ffi_store8(iter_base + 0, 25)
-
-          let ptr504 = mbt_ffi_str2ptr(payload503)
-          mbt_ffi_store32(iter_base + 12, payload503.length())
-          mbt_ffi_store32(iter_base + 8, ptr504)
-          cleanup_list.push(ptr504)
-
-          ()
-        }
-        UrlValue(payload505) => {
-          mbt_ffi_store8(iter_base + 0, 26)
 
           let ptr506 = mbt_ffi_str2ptr(payload505)
           mbt_ffi_store32(iter_base + 12, payload505.length())
@@ -19912,95 +19936,113 @@ pub fn WasmRpc::wasm_rpc(
 
           ()
         }
-        DatetimeValue(payload507) => {
+        UrlValue(payload507) => {
+          mbt_ffi_store8(iter_base + 0, 26)
+
+          let ptr508 = mbt_ffi_str2ptr(payload507)
+          mbt_ffi_store32(iter_base + 12, payload507.length())
+          mbt_ffi_store32(iter_base + 8, ptr508)
+          cleanup_list.push(ptr508)
+
+          ()
+        }
+        DatetimeValue(payload509) => {
           mbt_ffi_store8(iter_base + 0, 27)
-          mbt_ffi_store64(iter_base + 8, payload507.seconds)
+          mbt_ffi_store64(iter_base + 8, payload509.seconds)
           mbt_ffi_store32(
             iter_base + 16,
-            payload507.nanoseconds.reinterpret_as_int(),
+            payload509.nanoseconds.reinterpret_as_int(),
           )
 
           ()
         }
-        DurationValue(payload508) => {
+        DurationValue(payload510) => {
           mbt_ffi_store8(iter_base + 0, 28)
-          mbt_ffi_store64(iter_base + 8, payload508.nanoseconds)
+          mbt_ffi_store64(iter_base + 8, payload510.nanoseconds)
 
           ()
         }
-        QuantityValueNode(payload509) => {
+        QuantityValueNode(payload511) => {
           mbt_ffi_store8(iter_base + 0, 29)
-          mbt_ffi_store64(iter_base + 8, payload509.mantissa)
-          mbt_ffi_store32(iter_base + 16, payload509.scale)
+          mbt_ffi_store64(iter_base + 8, payload511.mantissa)
+          mbt_ffi_store32(iter_base + 16, payload511.scale)
 
-          let ptr510 = mbt_ffi_str2ptr(payload509.unit)
-          mbt_ffi_store32(iter_base + 24, payload509.unit.length())
-          mbt_ffi_store32(iter_base + 20, ptr510)
-          cleanup_list.push(ptr510)
-
-          ()
-        }
-        UnionValue(payload511) => {
-          mbt_ffi_store8(iter_base + 0, 30)
-
-          let ptr512 = mbt_ffi_str2ptr(payload511.tag)
-          mbt_ffi_store32(iter_base + 12, payload511.tag.length())
-          mbt_ffi_store32(iter_base + 8, ptr512)
-          mbt_ffi_store32(iter_base + 16, payload511.body)
+          let ptr512 = mbt_ffi_str2ptr(payload511.unit)
+          mbt_ffi_store32(iter_base + 24, payload511.unit.length())
+          mbt_ffi_store32(iter_base + 20, ptr512)
           cleanup_list.push(ptr512)
 
           ()
         }
-        SecretValue(payload513) => {
-          mbt_ffi_store8(iter_base + 0, 31)
+        UnionValue(payload513) => {
+          mbt_ffi_store8(iter_base + 0, 30)
 
-          let @types.Secret(handle514) = payload513
-          mbt_ffi_store32(iter_base + 8, handle514)
+          let ptr514 = mbt_ffi_str2ptr(payload513.tag)
+          mbt_ffi_store32(iter_base + 12, payload513.tag.length())
+          mbt_ffi_store32(iter_base + 8, ptr514)
+          mbt_ffi_store32(iter_base + 16, payload513.body)
+          cleanup_list.push(ptr514)
 
           ()
         }
-        QuotaTokenHandle(payload515) => {
-          mbt_ffi_store8(iter_base + 0, 32)
+        SecretValue(payload515) => {
+          mbt_ffi_store8(iter_base + 0, 31)
 
-          let @types.QuotaToken(handle516) = payload515
+          let @types.Secret(handle516) = payload515
           mbt_ffi_store32(iter_base + 8, handle516)
 
           ()
         }
-        PermissionCardHandle(payload517) => {
+        QuotaTokenHandle(payload517) => {
+          mbt_ffi_store8(iter_base + 0, 32)
+
+          let @types.QuotaToken(handle518) = payload517
+          mbt_ffi_store32(iter_base + 8, handle518)
+
+          ()
+        }
+        PermissionCardHandle(payload519) => {
           mbt_ffi_store8(iter_base + 0, 33)
 
-          let @types.PermissionCard(handle518) = payload517
-          mbt_ffi_store32(iter_base + 8, handle518)
+          let @types.PermissionCard(handle520) = payload519
+          mbt_ffi_store32(iter_base + 8, handle520)
+
+          ()
+        }
+        StreamValue(payload521) => {
+          mbt_ffi_store8(iter_base + 0, 34)
+
+          let @types.SchemaValueStream(handle522) = payload521
+          mbt_ffi_store32(iter_base + 8, handle522)
 
           ()
         }
       }
     }
     mbt_ffi_store32(iter_base + 32, iter_elem.value.value.value_nodes.length())
-    mbt_ffi_store32(iter_base + 28, address519)
+    mbt_ffi_store32(iter_base + 28, address523)
     mbt_ffi_store32(iter_base + 36, iter_elem.value.value.root)
-    cleanup_list.push(address75)
-    cleanup_list.push(address439)
-    cleanup_list.push(address445)
-    cleanup_list.push(address519)
+    cleanup_list.push(address77)
+    cleanup_list.push(address441)
+    cleanup_list.push(address447)
+    cleanup_list.push(address523)
   }
   let result : Int = wasmImportConstructorWasmRpc(
     ptr,
     agent_type_name.length(),
-    address68,
+    address70,
     constructor_.value_nodes.length(),
     constructor_.root,
     lowered,
-    lowered72,
-    lowered73,
-    address521,
+    lowered74,
+    lowered75,
+    address525,
     agent_config.length(),
   )
   let ret = WasmRpc::WasmRpc(result)
   mbt_ffi_free(ptr)
-  mbt_ffi_free(address68)
-  mbt_ffi_free(address521)
+  mbt_ffi_free(address70)
+  mbt_ffi_free(address525)
 
   cleanup_list.each(mbt_ffi_free)
   return ret
@@ -20023,10 +20065,10 @@ pub fn WasmRpc::invoke_and_await(
 
   let ptr = mbt_ffi_str2ptr(method_name)
 
-  let address69 = mbt_ffi_malloc(input.value_nodes.length() * 32)
-  for index70 = 0; index70 < input.value_nodes.length(); index70 = index70 + 1 {
-    let iter_elem : @types.SchemaValueNode = input.value_nodes[index70]
-    let iter_base = address69 + index70 * 32
+  let address71 = mbt_ffi_malloc(input.value_nodes.length() * 32)
+  for index72 = 0; index72 < input.value_nodes.length(); index72 = index72 + 1 {
+    let iter_elem : @types.SchemaValueNode = input.value_nodes[index72]
+    let iter_base = address71 + index72 * 32
 
     match iter_elem {
       BoolValue(payload) => {
@@ -20433,15 +20475,23 @@ pub fn WasmRpc::invoke_and_await(
 
         ()
       }
+      StreamValue(payload69) => {
+        mbt_ffi_store8(iter_base + 0, 34)
+
+        let @types.SchemaValueStream(handle70) = payload69
+        mbt_ffi_store32(iter_base + 8, handle70)
+
+        ()
+      }
     }
   }
 
-  let (lowered, lowered74) = match scope_card {
+  let (lowered, lowered76) = match scope_card {
     None => (0, 0)
-    Some(payload72) => {
-      let @types.PermissionCard(handle73) = payload72
+    Some(payload74) => {
+      let @types.PermissionCard(handle75) = payload74
 
-      (1, handle73)
+      (1, handle75)
     }
   }
   let return_area = mbt_ffi_malloc(44)
@@ -20449,37 +20499,37 @@ pub fn WasmRpc::invoke_and_await(
     handle,
     ptr,
     method_name.length(),
-    address69,
+    address71,
     input.value_nodes.length(),
     input.root,
     lowered,
-    lowered74,
+    lowered76,
     return_area,
   )
 
-  let lifted350 = match mbt_ffi_load8_u(return_area + 0) {
+  let lifted352 = match mbt_ffi_load8_u(return_area + 0) {
     0 => {
       let result = mbt_ffi_ptr2str(
         mbt_ffi_load32(return_area + 4),
         mbt_ffi_load32(return_area + 8),
       )
 
-      let result75 = mbt_ffi_ptr2str(
+      let result77 = mbt_ffi_ptr2str(
         mbt_ffi_load32(return_area + 12),
         mbt_ffi_load32(return_area + 16),
       )
 
-      let lifted105 : @types.SchemaValueTree? = match
+      let lifted107 : @types.SchemaValueTree? = match
         mbt_ffi_load8_u(return_area + 20) {
         0 => Option::None
         1 => {
-          let array103 : Array[@types.SchemaValueNode] = []
-          for index104 = 0
-              index104 < mbt_ffi_load32(return_area + 28)
-              index104 = index104 + 1 {
-            let iter_base = mbt_ffi_load32(return_area + 24) + index104 * 32
+          let array105 : Array[@types.SchemaValueNode] = []
+          for index106 = 0
+              index106 < mbt_ffi_load32(return_area + 28)
+              index106 = index106 + 1 {
+            let iter_base = mbt_ffi_load32(return_area + 24) + index106 * 32
 
-            let lifted102 = match mbt_ffi_load8_u(iter_base + 0) {
+            let lifted104 = match mbt_ffi_load8_u(iter_base + 0) {
               0 =>
                 @types.SchemaValueNode::BoolValue(
                   mbt_ffi_load8_u(iter_base + 8) != 0,
@@ -20518,19 +20568,19 @@ pub fn WasmRpc::invoke_and_await(
                   Int::unsafe_to_char(mbt_ffi_load32(iter_base + 8)),
                 )
               12 => {
-                let result76 = mbt_ffi_ptr2str(
+                let result78 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 8),
                   mbt_ffi_load32(iter_base + 12),
                 )
 
-                @types.SchemaValueNode::StringValue(result76)
+                @types.SchemaValueNode::StringValue(result78)
               }
               13 => {
                 let array : Array[Int] = []
-                for index77 = 0
-                    index77 < mbt_ffi_load32(iter_base + 12)
-                    index77 = index77 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index77 * 4
+                for index79 = 0
+                    index79 < mbt_ffi_load32(iter_base + 12)
+                    index79 = index79 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index79 * 4
 
                   array.push(mbt_ffi_load32(iter_base + 0))
                 }
@@ -20555,32 +20605,19 @@ pub fn WasmRpc::invoke_and_await(
                   mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
                 )
               16 => {
-                let array78 : Array[Bool] = []
-                for index79 = 0
-                    index79 < mbt_ffi_load32(iter_base + 12)
-                    index79 = index79 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index79 * 1
-
-                  array78.push(mbt_ffi_load8_u(iter_base + 0) != 0)
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-                @types.SchemaValueNode::FlagsValue(array78)
-              }
-              17 => {
-                let array80 : Array[Int] = []
+                let array80 : Array[Bool] = []
                 for index81 = 0
                     index81 < mbt_ffi_load32(iter_base + 12)
                     index81 = index81 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index81 * 4
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index81 * 1
 
-                  array80.push(mbt_ffi_load32(iter_base + 0))
+                  array80.push(mbt_ffi_load8_u(iter_base + 0) != 0)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.SchemaValueNode::TupleValue(array80)
+                @types.SchemaValueNode::FlagsValue(array80)
               }
-              18 => {
+              17 => {
                 let array82 : Array[Int] = []
                 for index83 = 0
                     index83 < mbt_ffi_load32(iter_base + 12)
@@ -20591,9 +20628,9 @@ pub fn WasmRpc::invoke_and_await(
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.SchemaValueNode::ListValue(array82)
+                @types.SchemaValueNode::TupleValue(array82)
               }
-              19 => {
+              18 => {
                 let array84 : Array[Int] = []
                 for index85 = 0
                     index85 < mbt_ffi_load32(iter_base + 12)
@@ -20604,123 +20641,136 @@ pub fn WasmRpc::invoke_and_await(
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.SchemaValueNode::FixedListValue(array84)
+                @types.SchemaValueNode::ListValue(array84)
               }
-              20 => {
-                let array86 : Array[@types.MapEntry] = []
+              19 => {
+                let array86 : Array[Int] = []
                 for index87 = 0
                     index87 < mbt_ffi_load32(iter_base + 12)
                     index87 = index87 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index87 * 8
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index87 * 4
 
-                  array86.push(@types.MapEntry::{
+                  array86.push(mbt_ffi_load32(iter_base + 0))
+                }
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                @types.SchemaValueNode::FixedListValue(array86)
+              }
+              20 => {
+                let array88 : Array[@types.MapEntry] = []
+                for index89 = 0
+                    index89 < mbt_ffi_load32(iter_base + 12)
+                    index89 = index89 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index89 * 8
+
+                  array88.push(@types.MapEntry::{
                     key: mbt_ffi_load32(iter_base + 0),
                     value: mbt_ffi_load32(iter_base + 4),
                   })
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.SchemaValueNode::MapValue(array86)
+                @types.SchemaValueNode::MapValue(array88)
               }
               21 => {
-                let lifted88 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
+                let lifted90 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
                   0 => Option::None
                   1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                   _ => panic()
                 }
 
-                @types.SchemaValueNode::OptionValue(lifted88)
+                @types.SchemaValueNode::OptionValue(lifted90)
               }
               22 => {
-                let lifted91 = match mbt_ffi_load8_u(iter_base + 8) {
+                let lifted93 = match mbt_ffi_load8_u(iter_base + 8) {
                   0 => {
-                    let lifted89 : Int? = match
+                    let lifted91 : Int? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 16))
                       _ => panic()
                     }
 
-                    @types.ResultValuePayload::OkValue(lifted89)
+                    @types.ResultValuePayload::OkValue(lifted91)
                   }
                   1 => {
-                    let lifted90 : Int? = match
+                    let lifted92 : Int? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 16))
                       _ => panic()
                     }
 
-                    @types.ResultValuePayload::ErrValue(lifted90)
+                    @types.ResultValuePayload::ErrValue(lifted92)
                   }
                   _ => panic()
                 }
 
-                @types.SchemaValueNode::ResultValue(lifted91)
+                @types.SchemaValueNode::ResultValue(lifted93)
               }
               23 => {
-                let result92 = mbt_ffi_ptr2str(
+                let result94 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 8),
                   mbt_ffi_load32(iter_base + 12),
                 )
 
-                let lifted94 : String? = match mbt_ffi_load8_u(iter_base + 16) {
+                let lifted96 : String? = match mbt_ffi_load8_u(iter_base + 16) {
                   0 => Option::None
                   1 => {
-                    let result93 = mbt_ffi_ptr2str(
+                    let result95 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 20),
                       mbt_ffi_load32(iter_base + 24),
                     )
 
-                    Option::Some(result93)
+                    Option::Some(result95)
                   }
                   _ => panic()
                 }
 
                 @types.SchemaValueNode::TextValue(@types.TextValuePayload::{
-                  text: result92,
-                  language: lifted94,
+                  text: result94,
+                  language: lifted96,
                 })
               }
               24 => {
-                let result95 = mbt_ffi_ptr2bytes(
+                let result97 = mbt_ffi_ptr2bytes(
                   mbt_ffi_load32(iter_base + 8),
                   mbt_ffi_load32(iter_base + 12),
                 )
 
-                let lifted97 : String? = match mbt_ffi_load8_u(iter_base + 16) {
+                let lifted99 : String? = match mbt_ffi_load8_u(iter_base + 16) {
                   0 => Option::None
                   1 => {
-                    let result96 = mbt_ffi_ptr2str(
+                    let result98 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 20),
                       mbt_ffi_load32(iter_base + 24),
                     )
 
-                    Option::Some(result96)
+                    Option::Some(result98)
                   }
                   _ => panic()
                 }
 
                 @types.SchemaValueNode::BinaryValue(@types.BinaryValuePayload::{
-                  bytes: result95,
-                  mime_type: lifted97,
+                  bytes: result97,
+                  mime_type: lifted99,
                 })
               }
               25 => {
-                let result98 = mbt_ffi_ptr2str(
+                let result100 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 8),
                   mbt_ffi_load32(iter_base + 12),
                 )
 
-                @types.SchemaValueNode::PathValue(result98)
+                @types.SchemaValueNode::PathValue(result100)
               }
               26 => {
-                let result99 = mbt_ffi_ptr2str(
+                let result101 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 8),
                   mbt_ffi_load32(iter_base + 12),
                 )
 
-                @types.SchemaValueNode::UrlValue(result99)
+                @types.SchemaValueNode::UrlValue(result101)
               }
               27 =>
                 @types.SchemaValueNode::DatetimeValue(@types.Datetime::{
@@ -20732,7 +20782,7 @@ pub fn WasmRpc::invoke_and_await(
                   nanoseconds: mbt_ffi_load64(iter_base + 8),
                 })
               29 => {
-                let result100 = mbt_ffi_ptr2str(
+                let result102 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 20),
                   mbt_ffi_load32(iter_base + 24),
                 )
@@ -20740,17 +20790,17 @@ pub fn WasmRpc::invoke_and_await(
                 @types.SchemaValueNode::QuantityValueNode(@types.QuantityValue::{
                   mantissa: mbt_ffi_load64(iter_base + 8),
                   scale: mbt_ffi_load32(iter_base + 16),
-                  unit: result100,
+                  unit: result102,
                 })
               }
               30 => {
-                let result101 = mbt_ffi_ptr2str(
+                let result103 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 8),
                   mbt_ffi_load32(iter_base + 12),
                 )
 
                 @types.SchemaValueNode::UnionValue(@types.UnionValuePayload::{
-                  tag: result101,
+                  tag: result103,
                   body: mbt_ffi_load32(iter_base + 16),
                 })
               }
@@ -20768,15 +20818,21 @@ pub fn WasmRpc::invoke_and_await(
                     mbt_ffi_load32(iter_base + 8),
                   ),
                 )
+              34 =>
+                @types.SchemaValueNode::StreamValue(
+                  @types.SchemaValueStream::SchemaValueStream(
+                    mbt_ffi_load32(iter_base + 8),
+                  ),
+                )
               _ => panic()
             }
 
-            array103.push(lifted102)
+            array105.push(lifted104)
           }
           mbt_ffi_free(mbt_ffi_load32(return_area + 24))
 
           Option::Some(@types.SchemaValueTree::{
-            value_nodes: array103,
+            value_nodes: array105,
             root: mbt_ffi_load32(return_area + 32),
           })
         }
@@ -20786,103 +20842,103 @@ pub fn WasmRpc::invoke_and_await(
       Result::Ok(InvocationResultWithMetadata::{
         metadata: InvocationMetadata::{
           agent_id: result,
-          idempotency_key: result75,
+          idempotency_key: result77,
         },
-        result: lifted105,
+        result: lifted107,
       })
     }
     1 => {
-      let lifted349 = match mbt_ffi_load8_u(return_area + 4) {
+      let lifted351 = match mbt_ffi_load8_u(return_area + 4) {
         0 => {
-          let result106 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(return_area + 8),
-            mbt_ffi_load32(return_area + 12),
-          )
-
-          RpcError::ProtocolError(result106)
-        }
-        1 => {
-          let result107 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(return_area + 8),
-            mbt_ffi_load32(return_area + 12),
-          )
-
-          RpcError::Denied(result107)
-        }
-        2 => {
           let result108 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          RpcError::NotFound(result108)
+          RpcError::ProtocolError(result108)
         }
-        3 => {
+        1 => {
           let result109 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          RpcError::RemoteInternalError(result109)
+          RpcError::Denied(result109)
+        }
+        2 => {
+          let result110 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
+          )
+
+          RpcError::NotFound(result110)
+        }
+        3 => {
+          let result111 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
+          )
+
+          RpcError::RemoteInternalError(result111)
         }
         4 => {
-          let lifted348 = match mbt_ffi_load8_u(return_area + 8) {
+          let lifted350 = match mbt_ffi_load8_u(return_area + 8) {
             0 => {
-              let result110 = mbt_ffi_ptr2str(
-                mbt_ffi_load32(return_area + 12),
-                mbt_ffi_load32(return_area + 16),
-              )
-
-              @common.AgentError::InvalidInput(result110)
-            }
-            1 => {
-              let result111 = mbt_ffi_ptr2str(
-                mbt_ffi_load32(return_area + 12),
-                mbt_ffi_load32(return_area + 16),
-              )
-
-              @common.AgentError::InvalidMethod(result111)
-            }
-            2 => {
               let result112 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(return_area + 12),
                 mbt_ffi_load32(return_area + 16),
               )
 
-              @common.AgentError::InvalidType(result112)
+              @common.AgentError::InvalidInput(result112)
             }
-            3 => {
+            1 => {
               let result113 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(return_area + 12),
                 mbt_ffi_load32(return_area + 16),
               )
 
-              @common.AgentError::InvalidAgentId(result113)
+              @common.AgentError::InvalidMethod(result113)
+            }
+            2 => {
+              let result114 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(return_area + 12),
+                mbt_ffi_load32(return_area + 16),
+              )
+
+              @common.AgentError::InvalidType(result114)
+            }
+            3 => {
+              let result115 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(return_area + 12),
+                mbt_ffi_load32(return_area + 16),
+              )
+
+              @common.AgentError::InvalidAgentId(result115)
             }
             4 => {
-              let array310 : Array[@types.SchemaTypeNode] = []
-              for index311 = 0
-                  index311 < mbt_ffi_load32(return_area + 16)
-                  index311 = index311 + 1 {
+              let array312 : Array[@types.SchemaTypeNode] = []
+              for index313 = 0
+                  index313 < mbt_ffi_load32(return_area + 16)
+                  index313 = index313 + 1 {
                 let iter_base = mbt_ffi_load32(return_area + 12) +
-                  index311 * 144
+                  index313 * 144
 
-                let lifted296 = match mbt_ffi_load8_u(iter_base + 0) {
+                let lifted298 = match mbt_ffi_load8_u(iter_base + 0) {
                   0 =>
                     @types.SchemaTypeBody::RefType(
                       mbt_ffi_load32(iter_base + 8),
                     )
                   1 => @types.SchemaTypeBody::BoolType
                   2 => {
-                    let lifted120 : @types.NumericRestrictions? = match
+                    let lifted122 : @types.NumericRestrictions? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let lifted115 : @types.NumericBound? = match
+                        let lifted117 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 16) {
                           0 => Option::None
                           1 => {
-                            let lifted114 = match
+                            let lifted116 = match
                               mbt_ffi_load8_u(iter_base + 24) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -20895,32 +20951,6 @@ pub fn WasmRpc::invoke_and_await(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted114)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted117 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 40) {
-                          0 => Option::None
-                          1 => {
-                            let lifted116 = match
-                              mbt_ffi_load8_u(iter_base + 48) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 56),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -20930,67 +20960,11 @@ pub fn WasmRpc::invoke_and_await(
                           _ => panic()
                         }
 
-                        let lifted119 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result118 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result118)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted115,
-                          max: lifted117,
-                          unit: lifted119,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::S8Type(lifted120)
-                  }
-                  3 => {
-                    let lifted127 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted122 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted121 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted121)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted124 : @types.NumericBound? = match
+                        let lifted119 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted123 = match
+                            let lifted118 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -21003,6 +20977,62 @@ pub fn WasmRpc::invoke_and_await(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted118)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted121 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result120 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result120)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted117,
+                          max: lifted119,
+                          unit: lifted121,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::S8Type(lifted122)
+                  }
+                  3 => {
+                    let lifted129 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted124 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted123 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -21012,67 +21042,11 @@ pub fn WasmRpc::invoke_and_await(
                           _ => panic()
                         }
 
-                        let lifted126 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result125 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result125)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted122,
-                          max: lifted124,
-                          unit: lifted126,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::S16Type(lifted127)
-                  }
-                  4 => {
-                    let lifted134 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted129 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted128 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted128)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted131 : @types.NumericBound? = match
+                        let lifted126 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted130 = match
+                            let lifted125 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -21085,6 +21059,62 @@ pub fn WasmRpc::invoke_and_await(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted125)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted128 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result127 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result127)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted124,
+                          max: lifted126,
+                          unit: lifted128,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::S16Type(lifted129)
+                  }
+                  4 => {
+                    let lifted136 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted131 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted130 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -21094,67 +21124,11 @@ pub fn WasmRpc::invoke_and_await(
                           _ => panic()
                         }
 
-                        let lifted133 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result132 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result132)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted129,
-                          max: lifted131,
-                          unit: lifted133,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::S32Type(lifted134)
-                  }
-                  5 => {
-                    let lifted141 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted136 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted135 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted135)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted138 : @types.NumericBound? = match
+                        let lifted133 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted137 = match
+                            let lifted132 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -21167,6 +21141,62 @@ pub fn WasmRpc::invoke_and_await(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted132)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted135 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result134 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result134)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted131,
+                          max: lifted133,
+                          unit: lifted135,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::S32Type(lifted136)
+                  }
+                  5 => {
+                    let lifted143 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted138 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted137 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -21176,67 +21206,11 @@ pub fn WasmRpc::invoke_and_await(
                           _ => panic()
                         }
 
-                        let lifted140 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result139 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result139)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted136,
-                          max: lifted138,
-                          unit: lifted140,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::S64Type(lifted141)
-                  }
-                  6 => {
-                    let lifted148 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted143 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted142 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted142)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted145 : @types.NumericBound? = match
+                        let lifted140 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted144 = match
+                            let lifted139 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -21249,6 +21223,62 @@ pub fn WasmRpc::invoke_and_await(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted139)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted142 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result141 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result141)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted138,
+                          max: lifted140,
+                          unit: lifted142,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::S64Type(lifted143)
+                  }
+                  6 => {
+                    let lifted150 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted145 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted144 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -21258,67 +21288,11 @@ pub fn WasmRpc::invoke_and_await(
                           _ => panic()
                         }
 
-                        let lifted147 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result146 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result146)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted143,
-                          max: lifted145,
-                          unit: lifted147,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::U8Type(lifted148)
-                  }
-                  7 => {
-                    let lifted155 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted150 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted149 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted149)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted152 : @types.NumericBound? = match
+                        let lifted147 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted151 = match
+                            let lifted146 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -21331,6 +21305,62 @@ pub fn WasmRpc::invoke_and_await(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted146)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted149 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result148 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result148)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted145,
+                          max: lifted147,
+                          unit: lifted149,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::U8Type(lifted150)
+                  }
+                  7 => {
+                    let lifted157 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted152 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted151 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -21340,67 +21370,11 @@ pub fn WasmRpc::invoke_and_await(
                           _ => panic()
                         }
 
-                        let lifted154 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result153 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result153)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted150,
-                          max: lifted152,
-                          unit: lifted154,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::U16Type(lifted155)
-                  }
-                  8 => {
-                    let lifted162 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted157 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted156 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted156)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted159 : @types.NumericBound? = match
+                        let lifted154 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted158 = match
+                            let lifted153 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -21413,6 +21387,62 @@ pub fn WasmRpc::invoke_and_await(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted153)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted156 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result155 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result155)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted152,
+                          max: lifted154,
+                          unit: lifted156,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::U16Type(lifted157)
+                  }
+                  8 => {
+                    let lifted164 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted159 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted158 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -21422,67 +21452,11 @@ pub fn WasmRpc::invoke_and_await(
                           _ => panic()
                         }
 
-                        let lifted161 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result160 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result160)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted157,
-                          max: lifted159,
-                          unit: lifted161,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::U32Type(lifted162)
-                  }
-                  9 => {
-                    let lifted169 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted164 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted163 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted163)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted166 : @types.NumericBound? = match
+                        let lifted161 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted165 = match
+                            let lifted160 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -21495,6 +21469,62 @@ pub fn WasmRpc::invoke_and_await(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted160)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted163 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result162 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result162)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted159,
+                          max: lifted161,
+                          unit: lifted163,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::U32Type(lifted164)
+                  }
+                  9 => {
+                    let lifted171 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted166 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted165 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -21504,67 +21534,11 @@ pub fn WasmRpc::invoke_and_await(
                           _ => panic()
                         }
 
-                        let lifted168 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result167 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result167)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted164,
-                          max: lifted166,
-                          unit: lifted168,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::U64Type(lifted169)
-                  }
-                  10 => {
-                    let lifted176 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted171 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted170 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted170)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted173 : @types.NumericBound? = match
+                        let lifted168 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted172 = match
+                            let lifted167 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -21577,6 +21551,62 @@ pub fn WasmRpc::invoke_and_await(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted167)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted170 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result169 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result169)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted166,
+                          max: lifted168,
+                          unit: lifted170,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::U64Type(lifted171)
+                  }
+                  10 => {
+                    let lifted178 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted173 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted172 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -21586,67 +21616,11 @@ pub fn WasmRpc::invoke_and_await(
                           _ => panic()
                         }
 
-                        let lifted175 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result174 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result174)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted171,
-                          max: lifted173,
-                          unit: lifted175,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::F32Type(lifted176)
-                  }
-                  11 => {
-                    let lifted183 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted178 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted177 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted177)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted180 : @types.NumericBound? = match
+                        let lifted175 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted179 = match
+                            let lifted174 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -21663,324 +21637,406 @@ pub fn WasmRpc::invoke_and_await(
                               _ => panic()
                             }
 
-                            Option::Some(lifted179)
+                            Option::Some(lifted174)
                           }
                           _ => panic()
                         }
 
-                        let lifted182 : String? = match
+                        let lifted177 : String? = match
                           mbt_ffi_load8_u(iter_base + 64) {
                           0 => Option::None
                           1 => {
-                            let result181 = mbt_ffi_ptr2str(
+                            let result176 = mbt_ffi_ptr2str(
                               mbt_ffi_load32(iter_base + 68),
                               mbt_ffi_load32(iter_base + 72),
                             )
 
-                            Option::Some(result181)
+                            Option::Some(result176)
                           }
                           _ => panic()
                         }
 
                         Option::Some(@types.NumericRestrictions::{
-                          min: lifted178,
-                          max: lifted180,
-                          unit: lifted182,
+                          min: lifted173,
+                          max: lifted175,
+                          unit: lifted177,
                         })
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::F64Type(lifted183)
+                    @types.SchemaTypeBody::F32Type(lifted178)
+                  }
+                  11 => {
+                    let lifted185 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted180 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted179 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted179)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted182 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 40) {
+                          0 => Option::None
+                          1 => {
+                            let lifted181 = match
+                              mbt_ffi_load8_u(iter_base + 48) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 56),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted181)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted184 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result183 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result183)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted180,
+                          max: lifted182,
+                          unit: lifted184,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::F64Type(lifted185)
                   }
                   12 => @types.SchemaTypeBody::CharType
                   13 => @types.SchemaTypeBody::StringType
                   14 => {
-                    let array198 : Array[@types.NamedFieldType] = []
-                    for index199 = 0
-                        index199 < mbt_ffi_load32(iter_base + 12)
-                        index199 = index199 + 1 {
+                    let array200 : Array[@types.NamedFieldType] = []
+                    for index201 = 0
+                        index201 < mbt_ffi_load32(iter_base + 12)
+                        index201 = index201 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index199 * 68
+                        index201 * 68
 
-                      let result184 = mbt_ffi_ptr2str(
+                      let result186 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      let lifted186 : String? = match
+                      let lifted188 : String? = match
                         mbt_ffi_load8_u(iter_base + 12) {
                         0 => Option::None
                         1 => {
-                          let result185 = mbt_ffi_ptr2str(
+                          let result187 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          Option::Some(result185)
+                          Option::Some(result187)
                         }
                         _ => panic()
                       }
 
-                      let array188 : Array[String] = []
-                      for index189 = 0
-                          index189 < mbt_ffi_load32(iter_base + 28)
-                          index189 = index189 + 1 {
+                      let array190 : Array[String] = []
+                      for index191 = 0
+                          index191 < mbt_ffi_load32(iter_base + 28)
+                          index191 = index191 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 24) +
-                          index189 * 8
+                          index191 * 8
 
-                        let result187 = mbt_ffi_ptr2str(
+                        let result189 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array188.push(result187)
+                        array190.push(result189)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
 
-                      let array191 : Array[String] = []
-                      for index192 = 0
-                          index192 < mbt_ffi_load32(iter_base + 36)
-                          index192 = index192 + 1 {
+                      let array193 : Array[String] = []
+                      for index194 = 0
+                          index194 < mbt_ffi_load32(iter_base + 36)
+                          index194 = index194 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 32) +
-                          index192 * 8
+                          index194 * 8
 
-                        let result190 = mbt_ffi_ptr2str(
+                        let result192 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array191.push(result190)
+                        array193.push(result192)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
 
-                      let lifted194 : String? = match
+                      let lifted196 : String? = match
                         mbt_ffi_load8_u(iter_base + 40) {
                         0 => Option::None
                         1 => {
-                          let result193 = mbt_ffi_ptr2str(
+                          let result195 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 44),
                             mbt_ffi_load32(iter_base + 48),
                           )
 
-                          Option::Some(result193)
+                          Option::Some(result195)
                         }
                         _ => panic()
                       }
 
-                      let lifted197 : @types.Role? = match
+                      let lifted199 : @types.Role? = match
                         mbt_ffi_load8_u(iter_base + 52) {
                         0 => Option::None
                         1 => {
-                          let lifted196 = match
+                          let lifted198 = match
                             mbt_ffi_load8_u(iter_base + 56) {
                             0 => @types.Role::Multimodal
                             1 => @types.Role::UnstructuredText
                             2 => @types.Role::UnstructuredBinary
                             3 => {
-                              let result195 = mbt_ffi_ptr2str(
+                              let result197 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 60),
                                 mbt_ffi_load32(iter_base + 64),
                               )
 
-                              @types.Role::Other(result195)
+                              @types.Role::Other(result197)
                             }
                             _ => panic()
                           }
 
-                          Option::Some(lifted196)
+                          Option::Some(lifted198)
                         }
                         _ => panic()
                       }
 
-                      array198.push(@types.NamedFieldType::{
-                        name: result184,
+                      array200.push(@types.NamedFieldType::{
+                        name: result186,
                         body: mbt_ffi_load32(iter_base + 8),
                         metadata: @types.MetadataEnvelope::{
-                          doc: lifted186,
-                          aliases: array188,
-                          examples: array191,
-                          deprecated: lifted194,
-                          role: lifted197,
+                          doc: lifted188,
+                          aliases: array190,
+                          examples: array193,
+                          deprecated: lifted196,
+                          role: lifted199,
                         },
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::RecordType(array198)
+                    @types.SchemaTypeBody::RecordType(array200)
                   }
                   15 => {
-                    let array215 : Array[@types.VariantCaseType] = []
-                    for index216 = 0
-                        index216 < mbt_ffi_load32(iter_base + 12)
-                        index216 = index216 + 1 {
+                    let array217 : Array[@types.VariantCaseType] = []
+                    for index218 = 0
+                        index218 < mbt_ffi_load32(iter_base + 12)
+                        index218 = index218 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index216 * 72
+                        index218 * 72
 
-                      let result200 = mbt_ffi_ptr2str(
+                      let result202 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      let lifted201 : Int? = match
+                      let lifted203 : Int? = match
                         mbt_ffi_load8_u(iter_base + 8) {
                         0 => Option::None
                         1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                         _ => panic()
                       }
 
-                      let lifted203 : String? = match
+                      let lifted205 : String? = match
                         mbt_ffi_load8_u(iter_base + 16) {
                         0 => Option::None
                         1 => {
-                          let result202 = mbt_ffi_ptr2str(
+                          let result204 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 20),
                             mbt_ffi_load32(iter_base + 24),
                           )
 
-                          Option::Some(result202)
+                          Option::Some(result204)
                         }
                         _ => panic()
                       }
 
-                      let array205 : Array[String] = []
-                      for index206 = 0
-                          index206 < mbt_ffi_load32(iter_base + 32)
-                          index206 = index206 + 1 {
+                      let array207 : Array[String] = []
+                      for index208 = 0
+                          index208 < mbt_ffi_load32(iter_base + 32)
+                          index208 = index208 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 28) +
-                          index206 * 8
+                          index208 * 8
 
-                        let result204 = mbt_ffi_ptr2str(
+                        let result206 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array205.push(result204)
+                        array207.push(result206)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
-                      let array208 : Array[String] = []
-                      for index209 = 0
-                          index209 < mbt_ffi_load32(iter_base + 40)
-                          index209 = index209 + 1 {
+                      let array210 : Array[String] = []
+                      for index211 = 0
+                          index211 < mbt_ffi_load32(iter_base + 40)
+                          index211 = index211 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 36) +
-                          index209 * 8
+                          index211 * 8
 
-                        let result207 = mbt_ffi_ptr2str(
+                        let result209 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array208.push(result207)
+                        array210.push(result209)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
 
-                      let lifted211 : String? = match
+                      let lifted213 : String? = match
                         mbt_ffi_load8_u(iter_base + 44) {
                         0 => Option::None
                         1 => {
-                          let result210 = mbt_ffi_ptr2str(
+                          let result212 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 48),
                             mbt_ffi_load32(iter_base + 52),
                           )
 
-                          Option::Some(result210)
+                          Option::Some(result212)
                         }
                         _ => panic()
                       }
 
-                      let lifted214 : @types.Role? = match
+                      let lifted216 : @types.Role? = match
                         mbt_ffi_load8_u(iter_base + 56) {
                         0 => Option::None
                         1 => {
-                          let lifted213 = match
+                          let lifted215 = match
                             mbt_ffi_load8_u(iter_base + 60) {
                             0 => @types.Role::Multimodal
                             1 => @types.Role::UnstructuredText
                             2 => @types.Role::UnstructuredBinary
                             3 => {
-                              let result212 = mbt_ffi_ptr2str(
+                              let result214 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 64),
                                 mbt_ffi_load32(iter_base + 68),
                               )
 
-                              @types.Role::Other(result212)
+                              @types.Role::Other(result214)
                             }
                             _ => panic()
                           }
 
-                          Option::Some(lifted213)
+                          Option::Some(lifted215)
                         }
                         _ => panic()
                       }
 
-                      array215.push(@types.VariantCaseType::{
-                        name: result200,
-                        payload: lifted201,
+                      array217.push(@types.VariantCaseType::{
+                        name: result202,
+                        payload: lifted203,
                         metadata: @types.MetadataEnvelope::{
-                          doc: lifted203,
-                          aliases: array205,
-                          examples: array208,
-                          deprecated: lifted211,
-                          role: lifted214,
+                          doc: lifted205,
+                          aliases: array207,
+                          examples: array210,
+                          deprecated: lifted213,
+                          role: lifted216,
                         },
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::VariantType(array215)
+                    @types.SchemaTypeBody::VariantType(array217)
                   }
                   16 => {
-                    let array218 : Array[String] = []
-                    for index219 = 0
-                        index219 < mbt_ffi_load32(iter_base + 12)
-                        index219 = index219 + 1 {
+                    let array220 : Array[String] = []
+                    for index221 = 0
+                        index221 < mbt_ffi_load32(iter_base + 12)
+                        index221 = index221 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index219 * 8
+                        index221 * 8
 
-                      let result217 = mbt_ffi_ptr2str(
+                      let result219 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      array218.push(result217)
+                      array220.push(result219)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::EnumType(array218)
+                    @types.SchemaTypeBody::EnumType(array220)
                   }
                   17 => {
-                    let array221 : Array[String] = []
-                    for index222 = 0
-                        index222 < mbt_ffi_load32(iter_base + 12)
-                        index222 = index222 + 1 {
-                      let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index222 * 8
-
-                      let result220 = mbt_ffi_ptr2str(
-                        mbt_ffi_load32(iter_base + 0),
-                        mbt_ffi_load32(iter_base + 4),
-                      )
-
-                      array221.push(result220)
-                    }
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-                    @types.SchemaTypeBody::FlagsType(array221)
-                  }
-                  18 => {
-                    let array223 : Array[Int] = []
+                    let array223 : Array[String] = []
                     for index224 = 0
                         index224 < mbt_ffi_load32(iter_base + 12)
                         index224 = index224 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index224 * 4
+                        index224 * 8
 
-                      array223.push(mbt_ffi_load32(iter_base + 0))
+                      let result222 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 0),
+                        mbt_ffi_load32(iter_base + 4),
+                      )
+
+                      array223.push(result222)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::TupleType(array223)
+                    @types.SchemaTypeBody::FlagsType(array223)
+                  }
+                  18 => {
+                    let array225 : Array[Int] = []
+                    for index226 = 0
+                        index226 < mbt_ffi_load32(iter_base + 12)
+                        index226 = index226 + 1 {
+                      let iter_base = mbt_ffi_load32(iter_base + 8) +
+                        index226 * 4
+
+                      array225.push(mbt_ffi_load32(iter_base + 0))
+                    }
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                    @types.SchemaTypeBody::TupleType(array225)
                   }
                   19 =>
                     @types.SchemaTypeBody::ListType(
@@ -22001,14 +22057,14 @@ pub fn WasmRpc::invoke_and_await(
                       mbt_ffi_load32(iter_base + 8),
                     )
                   23 => {
-                    let lifted225 : Int? = match
+                    let lifted227 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    let lifted226 : Int? = match
+                    let lifted228 : Int? = match
                       mbt_ffi_load8_u(iter_base + 16) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 20))
@@ -22016,37 +22072,37 @@ pub fn WasmRpc::invoke_and_await(
                     }
 
                     @types.SchemaTypeBody::ResultType(@types.ResultSpec::{
-                      ok: lifted225,
-                      err: lifted226,
+                      ok: lifted227,
+                      err: lifted228,
                     })
                   }
                   24 => {
-                    let lifted230 : Array[String]? = match
+                    let lifted232 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let array228 : Array[String] = []
-                        for index229 = 0
-                            index229 < mbt_ffi_load32(iter_base + 16)
-                            index229 = index229 + 1 {
+                        let array230 : Array[String] = []
+                        for index231 = 0
+                            index231 < mbt_ffi_load32(iter_base + 16)
+                            index231 = index231 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 12) +
-                            index229 * 8
+                            index231 * 8
 
-                          let result227 = mbt_ffi_ptr2str(
+                          let result229 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array228.push(result227)
+                          array230.push(result229)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
 
-                        Option::Some(array228)
+                        Option::Some(array230)
                       }
                       _ => panic()
                     }
 
-                    let lifted231 : UInt? = match
+                    let lifted233 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 20) {
                       0 => Option::None
                       1 =>
@@ -22056,7 +22112,7 @@ pub fn WasmRpc::invoke_and_await(
                       _ => panic()
                     }
 
-                    let lifted232 : UInt? = match
+                    let lifted234 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 28) {
                       0 => Option::None
                       1 =>
@@ -22066,54 +22122,54 @@ pub fn WasmRpc::invoke_and_await(
                       _ => panic()
                     }
 
-                    let lifted234 : String? = match
+                    let lifted236 : String? = match
                       mbt_ffi_load8_u(iter_base + 36) {
                       0 => Option::None
                       1 => {
-                        let result233 = mbt_ffi_ptr2str(
+                        let result235 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 40),
                           mbt_ffi_load32(iter_base + 44),
                         )
 
-                        Option::Some(result233)
+                        Option::Some(result235)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaTypeBody::TextType(@types.TextRestrictions::{
-                      languages: lifted230,
-                      min_length: lifted231,
-                      max_length: lifted232,
-                      regex: lifted234,
+                      languages: lifted232,
+                      min_length: lifted233,
+                      max_length: lifted234,
+                      regex: lifted236,
                     })
                   }
                   25 => {
-                    let lifted238 : Array[String]? = match
+                    let lifted240 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let array236 : Array[String] = []
-                        for index237 = 0
-                            index237 < mbt_ffi_load32(iter_base + 16)
-                            index237 = index237 + 1 {
+                        let array238 : Array[String] = []
+                        for index239 = 0
+                            index239 < mbt_ffi_load32(iter_base + 16)
+                            index239 = index239 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 12) +
-                            index237 * 8
+                            index239 * 8
 
-                          let result235 = mbt_ffi_ptr2str(
+                          let result237 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array236.push(result235)
+                          array238.push(result237)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
 
-                        Option::Some(array236)
+                        Option::Some(array238)
                       }
                       _ => panic()
                     }
 
-                    let lifted239 : UInt? = match
+                    let lifted241 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 20) {
                       0 => Option::None
                       1 =>
@@ -22123,7 +22179,7 @@ pub fn WasmRpc::invoke_and_await(
                       _ => panic()
                     }
 
-                    let lifted240 : UInt? = match
+                    let lifted242 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 28) {
                       0 => Option::None
                       1 =>
@@ -22134,58 +22190,58 @@ pub fn WasmRpc::invoke_and_await(
                     }
 
                     @types.SchemaTypeBody::BinaryType(@types.BinaryRestrictions::{
-                      mime_types: lifted238,
-                      min_bytes: lifted239,
-                      max_bytes: lifted240,
+                      mime_types: lifted240,
+                      min_bytes: lifted241,
+                      max_bytes: lifted242,
                     })
                   }
                   26 => {
-                    let lifted244 : Array[String]? = match
+                    let lifted246 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => {
-                        let array242 : Array[String] = []
-                        for index243 = 0
-                            index243 < mbt_ffi_load32(iter_base + 20)
-                            index243 = index243 + 1 {
+                        let array244 : Array[String] = []
+                        for index245 = 0
+                            index245 < mbt_ffi_load32(iter_base + 20)
+                            index245 = index245 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 16) +
-                            index243 * 8
+                            index245 * 8
 
-                          let result241 = mbt_ffi_ptr2str(
+                          let result243 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array242.push(result241)
+                          array244.push(result243)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
-                        Option::Some(array242)
+                        Option::Some(array244)
                       }
                       _ => panic()
                     }
 
-                    let lifted248 : Array[String]? = match
+                    let lifted250 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 24) {
                       0 => Option::None
                       1 => {
-                        let array246 : Array[String] = []
-                        for index247 = 0
-                            index247 < mbt_ffi_load32(iter_base + 32)
-                            index247 = index247 + 1 {
+                        let array248 : Array[String] = []
+                        for index249 = 0
+                            index249 < mbt_ffi_load32(iter_base + 32)
+                            index249 = index249 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 28) +
-                            index247 * 8
+                            index249 * 8
 
-                          let result245 = mbt_ffi_ptr2str(
+                          let result247 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array246.push(result245)
+                          array248.push(result247)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
-                        Option::Some(array246)
+                        Option::Some(array248)
                       }
                       _ => panic()
                     }
@@ -22197,95 +22253,95 @@ pub fn WasmRpc::invoke_and_await(
                       kind: @types.PathKind::from(
                         mbt_ffi_load8_u(iter_base + 9),
                       ),
-                      allowed_mime_types: lifted244,
-                      allowed_extensions: lifted248,
+                      allowed_mime_types: lifted246,
+                      allowed_extensions: lifted250,
                     })
                   }
                   27 => {
-                    let lifted252 : Array[String]? = match
+                    let lifted254 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let array250 : Array[String] = []
-                        for index251 = 0
-                            index251 < mbt_ffi_load32(iter_base + 16)
-                            index251 = index251 + 1 {
+                        let array252 : Array[String] = []
+                        for index253 = 0
+                            index253 < mbt_ffi_load32(iter_base + 16)
+                            index253 = index253 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 12) +
-                            index251 * 8
+                            index253 * 8
 
-                          let result249 = mbt_ffi_ptr2str(
+                          let result251 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array250.push(result249)
+                          array252.push(result251)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
 
-                        Option::Some(array250)
+                        Option::Some(array252)
                       }
                       _ => panic()
                     }
 
-                    let lifted256 : Array[String]? = match
+                    let lifted258 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 20) {
                       0 => Option::None
                       1 => {
-                        let array254 : Array[String] = []
-                        for index255 = 0
-                            index255 < mbt_ffi_load32(iter_base + 28)
-                            index255 = index255 + 1 {
+                        let array256 : Array[String] = []
+                        for index257 = 0
+                            index257 < mbt_ffi_load32(iter_base + 28)
+                            index257 = index257 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 24) +
-                            index255 * 8
+                            index257 * 8
 
-                          let result253 = mbt_ffi_ptr2str(
+                          let result255 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array254.push(result253)
+                          array256.push(result255)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
 
-                        Option::Some(array254)
+                        Option::Some(array256)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaTypeBody::UrlType(@types.UrlRestrictions::{
-                      allowed_schemes: lifted252,
-                      allowed_hosts: lifted256,
+                      allowed_schemes: lifted254,
+                      allowed_hosts: lifted258,
                     })
                   }
                   28 => @types.SchemaTypeBody::DatetimeType
                   29 => @types.SchemaTypeBody::DurationType
                   30 => {
-                    let result257 = mbt_ffi_ptr2str(
+                    let result259 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    let array259 : Array[String] = []
-                    for index260 = 0
-                        index260 < mbt_ffi_load32(iter_base + 20)
-                        index260 = index260 + 1 {
+                    let array261 : Array[String] = []
+                    for index262 = 0
+                        index262 < mbt_ffi_load32(iter_base + 20)
+                        index262 = index262 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 16) +
-                        index260 * 8
+                        index262 * 8
 
-                      let result258 = mbt_ffi_ptr2str(
+                      let result260 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      array259.push(result258)
+                      array261.push(result260)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
-                    let lifted262 : @types.QuantityValue? = match
+                    let lifted264 : @types.QuantityValue? = match
                       mbt_ffi_load8_u(iter_base + 24) {
                       0 => Option::None
                       1 => {
-                        let result261 = mbt_ffi_ptr2str(
+                        let result263 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 44),
                           mbt_ffi_load32(iter_base + 48),
                         )
@@ -22293,17 +22349,17 @@ pub fn WasmRpc::invoke_and_await(
                         Option::Some(@types.QuantityValue::{
                           mantissa: mbt_ffi_load64(iter_base + 32),
                           scale: mbt_ffi_load32(iter_base + 40),
-                          unit: result261,
+                          unit: result263,
                         })
                       }
                       _ => panic()
                     }
 
-                    let lifted264 : @types.QuantityValue? = match
+                    let lifted266 : @types.QuantityValue? = match
                       mbt_ffi_load8_u(iter_base + 56) {
                       0 => Option::None
                       1 => {
-                        let result263 = mbt_ffi_ptr2str(
+                        let result265 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 76),
                           mbt_ffi_load32(iter_base + 80),
                         )
@@ -22311,233 +22367,213 @@ pub fn WasmRpc::invoke_and_await(
                         Option::Some(@types.QuantityValue::{
                           mantissa: mbt_ffi_load64(iter_base + 64),
                           scale: mbt_ffi_load32(iter_base + 72),
-                          unit: result263,
+                          unit: result265,
                         })
                       }
                       _ => panic()
                     }
 
                     @types.SchemaTypeBody::QuantityType(@types.QuantitySpec::{
-                      base_unit: result257,
-                      allowed_suffixes: array259,
-                      min: lifted262,
-                      max: lifted264,
+                      base_unit: result259,
+                      allowed_suffixes: array261,
+                      min: lifted264,
+                      max: lifted266,
                     })
                   }
                   31 => {
-                    let array288 : Array[@types.UnionBranch] = []
-                    for index289 = 0
-                        index289 < mbt_ffi_load32(iter_base + 12)
-                        index289 = index289 + 1 {
+                    let array290 : Array[@types.UnionBranch] = []
+                    for index291 = 0
+                        index291 < mbt_ffi_load32(iter_base + 12)
+                        index291 = index291 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index289 * 92
+                        index291 * 92
 
-                      let result265 = mbt_ffi_ptr2str(
+                      let result267 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      let lifted274 = match mbt_ffi_load8_u(iter_base + 12) {
+                      let lifted276 = match mbt_ffi_load8_u(iter_base + 12) {
                         0 => {
-                          let result266 = mbt_ffi_ptr2str(
-                            mbt_ffi_load32(iter_base + 16),
-                            mbt_ffi_load32(iter_base + 20),
-                          )
-
-                          @types.DiscriminatorRule::Prefix(result266)
-                        }
-                        1 => {
-                          let result267 = mbt_ffi_ptr2str(
-                            mbt_ffi_load32(iter_base + 16),
-                            mbt_ffi_load32(iter_base + 20),
-                          )
-
-                          @types.DiscriminatorRule::Suffix(result267)
-                        }
-                        2 => {
                           let result268 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          @types.DiscriminatorRule::Contains(result268)
+                          @types.DiscriminatorRule::Prefix(result268)
                         }
-                        3 => {
+                        1 => {
                           let result269 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          @types.DiscriminatorRule::Regex(result269)
+                          @types.DiscriminatorRule::Suffix(result269)
                         }
-                        4 => {
+                        2 => {
                           let result270 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          let lifted272 : String? = match
+                          @types.DiscriminatorRule::Contains(result270)
+                        }
+                        3 => {
+                          let result271 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 16),
+                            mbt_ffi_load32(iter_base + 20),
+                          )
+
+                          @types.DiscriminatorRule::Regex(result271)
+                        }
+                        4 => {
+                          let result272 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 16),
+                            mbt_ffi_load32(iter_base + 20),
+                          )
+
+                          let lifted274 : String? = match
                             mbt_ffi_load8_u(iter_base + 24) {
                             0 => Option::None
                             1 => {
-                              let result271 = mbt_ffi_ptr2str(
+                              let result273 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 28),
                                 mbt_ffi_load32(iter_base + 32),
                               )
 
-                              Option::Some(result271)
+                              Option::Some(result273)
                             }
                             _ => panic()
                           }
 
                           @types.DiscriminatorRule::FieldEquals(@types.FieldDiscriminator::{
-                            field_name: result270,
-                            literal: lifted272,
+                            field_name: result272,
+                            literal: lifted274,
                           })
                         }
                         5 => {
-                          let result273 = mbt_ffi_ptr2str(
+                          let result275 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          @types.DiscriminatorRule::FieldAbsent(result273)
+                          @types.DiscriminatorRule::FieldAbsent(result275)
                         }
                         _ => panic()
                       }
 
-                      let lifted276 : String? = match
+                      let lifted278 : String? = match
                         mbt_ffi_load8_u(iter_base + 36) {
                         0 => Option::None
                         1 => {
-                          let result275 = mbt_ffi_ptr2str(
+                          let result277 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 40),
                             mbt_ffi_load32(iter_base + 44),
                           )
 
-                          Option::Some(result275)
+                          Option::Some(result277)
                         }
                         _ => panic()
                       }
 
-                      let array278 : Array[String] = []
-                      for index279 = 0
-                          index279 < mbt_ffi_load32(iter_base + 52)
-                          index279 = index279 + 1 {
+                      let array280 : Array[String] = []
+                      for index281 = 0
+                          index281 < mbt_ffi_load32(iter_base + 52)
+                          index281 = index281 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 48) +
-                          index279 * 8
+                          index281 * 8
 
-                        let result277 = mbt_ffi_ptr2str(
+                        let result279 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array278.push(result277)
+                        array280.push(result279)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
 
-                      let array281 : Array[String] = []
-                      for index282 = 0
-                          index282 < mbt_ffi_load32(iter_base + 60)
-                          index282 = index282 + 1 {
+                      let array283 : Array[String] = []
+                      for index284 = 0
+                          index284 < mbt_ffi_load32(iter_base + 60)
+                          index284 = index284 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 56) +
-                          index282 * 8
+                          index284 * 8
 
-                        let result280 = mbt_ffi_ptr2str(
+                        let result282 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array281.push(result280)
+                        array283.push(result282)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
 
-                      let lifted284 : String? = match
+                      let lifted286 : String? = match
                         mbt_ffi_load8_u(iter_base + 64) {
                         0 => Option::None
                         1 => {
-                          let result283 = mbt_ffi_ptr2str(
+                          let result285 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 68),
                             mbt_ffi_load32(iter_base + 72),
                           )
 
-                          Option::Some(result283)
+                          Option::Some(result285)
                         }
                         _ => panic()
                       }
 
-                      let lifted287 : @types.Role? = match
+                      let lifted289 : @types.Role? = match
                         mbt_ffi_load8_u(iter_base + 76) {
                         0 => Option::None
                         1 => {
-                          let lifted286 = match
+                          let lifted288 = match
                             mbt_ffi_load8_u(iter_base + 80) {
                             0 => @types.Role::Multimodal
                             1 => @types.Role::UnstructuredText
                             2 => @types.Role::UnstructuredBinary
                             3 => {
-                              let result285 = mbt_ffi_ptr2str(
+                              let result287 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 84),
                                 mbt_ffi_load32(iter_base + 88),
                               )
 
-                              @types.Role::Other(result285)
+                              @types.Role::Other(result287)
                             }
                             _ => panic()
                           }
 
-                          Option::Some(lifted286)
+                          Option::Some(lifted288)
                         }
                         _ => panic()
                       }
 
-                      array288.push(@types.UnionBranch::{
-                        tag: result265,
+                      array290.push(@types.UnionBranch::{
+                        tag: result267,
                         body: mbt_ffi_load32(iter_base + 8),
-                        discriminator: lifted274,
+                        discriminator: lifted276,
                         metadata: @types.MetadataEnvelope::{
-                          doc: lifted276,
-                          aliases: array278,
-                          examples: array281,
-                          deprecated: lifted284,
-                          role: lifted287,
+                          doc: lifted278,
+                          aliases: array280,
+                          examples: array283,
+                          deprecated: lifted286,
+                          role: lifted289,
                         },
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
                     @types.SchemaTypeBody::UnionType(@types.UnionSpec::{
-                      branches: array288,
+                      branches: array290,
                     })
                   }
                   32 => {
-                    let lifted291 : String? = match
+                    let lifted293 : String? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => {
-                        let result290 = mbt_ffi_ptr2str(
+                        let result292 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 16),
                           mbt_ffi_load32(iter_base + 20),
-                        )
-
-                        Option::Some(result290)
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::SecretType(@types.SecretSpec::{
-                      inner: mbt_ffi_load32(iter_base + 8),
-                      category: lifted291,
-                    })
-                  }
-                  33 => {
-                    let lifted293 : String? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let result292 = mbt_ffi_ptr2str(
-                          mbt_ffi_load32(iter_base + 12),
-                          mbt_ffi_load32(iter_base + 16),
                         )
 
                         Option::Some(result292)
@@ -22545,8 +22581,28 @@ pub fn WasmRpc::invoke_and_await(
                       _ => panic()
                     }
 
+                    @types.SchemaTypeBody::SecretType(@types.SecretSpec::{
+                      inner: mbt_ffi_load32(iter_base + 8),
+                      category: lifted293,
+                    })
+                  }
+                  33 => {
+                    let lifted295 : String? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let result294 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 12),
+                          mbt_ffi_load32(iter_base + 16),
+                        )
+
+                        Option::Some(result294)
+                      }
+                      _ => panic()
+                    }
+
                     @types.SchemaTypeBody::QuotaTokenType(@types.QuotaTokenSpec::{
-                      resource_name: lifted293,
+                      resource_name: lifted295,
                     })
                   }
                   34 =>
@@ -22554,162 +22610,162 @@ pub fn WasmRpc::invoke_and_await(
                       polymorphic: mbt_ffi_load8_u(iter_base + 8) != 0,
                     })
                   35 => {
-                    let lifted294 : Int? = match
+                    let lifted296 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::FutureType(lifted294)
+                    @types.SchemaTypeBody::FutureType(lifted296)
                   }
                   36 => {
-                    let lifted295 : Int? = match
+                    let lifted297 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::StreamType(lifted295)
+                    @types.SchemaTypeBody::StreamType(lifted297)
                   }
                   _ => panic()
                 }
 
-                let lifted298 : String? = match
+                let lifted300 : String? = match
                   mbt_ffi_load8_u(iter_base + 88) {
                   0 => Option::None
                   1 => {
-                    let result297 = mbt_ffi_ptr2str(
+                    let result299 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 92),
                       mbt_ffi_load32(iter_base + 96),
                     )
 
-                    Option::Some(result297)
+                    Option::Some(result299)
                   }
                   _ => panic()
                 }
 
-                let array300 : Array[String] = []
-                for index301 = 0
-                    index301 < mbt_ffi_load32(iter_base + 104)
-                    index301 = index301 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 100) + index301 * 8
+                let array302 : Array[String] = []
+                for index303 = 0
+                    index303 < mbt_ffi_load32(iter_base + 104)
+                    index303 = index303 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 100) + index303 * 8
 
-                  let result299 = mbt_ffi_ptr2str(
+                  let result301 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  array300.push(result299)
+                  array302.push(result301)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
 
-                let array303 : Array[String] = []
-                for index304 = 0
-                    index304 < mbt_ffi_load32(iter_base + 112)
-                    index304 = index304 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 108) + index304 * 8
+                let array305 : Array[String] = []
+                for index306 = 0
+                    index306 < mbt_ffi_load32(iter_base + 112)
+                    index306 = index306 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 108) + index306 * 8
 
-                  let result302 = mbt_ffi_ptr2str(
+                  let result304 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  array303.push(result302)
+                  array305.push(result304)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
 
-                let lifted306 : String? = match
+                let lifted308 : String? = match
                   mbt_ffi_load8_u(iter_base + 116) {
                   0 => Option::None
                   1 => {
-                    let result305 = mbt_ffi_ptr2str(
+                    let result307 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 120),
                       mbt_ffi_load32(iter_base + 124),
                     )
 
-                    Option::Some(result305)
+                    Option::Some(result307)
                   }
                   _ => panic()
                 }
 
-                let lifted309 : @types.Role? = match
+                let lifted311 : @types.Role? = match
                   mbt_ffi_load8_u(iter_base + 128) {
                   0 => Option::None
                   1 => {
-                    let lifted308 = match mbt_ffi_load8_u(iter_base + 132) {
+                    let lifted310 = match mbt_ffi_load8_u(iter_base + 132) {
                       0 => @types.Role::Multimodal
                       1 => @types.Role::UnstructuredText
                       2 => @types.Role::UnstructuredBinary
                       3 => {
-                        let result307 = mbt_ffi_ptr2str(
+                        let result309 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 136),
                           mbt_ffi_load32(iter_base + 140),
                         )
 
-                        @types.Role::Other(result307)
+                        @types.Role::Other(result309)
                       }
                       _ => panic()
                     }
 
-                    Option::Some(lifted308)
+                    Option::Some(lifted310)
                   }
                   _ => panic()
                 }
 
-                array310.push(@types.SchemaTypeNode::{
-                  body: lifted296,
+                array312.push(@types.SchemaTypeNode::{
+                  body: lifted298,
                   metadata: @types.MetadataEnvelope::{
-                    doc: lifted298,
-                    aliases: array300,
-                    examples: array303,
-                    deprecated: lifted306,
-                    role: lifted309,
+                    doc: lifted300,
+                    aliases: array302,
+                    examples: array305,
+                    deprecated: lifted308,
+                    role: lifted311,
                   },
                 })
               }
               mbt_ffi_free(mbt_ffi_load32(return_area + 12))
 
-              let array315 : Array[@types.SchemaTypeDef] = []
-              for index316 = 0
-                  index316 < mbt_ffi_load32(return_area + 24)
-                  index316 = index316 + 1 {
-                let iter_base = mbt_ffi_load32(return_area + 20) + index316 * 24
+              let array317 : Array[@types.SchemaTypeDef] = []
+              for index318 = 0
+                  index318 < mbt_ffi_load32(return_area + 24)
+                  index318 = index318 + 1 {
+                let iter_base = mbt_ffi_load32(return_area + 20) + index318 * 24
 
-                let result312 = mbt_ffi_ptr2str(
+                let result314 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 0),
                   mbt_ffi_load32(iter_base + 4),
                 )
 
-                let lifted314 : String? = match mbt_ffi_load8_u(iter_base + 8) {
+                let lifted316 : String? = match mbt_ffi_load8_u(iter_base + 8) {
                   0 => Option::None
                   1 => {
-                    let result313 = mbt_ffi_ptr2str(
+                    let result315 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 12),
                       mbt_ffi_load32(iter_base + 16),
                     )
 
-                    Option::Some(result313)
+                    Option::Some(result315)
                   }
                   _ => panic()
                 }
 
-                array315.push(@types.SchemaTypeDef::{
-                  id: result312,
-                  name: lifted314,
+                array317.push(@types.SchemaTypeDef::{
+                  id: result314,
+                  name: lifted316,
                   body: mbt_ffi_load32(iter_base + 20),
                 })
               }
               mbt_ffi_free(mbt_ffi_load32(return_area + 20))
 
-              let array346 : Array[@types.SchemaValueNode] = []
-              for index347 = 0
-                  index347 < mbt_ffi_load32(return_area + 36)
-                  index347 = index347 + 1 {
-                let iter_base = mbt_ffi_load32(return_area + 32) + index347 * 32
+              let array348 : Array[@types.SchemaValueNode] = []
+              for index349 = 0
+                  index349 < mbt_ffi_load32(return_area + 36)
+                  index349 = index349 + 1 {
+                let iter_base = mbt_ffi_load32(return_area + 32) + index349 * 32
 
-                let lifted345 = match mbt_ffi_load8_u(iter_base + 0) {
+                let lifted347 = match mbt_ffi_load8_u(iter_base + 0) {
                   0 =>
                     @types.SchemaValueNode::BoolValue(
                       mbt_ffi_load8_u(iter_base + 8) != 0,
@@ -22761,29 +22817,29 @@ pub fn WasmRpc::invoke_and_await(
                       Int::unsafe_to_char(mbt_ffi_load32(iter_base + 8)),
                     )
                   12 => {
-                    let result317 = mbt_ffi_ptr2str(
+                    let result319 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    @types.SchemaValueNode::StringValue(result317)
+                    @types.SchemaValueNode::StringValue(result319)
                   }
                   13 => {
-                    let array318 : Array[Int] = []
-                    for index319 = 0
-                        index319 < mbt_ffi_load32(iter_base + 12)
-                        index319 = index319 + 1 {
+                    let array320 : Array[Int] = []
+                    for index321 = 0
+                        index321 < mbt_ffi_load32(iter_base + 12)
+                        index321 = index321 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index319 * 4
+                        index321 * 4
 
-                      array318.push(mbt_ffi_load32(iter_base + 0))
+                      array320.push(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::RecordValue(array318)
+                    @types.SchemaValueNode::RecordValue(array320)
                   }
                   14 => {
-                    let lifted320 : Int? = match
+                    let lifted322 : Int? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 16))
@@ -22792,7 +22848,7 @@ pub fn WasmRpc::invoke_and_await(
 
                     @types.SchemaValueNode::VariantValue(@types.VariantValuePayload::{
                       case: mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
-                      payload: lifted320,
+                      payload: lifted322,
                     })
                   }
                   15 =>
@@ -22800,34 +22856,20 @@ pub fn WasmRpc::invoke_and_await(
                       mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
                     )
                   16 => {
-                    let array321 : Array[Bool] = []
-                    for index322 = 0
-                        index322 < mbt_ffi_load32(iter_base + 12)
-                        index322 = index322 + 1 {
-                      let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index322 * 1
-
-                      array321.push(mbt_ffi_load8_u(iter_base + 0) != 0)
-                    }
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-                    @types.SchemaValueNode::FlagsValue(array321)
-                  }
-                  17 => {
-                    let array323 : Array[Int] = []
+                    let array323 : Array[Bool] = []
                     for index324 = 0
                         index324 < mbt_ffi_load32(iter_base + 12)
                         index324 = index324 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index324 * 4
+                        index324 * 1
 
-                      array323.push(mbt_ffi_load32(iter_base + 0))
+                      array323.push(mbt_ffi_load8_u(iter_base + 0) != 0)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::TupleValue(array323)
+                    @types.SchemaValueNode::FlagsValue(array323)
                   }
-                  18 => {
+                  17 => {
                     let array325 : Array[Int] = []
                     for index326 = 0
                         index326 < mbt_ffi_load32(iter_base + 12)
@@ -22839,9 +22881,9 @@ pub fn WasmRpc::invoke_and_await(
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::ListValue(array325)
+                    @types.SchemaValueNode::TupleValue(array325)
                   }
-                  19 => {
+                  18 => {
                     let array327 : Array[Int] = []
                     for index328 = 0
                         index328 < mbt_ffi_load32(iter_base + 12)
@@ -22853,127 +22895,141 @@ pub fn WasmRpc::invoke_and_await(
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::FixedListValue(array327)
+                    @types.SchemaValueNode::ListValue(array327)
                   }
-                  20 => {
-                    let array329 : Array[@types.MapEntry] = []
+                  19 => {
+                    let array329 : Array[Int] = []
                     for index330 = 0
                         index330 < mbt_ffi_load32(iter_base + 12)
                         index330 = index330 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index330 * 8
+                        index330 * 4
 
-                      array329.push(@types.MapEntry::{
+                      array329.push(mbt_ffi_load32(iter_base + 0))
+                    }
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                    @types.SchemaValueNode::FixedListValue(array329)
+                  }
+                  20 => {
+                    let array331 : Array[@types.MapEntry] = []
+                    for index332 = 0
+                        index332 < mbt_ffi_load32(iter_base + 12)
+                        index332 = index332 + 1 {
+                      let iter_base = mbt_ffi_load32(iter_base + 8) +
+                        index332 * 8
+
+                      array331.push(@types.MapEntry::{
                         key: mbt_ffi_load32(iter_base + 0),
                         value: mbt_ffi_load32(iter_base + 4),
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::MapValue(array329)
+                    @types.SchemaValueNode::MapValue(array331)
                   }
                   21 => {
-                    let lifted331 : Int? = match
+                    let lifted333 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    @types.SchemaValueNode::OptionValue(lifted331)
+                    @types.SchemaValueNode::OptionValue(lifted333)
                   }
                   22 => {
-                    let lifted334 = match mbt_ffi_load8_u(iter_base + 8) {
+                    let lifted336 = match mbt_ffi_load8_u(iter_base + 8) {
                       0 => {
-                        let lifted332 : Int? = match
+                        let lifted334 : Int? = match
                           mbt_ffi_load8_u(iter_base + 12) {
                           0 => Option::None
                           1 => Option::Some(mbt_ffi_load32(iter_base + 16))
                           _ => panic()
                         }
 
-                        @types.ResultValuePayload::OkValue(lifted332)
+                        @types.ResultValuePayload::OkValue(lifted334)
                       }
                       1 => {
-                        let lifted333 : Int? = match
+                        let lifted335 : Int? = match
                           mbt_ffi_load8_u(iter_base + 12) {
                           0 => Option::None
                           1 => Option::Some(mbt_ffi_load32(iter_base + 16))
                           _ => panic()
                         }
 
-                        @types.ResultValuePayload::ErrValue(lifted333)
+                        @types.ResultValuePayload::ErrValue(lifted335)
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaValueNode::ResultValue(lifted334)
+                    @types.SchemaValueNode::ResultValue(lifted336)
                   }
                   23 => {
-                    let result335 = mbt_ffi_ptr2str(
+                    let result337 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    let lifted337 : String? = match
+                    let lifted339 : String? = match
                       mbt_ffi_load8_u(iter_base + 16) {
                       0 => Option::None
                       1 => {
-                        let result336 = mbt_ffi_ptr2str(
+                        let result338 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 20),
                           mbt_ffi_load32(iter_base + 24),
                         )
 
-                        Option::Some(result336)
+                        Option::Some(result338)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaValueNode::TextValue(@types.TextValuePayload::{
-                      text: result335,
-                      language: lifted337,
+                      text: result337,
+                      language: lifted339,
                     })
                   }
                   24 => {
-                    let result338 = mbt_ffi_ptr2bytes(
+                    let result340 = mbt_ffi_ptr2bytes(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    let lifted340 : String? = match
+                    let lifted342 : String? = match
                       mbt_ffi_load8_u(iter_base + 16) {
                       0 => Option::None
                       1 => {
-                        let result339 = mbt_ffi_ptr2str(
+                        let result341 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 20),
                           mbt_ffi_load32(iter_base + 24),
                         )
 
-                        Option::Some(result339)
+                        Option::Some(result341)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaValueNode::BinaryValue(@types.BinaryValuePayload::{
-                      bytes: result338,
-                      mime_type: lifted340,
+                      bytes: result340,
+                      mime_type: lifted342,
                     })
                   }
                   25 => {
-                    let result341 = mbt_ffi_ptr2str(
+                    let result343 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    @types.SchemaValueNode::PathValue(result341)
+                    @types.SchemaValueNode::PathValue(result343)
                   }
                   26 => {
-                    let result342 = mbt_ffi_ptr2str(
+                    let result344 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    @types.SchemaValueNode::UrlValue(result342)
+                    @types.SchemaValueNode::UrlValue(result344)
                   }
                   27 =>
                     @types.SchemaValueNode::DatetimeValue(@types.Datetime::{
@@ -22985,7 +23041,7 @@ pub fn WasmRpc::invoke_and_await(
                       nanoseconds: mbt_ffi_load64(iter_base + 8),
                     })
                   29 => {
-                    let result343 = mbt_ffi_ptr2str(
+                    let result345 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 20),
                       mbt_ffi_load32(iter_base + 24),
                     )
@@ -22993,17 +23049,17 @@ pub fn WasmRpc::invoke_and_await(
                     @types.SchemaValueNode::QuantityValueNode(@types.QuantityValue::{
                       mantissa: mbt_ffi_load64(iter_base + 8),
                       scale: mbt_ffi_load32(iter_base + 16),
-                      unit: result343,
+                      unit: result345,
                     })
                   }
                   30 => {
-                    let result344 = mbt_ffi_ptr2str(
+                    let result346 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
                     @types.SchemaValueNode::UnionValue(@types.UnionValuePayload::{
-                      tag: result344,
+                      tag: result346,
                       body: mbt_ffi_load32(iter_base + 16),
                     })
                   }
@@ -23023,21 +23079,27 @@ pub fn WasmRpc::invoke_and_await(
                         mbt_ffi_load32(iter_base + 8),
                       ),
                     )
+                  34 =>
+                    @types.SchemaValueNode::StreamValue(
+                      @types.SchemaValueStream::SchemaValueStream(
+                        mbt_ffi_load32(iter_base + 8),
+                      ),
+                    )
                   _ => panic()
                 }
 
-                array346.push(lifted345)
+                array348.push(lifted347)
               }
               mbt_ffi_free(mbt_ffi_load32(return_area + 32))
 
               @common.AgentError::CustomError(@types.TypedSchemaValue::{
                 graph: @types.SchemaGraph::{
-                  type_nodes: array310,
-                  defs: array315,
+                  type_nodes: array312,
+                  defs: array317,
                   root: mbt_ffi_load32(return_area + 28),
                 },
                 value: @types.SchemaValueTree::{
-                  value_nodes: array346,
+                  value_nodes: array348,
                   root: mbt_ffi_load32(return_area + 40),
                 },
               })
@@ -23045,18 +23107,18 @@ pub fn WasmRpc::invoke_and_await(
             _ => panic()
           }
 
-          RpcError::RemoteAgentError(lifted348)
+          RpcError::RemoteAgentError(lifted350)
         }
         _ => panic()
       }
 
-      Result::Err(lifted349)
+      Result::Err(lifted351)
     }
     _ => panic()
   }
-  let ret = lifted350
+  let ret = lifted352
   mbt_ffi_free(ptr)
-  mbt_ffi_free(address69)
+  mbt_ffi_free(address71)
   mbt_ffi_free(return_area)
 
   cleanup_list.each(mbt_ffi_free)
@@ -23078,10 +23140,10 @@ pub fn WasmRpc::invoke(
 
   let ptr = mbt_ffi_str2ptr(method_name)
 
-  let address69 = mbt_ffi_malloc(input.value_nodes.length() * 32)
-  for index70 = 0; index70 < input.value_nodes.length(); index70 = index70 + 1 {
-    let iter_elem : @types.SchemaValueNode = input.value_nodes[index70]
-    let iter_base = address69 + index70 * 32
+  let address71 = mbt_ffi_malloc(input.value_nodes.length() * 32)
+  for index72 = 0; index72 < input.value_nodes.length(); index72 = index72 + 1 {
+    let iter_elem : @types.SchemaValueNode = input.value_nodes[index72]
+    let iter_base = address71 + index72 * 32
 
     match iter_elem {
       BoolValue(payload) => {
@@ -23488,15 +23550,23 @@ pub fn WasmRpc::invoke(
 
         ()
       }
+      StreamValue(payload69) => {
+        mbt_ffi_store8(iter_base + 0, 34)
+
+        let @types.SchemaValueStream(handle70) = payload69
+        mbt_ffi_store32(iter_base + 8, handle70)
+
+        ()
+      }
     }
   }
 
-  let (lowered, lowered74) = match scope_card {
+  let (lowered, lowered76) = match scope_card {
     None => (0, 0)
-    Some(payload72) => {
-      let @types.PermissionCard(handle73) = payload72
+    Some(payload74) => {
+      let @types.PermissionCard(handle75) = payload74
 
-      (1, handle73)
+      (1, handle75)
     }
   }
   let return_area = mbt_ffi_malloc(44)
@@ -23504,119 +23574,119 @@ pub fn WasmRpc::invoke(
     handle,
     ptr,
     method_name.length(),
-    address69,
+    address71,
     input.value_nodes.length(),
     input.root,
     lowered,
-    lowered74,
+    lowered76,
     return_area,
   )
 
-  let lifted318 = match mbt_ffi_load8_u(return_area + 0) {
+  let lifted320 = match mbt_ffi_load8_u(return_area + 0) {
     0 => {
       let result = mbt_ffi_ptr2str(
         mbt_ffi_load32(return_area + 4),
         mbt_ffi_load32(return_area + 8),
       )
 
-      let result75 = mbt_ffi_ptr2str(
+      let result77 = mbt_ffi_ptr2str(
         mbt_ffi_load32(return_area + 12),
         mbt_ffi_load32(return_area + 16),
       )
 
       Result::Ok(InvocationMetadata::{
         agent_id: result,
-        idempotency_key: result75,
+        idempotency_key: result77,
       })
     }
     1 => {
-      let lifted317 = match mbt_ffi_load8_u(return_area + 4) {
+      let lifted319 = match mbt_ffi_load8_u(return_area + 4) {
         0 => {
-          let result76 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(return_area + 8),
-            mbt_ffi_load32(return_area + 12),
-          )
-
-          RpcError::ProtocolError(result76)
-        }
-        1 => {
-          let result77 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(return_area + 8),
-            mbt_ffi_load32(return_area + 12),
-          )
-
-          RpcError::Denied(result77)
-        }
-        2 => {
           let result78 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          RpcError::NotFound(result78)
+          RpcError::ProtocolError(result78)
         }
-        3 => {
+        1 => {
           let result79 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          RpcError::RemoteInternalError(result79)
+          RpcError::Denied(result79)
+        }
+        2 => {
+          let result80 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
+          )
+
+          RpcError::NotFound(result80)
+        }
+        3 => {
+          let result81 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
+          )
+
+          RpcError::RemoteInternalError(result81)
         }
         4 => {
-          let lifted316 = match mbt_ffi_load8_u(return_area + 8) {
+          let lifted318 = match mbt_ffi_load8_u(return_area + 8) {
             0 => {
-              let result80 = mbt_ffi_ptr2str(
-                mbt_ffi_load32(return_area + 12),
-                mbt_ffi_load32(return_area + 16),
-              )
-
-              @common.AgentError::InvalidInput(result80)
-            }
-            1 => {
-              let result81 = mbt_ffi_ptr2str(
-                mbt_ffi_load32(return_area + 12),
-                mbt_ffi_load32(return_area + 16),
-              )
-
-              @common.AgentError::InvalidMethod(result81)
-            }
-            2 => {
               let result82 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(return_area + 12),
                 mbt_ffi_load32(return_area + 16),
               )
 
-              @common.AgentError::InvalidType(result82)
+              @common.AgentError::InvalidInput(result82)
             }
-            3 => {
+            1 => {
               let result83 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(return_area + 12),
                 mbt_ffi_load32(return_area + 16),
               )
 
-              @common.AgentError::InvalidAgentId(result83)
+              @common.AgentError::InvalidMethod(result83)
+            }
+            2 => {
+              let result84 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(return_area + 12),
+                mbt_ffi_load32(return_area + 16),
+              )
+
+              @common.AgentError::InvalidType(result84)
+            }
+            3 => {
+              let result85 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(return_area + 12),
+                mbt_ffi_load32(return_area + 16),
+              )
+
+              @common.AgentError::InvalidAgentId(result85)
             }
             4 => {
-              let array278 : Array[@types.SchemaTypeNode] = []
-              for index279 = 0
-                  index279 < mbt_ffi_load32(return_area + 16)
-                  index279 = index279 + 1 {
+              let array280 : Array[@types.SchemaTypeNode] = []
+              for index281 = 0
+                  index281 < mbt_ffi_load32(return_area + 16)
+                  index281 = index281 + 1 {
                 let iter_base = mbt_ffi_load32(return_area + 12) +
-                  index279 * 144
+                  index281 * 144
 
-                let lifted264 = match mbt_ffi_load8_u(iter_base + 0) {
+                let lifted266 = match mbt_ffi_load8_u(iter_base + 0) {
                   0 =>
                     @types.SchemaTypeBody::RefType(
                       mbt_ffi_load32(iter_base + 8),
                     )
                   1 => @types.SchemaTypeBody::BoolType
                   2 => {
-                    let lifted89 : @types.NumericRestrictions? = match
+                    let lifted91 : @types.NumericRestrictions? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let lifted84 : @types.NumericBound? = match
+                        let lifted86 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 16) {
                           0 => Option::None
                           1 => {
@@ -23641,11 +23711,11 @@ pub fn WasmRpc::invoke(
                           _ => panic()
                         }
 
-                        let lifted86 : @types.NumericBound? = match
+                        let lifted88 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted85 = match
+                            let lifted87 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -23662,46 +23732,46 @@ pub fn WasmRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted85)
+                            Option::Some(lifted87)
                           }
                           _ => panic()
                         }
 
-                        let lifted88 : String? = match
+                        let lifted90 : String? = match
                           mbt_ffi_load8_u(iter_base + 64) {
                           0 => Option::None
                           1 => {
-                            let result87 = mbt_ffi_ptr2str(
+                            let result89 = mbt_ffi_ptr2str(
                               mbt_ffi_load32(iter_base + 68),
                               mbt_ffi_load32(iter_base + 72),
                             )
 
-                            Option::Some(result87)
+                            Option::Some(result89)
                           }
                           _ => panic()
                         }
 
                         Option::Some(@types.NumericRestrictions::{
-                          min: lifted84,
-                          max: lifted86,
-                          unit: lifted88,
+                          min: lifted86,
+                          max: lifted88,
+                          unit: lifted90,
                         })
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::S8Type(lifted89)
+                    @types.SchemaTypeBody::S8Type(lifted91)
                   }
                   3 => {
-                    let lifted96 : @types.NumericRestrictions? = match
+                    let lifted98 : @types.NumericRestrictions? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let lifted91 : @types.NumericBound? = match
+                        let lifted93 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 16) {
                           0 => Option::None
                           1 => {
-                            let lifted90 = match
+                            let lifted92 = match
                               mbt_ffi_load8_u(iter_base + 24) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -23714,32 +23784,6 @@ pub fn WasmRpc::invoke(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted90)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted93 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 40) {
-                          0 => Option::None
-                          1 => {
-                            let lifted92 = match
-                              mbt_ffi_load8_u(iter_base + 48) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 56),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -23749,67 +23793,11 @@ pub fn WasmRpc::invoke(
                           _ => panic()
                         }
 
-                        let lifted95 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result94 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result94)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted91,
-                          max: lifted93,
-                          unit: lifted95,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::S16Type(lifted96)
-                  }
-                  4 => {
-                    let lifted103 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted98 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted97 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted97)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted100 : @types.NumericBound? = match
+                        let lifted95 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted99 = match
+                            let lifted94 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -23822,6 +23810,62 @@ pub fn WasmRpc::invoke(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted94)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted97 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result96 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result96)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted93,
+                          max: lifted95,
+                          unit: lifted97,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::S16Type(lifted98)
+                  }
+                  4 => {
+                    let lifted105 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted100 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted99 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -23831,67 +23875,11 @@ pub fn WasmRpc::invoke(
                           _ => panic()
                         }
 
-                        let lifted102 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result101 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result101)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted98,
-                          max: lifted100,
-                          unit: lifted102,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::S32Type(lifted103)
-                  }
-                  5 => {
-                    let lifted110 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted105 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted104 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted104)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted107 : @types.NumericBound? = match
+                        let lifted102 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted106 = match
+                            let lifted101 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -23904,6 +23892,62 @@ pub fn WasmRpc::invoke(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted101)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted104 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result103 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result103)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted100,
+                          max: lifted102,
+                          unit: lifted104,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::S32Type(lifted105)
+                  }
+                  5 => {
+                    let lifted112 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted107 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted106 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -23913,67 +23957,11 @@ pub fn WasmRpc::invoke(
                           _ => panic()
                         }
 
-                        let lifted109 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result108 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result108)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted105,
-                          max: lifted107,
-                          unit: lifted109,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::S64Type(lifted110)
-                  }
-                  6 => {
-                    let lifted117 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted112 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted111 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted111)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted114 : @types.NumericBound? = match
+                        let lifted109 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted113 = match
+                            let lifted108 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -23986,6 +23974,62 @@ pub fn WasmRpc::invoke(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted108)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted111 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result110 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result110)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted107,
+                          max: lifted109,
+                          unit: lifted111,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::S64Type(lifted112)
+                  }
+                  6 => {
+                    let lifted119 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted114 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted113 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -23995,67 +24039,11 @@ pub fn WasmRpc::invoke(
                           _ => panic()
                         }
 
-                        let lifted116 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result115 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result115)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted112,
-                          max: lifted114,
-                          unit: lifted116,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::U8Type(lifted117)
-                  }
-                  7 => {
-                    let lifted124 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted119 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted118 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted118)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted121 : @types.NumericBound? = match
+                        let lifted116 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted120 = match
+                            let lifted115 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -24068,6 +24056,62 @@ pub fn WasmRpc::invoke(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted115)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted118 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result117 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result117)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted114,
+                          max: lifted116,
+                          unit: lifted118,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::U8Type(lifted119)
+                  }
+                  7 => {
+                    let lifted126 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted121 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted120 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -24077,67 +24121,11 @@ pub fn WasmRpc::invoke(
                           _ => panic()
                         }
 
-                        let lifted123 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result122 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result122)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted119,
-                          max: lifted121,
-                          unit: lifted123,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::U16Type(lifted124)
-                  }
-                  8 => {
-                    let lifted131 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted126 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted125 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted125)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted128 : @types.NumericBound? = match
+                        let lifted123 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted127 = match
+                            let lifted122 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -24150,6 +24138,62 @@ pub fn WasmRpc::invoke(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted122)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted125 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result124 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result124)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted121,
+                          max: lifted123,
+                          unit: lifted125,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::U16Type(lifted126)
+                  }
+                  8 => {
+                    let lifted133 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted128 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted127 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -24159,67 +24203,11 @@ pub fn WasmRpc::invoke(
                           _ => panic()
                         }
 
-                        let lifted130 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result129 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result129)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted126,
-                          max: lifted128,
-                          unit: lifted130,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::U32Type(lifted131)
-                  }
-                  9 => {
-                    let lifted138 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted133 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted132 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted132)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted135 : @types.NumericBound? = match
+                        let lifted130 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted134 = match
+                            let lifted129 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -24232,6 +24220,62 @@ pub fn WasmRpc::invoke(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted129)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted132 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result131 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result131)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted128,
+                          max: lifted130,
+                          unit: lifted132,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::U32Type(lifted133)
+                  }
+                  9 => {
+                    let lifted140 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted135 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted134 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -24241,67 +24285,11 @@ pub fn WasmRpc::invoke(
                           _ => panic()
                         }
 
-                        let lifted137 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result136 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result136)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted133,
-                          max: lifted135,
-                          unit: lifted137,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::U64Type(lifted138)
-                  }
-                  10 => {
-                    let lifted145 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted140 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted139 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted139)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted142 : @types.NumericBound? = match
+                        let lifted137 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted141 = match
+                            let lifted136 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -24314,6 +24302,62 @@ pub fn WasmRpc::invoke(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted136)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted139 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result138 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result138)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted135,
+                          max: lifted137,
+                          unit: lifted139,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::U64Type(lifted140)
+                  }
+                  10 => {
+                    let lifted147 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted142 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted141 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -24323,67 +24367,11 @@ pub fn WasmRpc::invoke(
                           _ => panic()
                         }
 
-                        let lifted144 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result143 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result143)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted140,
-                          max: lifted142,
-                          unit: lifted144,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::F32Type(lifted145)
-                  }
-                  11 => {
-                    let lifted152 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted147 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted146 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted146)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted149 : @types.NumericBound? = match
+                        let lifted144 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted148 = match
+                            let lifted143 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -24400,324 +24388,406 @@ pub fn WasmRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted148)
+                            Option::Some(lifted143)
                           }
                           _ => panic()
                         }
 
-                        let lifted151 : String? = match
+                        let lifted146 : String? = match
                           mbt_ffi_load8_u(iter_base + 64) {
                           0 => Option::None
                           1 => {
-                            let result150 = mbt_ffi_ptr2str(
+                            let result145 = mbt_ffi_ptr2str(
                               mbt_ffi_load32(iter_base + 68),
                               mbt_ffi_load32(iter_base + 72),
                             )
 
-                            Option::Some(result150)
+                            Option::Some(result145)
                           }
                           _ => panic()
                         }
 
                         Option::Some(@types.NumericRestrictions::{
-                          min: lifted147,
-                          max: lifted149,
-                          unit: lifted151,
+                          min: lifted142,
+                          max: lifted144,
+                          unit: lifted146,
                         })
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::F64Type(lifted152)
+                    @types.SchemaTypeBody::F32Type(lifted147)
+                  }
+                  11 => {
+                    let lifted154 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted149 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted148 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted148)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted151 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 40) {
+                          0 => Option::None
+                          1 => {
+                            let lifted150 = match
+                              mbt_ffi_load8_u(iter_base + 48) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 56),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted150)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted153 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result152 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result152)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted149,
+                          max: lifted151,
+                          unit: lifted153,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::F64Type(lifted154)
                   }
                   12 => @types.SchemaTypeBody::CharType
                   13 => @types.SchemaTypeBody::StringType
                   14 => {
-                    let array166 : Array[@types.NamedFieldType] = []
-                    for index167 = 0
-                        index167 < mbt_ffi_load32(iter_base + 12)
-                        index167 = index167 + 1 {
+                    let array168 : Array[@types.NamedFieldType] = []
+                    for index169 = 0
+                        index169 < mbt_ffi_load32(iter_base + 12)
+                        index169 = index169 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index167 * 68
+                        index169 * 68
 
-                      let result153 = mbt_ffi_ptr2str(
+                      let result155 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      let lifted155 : String? = match
+                      let lifted157 : String? = match
                         mbt_ffi_load8_u(iter_base + 12) {
                         0 => Option::None
                         1 => {
-                          let result154 = mbt_ffi_ptr2str(
+                          let result156 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          Option::Some(result154)
+                          Option::Some(result156)
                         }
                         _ => panic()
                       }
 
                       let array : Array[String] = []
-                      for index157 = 0
-                          index157 < mbt_ffi_load32(iter_base + 28)
-                          index157 = index157 + 1 {
+                      for index159 = 0
+                          index159 < mbt_ffi_load32(iter_base + 28)
+                          index159 = index159 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 24) +
-                          index157 * 8
-
-                        let result156 = mbt_ffi_ptr2str(
-                          mbt_ffi_load32(iter_base + 0),
-                          mbt_ffi_load32(iter_base + 4),
-                        )
-
-                        array.push(result156)
-                      }
-                      mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
-
-                      let array159 : Array[String] = []
-                      for index160 = 0
-                          index160 < mbt_ffi_load32(iter_base + 36)
-                          index160 = index160 + 1 {
-                        let iter_base = mbt_ffi_load32(iter_base + 32) +
-                          index160 * 8
+                          index159 * 8
 
                         let result158 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array159.push(result158)
+                        array.push(result158)
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
+
+                      let array161 : Array[String] = []
+                      for index162 = 0
+                          index162 < mbt_ffi_load32(iter_base + 36)
+                          index162 = index162 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 32) +
+                          index162 * 8
+
+                        let result160 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 0),
+                          mbt_ffi_load32(iter_base + 4),
+                        )
+
+                        array161.push(result160)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
 
-                      let lifted162 : String? = match
+                      let lifted164 : String? = match
                         mbt_ffi_load8_u(iter_base + 40) {
                         0 => Option::None
                         1 => {
-                          let result161 = mbt_ffi_ptr2str(
+                          let result163 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 44),
                             mbt_ffi_load32(iter_base + 48),
                           )
 
-                          Option::Some(result161)
+                          Option::Some(result163)
                         }
                         _ => panic()
                       }
 
-                      let lifted165 : @types.Role? = match
+                      let lifted167 : @types.Role? = match
                         mbt_ffi_load8_u(iter_base + 52) {
                         0 => Option::None
                         1 => {
-                          let lifted164 = match
+                          let lifted166 = match
                             mbt_ffi_load8_u(iter_base + 56) {
                             0 => @types.Role::Multimodal
                             1 => @types.Role::UnstructuredText
                             2 => @types.Role::UnstructuredBinary
                             3 => {
-                              let result163 = mbt_ffi_ptr2str(
+                              let result165 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 60),
                                 mbt_ffi_load32(iter_base + 64),
                               )
 
-                              @types.Role::Other(result163)
+                              @types.Role::Other(result165)
                             }
                             _ => panic()
                           }
 
-                          Option::Some(lifted164)
+                          Option::Some(lifted166)
                         }
                         _ => panic()
                       }
 
-                      array166.push(@types.NamedFieldType::{
-                        name: result153,
+                      array168.push(@types.NamedFieldType::{
+                        name: result155,
                         body: mbt_ffi_load32(iter_base + 8),
                         metadata: @types.MetadataEnvelope::{
-                          doc: lifted155,
+                          doc: lifted157,
                           aliases: array,
-                          examples: array159,
-                          deprecated: lifted162,
-                          role: lifted165,
+                          examples: array161,
+                          deprecated: lifted164,
+                          role: lifted167,
                         },
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::RecordType(array166)
+                    @types.SchemaTypeBody::RecordType(array168)
                   }
                   15 => {
-                    let array183 : Array[@types.VariantCaseType] = []
-                    for index184 = 0
-                        index184 < mbt_ffi_load32(iter_base + 12)
-                        index184 = index184 + 1 {
+                    let array185 : Array[@types.VariantCaseType] = []
+                    for index186 = 0
+                        index186 < mbt_ffi_load32(iter_base + 12)
+                        index186 = index186 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index184 * 72
+                        index186 * 72
 
-                      let result168 = mbt_ffi_ptr2str(
+                      let result170 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      let lifted169 : Int? = match
+                      let lifted171 : Int? = match
                         mbt_ffi_load8_u(iter_base + 8) {
                         0 => Option::None
                         1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                         _ => panic()
                       }
 
-                      let lifted171 : String? = match
+                      let lifted173 : String? = match
                         mbt_ffi_load8_u(iter_base + 16) {
                         0 => Option::None
                         1 => {
-                          let result170 = mbt_ffi_ptr2str(
+                          let result172 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 20),
                             mbt_ffi_load32(iter_base + 24),
                           )
 
-                          Option::Some(result170)
+                          Option::Some(result172)
                         }
                         _ => panic()
                       }
 
-                      let array173 : Array[String] = []
-                      for index174 = 0
-                          index174 < mbt_ffi_load32(iter_base + 32)
-                          index174 = index174 + 1 {
+                      let array175 : Array[String] = []
+                      for index176 = 0
+                          index176 < mbt_ffi_load32(iter_base + 32)
+                          index176 = index176 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 28) +
-                          index174 * 8
+                          index176 * 8
 
-                        let result172 = mbt_ffi_ptr2str(
+                        let result174 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array173.push(result172)
+                        array175.push(result174)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
-                      let array176 : Array[String] = []
-                      for index177 = 0
-                          index177 < mbt_ffi_load32(iter_base + 40)
-                          index177 = index177 + 1 {
+                      let array178 : Array[String] = []
+                      for index179 = 0
+                          index179 < mbt_ffi_load32(iter_base + 40)
+                          index179 = index179 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 36) +
-                          index177 * 8
+                          index179 * 8
 
-                        let result175 = mbt_ffi_ptr2str(
+                        let result177 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array176.push(result175)
+                        array178.push(result177)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
 
-                      let lifted179 : String? = match
+                      let lifted181 : String? = match
                         mbt_ffi_load8_u(iter_base + 44) {
                         0 => Option::None
                         1 => {
-                          let result178 = mbt_ffi_ptr2str(
+                          let result180 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 48),
                             mbt_ffi_load32(iter_base + 52),
                           )
 
-                          Option::Some(result178)
+                          Option::Some(result180)
                         }
                         _ => panic()
                       }
 
-                      let lifted182 : @types.Role? = match
+                      let lifted184 : @types.Role? = match
                         mbt_ffi_load8_u(iter_base + 56) {
                         0 => Option::None
                         1 => {
-                          let lifted181 = match
+                          let lifted183 = match
                             mbt_ffi_load8_u(iter_base + 60) {
                             0 => @types.Role::Multimodal
                             1 => @types.Role::UnstructuredText
                             2 => @types.Role::UnstructuredBinary
                             3 => {
-                              let result180 = mbt_ffi_ptr2str(
+                              let result182 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 64),
                                 mbt_ffi_load32(iter_base + 68),
                               )
 
-                              @types.Role::Other(result180)
+                              @types.Role::Other(result182)
                             }
                             _ => panic()
                           }
 
-                          Option::Some(lifted181)
+                          Option::Some(lifted183)
                         }
                         _ => panic()
                       }
 
-                      array183.push(@types.VariantCaseType::{
-                        name: result168,
-                        payload: lifted169,
+                      array185.push(@types.VariantCaseType::{
+                        name: result170,
+                        payload: lifted171,
                         metadata: @types.MetadataEnvelope::{
-                          doc: lifted171,
-                          aliases: array173,
-                          examples: array176,
-                          deprecated: lifted179,
-                          role: lifted182,
+                          doc: lifted173,
+                          aliases: array175,
+                          examples: array178,
+                          deprecated: lifted181,
+                          role: lifted184,
                         },
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::VariantType(array183)
+                    @types.SchemaTypeBody::VariantType(array185)
                   }
                   16 => {
-                    let array186 : Array[String] = []
-                    for index187 = 0
-                        index187 < mbt_ffi_load32(iter_base + 12)
-                        index187 = index187 + 1 {
+                    let array188 : Array[String] = []
+                    for index189 = 0
+                        index189 < mbt_ffi_load32(iter_base + 12)
+                        index189 = index189 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index187 * 8
+                        index189 * 8
 
-                      let result185 = mbt_ffi_ptr2str(
+                      let result187 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      array186.push(result185)
+                      array188.push(result187)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::EnumType(array186)
+                    @types.SchemaTypeBody::EnumType(array188)
                   }
                   17 => {
-                    let array189 : Array[String] = []
-                    for index190 = 0
-                        index190 < mbt_ffi_load32(iter_base + 12)
-                        index190 = index190 + 1 {
-                      let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index190 * 8
-
-                      let result188 = mbt_ffi_ptr2str(
-                        mbt_ffi_load32(iter_base + 0),
-                        mbt_ffi_load32(iter_base + 4),
-                      )
-
-                      array189.push(result188)
-                    }
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-                    @types.SchemaTypeBody::FlagsType(array189)
-                  }
-                  18 => {
-                    let array191 : Array[Int] = []
+                    let array191 : Array[String] = []
                     for index192 = 0
                         index192 < mbt_ffi_load32(iter_base + 12)
                         index192 = index192 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index192 * 4
+                        index192 * 8
 
-                      array191.push(mbt_ffi_load32(iter_base + 0))
+                      let result190 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 0),
+                        mbt_ffi_load32(iter_base + 4),
+                      )
+
+                      array191.push(result190)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::TupleType(array191)
+                    @types.SchemaTypeBody::FlagsType(array191)
+                  }
+                  18 => {
+                    let array193 : Array[Int] = []
+                    for index194 = 0
+                        index194 < mbt_ffi_load32(iter_base + 12)
+                        index194 = index194 + 1 {
+                      let iter_base = mbt_ffi_load32(iter_base + 8) +
+                        index194 * 4
+
+                      array193.push(mbt_ffi_load32(iter_base + 0))
+                    }
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                    @types.SchemaTypeBody::TupleType(array193)
                   }
                   19 =>
                     @types.SchemaTypeBody::ListType(
@@ -24738,14 +24808,14 @@ pub fn WasmRpc::invoke(
                       mbt_ffi_load32(iter_base + 8),
                     )
                   23 => {
-                    let lifted193 : Int? = match
+                    let lifted195 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    let lifted194 : Int? = match
+                    let lifted196 : Int? = match
                       mbt_ffi_load8_u(iter_base + 16) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 20))
@@ -24753,37 +24823,37 @@ pub fn WasmRpc::invoke(
                     }
 
                     @types.SchemaTypeBody::ResultType(@types.ResultSpec::{
-                      ok: lifted193,
-                      err: lifted194,
+                      ok: lifted195,
+                      err: lifted196,
                     })
                   }
                   24 => {
-                    let lifted198 : Array[String]? = match
+                    let lifted200 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let array196 : Array[String] = []
-                        for index197 = 0
-                            index197 < mbt_ffi_load32(iter_base + 16)
-                            index197 = index197 + 1 {
+                        let array198 : Array[String] = []
+                        for index199 = 0
+                            index199 < mbt_ffi_load32(iter_base + 16)
+                            index199 = index199 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 12) +
-                            index197 * 8
+                            index199 * 8
 
-                          let result195 = mbt_ffi_ptr2str(
+                          let result197 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array196.push(result195)
+                          array198.push(result197)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
 
-                        Option::Some(array196)
+                        Option::Some(array198)
                       }
                       _ => panic()
                     }
 
-                    let lifted199 : UInt? = match
+                    let lifted201 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 20) {
                       0 => Option::None
                       1 =>
@@ -24793,7 +24863,7 @@ pub fn WasmRpc::invoke(
                       _ => panic()
                     }
 
-                    let lifted200 : UInt? = match
+                    let lifted202 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 28) {
                       0 => Option::None
                       1 =>
@@ -24803,54 +24873,54 @@ pub fn WasmRpc::invoke(
                       _ => panic()
                     }
 
-                    let lifted202 : String? = match
+                    let lifted204 : String? = match
                       mbt_ffi_load8_u(iter_base + 36) {
                       0 => Option::None
                       1 => {
-                        let result201 = mbt_ffi_ptr2str(
+                        let result203 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 40),
                           mbt_ffi_load32(iter_base + 44),
                         )
 
-                        Option::Some(result201)
+                        Option::Some(result203)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaTypeBody::TextType(@types.TextRestrictions::{
-                      languages: lifted198,
-                      min_length: lifted199,
-                      max_length: lifted200,
-                      regex: lifted202,
+                      languages: lifted200,
+                      min_length: lifted201,
+                      max_length: lifted202,
+                      regex: lifted204,
                     })
                   }
                   25 => {
-                    let lifted206 : Array[String]? = match
+                    let lifted208 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let array204 : Array[String] = []
-                        for index205 = 0
-                            index205 < mbt_ffi_load32(iter_base + 16)
-                            index205 = index205 + 1 {
+                        let array206 : Array[String] = []
+                        for index207 = 0
+                            index207 < mbt_ffi_load32(iter_base + 16)
+                            index207 = index207 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 12) +
-                            index205 * 8
+                            index207 * 8
 
-                          let result203 = mbt_ffi_ptr2str(
+                          let result205 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array204.push(result203)
+                          array206.push(result205)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
 
-                        Option::Some(array204)
+                        Option::Some(array206)
                       }
                       _ => panic()
                     }
 
-                    let lifted207 : UInt? = match
+                    let lifted209 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 20) {
                       0 => Option::None
                       1 =>
@@ -24860,7 +24930,7 @@ pub fn WasmRpc::invoke(
                       _ => panic()
                     }
 
-                    let lifted208 : UInt? = match
+                    let lifted210 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 28) {
                       0 => Option::None
                       1 =>
@@ -24871,58 +24941,58 @@ pub fn WasmRpc::invoke(
                     }
 
                     @types.SchemaTypeBody::BinaryType(@types.BinaryRestrictions::{
-                      mime_types: lifted206,
-                      min_bytes: lifted207,
-                      max_bytes: lifted208,
+                      mime_types: lifted208,
+                      min_bytes: lifted209,
+                      max_bytes: lifted210,
                     })
                   }
                   26 => {
-                    let lifted212 : Array[String]? = match
+                    let lifted214 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => {
-                        let array210 : Array[String] = []
-                        for index211 = 0
-                            index211 < mbt_ffi_load32(iter_base + 20)
-                            index211 = index211 + 1 {
+                        let array212 : Array[String] = []
+                        for index213 = 0
+                            index213 < mbt_ffi_load32(iter_base + 20)
+                            index213 = index213 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 16) +
-                            index211 * 8
+                            index213 * 8
 
-                          let result209 = mbt_ffi_ptr2str(
+                          let result211 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array210.push(result209)
+                          array212.push(result211)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
-                        Option::Some(array210)
+                        Option::Some(array212)
                       }
                       _ => panic()
                     }
 
-                    let lifted216 : Array[String]? = match
+                    let lifted218 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 24) {
                       0 => Option::None
                       1 => {
-                        let array214 : Array[String] = []
-                        for index215 = 0
-                            index215 < mbt_ffi_load32(iter_base + 32)
-                            index215 = index215 + 1 {
+                        let array216 : Array[String] = []
+                        for index217 = 0
+                            index217 < mbt_ffi_load32(iter_base + 32)
+                            index217 = index217 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 28) +
-                            index215 * 8
+                            index217 * 8
 
-                          let result213 = mbt_ffi_ptr2str(
+                          let result215 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array214.push(result213)
+                          array216.push(result215)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
-                        Option::Some(array214)
+                        Option::Some(array216)
                       }
                       _ => panic()
                     }
@@ -24934,95 +25004,95 @@ pub fn WasmRpc::invoke(
                       kind: @types.PathKind::from(
                         mbt_ffi_load8_u(iter_base + 9),
                       ),
-                      allowed_mime_types: lifted212,
-                      allowed_extensions: lifted216,
+                      allowed_mime_types: lifted214,
+                      allowed_extensions: lifted218,
                     })
                   }
                   27 => {
-                    let lifted220 : Array[String]? = match
+                    let lifted222 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let array218 : Array[String] = []
-                        for index219 = 0
-                            index219 < mbt_ffi_load32(iter_base + 16)
-                            index219 = index219 + 1 {
+                        let array220 : Array[String] = []
+                        for index221 = 0
+                            index221 < mbt_ffi_load32(iter_base + 16)
+                            index221 = index221 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 12) +
-                            index219 * 8
+                            index221 * 8
 
-                          let result217 = mbt_ffi_ptr2str(
+                          let result219 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array218.push(result217)
+                          array220.push(result219)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
 
-                        Option::Some(array218)
+                        Option::Some(array220)
                       }
                       _ => panic()
                     }
 
-                    let lifted224 : Array[String]? = match
+                    let lifted226 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 20) {
                       0 => Option::None
                       1 => {
-                        let array222 : Array[String] = []
-                        for index223 = 0
-                            index223 < mbt_ffi_load32(iter_base + 28)
-                            index223 = index223 + 1 {
+                        let array224 : Array[String] = []
+                        for index225 = 0
+                            index225 < mbt_ffi_load32(iter_base + 28)
+                            index225 = index225 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 24) +
-                            index223 * 8
+                            index225 * 8
 
-                          let result221 = mbt_ffi_ptr2str(
+                          let result223 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array222.push(result221)
+                          array224.push(result223)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
 
-                        Option::Some(array222)
+                        Option::Some(array224)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaTypeBody::UrlType(@types.UrlRestrictions::{
-                      allowed_schemes: lifted220,
-                      allowed_hosts: lifted224,
+                      allowed_schemes: lifted222,
+                      allowed_hosts: lifted226,
                     })
                   }
                   28 => @types.SchemaTypeBody::DatetimeType
                   29 => @types.SchemaTypeBody::DurationType
                   30 => {
-                    let result225 = mbt_ffi_ptr2str(
+                    let result227 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    let array227 : Array[String] = []
-                    for index228 = 0
-                        index228 < mbt_ffi_load32(iter_base + 20)
-                        index228 = index228 + 1 {
+                    let array229 : Array[String] = []
+                    for index230 = 0
+                        index230 < mbt_ffi_load32(iter_base + 20)
+                        index230 = index230 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 16) +
-                        index228 * 8
+                        index230 * 8
 
-                      let result226 = mbt_ffi_ptr2str(
+                      let result228 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      array227.push(result226)
+                      array229.push(result228)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
-                    let lifted230 : @types.QuantityValue? = match
+                    let lifted232 : @types.QuantityValue? = match
                       mbt_ffi_load8_u(iter_base + 24) {
                       0 => Option::None
                       1 => {
-                        let result229 = mbt_ffi_ptr2str(
+                        let result231 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 44),
                           mbt_ffi_load32(iter_base + 48),
                         )
@@ -25030,17 +25100,17 @@ pub fn WasmRpc::invoke(
                         Option::Some(@types.QuantityValue::{
                           mantissa: mbt_ffi_load64(iter_base + 32),
                           scale: mbt_ffi_load32(iter_base + 40),
-                          unit: result229,
+                          unit: result231,
                         })
                       }
                       _ => panic()
                     }
 
-                    let lifted232 : @types.QuantityValue? = match
+                    let lifted234 : @types.QuantityValue? = match
                       mbt_ffi_load8_u(iter_base + 56) {
                       0 => Option::None
                       1 => {
-                        let result231 = mbt_ffi_ptr2str(
+                        let result233 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 76),
                           mbt_ffi_load32(iter_base + 80),
                         )
@@ -25048,233 +25118,213 @@ pub fn WasmRpc::invoke(
                         Option::Some(@types.QuantityValue::{
                           mantissa: mbt_ffi_load64(iter_base + 64),
                           scale: mbt_ffi_load32(iter_base + 72),
-                          unit: result231,
+                          unit: result233,
                         })
                       }
                       _ => panic()
                     }
 
                     @types.SchemaTypeBody::QuantityType(@types.QuantitySpec::{
-                      base_unit: result225,
-                      allowed_suffixes: array227,
-                      min: lifted230,
-                      max: lifted232,
+                      base_unit: result227,
+                      allowed_suffixes: array229,
+                      min: lifted232,
+                      max: lifted234,
                     })
                   }
                   31 => {
-                    let array256 : Array[@types.UnionBranch] = []
-                    for index257 = 0
-                        index257 < mbt_ffi_load32(iter_base + 12)
-                        index257 = index257 + 1 {
+                    let array258 : Array[@types.UnionBranch] = []
+                    for index259 = 0
+                        index259 < mbt_ffi_load32(iter_base + 12)
+                        index259 = index259 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index257 * 92
+                        index259 * 92
 
-                      let result233 = mbt_ffi_ptr2str(
+                      let result235 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      let lifted242 = match mbt_ffi_load8_u(iter_base + 12) {
+                      let lifted244 = match mbt_ffi_load8_u(iter_base + 12) {
                         0 => {
-                          let result234 = mbt_ffi_ptr2str(
-                            mbt_ffi_load32(iter_base + 16),
-                            mbt_ffi_load32(iter_base + 20),
-                          )
-
-                          @types.DiscriminatorRule::Prefix(result234)
-                        }
-                        1 => {
-                          let result235 = mbt_ffi_ptr2str(
-                            mbt_ffi_load32(iter_base + 16),
-                            mbt_ffi_load32(iter_base + 20),
-                          )
-
-                          @types.DiscriminatorRule::Suffix(result235)
-                        }
-                        2 => {
                           let result236 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          @types.DiscriminatorRule::Contains(result236)
+                          @types.DiscriminatorRule::Prefix(result236)
                         }
-                        3 => {
+                        1 => {
                           let result237 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          @types.DiscriminatorRule::Regex(result237)
+                          @types.DiscriminatorRule::Suffix(result237)
                         }
-                        4 => {
+                        2 => {
                           let result238 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          let lifted240 : String? = match
+                          @types.DiscriminatorRule::Contains(result238)
+                        }
+                        3 => {
+                          let result239 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 16),
+                            mbt_ffi_load32(iter_base + 20),
+                          )
+
+                          @types.DiscriminatorRule::Regex(result239)
+                        }
+                        4 => {
+                          let result240 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 16),
+                            mbt_ffi_load32(iter_base + 20),
+                          )
+
+                          let lifted242 : String? = match
                             mbt_ffi_load8_u(iter_base + 24) {
                             0 => Option::None
                             1 => {
-                              let result239 = mbt_ffi_ptr2str(
+                              let result241 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 28),
                                 mbt_ffi_load32(iter_base + 32),
                               )
 
-                              Option::Some(result239)
+                              Option::Some(result241)
                             }
                             _ => panic()
                           }
 
                           @types.DiscriminatorRule::FieldEquals(@types.FieldDiscriminator::{
-                            field_name: result238,
-                            literal: lifted240,
+                            field_name: result240,
+                            literal: lifted242,
                           })
                         }
                         5 => {
-                          let result241 = mbt_ffi_ptr2str(
+                          let result243 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          @types.DiscriminatorRule::FieldAbsent(result241)
+                          @types.DiscriminatorRule::FieldAbsent(result243)
                         }
                         _ => panic()
                       }
 
-                      let lifted244 : String? = match
+                      let lifted246 : String? = match
                         mbt_ffi_load8_u(iter_base + 36) {
                         0 => Option::None
                         1 => {
-                          let result243 = mbt_ffi_ptr2str(
+                          let result245 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 40),
                             mbt_ffi_load32(iter_base + 44),
                           )
 
-                          Option::Some(result243)
+                          Option::Some(result245)
                         }
                         _ => panic()
                       }
 
-                      let array246 : Array[String] = []
-                      for index247 = 0
-                          index247 < mbt_ffi_load32(iter_base + 52)
-                          index247 = index247 + 1 {
+                      let array248 : Array[String] = []
+                      for index249 = 0
+                          index249 < mbt_ffi_load32(iter_base + 52)
+                          index249 = index249 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 48) +
-                          index247 * 8
+                          index249 * 8
 
-                        let result245 = mbt_ffi_ptr2str(
+                        let result247 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array246.push(result245)
+                        array248.push(result247)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
 
-                      let array249 : Array[String] = []
-                      for index250 = 0
-                          index250 < mbt_ffi_load32(iter_base + 60)
-                          index250 = index250 + 1 {
+                      let array251 : Array[String] = []
+                      for index252 = 0
+                          index252 < mbt_ffi_load32(iter_base + 60)
+                          index252 = index252 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 56) +
-                          index250 * 8
+                          index252 * 8
 
-                        let result248 = mbt_ffi_ptr2str(
+                        let result250 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array249.push(result248)
+                        array251.push(result250)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
 
-                      let lifted252 : String? = match
+                      let lifted254 : String? = match
                         mbt_ffi_load8_u(iter_base + 64) {
                         0 => Option::None
                         1 => {
-                          let result251 = mbt_ffi_ptr2str(
+                          let result253 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 68),
                             mbt_ffi_load32(iter_base + 72),
                           )
 
-                          Option::Some(result251)
+                          Option::Some(result253)
                         }
                         _ => panic()
                       }
 
-                      let lifted255 : @types.Role? = match
+                      let lifted257 : @types.Role? = match
                         mbt_ffi_load8_u(iter_base + 76) {
                         0 => Option::None
                         1 => {
-                          let lifted254 = match
+                          let lifted256 = match
                             mbt_ffi_load8_u(iter_base + 80) {
                             0 => @types.Role::Multimodal
                             1 => @types.Role::UnstructuredText
                             2 => @types.Role::UnstructuredBinary
                             3 => {
-                              let result253 = mbt_ffi_ptr2str(
+                              let result255 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 84),
                                 mbt_ffi_load32(iter_base + 88),
                               )
 
-                              @types.Role::Other(result253)
+                              @types.Role::Other(result255)
                             }
                             _ => panic()
                           }
 
-                          Option::Some(lifted254)
+                          Option::Some(lifted256)
                         }
                         _ => panic()
                       }
 
-                      array256.push(@types.UnionBranch::{
-                        tag: result233,
+                      array258.push(@types.UnionBranch::{
+                        tag: result235,
                         body: mbt_ffi_load32(iter_base + 8),
-                        discriminator: lifted242,
+                        discriminator: lifted244,
                         metadata: @types.MetadataEnvelope::{
-                          doc: lifted244,
-                          aliases: array246,
-                          examples: array249,
-                          deprecated: lifted252,
-                          role: lifted255,
+                          doc: lifted246,
+                          aliases: array248,
+                          examples: array251,
+                          deprecated: lifted254,
+                          role: lifted257,
                         },
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
                     @types.SchemaTypeBody::UnionType(@types.UnionSpec::{
-                      branches: array256,
+                      branches: array258,
                     })
                   }
                   32 => {
-                    let lifted259 : String? = match
+                    let lifted261 : String? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => {
-                        let result258 = mbt_ffi_ptr2str(
+                        let result260 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 16),
                           mbt_ffi_load32(iter_base + 20),
-                        )
-
-                        Option::Some(result258)
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::SecretType(@types.SecretSpec::{
-                      inner: mbt_ffi_load32(iter_base + 8),
-                      category: lifted259,
-                    })
-                  }
-                  33 => {
-                    let lifted261 : String? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let result260 = mbt_ffi_ptr2str(
-                          mbt_ffi_load32(iter_base + 12),
-                          mbt_ffi_load32(iter_base + 16),
                         )
 
                         Option::Some(result260)
@@ -25282,8 +25332,28 @@ pub fn WasmRpc::invoke(
                       _ => panic()
                     }
 
+                    @types.SchemaTypeBody::SecretType(@types.SecretSpec::{
+                      inner: mbt_ffi_load32(iter_base + 8),
+                      category: lifted261,
+                    })
+                  }
+                  33 => {
+                    let lifted263 : String? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let result262 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 12),
+                          mbt_ffi_load32(iter_base + 16),
+                        )
+
+                        Option::Some(result262)
+                      }
+                      _ => panic()
+                    }
+
                     @types.SchemaTypeBody::QuotaTokenType(@types.QuotaTokenSpec::{
-                      resource_name: lifted261,
+                      resource_name: lifted263,
                     })
                   }
                   34 =>
@@ -25291,162 +25361,162 @@ pub fn WasmRpc::invoke(
                       polymorphic: mbt_ffi_load8_u(iter_base + 8) != 0,
                     })
                   35 => {
-                    let lifted262 : Int? = match
+                    let lifted264 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::FutureType(lifted262)
+                    @types.SchemaTypeBody::FutureType(lifted264)
                   }
                   36 => {
-                    let lifted263 : Int? = match
+                    let lifted265 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::StreamType(lifted263)
+                    @types.SchemaTypeBody::StreamType(lifted265)
                   }
                   _ => panic()
                 }
 
-                let lifted266 : String? = match
+                let lifted268 : String? = match
                   mbt_ffi_load8_u(iter_base + 88) {
                   0 => Option::None
                   1 => {
-                    let result265 = mbt_ffi_ptr2str(
+                    let result267 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 92),
                       mbt_ffi_load32(iter_base + 96),
                     )
 
-                    Option::Some(result265)
+                    Option::Some(result267)
                   }
                   _ => panic()
                 }
 
-                let array268 : Array[String] = []
-                for index269 = 0
-                    index269 < mbt_ffi_load32(iter_base + 104)
-                    index269 = index269 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 100) + index269 * 8
+                let array270 : Array[String] = []
+                for index271 = 0
+                    index271 < mbt_ffi_load32(iter_base + 104)
+                    index271 = index271 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 100) + index271 * 8
 
-                  let result267 = mbt_ffi_ptr2str(
+                  let result269 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  array268.push(result267)
+                  array270.push(result269)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
 
-                let array271 : Array[String] = []
-                for index272 = 0
-                    index272 < mbt_ffi_load32(iter_base + 112)
-                    index272 = index272 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 108) + index272 * 8
+                let array273 : Array[String] = []
+                for index274 = 0
+                    index274 < mbt_ffi_load32(iter_base + 112)
+                    index274 = index274 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 108) + index274 * 8
 
-                  let result270 = mbt_ffi_ptr2str(
+                  let result272 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  array271.push(result270)
+                  array273.push(result272)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
 
-                let lifted274 : String? = match
+                let lifted276 : String? = match
                   mbt_ffi_load8_u(iter_base + 116) {
                   0 => Option::None
                   1 => {
-                    let result273 = mbt_ffi_ptr2str(
+                    let result275 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 120),
                       mbt_ffi_load32(iter_base + 124),
                     )
 
-                    Option::Some(result273)
+                    Option::Some(result275)
                   }
                   _ => panic()
                 }
 
-                let lifted277 : @types.Role? = match
+                let lifted279 : @types.Role? = match
                   mbt_ffi_load8_u(iter_base + 128) {
                   0 => Option::None
                   1 => {
-                    let lifted276 = match mbt_ffi_load8_u(iter_base + 132) {
+                    let lifted278 = match mbt_ffi_load8_u(iter_base + 132) {
                       0 => @types.Role::Multimodal
                       1 => @types.Role::UnstructuredText
                       2 => @types.Role::UnstructuredBinary
                       3 => {
-                        let result275 = mbt_ffi_ptr2str(
+                        let result277 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 136),
                           mbt_ffi_load32(iter_base + 140),
                         )
 
-                        @types.Role::Other(result275)
+                        @types.Role::Other(result277)
                       }
                       _ => panic()
                     }
 
-                    Option::Some(lifted276)
+                    Option::Some(lifted278)
                   }
                   _ => panic()
                 }
 
-                array278.push(@types.SchemaTypeNode::{
-                  body: lifted264,
+                array280.push(@types.SchemaTypeNode::{
+                  body: lifted266,
                   metadata: @types.MetadataEnvelope::{
-                    doc: lifted266,
-                    aliases: array268,
-                    examples: array271,
-                    deprecated: lifted274,
-                    role: lifted277,
+                    doc: lifted268,
+                    aliases: array270,
+                    examples: array273,
+                    deprecated: lifted276,
+                    role: lifted279,
                   },
                 })
               }
               mbt_ffi_free(mbt_ffi_load32(return_area + 12))
 
-              let array283 : Array[@types.SchemaTypeDef] = []
-              for index284 = 0
-                  index284 < mbt_ffi_load32(return_area + 24)
-                  index284 = index284 + 1 {
-                let iter_base = mbt_ffi_load32(return_area + 20) + index284 * 24
+              let array285 : Array[@types.SchemaTypeDef] = []
+              for index286 = 0
+                  index286 < mbt_ffi_load32(return_area + 24)
+                  index286 = index286 + 1 {
+                let iter_base = mbt_ffi_load32(return_area + 20) + index286 * 24
 
-                let result280 = mbt_ffi_ptr2str(
+                let result282 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 0),
                   mbt_ffi_load32(iter_base + 4),
                 )
 
-                let lifted282 : String? = match mbt_ffi_load8_u(iter_base + 8) {
+                let lifted284 : String? = match mbt_ffi_load8_u(iter_base + 8) {
                   0 => Option::None
                   1 => {
-                    let result281 = mbt_ffi_ptr2str(
+                    let result283 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 12),
                       mbt_ffi_load32(iter_base + 16),
                     )
 
-                    Option::Some(result281)
+                    Option::Some(result283)
                   }
                   _ => panic()
                 }
 
-                array283.push(@types.SchemaTypeDef::{
-                  id: result280,
-                  name: lifted282,
+                array285.push(@types.SchemaTypeDef::{
+                  id: result282,
+                  name: lifted284,
                   body: mbt_ffi_load32(iter_base + 20),
                 })
               }
               mbt_ffi_free(mbt_ffi_load32(return_area + 20))
 
-              let array314 : Array[@types.SchemaValueNode] = []
-              for index315 = 0
-                  index315 < mbt_ffi_load32(return_area + 36)
-                  index315 = index315 + 1 {
-                let iter_base = mbt_ffi_load32(return_area + 32) + index315 * 32
+              let array316 : Array[@types.SchemaValueNode] = []
+              for index317 = 0
+                  index317 < mbt_ffi_load32(return_area + 36)
+                  index317 = index317 + 1 {
+                let iter_base = mbt_ffi_load32(return_area + 32) + index317 * 32
 
-                let lifted313 = match mbt_ffi_load8_u(iter_base + 0) {
+                let lifted315 = match mbt_ffi_load8_u(iter_base + 0) {
                   0 =>
                     @types.SchemaValueNode::BoolValue(
                       mbt_ffi_load8_u(iter_base + 8) != 0,
@@ -25498,29 +25568,29 @@ pub fn WasmRpc::invoke(
                       Int::unsafe_to_char(mbt_ffi_load32(iter_base + 8)),
                     )
                   12 => {
-                    let result285 = mbt_ffi_ptr2str(
+                    let result287 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    @types.SchemaValueNode::StringValue(result285)
+                    @types.SchemaValueNode::StringValue(result287)
                   }
                   13 => {
-                    let array286 : Array[Int] = []
-                    for index287 = 0
-                        index287 < mbt_ffi_load32(iter_base + 12)
-                        index287 = index287 + 1 {
+                    let array288 : Array[Int] = []
+                    for index289 = 0
+                        index289 < mbt_ffi_load32(iter_base + 12)
+                        index289 = index289 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index287 * 4
+                        index289 * 4
 
-                      array286.push(mbt_ffi_load32(iter_base + 0))
+                      array288.push(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::RecordValue(array286)
+                    @types.SchemaValueNode::RecordValue(array288)
                   }
                   14 => {
-                    let lifted288 : Int? = match
+                    let lifted290 : Int? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 16))
@@ -25529,7 +25599,7 @@ pub fn WasmRpc::invoke(
 
                     @types.SchemaValueNode::VariantValue(@types.VariantValuePayload::{
                       case: mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
-                      payload: lifted288,
+                      payload: lifted290,
                     })
                   }
                   15 =>
@@ -25537,34 +25607,20 @@ pub fn WasmRpc::invoke(
                       mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
                     )
                   16 => {
-                    let array289 : Array[Bool] = []
-                    for index290 = 0
-                        index290 < mbt_ffi_load32(iter_base + 12)
-                        index290 = index290 + 1 {
-                      let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index290 * 1
-
-                      array289.push(mbt_ffi_load8_u(iter_base + 0) != 0)
-                    }
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-                    @types.SchemaValueNode::FlagsValue(array289)
-                  }
-                  17 => {
-                    let array291 : Array[Int] = []
+                    let array291 : Array[Bool] = []
                     for index292 = 0
                         index292 < mbt_ffi_load32(iter_base + 12)
                         index292 = index292 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index292 * 4
+                        index292 * 1
 
-                      array291.push(mbt_ffi_load32(iter_base + 0))
+                      array291.push(mbt_ffi_load8_u(iter_base + 0) != 0)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::TupleValue(array291)
+                    @types.SchemaValueNode::FlagsValue(array291)
                   }
-                  18 => {
+                  17 => {
                     let array293 : Array[Int] = []
                     for index294 = 0
                         index294 < mbt_ffi_load32(iter_base + 12)
@@ -25576,9 +25632,9 @@ pub fn WasmRpc::invoke(
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::ListValue(array293)
+                    @types.SchemaValueNode::TupleValue(array293)
                   }
-                  19 => {
+                  18 => {
                     let array295 : Array[Int] = []
                     for index296 = 0
                         index296 < mbt_ffi_load32(iter_base + 12)
@@ -25590,127 +25646,141 @@ pub fn WasmRpc::invoke(
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::FixedListValue(array295)
+                    @types.SchemaValueNode::ListValue(array295)
                   }
-                  20 => {
-                    let array297 : Array[@types.MapEntry] = []
+                  19 => {
+                    let array297 : Array[Int] = []
                     for index298 = 0
                         index298 < mbt_ffi_load32(iter_base + 12)
                         index298 = index298 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index298 * 8
+                        index298 * 4
 
-                      array297.push(@types.MapEntry::{
+                      array297.push(mbt_ffi_load32(iter_base + 0))
+                    }
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                    @types.SchemaValueNode::FixedListValue(array297)
+                  }
+                  20 => {
+                    let array299 : Array[@types.MapEntry] = []
+                    for index300 = 0
+                        index300 < mbt_ffi_load32(iter_base + 12)
+                        index300 = index300 + 1 {
+                      let iter_base = mbt_ffi_load32(iter_base + 8) +
+                        index300 * 8
+
+                      array299.push(@types.MapEntry::{
                         key: mbt_ffi_load32(iter_base + 0),
                         value: mbt_ffi_load32(iter_base + 4),
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::MapValue(array297)
+                    @types.SchemaValueNode::MapValue(array299)
                   }
                   21 => {
-                    let lifted299 : Int? = match
+                    let lifted301 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    @types.SchemaValueNode::OptionValue(lifted299)
+                    @types.SchemaValueNode::OptionValue(lifted301)
                   }
                   22 => {
-                    let lifted302 = match mbt_ffi_load8_u(iter_base + 8) {
+                    let lifted304 = match mbt_ffi_load8_u(iter_base + 8) {
                       0 => {
-                        let lifted300 : Int? = match
+                        let lifted302 : Int? = match
                           mbt_ffi_load8_u(iter_base + 12) {
                           0 => Option::None
                           1 => Option::Some(mbt_ffi_load32(iter_base + 16))
                           _ => panic()
                         }
 
-                        @types.ResultValuePayload::OkValue(lifted300)
+                        @types.ResultValuePayload::OkValue(lifted302)
                       }
                       1 => {
-                        let lifted301 : Int? = match
+                        let lifted303 : Int? = match
                           mbt_ffi_load8_u(iter_base + 12) {
                           0 => Option::None
                           1 => Option::Some(mbt_ffi_load32(iter_base + 16))
                           _ => panic()
                         }
 
-                        @types.ResultValuePayload::ErrValue(lifted301)
+                        @types.ResultValuePayload::ErrValue(lifted303)
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaValueNode::ResultValue(lifted302)
+                    @types.SchemaValueNode::ResultValue(lifted304)
                   }
                   23 => {
-                    let result303 = mbt_ffi_ptr2str(
+                    let result305 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    let lifted305 : String? = match
+                    let lifted307 : String? = match
                       mbt_ffi_load8_u(iter_base + 16) {
                       0 => Option::None
                       1 => {
-                        let result304 = mbt_ffi_ptr2str(
+                        let result306 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 20),
                           mbt_ffi_load32(iter_base + 24),
                         )
 
-                        Option::Some(result304)
+                        Option::Some(result306)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaValueNode::TextValue(@types.TextValuePayload::{
-                      text: result303,
-                      language: lifted305,
+                      text: result305,
+                      language: lifted307,
                     })
                   }
                   24 => {
-                    let result306 = mbt_ffi_ptr2bytes(
+                    let result308 = mbt_ffi_ptr2bytes(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    let lifted308 : String? = match
+                    let lifted310 : String? = match
                       mbt_ffi_load8_u(iter_base + 16) {
                       0 => Option::None
                       1 => {
-                        let result307 = mbt_ffi_ptr2str(
+                        let result309 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 20),
                           mbt_ffi_load32(iter_base + 24),
                         )
 
-                        Option::Some(result307)
+                        Option::Some(result309)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaValueNode::BinaryValue(@types.BinaryValuePayload::{
-                      bytes: result306,
-                      mime_type: lifted308,
+                      bytes: result308,
+                      mime_type: lifted310,
                     })
                   }
                   25 => {
-                    let result309 = mbt_ffi_ptr2str(
+                    let result311 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    @types.SchemaValueNode::PathValue(result309)
+                    @types.SchemaValueNode::PathValue(result311)
                   }
                   26 => {
-                    let result310 = mbt_ffi_ptr2str(
+                    let result312 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    @types.SchemaValueNode::UrlValue(result310)
+                    @types.SchemaValueNode::UrlValue(result312)
                   }
                   27 =>
                     @types.SchemaValueNode::DatetimeValue(@types.Datetime::{
@@ -25722,7 +25792,7 @@ pub fn WasmRpc::invoke(
                       nanoseconds: mbt_ffi_load64(iter_base + 8),
                     })
                   29 => {
-                    let result311 = mbt_ffi_ptr2str(
+                    let result313 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 20),
                       mbt_ffi_load32(iter_base + 24),
                     )
@@ -25730,17 +25800,17 @@ pub fn WasmRpc::invoke(
                     @types.SchemaValueNode::QuantityValueNode(@types.QuantityValue::{
                       mantissa: mbt_ffi_load64(iter_base + 8),
                       scale: mbt_ffi_load32(iter_base + 16),
-                      unit: result311,
+                      unit: result313,
                     })
                   }
                   30 => {
-                    let result312 = mbt_ffi_ptr2str(
+                    let result314 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
                     @types.SchemaValueNode::UnionValue(@types.UnionValuePayload::{
-                      tag: result312,
+                      tag: result314,
                       body: mbt_ffi_load32(iter_base + 16),
                     })
                   }
@@ -25760,21 +25830,27 @@ pub fn WasmRpc::invoke(
                         mbt_ffi_load32(iter_base + 8),
                       ),
                     )
+                  34 =>
+                    @types.SchemaValueNode::StreamValue(
+                      @types.SchemaValueStream::SchemaValueStream(
+                        mbt_ffi_load32(iter_base + 8),
+                      ),
+                    )
                   _ => panic()
                 }
 
-                array314.push(lifted313)
+                array316.push(lifted315)
               }
               mbt_ffi_free(mbt_ffi_load32(return_area + 32))
 
               @common.AgentError::CustomError(@types.TypedSchemaValue::{
                 graph: @types.SchemaGraph::{
-                  type_nodes: array278,
-                  defs: array283,
+                  type_nodes: array280,
+                  defs: array285,
                   root: mbt_ffi_load32(return_area + 28),
                 },
                 value: @types.SchemaValueTree::{
-                  value_nodes: array314,
+                  value_nodes: array316,
                   root: mbt_ffi_load32(return_area + 40),
                 },
               })
@@ -25782,18 +25858,18 @@ pub fn WasmRpc::invoke(
             _ => panic()
           }
 
-          RpcError::RemoteAgentError(lifted316)
+          RpcError::RemoteAgentError(lifted318)
         }
         _ => panic()
       }
 
-      Result::Err(lifted317)
+      Result::Err(lifted319)
     }
     _ => panic()
   }
-  let ret = lifted318
+  let ret = lifted320
   mbt_ffi_free(ptr)
-  mbt_ffi_free(address69)
+  mbt_ffi_free(address71)
   mbt_ffi_free(return_area)
 
   cleanup_list.each(mbt_ffi_free)
@@ -25817,10 +25893,10 @@ pub fn WasmRpc::async_invoke_and_await(
 
   let ptr = mbt_ffi_str2ptr(method_name)
 
-  let address69 = mbt_ffi_malloc(input.value_nodes.length() * 32)
-  for index70 = 0; index70 < input.value_nodes.length(); index70 = index70 + 1 {
-    let iter_elem : @types.SchemaValueNode = input.value_nodes[index70]
-    let iter_base = address69 + index70 * 32
+  let address71 = mbt_ffi_malloc(input.value_nodes.length() * 32)
+  for index72 = 0; index72 < input.value_nodes.length(); index72 = index72 + 1 {
+    let iter_elem : @types.SchemaValueNode = input.value_nodes[index72]
+    let iter_base = address71 + index72 * 32
 
     match iter_elem {
       BoolValue(payload) => {
@@ -26227,15 +26303,23 @@ pub fn WasmRpc::async_invoke_and_await(
 
         ()
       }
+      StreamValue(payload69) => {
+        mbt_ffi_store8(iter_base + 0, 34)
+
+        let @types.SchemaValueStream(handle70) = payload69
+        mbt_ffi_store32(iter_base + 8, handle70)
+
+        ()
+      }
     }
   }
 
-  let (lowered, lowered74) = match scope_card {
+  let (lowered, lowered76) = match scope_card {
     None => (0, 0)
-    Some(payload72) => {
-      let @types.PermissionCard(handle73) = payload72
+    Some(payload74) => {
+      let @types.PermissionCard(handle75) = payload74
 
-      (1, handle73)
+      (1, handle75)
     }
   }
   let return_area = mbt_ffi_malloc(20)
@@ -26243,11 +26327,11 @@ pub fn WasmRpc::async_invoke_and_await(
     handle,
     ptr,
     method_name.length(),
-    address69,
+    address71,
     input.value_nodes.length(),
     input.root,
     lowered,
-    lowered74,
+    lowered76,
     return_area,
   )
 
@@ -26256,21 +26340,21 @@ pub fn WasmRpc::async_invoke_and_await(
     mbt_ffi_load32(return_area + 4),
   )
 
-  let result75 = mbt_ffi_ptr2str(
+  let result77 = mbt_ffi_ptr2str(
     mbt_ffi_load32(return_area + 8),
     mbt_ffi_load32(return_area + 12),
   )
   let ret = AsyncInvocationWithMetadata::{
     metadata: InvocationMetadata::{
       agent_id: result,
-      idempotency_key: result75,
+      idempotency_key: result77,
     },
     future: FutureInvokeResult::FutureInvokeResult(
       mbt_ffi_load32(return_area + 16),
     ),
   }
   mbt_ffi_free(ptr)
-  mbt_ffi_free(address69)
+  mbt_ffi_free(address71)
   mbt_ffi_free(return_area)
 
   cleanup_list.each(mbt_ffi_free)
@@ -26292,10 +26376,10 @@ pub fn WasmRpc::schedule_invocation(
 
   let ptr = mbt_ffi_str2ptr(method_name)
 
-  let address69 = mbt_ffi_malloc(input.value_nodes.length() * 32)
-  for index70 = 0; index70 < input.value_nodes.length(); index70 = index70 + 1 {
-    let iter_elem : @types.SchemaValueNode = input.value_nodes[index70]
-    let iter_base = address69 + index70 * 32
+  let address71 = mbt_ffi_malloc(input.value_nodes.length() * 32)
+  for index72 = 0; index72 < input.value_nodes.length(); index72 = index72 + 1 {
+    let iter_elem : @types.SchemaValueNode = input.value_nodes[index72]
+    let iter_base = address71 + index72 * 32
 
     match iter_elem {
       BoolValue(payload) => {
@@ -26702,15 +26786,23 @@ pub fn WasmRpc::schedule_invocation(
 
         ()
       }
+      StreamValue(payload69) => {
+        mbt_ffi_store8(iter_base + 0, 34)
+
+        let @types.SchemaValueStream(handle70) = payload69
+        mbt_ffi_store32(iter_base + 8, handle70)
+
+        ()
+      }
     }
   }
 
-  let (lowered, lowered74) = match scope_card {
+  let (lowered, lowered76) = match scope_card {
     None => (0, 0)
-    Some(payload72) => {
-      let @types.PermissionCard(handle73) = payload72
+    Some(payload74) => {
+      let @types.PermissionCard(handle75) = payload74
 
-      (1, handle73)
+      (1, handle75)
     }
   }
   let return_area = mbt_ffi_malloc(44)
@@ -26720,22 +26812,22 @@ pub fn WasmRpc::schedule_invocation(
     scheduled_time.nanoseconds.reinterpret_as_int(),
     ptr,
     method_name.length(),
-    address69,
+    address71,
     input.value_nodes.length(),
     input.root,
     lowered,
-    lowered74,
+    lowered76,
     return_area,
   )
 
-  let lifted318 = match mbt_ffi_load8_u(return_area + 0) {
+  let lifted320 = match mbt_ffi_load8_u(return_area + 0) {
     0 => {
       let result = mbt_ffi_ptr2str(
         mbt_ffi_load32(return_area + 4),
         mbt_ffi_load32(return_area + 8),
       )
 
-      let result75 = mbt_ffi_ptr2str(
+      let result77 = mbt_ffi_ptr2str(
         mbt_ffi_load32(return_area + 12),
         mbt_ffi_load32(return_area + 16),
       )
@@ -26743,98 +26835,98 @@ pub fn WasmRpc::schedule_invocation(
       Result::Ok(ScheduledInvocationReceipt::{
         metadata: InvocationMetadata::{
           agent_id: result,
-          idempotency_key: result75,
+          idempotency_key: result77,
         },
       })
     }
     1 => {
-      let lifted317 = match mbt_ffi_load8_u(return_area + 4) {
+      let lifted319 = match mbt_ffi_load8_u(return_area + 4) {
         0 => {
-          let result76 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(return_area + 8),
-            mbt_ffi_load32(return_area + 12),
-          )
-
-          RpcError::ProtocolError(result76)
-        }
-        1 => {
-          let result77 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(return_area + 8),
-            mbt_ffi_load32(return_area + 12),
-          )
-
-          RpcError::Denied(result77)
-        }
-        2 => {
           let result78 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          RpcError::NotFound(result78)
+          RpcError::ProtocolError(result78)
         }
-        3 => {
+        1 => {
           let result79 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          RpcError::RemoteInternalError(result79)
+          RpcError::Denied(result79)
+        }
+        2 => {
+          let result80 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
+          )
+
+          RpcError::NotFound(result80)
+        }
+        3 => {
+          let result81 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
+          )
+
+          RpcError::RemoteInternalError(result81)
         }
         4 => {
-          let lifted316 = match mbt_ffi_load8_u(return_area + 8) {
+          let lifted318 = match mbt_ffi_load8_u(return_area + 8) {
             0 => {
-              let result80 = mbt_ffi_ptr2str(
-                mbt_ffi_load32(return_area + 12),
-                mbt_ffi_load32(return_area + 16),
-              )
-
-              @common.AgentError::InvalidInput(result80)
-            }
-            1 => {
-              let result81 = mbt_ffi_ptr2str(
-                mbt_ffi_load32(return_area + 12),
-                mbt_ffi_load32(return_area + 16),
-              )
-
-              @common.AgentError::InvalidMethod(result81)
-            }
-            2 => {
               let result82 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(return_area + 12),
                 mbt_ffi_load32(return_area + 16),
               )
 
-              @common.AgentError::InvalidType(result82)
+              @common.AgentError::InvalidInput(result82)
             }
-            3 => {
+            1 => {
               let result83 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(return_area + 12),
                 mbt_ffi_load32(return_area + 16),
               )
 
-              @common.AgentError::InvalidAgentId(result83)
+              @common.AgentError::InvalidMethod(result83)
+            }
+            2 => {
+              let result84 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(return_area + 12),
+                mbt_ffi_load32(return_area + 16),
+              )
+
+              @common.AgentError::InvalidType(result84)
+            }
+            3 => {
+              let result85 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(return_area + 12),
+                mbt_ffi_load32(return_area + 16),
+              )
+
+              @common.AgentError::InvalidAgentId(result85)
             }
             4 => {
-              let array278 : Array[@types.SchemaTypeNode] = []
-              for index279 = 0
-                  index279 < mbt_ffi_load32(return_area + 16)
-                  index279 = index279 + 1 {
+              let array280 : Array[@types.SchemaTypeNode] = []
+              for index281 = 0
+                  index281 < mbt_ffi_load32(return_area + 16)
+                  index281 = index281 + 1 {
                 let iter_base = mbt_ffi_load32(return_area + 12) +
-                  index279 * 144
+                  index281 * 144
 
-                let lifted264 = match mbt_ffi_load8_u(iter_base + 0) {
+                let lifted266 = match mbt_ffi_load8_u(iter_base + 0) {
                   0 =>
                     @types.SchemaTypeBody::RefType(
                       mbt_ffi_load32(iter_base + 8),
                     )
                   1 => @types.SchemaTypeBody::BoolType
                   2 => {
-                    let lifted89 : @types.NumericRestrictions? = match
+                    let lifted91 : @types.NumericRestrictions? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let lifted84 : @types.NumericBound? = match
+                        let lifted86 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 16) {
                           0 => Option::None
                           1 => {
@@ -26859,11 +26951,11 @@ pub fn WasmRpc::schedule_invocation(
                           _ => panic()
                         }
 
-                        let lifted86 : @types.NumericBound? = match
+                        let lifted88 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted85 = match
+                            let lifted87 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -26880,46 +26972,46 @@ pub fn WasmRpc::schedule_invocation(
                               _ => panic()
                             }
 
-                            Option::Some(lifted85)
+                            Option::Some(lifted87)
                           }
                           _ => panic()
                         }
 
-                        let lifted88 : String? = match
+                        let lifted90 : String? = match
                           mbt_ffi_load8_u(iter_base + 64) {
                           0 => Option::None
                           1 => {
-                            let result87 = mbt_ffi_ptr2str(
+                            let result89 = mbt_ffi_ptr2str(
                               mbt_ffi_load32(iter_base + 68),
                               mbt_ffi_load32(iter_base + 72),
                             )
 
-                            Option::Some(result87)
+                            Option::Some(result89)
                           }
                           _ => panic()
                         }
 
                         Option::Some(@types.NumericRestrictions::{
-                          min: lifted84,
-                          max: lifted86,
-                          unit: lifted88,
+                          min: lifted86,
+                          max: lifted88,
+                          unit: lifted90,
                         })
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::S8Type(lifted89)
+                    @types.SchemaTypeBody::S8Type(lifted91)
                   }
                   3 => {
-                    let lifted96 : @types.NumericRestrictions? = match
+                    let lifted98 : @types.NumericRestrictions? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let lifted91 : @types.NumericBound? = match
+                        let lifted93 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 16) {
                           0 => Option::None
                           1 => {
-                            let lifted90 = match
+                            let lifted92 = match
                               mbt_ffi_load8_u(iter_base + 24) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -26932,32 +27024,6 @@ pub fn WasmRpc::schedule_invocation(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted90)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted93 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 40) {
-                          0 => Option::None
-                          1 => {
-                            let lifted92 = match
-                              mbt_ffi_load8_u(iter_base + 48) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 56),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -26967,67 +27033,11 @@ pub fn WasmRpc::schedule_invocation(
                           _ => panic()
                         }
 
-                        let lifted95 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result94 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result94)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted91,
-                          max: lifted93,
-                          unit: lifted95,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::S16Type(lifted96)
-                  }
-                  4 => {
-                    let lifted103 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted98 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted97 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted97)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted100 : @types.NumericBound? = match
+                        let lifted95 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted99 = match
+                            let lifted94 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -27040,6 +27050,62 @@ pub fn WasmRpc::schedule_invocation(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted94)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted97 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result96 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result96)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted93,
+                          max: lifted95,
+                          unit: lifted97,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::S16Type(lifted98)
+                  }
+                  4 => {
+                    let lifted105 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted100 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted99 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -27049,67 +27115,11 @@ pub fn WasmRpc::schedule_invocation(
                           _ => panic()
                         }
 
-                        let lifted102 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result101 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result101)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted98,
-                          max: lifted100,
-                          unit: lifted102,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::S32Type(lifted103)
-                  }
-                  5 => {
-                    let lifted110 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted105 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted104 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted104)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted107 : @types.NumericBound? = match
+                        let lifted102 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted106 = match
+                            let lifted101 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -27122,6 +27132,62 @@ pub fn WasmRpc::schedule_invocation(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted101)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted104 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result103 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result103)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted100,
+                          max: lifted102,
+                          unit: lifted104,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::S32Type(lifted105)
+                  }
+                  5 => {
+                    let lifted112 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted107 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted106 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -27131,67 +27197,11 @@ pub fn WasmRpc::schedule_invocation(
                           _ => panic()
                         }
 
-                        let lifted109 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result108 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result108)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted105,
-                          max: lifted107,
-                          unit: lifted109,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::S64Type(lifted110)
-                  }
-                  6 => {
-                    let lifted117 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted112 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted111 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted111)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted114 : @types.NumericBound? = match
+                        let lifted109 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted113 = match
+                            let lifted108 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -27204,6 +27214,62 @@ pub fn WasmRpc::schedule_invocation(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted108)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted111 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result110 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result110)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted107,
+                          max: lifted109,
+                          unit: lifted111,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::S64Type(lifted112)
+                  }
+                  6 => {
+                    let lifted119 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted114 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted113 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -27213,67 +27279,11 @@ pub fn WasmRpc::schedule_invocation(
                           _ => panic()
                         }
 
-                        let lifted116 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result115 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result115)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted112,
-                          max: lifted114,
-                          unit: lifted116,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::U8Type(lifted117)
-                  }
-                  7 => {
-                    let lifted124 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted119 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted118 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted118)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted121 : @types.NumericBound? = match
+                        let lifted116 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted120 = match
+                            let lifted115 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -27286,6 +27296,62 @@ pub fn WasmRpc::schedule_invocation(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted115)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted118 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result117 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result117)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted114,
+                          max: lifted116,
+                          unit: lifted118,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::U8Type(lifted119)
+                  }
+                  7 => {
+                    let lifted126 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted121 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted120 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -27295,67 +27361,11 @@ pub fn WasmRpc::schedule_invocation(
                           _ => panic()
                         }
 
-                        let lifted123 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result122 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result122)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted119,
-                          max: lifted121,
-                          unit: lifted123,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::U16Type(lifted124)
-                  }
-                  8 => {
-                    let lifted131 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted126 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted125 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted125)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted128 : @types.NumericBound? = match
+                        let lifted123 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted127 = match
+                            let lifted122 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -27368,6 +27378,62 @@ pub fn WasmRpc::schedule_invocation(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted122)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted125 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result124 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result124)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted121,
+                          max: lifted123,
+                          unit: lifted125,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::U16Type(lifted126)
+                  }
+                  8 => {
+                    let lifted133 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted128 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted127 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -27377,67 +27443,11 @@ pub fn WasmRpc::schedule_invocation(
                           _ => panic()
                         }
 
-                        let lifted130 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result129 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result129)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted126,
-                          max: lifted128,
-                          unit: lifted130,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::U32Type(lifted131)
-                  }
-                  9 => {
-                    let lifted138 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted133 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted132 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted132)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted135 : @types.NumericBound? = match
+                        let lifted130 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted134 = match
+                            let lifted129 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -27450,6 +27460,62 @@ pub fn WasmRpc::schedule_invocation(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted129)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted132 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result131 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result131)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted128,
+                          max: lifted130,
+                          unit: lifted132,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::U32Type(lifted133)
+                  }
+                  9 => {
+                    let lifted140 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted135 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted134 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -27459,67 +27525,11 @@ pub fn WasmRpc::schedule_invocation(
                           _ => panic()
                         }
 
-                        let lifted137 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result136 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result136)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted133,
-                          max: lifted135,
-                          unit: lifted137,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::U64Type(lifted138)
-                  }
-                  10 => {
-                    let lifted145 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted140 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted139 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted139)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted142 : @types.NumericBound? = match
+                        let lifted137 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted141 = match
+                            let lifted136 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -27532,6 +27542,62 @@ pub fn WasmRpc::schedule_invocation(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted136)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted139 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result138 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result138)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted135,
+                          max: lifted137,
+                          unit: lifted139,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::U64Type(lifted140)
+                  }
+                  10 => {
+                    let lifted147 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted142 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted141 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -27541,67 +27607,11 @@ pub fn WasmRpc::schedule_invocation(
                           _ => panic()
                         }
 
-                        let lifted144 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result143 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result143)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted140,
-                          max: lifted142,
-                          unit: lifted144,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::F32Type(lifted145)
-                  }
-                  11 => {
-                    let lifted152 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted147 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted146 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted146)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted149 : @types.NumericBound? = match
+                        let lifted144 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted148 = match
+                            let lifted143 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -27618,324 +27628,406 @@ pub fn WasmRpc::schedule_invocation(
                               _ => panic()
                             }
 
-                            Option::Some(lifted148)
+                            Option::Some(lifted143)
                           }
                           _ => panic()
                         }
 
-                        let lifted151 : String? = match
+                        let lifted146 : String? = match
                           mbt_ffi_load8_u(iter_base + 64) {
                           0 => Option::None
                           1 => {
-                            let result150 = mbt_ffi_ptr2str(
+                            let result145 = mbt_ffi_ptr2str(
                               mbt_ffi_load32(iter_base + 68),
                               mbt_ffi_load32(iter_base + 72),
                             )
 
-                            Option::Some(result150)
+                            Option::Some(result145)
                           }
                           _ => panic()
                         }
 
                         Option::Some(@types.NumericRestrictions::{
-                          min: lifted147,
-                          max: lifted149,
-                          unit: lifted151,
+                          min: lifted142,
+                          max: lifted144,
+                          unit: lifted146,
                         })
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::F64Type(lifted152)
+                    @types.SchemaTypeBody::F32Type(lifted147)
+                  }
+                  11 => {
+                    let lifted154 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted149 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted148 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted148)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted151 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 40) {
+                          0 => Option::None
+                          1 => {
+                            let lifted150 = match
+                              mbt_ffi_load8_u(iter_base + 48) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 56),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted150)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted153 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result152 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result152)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted149,
+                          max: lifted151,
+                          unit: lifted153,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::F64Type(lifted154)
                   }
                   12 => @types.SchemaTypeBody::CharType
                   13 => @types.SchemaTypeBody::StringType
                   14 => {
-                    let array166 : Array[@types.NamedFieldType] = []
-                    for index167 = 0
-                        index167 < mbt_ffi_load32(iter_base + 12)
-                        index167 = index167 + 1 {
+                    let array168 : Array[@types.NamedFieldType] = []
+                    for index169 = 0
+                        index169 < mbt_ffi_load32(iter_base + 12)
+                        index169 = index169 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index167 * 68
+                        index169 * 68
 
-                      let result153 = mbt_ffi_ptr2str(
+                      let result155 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      let lifted155 : String? = match
+                      let lifted157 : String? = match
                         mbt_ffi_load8_u(iter_base + 12) {
                         0 => Option::None
                         1 => {
-                          let result154 = mbt_ffi_ptr2str(
+                          let result156 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          Option::Some(result154)
+                          Option::Some(result156)
                         }
                         _ => panic()
                       }
 
                       let array : Array[String] = []
-                      for index157 = 0
-                          index157 < mbt_ffi_load32(iter_base + 28)
-                          index157 = index157 + 1 {
+                      for index159 = 0
+                          index159 < mbt_ffi_load32(iter_base + 28)
+                          index159 = index159 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 24) +
-                          index157 * 8
-
-                        let result156 = mbt_ffi_ptr2str(
-                          mbt_ffi_load32(iter_base + 0),
-                          mbt_ffi_load32(iter_base + 4),
-                        )
-
-                        array.push(result156)
-                      }
-                      mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
-
-                      let array159 : Array[String] = []
-                      for index160 = 0
-                          index160 < mbt_ffi_load32(iter_base + 36)
-                          index160 = index160 + 1 {
-                        let iter_base = mbt_ffi_load32(iter_base + 32) +
-                          index160 * 8
+                          index159 * 8
 
                         let result158 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array159.push(result158)
+                        array.push(result158)
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
+
+                      let array161 : Array[String] = []
+                      for index162 = 0
+                          index162 < mbt_ffi_load32(iter_base + 36)
+                          index162 = index162 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 32) +
+                          index162 * 8
+
+                        let result160 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 0),
+                          mbt_ffi_load32(iter_base + 4),
+                        )
+
+                        array161.push(result160)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
 
-                      let lifted162 : String? = match
+                      let lifted164 : String? = match
                         mbt_ffi_load8_u(iter_base + 40) {
                         0 => Option::None
                         1 => {
-                          let result161 = mbt_ffi_ptr2str(
+                          let result163 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 44),
                             mbt_ffi_load32(iter_base + 48),
                           )
 
-                          Option::Some(result161)
+                          Option::Some(result163)
                         }
                         _ => panic()
                       }
 
-                      let lifted165 : @types.Role? = match
+                      let lifted167 : @types.Role? = match
                         mbt_ffi_load8_u(iter_base + 52) {
                         0 => Option::None
                         1 => {
-                          let lifted164 = match
+                          let lifted166 = match
                             mbt_ffi_load8_u(iter_base + 56) {
                             0 => @types.Role::Multimodal
                             1 => @types.Role::UnstructuredText
                             2 => @types.Role::UnstructuredBinary
                             3 => {
-                              let result163 = mbt_ffi_ptr2str(
+                              let result165 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 60),
                                 mbt_ffi_load32(iter_base + 64),
                               )
 
-                              @types.Role::Other(result163)
+                              @types.Role::Other(result165)
                             }
                             _ => panic()
                           }
 
-                          Option::Some(lifted164)
+                          Option::Some(lifted166)
                         }
                         _ => panic()
                       }
 
-                      array166.push(@types.NamedFieldType::{
-                        name: result153,
+                      array168.push(@types.NamedFieldType::{
+                        name: result155,
                         body: mbt_ffi_load32(iter_base + 8),
                         metadata: @types.MetadataEnvelope::{
-                          doc: lifted155,
+                          doc: lifted157,
                           aliases: array,
-                          examples: array159,
-                          deprecated: lifted162,
-                          role: lifted165,
+                          examples: array161,
+                          deprecated: lifted164,
+                          role: lifted167,
                         },
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::RecordType(array166)
+                    @types.SchemaTypeBody::RecordType(array168)
                   }
                   15 => {
-                    let array183 : Array[@types.VariantCaseType] = []
-                    for index184 = 0
-                        index184 < mbt_ffi_load32(iter_base + 12)
-                        index184 = index184 + 1 {
+                    let array185 : Array[@types.VariantCaseType] = []
+                    for index186 = 0
+                        index186 < mbt_ffi_load32(iter_base + 12)
+                        index186 = index186 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index184 * 72
+                        index186 * 72
 
-                      let result168 = mbt_ffi_ptr2str(
+                      let result170 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      let lifted169 : Int? = match
+                      let lifted171 : Int? = match
                         mbt_ffi_load8_u(iter_base + 8) {
                         0 => Option::None
                         1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                         _ => panic()
                       }
 
-                      let lifted171 : String? = match
+                      let lifted173 : String? = match
                         mbt_ffi_load8_u(iter_base + 16) {
                         0 => Option::None
                         1 => {
-                          let result170 = mbt_ffi_ptr2str(
+                          let result172 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 20),
                             mbt_ffi_load32(iter_base + 24),
                           )
 
-                          Option::Some(result170)
+                          Option::Some(result172)
                         }
                         _ => panic()
                       }
 
-                      let array173 : Array[String] = []
-                      for index174 = 0
-                          index174 < mbt_ffi_load32(iter_base + 32)
-                          index174 = index174 + 1 {
+                      let array175 : Array[String] = []
+                      for index176 = 0
+                          index176 < mbt_ffi_load32(iter_base + 32)
+                          index176 = index176 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 28) +
-                          index174 * 8
+                          index176 * 8
 
-                        let result172 = mbt_ffi_ptr2str(
+                        let result174 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array173.push(result172)
+                        array175.push(result174)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
-                      let array176 : Array[String] = []
-                      for index177 = 0
-                          index177 < mbt_ffi_load32(iter_base + 40)
-                          index177 = index177 + 1 {
+                      let array178 : Array[String] = []
+                      for index179 = 0
+                          index179 < mbt_ffi_load32(iter_base + 40)
+                          index179 = index179 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 36) +
-                          index177 * 8
+                          index179 * 8
 
-                        let result175 = mbt_ffi_ptr2str(
+                        let result177 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array176.push(result175)
+                        array178.push(result177)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
 
-                      let lifted179 : String? = match
+                      let lifted181 : String? = match
                         mbt_ffi_load8_u(iter_base + 44) {
                         0 => Option::None
                         1 => {
-                          let result178 = mbt_ffi_ptr2str(
+                          let result180 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 48),
                             mbt_ffi_load32(iter_base + 52),
                           )
 
-                          Option::Some(result178)
+                          Option::Some(result180)
                         }
                         _ => panic()
                       }
 
-                      let lifted182 : @types.Role? = match
+                      let lifted184 : @types.Role? = match
                         mbt_ffi_load8_u(iter_base + 56) {
                         0 => Option::None
                         1 => {
-                          let lifted181 = match
+                          let lifted183 = match
                             mbt_ffi_load8_u(iter_base + 60) {
                             0 => @types.Role::Multimodal
                             1 => @types.Role::UnstructuredText
                             2 => @types.Role::UnstructuredBinary
                             3 => {
-                              let result180 = mbt_ffi_ptr2str(
+                              let result182 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 64),
                                 mbt_ffi_load32(iter_base + 68),
                               )
 
-                              @types.Role::Other(result180)
+                              @types.Role::Other(result182)
                             }
                             _ => panic()
                           }
 
-                          Option::Some(lifted181)
+                          Option::Some(lifted183)
                         }
                         _ => panic()
                       }
 
-                      array183.push(@types.VariantCaseType::{
-                        name: result168,
-                        payload: lifted169,
+                      array185.push(@types.VariantCaseType::{
+                        name: result170,
+                        payload: lifted171,
                         metadata: @types.MetadataEnvelope::{
-                          doc: lifted171,
-                          aliases: array173,
-                          examples: array176,
-                          deprecated: lifted179,
-                          role: lifted182,
+                          doc: lifted173,
+                          aliases: array175,
+                          examples: array178,
+                          deprecated: lifted181,
+                          role: lifted184,
                         },
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::VariantType(array183)
+                    @types.SchemaTypeBody::VariantType(array185)
                   }
                   16 => {
-                    let array186 : Array[String] = []
-                    for index187 = 0
-                        index187 < mbt_ffi_load32(iter_base + 12)
-                        index187 = index187 + 1 {
+                    let array188 : Array[String] = []
+                    for index189 = 0
+                        index189 < mbt_ffi_load32(iter_base + 12)
+                        index189 = index189 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index187 * 8
+                        index189 * 8
 
-                      let result185 = mbt_ffi_ptr2str(
+                      let result187 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      array186.push(result185)
+                      array188.push(result187)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::EnumType(array186)
+                    @types.SchemaTypeBody::EnumType(array188)
                   }
                   17 => {
-                    let array189 : Array[String] = []
-                    for index190 = 0
-                        index190 < mbt_ffi_load32(iter_base + 12)
-                        index190 = index190 + 1 {
-                      let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index190 * 8
-
-                      let result188 = mbt_ffi_ptr2str(
-                        mbt_ffi_load32(iter_base + 0),
-                        mbt_ffi_load32(iter_base + 4),
-                      )
-
-                      array189.push(result188)
-                    }
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-                    @types.SchemaTypeBody::FlagsType(array189)
-                  }
-                  18 => {
-                    let array191 : Array[Int] = []
+                    let array191 : Array[String] = []
                     for index192 = 0
                         index192 < mbt_ffi_load32(iter_base + 12)
                         index192 = index192 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index192 * 4
+                        index192 * 8
 
-                      array191.push(mbt_ffi_load32(iter_base + 0))
+                      let result190 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 0),
+                        mbt_ffi_load32(iter_base + 4),
+                      )
+
+                      array191.push(result190)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::TupleType(array191)
+                    @types.SchemaTypeBody::FlagsType(array191)
+                  }
+                  18 => {
+                    let array193 : Array[Int] = []
+                    for index194 = 0
+                        index194 < mbt_ffi_load32(iter_base + 12)
+                        index194 = index194 + 1 {
+                      let iter_base = mbt_ffi_load32(iter_base + 8) +
+                        index194 * 4
+
+                      array193.push(mbt_ffi_load32(iter_base + 0))
+                    }
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                    @types.SchemaTypeBody::TupleType(array193)
                   }
                   19 =>
                     @types.SchemaTypeBody::ListType(
@@ -27956,14 +28048,14 @@ pub fn WasmRpc::schedule_invocation(
                       mbt_ffi_load32(iter_base + 8),
                     )
                   23 => {
-                    let lifted193 : Int? = match
+                    let lifted195 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    let lifted194 : Int? = match
+                    let lifted196 : Int? = match
                       mbt_ffi_load8_u(iter_base + 16) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 20))
@@ -27971,37 +28063,37 @@ pub fn WasmRpc::schedule_invocation(
                     }
 
                     @types.SchemaTypeBody::ResultType(@types.ResultSpec::{
-                      ok: lifted193,
-                      err: lifted194,
+                      ok: lifted195,
+                      err: lifted196,
                     })
                   }
                   24 => {
-                    let lifted198 : Array[String]? = match
+                    let lifted200 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let array196 : Array[String] = []
-                        for index197 = 0
-                            index197 < mbt_ffi_load32(iter_base + 16)
-                            index197 = index197 + 1 {
+                        let array198 : Array[String] = []
+                        for index199 = 0
+                            index199 < mbt_ffi_load32(iter_base + 16)
+                            index199 = index199 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 12) +
-                            index197 * 8
+                            index199 * 8
 
-                          let result195 = mbt_ffi_ptr2str(
+                          let result197 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array196.push(result195)
+                          array198.push(result197)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
 
-                        Option::Some(array196)
+                        Option::Some(array198)
                       }
                       _ => panic()
                     }
 
-                    let lifted199 : UInt? = match
+                    let lifted201 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 20) {
                       0 => Option::None
                       1 =>
@@ -28011,7 +28103,7 @@ pub fn WasmRpc::schedule_invocation(
                       _ => panic()
                     }
 
-                    let lifted200 : UInt? = match
+                    let lifted202 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 28) {
                       0 => Option::None
                       1 =>
@@ -28021,54 +28113,54 @@ pub fn WasmRpc::schedule_invocation(
                       _ => panic()
                     }
 
-                    let lifted202 : String? = match
+                    let lifted204 : String? = match
                       mbt_ffi_load8_u(iter_base + 36) {
                       0 => Option::None
                       1 => {
-                        let result201 = mbt_ffi_ptr2str(
+                        let result203 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 40),
                           mbt_ffi_load32(iter_base + 44),
                         )
 
-                        Option::Some(result201)
+                        Option::Some(result203)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaTypeBody::TextType(@types.TextRestrictions::{
-                      languages: lifted198,
-                      min_length: lifted199,
-                      max_length: lifted200,
-                      regex: lifted202,
+                      languages: lifted200,
+                      min_length: lifted201,
+                      max_length: lifted202,
+                      regex: lifted204,
                     })
                   }
                   25 => {
-                    let lifted206 : Array[String]? = match
+                    let lifted208 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let array204 : Array[String] = []
-                        for index205 = 0
-                            index205 < mbt_ffi_load32(iter_base + 16)
-                            index205 = index205 + 1 {
+                        let array206 : Array[String] = []
+                        for index207 = 0
+                            index207 < mbt_ffi_load32(iter_base + 16)
+                            index207 = index207 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 12) +
-                            index205 * 8
+                            index207 * 8
 
-                          let result203 = mbt_ffi_ptr2str(
+                          let result205 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array204.push(result203)
+                          array206.push(result205)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
 
-                        Option::Some(array204)
+                        Option::Some(array206)
                       }
                       _ => panic()
                     }
 
-                    let lifted207 : UInt? = match
+                    let lifted209 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 20) {
                       0 => Option::None
                       1 =>
@@ -28078,7 +28170,7 @@ pub fn WasmRpc::schedule_invocation(
                       _ => panic()
                     }
 
-                    let lifted208 : UInt? = match
+                    let lifted210 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 28) {
                       0 => Option::None
                       1 =>
@@ -28089,58 +28181,58 @@ pub fn WasmRpc::schedule_invocation(
                     }
 
                     @types.SchemaTypeBody::BinaryType(@types.BinaryRestrictions::{
-                      mime_types: lifted206,
-                      min_bytes: lifted207,
-                      max_bytes: lifted208,
+                      mime_types: lifted208,
+                      min_bytes: lifted209,
+                      max_bytes: lifted210,
                     })
                   }
                   26 => {
-                    let lifted212 : Array[String]? = match
+                    let lifted214 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => {
-                        let array210 : Array[String] = []
-                        for index211 = 0
-                            index211 < mbt_ffi_load32(iter_base + 20)
-                            index211 = index211 + 1 {
+                        let array212 : Array[String] = []
+                        for index213 = 0
+                            index213 < mbt_ffi_load32(iter_base + 20)
+                            index213 = index213 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 16) +
-                            index211 * 8
+                            index213 * 8
 
-                          let result209 = mbt_ffi_ptr2str(
+                          let result211 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array210.push(result209)
+                          array212.push(result211)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
-                        Option::Some(array210)
+                        Option::Some(array212)
                       }
                       _ => panic()
                     }
 
-                    let lifted216 : Array[String]? = match
+                    let lifted218 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 24) {
                       0 => Option::None
                       1 => {
-                        let array214 : Array[String] = []
-                        for index215 = 0
-                            index215 < mbt_ffi_load32(iter_base + 32)
-                            index215 = index215 + 1 {
+                        let array216 : Array[String] = []
+                        for index217 = 0
+                            index217 < mbt_ffi_load32(iter_base + 32)
+                            index217 = index217 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 28) +
-                            index215 * 8
+                            index217 * 8
 
-                          let result213 = mbt_ffi_ptr2str(
+                          let result215 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array214.push(result213)
+                          array216.push(result215)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
-                        Option::Some(array214)
+                        Option::Some(array216)
                       }
                       _ => panic()
                     }
@@ -28152,95 +28244,95 @@ pub fn WasmRpc::schedule_invocation(
                       kind: @types.PathKind::from(
                         mbt_ffi_load8_u(iter_base + 9),
                       ),
-                      allowed_mime_types: lifted212,
-                      allowed_extensions: lifted216,
+                      allowed_mime_types: lifted214,
+                      allowed_extensions: lifted218,
                     })
                   }
                   27 => {
-                    let lifted220 : Array[String]? = match
+                    let lifted222 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let array218 : Array[String] = []
-                        for index219 = 0
-                            index219 < mbt_ffi_load32(iter_base + 16)
-                            index219 = index219 + 1 {
+                        let array220 : Array[String] = []
+                        for index221 = 0
+                            index221 < mbt_ffi_load32(iter_base + 16)
+                            index221 = index221 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 12) +
-                            index219 * 8
+                            index221 * 8
 
-                          let result217 = mbt_ffi_ptr2str(
+                          let result219 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array218.push(result217)
+                          array220.push(result219)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
 
-                        Option::Some(array218)
+                        Option::Some(array220)
                       }
                       _ => panic()
                     }
 
-                    let lifted224 : Array[String]? = match
+                    let lifted226 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 20) {
                       0 => Option::None
                       1 => {
-                        let array222 : Array[String] = []
-                        for index223 = 0
-                            index223 < mbt_ffi_load32(iter_base + 28)
-                            index223 = index223 + 1 {
+                        let array224 : Array[String] = []
+                        for index225 = 0
+                            index225 < mbt_ffi_load32(iter_base + 28)
+                            index225 = index225 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 24) +
-                            index223 * 8
+                            index225 * 8
 
-                          let result221 = mbt_ffi_ptr2str(
+                          let result223 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array222.push(result221)
+                          array224.push(result223)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
 
-                        Option::Some(array222)
+                        Option::Some(array224)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaTypeBody::UrlType(@types.UrlRestrictions::{
-                      allowed_schemes: lifted220,
-                      allowed_hosts: lifted224,
+                      allowed_schemes: lifted222,
+                      allowed_hosts: lifted226,
                     })
                   }
                   28 => @types.SchemaTypeBody::DatetimeType
                   29 => @types.SchemaTypeBody::DurationType
                   30 => {
-                    let result225 = mbt_ffi_ptr2str(
+                    let result227 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    let array227 : Array[String] = []
-                    for index228 = 0
-                        index228 < mbt_ffi_load32(iter_base + 20)
-                        index228 = index228 + 1 {
+                    let array229 : Array[String] = []
+                    for index230 = 0
+                        index230 < mbt_ffi_load32(iter_base + 20)
+                        index230 = index230 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 16) +
-                        index228 * 8
+                        index230 * 8
 
-                      let result226 = mbt_ffi_ptr2str(
+                      let result228 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      array227.push(result226)
+                      array229.push(result228)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
-                    let lifted230 : @types.QuantityValue? = match
+                    let lifted232 : @types.QuantityValue? = match
                       mbt_ffi_load8_u(iter_base + 24) {
                       0 => Option::None
                       1 => {
-                        let result229 = mbt_ffi_ptr2str(
+                        let result231 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 44),
                           mbt_ffi_load32(iter_base + 48),
                         )
@@ -28248,17 +28340,17 @@ pub fn WasmRpc::schedule_invocation(
                         Option::Some(@types.QuantityValue::{
                           mantissa: mbt_ffi_load64(iter_base + 32),
                           scale: mbt_ffi_load32(iter_base + 40),
-                          unit: result229,
+                          unit: result231,
                         })
                       }
                       _ => panic()
                     }
 
-                    let lifted232 : @types.QuantityValue? = match
+                    let lifted234 : @types.QuantityValue? = match
                       mbt_ffi_load8_u(iter_base + 56) {
                       0 => Option::None
                       1 => {
-                        let result231 = mbt_ffi_ptr2str(
+                        let result233 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 76),
                           mbt_ffi_load32(iter_base + 80),
                         )
@@ -28266,233 +28358,213 @@ pub fn WasmRpc::schedule_invocation(
                         Option::Some(@types.QuantityValue::{
                           mantissa: mbt_ffi_load64(iter_base + 64),
                           scale: mbt_ffi_load32(iter_base + 72),
-                          unit: result231,
+                          unit: result233,
                         })
                       }
                       _ => panic()
                     }
 
                     @types.SchemaTypeBody::QuantityType(@types.QuantitySpec::{
-                      base_unit: result225,
-                      allowed_suffixes: array227,
-                      min: lifted230,
-                      max: lifted232,
+                      base_unit: result227,
+                      allowed_suffixes: array229,
+                      min: lifted232,
+                      max: lifted234,
                     })
                   }
                   31 => {
-                    let array256 : Array[@types.UnionBranch] = []
-                    for index257 = 0
-                        index257 < mbt_ffi_load32(iter_base + 12)
-                        index257 = index257 + 1 {
+                    let array258 : Array[@types.UnionBranch] = []
+                    for index259 = 0
+                        index259 < mbt_ffi_load32(iter_base + 12)
+                        index259 = index259 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index257 * 92
+                        index259 * 92
 
-                      let result233 = mbt_ffi_ptr2str(
+                      let result235 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      let lifted242 = match mbt_ffi_load8_u(iter_base + 12) {
+                      let lifted244 = match mbt_ffi_load8_u(iter_base + 12) {
                         0 => {
-                          let result234 = mbt_ffi_ptr2str(
-                            mbt_ffi_load32(iter_base + 16),
-                            mbt_ffi_load32(iter_base + 20),
-                          )
-
-                          @types.DiscriminatorRule::Prefix(result234)
-                        }
-                        1 => {
-                          let result235 = mbt_ffi_ptr2str(
-                            mbt_ffi_load32(iter_base + 16),
-                            mbt_ffi_load32(iter_base + 20),
-                          )
-
-                          @types.DiscriminatorRule::Suffix(result235)
-                        }
-                        2 => {
                           let result236 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          @types.DiscriminatorRule::Contains(result236)
+                          @types.DiscriminatorRule::Prefix(result236)
                         }
-                        3 => {
+                        1 => {
                           let result237 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          @types.DiscriminatorRule::Regex(result237)
+                          @types.DiscriminatorRule::Suffix(result237)
                         }
-                        4 => {
+                        2 => {
                           let result238 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          let lifted240 : String? = match
+                          @types.DiscriminatorRule::Contains(result238)
+                        }
+                        3 => {
+                          let result239 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 16),
+                            mbt_ffi_load32(iter_base + 20),
+                          )
+
+                          @types.DiscriminatorRule::Regex(result239)
+                        }
+                        4 => {
+                          let result240 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 16),
+                            mbt_ffi_load32(iter_base + 20),
+                          )
+
+                          let lifted242 : String? = match
                             mbt_ffi_load8_u(iter_base + 24) {
                             0 => Option::None
                             1 => {
-                              let result239 = mbt_ffi_ptr2str(
+                              let result241 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 28),
                                 mbt_ffi_load32(iter_base + 32),
                               )
 
-                              Option::Some(result239)
+                              Option::Some(result241)
                             }
                             _ => panic()
                           }
 
                           @types.DiscriminatorRule::FieldEquals(@types.FieldDiscriminator::{
-                            field_name: result238,
-                            literal: lifted240,
+                            field_name: result240,
+                            literal: lifted242,
                           })
                         }
                         5 => {
-                          let result241 = mbt_ffi_ptr2str(
+                          let result243 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          @types.DiscriminatorRule::FieldAbsent(result241)
+                          @types.DiscriminatorRule::FieldAbsent(result243)
                         }
                         _ => panic()
                       }
 
-                      let lifted244 : String? = match
+                      let lifted246 : String? = match
                         mbt_ffi_load8_u(iter_base + 36) {
                         0 => Option::None
                         1 => {
-                          let result243 = mbt_ffi_ptr2str(
+                          let result245 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 40),
                             mbt_ffi_load32(iter_base + 44),
                           )
 
-                          Option::Some(result243)
+                          Option::Some(result245)
                         }
                         _ => panic()
                       }
 
-                      let array246 : Array[String] = []
-                      for index247 = 0
-                          index247 < mbt_ffi_load32(iter_base + 52)
-                          index247 = index247 + 1 {
+                      let array248 : Array[String] = []
+                      for index249 = 0
+                          index249 < mbt_ffi_load32(iter_base + 52)
+                          index249 = index249 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 48) +
-                          index247 * 8
+                          index249 * 8
 
-                        let result245 = mbt_ffi_ptr2str(
+                        let result247 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array246.push(result245)
+                        array248.push(result247)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
 
-                      let array249 : Array[String] = []
-                      for index250 = 0
-                          index250 < mbt_ffi_load32(iter_base + 60)
-                          index250 = index250 + 1 {
+                      let array251 : Array[String] = []
+                      for index252 = 0
+                          index252 < mbt_ffi_load32(iter_base + 60)
+                          index252 = index252 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 56) +
-                          index250 * 8
+                          index252 * 8
 
-                        let result248 = mbt_ffi_ptr2str(
+                        let result250 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array249.push(result248)
+                        array251.push(result250)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
 
-                      let lifted252 : String? = match
+                      let lifted254 : String? = match
                         mbt_ffi_load8_u(iter_base + 64) {
                         0 => Option::None
                         1 => {
-                          let result251 = mbt_ffi_ptr2str(
+                          let result253 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 68),
                             mbt_ffi_load32(iter_base + 72),
                           )
 
-                          Option::Some(result251)
+                          Option::Some(result253)
                         }
                         _ => panic()
                       }
 
-                      let lifted255 : @types.Role? = match
+                      let lifted257 : @types.Role? = match
                         mbt_ffi_load8_u(iter_base + 76) {
                         0 => Option::None
                         1 => {
-                          let lifted254 = match
+                          let lifted256 = match
                             mbt_ffi_load8_u(iter_base + 80) {
                             0 => @types.Role::Multimodal
                             1 => @types.Role::UnstructuredText
                             2 => @types.Role::UnstructuredBinary
                             3 => {
-                              let result253 = mbt_ffi_ptr2str(
+                              let result255 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 84),
                                 mbt_ffi_load32(iter_base + 88),
                               )
 
-                              @types.Role::Other(result253)
+                              @types.Role::Other(result255)
                             }
                             _ => panic()
                           }
 
-                          Option::Some(lifted254)
+                          Option::Some(lifted256)
                         }
                         _ => panic()
                       }
 
-                      array256.push(@types.UnionBranch::{
-                        tag: result233,
+                      array258.push(@types.UnionBranch::{
+                        tag: result235,
                         body: mbt_ffi_load32(iter_base + 8),
-                        discriminator: lifted242,
+                        discriminator: lifted244,
                         metadata: @types.MetadataEnvelope::{
-                          doc: lifted244,
-                          aliases: array246,
-                          examples: array249,
-                          deprecated: lifted252,
-                          role: lifted255,
+                          doc: lifted246,
+                          aliases: array248,
+                          examples: array251,
+                          deprecated: lifted254,
+                          role: lifted257,
                         },
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
                     @types.SchemaTypeBody::UnionType(@types.UnionSpec::{
-                      branches: array256,
+                      branches: array258,
                     })
                   }
                   32 => {
-                    let lifted259 : String? = match
+                    let lifted261 : String? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => {
-                        let result258 = mbt_ffi_ptr2str(
+                        let result260 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 16),
                           mbt_ffi_load32(iter_base + 20),
-                        )
-
-                        Option::Some(result258)
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::SecretType(@types.SecretSpec::{
-                      inner: mbt_ffi_load32(iter_base + 8),
-                      category: lifted259,
-                    })
-                  }
-                  33 => {
-                    let lifted261 : String? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let result260 = mbt_ffi_ptr2str(
-                          mbt_ffi_load32(iter_base + 12),
-                          mbt_ffi_load32(iter_base + 16),
                         )
 
                         Option::Some(result260)
@@ -28500,8 +28572,28 @@ pub fn WasmRpc::schedule_invocation(
                       _ => panic()
                     }
 
+                    @types.SchemaTypeBody::SecretType(@types.SecretSpec::{
+                      inner: mbt_ffi_load32(iter_base + 8),
+                      category: lifted261,
+                    })
+                  }
+                  33 => {
+                    let lifted263 : String? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let result262 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 12),
+                          mbt_ffi_load32(iter_base + 16),
+                        )
+
+                        Option::Some(result262)
+                      }
+                      _ => panic()
+                    }
+
                     @types.SchemaTypeBody::QuotaTokenType(@types.QuotaTokenSpec::{
-                      resource_name: lifted261,
+                      resource_name: lifted263,
                     })
                   }
                   34 =>
@@ -28509,162 +28601,162 @@ pub fn WasmRpc::schedule_invocation(
                       polymorphic: mbt_ffi_load8_u(iter_base + 8) != 0,
                     })
                   35 => {
-                    let lifted262 : Int? = match
+                    let lifted264 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::FutureType(lifted262)
+                    @types.SchemaTypeBody::FutureType(lifted264)
                   }
                   36 => {
-                    let lifted263 : Int? = match
+                    let lifted265 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::StreamType(lifted263)
+                    @types.SchemaTypeBody::StreamType(lifted265)
                   }
                   _ => panic()
                 }
 
-                let lifted266 : String? = match
+                let lifted268 : String? = match
                   mbt_ffi_load8_u(iter_base + 88) {
                   0 => Option::None
                   1 => {
-                    let result265 = mbt_ffi_ptr2str(
+                    let result267 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 92),
                       mbt_ffi_load32(iter_base + 96),
                     )
 
-                    Option::Some(result265)
+                    Option::Some(result267)
                   }
                   _ => panic()
                 }
 
-                let array268 : Array[String] = []
-                for index269 = 0
-                    index269 < mbt_ffi_load32(iter_base + 104)
-                    index269 = index269 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 100) + index269 * 8
+                let array270 : Array[String] = []
+                for index271 = 0
+                    index271 < mbt_ffi_load32(iter_base + 104)
+                    index271 = index271 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 100) + index271 * 8
 
-                  let result267 = mbt_ffi_ptr2str(
+                  let result269 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  array268.push(result267)
+                  array270.push(result269)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
 
-                let array271 : Array[String] = []
-                for index272 = 0
-                    index272 < mbt_ffi_load32(iter_base + 112)
-                    index272 = index272 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 108) + index272 * 8
+                let array273 : Array[String] = []
+                for index274 = 0
+                    index274 < mbt_ffi_load32(iter_base + 112)
+                    index274 = index274 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 108) + index274 * 8
 
-                  let result270 = mbt_ffi_ptr2str(
+                  let result272 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  array271.push(result270)
+                  array273.push(result272)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
 
-                let lifted274 : String? = match
+                let lifted276 : String? = match
                   mbt_ffi_load8_u(iter_base + 116) {
                   0 => Option::None
                   1 => {
-                    let result273 = mbt_ffi_ptr2str(
+                    let result275 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 120),
                       mbt_ffi_load32(iter_base + 124),
                     )
 
-                    Option::Some(result273)
+                    Option::Some(result275)
                   }
                   _ => panic()
                 }
 
-                let lifted277 : @types.Role? = match
+                let lifted279 : @types.Role? = match
                   mbt_ffi_load8_u(iter_base + 128) {
                   0 => Option::None
                   1 => {
-                    let lifted276 = match mbt_ffi_load8_u(iter_base + 132) {
+                    let lifted278 = match mbt_ffi_load8_u(iter_base + 132) {
                       0 => @types.Role::Multimodal
                       1 => @types.Role::UnstructuredText
                       2 => @types.Role::UnstructuredBinary
                       3 => {
-                        let result275 = mbt_ffi_ptr2str(
+                        let result277 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 136),
                           mbt_ffi_load32(iter_base + 140),
                         )
 
-                        @types.Role::Other(result275)
+                        @types.Role::Other(result277)
                       }
                       _ => panic()
                     }
 
-                    Option::Some(lifted276)
+                    Option::Some(lifted278)
                   }
                   _ => panic()
                 }
 
-                array278.push(@types.SchemaTypeNode::{
-                  body: lifted264,
+                array280.push(@types.SchemaTypeNode::{
+                  body: lifted266,
                   metadata: @types.MetadataEnvelope::{
-                    doc: lifted266,
-                    aliases: array268,
-                    examples: array271,
-                    deprecated: lifted274,
-                    role: lifted277,
+                    doc: lifted268,
+                    aliases: array270,
+                    examples: array273,
+                    deprecated: lifted276,
+                    role: lifted279,
                   },
                 })
               }
               mbt_ffi_free(mbt_ffi_load32(return_area + 12))
 
-              let array283 : Array[@types.SchemaTypeDef] = []
-              for index284 = 0
-                  index284 < mbt_ffi_load32(return_area + 24)
-                  index284 = index284 + 1 {
-                let iter_base = mbt_ffi_load32(return_area + 20) + index284 * 24
+              let array285 : Array[@types.SchemaTypeDef] = []
+              for index286 = 0
+                  index286 < mbt_ffi_load32(return_area + 24)
+                  index286 = index286 + 1 {
+                let iter_base = mbt_ffi_load32(return_area + 20) + index286 * 24
 
-                let result280 = mbt_ffi_ptr2str(
+                let result282 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 0),
                   mbt_ffi_load32(iter_base + 4),
                 )
 
-                let lifted282 : String? = match mbt_ffi_load8_u(iter_base + 8) {
+                let lifted284 : String? = match mbt_ffi_load8_u(iter_base + 8) {
                   0 => Option::None
                   1 => {
-                    let result281 = mbt_ffi_ptr2str(
+                    let result283 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 12),
                       mbt_ffi_load32(iter_base + 16),
                     )
 
-                    Option::Some(result281)
+                    Option::Some(result283)
                   }
                   _ => panic()
                 }
 
-                array283.push(@types.SchemaTypeDef::{
-                  id: result280,
-                  name: lifted282,
+                array285.push(@types.SchemaTypeDef::{
+                  id: result282,
+                  name: lifted284,
                   body: mbt_ffi_load32(iter_base + 20),
                 })
               }
               mbt_ffi_free(mbt_ffi_load32(return_area + 20))
 
-              let array314 : Array[@types.SchemaValueNode] = []
-              for index315 = 0
-                  index315 < mbt_ffi_load32(return_area + 36)
-                  index315 = index315 + 1 {
-                let iter_base = mbt_ffi_load32(return_area + 32) + index315 * 32
+              let array316 : Array[@types.SchemaValueNode] = []
+              for index317 = 0
+                  index317 < mbt_ffi_load32(return_area + 36)
+                  index317 = index317 + 1 {
+                let iter_base = mbt_ffi_load32(return_area + 32) + index317 * 32
 
-                let lifted313 = match mbt_ffi_load8_u(iter_base + 0) {
+                let lifted315 = match mbt_ffi_load8_u(iter_base + 0) {
                   0 =>
                     @types.SchemaValueNode::BoolValue(
                       mbt_ffi_load8_u(iter_base + 8) != 0,
@@ -28716,29 +28808,29 @@ pub fn WasmRpc::schedule_invocation(
                       Int::unsafe_to_char(mbt_ffi_load32(iter_base + 8)),
                     )
                   12 => {
-                    let result285 = mbt_ffi_ptr2str(
+                    let result287 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    @types.SchemaValueNode::StringValue(result285)
+                    @types.SchemaValueNode::StringValue(result287)
                   }
                   13 => {
-                    let array286 : Array[Int] = []
-                    for index287 = 0
-                        index287 < mbt_ffi_load32(iter_base + 12)
-                        index287 = index287 + 1 {
+                    let array288 : Array[Int] = []
+                    for index289 = 0
+                        index289 < mbt_ffi_load32(iter_base + 12)
+                        index289 = index289 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index287 * 4
+                        index289 * 4
 
-                      array286.push(mbt_ffi_load32(iter_base + 0))
+                      array288.push(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::RecordValue(array286)
+                    @types.SchemaValueNode::RecordValue(array288)
                   }
                   14 => {
-                    let lifted288 : Int? = match
+                    let lifted290 : Int? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 16))
@@ -28747,7 +28839,7 @@ pub fn WasmRpc::schedule_invocation(
 
                     @types.SchemaValueNode::VariantValue(@types.VariantValuePayload::{
                       case: mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
-                      payload: lifted288,
+                      payload: lifted290,
                     })
                   }
                   15 =>
@@ -28755,34 +28847,20 @@ pub fn WasmRpc::schedule_invocation(
                       mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
                     )
                   16 => {
-                    let array289 : Array[Bool] = []
-                    for index290 = 0
-                        index290 < mbt_ffi_load32(iter_base + 12)
-                        index290 = index290 + 1 {
-                      let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index290 * 1
-
-                      array289.push(mbt_ffi_load8_u(iter_base + 0) != 0)
-                    }
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-                    @types.SchemaValueNode::FlagsValue(array289)
-                  }
-                  17 => {
-                    let array291 : Array[Int] = []
+                    let array291 : Array[Bool] = []
                     for index292 = 0
                         index292 < mbt_ffi_load32(iter_base + 12)
                         index292 = index292 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index292 * 4
+                        index292 * 1
 
-                      array291.push(mbt_ffi_load32(iter_base + 0))
+                      array291.push(mbt_ffi_load8_u(iter_base + 0) != 0)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::TupleValue(array291)
+                    @types.SchemaValueNode::FlagsValue(array291)
                   }
-                  18 => {
+                  17 => {
                     let array293 : Array[Int] = []
                     for index294 = 0
                         index294 < mbt_ffi_load32(iter_base + 12)
@@ -28794,9 +28872,9 @@ pub fn WasmRpc::schedule_invocation(
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::ListValue(array293)
+                    @types.SchemaValueNode::TupleValue(array293)
                   }
-                  19 => {
+                  18 => {
                     let array295 : Array[Int] = []
                     for index296 = 0
                         index296 < mbt_ffi_load32(iter_base + 12)
@@ -28808,127 +28886,141 @@ pub fn WasmRpc::schedule_invocation(
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::FixedListValue(array295)
+                    @types.SchemaValueNode::ListValue(array295)
                   }
-                  20 => {
-                    let array297 : Array[@types.MapEntry] = []
+                  19 => {
+                    let array297 : Array[Int] = []
                     for index298 = 0
                         index298 < mbt_ffi_load32(iter_base + 12)
                         index298 = index298 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index298 * 8
+                        index298 * 4
 
-                      array297.push(@types.MapEntry::{
+                      array297.push(mbt_ffi_load32(iter_base + 0))
+                    }
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                    @types.SchemaValueNode::FixedListValue(array297)
+                  }
+                  20 => {
+                    let array299 : Array[@types.MapEntry] = []
+                    for index300 = 0
+                        index300 < mbt_ffi_load32(iter_base + 12)
+                        index300 = index300 + 1 {
+                      let iter_base = mbt_ffi_load32(iter_base + 8) +
+                        index300 * 8
+
+                      array299.push(@types.MapEntry::{
                         key: mbt_ffi_load32(iter_base + 0),
                         value: mbt_ffi_load32(iter_base + 4),
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::MapValue(array297)
+                    @types.SchemaValueNode::MapValue(array299)
                   }
                   21 => {
-                    let lifted299 : Int? = match
+                    let lifted301 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    @types.SchemaValueNode::OptionValue(lifted299)
+                    @types.SchemaValueNode::OptionValue(lifted301)
                   }
                   22 => {
-                    let lifted302 = match mbt_ffi_load8_u(iter_base + 8) {
+                    let lifted304 = match mbt_ffi_load8_u(iter_base + 8) {
                       0 => {
-                        let lifted300 : Int? = match
+                        let lifted302 : Int? = match
                           mbt_ffi_load8_u(iter_base + 12) {
                           0 => Option::None
                           1 => Option::Some(mbt_ffi_load32(iter_base + 16))
                           _ => panic()
                         }
 
-                        @types.ResultValuePayload::OkValue(lifted300)
+                        @types.ResultValuePayload::OkValue(lifted302)
                       }
                       1 => {
-                        let lifted301 : Int? = match
+                        let lifted303 : Int? = match
                           mbt_ffi_load8_u(iter_base + 12) {
                           0 => Option::None
                           1 => Option::Some(mbt_ffi_load32(iter_base + 16))
                           _ => panic()
                         }
 
-                        @types.ResultValuePayload::ErrValue(lifted301)
+                        @types.ResultValuePayload::ErrValue(lifted303)
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaValueNode::ResultValue(lifted302)
+                    @types.SchemaValueNode::ResultValue(lifted304)
                   }
                   23 => {
-                    let result303 = mbt_ffi_ptr2str(
+                    let result305 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    let lifted305 : String? = match
+                    let lifted307 : String? = match
                       mbt_ffi_load8_u(iter_base + 16) {
                       0 => Option::None
                       1 => {
-                        let result304 = mbt_ffi_ptr2str(
+                        let result306 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 20),
                           mbt_ffi_load32(iter_base + 24),
                         )
 
-                        Option::Some(result304)
+                        Option::Some(result306)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaValueNode::TextValue(@types.TextValuePayload::{
-                      text: result303,
-                      language: lifted305,
+                      text: result305,
+                      language: lifted307,
                     })
                   }
                   24 => {
-                    let result306 = mbt_ffi_ptr2bytes(
+                    let result308 = mbt_ffi_ptr2bytes(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    let lifted308 : String? = match
+                    let lifted310 : String? = match
                       mbt_ffi_load8_u(iter_base + 16) {
                       0 => Option::None
                       1 => {
-                        let result307 = mbt_ffi_ptr2str(
+                        let result309 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 20),
                           mbt_ffi_load32(iter_base + 24),
                         )
 
-                        Option::Some(result307)
+                        Option::Some(result309)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaValueNode::BinaryValue(@types.BinaryValuePayload::{
-                      bytes: result306,
-                      mime_type: lifted308,
+                      bytes: result308,
+                      mime_type: lifted310,
                     })
                   }
                   25 => {
-                    let result309 = mbt_ffi_ptr2str(
+                    let result311 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    @types.SchemaValueNode::PathValue(result309)
+                    @types.SchemaValueNode::PathValue(result311)
                   }
                   26 => {
-                    let result310 = mbt_ffi_ptr2str(
+                    let result312 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    @types.SchemaValueNode::UrlValue(result310)
+                    @types.SchemaValueNode::UrlValue(result312)
                   }
                   27 =>
                     @types.SchemaValueNode::DatetimeValue(@types.Datetime::{
@@ -28940,7 +29032,7 @@ pub fn WasmRpc::schedule_invocation(
                       nanoseconds: mbt_ffi_load64(iter_base + 8),
                     })
                   29 => {
-                    let result311 = mbt_ffi_ptr2str(
+                    let result313 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 20),
                       mbt_ffi_load32(iter_base + 24),
                     )
@@ -28948,17 +29040,17 @@ pub fn WasmRpc::schedule_invocation(
                     @types.SchemaValueNode::QuantityValueNode(@types.QuantityValue::{
                       mantissa: mbt_ffi_load64(iter_base + 8),
                       scale: mbt_ffi_load32(iter_base + 16),
-                      unit: result311,
+                      unit: result313,
                     })
                   }
                   30 => {
-                    let result312 = mbt_ffi_ptr2str(
+                    let result314 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
                     @types.SchemaValueNode::UnionValue(@types.UnionValuePayload::{
-                      tag: result312,
+                      tag: result314,
                       body: mbt_ffi_load32(iter_base + 16),
                     })
                   }
@@ -28978,21 +29070,27 @@ pub fn WasmRpc::schedule_invocation(
                         mbt_ffi_load32(iter_base + 8),
                       ),
                     )
+                  34 =>
+                    @types.SchemaValueNode::StreamValue(
+                      @types.SchemaValueStream::SchemaValueStream(
+                        mbt_ffi_load32(iter_base + 8),
+                      ),
+                    )
                   _ => panic()
                 }
 
-                array314.push(lifted313)
+                array316.push(lifted315)
               }
               mbt_ffi_free(mbt_ffi_load32(return_area + 32))
 
               @common.AgentError::CustomError(@types.TypedSchemaValue::{
                 graph: @types.SchemaGraph::{
-                  type_nodes: array278,
-                  defs: array283,
+                  type_nodes: array280,
+                  defs: array285,
                   root: mbt_ffi_load32(return_area + 28),
                 },
                 value: @types.SchemaValueTree::{
-                  value_nodes: array314,
+                  value_nodes: array316,
                   root: mbt_ffi_load32(return_area + 40),
                 },
               })
@@ -29000,18 +29098,18 @@ pub fn WasmRpc::schedule_invocation(
             _ => panic()
           }
 
-          RpcError::RemoteAgentError(lifted316)
+          RpcError::RemoteAgentError(lifted318)
         }
         _ => panic()
       }
 
-      Result::Err(lifted317)
+      Result::Err(lifted319)
     }
     _ => panic()
   }
-  let ret = lifted318
+  let ret = lifted320
   mbt_ffi_free(ptr)
-  mbt_ffi_free(address69)
+  mbt_ffi_free(address71)
   mbt_ffi_free(return_area)
 
   cleanup_list.each(mbt_ffi_free)
@@ -29035,10 +29133,10 @@ pub fn WasmRpc::schedule_cancelable_invocation(
 
   let ptr = mbt_ffi_str2ptr(method_name)
 
-  let address69 = mbt_ffi_malloc(input.value_nodes.length() * 32)
-  for index70 = 0; index70 < input.value_nodes.length(); index70 = index70 + 1 {
-    let iter_elem : @types.SchemaValueNode = input.value_nodes[index70]
-    let iter_base = address69 + index70 * 32
+  let address71 = mbt_ffi_malloc(input.value_nodes.length() * 32)
+  for index72 = 0; index72 < input.value_nodes.length(); index72 = index72 + 1 {
+    let iter_elem : @types.SchemaValueNode = input.value_nodes[index72]
+    let iter_base = address71 + index72 * 32
 
     match iter_elem {
       BoolValue(payload) => {
@@ -29445,15 +29543,23 @@ pub fn WasmRpc::schedule_cancelable_invocation(
 
         ()
       }
+      StreamValue(payload69) => {
+        mbt_ffi_store8(iter_base + 0, 34)
+
+        let @types.SchemaValueStream(handle70) = payload69
+        mbt_ffi_store32(iter_base + 8, handle70)
+
+        ()
+      }
     }
   }
 
-  let (lowered, lowered74) = match scope_card {
+  let (lowered, lowered76) = match scope_card {
     None => (0, 0)
-    Some(payload72) => {
-      let @types.PermissionCard(handle73) = payload72
+    Some(payload74) => {
+      let @types.PermissionCard(handle75) = payload74
 
-      (1, handle73)
+      (1, handle75)
     }
   }
   let return_area = mbt_ffi_malloc(44)
@@ -29463,22 +29569,22 @@ pub fn WasmRpc::schedule_cancelable_invocation(
     scheduled_time.nanoseconds.reinterpret_as_int(),
     ptr,
     method_name.length(),
-    address69,
+    address71,
     input.value_nodes.length(),
     input.root,
     lowered,
-    lowered74,
+    lowered76,
     return_area,
   )
 
-  let lifted318 = match mbt_ffi_load8_u(return_area + 0) {
+  let lifted320 = match mbt_ffi_load8_u(return_area + 0) {
     0 => {
       let result = mbt_ffi_ptr2str(
         mbt_ffi_load32(return_area + 4),
         mbt_ffi_load32(return_area + 8),
       )
 
-      let result75 = mbt_ffi_ptr2str(
+      let result77 = mbt_ffi_ptr2str(
         mbt_ffi_load32(return_area + 12),
         mbt_ffi_load32(return_area + 16),
       )
@@ -29486,7 +29592,7 @@ pub fn WasmRpc::schedule_cancelable_invocation(
       Result::Ok(CancelableScheduledInvocationReceipt::{
         metadata: InvocationMetadata::{
           agent_id: result,
-          idempotency_key: result75,
+          idempotency_key: result77,
         },
         cancellation_token: CancellationToken::CancellationToken(
           mbt_ffi_load32(return_area + 20),
@@ -29494,93 +29600,93 @@ pub fn WasmRpc::schedule_cancelable_invocation(
       })
     }
     1 => {
-      let lifted317 = match mbt_ffi_load8_u(return_area + 4) {
+      let lifted319 = match mbt_ffi_load8_u(return_area + 4) {
         0 => {
-          let result76 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(return_area + 8),
-            mbt_ffi_load32(return_area + 12),
-          )
-
-          RpcError::ProtocolError(result76)
-        }
-        1 => {
-          let result77 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(return_area + 8),
-            mbt_ffi_load32(return_area + 12),
-          )
-
-          RpcError::Denied(result77)
-        }
-        2 => {
           let result78 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          RpcError::NotFound(result78)
+          RpcError::ProtocolError(result78)
         }
-        3 => {
+        1 => {
           let result79 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          RpcError::RemoteInternalError(result79)
+          RpcError::Denied(result79)
+        }
+        2 => {
+          let result80 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
+          )
+
+          RpcError::NotFound(result80)
+        }
+        3 => {
+          let result81 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
+          )
+
+          RpcError::RemoteInternalError(result81)
         }
         4 => {
-          let lifted316 = match mbt_ffi_load8_u(return_area + 8) {
+          let lifted318 = match mbt_ffi_load8_u(return_area + 8) {
             0 => {
-              let result80 = mbt_ffi_ptr2str(
-                mbt_ffi_load32(return_area + 12),
-                mbt_ffi_load32(return_area + 16),
-              )
-
-              @common.AgentError::InvalidInput(result80)
-            }
-            1 => {
-              let result81 = mbt_ffi_ptr2str(
-                mbt_ffi_load32(return_area + 12),
-                mbt_ffi_load32(return_area + 16),
-              )
-
-              @common.AgentError::InvalidMethod(result81)
-            }
-            2 => {
               let result82 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(return_area + 12),
                 mbt_ffi_load32(return_area + 16),
               )
 
-              @common.AgentError::InvalidType(result82)
+              @common.AgentError::InvalidInput(result82)
             }
-            3 => {
+            1 => {
               let result83 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(return_area + 12),
                 mbt_ffi_load32(return_area + 16),
               )
 
-              @common.AgentError::InvalidAgentId(result83)
+              @common.AgentError::InvalidMethod(result83)
+            }
+            2 => {
+              let result84 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(return_area + 12),
+                mbt_ffi_load32(return_area + 16),
+              )
+
+              @common.AgentError::InvalidType(result84)
+            }
+            3 => {
+              let result85 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(return_area + 12),
+                mbt_ffi_load32(return_area + 16),
+              )
+
+              @common.AgentError::InvalidAgentId(result85)
             }
             4 => {
-              let array278 : Array[@types.SchemaTypeNode] = []
-              for index279 = 0
-                  index279 < mbt_ffi_load32(return_area + 16)
-                  index279 = index279 + 1 {
+              let array280 : Array[@types.SchemaTypeNode] = []
+              for index281 = 0
+                  index281 < mbt_ffi_load32(return_area + 16)
+                  index281 = index281 + 1 {
                 let iter_base = mbt_ffi_load32(return_area + 12) +
-                  index279 * 144
+                  index281 * 144
 
-                let lifted264 = match mbt_ffi_load8_u(iter_base + 0) {
+                let lifted266 = match mbt_ffi_load8_u(iter_base + 0) {
                   0 =>
                     @types.SchemaTypeBody::RefType(
                       mbt_ffi_load32(iter_base + 8),
                     )
                   1 => @types.SchemaTypeBody::BoolType
                   2 => {
-                    let lifted89 : @types.NumericRestrictions? = match
+                    let lifted91 : @types.NumericRestrictions? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let lifted84 : @types.NumericBound? = match
+                        let lifted86 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 16) {
                           0 => Option::None
                           1 => {
@@ -29605,11 +29711,11 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                           _ => panic()
                         }
 
-                        let lifted86 : @types.NumericBound? = match
+                        let lifted88 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted85 = match
+                            let lifted87 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -29626,46 +29732,46 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                               _ => panic()
                             }
 
-                            Option::Some(lifted85)
+                            Option::Some(lifted87)
                           }
                           _ => panic()
                         }
 
-                        let lifted88 : String? = match
+                        let lifted90 : String? = match
                           mbt_ffi_load8_u(iter_base + 64) {
                           0 => Option::None
                           1 => {
-                            let result87 = mbt_ffi_ptr2str(
+                            let result89 = mbt_ffi_ptr2str(
                               mbt_ffi_load32(iter_base + 68),
                               mbt_ffi_load32(iter_base + 72),
                             )
 
-                            Option::Some(result87)
+                            Option::Some(result89)
                           }
                           _ => panic()
                         }
 
                         Option::Some(@types.NumericRestrictions::{
-                          min: lifted84,
-                          max: lifted86,
-                          unit: lifted88,
+                          min: lifted86,
+                          max: lifted88,
+                          unit: lifted90,
                         })
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::S8Type(lifted89)
+                    @types.SchemaTypeBody::S8Type(lifted91)
                   }
                   3 => {
-                    let lifted96 : @types.NumericRestrictions? = match
+                    let lifted98 : @types.NumericRestrictions? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let lifted91 : @types.NumericBound? = match
+                        let lifted93 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 16) {
                           0 => Option::None
                           1 => {
-                            let lifted90 = match
+                            let lifted92 = match
                               mbt_ffi_load8_u(iter_base + 24) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -29678,32 +29784,6 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted90)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted93 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 40) {
-                          0 => Option::None
-                          1 => {
-                            let lifted92 = match
-                              mbt_ffi_load8_u(iter_base + 48) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 56),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -29713,67 +29793,11 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                           _ => panic()
                         }
 
-                        let lifted95 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result94 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result94)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted91,
-                          max: lifted93,
-                          unit: lifted95,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::S16Type(lifted96)
-                  }
-                  4 => {
-                    let lifted103 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted98 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted97 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted97)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted100 : @types.NumericBound? = match
+                        let lifted95 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted99 = match
+                            let lifted94 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -29786,6 +29810,62 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted94)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted97 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result96 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result96)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted93,
+                          max: lifted95,
+                          unit: lifted97,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::S16Type(lifted98)
+                  }
+                  4 => {
+                    let lifted105 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted100 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted99 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -29795,67 +29875,11 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                           _ => panic()
                         }
 
-                        let lifted102 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result101 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result101)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted98,
-                          max: lifted100,
-                          unit: lifted102,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::S32Type(lifted103)
-                  }
-                  5 => {
-                    let lifted110 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted105 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted104 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted104)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted107 : @types.NumericBound? = match
+                        let lifted102 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted106 = match
+                            let lifted101 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -29868,6 +29892,62 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted101)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted104 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result103 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result103)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted100,
+                          max: lifted102,
+                          unit: lifted104,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::S32Type(lifted105)
+                  }
+                  5 => {
+                    let lifted112 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted107 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted106 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -29877,67 +29957,11 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                           _ => panic()
                         }
 
-                        let lifted109 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result108 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result108)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted105,
-                          max: lifted107,
-                          unit: lifted109,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::S64Type(lifted110)
-                  }
-                  6 => {
-                    let lifted117 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted112 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted111 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted111)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted114 : @types.NumericBound? = match
+                        let lifted109 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted113 = match
+                            let lifted108 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -29950,6 +29974,62 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted108)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted111 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result110 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result110)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted107,
+                          max: lifted109,
+                          unit: lifted111,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::S64Type(lifted112)
+                  }
+                  6 => {
+                    let lifted119 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted114 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted113 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -29959,67 +30039,11 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                           _ => panic()
                         }
 
-                        let lifted116 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result115 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result115)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted112,
-                          max: lifted114,
-                          unit: lifted116,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::U8Type(lifted117)
-                  }
-                  7 => {
-                    let lifted124 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted119 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted118 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted118)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted121 : @types.NumericBound? = match
+                        let lifted116 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted120 = match
+                            let lifted115 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -30032,6 +30056,62 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted115)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted118 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result117 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result117)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted114,
+                          max: lifted116,
+                          unit: lifted118,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::U8Type(lifted119)
+                  }
+                  7 => {
+                    let lifted126 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted121 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted120 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -30041,67 +30121,11 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                           _ => panic()
                         }
 
-                        let lifted123 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result122 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result122)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted119,
-                          max: lifted121,
-                          unit: lifted123,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::U16Type(lifted124)
-                  }
-                  8 => {
-                    let lifted131 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted126 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted125 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted125)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted128 : @types.NumericBound? = match
+                        let lifted123 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted127 = match
+                            let lifted122 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -30114,6 +30138,62 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted122)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted125 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result124 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result124)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted121,
+                          max: lifted123,
+                          unit: lifted125,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::U16Type(lifted126)
+                  }
+                  8 => {
+                    let lifted133 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted128 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted127 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -30123,67 +30203,11 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                           _ => panic()
                         }
 
-                        let lifted130 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result129 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result129)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted126,
-                          max: lifted128,
-                          unit: lifted130,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::U32Type(lifted131)
-                  }
-                  9 => {
-                    let lifted138 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted133 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted132 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted132)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted135 : @types.NumericBound? = match
+                        let lifted130 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted134 = match
+                            let lifted129 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -30196,6 +30220,62 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted129)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted132 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result131 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result131)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted128,
+                          max: lifted130,
+                          unit: lifted132,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::U32Type(lifted133)
+                  }
+                  9 => {
+                    let lifted140 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted135 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted134 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -30205,67 +30285,11 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                           _ => panic()
                         }
 
-                        let lifted137 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result136 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result136)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted133,
-                          max: lifted135,
-                          unit: lifted137,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::U64Type(lifted138)
-                  }
-                  10 => {
-                    let lifted145 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted140 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted139 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted139)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted142 : @types.NumericBound? = match
+                        let lifted137 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted141 = match
+                            let lifted136 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -30278,6 +30302,62 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                               2 =>
                                 @types.NumericBound::FloatBits(
                                   mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted136)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted139 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result138 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result138)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted135,
+                          max: lifted137,
+                          unit: lifted139,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::U64Type(lifted140)
+                  }
+                  10 => {
+                    let lifted147 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted142 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted141 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
                                 )
                               _ => panic()
                             }
@@ -30287,67 +30367,11 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                           _ => panic()
                         }
 
-                        let lifted144 : String? = match
-                          mbt_ffi_load8_u(iter_base + 64) {
-                          0 => Option::None
-                          1 => {
-                            let result143 = mbt_ffi_ptr2str(
-                              mbt_ffi_load32(iter_base + 68),
-                              mbt_ffi_load32(iter_base + 72),
-                            )
-
-                            Option::Some(result143)
-                          }
-                          _ => panic()
-                        }
-
-                        Option::Some(@types.NumericRestrictions::{
-                          min: lifted140,
-                          max: lifted142,
-                          unit: lifted144,
-                        })
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::F32Type(lifted145)
-                  }
-                  11 => {
-                    let lifted152 : @types.NumericRestrictions? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let lifted147 : @types.NumericBound? = match
-                          mbt_ffi_load8_u(iter_base + 16) {
-                          0 => Option::None
-                          1 => {
-                            let lifted146 = match
-                              mbt_ffi_load8_u(iter_base + 24) {
-                              0 =>
-                                @types.NumericBound::Signed(
-                                  mbt_ffi_load64(iter_base + 32),
-                                )
-                              1 =>
-                                @types.NumericBound::Unsigned(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              2 =>
-                                @types.NumericBound::FloatBits(
-                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
-                                )
-                              _ => panic()
-                            }
-
-                            Option::Some(lifted146)
-                          }
-                          _ => panic()
-                        }
-
-                        let lifted149 : @types.NumericBound? = match
+                        let lifted144 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted148 = match
+                            let lifted143 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -30364,324 +30388,406 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                               _ => panic()
                             }
 
-                            Option::Some(lifted148)
+                            Option::Some(lifted143)
                           }
                           _ => panic()
                         }
 
-                        let lifted151 : String? = match
+                        let lifted146 : String? = match
                           mbt_ffi_load8_u(iter_base + 64) {
                           0 => Option::None
                           1 => {
-                            let result150 = mbt_ffi_ptr2str(
+                            let result145 = mbt_ffi_ptr2str(
                               mbt_ffi_load32(iter_base + 68),
                               mbt_ffi_load32(iter_base + 72),
                             )
 
-                            Option::Some(result150)
+                            Option::Some(result145)
                           }
                           _ => panic()
                         }
 
                         Option::Some(@types.NumericRestrictions::{
-                          min: lifted147,
-                          max: lifted149,
-                          unit: lifted151,
+                          min: lifted142,
+                          max: lifted144,
+                          unit: lifted146,
                         })
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::F64Type(lifted152)
+                    @types.SchemaTypeBody::F32Type(lifted147)
+                  }
+                  11 => {
+                    let lifted154 : @types.NumericRestrictions? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let lifted149 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let lifted148 = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 32),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted148)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted151 : @types.NumericBound? = match
+                          mbt_ffi_load8_u(iter_base + 40) {
+                          0 => Option::None
+                          1 => {
+                            let lifted150 = match
+                              mbt_ffi_load8_u(iter_base + 48) {
+                              0 =>
+                                @types.NumericBound::Signed(
+                                  mbt_ffi_load64(iter_base + 56),
+                                )
+                              1 =>
+                                @types.NumericBound::Unsigned(
+                                  mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              2 =>
+                                @types.NumericBound::FloatBits(
+                                  mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                )
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted150)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted153 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result152 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result152)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(@types.NumericRestrictions::{
+                          min: lifted149,
+                          max: lifted151,
+                          unit: lifted153,
+                        })
+                      }
+                      _ => panic()
+                    }
+
+                    @types.SchemaTypeBody::F64Type(lifted154)
                   }
                   12 => @types.SchemaTypeBody::CharType
                   13 => @types.SchemaTypeBody::StringType
                   14 => {
-                    let array166 : Array[@types.NamedFieldType] = []
-                    for index167 = 0
-                        index167 < mbt_ffi_load32(iter_base + 12)
-                        index167 = index167 + 1 {
+                    let array168 : Array[@types.NamedFieldType] = []
+                    for index169 = 0
+                        index169 < mbt_ffi_load32(iter_base + 12)
+                        index169 = index169 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index167 * 68
+                        index169 * 68
 
-                      let result153 = mbt_ffi_ptr2str(
+                      let result155 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      let lifted155 : String? = match
+                      let lifted157 : String? = match
                         mbt_ffi_load8_u(iter_base + 12) {
                         0 => Option::None
                         1 => {
-                          let result154 = mbt_ffi_ptr2str(
+                          let result156 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          Option::Some(result154)
+                          Option::Some(result156)
                         }
                         _ => panic()
                       }
 
                       let array : Array[String] = []
-                      for index157 = 0
-                          index157 < mbt_ffi_load32(iter_base + 28)
-                          index157 = index157 + 1 {
+                      for index159 = 0
+                          index159 < mbt_ffi_load32(iter_base + 28)
+                          index159 = index159 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 24) +
-                          index157 * 8
-
-                        let result156 = mbt_ffi_ptr2str(
-                          mbt_ffi_load32(iter_base + 0),
-                          mbt_ffi_load32(iter_base + 4),
-                        )
-
-                        array.push(result156)
-                      }
-                      mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
-
-                      let array159 : Array[String] = []
-                      for index160 = 0
-                          index160 < mbt_ffi_load32(iter_base + 36)
-                          index160 = index160 + 1 {
-                        let iter_base = mbt_ffi_load32(iter_base + 32) +
-                          index160 * 8
+                          index159 * 8
 
                         let result158 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array159.push(result158)
+                        array.push(result158)
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
+
+                      let array161 : Array[String] = []
+                      for index162 = 0
+                          index162 < mbt_ffi_load32(iter_base + 36)
+                          index162 = index162 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 32) +
+                          index162 * 8
+
+                        let result160 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 0),
+                          mbt_ffi_load32(iter_base + 4),
+                        )
+
+                        array161.push(result160)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
 
-                      let lifted162 : String? = match
+                      let lifted164 : String? = match
                         mbt_ffi_load8_u(iter_base + 40) {
                         0 => Option::None
                         1 => {
-                          let result161 = mbt_ffi_ptr2str(
+                          let result163 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 44),
                             mbt_ffi_load32(iter_base + 48),
                           )
 
-                          Option::Some(result161)
+                          Option::Some(result163)
                         }
                         _ => panic()
                       }
 
-                      let lifted165 : @types.Role? = match
+                      let lifted167 : @types.Role? = match
                         mbt_ffi_load8_u(iter_base + 52) {
                         0 => Option::None
                         1 => {
-                          let lifted164 = match
+                          let lifted166 = match
                             mbt_ffi_load8_u(iter_base + 56) {
                             0 => @types.Role::Multimodal
                             1 => @types.Role::UnstructuredText
                             2 => @types.Role::UnstructuredBinary
                             3 => {
-                              let result163 = mbt_ffi_ptr2str(
+                              let result165 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 60),
                                 mbt_ffi_load32(iter_base + 64),
                               )
 
-                              @types.Role::Other(result163)
+                              @types.Role::Other(result165)
                             }
                             _ => panic()
                           }
 
-                          Option::Some(lifted164)
+                          Option::Some(lifted166)
                         }
                         _ => panic()
                       }
 
-                      array166.push(@types.NamedFieldType::{
-                        name: result153,
+                      array168.push(@types.NamedFieldType::{
+                        name: result155,
                         body: mbt_ffi_load32(iter_base + 8),
                         metadata: @types.MetadataEnvelope::{
-                          doc: lifted155,
+                          doc: lifted157,
                           aliases: array,
-                          examples: array159,
-                          deprecated: lifted162,
-                          role: lifted165,
+                          examples: array161,
+                          deprecated: lifted164,
+                          role: lifted167,
                         },
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::RecordType(array166)
+                    @types.SchemaTypeBody::RecordType(array168)
                   }
                   15 => {
-                    let array183 : Array[@types.VariantCaseType] = []
-                    for index184 = 0
-                        index184 < mbt_ffi_load32(iter_base + 12)
-                        index184 = index184 + 1 {
+                    let array185 : Array[@types.VariantCaseType] = []
+                    for index186 = 0
+                        index186 < mbt_ffi_load32(iter_base + 12)
+                        index186 = index186 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index184 * 72
+                        index186 * 72
 
-                      let result168 = mbt_ffi_ptr2str(
+                      let result170 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      let lifted169 : Int? = match
+                      let lifted171 : Int? = match
                         mbt_ffi_load8_u(iter_base + 8) {
                         0 => Option::None
                         1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                         _ => panic()
                       }
 
-                      let lifted171 : String? = match
+                      let lifted173 : String? = match
                         mbt_ffi_load8_u(iter_base + 16) {
                         0 => Option::None
                         1 => {
-                          let result170 = mbt_ffi_ptr2str(
+                          let result172 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 20),
                             mbt_ffi_load32(iter_base + 24),
                           )
 
-                          Option::Some(result170)
+                          Option::Some(result172)
                         }
                         _ => panic()
                       }
 
-                      let array173 : Array[String] = []
-                      for index174 = 0
-                          index174 < mbt_ffi_load32(iter_base + 32)
-                          index174 = index174 + 1 {
+                      let array175 : Array[String] = []
+                      for index176 = 0
+                          index176 < mbt_ffi_load32(iter_base + 32)
+                          index176 = index176 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 28) +
-                          index174 * 8
+                          index176 * 8
 
-                        let result172 = mbt_ffi_ptr2str(
+                        let result174 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array173.push(result172)
+                        array175.push(result174)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
-                      let array176 : Array[String] = []
-                      for index177 = 0
-                          index177 < mbt_ffi_load32(iter_base + 40)
-                          index177 = index177 + 1 {
+                      let array178 : Array[String] = []
+                      for index179 = 0
+                          index179 < mbt_ffi_load32(iter_base + 40)
+                          index179 = index179 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 36) +
-                          index177 * 8
+                          index179 * 8
 
-                        let result175 = mbt_ffi_ptr2str(
+                        let result177 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array176.push(result175)
+                        array178.push(result177)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
 
-                      let lifted179 : String? = match
+                      let lifted181 : String? = match
                         mbt_ffi_load8_u(iter_base + 44) {
                         0 => Option::None
                         1 => {
-                          let result178 = mbt_ffi_ptr2str(
+                          let result180 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 48),
                             mbt_ffi_load32(iter_base + 52),
                           )
 
-                          Option::Some(result178)
+                          Option::Some(result180)
                         }
                         _ => panic()
                       }
 
-                      let lifted182 : @types.Role? = match
+                      let lifted184 : @types.Role? = match
                         mbt_ffi_load8_u(iter_base + 56) {
                         0 => Option::None
                         1 => {
-                          let lifted181 = match
+                          let lifted183 = match
                             mbt_ffi_load8_u(iter_base + 60) {
                             0 => @types.Role::Multimodal
                             1 => @types.Role::UnstructuredText
                             2 => @types.Role::UnstructuredBinary
                             3 => {
-                              let result180 = mbt_ffi_ptr2str(
+                              let result182 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 64),
                                 mbt_ffi_load32(iter_base + 68),
                               )
 
-                              @types.Role::Other(result180)
+                              @types.Role::Other(result182)
                             }
                             _ => panic()
                           }
 
-                          Option::Some(lifted181)
+                          Option::Some(lifted183)
                         }
                         _ => panic()
                       }
 
-                      array183.push(@types.VariantCaseType::{
-                        name: result168,
-                        payload: lifted169,
+                      array185.push(@types.VariantCaseType::{
+                        name: result170,
+                        payload: lifted171,
                         metadata: @types.MetadataEnvelope::{
-                          doc: lifted171,
-                          aliases: array173,
-                          examples: array176,
-                          deprecated: lifted179,
-                          role: lifted182,
+                          doc: lifted173,
+                          aliases: array175,
+                          examples: array178,
+                          deprecated: lifted181,
+                          role: lifted184,
                         },
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::VariantType(array183)
+                    @types.SchemaTypeBody::VariantType(array185)
                   }
                   16 => {
-                    let array186 : Array[String] = []
-                    for index187 = 0
-                        index187 < mbt_ffi_load32(iter_base + 12)
-                        index187 = index187 + 1 {
+                    let array188 : Array[String] = []
+                    for index189 = 0
+                        index189 < mbt_ffi_load32(iter_base + 12)
+                        index189 = index189 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index187 * 8
+                        index189 * 8
 
-                      let result185 = mbt_ffi_ptr2str(
+                      let result187 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      array186.push(result185)
+                      array188.push(result187)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::EnumType(array186)
+                    @types.SchemaTypeBody::EnumType(array188)
                   }
                   17 => {
-                    let array189 : Array[String] = []
-                    for index190 = 0
-                        index190 < mbt_ffi_load32(iter_base + 12)
-                        index190 = index190 + 1 {
-                      let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index190 * 8
-
-                      let result188 = mbt_ffi_ptr2str(
-                        mbt_ffi_load32(iter_base + 0),
-                        mbt_ffi_load32(iter_base + 4),
-                      )
-
-                      array189.push(result188)
-                    }
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-                    @types.SchemaTypeBody::FlagsType(array189)
-                  }
-                  18 => {
-                    let array191 : Array[Int] = []
+                    let array191 : Array[String] = []
                     for index192 = 0
                         index192 < mbt_ffi_load32(iter_base + 12)
                         index192 = index192 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index192 * 4
+                        index192 * 8
 
-                      array191.push(mbt_ffi_load32(iter_base + 0))
+                      let result190 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 0),
+                        mbt_ffi_load32(iter_base + 4),
+                      )
+
+                      array191.push(result190)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::TupleType(array191)
+                    @types.SchemaTypeBody::FlagsType(array191)
+                  }
+                  18 => {
+                    let array193 : Array[Int] = []
+                    for index194 = 0
+                        index194 < mbt_ffi_load32(iter_base + 12)
+                        index194 = index194 + 1 {
+                      let iter_base = mbt_ffi_load32(iter_base + 8) +
+                        index194 * 4
+
+                      array193.push(mbt_ffi_load32(iter_base + 0))
+                    }
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                    @types.SchemaTypeBody::TupleType(array193)
                   }
                   19 =>
                     @types.SchemaTypeBody::ListType(
@@ -30702,14 +30808,14 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                       mbt_ffi_load32(iter_base + 8),
                     )
                   23 => {
-                    let lifted193 : Int? = match
+                    let lifted195 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    let lifted194 : Int? = match
+                    let lifted196 : Int? = match
                       mbt_ffi_load8_u(iter_base + 16) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 20))
@@ -30717,37 +30823,37 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                     }
 
                     @types.SchemaTypeBody::ResultType(@types.ResultSpec::{
-                      ok: lifted193,
-                      err: lifted194,
+                      ok: lifted195,
+                      err: lifted196,
                     })
                   }
                   24 => {
-                    let lifted198 : Array[String]? = match
+                    let lifted200 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let array196 : Array[String] = []
-                        for index197 = 0
-                            index197 < mbt_ffi_load32(iter_base + 16)
-                            index197 = index197 + 1 {
+                        let array198 : Array[String] = []
+                        for index199 = 0
+                            index199 < mbt_ffi_load32(iter_base + 16)
+                            index199 = index199 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 12) +
-                            index197 * 8
+                            index199 * 8
 
-                          let result195 = mbt_ffi_ptr2str(
+                          let result197 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array196.push(result195)
+                          array198.push(result197)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
 
-                        Option::Some(array196)
+                        Option::Some(array198)
                       }
                       _ => panic()
                     }
 
-                    let lifted199 : UInt? = match
+                    let lifted201 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 20) {
                       0 => Option::None
                       1 =>
@@ -30757,7 +30863,7 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                       _ => panic()
                     }
 
-                    let lifted200 : UInt? = match
+                    let lifted202 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 28) {
                       0 => Option::None
                       1 =>
@@ -30767,54 +30873,54 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                       _ => panic()
                     }
 
-                    let lifted202 : String? = match
+                    let lifted204 : String? = match
                       mbt_ffi_load8_u(iter_base + 36) {
                       0 => Option::None
                       1 => {
-                        let result201 = mbt_ffi_ptr2str(
+                        let result203 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 40),
                           mbt_ffi_load32(iter_base + 44),
                         )
 
-                        Option::Some(result201)
+                        Option::Some(result203)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaTypeBody::TextType(@types.TextRestrictions::{
-                      languages: lifted198,
-                      min_length: lifted199,
-                      max_length: lifted200,
-                      regex: lifted202,
+                      languages: lifted200,
+                      min_length: lifted201,
+                      max_length: lifted202,
+                      regex: lifted204,
                     })
                   }
                   25 => {
-                    let lifted206 : Array[String]? = match
+                    let lifted208 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let array204 : Array[String] = []
-                        for index205 = 0
-                            index205 < mbt_ffi_load32(iter_base + 16)
-                            index205 = index205 + 1 {
+                        let array206 : Array[String] = []
+                        for index207 = 0
+                            index207 < mbt_ffi_load32(iter_base + 16)
+                            index207 = index207 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 12) +
-                            index205 * 8
+                            index207 * 8
 
-                          let result203 = mbt_ffi_ptr2str(
+                          let result205 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array204.push(result203)
+                          array206.push(result205)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
 
-                        Option::Some(array204)
+                        Option::Some(array206)
                       }
                       _ => panic()
                     }
 
-                    let lifted207 : UInt? = match
+                    let lifted209 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 20) {
                       0 => Option::None
                       1 =>
@@ -30824,7 +30930,7 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                       _ => panic()
                     }
 
-                    let lifted208 : UInt? = match
+                    let lifted210 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 28) {
                       0 => Option::None
                       1 =>
@@ -30835,58 +30941,58 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                     }
 
                     @types.SchemaTypeBody::BinaryType(@types.BinaryRestrictions::{
-                      mime_types: lifted206,
-                      min_bytes: lifted207,
-                      max_bytes: lifted208,
+                      mime_types: lifted208,
+                      min_bytes: lifted209,
+                      max_bytes: lifted210,
                     })
                   }
                   26 => {
-                    let lifted212 : Array[String]? = match
+                    let lifted214 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => {
-                        let array210 : Array[String] = []
-                        for index211 = 0
-                            index211 < mbt_ffi_load32(iter_base + 20)
-                            index211 = index211 + 1 {
+                        let array212 : Array[String] = []
+                        for index213 = 0
+                            index213 < mbt_ffi_load32(iter_base + 20)
+                            index213 = index213 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 16) +
-                            index211 * 8
+                            index213 * 8
 
-                          let result209 = mbt_ffi_ptr2str(
+                          let result211 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array210.push(result209)
+                          array212.push(result211)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
-                        Option::Some(array210)
+                        Option::Some(array212)
                       }
                       _ => panic()
                     }
 
-                    let lifted216 : Array[String]? = match
+                    let lifted218 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 24) {
                       0 => Option::None
                       1 => {
-                        let array214 : Array[String] = []
-                        for index215 = 0
-                            index215 < mbt_ffi_load32(iter_base + 32)
-                            index215 = index215 + 1 {
+                        let array216 : Array[String] = []
+                        for index217 = 0
+                            index217 < mbt_ffi_load32(iter_base + 32)
+                            index217 = index217 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 28) +
-                            index215 * 8
+                            index217 * 8
 
-                          let result213 = mbt_ffi_ptr2str(
+                          let result215 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array214.push(result213)
+                          array216.push(result215)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
-                        Option::Some(array214)
+                        Option::Some(array216)
                       }
                       _ => panic()
                     }
@@ -30898,95 +31004,95 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                       kind: @types.PathKind::from(
                         mbt_ffi_load8_u(iter_base + 9),
                       ),
-                      allowed_mime_types: lifted212,
-                      allowed_extensions: lifted216,
+                      allowed_mime_types: lifted214,
+                      allowed_extensions: lifted218,
                     })
                   }
                   27 => {
-                    let lifted220 : Array[String]? = match
+                    let lifted222 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let array218 : Array[String] = []
-                        for index219 = 0
-                            index219 < mbt_ffi_load32(iter_base + 16)
-                            index219 = index219 + 1 {
+                        let array220 : Array[String] = []
+                        for index221 = 0
+                            index221 < mbt_ffi_load32(iter_base + 16)
+                            index221 = index221 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 12) +
-                            index219 * 8
+                            index221 * 8
 
-                          let result217 = mbt_ffi_ptr2str(
+                          let result219 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array218.push(result217)
+                          array220.push(result219)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
 
-                        Option::Some(array218)
+                        Option::Some(array220)
                       }
                       _ => panic()
                     }
 
-                    let lifted224 : Array[String]? = match
+                    let lifted226 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 20) {
                       0 => Option::None
                       1 => {
-                        let array222 : Array[String] = []
-                        for index223 = 0
-                            index223 < mbt_ffi_load32(iter_base + 28)
-                            index223 = index223 + 1 {
+                        let array224 : Array[String] = []
+                        for index225 = 0
+                            index225 < mbt_ffi_load32(iter_base + 28)
+                            index225 = index225 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 24) +
-                            index223 * 8
+                            index225 * 8
 
-                          let result221 = mbt_ffi_ptr2str(
+                          let result223 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array222.push(result221)
+                          array224.push(result223)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
 
-                        Option::Some(array222)
+                        Option::Some(array224)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaTypeBody::UrlType(@types.UrlRestrictions::{
-                      allowed_schemes: lifted220,
-                      allowed_hosts: lifted224,
+                      allowed_schemes: lifted222,
+                      allowed_hosts: lifted226,
                     })
                   }
                   28 => @types.SchemaTypeBody::DatetimeType
                   29 => @types.SchemaTypeBody::DurationType
                   30 => {
-                    let result225 = mbt_ffi_ptr2str(
+                    let result227 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    let array227 : Array[String] = []
-                    for index228 = 0
-                        index228 < mbt_ffi_load32(iter_base + 20)
-                        index228 = index228 + 1 {
+                    let array229 : Array[String] = []
+                    for index230 = 0
+                        index230 < mbt_ffi_load32(iter_base + 20)
+                        index230 = index230 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 16) +
-                        index228 * 8
+                        index230 * 8
 
-                      let result226 = mbt_ffi_ptr2str(
+                      let result228 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      array227.push(result226)
+                      array229.push(result228)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
-                    let lifted230 : @types.QuantityValue? = match
+                    let lifted232 : @types.QuantityValue? = match
                       mbt_ffi_load8_u(iter_base + 24) {
                       0 => Option::None
                       1 => {
-                        let result229 = mbt_ffi_ptr2str(
+                        let result231 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 44),
                           mbt_ffi_load32(iter_base + 48),
                         )
@@ -30994,17 +31100,17 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                         Option::Some(@types.QuantityValue::{
                           mantissa: mbt_ffi_load64(iter_base + 32),
                           scale: mbt_ffi_load32(iter_base + 40),
-                          unit: result229,
+                          unit: result231,
                         })
                       }
                       _ => panic()
                     }
 
-                    let lifted232 : @types.QuantityValue? = match
+                    let lifted234 : @types.QuantityValue? = match
                       mbt_ffi_load8_u(iter_base + 56) {
                       0 => Option::None
                       1 => {
-                        let result231 = mbt_ffi_ptr2str(
+                        let result233 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 76),
                           mbt_ffi_load32(iter_base + 80),
                         )
@@ -31012,233 +31118,213 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                         Option::Some(@types.QuantityValue::{
                           mantissa: mbt_ffi_load64(iter_base + 64),
                           scale: mbt_ffi_load32(iter_base + 72),
-                          unit: result231,
+                          unit: result233,
                         })
                       }
                       _ => panic()
                     }
 
                     @types.SchemaTypeBody::QuantityType(@types.QuantitySpec::{
-                      base_unit: result225,
-                      allowed_suffixes: array227,
-                      min: lifted230,
-                      max: lifted232,
+                      base_unit: result227,
+                      allowed_suffixes: array229,
+                      min: lifted232,
+                      max: lifted234,
                     })
                   }
                   31 => {
-                    let array256 : Array[@types.UnionBranch] = []
-                    for index257 = 0
-                        index257 < mbt_ffi_load32(iter_base + 12)
-                        index257 = index257 + 1 {
+                    let array258 : Array[@types.UnionBranch] = []
+                    for index259 = 0
+                        index259 < mbt_ffi_load32(iter_base + 12)
+                        index259 = index259 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index257 * 92
+                        index259 * 92
 
-                      let result233 = mbt_ffi_ptr2str(
+                      let result235 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      let lifted242 = match mbt_ffi_load8_u(iter_base + 12) {
+                      let lifted244 = match mbt_ffi_load8_u(iter_base + 12) {
                         0 => {
-                          let result234 = mbt_ffi_ptr2str(
-                            mbt_ffi_load32(iter_base + 16),
-                            mbt_ffi_load32(iter_base + 20),
-                          )
-
-                          @types.DiscriminatorRule::Prefix(result234)
-                        }
-                        1 => {
-                          let result235 = mbt_ffi_ptr2str(
-                            mbt_ffi_load32(iter_base + 16),
-                            mbt_ffi_load32(iter_base + 20),
-                          )
-
-                          @types.DiscriminatorRule::Suffix(result235)
-                        }
-                        2 => {
                           let result236 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          @types.DiscriminatorRule::Contains(result236)
+                          @types.DiscriminatorRule::Prefix(result236)
                         }
-                        3 => {
+                        1 => {
                           let result237 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          @types.DiscriminatorRule::Regex(result237)
+                          @types.DiscriminatorRule::Suffix(result237)
                         }
-                        4 => {
+                        2 => {
                           let result238 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          let lifted240 : String? = match
+                          @types.DiscriminatorRule::Contains(result238)
+                        }
+                        3 => {
+                          let result239 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 16),
+                            mbt_ffi_load32(iter_base + 20),
+                          )
+
+                          @types.DiscriminatorRule::Regex(result239)
+                        }
+                        4 => {
+                          let result240 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 16),
+                            mbt_ffi_load32(iter_base + 20),
+                          )
+
+                          let lifted242 : String? = match
                             mbt_ffi_load8_u(iter_base + 24) {
                             0 => Option::None
                             1 => {
-                              let result239 = mbt_ffi_ptr2str(
+                              let result241 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 28),
                                 mbt_ffi_load32(iter_base + 32),
                               )
 
-                              Option::Some(result239)
+                              Option::Some(result241)
                             }
                             _ => panic()
                           }
 
                           @types.DiscriminatorRule::FieldEquals(@types.FieldDiscriminator::{
-                            field_name: result238,
-                            literal: lifted240,
+                            field_name: result240,
+                            literal: lifted242,
                           })
                         }
                         5 => {
-                          let result241 = mbt_ffi_ptr2str(
+                          let result243 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          @types.DiscriminatorRule::FieldAbsent(result241)
+                          @types.DiscriminatorRule::FieldAbsent(result243)
                         }
                         _ => panic()
                       }
 
-                      let lifted244 : String? = match
+                      let lifted246 : String? = match
                         mbt_ffi_load8_u(iter_base + 36) {
                         0 => Option::None
                         1 => {
-                          let result243 = mbt_ffi_ptr2str(
+                          let result245 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 40),
                             mbt_ffi_load32(iter_base + 44),
                           )
 
-                          Option::Some(result243)
+                          Option::Some(result245)
                         }
                         _ => panic()
                       }
 
-                      let array246 : Array[String] = []
-                      for index247 = 0
-                          index247 < mbt_ffi_load32(iter_base + 52)
-                          index247 = index247 + 1 {
+                      let array248 : Array[String] = []
+                      for index249 = 0
+                          index249 < mbt_ffi_load32(iter_base + 52)
+                          index249 = index249 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 48) +
-                          index247 * 8
+                          index249 * 8
 
-                        let result245 = mbt_ffi_ptr2str(
+                        let result247 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array246.push(result245)
+                        array248.push(result247)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
 
-                      let array249 : Array[String] = []
-                      for index250 = 0
-                          index250 < mbt_ffi_load32(iter_base + 60)
-                          index250 = index250 + 1 {
+                      let array251 : Array[String] = []
+                      for index252 = 0
+                          index252 < mbt_ffi_load32(iter_base + 60)
+                          index252 = index252 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 56) +
-                          index250 * 8
+                          index252 * 8
 
-                        let result248 = mbt_ffi_ptr2str(
+                        let result250 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array249.push(result248)
+                        array251.push(result250)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
 
-                      let lifted252 : String? = match
+                      let lifted254 : String? = match
                         mbt_ffi_load8_u(iter_base + 64) {
                         0 => Option::None
                         1 => {
-                          let result251 = mbt_ffi_ptr2str(
+                          let result253 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 68),
                             mbt_ffi_load32(iter_base + 72),
                           )
 
-                          Option::Some(result251)
+                          Option::Some(result253)
                         }
                         _ => panic()
                       }
 
-                      let lifted255 : @types.Role? = match
+                      let lifted257 : @types.Role? = match
                         mbt_ffi_load8_u(iter_base + 76) {
                         0 => Option::None
                         1 => {
-                          let lifted254 = match
+                          let lifted256 = match
                             mbt_ffi_load8_u(iter_base + 80) {
                             0 => @types.Role::Multimodal
                             1 => @types.Role::UnstructuredText
                             2 => @types.Role::UnstructuredBinary
                             3 => {
-                              let result253 = mbt_ffi_ptr2str(
+                              let result255 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 84),
                                 mbt_ffi_load32(iter_base + 88),
                               )
 
-                              @types.Role::Other(result253)
+                              @types.Role::Other(result255)
                             }
                             _ => panic()
                           }
 
-                          Option::Some(lifted254)
+                          Option::Some(lifted256)
                         }
                         _ => panic()
                       }
 
-                      array256.push(@types.UnionBranch::{
-                        tag: result233,
+                      array258.push(@types.UnionBranch::{
+                        tag: result235,
                         body: mbt_ffi_load32(iter_base + 8),
-                        discriminator: lifted242,
+                        discriminator: lifted244,
                         metadata: @types.MetadataEnvelope::{
-                          doc: lifted244,
-                          aliases: array246,
-                          examples: array249,
-                          deprecated: lifted252,
-                          role: lifted255,
+                          doc: lifted246,
+                          aliases: array248,
+                          examples: array251,
+                          deprecated: lifted254,
+                          role: lifted257,
                         },
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
                     @types.SchemaTypeBody::UnionType(@types.UnionSpec::{
-                      branches: array256,
+                      branches: array258,
                     })
                   }
                   32 => {
-                    let lifted259 : String? = match
+                    let lifted261 : String? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => {
-                        let result258 = mbt_ffi_ptr2str(
+                        let result260 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 16),
                           mbt_ffi_load32(iter_base + 20),
-                        )
-
-                        Option::Some(result258)
-                      }
-                      _ => panic()
-                    }
-
-                    @types.SchemaTypeBody::SecretType(@types.SecretSpec::{
-                      inner: mbt_ffi_load32(iter_base + 8),
-                      category: lifted259,
-                    })
-                  }
-                  33 => {
-                    let lifted261 : String? = match
-                      mbt_ffi_load8_u(iter_base + 8) {
-                      0 => Option::None
-                      1 => {
-                        let result260 = mbt_ffi_ptr2str(
-                          mbt_ffi_load32(iter_base + 12),
-                          mbt_ffi_load32(iter_base + 16),
                         )
 
                         Option::Some(result260)
@@ -31246,8 +31332,28 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                       _ => panic()
                     }
 
+                    @types.SchemaTypeBody::SecretType(@types.SecretSpec::{
+                      inner: mbt_ffi_load32(iter_base + 8),
+                      category: lifted261,
+                    })
+                  }
+                  33 => {
+                    let lifted263 : String? = match
+                      mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => {
+                        let result262 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 12),
+                          mbt_ffi_load32(iter_base + 16),
+                        )
+
+                        Option::Some(result262)
+                      }
+                      _ => panic()
+                    }
+
                     @types.SchemaTypeBody::QuotaTokenType(@types.QuotaTokenSpec::{
-                      resource_name: lifted261,
+                      resource_name: lifted263,
                     })
                   }
                   34 =>
@@ -31255,162 +31361,162 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                       polymorphic: mbt_ffi_load8_u(iter_base + 8) != 0,
                     })
                   35 => {
-                    let lifted262 : Int? = match
+                    let lifted264 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::FutureType(lifted262)
+                    @types.SchemaTypeBody::FutureType(lifted264)
                   }
                   36 => {
-                    let lifted263 : Int? = match
+                    let lifted265 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::StreamType(lifted263)
+                    @types.SchemaTypeBody::StreamType(lifted265)
                   }
                   _ => panic()
                 }
 
-                let lifted266 : String? = match
+                let lifted268 : String? = match
                   mbt_ffi_load8_u(iter_base + 88) {
                   0 => Option::None
                   1 => {
-                    let result265 = mbt_ffi_ptr2str(
+                    let result267 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 92),
                       mbt_ffi_load32(iter_base + 96),
                     )
 
-                    Option::Some(result265)
+                    Option::Some(result267)
                   }
                   _ => panic()
                 }
 
-                let array268 : Array[String] = []
-                for index269 = 0
-                    index269 < mbt_ffi_load32(iter_base + 104)
-                    index269 = index269 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 100) + index269 * 8
+                let array270 : Array[String] = []
+                for index271 = 0
+                    index271 < mbt_ffi_load32(iter_base + 104)
+                    index271 = index271 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 100) + index271 * 8
 
-                  let result267 = mbt_ffi_ptr2str(
+                  let result269 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  array268.push(result267)
+                  array270.push(result269)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
 
-                let array271 : Array[String] = []
-                for index272 = 0
-                    index272 < mbt_ffi_load32(iter_base + 112)
-                    index272 = index272 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 108) + index272 * 8
+                let array273 : Array[String] = []
+                for index274 = 0
+                    index274 < mbt_ffi_load32(iter_base + 112)
+                    index274 = index274 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 108) + index274 * 8
 
-                  let result270 = mbt_ffi_ptr2str(
+                  let result272 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  array271.push(result270)
+                  array273.push(result272)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
 
-                let lifted274 : String? = match
+                let lifted276 : String? = match
                   mbt_ffi_load8_u(iter_base + 116) {
                   0 => Option::None
                   1 => {
-                    let result273 = mbt_ffi_ptr2str(
+                    let result275 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 120),
                       mbt_ffi_load32(iter_base + 124),
                     )
 
-                    Option::Some(result273)
+                    Option::Some(result275)
                   }
                   _ => panic()
                 }
 
-                let lifted277 : @types.Role? = match
+                let lifted279 : @types.Role? = match
                   mbt_ffi_load8_u(iter_base + 128) {
                   0 => Option::None
                   1 => {
-                    let lifted276 = match mbt_ffi_load8_u(iter_base + 132) {
+                    let lifted278 = match mbt_ffi_load8_u(iter_base + 132) {
                       0 => @types.Role::Multimodal
                       1 => @types.Role::UnstructuredText
                       2 => @types.Role::UnstructuredBinary
                       3 => {
-                        let result275 = mbt_ffi_ptr2str(
+                        let result277 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 136),
                           mbt_ffi_load32(iter_base + 140),
                         )
 
-                        @types.Role::Other(result275)
+                        @types.Role::Other(result277)
                       }
                       _ => panic()
                     }
 
-                    Option::Some(lifted276)
+                    Option::Some(lifted278)
                   }
                   _ => panic()
                 }
 
-                array278.push(@types.SchemaTypeNode::{
-                  body: lifted264,
+                array280.push(@types.SchemaTypeNode::{
+                  body: lifted266,
                   metadata: @types.MetadataEnvelope::{
-                    doc: lifted266,
-                    aliases: array268,
-                    examples: array271,
-                    deprecated: lifted274,
-                    role: lifted277,
+                    doc: lifted268,
+                    aliases: array270,
+                    examples: array273,
+                    deprecated: lifted276,
+                    role: lifted279,
                   },
                 })
               }
               mbt_ffi_free(mbt_ffi_load32(return_area + 12))
 
-              let array283 : Array[@types.SchemaTypeDef] = []
-              for index284 = 0
-                  index284 < mbt_ffi_load32(return_area + 24)
-                  index284 = index284 + 1 {
-                let iter_base = mbt_ffi_load32(return_area + 20) + index284 * 24
+              let array285 : Array[@types.SchemaTypeDef] = []
+              for index286 = 0
+                  index286 < mbt_ffi_load32(return_area + 24)
+                  index286 = index286 + 1 {
+                let iter_base = mbt_ffi_load32(return_area + 20) + index286 * 24
 
-                let result280 = mbt_ffi_ptr2str(
+                let result282 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 0),
                   mbt_ffi_load32(iter_base + 4),
                 )
 
-                let lifted282 : String? = match mbt_ffi_load8_u(iter_base + 8) {
+                let lifted284 : String? = match mbt_ffi_load8_u(iter_base + 8) {
                   0 => Option::None
                   1 => {
-                    let result281 = mbt_ffi_ptr2str(
+                    let result283 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 12),
                       mbt_ffi_load32(iter_base + 16),
                     )
 
-                    Option::Some(result281)
+                    Option::Some(result283)
                   }
                   _ => panic()
                 }
 
-                array283.push(@types.SchemaTypeDef::{
-                  id: result280,
-                  name: lifted282,
+                array285.push(@types.SchemaTypeDef::{
+                  id: result282,
+                  name: lifted284,
                   body: mbt_ffi_load32(iter_base + 20),
                 })
               }
               mbt_ffi_free(mbt_ffi_load32(return_area + 20))
 
-              let array314 : Array[@types.SchemaValueNode] = []
-              for index315 = 0
-                  index315 < mbt_ffi_load32(return_area + 36)
-                  index315 = index315 + 1 {
-                let iter_base = mbt_ffi_load32(return_area + 32) + index315 * 32
+              let array316 : Array[@types.SchemaValueNode] = []
+              for index317 = 0
+                  index317 < mbt_ffi_load32(return_area + 36)
+                  index317 = index317 + 1 {
+                let iter_base = mbt_ffi_load32(return_area + 32) + index317 * 32
 
-                let lifted313 = match mbt_ffi_load8_u(iter_base + 0) {
+                let lifted315 = match mbt_ffi_load8_u(iter_base + 0) {
                   0 =>
                     @types.SchemaValueNode::BoolValue(
                       mbt_ffi_load8_u(iter_base + 8) != 0,
@@ -31462,29 +31568,29 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                       Int::unsafe_to_char(mbt_ffi_load32(iter_base + 8)),
                     )
                   12 => {
-                    let result285 = mbt_ffi_ptr2str(
+                    let result287 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    @types.SchemaValueNode::StringValue(result285)
+                    @types.SchemaValueNode::StringValue(result287)
                   }
                   13 => {
-                    let array286 : Array[Int] = []
-                    for index287 = 0
-                        index287 < mbt_ffi_load32(iter_base + 12)
-                        index287 = index287 + 1 {
+                    let array288 : Array[Int] = []
+                    for index289 = 0
+                        index289 < mbt_ffi_load32(iter_base + 12)
+                        index289 = index289 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index287 * 4
+                        index289 * 4
 
-                      array286.push(mbt_ffi_load32(iter_base + 0))
+                      array288.push(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::RecordValue(array286)
+                    @types.SchemaValueNode::RecordValue(array288)
                   }
                   14 => {
-                    let lifted288 : Int? = match
+                    let lifted290 : Int? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 16))
@@ -31493,7 +31599,7 @@ pub fn WasmRpc::schedule_cancelable_invocation(
 
                     @types.SchemaValueNode::VariantValue(@types.VariantValuePayload::{
                       case: mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
-                      payload: lifted288,
+                      payload: lifted290,
                     })
                   }
                   15 =>
@@ -31501,34 +31607,20 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                       mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
                     )
                   16 => {
-                    let array289 : Array[Bool] = []
-                    for index290 = 0
-                        index290 < mbt_ffi_load32(iter_base + 12)
-                        index290 = index290 + 1 {
-                      let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index290 * 1
-
-                      array289.push(mbt_ffi_load8_u(iter_base + 0) != 0)
-                    }
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-                    @types.SchemaValueNode::FlagsValue(array289)
-                  }
-                  17 => {
-                    let array291 : Array[Int] = []
+                    let array291 : Array[Bool] = []
                     for index292 = 0
                         index292 < mbt_ffi_load32(iter_base + 12)
                         index292 = index292 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index292 * 4
+                        index292 * 1
 
-                      array291.push(mbt_ffi_load32(iter_base + 0))
+                      array291.push(mbt_ffi_load8_u(iter_base + 0) != 0)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::TupleValue(array291)
+                    @types.SchemaValueNode::FlagsValue(array291)
                   }
-                  18 => {
+                  17 => {
                     let array293 : Array[Int] = []
                     for index294 = 0
                         index294 < mbt_ffi_load32(iter_base + 12)
@@ -31540,9 +31632,9 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::ListValue(array293)
+                    @types.SchemaValueNode::TupleValue(array293)
                   }
-                  19 => {
+                  18 => {
                     let array295 : Array[Int] = []
                     for index296 = 0
                         index296 < mbt_ffi_load32(iter_base + 12)
@@ -31554,127 +31646,141 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::FixedListValue(array295)
+                    @types.SchemaValueNode::ListValue(array295)
                   }
-                  20 => {
-                    let array297 : Array[@types.MapEntry] = []
+                  19 => {
+                    let array297 : Array[Int] = []
                     for index298 = 0
                         index298 < mbt_ffi_load32(iter_base + 12)
                         index298 = index298 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index298 * 8
+                        index298 * 4
 
-                      array297.push(@types.MapEntry::{
+                      array297.push(mbt_ffi_load32(iter_base + 0))
+                    }
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                    @types.SchemaValueNode::FixedListValue(array297)
+                  }
+                  20 => {
+                    let array299 : Array[@types.MapEntry] = []
+                    for index300 = 0
+                        index300 < mbt_ffi_load32(iter_base + 12)
+                        index300 = index300 + 1 {
+                      let iter_base = mbt_ffi_load32(iter_base + 8) +
+                        index300 * 8
+
+                      array299.push(@types.MapEntry::{
                         key: mbt_ffi_load32(iter_base + 0),
                         value: mbt_ffi_load32(iter_base + 4),
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::MapValue(array297)
+                    @types.SchemaValueNode::MapValue(array299)
                   }
                   21 => {
-                    let lifted299 : Int? = match
+                    let lifted301 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    @types.SchemaValueNode::OptionValue(lifted299)
+                    @types.SchemaValueNode::OptionValue(lifted301)
                   }
                   22 => {
-                    let lifted302 = match mbt_ffi_load8_u(iter_base + 8) {
+                    let lifted304 = match mbt_ffi_load8_u(iter_base + 8) {
                       0 => {
-                        let lifted300 : Int? = match
+                        let lifted302 : Int? = match
                           mbt_ffi_load8_u(iter_base + 12) {
                           0 => Option::None
                           1 => Option::Some(mbt_ffi_load32(iter_base + 16))
                           _ => panic()
                         }
 
-                        @types.ResultValuePayload::OkValue(lifted300)
+                        @types.ResultValuePayload::OkValue(lifted302)
                       }
                       1 => {
-                        let lifted301 : Int? = match
+                        let lifted303 : Int? = match
                           mbt_ffi_load8_u(iter_base + 12) {
                           0 => Option::None
                           1 => Option::Some(mbt_ffi_load32(iter_base + 16))
                           _ => panic()
                         }
 
-                        @types.ResultValuePayload::ErrValue(lifted301)
+                        @types.ResultValuePayload::ErrValue(lifted303)
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaValueNode::ResultValue(lifted302)
+                    @types.SchemaValueNode::ResultValue(lifted304)
                   }
                   23 => {
-                    let result303 = mbt_ffi_ptr2str(
+                    let result305 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    let lifted305 : String? = match
+                    let lifted307 : String? = match
                       mbt_ffi_load8_u(iter_base + 16) {
                       0 => Option::None
                       1 => {
-                        let result304 = mbt_ffi_ptr2str(
+                        let result306 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 20),
                           mbt_ffi_load32(iter_base + 24),
                         )
 
-                        Option::Some(result304)
+                        Option::Some(result306)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaValueNode::TextValue(@types.TextValuePayload::{
-                      text: result303,
-                      language: lifted305,
+                      text: result305,
+                      language: lifted307,
                     })
                   }
                   24 => {
-                    let result306 = mbt_ffi_ptr2bytes(
+                    let result308 = mbt_ffi_ptr2bytes(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    let lifted308 : String? = match
+                    let lifted310 : String? = match
                       mbt_ffi_load8_u(iter_base + 16) {
                       0 => Option::None
                       1 => {
-                        let result307 = mbt_ffi_ptr2str(
+                        let result309 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 20),
                           mbt_ffi_load32(iter_base + 24),
                         )
 
-                        Option::Some(result307)
+                        Option::Some(result309)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaValueNode::BinaryValue(@types.BinaryValuePayload::{
-                      bytes: result306,
-                      mime_type: lifted308,
+                      bytes: result308,
+                      mime_type: lifted310,
                     })
                   }
                   25 => {
-                    let result309 = mbt_ffi_ptr2str(
+                    let result311 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    @types.SchemaValueNode::PathValue(result309)
+                    @types.SchemaValueNode::PathValue(result311)
                   }
                   26 => {
-                    let result310 = mbt_ffi_ptr2str(
+                    let result312 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    @types.SchemaValueNode::UrlValue(result310)
+                    @types.SchemaValueNode::UrlValue(result312)
                   }
                   27 =>
                     @types.SchemaValueNode::DatetimeValue(@types.Datetime::{
@@ -31686,7 +31792,7 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                       nanoseconds: mbt_ffi_load64(iter_base + 8),
                     })
                   29 => {
-                    let result311 = mbt_ffi_ptr2str(
+                    let result313 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 20),
                       mbt_ffi_load32(iter_base + 24),
                     )
@@ -31694,17 +31800,17 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                     @types.SchemaValueNode::QuantityValueNode(@types.QuantityValue::{
                       mantissa: mbt_ffi_load64(iter_base + 8),
                       scale: mbt_ffi_load32(iter_base + 16),
-                      unit: result311,
+                      unit: result313,
                     })
                   }
                   30 => {
-                    let result312 = mbt_ffi_ptr2str(
+                    let result314 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
                     @types.SchemaValueNode::UnionValue(@types.UnionValuePayload::{
-                      tag: result312,
+                      tag: result314,
                       body: mbt_ffi_load32(iter_base + 16),
                     })
                   }
@@ -31724,21 +31830,27 @@ pub fn WasmRpc::schedule_cancelable_invocation(
                         mbt_ffi_load32(iter_base + 8),
                       ),
                     )
+                  34 =>
+                    @types.SchemaValueNode::StreamValue(
+                      @types.SchemaValueStream::SchemaValueStream(
+                        mbt_ffi_load32(iter_base + 8),
+                      ),
+                    )
                   _ => panic()
                 }
 
-                array314.push(lifted313)
+                array316.push(lifted315)
               }
               mbt_ffi_free(mbt_ffi_load32(return_area + 32))
 
               @common.AgentError::CustomError(@types.TypedSchemaValue::{
                 graph: @types.SchemaGraph::{
-                  type_nodes: array278,
-                  defs: array283,
+                  type_nodes: array280,
+                  defs: array285,
                   root: mbt_ffi_load32(return_area + 28),
                 },
                 value: @types.SchemaValueTree::{
-                  value_nodes: array314,
+                  value_nodes: array316,
                   root: mbt_ffi_load32(return_area + 40),
                 },
               })
@@ -31746,18 +31858,18 @@ pub fn WasmRpc::schedule_cancelable_invocation(
             _ => panic()
           }
 
-          RpcError::RemoteAgentError(lifted316)
+          RpcError::RemoteAgentError(lifted318)
         }
         _ => panic()
       }
 
-      Result::Err(lifted317)
+      Result::Err(lifted319)
     }
     _ => panic()
   }
-  let ret = lifted318
+  let ret = lifted320
   mbt_ffi_free(ptr)
-  mbt_ffi_free(address69)
+  mbt_ffi_free(address71)
   mbt_ffi_free(return_area)
 
   cleanup_list.each(mbt_ffi_free)
@@ -31846,6 +31958,10 @@ pub async fn FutureInvokeResult::get(
                     @types.QuotaToken::QuotaToken(mbt_ffi_load32(iter_base + 8)).drop()
                   33 =>
                     @types.PermissionCard::PermissionCard(
+                      mbt_ffi_load32(iter_base + 8),
+                    ).drop()
+                  34 =>
+                    @types.SchemaValueStream::SchemaValueStream(
                       mbt_ffi_load32(iter_base + 8),
                     ).drop()
                   _ => panic()
@@ -32463,6 +32579,10 @@ pub async fn FutureInvokeResult::get(
                         @types.PermissionCard::PermissionCard(
                           mbt_ffi_load32(iter_base + 8),
                         ).drop()
+                      34 =>
+                        @types.SchemaValueStream::SchemaValueStream(
+                          mbt_ffi_load32(iter_base + 8),
+                        ).drop()
                       _ => panic()
                     }
                   }
@@ -32775,6 +32895,12 @@ pub async fn FutureInvokeResult::get(
               33 =>
                 @types.SchemaValueNode::PermissionCardHandle(
                   @types.PermissionCard::PermissionCard(
+                    mbt_ffi_load32(iter_base + 8),
+                  ),
+                )
+              34 =>
+                @types.SchemaValueNode::StreamValue(
+                  @types.SchemaValueStream::SchemaValueStream(
                     mbt_ffi_load32(iter_base + 8),
                   ),
                 )
@@ -35023,6 +35149,12 @@ pub async fn FutureInvokeResult::get(
                   33 =>
                     @types.SchemaValueNode::PermissionCardHandle(
                       @types.PermissionCard::PermissionCard(
+                        mbt_ffi_load32(iter_base + 8),
+                      ),
+                    )
+                  34 =>
+                    @types.SchemaValueNode::StreamValue(
+                      @types.SchemaValueStream::SchemaValueStream(
                         mbt_ffi_load32(iter_base + 8),
                       ),
                     )
@@ -37784,6 +37916,12 @@ pub fn get_config_value(
           33 =>
             @types.SchemaValueNode::PermissionCardHandle(
               @types.PermissionCard::PermissionCard(
+                mbt_ffi_load32(iter_base + 8),
+              ),
+            )
+          34 =>
+            @types.SchemaValueNode::StreamValue(
+              @types.SchemaValueStream::SchemaValueStream(
                 mbt_ffi_load32(iter_base + 8),
               ),
             )

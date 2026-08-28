@@ -2702,6 +2702,12 @@ pub fn reveal(
                 mbt_ffi_load32(iter_base + 8),
               ),
             )
+          34 =>
+            @types.SchemaValueNode::StreamValue(
+              @types.SchemaValueStream::SchemaValueStream(
+                mbt_ffi_load32(iter_base + 8),
+              ),
+            )
           _ => panic()
         }
 

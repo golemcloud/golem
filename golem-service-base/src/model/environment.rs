@@ -30,18 +30,24 @@ pub struct EnvironmentState {
     pub tool_deployment: Option<ToolDeploymentState>,
 }
 
-impl From<EnvironmentState> for golem_api_grpc::proto::golem::registry::EnvironmentState {
-    fn from(value: EnvironmentState) -> Self {
-        Self {
+impl TryFrom<EnvironmentState> for golem_api_grpc::proto::golem::registry::EnvironmentState {
+    type Error = String;
+
+    fn try_from(value: EnvironmentState) -> Result<Self, Self::Error> {
+        Ok(Self {
             agent_deployment_details: value
                 .agent_deployment_details
                 .into_values()
                 .map(Into::into)
                 .collect(),
-            agent_secrets: value.agent_secrets.into_values().map(Into::into).collect(),
+            agent_secrets: value
+                .agent_secrets
+                .into_values()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
             retry_policies: value.retry_policies.into_iter().map(Into::into).collect(),
             tool_deployment: value.tool_deployment.map(Into::into),
-        }
+        })
     }
 }
 
@@ -97,7 +103,8 @@ mod tests {
             tool_deployment: Some(tool_deployment.clone()),
         };
 
-        let proto: golem_api_grpc::proto::golem::registry::EnvironmentState = state.into();
+        let proto: golem_api_grpc::proto::golem::registry::EnvironmentState =
+            state.try_into().unwrap();
         let decoded = EnvironmentState::try_from(proto).unwrap();
 
         assert_eq!(decoded.tool_deployment, Some(tool_deployment));

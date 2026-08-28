@@ -79,6 +79,11 @@ message OplogEntry {
     CardTransferredParameters CardTransferred = 57;
     CardRevokedCascadeParameters CardRevokedCascade = 58;
     CardTransferConfirmedParameters CardTransferConfirmed = 59;
+    DurableStreamRecordParameters StreamRegistered = 60;
+    DurableStreamRecordParameters StreamItems = 61;
+    DurableStreamRecordParameters StreamEnd = 62;
+    DurableStreamRecordParameters StreamCancel = 63;
+    DurableStreamRecordParameters StreamSession = 64;
   }
 }
 
@@ -440,6 +445,11 @@ message HostStreamFrameParameters {
   uint64 parent_start_index = 2;
   HostStreamKind kind = 3;
   golem.schema.TypedSchemaValue payload = 4;
+}
+
+message DurableStreamRecordParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.schema.TypedSchemaValue record = 2;
 }
 
 message EndAtomicRegionParameters {

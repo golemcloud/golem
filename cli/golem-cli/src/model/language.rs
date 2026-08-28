@@ -131,7 +131,7 @@ mod tests {
             Some(GuestLanguage::Rust)
         );
         assert_eq!(
-            GuestLanguage::from_component_template_name("custom-scala"),
+            GuestLanguage::from_component_template_name("custom-ts"),
             None
         );
     }

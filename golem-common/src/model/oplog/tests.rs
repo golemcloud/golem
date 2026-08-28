@@ -1556,6 +1556,7 @@ fn remove_retry_policy_serialization_poem_serde_equivalence() {
 mod scope_scan {
     use crate::model::invocation_context::SpanId;
     use crate::model::oplog::host_functions::HostFunctionName;
+    use crate::model::oplog::raw_types::PayloadId;
     use crate::model::oplog::{
         AttributeMap, DurableFunctionType, LogLevel, OplogEntry, OplogPayload,
         OplogScopeProjection, ScopeScanState,
@@ -1798,6 +1799,51 @@ mod scope_scan {
             .collect::<Vec<_>>();
 
         assert_eq!(projected, vec![10, 11]);
+    }
+
+    #[test]
+    fn stream_hints_are_benign_revision_neutral_and_excluded_from_scope_projection() {
+        macro_rules! external_payload {
+            () => {
+                OplogPayload::External {
+                    payload_id: PayloadId::new(),
+                    md5_hash: vec![0; 16],
+                    cached: None,
+                }
+            };
+        }
+        let entries = [
+            OplogEntry::StreamRegistered {
+                timestamp: Timestamp::now_utc(),
+                record: external_payload!(),
+            },
+            OplogEntry::StreamItems {
+                timestamp: Timestamp::now_utc(),
+                record: external_payload!(),
+            },
+            OplogEntry::StreamEnd {
+                timestamp: Timestamp::now_utc(),
+                record: external_payload!(),
+            },
+            OplogEntry::StreamCancel {
+                timestamp: Timestamp::now_utc(),
+                record: external_payload!(),
+            },
+            OplogEntry::StreamSession {
+                timestamp: Timestamp::now_utc(),
+                record: external_payload!(),
+            },
+        ];
+        let root = idx(10);
+        let state = ScopeScanState::new(root);
+        let mut projection = OplogScopeProjection::new(root);
+        assert!(projection.includes(root, &start(None, DurableFunctionType::WriteLocal)));
+
+        for (offset, entry) in entries.iter().enumerate() {
+            assert!(entry.no_concurrent_side_effect(root, &state));
+            assert_eq!(entry.specifies_component_revision(), None);
+            assert!(!projection.includes(idx(11 + offset as u64), entry));
+        }
     }
 
     #[test]

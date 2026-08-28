@@ -38,7 +38,7 @@ import {
   SchemaGraph,
   SchemaValue,
   schemaValueFromWit,
-  schemaValueToWit,
+  schemaValueToWitAsync,
 } from './internal/schema-model';
 import { AgentClassName } from './agentClassName';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
@@ -544,7 +544,7 @@ class ResolvedAgentImpl {
       if (mc.output.tag === 'unit') {
         return { tag: 'ok', val: undefined };
       }
-      return { tag: 'ok', val: schemaValueToWit(mc.output.codec.toValue(result)) };
+      return { tag: 'ok', val: await schemaValueToWitAsync(mc.output.codec.toValue(result)) };
     } catch (e) {
       return {
         tag: 'err',

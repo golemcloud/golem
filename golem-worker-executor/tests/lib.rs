@@ -94,30 +94,31 @@ tag_suite!(blobstore, group1);
 tag_suite!(keyvalue, group1);
 tag_suite!(in_function_retry, in_function_retry);
 tag_suite!(http, group1);
-tag_suite!(websocket, group1);
 tag_suite!(rdbms, group1);
-tag_suite!(agent, group1);
-tag_suite!(agent_sdk_ts, group1);
 
 tag_suite!(hot_update, group2);
 tag_suite!(instance_layer, group2);
 tag_suite!(transactions, group2);
 tag_suite!(observability, group2);
 tag_suite!(retry_policies, group2);
+tag_suite!(storage_quota, storage_quota);
 
-tag_suite!(durability, group3);
 tag_suite!(rpc, group3);
-tag_suite!(scope_cards, group3);
 tag_suite!(wasi, group3);
-tag_suite!(scalability, group3);
 tag_suite!(revert, group3);
-tag_suite!(readonly, group3);
+
+tag_suite!(websocket, group4);
+tag_suite!(agent, group4);
+tag_suite!(agent_sdk_ts, group4);
+tag_suite!(durability, group4);
+tag_suite!(scope_cards, group4);
+tag_suite!(scalability, group4);
+tag_suite!(readonly, group4);
 
 tag_suite!(ignite_service, ignite_service);
 tag_suite!(rdbms_service, rdbms_service);
 tag_suite!(resource_limits, group1);
 tag_suite!(oplog_metrics, group1);
-tag_suite!(storage_quota, group1);
 tag_suite!(tool_discovery, group1);
 
 sequential_suite!(key_value_storage);

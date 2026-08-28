@@ -559,6 +559,12 @@ pub fn get_all_tools() -> Array[RegisteredTool] {
                       mbt_ffi_load32(iter_base + 8),
                     ),
                   )
+                34 =>
+                  @types.SchemaValueNode::StreamValue(
+                    @types.SchemaValueStream::SchemaValueStream(
+                      mbt_ffi_load32(iter_base + 8),
+                    ),
+                  )
                 _ => panic()
               }
 
@@ -1105,6 +1111,12 @@ pub fn get_all_tools() -> Array[RegisteredTool] {
                     33 =>
                       @types.SchemaValueNode::PermissionCardHandle(
                         @types.PermissionCard::PermissionCard(
+                          mbt_ffi_load32(iter_base + 8),
+                        ),
+                      )
+                    34 =>
+                      @types.SchemaValueNode::StreamValue(
+                        @types.SchemaValueStream::SchemaValueStream(
                           mbt_ffi_load32(iter_base + 8),
                         ),
                       )
@@ -1690,6 +1702,12 @@ pub fn get_all_tools() -> Array[RegisteredTool] {
                           mbt_ffi_load32(iter_base + 8),
                         ),
                       )
+                    34 =>
+                      @types.SchemaValueNode::StreamValue(
+                        @types.SchemaValueStream::SchemaValueStream(
+                          mbt_ffi_load32(iter_base + 8),
+                        ),
+                      )
                     _ => panic()
                   }
 
@@ -2208,6 +2226,12 @@ pub fn get_all_tools() -> Array[RegisteredTool] {
                                 mbt_ffi_load32(iter_base + 8),
                               ),
                             )
+                          34 =>
+                            @types.SchemaValueNode::StreamValue(
+                              @types.SchemaValueStream::SchemaValueStream(
+                                mbt_ffi_load32(iter_base + 8),
+                              ),
+                            )
                           _ => panic()
                         }
 
@@ -2580,6 +2604,12 @@ pub fn get_all_tools() -> Array[RegisteredTool] {
                                 mbt_ffi_load32(iter_base + 8),
                               ),
                             )
+                          34 =>
+                            @types.SchemaValueNode::StreamValue(
+                              @types.SchemaValueStream::SchemaValueStream(
+                                mbt_ffi_load32(iter_base + 8),
+                              ),
+                            )
                           _ => panic()
                         }
 
@@ -2949,6 +2979,12 @@ pub fn get_all_tools() -> Array[RegisteredTool] {
                           33 =>
                             @types.SchemaValueNode::PermissionCardHandle(
                               @types.PermissionCard::PermissionCard(
+                                mbt_ffi_load32(iter_base + 8),
+                              ),
+                            )
+                          34 =>
+                            @types.SchemaValueNode::StreamValue(
+                              @types.SchemaValueStream::SchemaValueStream(
                                 mbt_ffi_load32(iter_base + 8),
                               ),
                             )
@@ -3341,6 +3377,12 @@ pub fn get_all_tools() -> Array[RegisteredTool] {
                                   mbt_ffi_load32(iter_base + 8),
                                 ),
                               )
+                            34 =>
+                              @types.SchemaValueNode::StreamValue(
+                                @types.SchemaValueStream::SchemaValueStream(
+                                  mbt_ffi_load32(iter_base + 8),
+                                ),
+                              )
                             _ => panic()
                           }
 
@@ -3717,6 +3759,12 @@ pub fn get_all_tools() -> Array[RegisteredTool] {
                                 mbt_ffi_load32(iter_base + 8),
                               ),
                             )
+                          34 =>
+                            @types.SchemaValueNode::StreamValue(
+                              @types.SchemaValueStream::SchemaValueStream(
+                                mbt_ffi_load32(iter_base + 8),
+                              ),
+                            )
                           _ => panic()
                         }
 
@@ -4083,6 +4131,12 @@ pub fn get_all_tools() -> Array[RegisteredTool] {
                           33 =>
                             @types.SchemaValueNode::PermissionCardHandle(
                               @types.PermissionCard::PermissionCard(
+                                mbt_ffi_load32(iter_base + 8),
+                              ),
+                            )
+                          34 =>
+                            @types.SchemaValueNode::StreamValue(
+                              @types.SchemaValueStream::SchemaValueStream(
                                 mbt_ffi_load32(iter_base + 8),
                               ),
                             )
@@ -4467,6 +4521,12 @@ pub fn get_all_tools() -> Array[RegisteredTool] {
                                 mbt_ffi_load32(iter_base + 8),
                               ),
                             )
+                          34 =>
+                            @types.SchemaValueNode::StreamValue(
+                              @types.SchemaValueStream::SchemaValueStream(
+                                mbt_ffi_load32(iter_base + 8),
+                              ),
+                            )
                           _ => panic()
                         }
 
@@ -4833,6 +4893,12 @@ pub fn get_all_tools() -> Array[RegisteredTool] {
                           33 =>
                             @types.SchemaValueNode::PermissionCardHandle(
                               @types.PermissionCard::PermissionCard(
+                                mbt_ffi_load32(iter_base + 8),
+                              ),
+                            )
+                          34 =>
+                            @types.SchemaValueNode::StreamValue(
+                              @types.SchemaValueStream::SchemaValueStream(
                                 mbt_ffi_load32(iter_base + 8),
                               ),
                             )
@@ -7520,6 +7586,12 @@ pub fn get_tool(name : String) -> RegisteredTool? {
                         mbt_ffi_load32(iter_base + 8),
                       ),
                     )
+                  34 =>
+                    @types.SchemaValueNode::StreamValue(
+                      @types.SchemaValueStream::SchemaValueStream(
+                        mbt_ffi_load32(iter_base + 8),
+                      ),
+                    )
                   _ => panic()
                 }
 
@@ -8071,6 +8143,12 @@ pub fn get_tool(name : String) -> RegisteredTool? {
                       33 =>
                         @types.SchemaValueNode::PermissionCardHandle(
                           @types.PermissionCard::PermissionCard(
+                            mbt_ffi_load32(iter_base + 8),
+                          ),
+                        )
+                      34 =>
+                        @types.SchemaValueNode::StreamValue(
+                          @types.SchemaValueStream::SchemaValueStream(
                             mbt_ffi_load32(iter_base + 8),
                           ),
                         )
@@ -8660,6 +8738,12 @@ pub fn get_tool(name : String) -> RegisteredTool? {
                             mbt_ffi_load32(iter_base + 8),
                           ),
                         )
+                      34 =>
+                        @types.SchemaValueNode::StreamValue(
+                          @types.SchemaValueStream::SchemaValueStream(
+                            mbt_ffi_load32(iter_base + 8),
+                          ),
+                        )
                       _ => panic()
                     }
 
@@ -9190,6 +9274,12 @@ pub fn get_tool(name : String) -> RegisteredTool? {
                                   mbt_ffi_load32(iter_base + 8),
                                 ),
                               )
+                            34 =>
+                              @types.SchemaValueNode::StreamValue(
+                                @types.SchemaValueStream::SchemaValueStream(
+                                  mbt_ffi_load32(iter_base + 8),
+                                ),
+                              )
                             _ => panic()
                           }
 
@@ -9573,6 +9663,12 @@ pub fn get_tool(name : String) -> RegisteredTool? {
                                   mbt_ffi_load32(iter_base + 8),
                                 ),
                               )
+                            34 =>
+                              @types.SchemaValueNode::StreamValue(
+                                @types.SchemaValueStream::SchemaValueStream(
+                                  mbt_ffi_load32(iter_base + 8),
+                                ),
+                              )
                             _ => panic()
                           }
 
@@ -9953,6 +10049,12 @@ pub fn get_tool(name : String) -> RegisteredTool? {
                             33 =>
                               @types.SchemaValueNode::PermissionCardHandle(
                                 @types.PermissionCard::PermissionCard(
+                                  mbt_ffi_load32(iter_base + 8),
+                                ),
+                              )
+                            34 =>
+                              @types.SchemaValueNode::StreamValue(
+                                @types.SchemaValueStream::SchemaValueStream(
                                   mbt_ffi_load32(iter_base + 8),
                                 ),
                               )
@@ -10350,6 +10452,12 @@ pub fn get_tool(name : String) -> RegisteredTool? {
                                     mbt_ffi_load32(iter_base + 8),
                                   ),
                                 )
+                              34 =>
+                                @types.SchemaValueNode::StreamValue(
+                                  @types.SchemaValueStream::SchemaValueStream(
+                                    mbt_ffi_load32(iter_base + 8),
+                                  ),
+                                )
                               _ => panic()
                             }
 
@@ -10737,6 +10845,12 @@ pub fn get_tool(name : String) -> RegisteredTool? {
                                   mbt_ffi_load32(iter_base + 8),
                                 ),
                               )
+                            34 =>
+                              @types.SchemaValueNode::StreamValue(
+                                @types.SchemaValueStream::SchemaValueStream(
+                                  mbt_ffi_load32(iter_base + 8),
+                                ),
+                              )
                             _ => panic()
                           }
 
@@ -11114,6 +11228,12 @@ pub fn get_tool(name : String) -> RegisteredTool? {
                             33 =>
                               @types.SchemaValueNode::PermissionCardHandle(
                                 @types.PermissionCard::PermissionCard(
+                                  mbt_ffi_load32(iter_base + 8),
+                                ),
+                              )
+                            34 =>
+                              @types.SchemaValueNode::StreamValue(
+                                @types.SchemaValueStream::SchemaValueStream(
                                   mbt_ffi_load32(iter_base + 8),
                                 ),
                               )
@@ -11509,6 +11629,12 @@ pub fn get_tool(name : String) -> RegisteredTool? {
                                   mbt_ffi_load32(iter_base + 8),
                                 ),
                               )
+                            34 =>
+                              @types.SchemaValueNode::StreamValue(
+                                @types.SchemaValueStream::SchemaValueStream(
+                                  mbt_ffi_load32(iter_base + 8),
+                                ),
+                              )
                             _ => panic()
                           }
 
@@ -11886,6 +12012,12 @@ pub fn get_tool(name : String) -> RegisteredTool? {
                             33 =>
                               @types.SchemaValueNode::PermissionCardHandle(
                                 @types.PermissionCard::PermissionCard(
+                                  mbt_ffi_load32(iter_base + 8),
+                                ),
+                              )
+                            34 =>
+                              @types.SchemaValueNode::StreamValue(
+                                @types.SchemaValueStream::SchemaValueStream(
                                   mbt_ffi_load32(iter_base + 8),
                                 ),
                               )
@@ -16431,12 +16563,12 @@ pub async fn ToolRpc::invoke_and_await(
   mbt_ffi_store32(lower_ptr + 12 + 8, address364)
   mbt_ffi_store32(lower_ptr + 12 + 16, input.graph.root)
 
-  let address437 = mbt_ffi_malloc(input.value.value_nodes.length() * 32)
-  for index438 = 0
-      index438 < input.value.value_nodes.length()
-      index438 = index438 + 1 {
-    let iter_elem : @types.SchemaValueNode = input.value.value_nodes[index438]
-    let iter_base = address437 + index438 * 32
+  let address439 = mbt_ffi_malloc(input.value.value_nodes.length() * 32)
+  for index440 = 0
+      index440 < input.value.value_nodes.length()
+      index440 = index440 + 1 {
+    let iter_elem : @types.SchemaValueNode = input.value.value_nodes[index440]
+    let iter_base = address439 + index440 * 32
 
     match iter_elem {
       BoolValue(payload366) => {
@@ -16840,10 +16972,18 @@ pub async fn ToolRpc::invoke_and_await(
 
         ()
       }
+      StreamValue(payload437) => {
+        mbt_ffi_store8(iter_base + 0, 34)
+
+        let @types.SchemaValueStream(handle438) = payload437
+        mbt_ffi_store32(iter_base + 8, handle438)
+
+        ()
+      }
     }
   }
   mbt_ffi_store32(lower_ptr + 12 + 24, input.value.value_nodes.length())
-  mbt_ffi_store32(lower_ptr + 12 + 20, address437)
+  mbt_ffi_store32(lower_ptr + 12 + 20, address439)
   mbt_ffi_store32(lower_ptr + 12 + 28, input.value.root)
 
   match stdin {
@@ -17446,6 +17586,10 @@ pub async fn ToolRpc::invoke_and_await(
               @types.PermissionCard::PermissionCard(
                 mbt_ffi_load32(iter_base + 8),
               ).drop()
+            34 =>
+              @types.SchemaValueStream::SchemaValueStream(
+                mbt_ffi_load32(iter_base + 8),
+              ).drop()
             _ => panic()
           }
         }
@@ -18029,6 +18173,7 @@ pub async fn ToolRpc::invoke_and_await(
             31 => ()
             32 => ()
             33 => ()
+            34 => ()
             _ => panic()
           }
         }
@@ -18630,6 +18775,10 @@ pub async fn ToolRpc::invoke_and_await(
                     @types.QuotaToken::QuotaToken(mbt_ffi_load32(iter_base + 8)).drop()
                   33 =>
                     @types.PermissionCard::PermissionCard(
+                      mbt_ffi_load32(iter_base + 8),
+                    ).drop()
+                  34 =>
+                    @types.SchemaValueStream::SchemaValueStream(
                       mbt_ffi_load32(iter_base + 8),
                     ).drop()
                   _ => panic()
@@ -19267,6 +19416,10 @@ pub async fn ToolRpc::invoke_and_await(
                         ).drop()
                       33 =>
                         @types.PermissionCard::PermissionCard(
+                          mbt_ffi_load32(iter_base + 8),
+                        ).drop()
+                      34 =>
+                        @types.SchemaValueStream::SchemaValueStream(
                           mbt_ffi_load32(iter_base + 8),
                         ).drop()
                       _ => panic()
@@ -21370,6 +21523,12 @@ pub async fn ToolRpc::invoke_and_await(
               33 =>
                 @types.SchemaValueNode::PermissionCardHandle(
                   @types.PermissionCard::PermissionCard(
+                    mbt_ffi_load32(iter_base + 8),
+                  ),
+                )
+              34 =>
+                @types.SchemaValueNode::StreamValue(
+                  @types.SchemaValueStream::SchemaValueStream(
                     mbt_ffi_load32(iter_base + 8),
                   ),
                 )
@@ -23659,6 +23818,12 @@ pub async fn ToolRpc::invoke_and_await(
                   33 =>
                     @types.SchemaValueNode::PermissionCardHandle(
                       @types.PermissionCard::PermissionCard(
+                        mbt_ffi_load32(iter_base + 8),
+                      ),
+                    )
+                  34 =>
+                    @types.SchemaValueNode::StreamValue(
+                      @types.SchemaValueStream::SchemaValueStream(
                         mbt_ffi_load32(iter_base + 8),
                       ),
                     )
@@ -26043,12 +26208,12 @@ pub async fn ToolRpc::invoke(
   mbt_ffi_store32(lower_ptr + 12 + 8, address364)
   mbt_ffi_store32(lower_ptr + 12 + 16, input.graph.root)
 
-  let address437 = mbt_ffi_malloc(input.value.value_nodes.length() * 32)
-  for index438 = 0
-      index438 < input.value.value_nodes.length()
-      index438 = index438 + 1 {
-    let iter_elem : @types.SchemaValueNode = input.value.value_nodes[index438]
-    let iter_base = address437 + index438 * 32
+  let address439 = mbt_ffi_malloc(input.value.value_nodes.length() * 32)
+  for index440 = 0
+      index440 < input.value.value_nodes.length()
+      index440 = index440 + 1 {
+    let iter_elem : @types.SchemaValueNode = input.value.value_nodes[index440]
+    let iter_base = address439 + index440 * 32
 
     match iter_elem {
       BoolValue(payload366) => {
@@ -26452,10 +26617,18 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
+      StreamValue(payload437) => {
+        mbt_ffi_store8(iter_base + 0, 34)
+
+        let @types.SchemaValueStream(handle438) = payload437
+        mbt_ffi_store32(iter_base + 8, handle438)
+
+        ()
+      }
     }
   }
   mbt_ffi_store32(lower_ptr + 12 + 24, input.value.value_nodes.length())
-  mbt_ffi_store32(lower_ptr + 12 + 20, address437)
+  mbt_ffi_store32(lower_ptr + 12 + 20, address439)
   mbt_ffi_store32(lower_ptr + 12 + 28, input.value.root)
 
   match stdin {
@@ -27054,6 +27227,10 @@ pub async fn ToolRpc::invoke(
               @types.PermissionCard::PermissionCard(
                 mbt_ffi_load32(iter_base + 8),
               ).drop()
+            34 =>
+              @types.SchemaValueStream::SchemaValueStream(
+                mbt_ffi_load32(iter_base + 8),
+              ).drop()
             _ => panic()
           }
         }
@@ -27637,6 +27814,7 @@ pub async fn ToolRpc::invoke(
             31 => ()
             32 => ()
             33 => ()
+            34 => ()
             _ => panic()
           }
         }
@@ -28270,6 +28448,10 @@ pub async fn ToolRpc::invoke(
                         ).drop()
                       33 =>
                         @types.PermissionCard::PermissionCard(
+                          mbt_ffi_load32(iter_base + 8),
+                        ).drop()
+                      34 =>
+                        @types.SchemaValueStream::SchemaValueStream(
                           mbt_ffi_load32(iter_base + 8),
                         ).drop()
                       _ => panic()
@@ -30532,6 +30714,12 @@ pub async fn ToolRpc::invoke(
                   33 =>
                     @types.SchemaValueNode::PermissionCardHandle(
                       @types.PermissionCard::PermissionCard(
+                        mbt_ffi_load32(iter_base + 8),
+                      ),
+                    )
+                  34 =>
+                    @types.SchemaValueNode::StreamValue(
+                      @types.SchemaValueStream::SchemaValueStream(
                         mbt_ffi_load32(iter_base + 8),
                       ),
                     )
@@ -32916,12 +33104,12 @@ pub async fn ToolRpc::async_invoke_and_await(
   mbt_ffi_store32(lower_ptr + 12 + 8, address364)
   mbt_ffi_store32(lower_ptr + 12 + 16, input.graph.root)
 
-  let address437 = mbt_ffi_malloc(input.value.value_nodes.length() * 32)
-  for index438 = 0
-      index438 < input.value.value_nodes.length()
-      index438 = index438 + 1 {
-    let iter_elem : @types.SchemaValueNode = input.value.value_nodes[index438]
-    let iter_base = address437 + index438 * 32
+  let address439 = mbt_ffi_malloc(input.value.value_nodes.length() * 32)
+  for index440 = 0
+      index440 < input.value.value_nodes.length()
+      index440 = index440 + 1 {
+    let iter_elem : @types.SchemaValueNode = input.value.value_nodes[index440]
+    let iter_base = address439 + index440 * 32
 
     match iter_elem {
       BoolValue(payload366) => {
@@ -33325,10 +33513,18 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
+      StreamValue(payload437) => {
+        mbt_ffi_store8(iter_base + 0, 34)
+
+        let @types.SchemaValueStream(handle438) = payload437
+        mbt_ffi_store32(iter_base + 8, handle438)
+
+        ()
+      }
     }
   }
   mbt_ffi_store32(lower_ptr + 12 + 24, input.value.value_nodes.length())
-  mbt_ffi_store32(lower_ptr + 12 + 20, address437)
+  mbt_ffi_store32(lower_ptr + 12 + 20, address439)
   mbt_ffi_store32(lower_ptr + 12 + 28, input.value.root)
 
   match stdin {
@@ -33931,6 +34127,10 @@ pub async fn ToolRpc::async_invoke_and_await(
               @types.PermissionCard::PermissionCard(
                 mbt_ffi_load32(iter_base + 8),
               ).drop()
+            34 =>
+              @types.SchemaValueStream::SchemaValueStream(
+                mbt_ffi_load32(iter_base + 8),
+              ).drop()
             _ => panic()
           }
         }
@@ -34514,6 +34714,7 @@ pub async fn ToolRpc::async_invoke_and_await(
             31 => ()
             32 => ()
             33 => ()
+            34 => ()
             _ => panic()
           }
         }
@@ -35139,6 +35340,10 @@ pub async fn FutureInvokeResult::get(
                     @types.QuotaToken::QuotaToken(mbt_ffi_load32(iter_base + 8)).drop()
                   33 =>
                     @types.PermissionCard::PermissionCard(
+                      mbt_ffi_load32(iter_base + 8),
+                    ).drop()
+                  34 =>
+                    @types.SchemaValueStream::SchemaValueStream(
                       mbt_ffi_load32(iter_base + 8),
                     ).drop()
                   _ => panic()
@@ -35776,6 +35981,10 @@ pub async fn FutureInvokeResult::get(
                         ).drop()
                       33 =>
                         @types.PermissionCard::PermissionCard(
+                          mbt_ffi_load32(iter_base + 8),
+                        ).drop()
+                      34 =>
+                        @types.SchemaValueStream::SchemaValueStream(
                           mbt_ffi_load32(iter_base + 8),
                         ).drop()
                       _ => panic()
@@ -37879,6 +38088,12 @@ pub async fn FutureInvokeResult::get(
               33 =>
                 @types.SchemaValueNode::PermissionCardHandle(
                   @types.PermissionCard::PermissionCard(
+                    mbt_ffi_load32(iter_base + 8),
+                  ),
+                )
+              34 =>
+                @types.SchemaValueNode::StreamValue(
+                  @types.SchemaValueStream::SchemaValueStream(
                     mbt_ffi_load32(iter_base + 8),
                   ),
                 )
@@ -40168,6 +40383,12 @@ pub async fn FutureInvokeResult::get(
                   33 =>
                     @types.SchemaValueNode::PermissionCardHandle(
                       @types.PermissionCard::PermissionCard(
+                        mbt_ffi_load32(iter_base + 8),
+                      ),
+                    )
+                  34 =>
+                    @types.SchemaValueNode::StreamValue(
+                      @types.SchemaValueStream::SchemaValueStream(
                         mbt_ffi_load32(iter_base + 8),
                       ),
                     )

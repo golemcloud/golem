@@ -1079,13 +1079,6 @@ fn parse_command(
     .unwrap_or("") +
     "::" +
     decl.name.name
-  if decl.is_async is Some(_) {
-    tool_fail(
-      "Async tool command '" +
-      owner +
-      "' is unsupported: the MoonBit WIT export invoker is synchronous and no block_on is available",
-    )
-  }
   let params : Array[(String, ToolParamType)] = []
   for p in decl.decl_params.unwrap_or(@list.List::from_array([])) {
     match p {

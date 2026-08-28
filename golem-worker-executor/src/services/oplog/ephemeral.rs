@@ -15,11 +15,14 @@
 use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::multilayer::{
     BackgroundTransferMessage, InstrumentedOplogArchive, MultiLayerOplogService, OplogArchive,
-    TransferFiber, WrappedOplogArchive,
+    TransferFiber, WrappedOplogArchive, transfer_between_lower_layers,
+};
+use crate::services::oplog::reader::{
+    OplogRead, OplogReadError, OplogReadSource, checked_range_end, fail_stop,
 };
 use crate::services::oplog::{
-    CommitLevel, Oplog, OplogAddReceipt, OplogService, OrderedOplogStart, PendingUpload,
-    downcast_oplog,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
+    OplogService, OrderedOplogStart, PendingUpload, ReservedRawStartBuilder, downcast_oplog,
 };
 use async_trait::async_trait;
 use golem_common::model::OwnedAgentId;
@@ -66,10 +69,18 @@ enum EphemeralJob {
         entry: OplogEntry,
         done: tokio::sync::oneshot::Sender<OplogIndex>,
     },
+    AddDurableStreamBatch {
+        make_batch: DurableStreamBatchBuilder,
+        done: tokio::sync::oneshot::Sender<Vec<(OplogIndex, OplogEntry)>>,
+    },
     AddPair {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
         done: tokio::sync::oneshot::Sender<(OplogIndex, OplogIndex)>,
+    },
+    AddIndexedStart {
+        build_request: IndexedReservedStartBuilder,
+        done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, String>>,
     },
     Commit {
         done: tokio::sync::oneshot::Sender<BTreeMap<OplogIndex, OplogEntry>>,
@@ -142,7 +153,7 @@ impl EphemeralOplogState {
             self.last_committed_idx = oplog_idx;
         }
 
-        self.target.append(pairs).await;
+        self.target.append(&pairs).await;
         result
     }
 }
@@ -172,12 +183,27 @@ impl EphemeralOplog {
         };
 
         let (jobs, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<EphemeralJob>();
+        let actor_primary_service = primary_service.clone();
+        let actor_owned_agent_id = owned_agent_id.clone();
         let actor = tokio::spawn(async move {
             while let Some(job) = job_rx.recv().await {
                 match job {
                     EphemeralJob::Add { entry, done } => {
                         let idx = state.add(entry).await;
                         let _ = done.send(idx);
+                    }
+                    EphemeralJob::AddDurableStreamBatch { make_batch, done } => {
+                        let records = make_batch(state.last_oplog_idx.next());
+                        let result = records
+                            .into_iter()
+                            .map(|record| {
+                                let entry = record.into_inline_entry();
+                                let idx = state.push(entry.clone());
+                                (idx, entry)
+                            })
+                            .collect();
+                        state.maybe_commit().await;
+                        let _ = done.send(result);
                     }
                     EphemeralJob::AddPair {
                         start,
@@ -189,6 +215,34 @@ impl EphemeralOplog {
                         let second_idx = state.push(second);
                         state.maybe_commit().await;
                         let _ = done.send((first_idx, second_idx));
+                    }
+                    EphemeralJob::AddIndexedStart {
+                        build_request,
+                        done,
+                    } => {
+                        let result = match build_request(state.last_oplog_idx.next()) {
+                            Ok((serialized_request, build_start)) => actor_primary_service
+                                .upload_raw_payload(
+                                    &actor_owned_agent_id,
+                                    agent_mode,
+                                    serialized_request,
+                                )
+                                .await
+                                .and_then(build_start)
+                                .map(|entry| {
+                                    let index = state.push(entry.clone());
+                                    OrderedOplogStart {
+                                        index,
+                                        entry,
+                                        pending_upload: PendingUpload::already_durable(),
+                                    }
+                                }),
+                            Err(error) => Err(error),
+                        };
+                        if result.is_ok() {
+                            state.maybe_commit().await;
+                        }
+                        let _ = done.send(result);
                     }
                     EphemeralJob::Commit { done } => {
                         let result = state.commit().await;
@@ -366,25 +420,12 @@ impl EphemeralOplog {
                         );
                         debug!("Reading entries from ephemeral oplog layer {source}");
 
-                        let source_layer = lower[source].clone();
-                        let target_layer = lower[source + 1].clone();
-
-                        let entries: Vec<_> = source_layer
-                            .read_prefix(last_transferred_idx)
-                            .await
-                            .into_iter()
-                            .collect();
-
-                        match entries.last() {
-                            Some(last_entry) => {
-                                let last_dropped_id = last_entry.0;
-                                let _ = target_layer.append(entries).await;
-                                source_layer.drop_prefix(last_dropped_id).await;
-                            }
-                            None => {
-                                warn!("No entries to transfer from ephemeral oplog layer {source}");
-                            }
-                        }
+                        transfer_between_lower_layers(
+                            source,
+                            last_transferred_idx,
+                            lower.clone(),
+                        )
+                        .await;
 
                         if drain && let Some(oplog) = keep_alive.as_ref() {
                             let _ = EphemeralOplog::try_archive_background(oplog).await;
@@ -533,6 +574,16 @@ impl Oplog for EphemeralOplog {
         })
     }
 
+    async fn add_durable_stream_batch(
+        &self,
+        make_batch: DurableStreamBatchBuilder,
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+        record_oplog_call("add_durable_stream_batch");
+        Ok(self
+            .run_job(|done| EphemeralJob::AddDurableStreamBatch { make_batch, done })
+            .await)
+    }
+
     async fn add_pair(
         &self,
         start: OplogEntry,
@@ -550,7 +601,7 @@ impl Oplog for EphemeralOplog {
     async fn add_start_with_reserved_raw_payload(
         &self,
         serialized_request: Vec<u8>,
-        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        build_start: ReservedRawStartBuilder,
     ) -> Result<OrderedOplogStart, String> {
         record_oplog_call("add_start_with_reserved_raw_payload");
         // Ephemeral oplogs are never replayed, so cross-call `Start` ordering need not be
@@ -570,6 +621,18 @@ impl Oplog for EphemeralOplog {
             entry,
             pending_upload: PendingUpload::already_durable(),
         })
+    }
+
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        build_request: IndexedReservedStartBuilder,
+    ) -> Result<OrderedOplogStart, String> {
+        record_oplog_call("add_start_with_indexed_reserved_raw_payload");
+        self.run_job(|done| EphemeralJob::AddIndexedStart {
+            build_request,
+            done,
+        })
+        .await
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
@@ -607,23 +670,15 @@ impl Oplog for EphemeralOplog {
         false
     }
 
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-        record_oplog_call("read");
-        self.read_many(oplog_index, 1)
-            .await
-            .remove(&oplog_index)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Missing oplog entry {oplog_index} for ephemeral oplog of {:?}",
-                    self.owned_agent_id
-                )
-            })
-    }
-
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
-        record_oplog_call("read_many");
-        if n == 0 {
-            return BTreeMap::new();
+    async fn read_exact(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        record_oplog_call("read_exact");
+        let mut read = fail_stop(OplogRead::new(oplog_index, n));
+        if read.next_range().is_none() {
+            return fail_stop(read.finish());
         }
 
         // A consistent snapshot of the uncommitted buffer and commit watermark is enough: a
@@ -634,9 +689,29 @@ impl Oplog for EphemeralOplog {
             .await;
 
         let req_start: u64 = oplog_index.into();
-        let req_end: u64 = oplog_index.range_end(n).into();
+        let req_end = fail_stop(checked_range_end(oplog_index, n))
+            .unwrap()
+            .as_u64();
+        let snapshot_end = fail_stop(
+            snapshot
+                .last_committed_idx
+                .as_u64()
+                .checked_add(snapshot.buffer.len() as u64)
+                .ok_or_else(|| {
+                    OplogReadError::corruption(
+                        OplogReadSource::EphemeralBuffer,
+                        "snapshot tail exceeds the oplog index range",
+                    )
+                }),
+        );
+        if req_end > snapshot_end {
+            fail_stop::<()>(Err(OplogReadError::Gap {
+                start: OplogIndex::from_u64(max(req_start, snapshot_end + 1)),
+                end: OplogIndex::from_u64(req_end),
+            }));
+        }
 
-        let mut result = BTreeMap::new();
+        let mut buffered = BTreeMap::new();
 
         // First, fill from the in-memory buffer (uncommitted entries)
         if !snapshot.buffer.is_empty() {
@@ -652,48 +727,22 @@ impl Oplog for EphemeralOplog {
                 for i in 0..count {
                     let idx = OplogIndex::from_u64(overlap_start + i as u64);
                     let entry = snapshot.buffer[offset + i].clone();
-                    result.insert(idx, entry);
+                    buffered.insert(idx, entry);
                 }
             }
         }
+        fail_stop(read.add_source(OplogReadSource::EphemeralBuffer, buffered));
 
-        // Check if the buffer already satisfied the full request
-        let full_match = match result.first_key_value() {
-            Some((first_idx, _)) => *first_idx == oplog_index && result.len() as u64 >= n,
-            None => false,
-        };
-
-        // Read remaining entries from committed lower layers, stopping as soon as
-        // the requested range starting at oplog_index is fully covered.
-        if !full_match {
-            let committed_end: u64 = snapshot.last_committed_idx.into();
-            if committed_end >= req_start {
-                let storage_end = min(req_end, committed_end);
-                // Buffered entries always start after the committed range, so they do not reduce
-                // how many committed entries we still need to load from the archive layers.
-                let mut remaining = storage_end - req_start + 1;
-
-                for layer in &self.lower {
-                    if remaining == 0 {
-                        break;
-                    }
-                    let partial = layer.read(oplog_index, remaining).await;
-                    let layer_full_match = match partial.first_key_value() {
-                        None => false,
-                        Some((first_idx, _)) => {
-                            remaining -= partial.len() as u64;
-                            *first_idx == oplog_index
-                        }
-                    };
-                    result.extend(partial);
-                    if layer_full_match {
-                        break;
-                    }
-                }
+        for (level, layer) in self.lower.iter().enumerate() {
+            if let Some((start, count)) = read.next_range() {
+                let entries = layer.read_source(start, count).await;
+                fail_stop(read.add_source(OplogReadSource::Archive(level), entries));
+            } else {
+                break;
             }
         }
 
-        result
+        fail_stop(read.finish())
     }
 
     async fn length(&self) -> u64 {

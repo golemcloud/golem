@@ -72,10 +72,10 @@ object MethodBinding {
                 Future
                   .failed[Option[JsSchemaValueTree]](js.JavaScriptException(JsAgentError.invalidInput(err.toString))),
               value =>
-                handler(instance, value, principal).map { out =>
+                handler(instance, value, principal).flatMap { out =>
                   outputCodec.into match {
-                    case None       => None
-                    case Some(into) => Some(SchemaPayload.encode(out)(into))
+                    case None       => Future.successful(None)
+                    case Some(into) => SchemaPayload.encodeAsync(out)(into).map(Some(_))
                   }
                 }
             )

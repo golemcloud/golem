@@ -177,8 +177,10 @@ mod protobuf {
         }
     }
 
-    impl From<AgentMetadataDto> for golem_api_grpc::proto::golem::worker::AgentMetadata {
-        fn from(value: AgentMetadataDto) -> Self {
+    impl TryFrom<AgentMetadataDto> for golem_api_grpc::proto::golem::worker::AgentMetadata {
+        type Error = String;
+
+        fn try_from(value: AgentMetadataDto) -> Result<Self, Self::Error> {
             let mut owned_resources = Vec::new();
             for instance in value.exported_resource_instances {
                 owned_resources.push(golem_api_grpc::proto::golem::worker::ResourceDescription {
@@ -189,12 +191,16 @@ mod protobuf {
                 });
             }
 
-            Self {
+            Ok(Self {
                 agent_id: Some(value.agent_id.into()),
                 environment_id: Some(value.environment_id.into()),
                 created_by: Some(value.created_by.into()),
                 env: value.env,
-                config: value.config.into_iter().map(Into::into).collect(),
+                config: value
+                    .config
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
                 status: value.status.into(),
                 component_revision: value.component_revision.into(),
                 retry_count: value.retry_count,
@@ -222,7 +228,7 @@ mod protobuf {
                     .collect(),
                 oplog_idx: u64::from(value.last_oplog_index),
                 fingerprint: Some(value.fingerprint.0.into()),
-            }
+            })
         }
     }
 
@@ -425,12 +431,16 @@ mod protobuf {
         }
     }
 
-    impl From<TypedAgentConfigEntry> for golem_api_grpc::proto::golem::worker::TypedAgentConfigEntry {
-        fn from(value: TypedAgentConfigEntry) -> Self {
-            Self {
+    impl TryFrom<TypedAgentConfigEntry>
+        for golem_api_grpc::proto::golem::worker::TypedAgentConfigEntry
+    {
+        type Error = String;
+
+        fn try_from(value: TypedAgentConfigEntry) -> Result<Self, Self::Error> {
+            Ok(Self {
                 path: value.path,
-                value: Some(value.value.into()),
-            }
+                value: Some(value.value.try_into()?),
+            })
         }
     }
 }

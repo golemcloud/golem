@@ -81,7 +81,7 @@ Worker executor tests, integration tests, and CLI integration tests may depend o
 |-------|--------------|
 | One Rust test or test module | `cargo test -p <crate> -- <test_name> --report-time` |
 | One crate's library tests | `cargo test -p <crate> --lib -- --report-time` |
-| Worker executor test group | `cargo make worker-executor-tests-group1`, `group2`, `group3`, or `misc` |
+| Worker executor test group | `cargo make worker-executor-tests-group1`, `group2`, `group3`, `group4`, or `misc` |
 | One CLI integration area | Use a targeted `cargo-test-r` filter; see the `testing` skill |
 | Broad core logic or utilities | `cargo make unit-tests` |
 | Broad worker executor functionality | `cargo make worker-executor-tests` |

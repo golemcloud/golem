@@ -2,11 +2,12 @@
 // schema model (`golem:core/types@2.0.0`).
 //
 // Each agent gets a `<Name>Client` wrapping `@rpc.AgentClient`. Constructor and
-// method arguments are encoded into a `@types.SchemaValueTree` input record via
-// `@agents.encode_invocation_input`, and awaited results decoded via
-// `@agents.decode_output`. Awaited methods are async so they can suspend on the
-// P3 RPC result future; synchronous setup, trigger, and scheduling methods keep
-// the SDK's `@common.AgentError` contract.
+// method arguments are encoded into a `@types.SchemaValueTree` input record.
+// Awaited methods use `@agents.encode_invocation_input_async` and decode results
+// via `@agents.decode_output`, allowing native streams at any nesting depth.
+// Synchronous setup, trigger, and scheduling methods use
+// `@agents.encode_invocation_input` and keep the SDK's `@common.AgentError`
+// contract.
 //
 // Built as a MoonBit-source string and parsed back via `parse_generated_impls`
 // (see `value_types_emit.mbt` / `agents_emit.mbt`).
@@ -47,6 +48,13 @@ fn params_sig(params : Array[(String, ParamType)]) -> String {
 fn encode_input_expr(params : Array[(String, ParamType)]) -> String {
   let parts = params.map(fn(p) { "@schema.to_value_as(\{p.0})" }).join(", ")
   "@agents.encode_invocation_input([\{parts}])"
+}
+
+///|
+/// Renders the async input encoder used only by awaited RPC methods.
+fn encode_input_async_expr(params : Array[(String, ParamType)]) -> String {
+  let parts = params.map(fn(p) { "@schema.to_value_as(\{p.0})" }).join(", ")
+  "@agents.encode_invocation_input_async([\{parts}])"
 }
 
 ///|
@@ -234,6 +242,7 @@ fn emit_client_method(
   let vis = visible_params(meth.params)
   let ctx = escape_string_lit("\{agent.name}.\{meth.name}")
   let input_expr = encode_input_expr(vis)
+  let awaited_input_expr = encode_input_async_expr(vis)
   let arg_sig = params_sig(vis)
   let self_args = if arg_sig.is_empty() {
     "self : \{client}"
@@ -254,7 +263,7 @@ fn emit_client_method(
   buf.write_string(
     "pub async fn \{client}::\{meth.name}(\n  \{self_args},\n) -> \{ret} {\n",
   )
-  buf.write_string("  let input = \{input_expr}\n")
+  buf.write_string("  let input = \{awaited_input_expr}\n")
   buf.write_string(
     "  let response = self.client.invoke_and_await(\"\{escape_string_lit(meth.name)}\", input)\n",
   )
@@ -262,9 +271,9 @@ fn emit_client_method(
     None =>
       buf.write_string(
         if durable {
-          "  let _ = response.value\n"
+          "  @agents.discard_optional_wire_value(response.value)\n"
         } else {
-          "  { metadata: response.metadata, value: () }\n"
+          "  @agents.discard_optional_wire_value(response.value)\n  { metadata: response.metadata, value: () }\n"
         },
       )
     Some(_) => {

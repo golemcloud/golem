@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { templateMatrix } from '../packages/golem-ts-sdk/scripts/template-matrix.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(scriptDir, '..');
@@ -26,5 +27,7 @@ if (fs.existsSync(packagesDir)) {
   }
 }
 
-removePath(path.join(packagesDir, 'golem-ts-sdk', 'agent-template'));
-removePath(path.join(packagesDir, 'golem-ts-sdk', 'wasm', 'agent_guest.wasm'));
+for (const template of templateMatrix) {
+  removePath(path.join(packagesDir, 'golem-ts-sdk', template.wrapperDirectory));
+  removePath(path.join(packagesDir, 'golem-ts-sdk', 'wasm', template.wasmFile));
+}

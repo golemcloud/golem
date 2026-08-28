@@ -149,6 +149,13 @@ impl Oplog for FrameTestOplog {
         unimplemented!()
     }
 
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        _build_request: crate::services::oplog::IndexedReservedStartBuilder,
+    ) -> Result<OrderedOplogStart, String> {
+        unimplemented!()
+    }
+
     async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
         0
     }
@@ -169,20 +176,22 @@ impl Oplog for FrameTestOplog {
         true
     }
 
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-        let entries = self.entries.lock().unwrap();
-        let idx: u64 = oplog_index.into();
-        entries[(idx - 1) as usize].clone()
-    }
-
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn read_exact(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
         let entries = self.entries.lock().unwrap();
         let start: u64 = oplog_index.into();
         let mut result = BTreeMap::new();
         for i in start..(start + n) {
-            if let Some(entry) = entries.get((i - 1) as usize) {
-                result.insert(OplogIndex::from_u64(i), entry.clone());
-            }
+            let entry = entries.get((i - 1) as usize).unwrap_or_else(|| {
+                panic!(
+                    "Missing oplog entry in exact range [{oplog_index}..={}]",
+                    OplogIndex::from_u64(start + n - 1)
+                )
+            });
+            result.insert(OplogIndex::from_u64(i), entry.clone());
         }
         result
     }

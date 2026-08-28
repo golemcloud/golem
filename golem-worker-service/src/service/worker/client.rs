@@ -17,16 +17,27 @@ use super::{
     AllExecutors, CallWorkerExecutorError, HasWorkerExecutorClients, RandomExecutor,
     ResponseMapResult, RoutingLogic, WorkerServiceError, WorkerStream,
 };
+use crate::service::auth::AuthServiceError;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::TryStreamExt;
 use futures::{Stream, StreamExt};
-use golem_api_grpc::proto::golem::worker::{InvocationContext, LogEvent};
+use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
+use golem_api_grpc::proto::golem::worker::invocation_request;
+use golem_api_grpc::proto::golem::worker::invocation_response;
+use golem_api_grpc::proto::golem::worker::invocation_session_completion;
+use golem_api_grpc::proto::golem::worker::invocation_session_result;
+use golem_api_grpc::proto::golem::worker::{
+    InvocationContext, InvocationFailure, InvocationFailureKind, InvocationRejected,
+    InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionResult,
+    InvocationStart, LogEvent,
+};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest,
-    CreateWorkerRequest, DeactivatePluginRequest, DeliverCardTransferRequest, ForkWorkerRequest,
+    CreateWorkerRequest, DeactivatePluginRequest, DeliverCardTransferRequest,
+    DurableStreamAttachmentControlRequest, DurableStreamSegmentReadRequest, ForkWorkerRequest,
     InterruptWorkerRequest, ProcessOplogEntriesRequest, ResolveRevertLastInvocationsRequest,
     ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
@@ -53,11 +64,14 @@ use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, sync::Arc};
-use tonic::Code;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Channel;
+use tonic::{Code, Status};
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 fn freshness_disposition_for_dispatch(
@@ -71,6 +85,203 @@ fn freshness_disposition_for_dispatch(
     } else {
         InvocationFreshnessDisposition::MayExist
     }
+}
+
+pub type InvocationRequestStream = Pin<Box<dyn Stream<Item = InvocationRequest> + Send + 'static>>;
+pub type InvocationResponseStream =
+    Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send + 'static>>;
+type InvocationSessionCall<'a> = Pin<
+    Box<
+        dyn Future<Output = Result<tonic::Response<tonic::Streaming<InvocationResponse>>, Status>>
+            + Send
+            + 'a,
+    >,
+>;
+
+fn invoke_agent_session_once<'a>(
+    client: &'a mut WorkerExecutorClient<OtelGrpcService<Channel>>,
+    request: Option<InvocationRequestStream>,
+) -> InvocationSessionCall<'a> {
+    match request {
+        Some(request) => Box::pin(client.invoke_agent_session(request)),
+        None => Box::pin(std::future::ready(Err(Status::aborted(
+            "invocation session request was already consumed",
+        )))),
+    }
+}
+
+#[derive(Debug)]
+enum OneShotInvocationSessionResult {
+    Success(AgentInvocationOutput),
+    Rejected(InvocationRejected),
+    Failure(InvocationFailure),
+    ProtocolFailure(String),
+}
+
+fn protocol_failure(details: impl Into<String>) -> OneShotInvocationSessionResult {
+    OneShotInvocationSessionResult::ProtocolFailure(details.into())
+}
+
+fn decode_invocation_rejection(rejected: InvocationRejected) -> WorkerServiceError {
+    match InvocationRejectionReason::try_from(rejected.reason) {
+        Ok(InvocationRejectionReason::NotFound) => rejected
+            .agent_id
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(WorkerServiceError::TypeChecker)
+            .and_then(|agent_id| {
+                agent_id
+                    .map(WorkerServiceError::AgentNotFound)
+                    .ok_or_else(|| WorkerServiceError::Internal(rejected.error.clone()))
+            })
+            .unwrap_or_else(|error| error),
+        Ok(InvocationRejectionReason::Unauthorized) => {
+            WorkerServiceError::AuthError(AuthServiceError::CouldNotAuthenticate)
+        }
+        Ok(InvocationRejectionReason::Internal) => WorkerServiceError::Internal(rejected.error),
+        _ => WorkerServiceError::TypeChecker(rejected.error),
+    }
+}
+
+fn decode_invocation_failure(failure: InvocationFailure) -> WorkerExecutorError {
+    if failure.kind == InvocationFailureKind::Protocol as i32 {
+        WorkerExecutorError::invalid_request(failure.message)
+    } else if let Some(worker_error) = failure.worker_error {
+        worker_error
+            .try_into()
+            .unwrap_or_else(|error| WorkerExecutorError::Unknown {
+                details: format!("failed to decode worker execution error: {error}"),
+            })
+    } else {
+        WorkerExecutorError::Unknown {
+            details: failure.message,
+        }
+    }
+}
+
+fn decode_invocation_result(
+    wire: InvocationSessionResult,
+) -> Result<AgentInvocationOutput, String> {
+    let result = match wire.result.ok_or("invocation result has no payload")? {
+        invocation_session_result::Result::MethodResult(value) => {
+            AgentInvocationResult::AgentMethod {
+                output: value.try_into()?,
+            }
+        }
+        invocation_session_result::Result::NoResult(_) => {
+            AgentInvocationResult::AgentInitialization
+        }
+    };
+    let invocation_status = wire.status.and_then(|status| {
+        golem_api_grpc::proto::golem::worker::InvocationStatus::try_from(status)
+            .ok()
+            .map(InvocationStatus::from)
+    });
+    Ok(AgentInvocationOutput {
+        result,
+        consumed_fuel: wire.fuel_consumed,
+        invocation_status,
+        component_revision: wire
+            .component_revision
+            .map(ComponentRevision::new)
+            .transpose()
+            .map_err(|error| error.to_string())?,
+        agent_id: wire.agent_id.map(TryInto::try_into).transpose()?,
+        idempotency_key: wire.idempotency_key.map(Into::into),
+        oplog_index: wire.oplog_index.map(OplogIndex::from_u64),
+        agent_fingerprint: wire
+            .agent_fingerprint
+            .map(|uuid| AgentFingerprint(uuid.into())),
+    })
+}
+
+async fn run_one_shot_invocation_session(
+    client: &mut WorkerExecutorClient<OtelGrpcService<Channel>>,
+    start: InvocationStart,
+) -> Result<OneShotInvocationSessionResult, Status> {
+    let (requests, receiver) = mpsc::channel(1);
+    let request = InvocationRequest {
+        request: Some(invocation_request::Request::Start(start)),
+    };
+    let mut state = InvocationSessionState::default();
+    state
+        .validate_trusted_request(&request)
+        .map_err(Status::invalid_argument)?;
+    requests
+        .send(request)
+        .await
+        .map_err(|_| Status::unavailable("invocation session request ended before start"))?;
+    let responses = client
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    collect_one_shot_invocation_session(responses, state).await
+}
+
+async fn collect_one_shot_invocation_session<S>(
+    mut responses: S,
+    mut state: InvocationSessionState,
+) -> Result<OneShotInvocationSessionResult, Status>
+where
+    S: Stream<Item = Result<InvocationResponse, Status>> + Unpin,
+{
+    let mut result = None;
+    let mut terminal_outcome = None;
+
+    while let Some(response) = responses.next().await.transpose()? {
+        if let Err(details) = state.validate_response(&response) {
+            return Ok(protocol_failure(details));
+        }
+        match response.response {
+            Some(invocation_response::Response::Accepted(_)) => {}
+            Some(invocation_response::Response::Rejected(rejected)) => {
+                terminal_outcome = Some(Ok(OneShotInvocationSessionResult::Rejected(rejected)));
+            }
+            Some(invocation_response::Response::Result(invocation_result)) => {
+                result = match decode_invocation_result(invocation_result) {
+                    Ok(result) => Some(result),
+                    Err(details) => return Ok(protocol_failure(details)),
+                };
+            }
+            Some(invocation_response::Response::Finished(finished)) => {
+                terminal_outcome = Some(match finished.outcome {
+                    Some(invocation_session_completion::Outcome::Success(_)) => result
+                        .take()
+                        .map(OneShotInvocationSessionResult::Success)
+                        .ok_or_else(|| Status::internal("invocation completed without a result")),
+                    Some(invocation_session_completion::Outcome::Failure(failure)) => {
+                        if failure.kind == InvocationFailureKind::Transport as i32 {
+                            Err(Status::unavailable(failure.message))
+                        } else {
+                            Ok(OneShotInvocationSessionResult::Failure(failure))
+                        }
+                    }
+                    None => Ok(protocol_failure("invocation completion has no outcome")),
+                });
+            }
+            Some(
+                invocation_response::Response::OutputItem(_)
+                | invocation_response::Response::OutputEnd(_)
+                | invocation_response::Response::OutputError(_)
+                | invocation_response::Response::InputAck(_)
+                | invocation_response::Response::StreamCancel(_),
+            ) => {
+                return Ok(protocol_failure(
+                    "a non-streaming invocation received a stream frame",
+                ));
+            }
+            Some(invocation_response::Response::AttachmentRevoked(_)) => {
+                unreachable!("response validation rejects attachment revocation")
+            }
+            None => unreachable!("response validation rejects empty frames"),
+        }
+    }
+
+    terminal_outcome.unwrap_or_else(|| {
+        Err(Status::unavailable(
+            "invocation session response ended before completion",
+        ))
+    })
 }
 
 #[async_trait]
@@ -272,6 +483,45 @@ pub trait WorkerClient: Send + Sync {
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
     ) -> WorkerResult<AgentInvocationOutput>;
 
+    async fn invoke_agent_session(
+        &self,
+        _agent_id: &AgentId,
+        _request: InvocationRequestStream,
+    ) -> WorkerResult<InvocationResponseStream> {
+        Err(WorkerServiceError::Internal(
+            "invocation sessions are not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn control_durable_stream_attachment(
+        &self,
+        _producer_agent_id: &AgentId,
+        _producer_environment_id: EnvironmentId,
+        _consumer_agent_id: &AgentId,
+        _consumer_environment_id: EnvironmentId,
+        _expected_consumer_fingerprint: AgentFingerprint,
+        _payload: Vec<u8>,
+        _auth_ctx: AuthCtx,
+    ) -> WorkerResult<bool> {
+        Err(WorkerServiceError::Internal(
+            "durable stream attachment control is not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn read_durable_stream_segment(
+        &self,
+        _producer_agent_id: &AgentId,
+        _producer_environment_id: EnvironmentId,
+        _consumer_agent_id: &AgentId,
+        _consumer_environment_id: EnvironmentId,
+        _expected_consumer_fingerprint: AgentFingerprint,
+        _payload: Vec<u8>,
+        _auth_ctx: AuthCtx,
+    ) -> WorkerResult<Vec<u8>> {
+        Err(WorkerServiceError::Internal(
+            "durable stream segment reads are not supported by this worker client".to_string(),
+        ))
+    }
     async fn deliver_card_transfer(
         &self,
         target_agent_id: &AgentId,
@@ -1467,100 +1717,211 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         let agent_id = agent_id.clone();
         let agent_id_clone = agent_id.clone();
         let first_dispatch = Arc::new(AtomicBool::new(true));
+        let attempt_id = uuid::Uuid::new_v4();
 
         let result = self
             .call_worker_executor(
                 agent_id.clone(),
-                "invoke_agent",
+                "invoke_agent_session",
                 move |worker_executor_client| {
                     let freshness_disposition =
                         freshness_disposition_for_dispatch(freshness_disposition, &first_dispatch);
-                    Box::pin(worker_executor_client.invoke_agent(
-                        workerexecutor::v1::InvokeAgentRequest {
-                            agent_id: Some(agent_id_clone.clone().into()),
-                            method_name: method_name.clone(),
-                            method_parameters: method_parameters.clone(),
-                            mode,
-                            schedule_at,
-                            idempotency_key: idempotency_key.clone().map(|k| k.into()),
-                            component_owner_account_id: Some(account_id.into()),
-                            environment_id: Some(environment_id.into()),
-                            auth_ctx: Some(auth_ctx.clone().into()),
-                            context: invocation_context.clone(),
-                            principal: Some(principal.clone()),
-                            freshness_disposition: match freshness_disposition {
-                                InvocationFreshnessDisposition::MayExist => {
-                                    workerexecutor::v1::InvocationFreshnessDisposition::MayExist
-                                        as i32
-                                }
-                                InvocationFreshnessDisposition::KnownFresh => {
-                                    workerexecutor::v1::InvocationFreshnessDisposition::KnownFresh
-                                        as i32
-                                }
-                            },
-                            config: config.clone().into_iter().map(Into::into).collect(),
-                            scope_card: scope_card.clone(),
+                    let start = InvocationStart {
+                        agent_id: Some(agent_id_clone.clone().into()),
+                        method_name: method_name.clone(),
+                        input: method_parameters.clone(),
+                        idempotency_key: idempotency_key.clone().map(Into::into),
+                        context: invocation_context.clone(),
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        principal: Some(principal.clone()),
+                        environment_id: Some(environment_id.into()),
+                        config: config.clone().into_iter().map(Into::into).collect(),
+                        component_owner_account_id: Some(account_id.into()),
+                        mode,
+                        schedule_at,
+                        freshness_disposition: match freshness_disposition {
+                            InvocationFreshnessDisposition::MayExist => {
+                                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                                    as i32
+                            }
+                            InvocationFreshnessDisposition::KnownFresh => {
+                                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh
+                                    as i32
+                            }
                         },
+                        attempt_id: Some(attempt_id.into()),
+                        expected_callee_fingerprint: None,
+                        durable_input_mappings: Vec::new(),
+                        scope_card: scope_card.clone(),
+                    };
+                    Box::pin(run_one_shot_invocation_session(
+                        worker_executor_client,
+                        start,
                     ))
                 },
-                |response| match response.into_inner() {
-                    workerexecutor::v1::InvokeAgentResponse {
-                        result:
-                            Some(workerexecutor::v1::invoke_agent_response::Result::Success(
-                                workerexecutor::v1::InvokeAgentSuccess {
-                                    result,
-                                    fuel_consumed,
-                                    component_revision,
-                                    status,
-                                    oplog_index,
-                                    agent_fingerprint,
-                                    agent_id,
-                                    idempotency_key,
-                                },
-                            )),
-                    } => {
-                        let invocation_result = match result {
-                            Some(proto_val) => {
-                                let output = golem_common::schema::SchemaValue::try_from(proto_val)
-                                    .map_err(WorkerExecutorError::unknown)?;
-                                AgentInvocationResult::AgentMethod { output }
-                            }
-                            None => AgentInvocationResult::AgentInitialization,
-                        };
-                        let invocation_status = status.and_then(|s| {
-                            golem_api_grpc::proto::golem::worker::InvocationStatus::try_from(s)
-                                .ok()
-                                .map(InvocationStatus::from)
-                        });
-                        Ok(AgentInvocationOutput {
-                            result: invocation_result,
-                            consumed_fuel: fuel_consumed,
-                            invocation_status,
-                            component_revision: component_revision
-                                .map(ComponentRevision::new)
-                                .transpose()
-                                .map_err(|err| WorkerExecutorError::unknown(err.to_string()))?,
-                            agent_id: agent_id
-                                .map(TryInto::try_into)
-                                .transpose()
-                                .map_err(|err: String| WorkerExecutorError::unknown(err))?,
-                            idempotency_key: idempotency_key.map(Into::into),
-                            oplog_index: oplog_index.map(OplogIndex::from_u64),
-                            agent_fingerprint: agent_fingerprint
-                                .map(|uuid| AgentFingerprint(uuid.into())),
-                        })
+                |outcome| match outcome {
+                    OneShotInvocationSessionResult::Success(output) => Ok(output),
+                    OneShotInvocationSessionResult::Rejected(rejected) => {
+                        Err(decode_invocation_rejection(rejected).into())
                     }
-                    workerexecutor::v1::InvokeAgentResponse {
-                        result:
-                            Some(workerexecutor::v1::invoke_agent_response::Result::Failure(err)),
-                    } => Err(err.into()),
-                    workerexecutor::v1::InvokeAgentResponse { .. } => Err("Empty response".into()),
+                    OneShotInvocationSessionResult::Failure(failure) => {
+                        Err(decode_invocation_failure(failure).into())
+                    }
+                    OneShotInvocationSessionResult::ProtocolFailure(details) => {
+                        Err(WorkerExecutorError::invalid_request(details).into())
+                    }
                 },
                 WorkerServiceError::InternalCallError,
             )
             .await?;
 
         Ok(result)
+    }
+
+    async fn invoke_agent_session(
+        &self,
+        agent_id: &AgentId,
+        request: InvocationRequestStream,
+    ) -> WorkerResult<InvocationResponseStream> {
+        let routing_table = self
+            .routing_table_service
+            .get_routing_table()
+            .await
+            .map_err(|error| {
+                WorkerServiceError::InternalCallError(
+                    CallWorkerExecutorError::FailedToGetRoutingTable(error),
+                )
+            })?;
+        let pod = routing_table.lookup(agent_id).ok_or_else(|| {
+            WorkerServiceError::InternalCallError(CallWorkerExecutorError::FailedToConnectToPod(
+                Status::unavailable(format!("no active shard for agent {agent_id}")),
+            ))
+        })?;
+        let request = Arc::new(std::sync::Mutex::new(Some(request)));
+        let response = self
+            .worker_executor_clients
+            .call_without_retry(
+                "invoke_agent_session",
+                pod.uri(self.worker_executor_clients.uses_tls()),
+                move |worker_executor_client| {
+                    let request = request
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner())
+                        .take();
+                    invoke_agent_session_once(worker_executor_client, request)
+                },
+            )
+            .await
+            .map_err(|status| {
+                WorkerServiceError::InternalCallError(
+                    CallWorkerExecutorError::FailedToConnectToPod(status),
+                )
+            })?;
+        Ok(Box::pin(response.into_inner()))
+    }
+
+    async fn control_durable_stream_attachment(
+        &self,
+        producer_agent_id: &AgentId,
+        producer_environment_id: EnvironmentId,
+        consumer_agent_id: &AgentId,
+        consumer_environment_id: EnvironmentId,
+        expected_consumer_fingerprint: AgentFingerprint,
+        payload: Vec<u8>,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<bool> {
+        let producer_agent_id = producer_agent_id.clone();
+        let consumer_agent_id = consumer_agent_id.clone();
+        self.call_worker_executor(
+            producer_agent_id.clone(),
+            "control_durable_stream_attachment",
+            move |worker_executor_client| {
+                Box::pin(worker_executor_client.control_durable_stream_attachment(
+                    DurableStreamAttachmentControlRequest {
+                        producer_agent_id: Some(producer_agent_id.clone().into()),
+                        producer_environment_id: Some(producer_environment_id.into()),
+                        payload: payload.clone(),
+                        consumer_agent_id: Some(consumer_agent_id.clone().into()),
+                        consumer_environment_id: Some(consumer_environment_id.into()),
+                        expected_consumer_fingerprint: Some(
+                            expected_consumer_fingerprint.0.into(),
+                        ),
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                    },
+                ))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::DurableStreamAttachmentControlResponse {
+                    result: Some(
+                        workerexecutor::v1::durable_stream_attachment_control_response::Result::Replayed(
+                            replayed,
+                        ),
+                    ),
+                } => Ok(replayed),
+                workerexecutor::v1::DurableStreamAttachmentControlResponse {
+                    result: Some(
+                        workerexecutor::v1::durable_stream_attachment_control_response::Result::Failure(
+                            error,
+                        ),
+                    ),
+                } => Err(error.into()),
+                _ => Err("Empty durable stream attachment control response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn read_durable_stream_segment(
+        &self,
+        producer_agent_id: &AgentId,
+        producer_environment_id: EnvironmentId,
+        consumer_agent_id: &AgentId,
+        consumer_environment_id: EnvironmentId,
+        expected_consumer_fingerprint: AgentFingerprint,
+        payload: Vec<u8>,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Vec<u8>> {
+        let producer_agent_id = producer_agent_id.clone();
+        let consumer_agent_id = consumer_agent_id.clone();
+        self.call_worker_executor(
+            producer_agent_id.clone(),
+            "read_durable_stream_segment",
+            move |worker_executor_client| {
+                Box::pin(worker_executor_client.read_durable_stream_segment(
+                    DurableStreamSegmentReadRequest {
+                        producer_agent_id: Some(producer_agent_id.clone().into()),
+                        producer_environment_id: Some(producer_environment_id.into()),
+                        payload: payload.clone(),
+                        consumer_agent_id: Some(consumer_agent_id.clone().into()),
+                        consumer_environment_id: Some(consumer_environment_id.into()),
+                        expected_consumer_fingerprint: Some(
+                            expected_consumer_fingerprint.0.into(),
+                        ),
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                    },
+                ))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::DurableStreamSegmentReadResponse {
+                    result: Some(
+                        workerexecutor::v1::durable_stream_segment_read_response::Result::Payload(
+                            payload,
+                        ),
+                    ),
+                } => Ok(payload),
+                workerexecutor::v1::DurableStreamSegmentReadResponse {
+                    result: Some(
+                        workerexecutor::v1::durable_stream_segment_read_response::Result::Failure(
+                            error,
+                        ),
+                    ),
+                } => Err(error.into()),
+                _ => Err("Empty durable stream segment read response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
     }
 
     async fn deliver_card_transfer(
@@ -1735,6 +2096,626 @@ mod freshness_tests {
                 &first_dispatch,
             ),
             InvocationFreshnessDisposition::MayExist
+        );
+    }
+}
+
+#[cfg(test)]
+mod one_shot_session_tests {
+    use super::{
+        OneShotInvocationSessionResult, collect_one_shot_invocation_session,
+        decode_invocation_failure,
+    };
+    use futures::stream;
+    use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
+    use golem_api_grpc::proto::golem::common::Empty;
+    use golem_api_grpc::proto::golem::schema::{SchemaValue, schema_value};
+    use golem_api_grpc::proto::golem::worker::{
+        AgentId, IdempotencyKey, InvocationAccepted, InvocationFailure, InvocationFailureKind,
+        InvocationRequest, InvocationResponse, InvocationSessionCompletion,
+        InvocationSessionResult, InvocationStart, invocation_request, invocation_response,
+        invocation_session_completion, invocation_session_result,
+    };
+    use golem_common::model::AgentFingerprint;
+    use golem_common::model::oplog::{AgentError, OplogIndex};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use test_r::test;
+    use tonic::Status;
+
+    fn key() -> Option<IdempotencyKey> {
+        Some(IdempotencyKey {
+            value: "session-key".to_string(),
+        })
+    }
+
+    fn agent_id() -> Option<AgentId> {
+        Some(
+            golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
+                agent_id: "agent".to_string(),
+            }
+            .into(),
+        )
+    }
+
+    fn state_after_start() -> InvocationSessionState {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_trusted_request(&InvocationRequest {
+                request: Some(invocation_request::Request::Start(InvocationStart {
+                    input: Some(SchemaValue {
+                        value: Some(schema_value::Value::U8Value(1)),
+                    }),
+                    idempotency_key: key(),
+                    ..Default::default()
+                })),
+            })
+            .unwrap();
+        state
+    }
+
+    fn frame(response: invocation_response::Response) -> Result<InvocationResponse, Status> {
+        Ok(InvocationResponse {
+            response: Some(response),
+        })
+    }
+
+    fn accepted() -> invocation_response::Response {
+        invocation_response::Response::Accepted(InvocationAccepted {
+            agent_id: agent_id(),
+            idempotency_key: key(),
+            component_revision: Some(3),
+            ..Default::default()
+        })
+    }
+
+    fn no_result() -> invocation_response::Response {
+        invocation_response::Response::Result(InvocationSessionResult {
+            result: Some(invocation_session_result::Result::NoResult(Empty {})),
+            component_revision: Some(3),
+            agent_id: agent_id(),
+            idempotency_key: key(),
+            ..Default::default()
+        })
+    }
+
+    fn finished(outcome: invocation_session_completion::Outcome) -> invocation_response::Response {
+        invocation_response::Response::Finished(InvocationSessionCompletion {
+            outcome: Some(outcome),
+        })
+    }
+
+    #[test]
+    async fn successful_session_preserves_unary_result_metadata() {
+        let responses = stream::iter([
+            frame(accepted()),
+            frame(invocation_response::Response::Result(
+                InvocationSessionResult {
+                    result: Some(invocation_session_result::Result::NoResult(Empty {})),
+                    component_revision: Some(3),
+                    agent_id: agent_id(),
+                    idempotency_key: key(),
+                    fuel_consumed: Some(17),
+                    status: Some(
+                        golem_api_grpc::proto::golem::worker::InvocationStatus::Complete as i32,
+                    ),
+                    oplog_index: Some(29),
+                    agent_fingerprint: Some(uuid::Uuid::nil().into()),
+                    new_stream_mappings: Vec::new(),
+                },
+            )),
+            frame(finished(invocation_session_completion::Outcome::Success(
+                Empty {},
+            ))),
+        ]);
+
+        let result = collect_one_shot_invocation_session(responses, state_after_start())
+            .await
+            .unwrap();
+        let OneShotInvocationSessionResult::Success(output) = result else {
+            panic!("expected a successful invocation session");
+        };
+        assert_eq!(output.agent_id.unwrap().agent_id, "agent");
+        assert_eq!(output.idempotency_key.unwrap().value, "session-key");
+        assert_eq!(output.component_revision.unwrap().get(), 3);
+        assert_eq!(output.consumed_fuel, Some(17));
+        assert_eq!(
+            output.invocation_status,
+            Some(golem_common::model::InvocationStatus::Complete)
+        );
+        assert_eq!(output.oplog_index, Some(OplogIndex::from_u64(29)));
+        assert_eq!(
+            output.agent_fingerprint,
+            Some(AgentFingerprint(uuid::Uuid::nil()))
+        );
+    }
+
+    #[test]
+    async fn typed_executor_failure_survives_the_session_adapter() {
+        let expected = WorkerExecutorError::InvocationFailed {
+            error: AgentError::Unknown("failed".to_string()),
+            stderr: "guest stderr".to_string(),
+        };
+        let responses = stream::iter([
+            frame(accepted()),
+            frame(finished(invocation_session_completion::Outcome::Failure(
+                InvocationFailure {
+                    kind: InvocationFailureKind::Execution as i32,
+                    code: "execution".to_string(),
+                    message: "failed".to_string(),
+                    worker_error: Some(expected.clone().into()),
+                },
+            ))),
+        ]);
+
+        let result = collect_one_shot_invocation_session(responses, state_after_start())
+            .await
+            .unwrap();
+        let OneShotInvocationSessionResult::Failure(failure) = result else {
+            panic!("expected an invocation failure");
+        };
+        assert_eq!(decode_invocation_failure(failure), expected);
+    }
+
+    #[test]
+    async fn successful_completion_before_result_is_a_protocol_failure() {
+        let responses = stream::iter([
+            frame(accepted()),
+            frame(finished(invocation_session_completion::Outcome::Success(
+                Empty {},
+            ))),
+        ]);
+
+        let result = collect_one_shot_invocation_session(responses, state_after_start())
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            OneShotInvocationSessionResult::ProtocolFailure(details)
+                if details.contains("before publishing a result")
+        ));
+    }
+
+    #[test]
+    async fn session_is_drained_and_rejects_frames_after_completion() {
+        let responses = stream::iter([
+            frame(accepted()),
+            frame(no_result()),
+            frame(finished(invocation_session_completion::Outcome::Success(
+                Empty {},
+            ))),
+            frame(no_result()),
+        ]);
+
+        let result = collect_one_shot_invocation_session(responses, state_after_start())
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            OneShotInvocationSessionResult::ProtocolFailure(details)
+                if details.contains("after completion")
+        ));
+    }
+
+    #[test]
+    async fn response_transport_error_after_completion_is_retriable() {
+        let responses = stream::iter([
+            frame(accepted()),
+            frame(no_result()),
+            frame(finished(invocation_session_completion::Outcome::Success(
+                Empty {},
+            ))),
+            Err(Status::unavailable("response did not close cleanly")),
+        ]);
+
+        let error = collect_one_shot_invocation_session(responses, state_after_start())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+    }
+
+    #[test]
+    async fn typed_transport_failure_is_retriable() {
+        let responses = stream::iter([
+            frame(accepted()),
+            frame(finished(invocation_session_completion::Outcome::Failure(
+                InvocationFailure {
+                    kind: InvocationFailureKind::Transport as i32,
+                    code: "transport".to_string(),
+                    message: "request transport failed".to_string(),
+                    worker_error: None,
+                },
+            ))),
+        ]);
+
+        let error = collect_one_shot_invocation_session(responses, state_after_start())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+        assert!(error.message().contains("request transport failed"));
+    }
+}
+
+#[cfg(test)]
+mod rejection_mapping_tests {
+    use super::{WorkerClient, WorkerExecutorWorkerClient, decode_invocation_rejection};
+    use futures::{Stream, stream};
+    use golem_api_grpc::proto::golem::schema::{SchemaValue, schema_value};
+    use golem_api_grpc::proto::golem::shardmanager::{
+        IpAddress, Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry, ShardId,
+        ip_address,
+    };
+    use golem_api_grpc::proto::golem::worker::v1::{AgentError, agent_error};
+    use golem_api_grpc::proto::golem::worker::{
+        InvocationRejected, InvocationRejectionReason, InvocationRequest, InvocationResponse,
+        invocation_response,
+    };
+    use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::{
+        WorkerExecutor, WorkerExecutorServer,
+    };
+    use golem_api_grpc::proto::golem::workerexecutor::v1::*;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::agent::{InvocationFreshnessDisposition, Principal};
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
+    use golem_common::model::{AgentId, RetryConfig, RoutingTable};
+    use golem_service_base::clients::shard_manager::{
+        BatchRenewalEntry, QuotaError, ShardManager, ShardManagerError,
+    };
+    use golem_service_base::grpc::client::{GrpcClientConfig, MultiTargetGrpcClient};
+    use golem_service_base::model::auth::AuthCtx;
+    use golem_service_base::model::quota_lease::{PendingReservation, QuotaLease};
+    use golem_service_base::service::routing_table::{RoutingTableConfig, RoutingTableService};
+    use std::net::Ipv4Addr;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use test_r::test;
+    use tokio::net::TcpListener;
+    use tokio_stream::wrappers::TcpListenerStream;
+    use tonic::codec::CompressionEncoding;
+    use tonic::{Request, Response, Status};
+    use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
+
+    fn public_error_for_rejection(reason: InvocationRejectionReason) -> agent_error::Error {
+        let rejection = InvocationRejected {
+            reason: reason as i32,
+            error: "rejected".to_string(),
+            ..Default::default()
+        };
+        let error: AgentError = decode_invocation_rejection(rejection).into();
+        error.error.expect("missing public error")
+    }
+
+    #[test]
+    fn validation_rejection_remains_a_bad_request() {
+        assert!(matches!(
+            public_error_for_rejection(InvocationRejectionReason::Validation),
+            agent_error::Error::BadRequest(_)
+        ));
+    }
+
+    #[test]
+    fn unauthorized_rejection_remains_unauthorized() {
+        assert!(matches!(
+            public_error_for_rejection(InvocationRejectionReason::Unauthorized),
+            agent_error::Error::Unauthorized(_)
+        ));
+    }
+
+    #[test]
+    fn internal_rejection_remains_internal() {
+        assert!(matches!(
+            public_error_for_rejection(InvocationRejectionReason::Internal),
+            agent_error::Error::InternalError(_)
+        ));
+    }
+
+    #[derive(Clone)]
+    struct StaticShardManager(RoutingTable);
+
+    #[async_trait::async_trait]
+    impl ShardManager for StaticShardManager {
+        async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError> {
+            Ok(self.0.clone())
+        }
+
+        async fn register(
+            &self,
+            _port: u16,
+            _pod_name: Option<String>,
+        ) -> Result<u32, ShardManagerError> {
+            unreachable!()
+        }
+
+        async fn acquire_quota_lease(
+            &self,
+            _environment_id: EnvironmentId,
+            _resource_name: ResourceName,
+            _port: u16,
+        ) -> Result<QuotaLease, QuotaError> {
+            unreachable!()
+        }
+
+        async fn renew_quota_lease(
+            &self,
+            _resource_definition_id: ResourceDefinitionId,
+            _port: u16,
+            _epoch: u64,
+            _unused: u64,
+            _pending_reservations: Vec<PendingReservation>,
+        ) -> Result<QuotaLease, QuotaError> {
+            unreachable!()
+        }
+
+        async fn batch_renew_quota_leases(
+            &self,
+            _port: u16,
+            _renewals: Vec<BatchRenewalEntry>,
+        ) -> Result<Vec<Result<QuotaLease, QuotaError>>, ShardManagerError> {
+            unreachable!()
+        }
+
+        async fn release_quota_lease(
+            &self,
+            _resource_definition_id: ResourceDefinitionId,
+            _port: u16,
+            _epoch: u64,
+            _unused: u64,
+        ) -> Result<(), QuotaError> {
+            unreachable!()
+        }
+    }
+
+    #[derive(Clone)]
+    struct RejectingExecutor;
+
+    macro_rules! unimplemented_unary {
+        ($name:ident, $request:ty, $response:ty) => {
+            fn $name<'life0, 'async_trait>(
+                &'life0 self,
+                _request: Request<$request>,
+            ) -> Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<Response<$response>, Status>>
+                        + Send
+                        + 'async_trait,
+                >,
+            >
+            where
+                'life0: 'async_trait,
+                Self: 'async_trait,
+            {
+                Box::pin(async { Err(Status::unimplemented(stringify!($name))) })
+            }
+        };
+    }
+
+    #[tonic::async_trait]
+    impl WorkerExecutor for RejectingExecutor {
+        type ConnectWorkerStream = Pin<
+            Box<
+                dyn Stream<Item = Result<golem_api_grpc::proto::golem::worker::LogEvent, Status>>
+                    + Send,
+            >,
+        >;
+        type GetFileContentsStream =
+            Pin<Box<dyn Stream<Item = Result<GetFileContentsResponse, Status>> + Send>>;
+        type InvokeAgentSessionStream =
+            Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send>>;
+
+        unimplemented_unary!(create_worker, CreateWorkerRequest, CreateWorkerResponse);
+        unimplemented_unary!(delete_worker, DeleteWorkerRequest, DeleteWorkerResponse);
+        unimplemented_unary!(
+            complete_promise,
+            CompletePromiseRequest,
+            CompletePromiseResponse
+        );
+        unimplemented_unary!(
+            interrupt_worker,
+            InterruptWorkerRequest,
+            InterruptWorkerResponse
+        );
+        unimplemented_unary!(revoke_shards, RevokeShardsRequest, RevokeShardsResponse);
+        unimplemented_unary!(assign_shards, AssignShardsRequest, AssignShardsResponse);
+        unimplemented_unary!(
+            set_shard_assignment,
+            SetShardAssignmentRequest,
+            SetShardAssignmentResponse
+        );
+        unimplemented_unary!(
+            get_agent_metadata,
+            GetAgentMetadataRequest,
+            GetAgentMetadataResponse
+        );
+        unimplemented_unary!(resume_worker, ResumeWorkerRequest, ResumeWorkerResponse);
+        unimplemented_unary!(
+            get_running_workers_metadata,
+            GetRunningWorkersMetadataRequest,
+            GetRunningWorkersMetadataResponse
+        );
+        unimplemented_unary!(
+            get_workers_metadata,
+            GetWorkersMetadataRequest,
+            GetWorkersMetadataResponse
+        );
+        unimplemented_unary!(update_worker, UpdateWorkerRequest, UpdateWorkerResponse);
+        unimplemented_unary!(get_oplog, GetOplogRequest, GetOplogResponse);
+        unimplemented_unary!(search_oplog, SearchOplogRequest, SearchOplogResponse);
+        unimplemented_unary!(fork_worker, ForkWorkerRequest, ForkWorkerResponse);
+        unimplemented_unary!(revert_worker, RevertWorkerRequest, RevertWorkerResponse);
+        unimplemented_unary!(
+            resolve_revert_last_invocations,
+            ResolveRevertLastInvocationsRequest,
+            ResolveRevertLastInvocationsResponse
+        );
+        unimplemented_unary!(
+            cancel_invocation,
+            CancelInvocationRequest,
+            CancelInvocationResponse
+        );
+        unimplemented_unary!(
+            control_durable_stream_attachment,
+            DurableStreamAttachmentControlRequest,
+            DurableStreamAttachmentControlResponse
+        );
+        unimplemented_unary!(
+            read_durable_stream_segment,
+            DurableStreamSegmentReadRequest,
+            DurableStreamSegmentReadResponse
+        );
+        unimplemented_unary!(
+            get_file_system_node,
+            GetFileSystemNodeRequest,
+            GetFileSystemNodeResponse
+        );
+        unimplemented_unary!(
+            get_agent_wallet,
+            GetAgentWalletRequest,
+            GetAgentWalletResponse
+        );
+        unimplemented_unary!(
+            activate_plugin,
+            ActivatePluginRequest,
+            ActivatePluginResponse
+        );
+        unimplemented_unary!(
+            deactivate_plugin,
+            DeactivatePluginRequest,
+            DeactivatePluginResponse
+        );
+        unimplemented_unary!(
+            process_oplog_entries,
+            ProcessOplogEntriesRequest,
+            ProcessOplogEntriesResponse
+        );
+        unimplemented_unary!(
+            deliver_card_transfer,
+            DeliverCardTransferRequest,
+            DeliverCardTransferResponse
+        );
+
+        async fn connect_worker(
+            &self,
+            _request: Request<ConnectWorkerRequest>,
+        ) -> Result<Response<Self::ConnectWorkerStream>, Status> {
+            Err(Status::unimplemented("connect_worker"))
+        }
+
+        async fn get_file_contents(
+            &self,
+            _request: Request<GetFileContentsRequest>,
+        ) -> Result<Response<Self::GetFileContentsStream>, Status> {
+            Err(Status::unimplemented("get_file_contents"))
+        }
+
+        async fn invoke_agent_session(
+            &self,
+            request: Request<tonic::Streaming<InvocationRequest>>,
+        ) -> Result<Response<Self::InvokeAgentSessionStream>, Status> {
+            let mut requests = request.into_inner();
+            let start = requests.message().await?.expect("missing invocation start");
+            let (idempotency_key, agent_id) = match start.request {
+                Some(golem_api_grpc::proto::golem::worker::invocation_request::Request::Start(
+                    start,
+                )) => (start.idempotency_key, start.agent_id),
+                other => panic!("expected invocation start, got {other:?}"),
+            };
+            Ok(Response::new(Box::pin(stream::iter([Ok(
+                InvocationResponse {
+                    response: Some(invocation_response::Response::Rejected(
+                        InvocationRejected {
+                            reason: InvocationRejectionReason::NotFound as i32,
+                            error: "agent not found".to_string(),
+                            idempotency_key,
+                            agent_id,
+                            component_revision: None,
+                        },
+                    )),
+                },
+            )]))))
+        }
+    }
+
+    #[test]
+    async fn unary_not_found_rejection_preserves_the_public_error_category() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(
+                    WorkerExecutorServer::new(RejectingExecutor)
+                        .accept_compressed(CompressionEncoding::Gzip)
+                        .send_compressed(CompressionEncoding::Gzip),
+                )
+                .serve_with_incoming(TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+
+        let routing_table: RoutingTable = GrpcRoutingTable {
+            number_of_shards: 1,
+            shard_assignments: vec![RoutingTableEntry {
+                shard_id: Some(ShardId { value: 0 }),
+                pod: Some(GrpcPod {
+                    ip: Some(IpAddress {
+                        kind: Some(ip_address::Kind::Ipv4(u32::from(Ipv4Addr::LOCALHOST))),
+                    }),
+                    port: port.into(),
+                }),
+            }],
+        }
+        .try_into()
+        .unwrap();
+        let routing = Arc::new(RoutingTableService::new(
+            RoutingTableConfig::default(),
+            Arc::new(StaticShardManager(routing_table)),
+        ));
+        let clients = MultiTargetGrpcClient::new(
+            "provisional-rejecting-executor",
+            |channel: OtelGrpcService<_>, max_message_size| {
+                golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient::new(channel)
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip)
+                    .max_decoding_message_size(max_message_size)
+                    .max_encoding_message_size(max_message_size)
+            },
+            GrpcClientConfig::default(),
+        );
+        let client = WorkerExecutorWorkerClient::new(clients, RetryConfig::default(), routing);
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "missing".to_string(),
+        };
+
+        let error = client
+            .invoke_agent(
+                &agent_id,
+                Some("run".to_string()),
+                Some(SchemaValue {
+                    value: Some(schema_value::Value::TupleValue(Default::default())),
+                }),
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+                None,
+                Some(golem_common::model::IdempotencyKey::new(
+                    "session-key".to_string(),
+                )),
+                None,
+                InvocationFreshnessDisposition::MayExist,
+                vec![],
+                EnvironmentId::new(),
+                AccountId::new(),
+                AuthCtx::System,
+                Principal::anonymous().into(),
+                None,
+            )
+            .await
+            .unwrap_err();
+
+        let public_error: AgentError = error.into();
+        assert!(
+            matches!(public_error.error, Some(agent_error::Error::NotFound(_))),
+            "InvocationRejected(NotFound) must remain a public not-found error, got {public_error:?}"
         );
     }
 }

@@ -3,6 +3,8 @@ import sbt.Keys.*
 import org.portablescala.sbtplatformdeps.PlatformDepsPlugin.autoImport.*
 import sbtcrossproject.CrossPlugin.autoImport.*
 import scalajscrossproject.ScalaJSCrossPlugin.autoImport.*
+import org.scalajs.jsenv.nodejs.NodeJSEnv
+import org.scalajs.linker.interface.ModuleKind
 
 // ---------------------------------------------------------------------------
 // Scala versions
@@ -155,7 +157,12 @@ lazy val core = project
       "io.github.cquiroz" %%% "scala-java-time-tzdb"       % scalaJavaTimeVersion % Test,
       "io.github.cquiroz" %%% "scala-java-locales"         % "1.5.4"             % Test,
       "io.github.cquiroz" %%% "locales-full-currencies-db" % "1.5.4"             % Test
-    )
+    ),
+    Test / scalaJSLinkerConfig ~= (_.withModuleKind(ModuleKind.CommonJSModule)),
+    Test / jsEnv := {
+      val moduleLoader = (Test / sourceDirectory).value / "js" / "schema-value-stream-module-loader.cjs"
+      new NodeJSEnv(NodeJSEnv.Config().withArgs(List("--require", moduleLoader.getAbsolutePath)))
+    }
   )
 
 // --- macros (JVM only) -----------------------------------------------------

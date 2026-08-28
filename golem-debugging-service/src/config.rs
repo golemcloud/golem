@@ -77,6 +77,7 @@ impl DebugConfig {
             scheduler_storage: self.scheduler_storage,
             blob_storage: self.blob_storage,
             limits: self.limits,
+            durable_stream: Default::default(),
             retry: self.retry,
             compiled_component_service: self.compiled_component_service,
             oplog: self.oplog,

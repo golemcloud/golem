@@ -40,11 +40,10 @@ import type {
   PermissionCardSpec,
   DiscriminatorRule,
   Datetime,
-  Uuid,
-  EnvironmentId,
 } from 'golem:core/types@2.0.0';
 import { GuestSecretHandle } from './secretHandle';
 import { GuestQuotaTokenHandle } from './quotaTokenHandle';
+import { GuestSchemaValueStreamHandle } from './schemaValueStreamHandle';
 import { GuestPermissionCardHandle } from './permissionCardHandle';
 
 export type {
@@ -62,8 +61,6 @@ export type {
   PermissionCardSpec,
   DiscriminatorRule,
   Datetime,
-  Uuid,
-  EnvironmentId,
 };
 
 // These are part of the schema-model public surface but are only ever re-exported
@@ -75,6 +72,8 @@ export type {
   PathDirection,
   PathKind,
   FieldDiscriminator,
+  Uuid,
+  EnvironmentId,
 } from 'golem:core/types@2.0.0';
 
 // ============================================================
@@ -442,6 +441,7 @@ export type SchemaValue =
   // An opaque, affine owned `quota-token` handle. Carried by ownership; never
   // inspectable or forgeable from a guest. See `GuestQuotaTokenHandle`.
   | { tag: 'quota-token'; handle: GuestQuotaTokenHandle }
+  | { tag: 'stream'; handle: GuestSchemaValueStreamHandle }
   // An opaque, affine owned `permission-card` handle.
   | { tag: 'permission-card'; handle: GuestPermissionCardHandle };
 
@@ -512,6 +512,7 @@ export const t = {
   secret: (inner: SchemaType, spec: Omit<SecretSpec, 'inner'> = {}): SchemaType =>
     schemaType({ tag: 'secret', spec, inner }),
   quotaToken: (spec: QuotaTokenSpec): SchemaType => schemaType({ tag: 'quota-token', spec }),
+  stream: (element?: SchemaType): SchemaType => schemaType({ tag: 'stream', element }),
   permissionCard: (spec: PermissionCardSpec): SchemaType =>
     schemaType({ tag: 'permission-card', spec }),
 };
@@ -577,6 +578,7 @@ export const v = {
   union: (unionTag: string, body: SchemaValue): SchemaValue => ({ tag: 'union', unionTag, body }),
   secret: (handle: GuestSecretHandle): SchemaValue => ({ tag: 'secret', handle }),
   quotaToken: (handle: GuestQuotaTokenHandle): SchemaValue => ({ tag: 'quota-token', handle }),
+  stream: (handle: GuestSchemaValueStreamHandle): SchemaValue => ({ tag: 'stream', handle }),
   permissionCard: (handle: GuestPermissionCardHandle): SchemaValue => ({
     tag: 'permission-card',
     handle,
@@ -661,6 +663,8 @@ export function deepEqual(a: unknown, b: unknown): boolean {
   // expose no enumerable state.
   if (a instanceof GuestSecretHandle || b instanceof GuestSecretHandle) return false;
   if (a instanceof GuestQuotaTokenHandle || b instanceof GuestQuotaTokenHandle) return false;
+  if (a instanceof GuestSchemaValueStreamHandle || b instanceof GuestSchemaValueStreamHandle)
+    return false;
   if (a instanceof GuestPermissionCardHandle || b instanceof GuestPermissionCardHandle) {
     return false;
   }

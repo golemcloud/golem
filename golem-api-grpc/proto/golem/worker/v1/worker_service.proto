@@ -18,6 +18,7 @@ import "golem/worker/filesystem.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation.proto";
 import "golem/worker/invocation_context.proto";
+import "golem/worker/invocation_session.proto";
 import "golem/worker/log_event.proto";
 import "golem/worker/oplog_cursor.proto";
 import "golem/worker/public_oplog.proto";
@@ -38,7 +39,12 @@ service WorkerService {
   rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
   rpc CompletePromise (CompletePromiseRequest) returns (CompletePromiseResponse);
   rpc InvokeAgent (InvokeAgentRequest) returns (InvokeAgentResponse);
+  // Internal executor-routing endpoint. Public clients use the authenticated
+  // agent-session WebSocket and its PublicInvocationRequest envelope.
+  rpc InvokeAgentSession (stream golem.worker.InvocationRequest) returns (stream golem.worker.InvocationResponse);
   rpc CancelInvocation (CancelInvocationRequest) returns (CancelInvocationResponse);
+  rpc ControlDurableStreamAttachment (DurableStreamAttachmentControlRequest) returns (DurableStreamAttachmentControlResponse);
+  rpc ReadDurableStreamSegment (DurableStreamSegmentReadRequest) returns (DurableStreamSegmentReadResponse);
   rpc ProcessOplogEntries (ProcessOplogEntriesRequest) returns (ProcessOplogEntriesResponse);
   rpc DeliverCardTransfer (DeliverCardTransferRequest) returns (DeliverCardTransferResponse);
 }
@@ -196,6 +202,40 @@ message CancelInvocationRequest {
 message CancelInvocationResponse {
   oneof result {
     bool success = 1;
+    AgentError error = 2;
+  }
+}
+
+message DurableStreamAttachmentControlRequest {
+  golem.worker.AgentId producer_agent_id = 1;
+  golem.common.EnvironmentId producer_environment_id = 2;
+  bytes payload = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+  golem.worker.AgentId consumer_agent_id = 5;
+  golem.common.EnvironmentId consumer_environment_id = 6;
+  golem.common.UUID expected_consumer_fingerprint = 7;
+}
+
+message DurableStreamAttachmentControlResponse {
+  oneof result {
+    bool replayed = 1;
+    AgentError error = 2;
+  }
+}
+
+message DurableStreamSegmentReadRequest {
+  golem.worker.AgentId producer_agent_id = 1;
+  golem.common.EnvironmentId producer_environment_id = 2;
+  bytes payload = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+  golem.worker.AgentId consumer_agent_id = 5;
+  golem.common.EnvironmentId consumer_environment_id = 6;
+  golem.common.UUID expected_consumer_fingerprint = 7;
+}
+
+message DurableStreamSegmentReadResponse {
+  oneof result {
+    bytes payload = 1;
     AgentError error = 2;
   }
 }
