@@ -15,14 +15,14 @@ pub(all) struct PackageScanResult {
 ///|
 /// Directories to skip during recursive package discovery.
 let skip_dirs : Array[String] = [
-  "_build", ".mooncakes", "golem-temp", ".git", ".githooks",
+  "_build", ".mooncakes", "golem-temp", ".git", ".githooks", "wit",
 ]
 
 ///|
 /// Generated files to exclude when scanning package source files.
 let generated_files : Array[String] = [
   "golem_agents.mbt", "golem_reexports.mbt", "golem_derive.mbt", "golem_clients.mbt",
-  "golem_tools.mbt", "golem_tool_clients.mbt",
+  "golem_tools.mbt", "golem_tool_clients.mbt", "golem_tool_middlewares.mbt",
 ]
 
 ///|
@@ -101,6 +101,7 @@ fn walk_dir(
     packages.push(PackageInfo::{ rel_path, dir })
   }
   let entries = @fs.read_dir(dir)
+  entries.sort_by((left, right) => left.compare(right))
   for entry in entries {
     if skip_dirs.contains(entry) {
       continue
@@ -117,6 +118,7 @@ fn walk_dir(
 pub fn scan_package(pkg : PackageInfo) -> PackageScanResult raise {
   let files : Array[(String, String)] = []
   let entries = @fs.read_dir(pkg.dir)
+  entries.sort_by((left, right) => left.compare(right))
   for entry in entries {
     if entry.has_suffix(".mbt") && not(generated_files.contains(entry)) {
       let path = "\{pkg.dir}/\{entry}"

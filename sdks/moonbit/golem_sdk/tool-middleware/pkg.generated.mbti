@@ -1,0 +1,117 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/tool-middleware"
+
+import {
+  "golemcloud/golem_sdk/async-core",
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/schema",
+  "golemcloud/golem_sdk/schema_model",
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn[E] decode_result_empty(OwnedInvocationResult) -> Result[Unit, ToolInvokeError[E]]
+
+pub fn[E] decode_result_stdout_only(OwnedInvocationResult) -> Result[@async-core.Stream[Byte], ToolInvokeError[E]]
+
+pub fn[T : @schema.FromSchema, E] decode_result_value(OwnedInvocationResult) -> Result[T, ToolInvokeError[E]]
+
+pub fn[T : @schema.FromSchema, E] decode_result_with_stdout(OwnedInvocationResult) -> Result[(T, @async-core.Stream[Byte]), ToolInvokeError[E]]
+
+pub fn[E] decode_tool_error(@golemcloud/golem_sdk/interface/golem/tool/common.ToolError, (@schema_model.TypedSchemaValue) -> Result[E, String]) -> ToolInvokeError[E]
+
+pub fn encode_tool_error(ToolInvokeError[@schema_model.TypedSchemaValue]) -> @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+
+// Errors
+
+// Types and methods
+pub struct MiddlewareStdin {
+  // private fields
+}
+
+pub(all) struct MonomorphicToolMiddlewareScope {
+  presented : @golemcloud/golem_sdk/interface/golem/tool/common.Tool
+  expected : @golemcloud/golem_sdk/interface/golem/tool/common.Tool
+}
+
+pub struct OwnedInvocationResult {
+  // private fields
+}
+
+pub struct OwnershipContext {
+  // private fields
+}
+
+pub struct RawInvocationResult {
+  // private fields
+}
+pub fn RawInvocationResult::drop(Self) -> Result[Unit, String]
+
+pub struct RawToolInvocation {
+  // private fields
+}
+pub fn RawToolInvocation::command_path(Self) -> Array[String]
+pub fn RawToolInvocation::empty_result(Self) -> RawInvocationResult
+pub fn RawToolInvocation::input(Self) -> RawTypedSchemaValue
+pub fn RawToolInvocation::principal(Self) -> @golemcloud/golem_sdk/interface/golem/agent/common.Principal
+pub fn RawToolInvocation::stdin(Self) -> MiddlewareStdin?
+pub fn RawToolInvocation::tool_metadata(Self) -> @golemcloud/golem_sdk/interface/golem/tool/common.Tool
+pub fn RawToolInvocation::tool_name(Self) -> String
+
+pub struct RawTypedSchemaValue {
+  // private fields
+}
+pub fn RawTypedSchemaValue::drop(Self) -> Result[Unit, String]
+pub fn RawTypedSchemaValue::schema_graph(Self) -> Result[@types.SchemaGraph, String]
+
+pub struct ResourceAcquisitionToken {
+  // private fields
+} derive(Eq, @debug.Debug)
+
+pub struct ResourceCandidate {
+  // private fields
+}
+
+pub struct ResourceCarrierOwnership {
+  // private fields
+}
+
+pub(all) enum ResourceKind {
+  Secret
+  QuotaToken
+  PermissionCard
+  SchemaValueStream
+} derive(Eq, @debug.Debug)
+
+pub(all) enum ToolInvokeError[E] {
+  InvalidToolName(String)
+  InvalidCommandPath(Array[String])
+  InvalidInput(String)
+  ConstraintViolation(String)
+  InvalidResult(String)
+  Tool(E)
+} derive(Eq, @debug.Debug)
+pub fn[E, M] ToolInvokeError::map_tool(Self[E], (E) -> M) -> Self[M]
+
+pub(all) struct ToolMiddleware {
+  name : String
+  aliases : Array[String]
+  doc : @golemcloud/golem_sdk/interface/golem/tool/common.Doc
+  scope : ToolMiddlewareScope
+}
+
+pub(all) enum ToolMiddlewareScope {
+  Monomorphic(MonomorphicToolMiddlewareScope)
+  Universal
+}
+
+pub struct UnderlyingTool {
+  // private fields
+}
+pub async fn UnderlyingTool::invoke(Self, Array[String], @schema_model.TypedSchemaValue, MiddlewareStdin?) -> Result[OwnedInvocationResult, ToolInvokeError[@schema_model.TypedSchemaValue]]
+pub async fn UnderlyingTool::invoke_raw(Self, Array[String], RawTypedSchemaValue, MiddlewareStdin?) -> Result[RawInvocationResult, ToolInvokeError[RawTypedSchemaValue]]
+
+// Type aliases
+
+// Traits
+

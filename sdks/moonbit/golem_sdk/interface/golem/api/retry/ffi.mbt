@@ -32,11 +32,6 @@ fn wasmImportSetRetryPolicy(
 fn wasmImportRemoveRetryPolicy(p0 : Int, p1 : Int) = "golem:api/retry@1.5.0" "remove-retry-policy"
 
 ///|
-#owned(str)
-extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
-  #|(func (param i32) (result i32) local.get 0)
-
-///|
 extern "wasm" fn mbt_ffi_free(position : Int) =
   #|(func (param i32) local.get 0 call $moonbit.decref)
 
@@ -85,3 +80,8 @@ extern "wasm" fn mbt_ffi_store8(offset : Int, value : Int) =
 ///|
 extern "wasm" fn mbt_ffi_storef64(offset : Int, value : Double) =
   #|(func (param i32) (param f64) local.get 0 local.get 1 f64.store)
+
+///|
+#owned(str)
+extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
+  #|(func (param i32) (result i32) local.get 0)
