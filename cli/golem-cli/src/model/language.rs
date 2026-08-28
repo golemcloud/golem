@@ -123,6 +123,10 @@ mod tests {
             Some(GuestLanguage::TypeScript)
         );
         assert_eq!(
+            GuestLanguage::from_component_template_name("scala-tool-middleware"),
+            Some(GuestLanguage::Scala)
+        );
+        assert_eq!(
             GuestLanguage::from_component_template_name("rust"),
             Some(GuestLanguage::Rust)
         );

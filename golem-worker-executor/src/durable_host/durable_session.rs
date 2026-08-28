@@ -467,7 +467,7 @@ impl DurableSessionStreams {
         let mut state = None;
         for (_, entry) in self
             .oplog
-            .read_many(
+            .read_exact(
                 golem_common::model::oplog::OplogIndex::INITIAL,
                 current.as_u64(),
             )
@@ -650,7 +650,7 @@ impl DurableSessionStreams {
         if current.is_defined() {
             for (_, entry) in self
                 .oplog
-                .read_many(
+                .read_exact(
                     golem_common::model::oplog::OplogIndex::INITIAL,
                     current.as_u64(),
                 )
@@ -715,7 +715,7 @@ impl DurableSessionStreams {
         if current.is_defined() {
             for (_, entry) in self
                 .oplog
-                .read_many(
+                .read_exact(
                     golem_common::model::oplog::OplogIndex::INITIAL,
                     current.as_u64(),
                 )
@@ -853,7 +853,7 @@ impl DurableSessionStreams {
         let mut attachment_authority = None;
         for (_, entry) in self
             .oplog
-            .read_many(
+            .read_exact(
                 golem_common::model::oplog::OplogIndex::INITIAL,
                 current.as_u64(),
             )
@@ -967,7 +967,7 @@ impl DurableSessionStreams {
         }
         for (_, entry) in self
             .oplog
-            .read_many(
+            .read_exact(
                 golem_common::model::oplog::OplogIndex::INITIAL,
                 current.as_u64(),
             )
@@ -1034,7 +1034,7 @@ impl DurableSessionStreams {
         let mut attached_epoch = (!local_session_authority).then_some(attachment.epoch);
         for (_, entry) in self
             .oplog
-            .read_many(
+            .read_exact(
                 golem_common::model::oplog::OplogIndex::INITIAL,
                 current.as_u64(),
             )
@@ -1125,7 +1125,7 @@ impl DurableSessionStreams {
         }
         for (_, entry) in self
             .oplog
-            .read_many(
+            .read_exact(
                 golem_common::model::oplog::OplogIndex::INITIAL,
                 current.as_u64(),
             )
@@ -1365,7 +1365,7 @@ impl DurableSessionStreams {
         }
         for (_, entry) in self
             .oplog
-            .read_many(
+            .read_exact(
                 golem_common::model::oplog::OplogIndex::INITIAL,
                 current.as_u64(),
             )
@@ -1759,7 +1759,7 @@ impl DurableSessionStreams {
         if current.is_defined() {
             for (_, entry) in self
                 .oplog
-                .read_many(
+                .read_exact(
                     golem_common::model::oplog::OplogIndex::INITIAL,
                     current.as_u64(),
                 )
@@ -2425,7 +2425,7 @@ impl DurableSessionStreams {
         }
         for (_, entry) in self
             .oplog
-            .read_many(
+            .read_exact(
                 golem_common::model::oplog::OplogIndex::INITIAL,
                 current.as_u64(),
             )
@@ -2786,7 +2786,7 @@ impl DurableSessionStreams {
         let mut visible_mappings = Vec::new();
         for (_, entry) in self
             .oplog
-            .read_many(
+            .read_exact(
                 golem_common::model::oplog::OplogIndex::INITIAL,
                 current.as_u64(),
             )
@@ -2911,7 +2911,7 @@ impl DurableSessionStreams {
         }
         for (_, entry) in self
             .oplog
-            .read_many(
+            .read_exact(
                 golem_common::model::oplog::OplogIndex::INITIAL,
                 current.as_u64(),
             )
@@ -2976,7 +2976,7 @@ impl DurableSessionStreams {
         }
         for (_, entry) in self
             .oplog
-            .read_many(
+            .read_exact(
                 golem_common::model::oplog::OplogIndex::INITIAL,
                 current.as_u64(),
             )
@@ -3317,7 +3317,7 @@ impl DurableSessionStreams {
         let mut output_ids = Vec::new();
         for (_, entry) in self
             .oplog
-            .read_many(
+            .read_exact(
                 golem_common::model::oplog::OplogIndex::INITIAL,
                 current.as_u64(),
             )
@@ -3463,7 +3463,7 @@ impl DurableSessionStreams {
         let mut events = Vec::new();
         for (_, entry) in self
             .oplog
-            .read_many(
+            .read_exact(
                 golem_common::model::oplog::OplogIndex::INITIAL,
                 current.as_u64(),
             )
@@ -5227,7 +5227,10 @@ mod tests {
         let current = oplog.current_oplog_index().await;
         let mut intent_indexes = HashMap::new();
         let mut terminal_indexes = HashMap::new();
-        for (index, entry) in oplog.read_many(OplogIndex::INITIAL, current.as_u64()).await {
+        for (index, entry) in oplog
+            .read_exact(OplogIndex::INITIAL, current.as_u64())
+            .await
+        {
             match entry {
                 OplogEntry::StreamSession { record, .. } => {
                     if let StreamSessionRecordV1::ConsumerCancelIntent(record) =
@@ -5363,7 +5366,10 @@ mod tests {
 
         let mut persisted_roles = HashMap::new();
         let current = oplog.current_oplog_index().await;
-        for (_, entry) in oplog.read_many(OplogIndex::INITIAL, current.as_u64()).await {
+        for (_, entry) in oplog
+            .read_exact(OplogIndex::INITIAL, current.as_u64())
+            .await
+        {
             let OplogEntry::StreamSession { record, .. } = entry else {
                 continue;
             };
