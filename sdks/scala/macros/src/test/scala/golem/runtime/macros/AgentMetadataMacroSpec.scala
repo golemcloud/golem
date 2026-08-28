@@ -17,7 +17,7 @@
 package golem.runtime.macros
 
 import golem.runtime.annotations.{agentDefinition, description, prompt, DurabilityMode}
-import golem.runtime.{AsyncImplementationMethod, MethodInvocation}
+import golem.runtime.{AsyncImplementationMethod, MethodInvocation, OutputMetadata}
 import golem.schema.{SchemaGraph, SchemaTypeBody}
 import zio.blocks.schema.Schema
 import zio.test._
@@ -26,11 +26,6 @@ import scala.concurrent.Future
 
 private[macros] object AgentMetadataMacroTypes {
 
-  /**
-   * Sealed-trait result type used to assert the macros derive schema-native
-   * metadata for nested user types. Avoids stdlib `Either`, whose zio-blocks
-   * derivation only works on Scala 3.
-   */
   sealed trait EchoResult
   object EchoResult {
     final case class Ok(value: Int)       extends EchoResult
@@ -61,6 +56,7 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
     def combine(left: String, right: Int): Future[String]
     def echoOption(value: Option[String]): Future[Option[String]]
     def echoResult(value: EchoResult): Future[EchoResult]
+    def echoEither(value: Either[String, Int]): Future[Either[String, Int]]
   }
 
   @agentDefinition(mode = DurabilityMode.Ephemeral)
@@ -120,7 +116,7 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
       test("EchoAgent metadata exposes all method names") {
         val names = echoMetadata.methods.map(_.name).sorted
         assertTrue(
-          names == List("combine", "echo", "echoOption", "echoResult"),
+          names == List("combine", "echo", "echoEither", "echoOption", "echoResult"),
           echoMetadata.description.contains("Rust-style Echo agent for metadata parity")
         )
       },
@@ -131,6 +127,17 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
           params.map(_.name) == List("left", "right"),
           rootBody(params.head.graph) == SchemaTypeBody.StringType,
           rootBody(params(1).graph) == SchemaTypeBody.S32Type()
+        )
+      },
+      test("EchoAgent Either method derives input and output schemas implicitly") {
+        val method   = echoMetadata.methods.find(_.name == "echoEither").get
+        val expected = SchemaTypeBody.ResultType(
+          Some(golem.schema.t.s32),
+          Some(golem.schema.t.string)
+        )
+        assertTrue(
+          rootBody(method.input.userSupplied.head.graph) == expected,
+          rootBody(method.output.asInstanceOf[OutputMetadata.Single].graph) == expected
         )
       },
       test("Agent metadata captures trait-level mode annotation") {

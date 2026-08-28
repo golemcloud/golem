@@ -53,7 +53,7 @@ val scalafmtDynamicVersion    = "3.10.4"
 // zio-blocks dependency helper
 // ---------------------------------------------------------------------------
 
-val zioBlocksVersion = "0.0.32"
+val zioBlocksVersion = "0.0.51"
 
 def zioBlocksDep(name: String) = Def.setting {
   "dev.zio" %%% s"zio-blocks-$name" % zioBlocksVersion
@@ -211,7 +211,7 @@ lazy val sbtPlugin = project
     scalaVersion       := Scala212,
     crossScalaVersions := Seq(Scala212),
     sbtVersion         := "1.12.0",
-    addSbtPlugin("org.scala-js" % "sbt-scalajs" % "1.20.2"),
+    addSbtPlugin("org.scala-js" % "sbt-scalajs" % "1.22.0"),
     libraryDependencies += "org.scalameta" %% "scalafmt-dynamic" % scalafmtDynamicVersion
   )
 
