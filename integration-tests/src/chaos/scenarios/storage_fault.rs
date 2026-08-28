@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Storage outage: the shared choreography behind S14, S16, S18 and S22.
+//! Storage fault: the shared choreography behind S14, S16, S17, S18 and S22.
 //!
-//! All four codes run this module. They differ in which store is taken away and
-//! for how long, both of which are suite settings, and in what a reader should
-//! expect of the result:
+//! All five codes run this module. They differ in which store the fault is
+//! aimed at, what it does to that store and for how long, all of which are
+//! suite settings, and in what a reader should expect of the result:
 //!
 //! * **S16** (GOL-379) cuts the key-value cluster for the length of an AWS
 //!   storage failover, about a minute. The key-value retry budget covers that,
@@ -35,10 +35,16 @@
 //!   than past any platform budget. There is no budget to exhaust: golem-dev
 //!   configures that client to retry forever. The claim is that a stall which
 //!   outlasts the caller does not turn one operation into two.
+//! * **S17** (GOL-375) leaves that same cache reachable and makes it slow. The
+//!   only scenario here that breaks nothing, and a different question rather
+//!   than a milder version of S18's: not whether the platform survives losing
+//!   its worker-status store, but whether it degrades or breaks when that store
+//!   gets slower. Going quiet would be a failure here rather than the expected
+//!   result.
 //!
-//! The driver is the same in all four because the difference is one of
+//! The driver is the same in all five because the difference is one of
 //! expectation, not of choreography. Nothing below asserts on which outcome
-//! happened: the account it produces answers all four questions, and the
+//! happened: the account it produces answers all five questions, and the
 //! oracles that fail the build — the scheduled-fire account and the
 //! exactly-once account — are the ones every one of them shares.
 //!
@@ -74,16 +80,20 @@
 //! commit anything durable at all, which is the opposite arrangement: the
 //! platform knows exactly what it is doing and cannot record any of it.
 //!
-//! The **Redis cache** that S18 cuts is not a cluster at all but the front half
-//! of the key-value layer. `NamespaceRoutedKeyValueStorage` sends the `Worker`,
+//! The **Redis cache** that S18 and S17 aim at is not a cluster at all but the
+//! front half of the key-value layer. `NamespaceRoutedKeyValueStorage` sends the `Worker`,
 //! `AgentStatus` and `AgentStatusCheckpoint` namespaces to it and everything
-//! else to Postgres, so S18 removes exactly the part S16 leaves standing. Both
-//! Aurora clusters stay reachable throughout.
+//! else to Postgres, so S18 removes exactly the part S16 leaves standing and
+//! S17 slows the same part instead. Both Aurora clusters stay reachable
+//! throughout either.
 //!
-//! No stream is a control group under any of them. A durable increment needs
-//! the running-workers set before it can start, the worker-status cache to
-//! resolve its mode, and the oplog before it can finish, so `durable` degrades
-//! under all three cuts and must not be read as untouched.
+//! No stream is a control group under the Aurora cuts. A durable increment
+//! needs the running-workers set before it can start, the worker-status cache
+//! to resolve its mode, and the oplog before it can finish, so `durable`
+//! degrades under both of those and must not be read as untouched. The two
+//! Redis scenarios are the exception, and deliberately so: there the streams
+//! that keep working are evidence rather than noise, which is why they are
+//! judged by their own expectations. See [`crate::chaos::OutageExpectation`].
 //!
 //! ## The control is the baseline, not another pod
 //!

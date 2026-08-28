@@ -140,6 +140,13 @@ pub enum OutageViolation {
     /// everything went quiet — would have called that its cleanest possible
     /// pass.
     UnexpectedStall,
+    /// A stream a delay was aimed at ran no slower than it did at rest.
+    ///
+    /// The latency equivalent of [`Self::OutageNotObserved`]. Where a cut
+    /// proves it landed by silence, a delay can only prove it by time, and a
+    /// netem rule that failed to apply leaves a run full of healthy numbers and
+    /// no error anywhere — the worst artifact this suite can produce.
+    SlowdownNotObserved,
     /// A stream that was confirming operations before the outage confirmed
     /// nothing at all after the heal.
     StreamNeverRecovered,
@@ -150,6 +157,7 @@ impl OutageViolation {
         match self {
             OutageViolation::OutageNotObserved => "outage-not-observed",
             OutageViolation::UnexpectedStall => "unexpected-stall",
+            OutageViolation::SlowdownNotObserved => "slowdown-not-observed",
             OutageViolation::StreamNeverRecovered => "stream-never-recovered",
         }
     }
@@ -318,6 +326,16 @@ pub struct StorageFaultReport {
     /// than from an assumption about faults.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub least_serving_stream_percent: Option<f64>,
+    /// The least any stream *expected to slow down* did, as a multiple of its
+    /// own before-fault median latency. `None` unless the expectation is
+    /// [`OutageExpectation::LatencyDegradation`].
+    ///
+    /// A multiple of the stream's own baseline rather than a millisecond
+    /// figure, because the streams differ by an order of magnitude at rest and
+    /// a single absolute threshold would be slack for one and unreachable for
+    /// another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub least_slowdown_factor: Option<f64>,
     pub cells: Vec<StreamThroughputCell>,
     /// What the outage began underneath, per stream. Empty for a run that never
     /// learned when the fault was.
@@ -466,6 +484,7 @@ impl StorageFaultReport {
             share_of_baseline_percent: None,
             quietest_stream_percent: None,
             least_serving_stream_percent: None,
+            least_slowdown_factor: None,
             cells,
             caught_in_flight: caught_in_flight(records, fault),
             recovery: Vec::new(),
@@ -579,6 +598,44 @@ impl StorageFaultReport {
                         self.endpoint
                     ),
                 });
+            }
+        }
+
+        // The latency half, before the serving one, because a delay that never
+        // applied makes everything below it uninteresting: the streams would
+        // all be serving normally and the run would read as a clean pass of an
+        // experiment that never happened.
+        if let Some(slowdown_floor) = self.expect.slowdown_floor() {
+            let mut slowdowns: Vec<(Stream, f64)> = served_before
+                .iter()
+                .copied()
+                .filter(|stream| self.expect.expects_slowdown(*stream))
+                .filter_map(|stream| {
+                    // Each stream against its own before-fault median. Medians
+                    // rather than means because a handful of retried operations
+                    // drag a mean far enough to hide whether the typical
+                    // operation moved at all, which is the question.
+                    let baseline = self.median_ms(stream, Window::BeforeFault)?;
+                    let during = self.median_ms(stream, Window::DuringFault)?;
+                    (baseline > 0.0).then_some((stream, round2(during / baseline)))
+                })
+                .collect();
+            slowdowns.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+            if let Some(&(stream, least)) = slowdowns.first() {
+                self.least_slowdown_factor = Some(least);
+                if least < slowdown_floor {
+                    self.findings.push(OutageFinding {
+                        violation: OutageViolation::SlowdownNotObserved,
+                        stream: Some(stream),
+                        detail: format!(
+                            "{stream} was expected to slow down while {} was delayed and ran at \
+                             {least}x its own baseline median against a {slowdown_floor}x floor \
+                             — so this run has no evidence the delay reached the executors",
+                            self.endpoint
+                        ),
+                    });
+                }
             }
         }
 
@@ -707,6 +764,15 @@ impl StorageFaultReport {
             .collect()
     }
 
+    /// One stream's median latency in a window, if it has a cell with samples.
+    fn median_ms(&self, stream: Stream, window: Window) -> Option<f64> {
+        self.cells
+            .iter()
+            .find(|c| c.stream == stream && c.window == window)
+            .filter(|c| c.latency.count > 0)
+            .map(|c| c.latency.p50_ms as f64)
+    }
+
     /// Context a reader needs in order to read the cells, which is not itself a
     /// problem.
     pub fn note_lines(&self) -> Vec<String> {
@@ -715,13 +781,23 @@ impl StorageFaultReport {
             // Says which streams the numbers are about, because under a partial
             // cut they are about a subset and a reader who assumes otherwise
             // draws the opposite conclusion from the same figure.
-            let quiet = match self.quietest_stream_percent {
-                Some(q) => format!(
+            // Under a latency expectation nothing is meant to go quiet, so the
+            // quiet figure is absent by design rather than missing, and the
+            // slowdown takes its place as what says the fault landed.
+            let quiet = match (self.quietest_stream_percent, self.least_slowdown_factor) {
+                (_, Some(factor)) => format!(
+                    "the streams expected to slow down ran at least {factor}x their own baseline \
+                     median (floor {}x)",
+                    self.expect.slowdown_floor().unwrap_or_default()
+                ),
+                (Some(q), None) => format!(
                     "the streams expected to stop were silent for at least {q}% of the fault \
                      window (floor {}%)",
                     self.expect.quiet_floor_percent()
                 ),
-                None => "no stream had a before-fault baseline to be judged against".to_string(),
+                (None, None) => {
+                    "no stream had a before-fault baseline to be judged against".to_string()
+                }
             };
             let serving = match (
                 self.least_serving_stream_percent,
@@ -1034,6 +1110,54 @@ mod tests {
         records
     }
 
+    const SLOWDOWN_FLOOR: f64 = 2.0;
+
+    /// A workload where every stream keeps serving and `ephemeral` is the one
+    /// the delay is aimed at. `ephemeral_ms` is what its operations take during
+    /// the fault, against a 200ms baseline.
+    fn latency_history(ephemeral_ms: u64, ephemeral_during: usize) -> Vec<OperationRecord> {
+        let mut records = Vec::new();
+        for second in 1..=300 {
+            records.push(timed(Stream::Durable, -second, 50));
+            records.push(timed(Stream::Ephemeral, -second, 200));
+        }
+        for i in 0..180 {
+            records.push(timed(Stream::Durable, i as i64, 50));
+        }
+        for i in 0..ephemeral_during {
+            records.push(timed(Stream::Ephemeral, i as i64, ephemeral_ms));
+        }
+        for second in 181..=420 {
+            records.push(timed(Stream::Durable, second, 50));
+            records.push(timed(Stream::Ephemeral, second, 200));
+        }
+        records
+    }
+
+    /// A confirmed operation that took a stated time, so a window's median is
+    /// something the test controls rather than something it inherits.
+    fn timed(stream: Stream, offset_secs: i64, duration_ms: u64) -> OperationRecord {
+        let mut record = op(stream, offset_secs, Outcome::Confirmed);
+        record.duration_ms = duration_ms;
+        record.completed_at =
+            Some(record.submitted_at + TimeDelta::milliseconds(duration_ms as i64));
+        record
+    }
+
+    fn build_latency(records: &[OperationRecord]) -> StorageFaultReport {
+        StorageFaultReport::build(
+            records,
+            Some(fault()),
+            ENDPOINT,
+            OutageExpectation::LatencyDegradation {
+                slowed: vec![Stream::Ephemeral],
+                slowdown_floor: SLOWDOWN_FLOOR,
+                serving_floor_percent: SERVING_FLOOR,
+            },
+            Duration::from_secs(120),
+        )
+    }
+
     fn build_partial(records: &[OperationRecord]) -> StorageFaultReport {
         StorageFaultReport::build(
             records,
@@ -1219,6 +1343,68 @@ mod tests {
                     && f.stream == Some(Stream::Durable)),
             "durable served nothing while off the fault path, got {:?}",
             wrong_stream.findings
+        );
+    }
+
+    /// The delay landed and the platform degraded rather than broke, which is
+    /// the outcome S15 and S17 are written to confirm.
+    #[test]
+    fn a_slowed_stream_that_kept_serving_is_the_expected_outcome() {
+        // 200ms at rest, 1s under the delay, and still completing throughout.
+        let report = build_latency(&latency_history(1_000, 180));
+
+        assert!(
+            report.findings.is_empty(),
+            "slower but still serving is what a delay is supposed to produce, got {:?}",
+            report.findings
+        );
+        assert_eq!(
+            report.least_slowdown_factor,
+            Some(5.0),
+            "1000ms against a 200ms baseline is 5x"
+        );
+        assert!(
+            report.quietest_stream_percent.is_none(),
+            "nothing is expected to go quiet under a delay, so there is no quiet verdict to draw"
+        );
+    }
+
+    /// The netem rule that never applied. Without this the run is full of
+    /// healthy numbers and no error anywhere, which is the worst artifact this
+    /// suite can produce — the same failure `outage-not-observed` exists to
+    /// catch, in the units a delay is measured in.
+    #[test]
+    fn a_delay_that_did_not_reach_the_executors_is_a_finding() {
+        // 240ms against a 200ms baseline: 1.2x, well under the 2x floor.
+        let report = build_latency(&latency_history(240, 180));
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.violation == OutageViolation::SlowdownNotObserved
+                    && f.stream == Some(Stream::Ephemeral)),
+            "a stream that barely moved cannot evidence a delay, got {:?}",
+            report.findings
+        );
+    }
+
+    /// A delay is supposed to cost time, not work. A slowed stream that stops
+    /// entirely means the added latency broke something — a timeout fired, a
+    /// pool drained — and that is a different and worse outcome than slowness.
+    #[test]
+    fn a_delay_that_stopped_a_stream_rather_than_slowing_it_is_a_finding() {
+        // Slow enough to clear the slowdown floor, but only a trickle of
+        // operations got through, so it degraded past degradation.
+        let report = build_latency(&latency_history(1_000, 2));
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.violation == OutageViolation::UnexpectedStall),
+            "a stream serving 2 operations where it served 180 has stopped, got {:?}",
+            report.findings
         );
     }
 

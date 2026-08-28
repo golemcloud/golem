@@ -1332,3 +1332,130 @@ scenarios:
       delaySecs: 5
 
     signalTimeoutSecs: 1800
+
+  # ---------------------------------------------------------------------------
+  # S17 — Redis latency degradation (GOL-375)
+  #
+  # The fifth scenario on the storage driver, and the first that does not break
+  # anything. S18 took the Redis cache away; this leaves it reachable and makes
+  # it slow. That is a different question rather than a milder version of the
+  # same one: S18 asked whether the platform survives losing its worker-status
+  # store, and this asks whether it degrades or breaks when that store gets
+  # slower. "It went quiet" would be a failure here, not the expected result.
+  #
+  # GOL-375 asks for three things S18 could not give it — invocation latency
+  # under load, RSS peak, and pending-work evidence — and for a determination of
+  # whether worker-status writes block invocation completion or are best effort.
+  # S18 answered half of that: best effort for a resident durable agent, because
+  # AgentStatusFlusher takes the blob off the commit path, and blocking for
+  # anything crossing a lifecycle boundary. This run gets the other half, which
+  # is what that costs when the store is merely slow rather than gone.
+  # ---------------------------------------------------------------------------
+  - code: S17
+    name: redis-cache-latency
+    enabled: true
+
+    fault:
+      # Recorded for the archive rather than acted on: the workflow selects the
+      # manifest by scenario code and reads the Chaos Mesh kind out of the
+      # manifest itself. It compares this string only against `none`,
+      # `network-partition` and `pod-kill`, none of which this is.
+      kind: network-delay
+      target: worker-executor
+      # Every executor, as in the other four. A cache that is slow for only some
+      # executors is a routing fault wearing a cache's clothes.
+      mode: all
+      # Must equal phases.faultSecs; see the note on S16.
+      durationSecs: 300
+
+    phases:
+      # Same as the other four, so all five are comparable.
+      baselineSecs: 300
+      # Longer than any of the others, and not for the reason S18's window is
+      # long. Nothing times out under a 500ms delay — an ephemeral operation
+      # goes from about 212ms to under a second, nowhere near the 120s attempt
+      # timeout — so there is no caller clock to outrun. The length is for the
+      # two things GOL-375 asks for that need time to develop: a memory series
+      # long enough to show whether the executor's dirty-status set grows, and
+      # a steady state rather than a transient. At the workflow's 15s sampling
+      # interval this is about 20 memory samples inside the window.
+      faultSecs: 300
+      # As the others.
+      recoverySecs: 420
+
+    workload:
+      # Identical to S14, S16, S18 and S22, so the difference between the five
+      # results is the fault and not the population.
+      durableAgents: 200
+      ephemeralAgents: 50
+      # Zero for the same reason as the others: the scheduled stream comes from
+      # the block below. Setting both is refused at load time.
+      scheduledAgents: 0
+      promiseAgents: 50
+      quotaAgents: 0
+      ratePerSec: 100
+
+    scheduled:
+      targets: 100
+      intervalMillis: 2000
+      leadSecs: 10
+      # The scheduler keeps its own schema on Postgres, which this fault does
+      # not touch, so its claims and acknowledgements should be unaffected. S18
+      # confirmed that: during-fault p99 was 2094ms against a 2099ms baseline.
+      # 240 as the other three, and it should not be approached.
+      leaseBudgetSecs: 240
+
+    storage:
+      # The same Redis endpoint S18 cuts. Both Aurora clusters stay reachable
+      # and unslowed for the whole run.
+      endpoint: master.golem-redis-dev.intsie.use1.cache.amazonaws.com
+
+      expect:
+        # Neither of the rules the other four use. Under a delay nothing is
+        # supposed to fall silent, so silence is not available as evidence that
+        # the fault landed and time has to stand in for it.
+        kind: latency-degradation
+
+        # `ephemeral` alone, for the reason S18 measured rather than predicted:
+        # its agents are created and torn down per operation, so every one
+        # crosses a lifecycle boundary, and that is one of the few things still
+        # reaching this cache synchronously. Under S18 it was the only stream
+        # that stopped.
+        slowed: [ephemeral]
+
+        # Ephemeral's baseline median was 212ms in S18's run. The delay is 500ms
+        # applied to egress only (`direction: to`, which Chaos Mesh's webhook
+        # requires for netem against an external target), so one Redis round
+        # trip inside the operation puts it at about 712ms, or 3.4x. Two put it
+        # near 5.7x.
+        #
+        # 2.0 sits below the single-round-trip case with room to spare while
+        # still failing the run that matters: a netem rule that never applied
+        # leaves the stream at roughly 1.0x, and the report would otherwise be
+        # full of healthy numbers describing an experiment that never happened.
+        slowdownFloor: 2.0
+
+        # A delay should cost time, not work. Throughput is not expected to move
+        # much: the per-stream in-flight budget is MAX_IN_FLIGHT/4 = 256, and at
+        # 33 operations per second and 712ms each the stream sits around 23 in
+        # flight, so nothing queues. A stream falling below half its baseline
+        # therefore means the added latency broke something rather than slowed
+        # it — a timeout fired, a pool drained — and that is worth failing on.
+        servingFloorPercent: 50
+
+      # Recorded, not asserted. Expected to be near zero: nothing was ever
+      # unreachable, so there is no reconnect to wait for and no backlog to
+      # drain, only the last few in-flight operations finishing at their slower
+      # pace.
+      recoveryBudgetSecs: 60
+
+    retryPolicy:
+      # Identical to the other four. Not load-bearing here the way it is in S18,
+      # because nothing should time out and so nothing should retry — but a
+      # retry count above zero would itself be a finding, and leaving the policy
+      # the same is what makes that comparable.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800

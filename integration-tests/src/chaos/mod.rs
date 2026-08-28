@@ -103,6 +103,9 @@ pub enum ScenarioCode {
     /// Executors cut off from the Redis cache that fronts the key-value layer,
     /// for longer than a caller is willing to wait.
     S18,
+    /// The same Redis cache still reachable but slowed, to ask whether the
+    /// platform degrades or breaks when its worker-status store gets slower.
+    S17,
 }
 
 impl ScenarioCode {
@@ -123,13 +126,14 @@ impl ScenarioCode {
             ScenarioCode::S22 => "S22",
             ScenarioCode::S14 => "S14",
             ScenarioCode::S18 => "S18",
+            ScenarioCode::S17 => "S17",
         }
     }
 
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 15] = [
+    pub const ALL: [ScenarioCode; 16] = [
         ScenarioCode::S1,
         ScenarioCode::S3,
         ScenarioCode::S5,
@@ -143,6 +147,7 @@ impl ScenarioCode {
         ScenarioCode::S13,
         ScenarioCode::S14,
         ScenarioCode::S16,
+        ScenarioCode::S17,
         ScenarioCode::S18,
         ScenarioCode::S22,
     ];
@@ -772,6 +777,38 @@ pub enum OutageExpectation {
         /// says it is.
         serving_floor_percent: f64,
     },
+    /// The store is still reachable, only slow. Nothing is expected to fall
+    /// silent at all, so the evidence the fault landed is latency rather than
+    /// absence. S15 and S17.
+    ///
+    /// Worth being explicit that this is a different *question*, not a milder
+    /// version of the other two. Those ask whether the platform survives losing
+    /// a store. This asks whether it degrades or breaks when one gets slower,
+    /// and "it went quiet" would be a failure here rather than the expected
+    /// result.
+    LatencyDegradation {
+        /// The streams whose latency must rise for the injected delay to have
+        /// landed. Their slowdown plays the part silence plays elsewhere: it is
+        /// the only positive evidence the run has that anything happened.
+        slowed: Vec<Stream>,
+        /// The least each named stream's during-fault median latency must be as
+        /// a multiple of its own before-fault median.
+        ///
+        /// A multiple rather than a millisecond figure, so the threshold does
+        /// not have to be re-derived per stream. Streams differ by an order of
+        /// magnitude at rest — S18's baselines ran from 56ms on `durable` to
+        /// 240ms on `ephemeral` — and a fixed ceiling would be slack for one
+        /// and impossible for the other.
+        slowdown_floor: f64,
+        /// The least of its own baseline rate *every* stream must still hold,
+        /// including the slowed ones.
+        ///
+        /// The claim that separates degradation from breakage. A delay should
+        /// make work take longer, not stop it, so a stream falling to nothing
+        /// here means the added latency cost more than time — a timeout fired,
+        /// a pool drained, a queue filled — and that is worth failing on.
+        serving_floor_percent: f64,
+    },
 }
 
 impl OutageExpectation {
@@ -785,6 +822,26 @@ impl OutageExpectation {
                 quiet_floor_percent,
                 ..
             } => *quiet_floor_percent,
+            // Nothing is expected to go quiet, so there is no floor to apply
+            // and reporting one would invite a reader to check it.
+            OutageExpectation::LatencyDegradation { .. } => 0.0,
+        }
+    }
+
+    /// Whether this stream is one whose slowdown would prove a delay landed.
+    pub fn expects_slowdown(&self, stream: Stream) -> bool {
+        match self {
+            OutageExpectation::LatencyDegradation { slowed, .. } => slowed.contains(&stream),
+            _ => false,
+        }
+    }
+
+    /// The multiple of its own baseline median a slowed stream must reach, or
+    /// `None` where the expectation makes no claim about latency.
+    pub fn slowdown_floor(&self) -> Option<f64> {
+        match self {
+            OutageExpectation::LatencyDegradation { slowdown_floor, .. } => Some(*slowdown_floor),
+            _ => None,
         }
     }
 
@@ -796,6 +853,7 @@ impl OutageExpectation {
         match self {
             OutageExpectation::WholeWorkload { .. } => true,
             OutageExpectation::PartialWorkload { silenced, .. } => silenced.contains(&stream),
+            OutageExpectation::LatencyDegradation { .. } => false,
         }
     }
 
@@ -805,6 +863,10 @@ impl OutageExpectation {
         match self {
             OutageExpectation::WholeWorkload { .. } => None,
             OutageExpectation::PartialWorkload {
+                serving_floor_percent,
+                ..
+            }
+            | OutageExpectation::LatencyDegradation {
                 serving_floor_percent,
                 ..
             } => Some(*serving_floor_percent),
@@ -1082,6 +1144,68 @@ impl ScenarioConfig {
         }
     }
 
+    /// A floor of 100% can never be met: a stream is only quiet between the
+    /// answers it did give, and an operation submitted just before the heal
+    /// confirms just after it, inside the window it was submitted in. Every run
+    /// would then report the outage as not observed, and the one verdict that
+    /// exists to catch a fault which never landed would be stuck on. A floor of
+    /// zero is the opposite failure: every run passes, including the ones where
+    /// nothing was ever cut off.
+    fn check_quiet_floor(&self, floor: f64) -> anyhow::Result<()> {
+        if !(0.0..100.0).contains(&floor) || floor <= 0.0 {
+            anyhow::bail!(
+                "chaos scenario {}: expect.quietFloorPercent is {floor}, which is not a share \
+                 of the fault window a real outage could be judged by",
+                self.code
+            );
+        }
+        Ok(())
+    }
+
+    fn check_serving_floor(&self, floor: f64) -> anyhow::Result<()> {
+        if !(0.0..=100.0).contains(&floor) || floor <= 0.0 {
+            anyhow::bail!(
+                "chaos scenario {}: expect.servingFloorPercent is {floor}, which is not a share \
+                 of a stream's own baseline it could be held to",
+                self.code
+            );
+        }
+        Ok(())
+    }
+
+    /// The streams whose behaviour is the run's only positive evidence that the
+    /// fault landed at all.
+    ///
+    /// Naming one the workload never drives leaves the run with no such
+    /// evidence and nothing to complain about — the exact failure the floors
+    /// exist to prevent, reintroduced one level up. Refused at load time so it
+    /// costs a build rather than a maintenance window.
+    fn check_evidence_streams(
+        &self,
+        field: &str,
+        streams: &[Stream],
+        evidence: &str,
+    ) -> anyhow::Result<()> {
+        if streams.is_empty() {
+            anyhow::bail!(
+                "chaos scenario {}: expect.{field} is empty, so nothing in the run would show \
+                 whether the fault landed at all",
+                self.code
+            );
+        }
+        for stream in streams {
+            if !self.drives_stream(*stream) {
+                anyhow::bail!(
+                    "chaos scenario {}: expect.{field} names `{stream}`, which this scenario's \
+                     workload never drives, so its {evidence} during the fault would prove \
+                     nothing",
+                    self.code
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub fn require_storage(&self) -> anyhow::Result<&StorageConfig> {
         let config = self.storage.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
@@ -1096,45 +1220,43 @@ impl ScenarioConfig {
         // that exists to catch a fault which never landed would be stuck on. A
         // floor of zero is the opposite failure: every run passes, including
         // the ones where nothing was ever cut off.
-        let quiet_floor = config.expect.quiet_floor_percent();
-        if !(0.0..100.0).contains(&quiet_floor) || quiet_floor <= 0.0 {
-            anyhow::bail!(
-                "chaos scenario {}: expect.quietFloorPercent is {quiet_floor}, which is not a \
-                 share of the fault window a real outage could be judged by",
-                self.code
-            );
-        }
-        if let Some(serving_floor) = config.expect.serving_floor_percent()
-            && (!(0.0..=100.0).contains(&serving_floor) || serving_floor <= 0.0)
-        {
-            anyhow::bail!(
-                "chaos scenario {}: expect.servingFloorPercent is {serving_floor}, which is not a \
-                 share of a stream's own baseline it could be held to",
-                self.code
-            );
-        }
-        // A partial cut proves it landed by naming the streams it stops, so a
-        // name the workload never drives leaves the run with no evidence and no
-        // complaint — the exact failure the quiet floor exists to prevent,
-        // reintroduced one level up. Refused here rather than at judge time so
-        // it costs a build rather than a maintenance window.
-        if let OutageExpectation::PartialWorkload { silenced, .. } = &config.expect {
-            if silenced.is_empty() {
-                anyhow::bail!(
-                    "chaos scenario {}: expect.silenced is empty, so nothing in the run would \
-                     show whether the cut landed at all",
-                    self.code
-                );
+        // Checked per variant rather than through the accessors, because the
+        // variants do not share a set of knobs and a single pass over "whatever
+        // is present" would silently skip whichever one this scenario actually
+        // relies on.
+        match &config.expect {
+            OutageExpectation::WholeWorkload {
+                quiet_floor_percent,
+            } => {
+                self.check_quiet_floor(*quiet_floor_percent)?;
             }
-            for stream in silenced {
-                if !self.drives_stream(*stream) {
+            OutageExpectation::PartialWorkload {
+                silenced,
+                quiet_floor_percent,
+                serving_floor_percent,
+            } => {
+                self.check_quiet_floor(*quiet_floor_percent)?;
+                self.check_serving_floor(*serving_floor_percent)?;
+                self.check_evidence_streams("silenced", silenced, "silence")?;
+            }
+            OutageExpectation::LatencyDegradation {
+                slowed,
+                slowdown_floor,
+                serving_floor_percent,
+            } => {
+                // A floor of 1.0 or less asks a stream to be no slower than it
+                // already was, which every run satisfies including one where
+                // the delay never applied. That is the same hole a zero quiet
+                // floor leaves, in the units this variant uses.
+                if !slowdown_floor.is_finite() || *slowdown_floor <= 1.0 {
                     anyhow::bail!(
-                        "chaos scenario {}: expect.silenced names `{stream}`, which this \
-                         scenario's workload never drives, so its silence during the fault \
-                         would prove nothing",
+                        "chaos scenario {}: expect.slowdownFloor is {slowdown_floor}, and a \
+                         factor at or below 1.0 is met by a run where the delay never applied",
                         self.code
                     );
                 }
+                self.check_serving_floor(*serving_floor_percent)?;
+                self.check_evidence_streams("slowed", slowed, "slowdown")?;
             }
         }
         if config.endpoint.trim().is_empty() {
@@ -1604,6 +1726,7 @@ mod tests {
         assert_eq!(ScenarioCode::parse("s16"), Some(ScenarioCode::S16));
         assert_eq!(ScenarioCode::parse("s14"), Some(ScenarioCode::S14));
         assert_eq!(ScenarioCode::parse("s18"), Some(ScenarioCode::S18));
+        assert_eq!(ScenarioCode::parse("s17"), Some(ScenarioCode::S17));
         assert_eq!(ScenarioCode::parse("S99"), None);
     }
 
@@ -1649,7 +1772,11 @@ mod tests {
                     entry.require_workload().unwrap();
                     entry.require_rollback().unwrap();
                 }
-                ScenarioCode::S14 | ScenarioCode::S16 | ScenarioCode::S18 | ScenarioCode::S22 => {
+                ScenarioCode::S14
+                | ScenarioCode::S16
+                | ScenarioCode::S17
+                | ScenarioCode::S18
+                | ScenarioCode::S22 => {
                     entry.require_workload().unwrap();
                     entry.require_scheduled().unwrap();
                     entry.require_storage().unwrap();
