@@ -8,7 +8,7 @@ import mill.scalalib.*
 
 val millVersion = "1.1.8"
 val scalaVersion = "3.8.2"
-val scalaJSVersion = "1.20.2"
+val scalaJSVersion = "1.22.0"
 
 object golemCodegen extends ScalaModule {
   def scalaVersion = build.scalaVersion
