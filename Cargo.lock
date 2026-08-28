@@ -2635,9 +2635,9 @@ dependencies = [
 
 [[package]]
 name = "desert_core"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99e561700fe8c3a51189d8f8b5e83344fb1747b88cc0343e14d3c22842459624"
+checksum = "623ecd066d1ec74037f703e5a5833304a5621a0c0201ad72ea04a80054483fc7"
 dependencies = [
  "bigdecimal",
  "bit-vec 0.6.3",
@@ -2658,9 +2658,9 @@ dependencies = [
 
 [[package]]
 name = "desert_macro"
-version = "0.1.9"
+version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e622883bc90493a0921717f5363f8adf7cb5307419abda5126bfd624379ca785"
+checksum = "d9ed06e04bc6899b2609b595a931e84d79a5f4187225d6f4cd942b2ebf54db81"
 dependencies = [
  "bytes",
  "desert_core",
@@ -2672,9 +2672,9 @@ dependencies = [
 
 [[package]]
 name = "desert_rust"
-version = "0.1.9"
+version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94677f3ac0a0b303a8b3dd01576348652c85e55da1b71a60f6b92f25180b66dd"
+checksum = "0fd78c31bbbee1a0cd9203362cb1b00306344759d064fc1e8636d5c8c64bfc61"
 dependencies = [
  "desert_core",
  "desert_macro",
