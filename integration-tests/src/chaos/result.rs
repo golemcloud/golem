@@ -245,6 +245,7 @@ mod tests {
                 target: "shard-manager".to_string(),
                 mode: "one".to_string(),
                 target_count: None,
+                manifest: None,
                 duration_secs: 60,
             },
             workload: Some(WorkloadConfig {
@@ -996,6 +997,7 @@ mod sample_artifact {
                 target: "shard-manager".to_string(),
                 mode: "one".to_string(),
                 target_count: None,
+                manifest: None,
                 duration_secs: 60,
             },
             workload: Some(WorkloadConfig {
@@ -1208,6 +1210,7 @@ mod sample_artifact {
                 target: "worker-executor".to_string(),
                 mode: "one".to_string(),
                 target_count: None,
+                manifest: None,
                 duration_secs: 60,
             },
             workload: None,

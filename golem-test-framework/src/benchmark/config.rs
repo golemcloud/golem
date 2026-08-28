@@ -270,6 +270,12 @@ pub enum ChaosScenarioArg {
     /// The key-value PostgreSQL cluster slowed rather than removed. S17's
     /// mirror on the other half of the split key-value layer.
     S15,
+    /// S15 driving `ephemeral` alone: the control for the elimination series.
+    S15A,
+    /// S15A plus `durable`.
+    S15B,
+    /// S15B plus `promise`.
+    S15C,
 }
 
 /// Density subcommand action.

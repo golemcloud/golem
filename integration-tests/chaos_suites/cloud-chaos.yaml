@@ -1653,3 +1653,239 @@ scenarios:
       delaySecs: 5
 
     signalTimeoutSecs: 1800
+
+  # ---------------------------------------------------------------------------
+  # S15A / S15B / S15C — the S15 elimination series
+  #
+  # S15's first run left one thing unexplained. `ephemeral` slowed 235x under a
+  # delay aimed at a cluster it never touches, and the search for a shared gate
+  # inside the executor came up empty: worker-service was exonerated by the
+  # traces, agent creation ran in single-digit milliseconds, memory and
+  # filesystem pools had headroom, the per-account concurrency semaphore is
+  # bypassed on golem-dev, the tokio global queue was flat at zero with the busy
+  # ratio *falling*, and neither the oplog cluster nor Redis moved. Everything
+  # was parked, nothing was competing, and no mechanism in the source accounts
+  # for it.
+  #
+  # So the next step is elimination rather than more forensics: hold the fault
+  # and the ephemeral stream fixed, and add one stream at a time until ephemeral
+  # starts to suffer. Whichever addition does it names the interaction, and the
+  # code reading has somewhere to start.
+  #
+  #   S15A   ephemeral                              the control: nothing should move
+  #   S15B   ephemeral + durable                    durable is the heaviest user
+  #   S15C   ephemeral + durable + promise
+  #   S15    ephemeral + durable + promise + scheduled   already run: 235x
+  #
+  # ── Why ratePerSec differs between them, which is not a knob being fiddled ──
+  #
+  # `workload::start` divides `ratePerSec` evenly across the streams that have
+  # agents, so a constant here would give ephemeral 100/s alone and 33/s in a
+  # threesome, and the comparison would be between three different ephemeral
+  # workloads rather than between three fault environments. Each entry sets the
+  # rate that holds ephemeral at the ~34/s S15 measured it at.
+  #
+  # One confound cannot be removed the same way. `MAX_IN_FLIGHT / active.len()`
+  # gives ephemeral a budget of 1024, 512 and 341 across the three, against 256
+  # in S15, and that ceiling is a constant in the driver rather than a suite
+  # setting. It bounds throughput, not latency, and latency is what this series
+  # reads, so it is recorded rather than corrected.
+  #
+  # ── Why the scheduled block is present with zero targets ───────────────────
+  #
+  # `storage_fault::run` requires the block. Zero targets means no registrations
+  # and no fires, so the scheduled stream is not driven and `drives_stream`
+  # reports it as absent, which is what keeps it out of the expectations below.
+  # ---------------------------------------------------------------------------
+  - code: S15A
+    name: keyvalue-postgres-latency-ephemeral-only
+    enabled: true
+
+    fault:
+      kind: network-delay
+      target: worker-executor
+      mode: all
+      # The same file S15 applies, not a copy of it. Four manifests that must
+      # stay identical by hand is four chances for the fault to diverge from the
+      # run it is being compared against.
+      manifest: networkchaos-s15.yaml
+      durationSecs: 300
+
+    phases:
+      # S15's exactly. Shorter windows would be cheaper and the effect is large
+      # enough to survive them, but the whole value of this series is that its
+      # ephemeral numbers are comparable with S15's, and a median taken over a
+      # different window length is a different measurement.
+      baselineSecs: 300
+      faultSecs: 300
+      recoverySecs: 420
+
+    workload:
+      durableAgents: 0
+      ephemeralAgents: 50
+      scheduledAgents: 0
+      promiseAgents: 0
+      quotaAgents: 0
+      # One active stream, so ephemeral gets all of it.
+      ratePerSec: 34
+
+    scheduled:
+      targets: 0
+      intervalMillis: 2000
+      leadSecs: 10
+      leaseBudgetSecs: 240
+
+    storage:
+      endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+
+      expect:
+        kind: latency-degradation
+
+        # Empty, and the only entry in the suite that is. Nothing this workload
+        # drives reaches the delayed cluster, so there is no stream whose
+        # slowdown could evidence the fault. That makes this a control rather
+        # than an experiment, and it means the run cannot fail on
+        # `slowdown-not-observed`: it cannot tell a delay that landed and did
+        # not matter from one that never applied.
+        #
+        # The evidence has to come from outside the workload, and it does. The
+        # scheduler polls its own schema on this cluster whether or not anything
+        # is scheduled, so `db_success_seconds{svc="scheduler_storage"}` moves
+        # under the fault regardless of what the workload does. Check it before
+        # believing a clean result here.
+        slowed: []
+
+        # Required by the schema and inert here, because the floor is only ever
+        # applied to the streams `slowed` names and it names none. Left at the
+        # series' value rather than at something arbitrary, so a later edit that
+        # gives this run a slowed stream inherits a floor that means what it
+        # does everywhere else.
+        slowdownFloor: 2.0
+
+        # The whole question. If ephemeral holds its 196ms median with nothing
+        # else running, then the 235x in S15 came from the company it was
+        # keeping and not from the fault.
+        steady: [ephemeral]
+        steadyCeiling: 1.5
+
+        servingFloorPercent: 50
+
+      recoveryBudgetSecs: 60
+
+    retryPolicy:
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  - code: S15B
+    name: keyvalue-postgres-latency-plus-durable
+    enabled: true
+
+    fault:
+      kind: network-delay
+      target: worker-executor
+      mode: all
+      manifest: networkchaos-s15.yaml
+      durationSecs: 300
+
+    phases:
+      baselineSecs: 300
+      faultSecs: 300
+      recoverySecs: 420
+
+    workload:
+      # S15's durable population, unchanged, so the load this adds is the load
+      # S15 had rather than a scaled-down version of it.
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 0
+      promiseAgents: 0
+      quotaAgents: 0
+      # Two active streams, so 34/s each.
+      ratePerSec: 68
+
+    scheduled:
+      targets: 0
+      intervalMillis: 2000
+      leadSecs: 10
+      leaseBudgetSecs: 240
+
+    storage:
+      endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+
+      expect:
+        kind: latency-degradation
+        # Durable waits on two synchronous writes to this cluster per
+        # invocation, so it should move a long way. S15 measured 644x.
+        slowed: [durable]
+        slowdownFloor: 2.0
+        # And this is the reading that matters. If ephemeral moves here, durable
+        # alone is enough to do it and the interaction is between those two.
+        steady: [ephemeral]
+        steadyCeiling: 1.5
+        servingFloorPercent: 50
+
+      recoveryBudgetSecs: 60
+
+    retryPolicy:
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  - code: S15C
+    name: keyvalue-postgres-latency-plus-promise
+    enabled: true
+
+    fault:
+      kind: network-delay
+      target: worker-executor
+      mode: all
+      manifest: networkchaos-s15.yaml
+      durationSecs: 300
+
+    phases:
+      baselineSecs: 300
+      faultSecs: 300
+      recoverySecs: 420
+
+    workload:
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 0
+      promiseAgents: 50
+      quotaAgents: 0
+      # Three active streams, so 33.3/s each — the rate S15 ran them at.
+      ratePerSec: 100
+
+    scheduled:
+      targets: 0
+      intervalMillis: 2000
+      leadSecs: 10
+      leaseBudgetSecs: 240
+
+    storage:
+      endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+
+      expect:
+        kind: latency-degradation
+        # Promise makes the most calls of any stream: three of its own, plus the
+        # two its durable agent pays on each of the two invocations an operation
+        # takes. S15 measured 939x.
+        slowed: [durable, promise]
+        slowdownFloor: 2.0
+        steady: [ephemeral]
+        steadyCeiling: 1.5
+        servingFloorPercent: 50
+
+      recoveryBudgetSecs: 60
+
+    retryPolicy:
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800

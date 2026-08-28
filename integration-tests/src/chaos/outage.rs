@@ -899,6 +899,14 @@ impl StorageFaultReport {
             // quiet figure is absent by design rather than missing, and the
             // slowdown takes its place as what says the fault landed.
             let quiet = match (self.quietest_stream_percent, self.least_slowdown_factor) {
+                // A control run: the expectation is a delay, but it names no
+                // stream that should feel it, so there is no slowdown to report
+                // and its absence is the result rather than missing data.
+                (None, None) if self.expect.slowdown_floor().is_some() => {
+                    "no stream in this run was expected to slow down, so whether the delay \
+                     landed has to be read from the storage metrics rather than from here"
+                        .to_string()
+                }
                 (_, Some(factor)) => format!(
                     "the streams expected to slow down ran at least {factor}x their own baseline \
                      median (floor {}x)",

@@ -109,6 +109,13 @@ pub enum ScenarioCode {
     /// The key-value PostgreSQL cluster still reachable but slowed. S17's
     /// mirror on the other half of the split key-value layer.
     S15,
+    /// S15 driving `ephemeral` alone. The control: that stream reaches none of
+    /// the delayed cluster, so nothing should move.
+    S15A,
+    /// S15A plus `durable`, the heaviest user of the delayed cluster.
+    S15B,
+    /// S15B plus `promise`. The remaining step, `scheduled`, is S15 itself.
+    S15C,
 }
 
 impl ScenarioCode {
@@ -131,13 +138,16 @@ impl ScenarioCode {
             ScenarioCode::S18 => "S18",
             ScenarioCode::S17 => "S17",
             ScenarioCode::S15 => "S15",
+            ScenarioCode::S15A => "S15A",
+            ScenarioCode::S15B => "S15B",
+            ScenarioCode::S15C => "S15C",
         }
     }
 
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 17] = [
+    pub const ALL: [ScenarioCode; 20] = [
         ScenarioCode::S1,
         ScenarioCode::S3,
         ScenarioCode::S5,
@@ -151,6 +161,9 @@ impl ScenarioCode {
         ScenarioCode::S13,
         ScenarioCode::S14,
         ScenarioCode::S15,
+        ScenarioCode::S15A,
+        ScenarioCode::S15B,
+        ScenarioCode::S15C,
         ScenarioCode::S16,
         ScenarioCode::S17,
         ScenarioCode::S18,
@@ -242,6 +255,17 @@ pub struct FaultConfig {
     /// half the executors" is only meaningful next to how many that was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_count: Option<u32>,
+    /// The Chaos Mesh manifest to apply, by file name, when it is not the one
+    /// the workflow would find from the scenario code.
+    ///
+    /// Exists for the elimination variants. S15A, S15B and S15C inject exactly
+    /// the fault S15 injects and differ only in which streams the workload
+    /// drives, so copying `networkchaos-s15.yaml` three times would make four
+    /// files that must be kept identical by hand — and a run whose fault
+    /// silently diverged from the run it is being compared against is worse
+    /// than no run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<String>,
     pub duration_secs: u64,
 }
 
@@ -1324,7 +1348,32 @@ impl ScenarioConfig {
                     );
                 }
                 self.check_serving_floor(*serving_floor_percent)?;
-                self.check_evidence_streams("slowed", slowed, "slowdown")?;
+                // A run may name no slowed streams at all, but only if it names
+                // steady ones — and then it is a control rather than an
+                // experiment. S15A drives `ephemeral` alone, which reaches none
+                // of the delayed store, so *nothing* in its workload should
+                // move and there is no slowdown available as evidence that the
+                // fault landed.
+                //
+                // The cost is real and worth stating: such a run cannot fail on
+                // `slowdown-not-observed`, so it cannot tell a delay that
+                // landed and did not matter from one that never applied. That
+                // evidence has to come from outside the workload, and for S15A
+                // it does — the scheduler polls its own schema on the delayed
+                // cluster whether or not anything is scheduled, so
+                // `db_success_seconds{svc="scheduler_storage"}` moves under the
+                // fault regardless. The runbook says to check it.
+                if slowed.is_empty() && steady.is_empty() {
+                    anyhow::bail!(
+                        "chaos scenario {}: expect.slowed and expect.steady are both empty, so \
+                         nothing in the run would show whether the fault landed or whether it \
+                         mattered",
+                        self.code
+                    );
+                }
+                if !slowed.is_empty() {
+                    self.check_evidence_streams("slowed", slowed, "slowdown")?;
+                }
                 // The steady list is optional, so it is checked only when
                 // present — but a present one carries the same two ways of
                 // being useless as the slowed list, plus one of its own.
@@ -1536,6 +1585,7 @@ mod tests {
                     target: "shard-manager".to_string(),
                     mode: "one".to_string(),
                     target_count: None,
+                    manifest: None,
                     duration_secs: 60,
                 },
                 phases: PhaseConfig {
@@ -1581,6 +1631,7 @@ mod tests {
                 target: "worker-executor".to_string(),
                 mode: "one".to_string(),
                 target_count: None,
+                manifest: None,
                 duration_secs: 60,
             },
             phases: PhaseConfig {
@@ -1655,6 +1706,7 @@ mod tests {
                 target: "worker-executor".to_string(),
                 mode: "all".to_string(),
                 target_count: None,
+                manifest: None,
                 duration_secs: 180,
             },
             phases: PhaseConfig {
@@ -1721,6 +1773,45 @@ mod tests {
                 .require_storage()
                 .is_err(),
             "a floor of the whole window can never be met"
+        );
+    }
+
+    /// A control run: no stream is expected to slow, and the one named steady
+    /// is what the run is actually asking about. Allowed, because a series that
+    /// isolates an interaction needs a run with nothing in it to interact.
+    #[test]
+    fn a_latency_run_that_names_only_steady_streams_is_allowed() {
+        let mut config = storage_config("db.example", 50.0, 0, true);
+        config.workload.as_mut().unwrap().ephemeral_agents = 10;
+        config.storage.as_mut().unwrap().expect = OutageExpectation::LatencyDegradation {
+            slowed: Vec::new(),
+            slowdown_floor: 2.0,
+            steady: vec![Stream::Ephemeral],
+            steady_ceiling: 1.5,
+            serving_floor_percent: 50.0,
+        };
+        assert!(
+            config.require_storage().is_ok(),
+            "a run may assert that nothing moved, as long as it names what should not have"
+        );
+    }
+
+    /// Both lists empty is the one shape that says nothing at all: no stream
+    /// would show the fault landing, and none would show it mattering either.
+    #[test]
+    fn a_latency_run_that_names_no_streams_at_all_is_refused() {
+        let mut config = storage_config("db.example", 50.0, 0, true);
+        config.storage.as_mut().unwrap().expect = OutageExpectation::LatencyDegradation {
+            slowed: Vec::new(),
+            slowdown_floor: 2.0,
+            steady: Vec::new(),
+            steady_ceiling: 1.5,
+            serving_floor_percent: 50.0,
+        };
+        let error = config.require_storage().unwrap_err().to_string();
+        assert!(
+            error.contains("expect.slowed and expect.steady are both empty"),
+            "the message has to say which pair is missing, got: {error}"
         );
     }
 
@@ -1831,6 +1922,8 @@ mod tests {
         assert_eq!(ScenarioCode::parse("s18"), Some(ScenarioCode::S18));
         assert_eq!(ScenarioCode::parse("s17"), Some(ScenarioCode::S17));
         assert_eq!(ScenarioCode::parse("s15"), Some(ScenarioCode::S15));
+        assert_eq!(ScenarioCode::parse("s15a"), Some(ScenarioCode::S15A));
+        assert_eq!(ScenarioCode::parse("s15c"), Some(ScenarioCode::S15C));
         assert_eq!(ScenarioCode::parse("S99"), None);
     }
 
@@ -1878,6 +1971,9 @@ mod tests {
                 }
                 ScenarioCode::S14
                 | ScenarioCode::S15
+                | ScenarioCode::S15A
+                | ScenarioCode::S15B
+                | ScenarioCode::S15C
                 | ScenarioCode::S16
                 | ScenarioCode::S17
                 | ScenarioCode::S18
