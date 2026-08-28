@@ -63,11 +63,11 @@ pub mod rust_dep {
 
 pub mod scala_dep {
     pub const SCALA_VERSION: &str = "3.8.2";
-    pub const SCALAJS_PLUGIN_VERSION: &str = "1.20.2";
+    pub const SCALAJS_PLUGIN_VERSION: &str = "1.22.0";
     pub const SBT_VERSION: &str = "1.12.0";
     /// zio-blocks (schema/JSON) library used by the generated Scala bridge
     /// client runtime for JSON parsing and rendering.
-    pub const ZIO_BLOCKS_VERSION: &str = "0.0.43";
+    pub const ZIO_BLOCKS_VERSION: &str = "0.0.51";
 }
 
 pub mod moonbit_dep {

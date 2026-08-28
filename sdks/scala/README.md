@@ -1,7 +1,7 @@
 # ZIO-Golem
 
 [![Scala 3](https://img.shields.io/badge/scala-3.3.x-red.svg)](https://www.scala-lang.org/)
-[![Scala.js](https://img.shields.io/badge/scala.js-1.20.x-blue.svg)](https://www.scala-js.org/)
+[![Scala.js](https://img.shields.io/badge/scala.js-1.22.x-blue.svg)](https://www.scala-js.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **A minimal, type-safe Scala SDK for building Golem agents.**

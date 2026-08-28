@@ -20,7 +20,7 @@ import $ivy.`dev.zio::zio-golem-mill:<VERSION>`
 import golem.mill.GolemAutoRegister
 
 object myApp extends GolemAutoRegister {
-  def scalaJSVersion   = "1.20.0"
+  def scalaJSVersion   = "1.22.0"
   def scalaVersion     = "3.3.7"
   def golemBasePackage = T(Some("myapp"))
 }

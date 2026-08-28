@@ -44,7 +44,7 @@ import golem.codegen.pipeline.CodegenPipeline
  * import golem.mill.GolemAutoRegister
  *
  * object demo extends ScalaJSModule with GolemAutoRegister {
- *   def scalaJSVersion = "1.20.0"
+ *   def scalaJSVersion = "1.22.0"
  *   def scalaVersion   = "3.3.7"
  *   def golemBasePackage = T(Some("demo"))
  * }
