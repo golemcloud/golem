@@ -29,9 +29,10 @@ import {
   v,
   type SchemaGraph,
 } from '../src/internal/schema-model';
-import { dynamicClient, getAgentType, getAgentTypeByAgentId } from '../src/reflection';
+import { getAgentType, getAgentTypeByAgentId } from '../src/reflection';
 import { RemoteCallError } from '../src/client';
 import { Uuid } from '../src/uuid';
+import { AgentId } from '../src/agentId';
 
 const stringGraph: SchemaGraph = { defs: new Map(), root: t.string() };
 
@@ -134,10 +135,10 @@ describe('agent reflection', () => {
   });
 
   it('looks up the current schema for a concrete agent instance', () => {
-    const rawId = {
+    const rawId = AgentId.from({
       componentId: { uuid: { highBits: 0n, lowBits: 1n } },
       agentId: 'ReflectedEcho(one)',
-    };
+    });
     vi.mocked(hostGetAgentTypeByAgentId).mockReturnValueOnce(registeredType());
 
     expect(getAgentTypeByAgentId(rawId)?.name).toBe('ReflectedEcho');
@@ -154,10 +155,11 @@ describe('agent reflection', () => {
       undefined,
     ]);
     const before = vi.mocked(hostGetAgentType).mock.calls.length;
-    const client = dynamicClient({
+    const agentId = AgentId.from({
       componentId: { uuid: { highBits: 0n, lowBits: 1n } },
       agentId: 'ReflectedEcho(one)',
     });
+    const client = agentId.dynamicClient();
     const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
     rpc.asyncInvokeAndAwait.mockReturnValue({
       metadata: { agentId: 'ReflectedEcho(one)', idempotencyKey: 'key' },
@@ -171,6 +173,51 @@ describe('agent reflection', () => {
       value: v.string('hello'),
     });
     expect(hostGetAgentType).toHaveBeenCalledTimes(before);
+  });
+
+  it('binds a discovered reflected type fluently to an existing identity', () => {
+    vi.mocked(hostGetAgentType).mockReturnValueOnce(registeredType());
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'ReflectedEcho',
+      {
+        graph: schemaGraphToWit(stringGraph),
+        value: schemaValueToWit(v.record([v.string('one')])),
+      },
+      undefined,
+    ]);
+    const reflected = getAgentType('ReflectedEcho')!;
+    const agentId = AgentId.from({
+      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
+      agentId: 'ReflectedEcho(one)',
+    });
+
+    const client = agentId.client(reflected);
+
+    expect(client.agentId).toBe(agentId);
+    expect(client.method('echo').definition.name).toBe('echo');
+  });
+
+  it('rejects binding a reflected ephemeral type to an existing identity', () => {
+    vi.mocked(hostGetAgentType).mockReturnValueOnce(registeredType('ephemeral'));
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'ReflectedEcho',
+      {
+        graph: schemaGraphToWit(stringGraph),
+        value: schemaValueToWit(v.record([v.string('one')])),
+      },
+      undefined,
+    ]);
+    const reflected = getAgentType('ReflectedEcho')!;
+    const agentId = AgentId.from({
+      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
+      agentId: 'ReflectedEcho(one)',
+    });
+    const creates = vi.mocked(WasmRpc.create).mock.calls.length;
+
+    expect(() => agentId.client(reflected)).toThrow(
+      "Cannot bind existing AgentId 'ReflectedEcho(one)' to ephemeral agent type 'ReflectedEcho'; use agentType.client.newPhantom(...)",
+    );
+    expect(WasmRpc.create).toHaveBeenCalledTimes(creates);
   });
 
   it('preserves the structured RPC error returned by client creation', () => {

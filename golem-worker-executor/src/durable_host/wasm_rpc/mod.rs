@@ -353,20 +353,15 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             )));
         }
         let config = decoded_config;
-        if agent_mode == AgentMode::Ephemeral
-            && agent_id.phantom_id.is_some()
-            && self.state.is_live()
-        {
-            return Ok(Err(RpcError::RemoteAgentError(
-                WitAgentError::InvalidAgentId(
-                    "An ephemeral RPC proxy cannot select a phantom ID".to_string(),
-                ),
-            )));
-        }
-
         let span = create_rpc_connection_span(self, &remote_agent_id).await?;
+        let pinned_ephemeral_identity =
+            agent_mode == AgentMode::Ephemeral && agent_id.phantom_id.is_some();
 
-        if agent_mode == AgentMode::Ephemeral {
+        // A phantom-less ephemeral address is a logical proxy: every invocation
+        // receives a fresh final identity. A supplied phantom is already a final
+        // observation/control identity, so preserve it as a fixed target and let
+        // the normal invocation path reject attempts to reuse the terminal agent.
+        if agent_mode == AgentMode::Ephemeral && agent_id.phantom_id.is_none() {
             let logical_agent_id = agent_id
                 .with_phantom_id(None)
                 .map_err(|err| anyhow::anyhow!(err))?;
@@ -451,6 +446,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         remote_agent_type,
                         component_revision,
                         remote_owner,
+                        pinned_ephemeral_identity,
                     )
                     .await
                     .map(Ok);
@@ -466,6 +462,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         remote_agent_type,
                         component_revision,
                         remote_owner,
+                        pinned_ephemeral_identity,
                     )
                     .await
                     .map(Ok);
@@ -483,6 +480,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             remote_agent_type,
             component_revision,
             remote_owner,
+            pinned_ephemeral_identity,
         )
         .await
         .map(Ok)
@@ -3067,6 +3065,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     remote_agent_type: Arc<AgentTypeSchema>,
     remote_component_revision: ComponentRevision,
     remote_owner: AgentOwnerPattern,
+    pinned_ephemeral_identity: bool,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let target_environment_id = ctx.owned_agent_id.environment_id;
     let remote_agent_id = OwnedAgentId::new(target_environment_id, &remote_agent_id);
@@ -3086,10 +3085,11 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
             remote_agent_id,
             ephemeral_logical_agent_id: None,
             span_id: span.span_id().clone(),
-            target_activation: WasmRpcTargetActivation::DeferredDurable {
-                env: env.to_vec(),
+            target_activation: initial_target_activation(
+                env.to_vec(),
                 config,
-            },
+                pinned_ephemeral_identity,
+            ),
             remote_agent_type,
             remote_component_revision,
             remote_owner,
@@ -3109,10 +3109,11 @@ async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
     remote_agent_type: Arc<AgentTypeSchema>,
     remote_component_revision: ComponentRevision,
     remote_owner: AgentOwnerPattern,
+    pinned_ephemeral_identity: bool,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let remote_agent_id = OwnedAgentId::new(target_environment_id, &remote_agent_id);
-    let target_activation = if target_fingerprint.0.is_nil() {
-        WasmRpcTargetActivation::DeferredDurable { env, config }
+    let target_activation = if pinned_ephemeral_identity || target_fingerprint.0.is_nil() {
+        initial_target_activation(env, config, pinned_ephemeral_identity)
     } else {
         WasmRpcTargetActivation::ReplayPending {
             target_fingerprint,
@@ -3561,6 +3562,18 @@ pub enum WasmRpcTargetActivation {
         env: Vec<(String, String)>,
         config: Vec<AgentConfigEntryDto>,
     },
+}
+
+fn initial_target_activation(
+    env: Vec<(String, String)>,
+    config: Vec<AgentConfigEntryDto>,
+    pinned_ephemeral_identity: bool,
+) -> WasmRpcTargetActivation {
+    if pinned_ephemeral_identity {
+        WasmRpcTargetActivation::DeferredEphemeral { env, config }
+    } else {
+        WasmRpcTargetActivation::DeferredDurable { env, config }
+    }
 }
 
 impl WasmRpcTargetActivation {
@@ -4491,6 +4504,17 @@ mod tests {
             target.target_creation_data().0,
             vec![("KEY".to_string(), "value".to_string())]
         );
+    }
+
+    #[test]
+    fn pinned_ephemeral_identity_skips_durable_activation() {
+        let target = initial_target_activation(vec![], vec![], true);
+
+        assert!(matches!(
+            target,
+            WasmRpcTargetActivation::DeferredEphemeral { .. }
+        ));
+        assert!(target.deferred_activation().is_none());
     }
 
     #[test]

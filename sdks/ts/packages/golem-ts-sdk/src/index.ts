@@ -67,6 +67,7 @@ export * from './host/durable';
 export { defineAgent } from './defineAgent';
 export type {
   AgentDefinition,
+  AgentClientBindingDefinition,
   AgentClientDefinition,
   AgentImpl,
   AgentImplementation,
@@ -172,7 +173,6 @@ export {
   ReflectedAgentClient,
   ReflectedAgentClientFactory,
   ReflectedAgentMethod,
-  dynamicClient,
   getAgentTypeByAgentId,
   getAllAgentTypes,
   getAgentType as getReflectedAgentType,

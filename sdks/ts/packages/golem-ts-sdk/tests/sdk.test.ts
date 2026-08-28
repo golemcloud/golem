@@ -14,7 +14,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
-import { makeAgentId, WasmRpc } from 'golem:agent/host@2.0.0';
+import { makeAgentId, parseAgentId, WasmRpc } from 'golem:agent/host@2.0.0';
 import type { CancellationToken, Datetime } from 'golem:agent/host@2.0.0';
 import { defineAgent } from '../src/defineAgent';
 import type { AgentSpec } from '../src/defineAgent';
@@ -29,6 +29,7 @@ import { compileSchema } from '../src/schema/adapter';
 import type { StandardSchemaV1 } from '../src/schema/standardSchema';
 import { s } from '../src/schema/markers';
 import { Uuid } from '../src/uuid';
+import { AgentId } from '../src/agentId';
 import { AgentClassName } from '../src/agentClassName';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
@@ -92,6 +93,22 @@ function remoteClientTypeChecks(): void {
   void ephemeralAgentId;
   void ephemeralMetadata;
   void ephemeralReceipt;
+
+  const sharedContract = defineAgentClient({
+    methods: { ping: method({ input: {}, returns: z.string() }) },
+  });
+  void agentId.client(sharedContract).ping();
+  void agentId.dynamicClient().method('ping');
+  // @ts-expect-error lifecycle mode belongs to exact constructor definitions, not ID bindings
+  defineAgentClient({ mode: 'durable', methods: sharedContract.methods });
+  // @ts-expect-error name-only ID bindings do not carry lifecycle mode either
+  defineAgentClient({ name: 'Named', mode: 'ephemeral', methods: sharedContract.methods });
+  // @ts-expect-error binding definitions expose no synthetic lifecycle mode
+  void sharedContract.mode;
+  // @ts-expect-error method-only contracts do not construct exact-target identities
+  sharedContract.agentId({});
+  // @ts-expect-error method-only contracts do not expose constructor-based factories
+  sharedContract.client.get({});
 
   const ephemeralId = { name: z.string() };
   const ephemeralMethods = { ping: method({ input: {}, returns: z.string() }) };
@@ -557,6 +574,169 @@ describe('RPC client', () => {
     expect(client.ping).toBeTypeOf('function');
     expect(AgentTypeRegistry.getRegisteredAgents()).toHaveLength(before);
     expect(AgentTypeRegistry.exists(new AgentClassName(name))).toBe(false);
+  });
+
+  it('binds one method-only contract to differently shaped existing agent identities', async () => {
+    const contract = defineAgentClient({
+      methods: { ping: method({ input: { message: z.string() }, returns: z.string() }) },
+    });
+    const first = AgentId.from({
+      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
+      agentId: 'FirstAgent(one)',
+    });
+    const second = AgentId.from({
+      componentId: { uuid: { highBits: 0n, lowBits: 2n } },
+      agentId: 'SecondAgent(team,two)',
+    });
+    vi.mocked(parseAgentId)
+      .mockReturnValueOnce([
+        'FirstAgent',
+        {
+          graph: { typeNodes: [], defs: [], root: 0 },
+          value: schemaValueToWit(v.record([v.string('one')])),
+        },
+        undefined,
+      ])
+      .mockReturnValueOnce([
+        'SecondAgent',
+        {
+          graph: { typeNodes: [], defs: [], root: 0 },
+          value: schemaValueToWit(v.record([v.string('team'), v.string('two')])),
+        },
+        undefined,
+      ]);
+
+    expect(first.client(contract).ping).toBeTypeOf('function');
+    expect(second.client(contract).ping).toBeTypeOf('function');
+    expect(
+      vi
+        .mocked(WasmRpc.create)
+        .mock.calls.slice(-2)
+        .map((call) => call[0]),
+    ).toEqual(['FirstAgent', 'SecondAgent']);
+    expect(contract).not.toHaveProperty('mode');
+  });
+
+  it('rejects lifecycle fields on partial JavaScript binding contracts', () => {
+    expect(() =>
+      defineAgentClient({
+        mode: 'durable',
+        methods: { ping: method({ input: {}, returns: z.string() }) },
+      } as any),
+    ).toThrow(
+      'Agent ID binding contracts may only define methods and an optional name; id, config, and mode require a complete exact name + id definition',
+    );
+  });
+
+  it('binds an exact durable definition to its matching existing identity', () => {
+    const definition = defineAgentClient({
+      name: 'ExactDurableAgent',
+      id: { name: z.string() },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const target = AgentId.from({
+      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
+      agentId: 'ExactDurableAgent(one)',
+    });
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'ExactDurableAgent',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.string('one')])),
+      },
+      undefined,
+    ]);
+
+    expect(target.client(definition).ping).toBeTypeOf('function');
+  });
+
+  it('rejects binding an exact ephemeral definition to an existing identity', () => {
+    const definition = defineAgentClient({
+      name: 'ExactEphemeralAgent',
+      mode: 'ephemeral',
+      id: { name: z.string() },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const target = AgentId.from({
+      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
+      agentId: 'ExactEphemeralAgent(one)',
+    });
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'ExactEphemeralAgent',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.string('one')])),
+      },
+      undefined,
+    ]);
+    const creates = vi.mocked(WasmRpc.create).mock.calls.length;
+
+    expect(() => target.client(definition)).toThrow(
+      "Cannot bind existing AgentId 'ExactEphemeralAgent(one)' to ephemeral agent type 'ExactEphemeralAgent'; use its client.newPhantom(...) factory",
+    );
+    expect(WasmRpc.create).toHaveBeenCalledTimes(creates);
+  });
+
+  it('checks an optional exact name locally before creating the remote client', () => {
+    const contract = defineAgentClient({
+      name: 'ExpectedAgent',
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const target = AgentId.from({
+      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
+      agentId: 'OtherAgent(one)',
+    });
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'OtherAgent',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.string('one')])),
+      },
+      undefined,
+    ]);
+    const creates = vi.mocked(WasmRpc.create).mock.calls.length;
+
+    expect(() => target.client(contract)).toThrow(
+      "Agent client contract 'ExpectedAgent' cannot bind agent type 'OtherAgent'",
+    );
+    expect(WasmRpc.create).toHaveBeenCalledTimes(creates);
+  });
+
+  it('surfaces an incompatible target method as a structured remote error', async () => {
+    const contract = defineAgentClient({
+      methods: { analyze: method({ input: { topic: z.string() }, returns: z.string() }) },
+    });
+    const target = AgentId.from({
+      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
+      agentId: 'ReportArchive(reports)',
+    });
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'ReportArchive',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.string('reports')])),
+      },
+      undefined,
+    ]);
+    const client = target.client(contract);
+    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
+    rpc.asyncInvokeAndAwait.mockReturnValue({
+      metadata: { agentId: target.agentId, idempotencyKey: 'key' },
+      future: {
+        get: vi.fn().mockRejectedValue({
+          tag: 'remote-agent-error',
+          val: { tag: 'invalid-method', val: 'analyze is not defined' },
+        }),
+        cancel: vi.fn(),
+      },
+    });
+
+    await expect(client.analyze({ topic: 'demand' })).rejects.toMatchObject({
+      cause: {
+        tag: 'remote-agent-error',
+        error: { tag: 'invalid-method', details: 'analyze is not defined' },
+      },
+    });
   });
 
   it('surfaces client creation failures for runtime-built reflection definitions', () => {

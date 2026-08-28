@@ -29,13 +29,14 @@ import { v } from './internal/schema-model';
 import type { SchemaGraph, SchemaType, SchemaValue } from './internal/schema-model';
 import { compileConfig, ConfigDeclaration } from './config';
 import { Uuid } from './uuid';
-import { AgentId } from './agentId';
+import { AgentId, bindAgentClient } from './agentId';
 import { getSelfMetadata } from './host/hostapi';
 import { compileSchema } from './schema/adapter';
 import { SchemaCodec } from './schema/codec';
 import { StandardSchemaV1 } from './schema/standardSchema';
 import type {
   AgentClientContract,
+  AgentClientBindingDefinition,
   AgentClientDefinition,
   CallerInput,
   ConfigSpec,
@@ -183,6 +184,14 @@ export type AgentClientSpec<
   readonly config?: Config;
 } & (Mode extends 'ephemeral' ? { readonly mode: 'ephemeral' } : { readonly mode?: 'durable' });
 
+export interface AgentClientBindingSpec<Methods extends MethodsRecord> {
+  readonly name?: string;
+  readonly methods: Methods;
+  readonly id?: never;
+  readonly config?: never;
+  readonly mode?: never;
+}
+
 /**
  * Build a typed client definition without registering or implementing an agent.
  * Its Standard Schema inputs may come from any schema library supported by the SDK.
@@ -194,15 +203,53 @@ export function defineAgentClient<
   Mode extends 'durable' | 'ephemeral' = 'durable',
 >(
   spec: AgentClientSpec<Id, Methods, Config, Mode>,
-): AgentClientDefinition<Id, Methods, Config, Mode> {
-  const contract: AgentClientContract<Id, Methods, Config, Mode> = {
-    name: spec.name,
-    id: spec.id,
+): AgentClientDefinition<Id, Methods, Config, Mode>;
+export function defineAgentClient<Methods extends MethodsRecord>(
+  spec: AgentClientBindingSpec<Methods>,
+): AgentClientBindingDefinition<Methods>;
+export function defineAgentClient(spec: {
+  readonly name?: string;
+  readonly id?: IdRecord;
+  readonly methods: MethodsRecord;
+  readonly config?: ConfigSpec;
+  readonly mode?: 'durable' | 'ephemeral';
+}):
+  | AgentClientDefinition<IdRecord, MethodsRecord, ConfigSpec, 'durable' | 'ephemeral'>
+  | AgentClientBindingDefinition<MethodsRecord> {
+  return defineAgentClientImpl(spec);
+}
+
+function defineAgentClientImpl(spec: {
+  readonly name?: string;
+  readonly id?: IdRecord;
+  readonly methods: MethodsRecord;
+  readonly config?: ConfigSpec;
+  readonly mode?: 'durable' | 'ephemeral';
+}):
+  | AgentClientDefinition<IdRecord, MethodsRecord, ConfigSpec, 'durable' | 'ephemeral'>
+  | AgentClientBindingDefinition<MethodsRecord> {
+  if (spec.name !== undefined && spec.id !== undefined) {
+    const exact: AgentClientContract<IdRecord, MethodsRecord, ConfigSpec, 'durable' | 'ephemeral'> =
+      {
+        name: spec.name,
+        id: spec.id,
+        methods: spec.methods,
+        config: spec.config,
+        mode: spec.mode ?? 'durable',
+      };
+    return Object.freeze({ ...exact, ...buildAgentClientSurface(exact, true) });
+  }
+  if (spec.id !== undefined || spec.config !== undefined || spec.mode !== undefined) {
+    throw new TypeError(
+      'Agent ID binding contracts may only define methods and an optional name; id, config, and mode require a complete exact name + id definition',
+    );
+  }
+  const binding = buildAgentIdBinding(spec, true);
+  return Object.freeze({
+    ...(spec.name === undefined ? {} : { name: spec.name }),
     methods: spec.methods,
-    config: spec.config,
-    mode: (spec.mode ?? 'durable') as Mode,
-  };
-  return Object.freeze({ ...contract, ...buildAgentClientSurface(contract, true) });
+    ...binding,
+  });
 }
 
 interface NamedCodec {
@@ -281,6 +328,123 @@ function encodeConfigOverrides(
   return out;
 }
 
+function compileRemoteMethods(methods: MethodsRecord): CompiledRemoteMethod[] {
+  return Object.entries(methods).map(([name, spec]) => {
+    const inputCodecs: NamedCodec[] = Object.keys(spec.input)
+      .map((key) => ({ name: key, codec: compileSchema(spec.input[key]) }))
+      .filter((entry) => entry.codec.autoInjected !== 'principal');
+    const returnCodec = compileSchema(spec.returns);
+    return {
+      name,
+      inputCodecs,
+      output: returnCodec.isUnit
+        ? ({ tag: 'unit' } as const)
+        : ({ tag: 'single', codec: returnCodec } as const),
+    };
+  });
+}
+
+function createRemoteClient<Methods extends MethodsRecord, Mode extends 'durable' | 'ephemeral'>(
+  methodCodecs: CompiledRemoteMethod[],
+  mode: Mode,
+  remote: ReturnType<typeof resolveRemoteAgentFallibly>,
+): RemoteClient<Methods, Mode> {
+  const decodeOutput = (method: CompiledRemoteMethod, value: unknown): unknown => {
+    if (method.output.tag === 'unit') return undefined;
+    if (value === undefined) {
+      throw new RemoteOutputError(
+        `Remote agent ${remote.agentId}.${method.name} returned no value for a non-unit output`,
+      );
+    }
+    try {
+      const decoded = value as SchemaValue;
+      assertValueMatchesType(decoded, method.output.codec.graph.root, method.output.codec.graph);
+      return method.output.codec.fromValue(decoded);
+    } catch (error) {
+      throw new RemoteOutputError(
+        `Remote agent ${remote.agentId}.${method.name} returned an invalid output: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    }
+  };
+
+  const client: Record<string, unknown> = {};
+  for (const method of methodCodecs) {
+    const invoke = async (input: Record<string, unknown> = {}, signal?: AbortSignal) => {
+      const invocation = await remote.invokeAndAwaitWithMetadata(
+        method.name,
+        encodeRecord(method.inputCodecs, input),
+        signal,
+      );
+      const value = decodeOutput(method, invocation.value);
+      return mode === 'ephemeral' ? { metadata: invocation.metadata, value } : value;
+    };
+    const methodFn =
+      method.inputCodecs.length === 0
+        ? (options?: RemoteCallOptions) => invoke({}, options?.signal)
+        : (input: Record<string, unknown>, options?: RemoteCallOptions) =>
+            invoke(input, options?.signal);
+    client[method.name] = Object.assign(methodFn, {
+      trigger: (input: Record<string, unknown> = {}) => {
+        const metadata = remote.invokeWithMetadata(
+          method.name,
+          encodeRecord(method.inputCodecs, input),
+        );
+        return mode === 'ephemeral' ? metadata : undefined;
+      },
+      schedule: (at: Datetime, input: Record<string, unknown> = {}) => {
+        const receipt = remote.scheduleCancelableWithMetadata(
+          at,
+          method.name,
+          encodeRecord(method.inputCodecs, input),
+        );
+        return mode === 'ephemeral' ? receipt : receipt.cancellationToken;
+      },
+    });
+  }
+  return client as RemoteClient<Methods, Mode>;
+}
+
+function buildAgentIdBinding<Methods extends MethodsRecord>(
+  def: { readonly name?: string; readonly methods: Methods },
+  fallible: boolean,
+): { [bindAgentClient](agentId: AgentId): RemoteClient<Methods> } {
+  const methodCodecs = compileRemoteMethods(def.methods);
+  return {
+    [bindAgentClient](agentId) {
+      return bindExistingAgent(def.name, methodCodecs, fallible, agentId, 'durable');
+    },
+  };
+}
+
+function bindExistingAgent<Methods extends MethodsRecord, Mode extends 'durable' | 'ephemeral'>(
+  exactName: string | undefined,
+  methodCodecs: CompiledRemoteMethod[],
+  fallible: boolean,
+  agentId: AgentId,
+  mode: Mode,
+): RemoteClient<Methods, Mode> {
+  const parts = AgentId.parse(agentId);
+  if (exactName !== undefined && exactName !== parts.typeName) {
+    throw new TypeError(
+      `Agent client contract '${exactName}' cannot bind agent type '${parts.typeName}'`,
+    );
+  }
+  if (mode === 'ephemeral') {
+    throw new TypeError(
+      `Cannot bind existing AgentId '${agentId.agentId}' to ephemeral agent type '${parts.typeName}'; use its client.newPhantom(...) factory`,
+    );
+  }
+  const remote = (fallible ? resolveRemoteAgentFallibly : resolveRemoteAgent)(
+    parts.typeName,
+    parts.constructorValue,
+    parts.phantomId,
+    [],
+    mode,
+  );
+  return createRemoteClient<Methods, Mode>(methodCodecs, mode, remote);
+}
+
 /** @internal Build the identity and typed-client surface attached to a definition. */
 export function buildAgentClientSurface<
   Id extends IdRecord,
@@ -288,7 +452,7 @@ export function buildAgentClientSurface<
   Config extends ConfigSpec,
   Mode extends 'durable' | 'ephemeral',
 >(
-  def: AgentClientContract<Id, Methods, Config, Mode>,
+  def: AgentClientContract<Id, Methods, Config, Mode> & { readonly name: string; readonly id: Id },
   fallible: boolean,
 ): {
   client: Mode extends 'ephemeral'
@@ -297,25 +461,13 @@ export function buildAgentClientSurface<
   agentId: Mode extends 'ephemeral'
     ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => AgentId
     : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => AgentId;
+  [bindAgentClient](agentId: AgentId): RemoteClient<Methods, Mode>;
 } {
   // Compile the def's id + method codecs once (cached in this closure).
   const idCodecs: NamedCodec[] = Object.keys(def.id)
-    .map((k) => ({ name: k, codec: compileSchema(def.id[k]) }))
+    .map((k) => ({ name: k, codec: compileSchema((def.id as Id)[k]) }))
     .filter((nc) => nc.codec.autoInjected !== 'principal');
-  const methodCodecs: CompiledRemoteMethod[] = Object.entries(def.methods).map(([name, spec]) => {
-    // Skip auto-injected `s.principal()` params: the callee's host injects the
-    // caller principal, so the RPC caller encodes no wire field for them (the
-    // remaining user-supplied codecs stay in declaration order, matching the
-    // callee's cursor decode in runtime.ts `invoke`).
-    const inputCodecs: NamedCodec[] = Object.keys((spec as MethodSpec).input)
-      .map((k) => ({ name: k, codec: compileSchema((spec as MethodSpec).input[k]) }))
-      .filter((nc) => nc.codec.autoInjected !== 'principal');
-    const retCodec = compileSchema((spec as MethodSpec).returns);
-    const output = retCodec.isUnit
-      ? ({ tag: 'unit' } as const)
-      : ({ tag: 'single', codec: retCodec } as const);
-    return { name, inputCodecs, output };
-  });
+  const methodCodecs = compileRemoteMethods(def.methods);
 
   const configDecls: ConfigDeclaration[] = compileConfig(def.config);
 
@@ -340,56 +492,7 @@ export function buildAgentClientSurface<
       agentConfig,
       def.mode,
     );
-    const agentId = remote.agentId;
-
-    const decodeOutput = (mc: CompiledRemoteMethod, val: unknown): unknown => {
-      if (mc.output.tag === 'unit') return undefined;
-      if (val === undefined) {
-        throw new RemoteOutputError(
-          `Remote agent ${agentId}.${mc.name} returned no value for a non-unit output`,
-        );
-      }
-      try {
-        const decoded = val as SchemaValue;
-        assertValueMatchesType(decoded, mc.output.codec.graph.root, mc.output.codec.graph);
-        return mc.output.codec.fromValue(decoded);
-      } catch (error) {
-        throw new RemoteOutputError(
-          `Remote agent ${agentId}.${mc.name} returned an invalid output: ${error instanceof Error ? error.message : String(error)}`,
-          { cause: error },
-        );
-      }
-    };
-
-    const client: Record<string, unknown> = {};
-    for (const mc of methodCodecs) {
-      const invoke = async (input: Record<string, unknown> = {}, signal?: AbortSignal) => {
-        const inputTree = encodeRecord(mc.inputCodecs, input);
-        const invocation = await remote.invokeAndAwaitWithMetadata(mc.name, inputTree, signal);
-        const value = decodeOutput(mc, invocation.value);
-        return def.mode === 'ephemeral' ? { metadata: invocation.metadata, value } : value;
-      };
-      const methodFn =
-        mc.inputCodecs.length === 0
-          ? (options?: RemoteCallOptions) => invoke({}, options?.signal)
-          : (input: Record<string, unknown>, options?: RemoteCallOptions) =>
-              invoke(input, options?.signal);
-      client[mc.name] = Object.assign(methodFn, {
-        trigger: (input: Record<string, unknown> = {}) => {
-          const metadata = remote.invokeWithMetadata(mc.name, encodeRecord(mc.inputCodecs, input));
-          return def.mode === 'ephemeral' ? metadata : undefined;
-        },
-        schedule: (at: Datetime, input: Record<string, unknown> = {}) => {
-          const receipt = remote.scheduleCancelableWithMetadata(
-            at,
-            mc.name,
-            encodeRecord(mc.inputCodecs, input),
-          );
-          return def.mode === 'ephemeral' ? receipt : receipt.cancellationToken;
-        },
-      });
-    }
-    return client as RemoteClient<Methods, Mode>;
+    return createRemoteClient<Methods, Mode>(methodCodecs, def.mode, remote);
   };
 
   const newPhantom = (
@@ -430,5 +533,8 @@ export function buildAgentClientSurface<
     agentId: createAgentId as Mode extends 'ephemeral'
       ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => AgentId
       : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => AgentId,
+    [bindAgentClient](agentId) {
+      return bindExistingAgent(def.name, methodCodecs, fallible, agentId, def.mode);
+    },
   };
 }

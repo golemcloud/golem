@@ -16,7 +16,6 @@ import {
   getAllAgentTypes as hostGetAllAgentTypes,
   getAgentType as hostGetAgentType,
   getAgentTypeByAgentId as hostGetAgentTypeByAgentId,
-  parseAgentId,
   type CancelableScheduledInvocationReceipt,
   type Datetime,
   type InvocationMetadata,
@@ -32,7 +31,6 @@ import { resolveRemoteAgentFallibly, type RemoteAgentHandle } from './bridge/age
 import {
   field,
   schemaGraphFromWit,
-  schemaValueFromWit,
   t,
   type SchemaGraph,
   type SchemaValue,
@@ -40,7 +38,14 @@ import {
 import { SchemaRef, type JsonValue } from './schema/ref';
 import { Uuid } from './uuid';
 import { ComponentId } from './ids';
-import { AgentId } from './agentId';
+import { AgentId, bindAgentClient } from './agentId';
+export {
+  DynamicAgentClient,
+  DynamicAgentMethod,
+  type DynamicAgentClientSurface,
+  type DynamicAgentMethodSurface,
+  type DynamicInvocation,
+} from './dynamicClient';
 
 export {
   isRemoteCallError,
@@ -112,6 +117,29 @@ export class AgentType {
       constructorValue: input,
       phantomId,
     });
+  }
+
+  [bindAgentClient](agentId: AgentId): ReflectedAgentClient {
+    const parts = AgentId.parse(agentId);
+    if (parts.typeName !== this.name) {
+      throw new TypeError(`Reflected agent type '${this.name}' cannot bind '${parts.typeName}'`);
+    }
+    if (this.mode === 'ephemeral') {
+      throw new TypeError(
+        `Cannot bind existing AgentId '${agentId.agentId}' to ephemeral agent type '${this.name}'; use agentType.client.newPhantom(...)`,
+      );
+    }
+    return new ReflectedAgentClient(
+      this,
+      resolveRemoteAgentFallibly(
+        parts.typeName,
+        parts.constructorValue,
+        parts.phantomId,
+        [],
+        this.mode,
+      ),
+      agentId,
+    );
   }
 }
 
@@ -238,44 +266,6 @@ export class ReflectedAgentMethod {
   }
 }
 
-export class DynamicAgentClient {
-  readonly agentId: AgentId;
-  private readonly remote: RemoteAgentHandle;
-
-  constructor(agentId: AgentId) {
-    this.agentId = agentId;
-    const [typeName, constructorValue, phantomId] = parseAgentId(agentId.agentId);
-    this.remote = resolveRemoteAgentFallibly(
-      typeName,
-      schemaValueFromWit(constructorValue.value),
-      phantomId === undefined ? undefined : Uuid.from(phantomId),
-    );
-  }
-
-  method(name: string): DynamicAgentMethod {
-    return new DynamicAgentMethod(name, this.remote);
-  }
-}
-
-export class DynamicAgentMethod {
-  constructor(
-    public readonly name: string,
-    private readonly remote: RemoteAgentHandle,
-  ) {}
-
-  invokeValue(input: SchemaValue, signal?: AbortSignal): Promise<ReflectedInvocation<SchemaValue>> {
-    return this.remote.invokeAndAwaitWithMetadata(this.name, input, signal);
-  }
-
-  triggerValue(input: SchemaValue): InvocationMetadata {
-    return this.remote.invokeWithMetadata(this.name, input);
-  }
-
-  scheduleValue(at: Datetime, input: SchemaValue): CancelableScheduledInvocationReceipt {
-    return this.remote.scheduleCancelableWithMetadata(at, this.name, input);
-  }
-}
-
 export function getAllAgentTypes(): readonly AgentType[] {
   return Object.freeze(hostGetAllAgentTypes().map((registered) => new AgentType(registered)));
 }
@@ -288,10 +278,6 @@ export function getAgentType(name: string): AgentType | undefined {
 export function getAgentTypeByAgentId(agentId: AgentId): AgentType | undefined {
   const registered = hostGetAgentTypeByAgentId(agentId);
   return registered === undefined ? undefined : new AgentType(registered);
-}
-
-export function dynamicClient(agentId: AgentId): DynamicAgentClient {
-  return new DynamicAgentClient(agentId);
 }
 
 function inputSchemaRef(graph: WitSchemaGraph, input: HostInputSchema): SchemaRef {
