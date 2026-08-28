@@ -25,11 +25,8 @@ pub fn decode_typed_value(
   value : @types.TypedSchemaValue,
   context : String,
 ) -> Result[@model.TypedSchemaValue, String] {
-  try @model.typed_schema_value_from_wit(value) catch {
-    error => {
-      @model.drop_wit_capabilities(value.value)
-      Err("failed to decode \{context}: \{error}")
-    }
+  try @model_host.typed_schema_value_from_wit(value) catch {
+    error => Err("failed to decode \{context}: \{error}")
   } noraise {
     decoded => Ok(decoded)
   }

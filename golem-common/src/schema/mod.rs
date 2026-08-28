@@ -33,7 +33,7 @@ pub use golem_schema::schema::proptest_strategies;
 pub use golem_schema::schema::wit;
 pub use golem_schema::schema::{
     canonical, conversion, derive, graph, host_managed, metadata, multimodal, schema_type,
-    schema_value, unstructured,
+    schema_value, stream, unstructured,
 };
 
 #[cfg(test)]

@@ -221,6 +221,11 @@ pub(all) struct DropResourceParameters {
   owner : String
 } derive(Eq, Show)
 
+pub(all) struct DurableStreamRecordParameters {
+  timestamp : @system-clock.Instant
+  record : @types.TypedSchemaValue
+} derive(Eq, Show)
+
 pub(all) struct EndAtomicRegionParameters {
   timestamp : @system-clock.Instant
   begin_index : UInt64
@@ -399,6 +404,11 @@ pub(all) enum OplogEntry {
   CardRevoked(CardRevokedParameters)
   CardExpired(CardExpiredParameters)
   HostStreamFrame(RawHostStreamFrameParameters)
+  StreamRegistered(RawDurableStreamRecordParameters)
+  StreamItems(RawDurableStreamRecordParameters)
+  StreamEnd(RawDurableStreamRecordParameters)
+  StreamCancel(RawDurableStreamRecordParameters)
+  StreamSession(RawDurableStreamRecordParameters)
   CompletionDiscarded(RawCompletionDiscardedParameters)
   CompletionDelivered(RawCompletionDeliveredParameters)
 } derive(Eq, Show)
@@ -502,6 +512,11 @@ pub(all) enum PublicOplogEntry {
   CardRevoked(CardRevokedParameters)
   CardExpired(CardExpiredParameters)
   HostStreamFrame(HostStreamFrameParameters)
+  StreamRegistered(DurableStreamRecordParameters)
+  StreamItems(DurableStreamRecordParameters)
+  StreamEnd(DurableStreamRecordParameters)
+  StreamCancel(DurableStreamRecordParameters)
+  StreamSession(DurableStreamRecordParameters)
   CompletionDiscarded(CompletionDiscardedParameters)
   CompletionDelivered(CompletionDeliveredParameters)
 } derive(Eq, Show)
@@ -601,6 +616,11 @@ pub(all) struct RawDropResourceParameters {
   timestamp : @system-clock.Instant
   id : UInt64
   resource_type_id : ResourceTypeId
+} derive(Eq, Show)
+
+pub(all) struct RawDurableStreamRecordParameters {
+  timestamp : @system-clock.Instant
+  record : OplogPayload
 } derive(Eq, Show)
 
 pub(all) struct RawEndParameters {
@@ -807,3 +827,4 @@ pub(all) enum WrappedFunctionType {
 // Type aliases
 
 // Traits
+

@@ -53,6 +53,14 @@ fn raw_resource_candidates(
           }),
         )
       }
+      @types.SchemaValueNode::StreamValue(stream) => {
+        let @types.SchemaValueStream(raw_index) = stream
+        candidates.push(
+          resource_candidate(ResourceKind::SchemaValueStream, raw_index, () => {
+            stream.drop()
+          }),
+        )
+      }
       _ => ()
     }
   }
@@ -154,11 +162,8 @@ fn RawTypedSchemaValue::decode_model_for_local(
   }
   self.state.val.value = None
   self.state.val.ownership = TransferredLocal
-  let decoded = @model.typed_schema_value_from_wit(value) catch {
-    error => {
-      @model.drop_wit_capabilities(value.value)
-      return Err("failed to decode middleware input: \{error}")
-    }
+  let decoded = @model_host.typed_schema_value_from_wit(value) catch {
+    error => return Err("failed to decode middleware input: \{error}")
   }
   context.register_cleanup(fn() {
     @model.drop_owned_capabilities(decoded.value)

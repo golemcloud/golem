@@ -18,7 +18,7 @@ if [[ ${GOLEM_MOONRUN_DISPATCH:-} == 1 ]]; then
   fi
 
   if grep -aFq 'golem:core/types@2.0.0' "$artifact"; then
-    exec node "$script_dir/run-wasm-test.mjs" "$artifact"
+    exec node "$script_dir/run-wasm-test.mjs" "$@"
   fi
 
   unset GOLEM_MOONRUN_DISPATCH MOONRUN_OVERRIDE

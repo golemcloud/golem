@@ -28,9 +28,9 @@ componentTemplates:
             dir: "{{ appRootDir }}/../golem_sdk_tools"
           - command: moon run cmd -- agents "{{ appRootDir }}" --component-dir "{{ componentDir }}" --role ordinary
             dir: "{{ appRootDir }}/../golem_sdk_tools"
-          - command: moon -C "{{ appRootDir }}" build --target wasm
+          - command: moon -C "{{ appRootDir }}" build --target wasm --target-dir "{{ appRootDir }}/_build"
             dir: "{{ appRootDir }}/../golem_sdk_tools"
-          - command: wasm-tools component embed "{{ appRootDir }}/../golem_sdk/wit" "{{ appRootDir }}/../_build/wasm/debug/build/golemcloud/golem_sdk_example1/{{ moonbitBuildPackagePath }}" --world agent-guest --encoding utf16 --output "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.embed.wasm"
+          - command: wasm-tools component embed "{{ appRootDir }}/../golem_sdk/wit" "{{ appRootDir }}/_build/wasm/debug/build/golemcloud/golem_sdk_example1/{{ moonbitBuildPackagePath }}" --world agent-guest --encoding utf16 --output "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.embed.wasm"
             mkdirs:
               - "{{ appRootDir }}/_build/wasm/debug"
           - command: wasm-tools component new "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.embed.wasm" --output "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.agent.wasm"
@@ -41,9 +41,9 @@ componentTemplates:
             dir: "{{ appRootDir }}/../golem_sdk_tools"
           - command: moon run cmd -- agents "{{ appRootDir }}" --component-dir "{{ componentDir }}" --role ordinary
             dir: "{{ appRootDir }}/../golem_sdk_tools"
-          - command: moon -C "{{ appRootDir }}" build --target wasm --release
+          - command: moon -C "{{ appRootDir }}" build --target wasm --release --target-dir "{{ appRootDir }}/_build"
             dir: "{{ appRootDir }}/../golem_sdk_tools"
-          - command: wasm-tools component embed "{{ appRootDir }}/../golem_sdk/wit" "{{ appRootDir }}/../_build/wasm/release/build/golemcloud/golem_sdk_example1/{{ moonbitBuildPackagePath }}" --world agent-guest --encoding utf16 --output "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.embed.wasm"
+          - command: wasm-tools component embed "{{ appRootDir }}/../golem_sdk/wit" "{{ appRootDir }}/_build/wasm/release/build/golemcloud/golem_sdk_example1/{{ moonbitBuildPackagePath }}" --world agent-guest --encoding utf16 --output "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.embed.wasm"
             mkdirs:
               - "{{ appRootDir }}/_build/wasm/release"
           - command: wasm-tools component new "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.embed.wasm" --output "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent.wasm"
@@ -57,9 +57,9 @@ componentTemplates:
             dir: "{{ appRootDir }}/../golem_sdk_tools"
           - command: moon run cmd -- agents "{{ appRootDir }}" --component-dir "{{ componentDir }}" --role tool-middleware
             dir: "{{ appRootDir }}/../golem_sdk_tools"
-          - command: moon -C "{{ appRootDir }}" build --target wasm
+          - command: moon -C "{{ appRootDir }}" build --target wasm --target-dir "{{ appRootDir }}/_build"
             dir: "{{ appRootDir }}/../golem_sdk_tools"
-          - command: wasm-tools component embed "{{ appRootDir }}/../golem_sdk/wit" "{{ appRootDir }}/../_build/wasm/debug/build/golemcloud/golem_sdk_example1/{{ moonbitBuildPackagePath }}" --world tool-middleware-guest --encoding utf16 --output "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.tool-middleware.embed.wasm"
+          - command: wasm-tools component embed "{{ appRootDir }}/../golem_sdk/wit" "{{ appRootDir }}/_build/wasm/debug/build/golemcloud/golem_sdk_example1/{{ moonbitBuildPackagePath }}" --world tool-middleware-guest --encoding utf16 --output "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.tool-middleware.embed.wasm"
             mkdirs:
               - "{{ appRootDir }}/_build/wasm/debug"
           - command: wasm-tools component new "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.tool-middleware.embed.wasm" --output "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.tool-middleware.wasm"
@@ -70,9 +70,9 @@ componentTemplates:
             dir: "{{ appRootDir }}/../golem_sdk_tools"
           - command: moon run cmd -- agents "{{ appRootDir }}" --component-dir "{{ componentDir }}" --role tool-middleware
             dir: "{{ appRootDir }}/../golem_sdk_tools"
-          - command: moon -C "{{ appRootDir }}" build --target wasm --release
+          - command: moon -C "{{ appRootDir }}" build --target wasm --release --target-dir "{{ appRootDir }}/_build"
             dir: "{{ appRootDir }}/../golem_sdk_tools"
-          - command: wasm-tools component embed "{{ appRootDir }}/../golem_sdk/wit" "{{ appRootDir }}/../_build/wasm/release/build/golemcloud/golem_sdk_example1/{{ moonbitBuildPackagePath }}" --world tool-middleware-guest --encoding utf16 --output "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.tool-middleware.embed.wasm"
+          - command: wasm-tools component embed "{{ appRootDir }}/../golem_sdk/wit" "{{ appRootDir }}/_build/wasm/release/build/golemcloud/golem_sdk_example1/{{ moonbitBuildPackagePath }}" --world tool-middleware-guest --encoding utf16 --output "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.tool-middleware.embed.wasm"
             mkdirs:
               - "{{ appRootDir }}/_build/wasm/release"
           - command: wasm-tools component new "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.tool-middleware.embed.wasm" --output "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.tool-middleware.wasm"

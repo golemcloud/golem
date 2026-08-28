@@ -89,8 +89,9 @@ declare module 'agent-guest' {
     /**
      * Invokes an agent. If create was not called before, it fails.
      * `input` is a value tree whose root encodes the method's parameter list.
-     * The result is `none` when the method's `output-schema` is `unit`, and
-     * `some(value)` for a `single` output.
+     * Streams are represented recursively by `stream-value` nodes. The result
+     * is `none` when the method's `output-schema` is `unit`, and `some(value)`
+     * for a `single` output.
      * @throws AgentError
      */
     export function invoke(methodName: string, input: SchemaValueTree, principal: Principal): Promise<SchemaValueTree | undefined>;

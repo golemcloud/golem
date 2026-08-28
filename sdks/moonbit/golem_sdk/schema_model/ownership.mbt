@@ -7,7 +7,11 @@ pub fn drop_owned_capabilities(value : SchemaValue) -> Unit {
   let secrets : Array[@types.Secret] = []
   let quota_tokens : Array[@types.QuotaToken] = []
   let permission_cards : Array[@types.PermissionCard] = []
-  take_owned_capabilities(value, secrets, quota_tokens, permission_cards)
+  let wrapped_streams : Array[@types.SchemaValueStream] = []
+  let native_streams : Array[@async-core.Stream[@types.SchemaValueTree]] = []
+  take_owned_capabilities(
+    value, secrets, quota_tokens, permission_cards, wrapped_streams, native_streams,
+  )
   for secret in secrets {
     secret.drop()
   }
@@ -16,6 +20,12 @@ pub fn drop_owned_capabilities(value : SchemaValue) -> Unit {
   }
   for permission_card in permission_cards {
     permission_card.drop()
+  }
+  for stream in wrapped_streams {
+    stream.drop()
+  }
+  for stream in native_streams {
+    stream.drop_sync()
   }
 }
 
@@ -30,11 +40,26 @@ fn[T : Eq] push_unique(values : Array[T], value : T) -> Unit {
 }
 
 ///|
+fn push_unique_native_stream(
+  values : Array[@async-core.Stream[@types.SchemaValueTree]],
+  value : @async-core.Stream[@types.SchemaValueTree],
+) -> Unit {
+  for existing in values {
+    if physical_equal(existing, value) {
+      return
+    }
+  }
+  values.push(value)
+}
+
+///|
 fn take_owned_capabilities(
   value : SchemaValue,
   secrets : Array[@types.Secret],
   quota_tokens : Array[@types.QuotaToken],
   permission_cards : Array[@types.PermissionCard],
+  wrapped_streams : Array[@types.SchemaValueStream],
+  native_streams : Array[@async-core.Stream[@types.SchemaValueTree]],
 ) -> Unit {
   match value {
     Secret(handle) =>
@@ -52,9 +77,17 @@ fn take_owned_capabilities(
         Some(raw) => push_unique(permission_cards, raw)
         None => ()
       }
+    Stream(handle) =>
+      match handle.take() {
+        Some(Wrapped(raw)) => push_unique(wrapped_streams, raw)
+        Some(Native(raw)) => push_unique_native_stream(native_streams, raw)
+        None => ()
+      }
     Record(values) | Tuple(values) | List(values) | FixedList(values) =>
       for nested in values {
-        take_owned_capabilities(nested, secrets, quota_tokens, permission_cards)
+        take_owned_capabilities(
+          nested, secrets, quota_tokens, permission_cards, wrapped_streams, native_streams,
+        )
       }
     Variant(_, nested)
     | Option(nested)
@@ -63,7 +96,7 @@ fn take_owned_capabilities(
       match nested {
         Some(nested) =>
           take_owned_capabilities(
-            nested, secrets, quota_tokens, permission_cards,
+            nested, secrets, quota_tokens, permission_cards, wrapped_streams, native_streams,
           )
         None => ()
       }
@@ -74,16 +107,22 @@ fn take_owned_capabilities(
           secrets,
           quota_tokens,
           permission_cards,
+          wrapped_streams,
+          native_streams,
         )
         take_owned_capabilities(
           entry.value,
           secrets,
           quota_tokens,
           permission_cards,
+          wrapped_streams,
+          native_streams,
         )
       }
     Union(_, nested) =>
-      take_owned_capabilities(nested, secrets, quota_tokens, permission_cards)
+      take_owned_capabilities(
+        nested, secrets, quota_tokens, permission_cards, wrapped_streams, native_streams,
+      )
     _ => ()
   }
 }
@@ -97,11 +136,13 @@ pub fn drop_wit_capabilities(value : @types.SchemaValueTree) -> Unit {
   let secrets : Array[@types.Secret] = []
   let quota_tokens : Array[@types.QuotaToken] = []
   let permission_cards : Array[@types.PermissionCard] = []
+  let streams : Array[@types.SchemaValueStream] = []
   for node in value.value_nodes {
     match node {
       @types.SecretValue(raw) => push_unique(secrets, raw)
       @types.QuotaTokenHandle(raw) => push_unique(quota_tokens, raw)
       @types.PermissionCardHandle(raw) => push_unique(permission_cards, raw)
+      @types.StreamValue(raw) => push_unique(streams, raw)
       _ => ()
     }
   }
@@ -113,5 +154,8 @@ pub fn drop_wit_capabilities(value : @types.SchemaValueTree) -> Unit {
   }
   for permission_card in permission_cards {
     permission_card.drop()
+  }
+  for stream in streams {
+    stream.drop()
   }
 }

@@ -5,7 +5,13 @@ import {
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model" @model,
   "golemcloud/golem_sdk/tool-core" @toolCore,
+  "golemcloud/golem_sdk/schema_model_host" @model_host,
+  "moonbitlang/core/strconv",
 }
+
+import {
+  "golemcloud/golem_sdk/interface/golem/core/types",
+} for "wbtest"
 
 warnings = "-44"
 

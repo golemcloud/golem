@@ -167,7 +167,8 @@ object WitSchemaValueNode {
    * quota-token-handle(own<quota-token>)`). Carries the opaque affine handle
    * unchanged; the take-once transfer happens at the JS host boundary.
    */
-  final case class QuotaTokenHandle(handle: GuestQuotaTokenHandle) extends WitSchemaValueNode
+  final case class QuotaTokenHandle(handle: GuestQuotaTokenHandle)   extends WitSchemaValueNode
+  final case class StreamValue(handle: GuestSchemaValueStreamHandle) extends WitSchemaValueNode
 
   /** Flat carrier for an owned `permission-card` resource. */
   final case class PermissionCardHandle(handle: GuestPermissionCardHandle) extends WitSchemaValueNode

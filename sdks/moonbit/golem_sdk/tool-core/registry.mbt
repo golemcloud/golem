@@ -7,7 +7,7 @@ pub fn new_stdout() -> (@async-core.Stream[Byte], @async-core.Sink[Byte]) {
 }
 
 ///|
-type ToolInvoker = (
+type ToolInvoker = async (
   Array[String],
   @types.TypedSchemaValue,
   @async-core.Stream[Byte]?,
@@ -117,51 +117,209 @@ pub fn get_registered_tool(
 }
 
 ///|
-pub fn invoke_registered_tool(
+pub async fn invoke_registered_tool(
   tool_name : String,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
   principal : @agentCommon.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
-  if !state.tools.contains(tool_name) {
-    return Err(@toolCommon.ToolError::InvalidToolName(tool_name))
-  }
-  invoke_registered_invoker(tool_name, command_path, input, stdin, principal)
+  invoke_registered_tool_with_resource_drops(
+    tool_name,
+    command_path,
+    input,
+    stdin,
+    principal,
+    @model_host.resource_drops(),
+  )
 }
 
 ///|
-fn invoke_registered_invoker(
+async fn invoke_registered_tool_with_resource_drops(
   tool_name : String,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
   principal : @agentCommon.Principal,
+  drops : @model.SchemaValueResourceDrops,
+) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+  if !state.tools.contains(tool_name) {
+    return reject_wire_invocation_with_resource_drops(
+      input,
+      stdin,
+      @toolCommon.ToolError::InvalidToolName(tool_name),
+      drops,
+    )
+  }
+  match state.defs.get(tool_name) {
+    Some(def) if def.command_index_by_path(command_path) is None =>
+      return reject_wire_invocation_with_resource_drops(
+        input,
+        stdin,
+        @toolCommon.ToolError::InvalidCommandPath(command_path),
+        drops,
+      )
+    _ => ()
+  }
+  invoke_registered_invoker(
+    tool_name, command_path, input, stdin, principal, drops,
+  )
+}
+
+///|
+async fn invoke_registered_invoker(
+  tool_name : String,
+  command_path : Array[String],
+  input : @types.TypedSchemaValue,
+  stdin : @async-core.Stream[Byte]?,
+  principal : @agentCommon.Principal,
+  drops : @model.SchemaValueResourceDrops,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   match state.invokers.get(tool_name) {
     Some(invoker) => invoker(command_path, input, stdin, principal)
-    None => Err(@toolCommon.ToolError::InvalidToolName(tool_name))
+    None =>
+      reject_wire_invocation_with_resource_drops(
+        input,
+        stdin,
+        @toolCommon.ToolError::InvalidToolName(tool_name),
+        drops,
+      )
   }
 }
 
 ///|
-pub fn invoke_registered_subtool(
+pub async fn invoke_registered_subtool(
   tool_name : String,
   command_path : Array[String],
   fields : Array[CanonicalInputValue],
   stdin : @async-core.Stream[Byte]?,
   principal : @agentCommon.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
-  let def = match state.defs.get(tool_name) {
-    Some(def) => def
-    None => return Err(@toolCommon.ToolError::InvalidToolName(tool_name))
+  invoke_registered_subtool_with_resource_drops(
+    tool_name,
+    command_path,
+    fields,
+    stdin,
+    principal,
+    @model_host.resource_drops(),
+  )
+}
+
+///|
+async fn invoke_registered_subtool_with_resource_drops(
+  tool_name : String,
+  command_path : Array[String],
+  fields : Array[CanonicalInputValue],
+  stdin : @async-core.Stream[Byte]?,
+  principal : @agentCommon.Principal,
+  drops : @model.SchemaValueResourceDrops,
+) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+  let route = match state.defs.get(tool_name) {
+    None => Err(@toolCommon.ToolError::InvalidToolName(tool_name))
+    Some(def) =>
+      match def.command_index_by_path(command_path) {
+        None => Err(@toolCommon.ToolError::InvalidCommandPath(command_path))
+        Some(index) if !state.invokers.contains(tool_name) =>
+          Err(@toolCommon.ToolError::InvalidToolName(tool_name))
+        Some(index) => Ok((def, index))
+      }
   }
-  let index = match def.command_index_by_path(command_path) {
-    Some(index) => index
-    None => return Err(@toolCommon.ToolError::InvalidCommandPath(command_path))
+  let (def, index) = match route {
+    Err(error) =>
+      return reject_decoded_invocation_with_resource_drops(
+        fields, stdin, error, drops,
+      )
+    Ok(route) => route
   }
   let input = forward_canonical_input(fields, def, index) catch {
-    error => return Err(error)
+    error =>
+      return reject_decoded_invocation_with_resource_drops(
+        fields, stdin, error, drops,
+      )
   }
-  invoke_registered_invoker(tool_name, command_path, input, stdin, principal)
+  release_canonical_input_values(fields, drops)
+  invoke_registered_invoker(
+    tool_name, command_path, input, stdin, principal, drops,
+  )
+}
+
+///|
+pub fn reject_wire_invocation(
+  input : @types.TypedSchemaValue,
+  stdin : @async-core.Stream[Byte]?,
+  error : @toolCommon.ToolError,
+) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+  reject_wire_invocation_with_resource_drops(
+    input,
+    stdin,
+    error,
+    @model_host.resource_drops(),
+  )
+}
+
+///|
+fn reject_wire_invocation_with_resource_drops(
+  input : @types.TypedSchemaValue,
+  stdin : @async-core.Stream[Byte]?,
+  error : @toolCommon.ToolError,
+  drops : @model.SchemaValueResourceDrops,
+) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+  release_wire_invocation_input(input, drops)
+  drop_optional_stdin(stdin)
+  Err(error)
+}
+
+///|
+fn release_wire_invocation_input(
+  input : @types.TypedSchemaValue,
+  drops : @model.SchemaValueResourceDrops,
+) -> Unit {
+  try @model.typed_schema_value_from_wit(input, drops) catch {
+    _ => ()
+  } noraise {
+    decoded => decoded.value.release_resources(drops)
+  }
+}
+
+///|
+pub fn reject_undecoded_invocation(
+  stdin : @async-core.Stream[Byte]?,
+  error : @toolCommon.ToolError,
+) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+  drop_optional_stdin(stdin)
+  Err(error)
+}
+
+///|
+pub fn reject_decoded_invocation(
+  fields : Array[CanonicalInputValue],
+  stdin : @async-core.Stream[Byte]?,
+  error : @toolCommon.ToolError,
+) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+  reject_decoded_invocation_with_resource_drops(
+    fields,
+    stdin,
+    error,
+    @model_host.resource_drops(),
+  )
+}
+
+///|
+fn reject_decoded_invocation_with_resource_drops(
+  fields : Array[CanonicalInputValue],
+  stdin : @async-core.Stream[Byte]?,
+  error : @toolCommon.ToolError,
+  drops : @model.SchemaValueResourceDrops,
+) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+  release_canonical_input_values(fields, drops)
+  drop_optional_stdin(stdin)
+  Err(error)
+}
+
+///|
+fn drop_optional_stdin(stdin : @async-core.Stream[Byte]?) -> Unit {
+  match stdin {
+    Some(stdin) => stdin.drop_sync()
+    None => ()
+  }
 }

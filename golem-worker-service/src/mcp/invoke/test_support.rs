@@ -16,7 +16,9 @@ use crate::service::agent_resolution_cache::AgentResolutionCache;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::component::{ComponentService, ComponentServiceError};
 use crate::service::limit::{LimitService, LimitServiceError};
-use crate::service::worker::{WorkerClient, WorkerResult, WorkerService, WorkerStream};
+use crate::service::worker::{
+    WorkerClient, WorkerResult, WorkerService, WorkerServiceError, WorkerStream,
+};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
@@ -39,7 +41,7 @@ use golem_common::model::worker::{
     AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertWorkerTarget,
 };
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
-use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
+use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, SchemaGraph};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
@@ -353,11 +355,11 @@ impl WorkerClient for RecordingWorkerClient {
 
     async fn get_metadata(
         &self,
-        _: &AgentId,
+        agent_id: &AgentId,
         _: EnvironmentId,
         _: AuthCtx,
     ) -> WorkerResult<AgentMetadataDto> {
-        unimplemented!()
+        Err(WorkerServiceError::AgentNotFound(agent_id.clone()))
     }
 
     async fn find_metadata(
@@ -571,13 +573,19 @@ pub(crate) struct InvocationHarness {
 }
 
 impl InvocationHarness {
-    pub(crate) fn new(invocation_output: AgentInvocationOutput) -> Self {
-        Self::new_with_agent_mode(invocation_output, AgentMode::Durable)
+    pub(crate) fn new(
+        invocation_output: AgentInvocationOutput,
+        constructor: AgentConstructorSchema,
+        methods: Vec<golem_common::schema::AgentMethodSchema>,
+    ) -> Self {
+        Self::new_with_agent_mode(invocation_output, AgentMode::Durable, constructor, methods)
     }
 
     pub(crate) fn new_with_agent_mode(
         invocation_output: AgentInvocationOutput,
         agent_mode: AgentMode,
+        constructor: AgentConstructorSchema,
+        methods: Vec<golem_common::schema::AgentMethodSchema>,
     ) -> Self {
         let component_id = ComponentId(Uuid::new_v4());
         let environment_id = EnvironmentId(Uuid::new_v4());
@@ -605,13 +613,8 @@ impl InvocationHarness {
                     description: String::new(),
                     source_language: String::new(),
                     schema: SchemaGraph::empty(),
-                    constructor: AgentConstructorSchema {
-                        name: None,
-                        description: String::new(),
-                        prompt_hint: None,
-                        input_schema: InputSchema::Parameters(vec![]),
-                    },
-                    methods: vec![],
+                    constructor,
+                    methods,
                     dependencies: vec![],
                     mode: agent_mode,
                     http_mount: None,

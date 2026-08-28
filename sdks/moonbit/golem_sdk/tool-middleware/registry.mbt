@@ -114,7 +114,7 @@ pub fn discover_tool_middlewares() -> Array[@toolCommon.ToolMiddleware] {
   let descriptors = tool_middleware_state.descriptors
     .to_array()
     .map(entry => entry.1.to_wit())
-  descriptors.sort_by((left, right) => left.name.compare(right.name))
+  descriptors.sort_by((left, right) => right.name.compare(left.name))
   descriptors
 }
 

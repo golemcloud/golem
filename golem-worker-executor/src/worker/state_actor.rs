@@ -104,6 +104,7 @@ enum StatusJob {
     /// invocation loop notified about the change, it enqueues a lifecycle job afterwards.
     CommitAndUpdateState {
         level: CommitLevel,
+        committed: Option<oneshot::Sender<()>>,
         done: oneshot::Sender<(OplogIndex, bool)>,
     },
     /// Appends an entry and completes its commit + fold transaction even if the caller is
@@ -219,10 +220,14 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         let status_task = tokio::spawn(async move {
             while let Some(job) = status_rx.recv().await {
                 match job {
-                    StatusJob::CommitAndUpdateState { level, done } => {
+                    StatusJob::CommitAndUpdateState {
+                        level,
+                        committed,
+                        done,
+                    } => {
                         complete_status_job(
                             async {
-                                let changed = state.commit_and_update_state(level).await;
+                                let changed = state.commit_and_update_state(level, committed).await;
                                 let index = state.oplog.current_oplog_index().await;
                                 (index, changed)
                             },
@@ -240,7 +245,9 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                         complete_status_job(
                             async {
                                 state.oplog.add(*entry).await;
-                                state.commit_and_update_state(CommitLevel::Always).await;
+                                state
+                                    .commit_and_update_state(CommitLevel::Always, None)
+                                    .await;
                                 state.ensure_status_attached().await;
                             },
                             done,
@@ -327,7 +334,25 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     /// completion on the status task (the same semantics as the oplog actor's own jobs).
     pub async fn commit_and_update_state(&self, level: CommitLevel) -> (OplogIndex, bool) {
         self.commit
-            .run_status_job(|done| StatusJob::CommitAndUpdateState { level, done })
+            .run_status_job(|done| StatusJob::CommitAndUpdateState {
+                level,
+                committed: None,
+                done,
+            })
+            .await
+    }
+
+    pub async fn commit_and_update_state_notifying(
+        &self,
+        level: CommitLevel,
+        committed: oneshot::Sender<()>,
+    ) -> (OplogIndex, bool) {
+        self.commit
+            .run_status_job(|done| StatusJob::CommitAndUpdateState {
+                level,
+                committed: Some(committed),
+                done,
+            })
             .await
     }
 
@@ -447,8 +472,12 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
 
 impl OwnerCommitController {
     pub async fn commit_and_update_state(&self, level: CommitLevel) -> (OplogIndex, bool) {
-        self.run_status_job(|done| StatusJob::CommitAndUpdateState { level, done })
-            .await
+        self.run_status_job(|done| StatusJob::CommitAndUpdateState {
+            level,
+            committed: None,
+            done,
+        })
+        .await
     }
 
     /// Sends a job to the status task and waits for its reply.
@@ -484,8 +513,16 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// committed entries into the published status or marks the status detached when it can no
     /// longer be incrementally computed (e.g. after a revert or a snapshot update). Returns
     /// whether the published status (or its detachment) changed.
-    async fn commit_and_update_state(&self, commit_level: CommitLevel) -> bool {
+    async fn commit_and_update_state(
+        &self,
+        commit_level: CommitLevel,
+        committed: Option<oneshot::Sender<()>>,
+    ) -> bool {
         let new_entries = self.oplog.commit(commit_level).await;
+        if let Some(committed) = committed {
+            let _ = committed.send(());
+        }
+
         let authority_change_count = new_entries
             .values()
             .filter(|entry| is_authority_state_entry(entry))
@@ -541,7 +578,8 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     }
 
     async fn reattach(&self) {
-        self.commit_and_update_state(CommitLevel::Always).await;
+        self.commit_and_update_state(CommitLevel::Always, None)
+            .await;
 
         self.ensure_status_attached().await;
     }

@@ -882,16 +882,21 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HostUnderlyingTool for DurableWorkerCtx<Ctx> {
-    async fn drop(&mut self, rep: Resource<UnderlyingTool>) -> anyhow::Result<()> {
-        let _ = self.table().delete(rep);
-        Ok(())
-    }
-}
+impl<Ctx: WorkerCtx> HostUnderlyingTool for DurableWorkerCtx<Ctx> {}
 
 impl<Ctx: WorkerCtx> HostToolCommon for DurableWorkerCtx<Ctx> {}
 
 impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolCommonHost<Ctx> {
+    async fn drop(
+        accessor: &Accessor<U, Self>,
+        rep: Resource<UnderlyingTool>,
+    ) -> anyhow::Result<()> {
+        accessor.with(|mut access| {
+            let _ = access.get().table().delete(rep);
+            Ok(())
+        })
+    }
+
     async fn invoke(
         _accessor: &Accessor<U, Self>,
         _self_: Resource<UnderlyingTool>,

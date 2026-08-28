@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 EXPECTED_INVOKE_LIFT_SHA256 = (
-    "0506e6210f1cce9fc336df85551e8106a8366adc5898d1b6bb3105167589154b"
+    "563d4220b02be6c79fce3bd9242fc992a2049b7a66da6b836ea86b16749461b2"
 )
 
 
@@ -24,22 +24,22 @@ def main() -> None:
     signature = "pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int {"
     if lines.count(signature) != 1:
         raise SystemExit("expected exactly one invoke-tool-middleware binding")
-    if len(lines) <= 19252:
+    if len(lines) <= 19346:
         raise SystemExit("unexpected truncated invoke-tool-middleware binding")
-    if lines[11693] != "pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int {":
+    if lines[11739] != "pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int {":
         raise SystemExit("unexpected invoke-tool-middleware binding shape")
-    if not lines[19252].startswith(
+    if not lines[19346].startswith(
         "fn wasmExportAsyncInvokeToolMiddlewareTaskReturn("
     ):
         raise SystemExit("unexpected invoke-tool-middleware binding end")
-    raw_lift = "\n".join(lines[11692:19251]) + "\n"
+    raw_lift = "\n".join(lines[11738:19346]) + "\n"
     digest = hashlib.sha256(raw_lift.encode()).hexdigest()
     if digest != EXPECTED_INVOKE_LIFT_SHA256:
         raise SystemExit(
             "unexpected invoke-tool-middleware lift digest: "
             f"expected {EXPECTED_INVOKE_LIFT_SHA256}, got {digest}"
         )
-    output = lines[:11692]
+    output = lines[:11738]
 
     def block(start: int, end: int) -> list[str]:
         return [
@@ -54,44 +54,44 @@ def main() -> None:
 
     helper(
         "fn __wit_bindgen_lift_invoke_tool_commands(p0 : Int) -> @common.CommandTree {",
-        11704,
-        15752,
+        11750,
+        15842,
         "@common.CommandTree::{nodes : array547}",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_tool_schema(p0 : Int) -> @types.SchemaGraph {",
-        15754,
-        17296,
+        15844,
+        17386,
         "@types.SchemaGraph::{type_nodes : array745, defs : array750, root : mbt_ffi_load32((p0) + 48)}",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_command_path(p0 : Int) -> Array[String] {",
-        17298,
-        17306,
+        17388,
+        17396,
         "array753",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_input_graph(p0 : Int) -> @types.SchemaGraph {",
-        17308,
-        18850,
+        17398,
+        18940,
         "@types.SchemaGraph::{type_nodes : array951, defs : array956, root : mbt_ffi_load32((p0) + 76)}",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_input_value(p0 : Int) -> @types.SchemaValueTree {",
-        18852,
-        19130,
+        18942,
+        19224,
         "@types.SchemaValueTree::{value_nodes : array987, root : mbt_ffi_load32((p0) + 88)}",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_stdin(p0 : Int) -> @async-core.Stream[Byte]? {",
-        19132,
-        19140,
+        19226,
+        19234,
         "lifted990",
     )
     helper(
         "fn __wit_bindgen_lift_invoke_principal(p0 : Int) -> @common0.Principal {",
-        19142,
-        19243,
+        19236,
+        19337,
         "lifted1008",
     )
     output.extend(
@@ -129,7 +129,7 @@ pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int {
 }
 """.splitlines()
     )
-    output.extend(lines[19252:])
+    output.extend(lines[19346:])
     path.write_text("\n".join(output) + "\n")
 
 

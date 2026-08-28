@@ -18,13 +18,12 @@ import { describe, expect, it, vi } from 'vitest';
 import * as z3 from 'zod3';
 import { z } from 'zod/v4';
 import {
-  client,
   getExtendedToolDefinition,
-  ToolCallError,
   toolDefinition,
   type ToolClientInvocationResult,
   type ToolClientTransport,
 } from '../src/tool';
+import { client, ToolCallError } from '../src/toolClient';
 import { compileSchema } from '../src/schema/adapter';
 import {
   deepEqual,

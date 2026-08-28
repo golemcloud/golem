@@ -681,6 +681,61 @@ impl TextOutput for PublicOplogEntry {
                     typed_schema_value_to_string(&params.payload)
                 ));
             }
+            PublicOplogEntry::StreamRegistered(params) => {
+                logln(format_message_highlight("STREAM REGISTERED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}record:            {}",
+                    typed_schema_value_to_string(&params.record)
+                ));
+            }
+            PublicOplogEntry::StreamItems(params) => {
+                logln(format_message_highlight("STREAM ITEMS"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}record:            {}",
+                    typed_schema_value_to_string(&params.record)
+                ));
+            }
+            PublicOplogEntry::StreamEnd(params) => {
+                logln(format_message_highlight("STREAM END"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}record:            {}",
+                    typed_schema_value_to_string(&params.record)
+                ));
+            }
+            PublicOplogEntry::StreamCancel(params) => {
+                logln(format_message_highlight("STREAM CANCEL"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}record:            {}",
+                    typed_schema_value_to_string(&params.record)
+                ));
+            }
+            PublicOplogEntry::StreamSession(params) => {
+                logln(format_message_highlight("STREAM SESSION"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}record:            {}",
+                    typed_schema_value_to_string(&params.record)
+                ));
+            }
             PublicOplogEntry::CardExpired(params) => {
                 logln(format_message_highlight("CARD EXPIRED"));
                 logln(format!(

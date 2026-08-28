@@ -920,22 +920,26 @@ impl ScalaBridgeGenerator {
             ));
             writer.indent();
             writer.line(format!(
-                "val parameters = {GUEST_CODEC}.encodeValue(methodParameters({invoke_args}))"
+                "{GUEST_CODEC}.encodeValueAsync(methodParameters({invoke_args})).flatMap {{ parameters =>"
             ));
             writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.invokeAndAwaitWithMetadata({method_name_lit}, parameters)).map {{ __response =>"
+                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.cancelableAsyncInvokeAndAwaitWithMetadata({method_name_lit}, parameters)).flatMap {{ __invocation =>"
             ));
             writer.indent();
-            writer.line("val __result = __response.value");
+            writer.line("__invocation.result.map { __result =>");
+            writer.indent();
             writer.line("val __decoded = {");
             writer.indent();
             writer.line(decode_block.clone());
             writer.dedent();
             writer.line("}");
             writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.runtime.rpc.InvocationResult(__response.metadata, __decoded)"
+                "{GUEST_RUNTIME_PKG}.runtime.rpc.InvocationResult(__invocation.metadata, __decoded)"
             ));
             writer.dedent();
+            writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
+            writer.dedent();
+            writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
             writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
             writer.dedent();
             writer.line("}");
@@ -943,14 +947,15 @@ impl ScalaBridgeGenerator {
             writer.line(format!("def apply({param_decls}): {FUTURE}[{ret_ty}] = {{"));
             writer.indent();
             writer.line(format!(
-                "val parameters = {GUEST_CODEC}.encodeValue(methodParameters({invoke_args}))"
+                "{GUEST_CODEC}.encodeValueAsync(methodParameters({invoke_args})).flatMap {{ parameters =>"
             ));
             writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.invokeAndAwait({method_name_lit}, parameters)).map {{ __result =>"
+                "resolved.asyncInvokeAndAwait({method_name_lit}, parameters).map {{ __result =>"
             ));
             writer.indent();
             writer.line(decode_block.clone());
             writer.dedent();
+            writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
             writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
             writer.dedent();
             writer.line("}");
@@ -959,14 +964,14 @@ impl ScalaBridgeGenerator {
 
         if ephemeral {
             writer.line(format!(
-                "def cancelable({param_decls}): _root_.scala.Either[{STRING}, {GUEST_RUNTIME_PKG}.runtime.rpc.CancelableAsyncInvocation[{ret_ty}]] = {{"
+                "def cancelable({param_decls}): {FUTURE}[{GUEST_RUNTIME_PKG}.runtime.rpc.CancelableAsyncInvocation[{ret_ty}]] = {{"
             ));
             writer.indent();
             writer.line(format!(
-                "val parameters = {GUEST_CODEC}.encodeValue(methodParameters({invoke_args}))"
+                "{GUEST_CODEC}.encodeValueAsync(methodParameters({invoke_args})).flatMap {{ parameters =>"
             ));
             writer.line(format!(
-                "resolved.cancelableAsyncInvokeAndAwaitWithMetadata({method_name_lit}, parameters).map {{ __invocation =>"
+                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.cancelableAsyncInvokeAndAwaitWithMetadata({method_name_lit}, parameters)).map {{ __invocation =>"
             ));
             writer.indent();
             writer.line("val __future = __invocation.result.map { __result =>");
@@ -978,7 +983,8 @@ impl ScalaBridgeGenerator {
                 "{GUEST_RUNTIME_PKG}.runtime.rpc.CancelableAsyncInvocation(__invocation.metadata, __future, __invocation.cancellationToken)"
             ));
             writer.dedent();
-            writer.line("}");
+            writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
+            writer.line("}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)");
             writer.dedent();
             writer.line("}");
         } else {
@@ -987,17 +993,16 @@ impl ScalaBridgeGenerator {
             ));
             writer.indent();
             writer.line(format!(
-                "val parameters = {GUEST_CODEC}.encodeValue(methodParameters({invoke_args}))"
+                "var __underlying = _root_.scala.Option.empty[_root_.golem.runtime.rpc.CancellationToken]\nvar __cancelled = false\nval __token = _root_.golem.runtime.rpc.CancellationToken.fromFunction(() => {{ __cancelled = true; __underlying.foreach(_.cancel()) }})\nval __future = {GUEST_CODEC}.encodeValueAsync(methodParameters({invoke_args})).flatMap {{ parameters =>"
             ));
             writer.line(format!(
-                "val (__future, __token) = resolved.cancelableAsyncInvokeAndAwait({method_name_lit}, parameters)"
+                "val (__rawFuture, __rawToken) = resolved.cancelableAsyncInvokeAndAwait({method_name_lit}, parameters)\n__underlying = _root_.scala.Some(__rawToken)\nif (__cancelled) __rawToken.cancel()\n__rawFuture.map {{ __result =>"
             ));
-            writer.line("(__future.map { __result =>");
             writer.indent();
             writer.line(decode_block.clone());
             writer.dedent();
             writer.line(
-                "}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue), __token)",
+                "}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)\n}(_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)\n(__future, __token)",
             );
             writer.dedent();
             writer.line("}");
@@ -3612,7 +3617,7 @@ mod tests {
         assert!(client_source.contains("_root_.golem.schema.SchemaValue.StringValue(message)"));
         assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.encodeValue"));
         assert!(client_source.contains("_root_.golem.runtime.rpc.RemoteAgentClient.resolve"));
-        assert!(client_source.contains("resolved.invokeAndAwait"));
+        assert!(client_source.contains("resolved.asyncInvokeAndAwait"));
         assert!(client_source.contains("def cancelable("));
         assert!(client_source.contains("resolved.cancelableAsyncInvokeAndAwait"));
         assert!(client_source.contains("def scheduleCancelableAt("));
@@ -3661,6 +3666,44 @@ mod tests {
     }
 
     #[test]
+    fn ephemeral_guest_await_remains_asynchronous() {
+        let dir = TempDir::new().unwrap();
+        let target_path =
+            Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.mode = AgentMode::Ephemeral;
+        agent_type.methods.push(AgentMethodSchema {
+            name: "echo".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters(vec![]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        });
+        let mut generator = ScalaBridgeGenerator::new_with_mode(
+            agent_type,
+            &target_path,
+            true,
+            ScalaBridgeMode::GuestWasmRpc,
+        )
+        .unwrap();
+
+        generator.generate().unwrap();
+
+        let client_source = std::fs::read_to_string(
+            target_path
+                .join("src/main/scala/golem/bridge/client/alpha_agent/AlphaAgentClient.scala"),
+        )
+        .unwrap();
+        assert!(
+            client_source.contains("resolved.cancelableAsyncInvokeAndAwaitWithMetadata("),
+            "ephemeral await must use asynchronous metadata-aware RPC:\n{client_source}"
+        );
+        assert!(!client_source.contains("resolved.invokeAndAwaitWithMetadata("));
+    }
+
+    #[test]
     fn guest_generation_renames_parameters_that_collide_with_cancelable_locals() {
         let dir = TempDir::new().unwrap();
         let target_path =
@@ -3697,7 +3740,7 @@ mod tests {
         .unwrap();
         assert!(client_source.contains("def cancelable(__future_2:"));
         assert!(client_source.contains("__token_2:"));
-        assert!(client_source.contains("val (__future, __token) ="));
+        assert!(client_source.contains("val (__rawFuture, __rawToken) ="));
         assert!(!client_source.contains("def cancelable(__future:"));
     }
 

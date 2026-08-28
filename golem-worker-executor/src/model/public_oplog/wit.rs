@@ -33,8 +33,9 @@ use golem_common::model::oplog::public_oplog_entry::{
     PublicAgentInvocationResult, PublicAttributeValue, PublicDurableFunctionType, PublicSpanData,
     RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
     SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
-    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
-    WriteRemoteTransactionParameters,
+    StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, StringAttributeValue, SuccessfulUpdateParams, SuspendParams,
+    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
     AgentInvocationOutputParameters, AgentTerminatedByQuotaError, EphemeralCannotSuspendError,
@@ -688,6 +689,36 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 kind: kind.into(),
                 payload: encode_public_typed_schema_value(payload)?,
             }),
+            PublicOplogEntry::StreamRegistered(StreamRegisteredParams { timestamp, record }) => {
+                Self::StreamRegistered(oplog::DurableStreamRecordParameters {
+                    timestamp: timestamp.into(),
+                    record: encode_public_typed_schema_value(record)?,
+                })
+            }
+            PublicOplogEntry::StreamItems(StreamItemsParams { timestamp, record }) => {
+                Self::StreamItems(oplog::DurableStreamRecordParameters {
+                    timestamp: timestamp.into(),
+                    record: encode_public_typed_schema_value(record)?,
+                })
+            }
+            PublicOplogEntry::StreamEnd(StreamEndParams { timestamp, record }) => {
+                Self::StreamEnd(oplog::DurableStreamRecordParameters {
+                    timestamp: timestamp.into(),
+                    record: encode_public_typed_schema_value(record)?,
+                })
+            }
+            PublicOplogEntry::StreamCancel(StreamCancelParams { timestamp, record }) => {
+                Self::StreamCancel(oplog::DurableStreamRecordParameters {
+                    timestamp: timestamp.into(),
+                    record: encode_public_typed_schema_value(record)?,
+                })
+            }
+            PublicOplogEntry::StreamSession(StreamSessionParams { timestamp, record }) => {
+                Self::StreamSession(oplog::DurableStreamRecordParameters {
+                    timestamp: timestamp.into(),
+                    record: encode_public_typed_schema_value(record)?,
+                })
+            }
         })
     }
 }
@@ -1511,6 +1542,26 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 kind: params.kind.into(),
                 payload: oplog_payload_from_wit(params.payload),
             }),
+            oplog::OplogEntry::StreamRegistered(params) => Ok(Self::StreamRegistered {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                record: oplog_payload_from_wit(params.record),
+            }),
+            oplog::OplogEntry::StreamItems(params) => Ok(Self::StreamItems {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                record: oplog_payload_from_wit(params.record),
+            }),
+            oplog::OplogEntry::StreamEnd(params) => Ok(Self::StreamEnd {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                record: oplog_payload_from_wit(params.record),
+            }),
+            oplog::OplogEntry::StreamCancel(params) => Ok(Self::StreamCancel {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                record: oplog_payload_from_wit(params.record),
+            }),
+            oplog::OplogEntry::StreamSession(params) => Ok(Self::StreamSession {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                record: oplog_payload_from_wit(params.record),
+            }),
         }
     }
 }
@@ -2084,6 +2135,36 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 kind: kind.into(),
                 payload: oplog_payload_to_wit(payload)?,
             })),
+            M::StreamRegistered { timestamp, record } => Ok(Self::StreamRegistered(
+                oplog::RawDurableStreamRecordParameters {
+                    timestamp: timestamp.into(),
+                    record: oplog_payload_to_wit(record)?,
+                },
+            )),
+            M::StreamItems { timestamp, record } => {
+                Ok(Self::StreamItems(oplog::RawDurableStreamRecordParameters {
+                    timestamp: timestamp.into(),
+                    record: oplog_payload_to_wit(record)?,
+                }))
+            }
+            M::StreamEnd { timestamp, record } => {
+                Ok(Self::StreamEnd(oplog::RawDurableStreamRecordParameters {
+                    timestamp: timestamp.into(),
+                    record: oplog_payload_to_wit(record)?,
+                }))
+            }
+            M::StreamCancel { timestamp, record } => Ok(Self::StreamCancel(
+                oplog::RawDurableStreamRecordParameters {
+                    timestamp: timestamp.into(),
+                    record: oplog_payload_to_wit(record)?,
+                },
+            )),
+            M::StreamSession { timestamp, record } => Ok(Self::StreamSession(
+                oplog::RawDurableStreamRecordParameters {
+                    timestamp: timestamp.into(),
+                    record: oplog_payload_to_wit(record)?,
+                },
+            )),
             M::CardEventQueued { timestamp, event } => {
                 Ok(Self::CardEventQueued(oplog::CardEventQueuedParameters {
                     timestamp: timestamp.into(),

@@ -123,6 +123,10 @@ mod tests {
             Some(GuestLanguage::MoonBit)
         );
         assert_eq!(
+            GuestLanguage::from_component_template_name("ts-tool-middleware"),
+            Some(GuestLanguage::TypeScript)
+        );
+        assert_eq!(
             GuestLanguage::from_component_template_name("ts-agent-tool-middleware"),
             Some(GuestLanguage::TypeScript)
         );
@@ -132,6 +136,10 @@ mod tests {
         );
         assert_eq!(
             GuestLanguage::from_component_template_name("custom-moonbit"),
+            None
+        );
+        assert_eq!(
+            GuestLanguage::from_component_template_name("custom-ts"),
             None
         );
     }

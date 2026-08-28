@@ -3671,6 +3671,7 @@ dependencies = [
 name = "golem-api-grpc"
 version = "0.0.0"
 dependencies = [
+ "blake3",
  "desert_rust",
  "miette",
  "prost 0.14.4",
@@ -3712,6 +3713,7 @@ dependencies = [
  "futures-util",
  "fuzzy-matcher",
  "goldenfile",
+ "golem-api-grpc",
  "golem-client",
  "golem-common",
  "heck",
@@ -3734,6 +3736,7 @@ dependencies = [
  "prettyplease",
  "proc-macro2",
  "proptest",
+ "prost 0.14.4",
  "quote",
  "regex",
  "reqwest 0.13.4",
@@ -3760,6 +3763,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-tungstenite",
+ "tokio-util",
  "toml 0.9.12+spec-1.1.0",
  "toml_edit 0.23.10+spec-1.0.0",
  "tracing",
@@ -4067,6 +4071,7 @@ dependencies = [
  "base64 0.22.1",
  "bigdecimal",
  "bit-vec 0.6.3",
+ "blake3",
  "bytes",
  "chrono",
  "combine",
@@ -4291,6 +4296,7 @@ dependencies = [
  "applying",
  "arc-swap",
  "assert2",
+ "async-broadcast",
  "async-lock",
  "async-recursion",
  "async-scoped",
@@ -4412,6 +4418,7 @@ dependencies = [
  "tempfile",
  "test-r",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tonic 0.14.6",
  "tonic-tracing-opentelemetry",
@@ -5335,6 +5342,7 @@ dependencies = [
  "opentelemetry 0.30.0",
  "opentelemetry_sdk 0.30.0",
  "pretty_assertions",
+ "prost 0.14.4",
  "rand 0.9.5",
  "redis",
  "reqwest 0.13.4",
@@ -11512,9 +11520,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c3f4f07c06f38d6858db65eed7975674f19aca749e6fd8bd56dd6e9376b8d33"
+checksum = "e870a6b59731416c8ebe60fe42dedd65fc92df7820d4f387a68330bd06ed1212"
 dependencies = [
  "anyhow",
  "camino",

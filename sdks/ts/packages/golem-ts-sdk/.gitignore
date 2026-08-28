@@ -1,6 +1,8 @@
 .metadata/
 .agent-template-wit/
 agent-template/
+agent-tool-middleware-template/
+tool-middleware-template/
 dist/
 node_modules/
 wasm/*.wasm

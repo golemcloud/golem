@@ -23,8 +23,9 @@ use crate::worker::invocation::{
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
-    FinalWorkerState, PendingWorkerInterrupt, QueuedWorkerInvocation, RetryDecision, RunningWorker,
-    Worker, WorkerCommand, WorkerInterruptState, WorkerTrace,
+    FinalWorkerState, PendingLiveInvocationDisposition, PendingWorkerInterrupt,
+    QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand,
+    WorkerInterruptState, WorkerTrace,
 };
 use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
 use async_lock::Mutex;
@@ -249,6 +250,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 cleanup_ephemeral_worker = result.cleanup_ephemeral_worker;
             }
 
+            store
+                .lock()
+                .await
+                .data()
+                .durable_ctx()
+                .begin_stream_runtime_teardown();
             self.suspend_worker(&store).await;
 
             if let Some(kind) = final_interrupt {
@@ -385,7 +392,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             active_agent.fence_entity_bodies();
         }
         self.parent
-            .stop_internal(true, None, FinalWorkerState::Unloaded { startup_failure })
+            .stop_internal(
+                true,
+                None,
+                FinalWorkerState::Unloaded { startup_failure },
+                PendingLiveInvocationDisposition::Fail,
+            )
             .await;
     }
 
@@ -459,6 +471,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             FinalWorkerState::Unloaded {
                                 startup_failure: Some(err),
                             },
+                            PendingLiveInvocationDisposition::Fail,
                         )
                         .await;
                     CreateInstanceResult::Failed
@@ -510,6 +523,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             FinalWorkerState::Unloaded {
                                 startup_failure: Some(err),
                             },
+                            PendingLiveInvocationDisposition::Fail,
                         )
                         .await;
                     Some(RetryDecision::None) // early return, we can't retry this
@@ -616,7 +630,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                             break self.interrupt(interrupt).await;
                         }
 
-                        let message = self.active.write().await.pop_front();
+                        let message = self.pop_ready_internal_invocation().await;
 
                         let result = if let Some(message) = message {
                             self.internal_invocation(message).await
@@ -686,6 +700,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             Some(command) => Some(command),
             None => self.next_wakeup().await,
         }
+    }
+
+    async fn pop_ready_internal_invocation(&self) -> Option<QueuedWorkerInvocation> {
+        self.active.write().await.pop_front()
     }
 
     /// Checks — before publishing `waiting_for_command = true`, which makes the
@@ -985,6 +1003,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                             FinalWorkerState::Unloaded {
                                 startup_failure: Some(err),
                             },
+                            PendingLiveInvocationDisposition::Fail,
                         )
                         .await;
                     CommandOutcome::BreakOuterLoop
@@ -1138,13 +1157,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     ) -> CommandOutcome {
         let kind = invocation.kind();
         let display_name = invocation.display_name();
+        let invocation_idempotency_key = idempotency_key.clone();
         let result = self
             .invoke_agent_with_context(invocation_context, idempotency_key, invocation)
             .await;
 
         match result {
             Ok(InvokeResult::Succeeded {
-                result: invocation_result,
+                result: mut invocation_result,
                 consumed_fuel,
             }) => {
                 let mut interrupt_state = self.parent.interrupt_signal.lock().await;
@@ -1152,6 +1172,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     drop(interrupt_state);
                     self.agent_invocation_failed(
                         &display_name,
+                        &invocation_idempotency_key,
                         Ok(InvokeResult::Interrupted {
                             consumed_fuel,
                             interrupt_kind: interrupt.kind,
@@ -1160,8 +1181,88 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await
                 } else {
                     drop(interrupt_state);
+                    if let AgentInvocationResult::AgentMethod { output } = &mut invocation_result {
+                        let component = self.store.data().component_metadata();
+                        let Some(agent_type) =
+                            self.parent.parsed_agent_id.as_ref().and_then(|parsed| {
+                                component
+                                    .metadata
+                                    .find_agent_type_by_name_ref(&parsed.agent_type)
+                            })
+                        else {
+                            return self
+                                .agent_invocation_failed(
+                                    &display_name,
+                                    &invocation_idempotency_key,
+                                    Err(WorkerExecutorError::runtime(
+                                        "durable invocation result schema is unavailable",
+                                    )),
+                                )
+                                .await;
+                        };
+                        let Some(method) = agent_type
+                            .methods
+                            .iter()
+                            .find(|method| method.name == display_name)
+                        else {
+                            return self
+                                .agent_invocation_failed(
+                                    &display_name,
+                                    &invocation_idempotency_key,
+                                    Err(WorkerExecutorError::runtime(
+                                        "durable invocation result method schema is unavailable",
+                                    )),
+                                )
+                                .await;
+                        };
+                        let graph = agent_type.schema.clone();
+                        let root =
+                            method.output_schema.schema().cloned().unwrap_or_else(|| {
+                                golem_common::schema::SchemaType::tuple(Vec::new())
+                            });
+                        let component_revision = component.revision;
+                        let parent = self.parent.clone();
+                        let idempotency_key = invocation_idempotency_key.clone();
+                        let result_value = output.clone();
+                        match self
+                            .store
+                            .run_concurrent(async move |_accessor| {
+                                parent
+                                    .materialize_durable_streaming_result(
+                                        &idempotency_key,
+                                        result_value,
+                                        &graph,
+                                        &root,
+                                        component_revision,
+                                    )
+                                    .await
+                            })
+                            .await
+                        {
+                            Ok(Ok(materialized)) => *output = materialized,
+                            Ok(Err(error)) => {
+                                return self
+                                    .agent_invocation_failed(
+                                        &display_name,
+                                        &invocation_idempotency_key,
+                                        Err(error),
+                                    )
+                                    .await;
+                            }
+                            Err(error) => {
+                                return self
+                                    .agent_invocation_failed(
+                                        &display_name,
+                                        &invocation_idempotency_key,
+                                        Err(WorkerExecutorError::runtime(error.to_string())),
+                                    )
+                                    .await;
+                            }
+                        }
+                    }
                     self.agent_invocation_finished(
                         display_name,
+                        &invocation_idempotency_key,
                         invocation_result,
                         consumed_fuel,
                         kind,
@@ -1177,9 +1278,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         .await
                         .claim_pending_terminal();
                 }
-                self.agent_invocation_failed(&display_name, result).await
+                self.agent_invocation_failed(&display_name, &invocation_idempotency_key, result)
+                    .await
             }
-            _ => self.agent_invocation_failed(&display_name, result).await,
+            _ => {
+                self.agent_invocation_failed(&display_name, &invocation_idempotency_key, result)
+                    .await
+            }
         }
     }
 
@@ -1222,7 +1327,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await;
             }
 
-            let invocation_for_lowering = invocation.clone();
+            let invocation_for_lowering = self
+                .parent
+                .rehydrate_durable_streaming_invocation(invocation.clone())
+                .await?;
             let lowered = lower_invocation(
                 invocation_for_lowering,
                 &component_metadata,
@@ -1264,6 +1372,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     async fn agent_invocation_finished(
         &mut self,
         full_function_name: String,
+        idempotency_key: &IdempotencyKey,
         invocation_result: AgentInvocationResult,
         consumed_fuel: u64,
         kind: AgentInvocationKind,
@@ -1285,11 +1394,24 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .on_agent_invocation_success(&full_function_name, consumed_fuel, &mut output)
             .await
         {
-            Ok(()) => successful_agent_invocation_outcome(
-                self.parent.agent_mode(),
-                self.store.data().component_metadata().metadata.is_agent(),
-                kind,
-            ),
+            Ok(()) => {
+                if let Err(error) = self
+                    .parent
+                    .complete_durable_streaming_session(idempotency_key)
+                    .await
+                {
+                    tracing::error!(%error, "Failed to complete durable streaming session");
+                    return failed_agent_invocation_outcome(
+                        self.parent.agent_mode(),
+                        RetryDecision::Immediate,
+                    );
+                }
+                successful_agent_invocation_outcome(
+                    self.parent.agent_mode(),
+                    self.store.data().component_metadata().metadata.is_agent(),
+                    kind,
+                )
+            }
             Err(error) => {
                 self.store
                     .data_mut()
@@ -1304,6 +1426,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         },
                     )
                     .await;
+                let _ = self
+                    .parent
+                    .fail_durable_streaming_session(idempotency_key, error.to_string())
+                    .await;
                 failed_agent_invocation_outcome(self.parent.agent_mode(), RetryDecision::None)
             }
         }
@@ -1313,8 +1439,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     async fn agent_invocation_failed(
         &mut self,
         full_function_name: &str,
+        idempotency_key: &IdempotencyKey,
         result: Result<InvokeResult, WorkerExecutorError>,
     ) -> CommandOutcome {
+        self.store
+            .data()
+            .durable_ctx()
+            .begin_stream_runtime_teardown();
+        let details = format!("{result:?}");
         let trap_type = match result {
             Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
             Err(error) => Some(TrapType::from_worker_executor_error::<Ctx>(
@@ -1334,6 +1466,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
             None => RetryDecision::None,
         };
+
+        if decision == RetryDecision::None {
+            let _ = self
+                .parent
+                .fail_durable_streaming_session(idempotency_key, details)
+                .await;
+        }
 
         failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
     }
@@ -2018,6 +2157,30 @@ mod tests {
         assert_eq!(
             failed_agent_invocation_outcome(AgentMode::Durable, RetryDecision::None),
             CommandOutcome::BreakInnerLoop(RetryDecision::None)
+        );
+    }
+
+    #[test]
+    fn durable_live_streaming_invocation_always_reconstructs_the_store() {
+        assert_eq!(
+            successful_agent_invocation_outcome(
+                AgentMode::Durable,
+                true,
+                AgentInvocationKind::AgentMethod
+            ),
+            CommandOutcome::Continue
+        );
+    }
+
+    #[test]
+    fn ephemeral_live_streaming_invocation_archives_its_ephemeral_oplog() {
+        assert_eq!(
+            successful_agent_invocation_outcome(
+                AgentMode::Ephemeral,
+                true,
+                AgentInvocationKind::AgentMethod
+            ),
+            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
         );
     }
 }

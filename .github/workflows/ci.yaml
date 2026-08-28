@@ -32,7 +32,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.4.1"
+  WASM_RQUICKJS_VERSION: "0.4.2"
   MOONBIT_INSTALL_VERSION: "0.10.2+1bb3e16cf"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
@@ -160,6 +160,7 @@ jobs:
           - name: group1
           - name: group2
           - name: group3
+          - name: group4
     name: worker-tests-${{ matrix.group.name }}
     steps:
       - uses: actions/checkout@v5

@@ -316,7 +316,7 @@ pub fn run_error_payload_for_tests(
 pub fn decode_run_error_payload_for_tests(
   payload : @types.TypedSchemaValue,
 ) -> RunError raise {
-  let payload = @model.typed_schema_value_from_wit(payload)
+  let payload = @model_host.typed_schema_value_from_wit(payload)
   match RunError::from_error_payload_value(payload) {
     Ok(error) => error
     Err(message) => raise Failure::Failure(message)

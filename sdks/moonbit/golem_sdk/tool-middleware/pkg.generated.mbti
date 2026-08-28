@@ -80,6 +80,7 @@ pub(all) enum ResourceKind {
   Secret
   QuotaToken
   PermissionCard
+  SchemaValueStream
 } derive(Eq, @debug.Debug)
 
 pub(all) enum ToolInvokeError[E] {
@@ -113,3 +114,4 @@ pub async fn UnderlyingTool::invoke_raw(Self, Array[String], RawTypedSchemaValue
 // Type aliases
 
 // Traits
+

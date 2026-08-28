@@ -545,7 +545,11 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                     .in_current_span()
                     .await;
 
-                    worker.map(|worker| Arc::new(ActiveAgent::new(Arc::new(worker))))
+                    worker.map(|worker| {
+                        let worker = Arc::new(worker);
+                        Worker::start_durable_stream_attachment_reconciler(&worker);
+                        Arc::new(ActiveAgent::new(worker))
+                    })
                 })
             })
             .await?;

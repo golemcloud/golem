@@ -15,6 +15,8 @@
 #[cfg(test)]
 test_r::enable!();
 
+pub mod invocation_session_protocol;
+
 #[allow(clippy::large_enum_variant)]
 pub mod proto {
     use crate::proto::golem::worker::UpdateMode;

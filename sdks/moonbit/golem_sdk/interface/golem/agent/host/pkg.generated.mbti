@@ -84,3 +84,4 @@ pub fn WasmRpc::wasm_rpc(String, @types.SchemaValueTree, @types.Uuid?, Array[@co
 // Type aliases
 
 // Traits
+

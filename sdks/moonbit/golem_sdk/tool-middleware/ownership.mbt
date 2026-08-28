@@ -5,6 +5,7 @@ pub(all) enum ResourceKind {
   Secret
   QuotaToken
   PermissionCard
+  SchemaValueStream
 } derive(Eq, Debug)
 
 ///|
@@ -185,6 +186,7 @@ fn ResourceKind::label(self : ResourceKind) -> String {
     Secret => "secret"
     QuotaToken => "quota-token"
     PermissionCard => "permission-card"
+    SchemaValueStream => "schema-value-stream"
   }
 }
 

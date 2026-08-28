@@ -663,6 +663,23 @@ test "an overlapping carrier cannot claim an older available acquisition" {
 }
 
 ///|
+test "overlapping raw schema streams cannot create two owners" {
+  let context = OwnershipContext::new(no_raw_drop)
+  let raw_stream = @types.SchemaValueStream::SchemaValueStream(17)
+  let make_carrier = fn() -> RawTypedSchemaValue {
+    context.own_raw_typed_schema_value({
+      graph: { type_nodes: [], defs: [], root: 0 },
+      value: { value_nodes: [@types.StreamValue(raw_stream)], root: 0 },
+    })
+  }
+  let older = make_carrier()
+  let overlapping = make_carrier()
+  assert_true(older.take_for_final(context) is Ok(_))
+  assert_true(overlapping.take_for_final(context) is Err(_))
+  context.revoke()
+}
+
+///|
 test "raw index reuse mints a new generation and rejects the stale carrier" {
   let old_drops = Ref(0)
   let new_drops = Ref(0)

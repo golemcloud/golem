@@ -16,6 +16,7 @@ ROOTS = (
 EXTERNAL_ALLOWLIST = frozenset(
     {
         "moonbitlang/core/deque",
+        "moonbitlang/core/encoding/utf8",
         "moonbitlang/core/ref",
         "moonbitlang/core/set",
         "moonbitlang/core/strconv",
