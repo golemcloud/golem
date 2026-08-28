@@ -54,25 +54,61 @@
 //! on the same cluster. The oplog is on a different Aurora cluster and the
 //! worker-status hot cache is in Redis, and neither is touched here.
 //!
-//! That is why every stream degrades rather than only the obviously storage-shaped
-//! ones. A durable increment needs the running-workers set before it can run at
-//! all, so `durable` is not a control group and must not be read as one.
+//! That is why every stream degrades under that cut rather than only the
+//! obviously storage-shaped ones. A durable increment needs the running-workers
+//! set before it can run at all, so `durable` is not a control group there and
+//! must not be read as one.
+//!
+//! S18 cuts the Redis half instead, and the picture inverts. Only `Worker`,
+//! `AgentStatus` and `AgentStatusCheckpoint` live there, the status blob is
+//! written off the commit path by a background sweeper, and what still crosses
+//! the cache synchronously is a lifecycle boundary or a `get_agent_mode` miss.
+//! So `ephemeral` stops and `durable`, `scheduled` and `promise` carry on, and
+//! the streams still answering are evidence rather than noise.
 //!
 //! ### What fails the run
 //!
-//! Two things, and both are statements about the experiment rather than about
+//! Three things, and all are statements about the experiment rather than about
 //! latency:
 //!
-//! * [`OutageViolation::OutageNotObserved`] — the workload kept working, so the
-//!   fault did not land where the run says it did.
+//! * [`OutageViolation::OutageNotObserved`] — a stream the cut was supposed to
+//!   stop kept working, so the fault did not land where the run says it did.
+//! * [`OutageViolation::UnexpectedStall`] — a stream the cut was *not* supposed
+//!   to touch stopped anyway.
 //! * [`OutageViolation::StreamNeverRecovered`] — a stream that was working
 //!   before the outage produced nothing at all after the heal.
+//!
+//! ### Why the verdict is per scenario and the account is not
+//!
+//! Everything above the verdict is factual and shared: throughput per stream
+//! per window, quiet time, latency, what the fault caught in flight. The
+//! verdict is supplied by the scenario, as an
+//! [`OutageExpectation`](crate::chaos::OutageExpectation), because what a cut
+//! is supposed to do depends on what it cut.
+//!
+//! This was one rule until S18. That rule — every stream must fall silent —
+//! is sound for S16, S22 and S14, where a database every stream depends on goes
+//! away. S18 cuts a cache only part of the workload touches, and there the same
+//! rule is not merely too strict but backwards: it reported S18's first run as
+//! an outage that never landed, on the grounds that `durable` held 100% of its
+//! baseline, which is exactly what the routing in
+//! `NamespaceRoutedKeyValueStorage` says should happen.
+//!
+//! Parameterising the old rule with a list of streams to exempt would have
+//! silenced that message and left the deeper gap. Under a partial cut the
+//! streams that keep working carry as much information as the ones that stop:
+//! had `durable` gone quiet under S18, the status blob would not be off the
+//! commit path the way `AgentStatusFlusher` describes, and a rule that only
+//! looks for silence would have called that its cleanest possible pass. So the
+//! partial expectation asserts both halves and the whole-workload one keeps
+//! asserting the single half that is all it can know.
 //!
 //! Recovery time is recorded against the configured budget and never asserted
 //! on, like every other budget in the suite. How long a connection pool may
 //! take to notice its database is back is a judgement, and the number is in the
 //! result either way.
 
+use crate::chaos::OutageExpectation;
 use crate::chaos::errors::ErrorClass;
 use crate::chaos::history::{OperationRecord, Outcome, Stream};
 use crate::chaos::split::{
@@ -93,6 +129,17 @@ pub enum OutageViolation {
     /// executors could still reach the database, and every other number in this
     /// report describes an undisturbed cluster.
     OutageNotObserved,
+    /// A stream a partial cut was *not* supposed to touch stopped serving
+    /// anyway.
+    ///
+    /// The counterpart to [`Self::OutageNotObserved`], and the reason the
+    /// storage scenarios stopped sharing one rule. A partial cut is a claim
+    /// about routing: these namespaces go to the store being cut and those go
+    /// elsewhere. If a stream on the far side stalls, the routing is not what
+    /// the source says it is, and the older rule — which asked only whether
+    /// everything went quiet — would have called that its cleanest possible
+    /// pass.
+    UnexpectedStall,
     /// A stream that was confirming operations before the outage confirmed
     /// nothing at all after the heal.
     StreamNeverRecovered,
@@ -102,6 +149,7 @@ impl OutageViolation {
     pub fn as_str(self) -> &'static str {
         match self {
             OutageViolation::OutageNotObserved => "outage-not-observed",
+            OutageViolation::UnexpectedStall => "unexpected-stall",
             OutageViolation::StreamNeverRecovered => "stream-never-recovered",
         }
     }
@@ -236,10 +284,11 @@ pub struct StorageOutageReport {
     /// recorded so an archived result says which storage the run was about
     /// rather than leaving it to the scenario name.
     pub endpoint: String,
-    /// The thresholds from the suite YAML, recorded so an archived cell can be
-    /// read years later against the numbers it was judged by rather than
-    /// against today's config.
-    pub outage_quiet_floor_percent: f64,
+    /// The rule from the suite YAML, recorded whole so an archived cell can be
+    /// read years later against what it was judged by rather than against
+    /// today's config — including *which* rule, since the storage scenarios no
+    /// longer share one.
+    pub expect: OutageExpectation,
     pub recovery_budget_ms: u64,
     /// The whole workload's during-fault rate as a share of its own baseline.
     /// `None` for a run that never learned when the fault was.
@@ -249,10 +298,26 @@ pub struct StorageOutageReport {
     /// behaves identically. See `outage_quiet_floor_percent`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share_of_baseline_percent: Option<f64>,
-    /// The least any one stream stayed silent during the fault, as a share of
-    /// that window. This is what the verdict is drawn from.
+    /// The least any stream *expected to stop* stayed silent during the fault,
+    /// as a share of that window. This is what the quiet half of the verdict is
+    /// drawn from.
+    ///
+    /// Under `WholeWorkload` that is every stream, so this is the run-wide
+    /// minimum and means what it always did. Under `PartialWorkload` it covers
+    /// only the named streams, because the others are expected to keep
+    /// answering and their quiet time says nothing about whether the cut
+    /// landed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quietest_stream_percent: Option<f64>,
+    /// The least of its own baseline any stream *expected to keep serving* held
+    /// during the fault. `None` under `WholeWorkload`, which expects none to.
+    ///
+    /// The other half of a partial cut's verdict, and the half no shared rule
+    /// could state: a partial cut claims the streams it does not touch carry on,
+    /// and that claim comes from where the code routes each namespace rather
+    /// than from an assumption about faults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub least_serving_stream_percent: Option<f64>,
     pub cells: Vec<StreamThroughputCell>,
     /// What the outage began underneath, per stream. Empty for a run that never
     /// learned when the fault was.
@@ -293,7 +358,7 @@ impl StorageOutageReport {
         records: &[OperationRecord],
         fault: Option<FaultWindow>,
         endpoint: &str,
-        outage_quiet_floor_percent: f64,
+        expect: OutageExpectation,
         recovery_budget: Duration,
     ) -> Self {
         let mut tallies: BTreeMap<(Stream, Window), Tally> = BTreeMap::new();
@@ -396,10 +461,11 @@ impl StorageOutageReport {
 
         let mut report = Self {
             endpoint: endpoint.to_string(),
-            outage_quiet_floor_percent,
+            expect,
             recovery_budget_ms: recovery_budget.as_millis().min(u64::MAX as u128) as u64,
             share_of_baseline_percent: None,
             quietest_stream_percent: None,
+            least_serving_stream_percent: None,
             cells,
             caught_in_flight: caught_in_flight(records, fault),
             recovery: Vec::new(),
@@ -469,33 +535,92 @@ impl StorageOutageReport {
             .map(|c| c.stream)
             .collect();
 
-        let mut quiet: Vec<(Stream, f64)> = self
+        // Split by what this scenario claims the cut does, not by what a cut
+        // does in general. The two sets are judged by opposite tests, and a
+        // stream in neither — one that never served before the fault — is
+        // judged by neither, because it has no baseline to be read against.
+        let during: Vec<&StreamThroughputCell> = self
             .cells
             .iter()
             .filter(|c| c.window == Window::DuringFault && c.window_secs > 0.0)
             .filter(|c| served_before.contains(&c.stream))
-            .filter_map(|c| {
-                c.quiet_ms
-                    .map(|ms| (c.stream, round2(ms as f64 / (c.window_secs * 10.0))))
+            .collect();
+
+        // Driven from `served_before` for the same reason as the serving list
+        // below: a stream that answered nothing at all leaves no during-fault
+        // cell, and that is total silence rather than missing data. Scoring the
+        // two sides of one fact differently — absence as 0% served but as
+        // "unknown" quiet — would let the same run read as a stall on one check
+        // and as no evidence on the other.
+        let mut quiet: Vec<(Stream, f64)> = served_before
+            .iter()
+            .copied()
+            .filter(|stream| self.expect.expects_silence(*stream))
+            .filter_map(|stream| match during.iter().find(|c| c.stream == stream) {
+                Some(cell) => cell
+                    .quiet_ms
+                    .map(|ms| (stream, round2(ms as f64 / (cell.window_secs * 10.0)))),
+                None => Some((stream, 100.0)),
             })
             .collect();
         quiet.sort_by(|a, b| a.1.total_cmp(&b.1));
 
-        let Some(&(stream, quietest)) = quiet.first() else {
+        if let Some(&(stream, quietest)) = quiet.first() {
+            self.quietest_stream_percent = Some(quietest);
+            let floor = self.expect.quiet_floor_percent();
+            if quietest < floor {
+                self.findings.push(OutageFinding {
+                    violation: OutageViolation::OutageNotObserved,
+                    stream: Some(stream),
+                    detail: format!(
+                        "{stream} was expected to stop while {} was unreachable and kept \
+                         answering instead, silent for only {quietest}% of the fault window \
+                         against a {floor}% floor — so this run has no evidence the cut landed",
+                        self.endpoint
+                    ),
+                });
+            }
+        }
+
+        let Some(serving_floor) = self.expect.serving_floor_percent() else {
             return;
         };
-        self.quietest_stream_percent = Some(quietest);
-        if quietest < self.outage_quiet_floor_percent {
-            self.findings.push(OutageFinding {
-                violation: OutageViolation::OutageNotObserved,
-                stream: Some(stream),
-                detail: format!(
-                    "{stream} kept answering through the fault window, silent for only \
-                     {quietest}% of it against a {}% floor, while {} was supposed to be \
-                     unreachable; the executors could still reach it",
-                    self.outage_quiet_floor_percent, self.endpoint
-                ),
-            });
+        // Driven from the streams that served *before* the cut rather than from
+        // the during-fault cells, because the worst case leaves no such cell at
+        // all: a stream whose operations all stall produces nothing to tally,
+        // and reading the cells alone would let total silence escape the one
+        // check that exists to catch it. Absence is the strongest evidence
+        // here, so it is scored as zero rather than skipped.
+        let mut serving: Vec<(Stream, f64)> = served_before
+            .iter()
+            .copied()
+            .filter(|stream| !self.expect.expects_silence(*stream))
+            .map(|stream| {
+                let share = during
+                    .iter()
+                    .find(|c| c.stream == stream)
+                    .and_then(|c| c.share_of_baseline_percent)
+                    .unwrap_or(0.0);
+                (stream, share)
+            })
+            .collect();
+        serving.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+        if let Some(&(stream, least)) = serving.first() {
+            self.least_serving_stream_percent = Some(least);
+            if least < serving_floor {
+                self.findings.push(OutageFinding {
+                    violation: OutageViolation::UnexpectedStall,
+                    stream: Some(stream),
+                    detail: format!(
+                        "{stream} does not depend on {} and was expected to carry on through \
+                         the cut, but held only {least}% of its own baseline against a \
+                         {serving_floor}% floor — the storage this stream actually reaches is \
+                         not what the routing says it is",
+                        self.endpoint
+                    ),
+                });
+            }
         }
     }
 
@@ -587,17 +712,30 @@ impl StorageOutageReport {
     pub fn note_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
         if let Some(share) = self.share_of_baseline_percent {
+            // Says which streams the numbers are about, because under a partial
+            // cut they are about a subset and a reader who assumes otherwise
+            // draws the opposite conclusion from the same figure.
             let quiet = match self.quietest_stream_percent {
                 Some(q) => format!(
-                    "the least quiet stream answered nothing for {q}% of the fault window \
-                     (floor {}%)",
-                    self.outage_quiet_floor_percent
+                    "the streams expected to stop were silent for at least {q}% of the fault \
+                     window (floor {}%)",
+                    self.expect.quiet_floor_percent()
                 ),
                 None => "no stream had a before-fault baseline to be judged against".to_string(),
             };
+            let serving = match (
+                self.least_serving_stream_percent,
+                self.expect.serving_floor_percent(),
+            ) {
+                (Some(least), Some(floor)) => format!(
+                    ", the streams expected to carry on held at least {least}% of their own \
+                     baseline (floor {floor}%)"
+                ),
+                _ => String::new(),
+            };
             lines.push(format!(
-                "Storage outage: {quiet} while {} was unreachable, and the workload held {share}% \
-                 of its baseline throughput across that window",
+                "Storage outage: {quiet}{serving} while {} was unreachable, and the workload held \
+                 {share}% of its baseline throughput across that window",
                 self.endpoint
             ));
         } else {
@@ -834,12 +972,90 @@ mod tests {
         records
     }
 
+    const SERVING_FLOOR: f64 = 50.0;
+
+    /// A workload shaped like S18's: `durable` on the far side of the cut and
+    /// `ephemeral` behind it. `durable_during` and `ephemeral_during` say how
+    /// many confirmations each managed while the storage was gone, so one
+    /// helper covers "behaved as designed", "the wrong stream stalled" and
+    /// "nothing stopped at all".
+    fn partial_history(durable_during: usize, ephemeral_during: usize) -> Vec<OperationRecord> {
+        let mut records = Vec::new();
+        for second in 1..=300 {
+            records.push(op(Stream::Durable, -second, Outcome::Confirmed));
+            records.push(op(Stream::Ephemeral, -second, Outcome::Confirmed));
+        }
+        for i in 0..durable_during {
+            records.push(op(Stream::Durable, i as i64, Outcome::Confirmed));
+        }
+        for i in 0..ephemeral_during {
+            records.push(op(Stream::Ephemeral, i as i64, Outcome::Confirmed));
+        }
+        for second in 181..=420 {
+            records.push(op(Stream::Durable, second, Outcome::Confirmed));
+            records.push(op(Stream::Ephemeral, second, Outcome::Confirmed));
+        }
+        records
+    }
+
+    /// The same shape as [`partial_history`], but with the operations that did
+    /// not confirm still *recorded* as stalled attempts.
+    ///
+    /// This is what a real run looks like: the workload keeps submitting into a
+    /// stall, so the stream has a during-fault cell showing what it offered and
+    /// nothing served. S18's first run recorded 321 such ephemeral operations.
+    /// [`partial_history`] covers the other shape, where a stream produced no
+    /// during-fault record at all, and the two must reach the same verdict.
+    fn partial_history_with_stalls(
+        durable_confirmed: usize,
+        ephemeral_confirmed: usize,
+    ) -> Vec<OperationRecord> {
+        let mut records = Vec::new();
+        for second in 1..=300 {
+            records.push(op(Stream::Durable, -second, Outcome::Confirmed));
+            records.push(op(Stream::Ephemeral, -second, Outcome::Confirmed));
+        }
+        for (stream, confirmed) in [
+            (Stream::Durable, durable_confirmed),
+            (Stream::Ephemeral, ephemeral_confirmed),
+        ] {
+            for i in 0..180 {
+                if i < confirmed {
+                    records.push(op(stream, i as i64, Outcome::Confirmed));
+                } else {
+                    records.push(stalled(stream, i as i64));
+                }
+            }
+        }
+        for second in 181..=420 {
+            records.push(op(Stream::Durable, second, Outcome::Confirmed));
+            records.push(op(Stream::Ephemeral, second, Outcome::Confirmed));
+        }
+        records
+    }
+
+    fn build_partial(records: &[OperationRecord]) -> StorageOutageReport {
+        StorageOutageReport::build(
+            records,
+            Some(fault()),
+            ENDPOINT,
+            OutageExpectation::PartialWorkload {
+                silenced: vec![Stream::Ephemeral],
+                quiet_floor_percent: QUIET_FLOOR,
+                serving_floor_percent: SERVING_FLOOR,
+            },
+            Duration::from_secs(120),
+        )
+    }
+
     fn build(records: &[OperationRecord]) -> StorageOutageReport {
         StorageOutageReport::build(
             records,
             Some(fault()),
             ENDPOINT,
-            QUIET_FLOOR,
+            OutageExpectation::WholeWorkload {
+                quiet_floor_percent: QUIET_FLOOR,
+            },
             Duration::from_secs(120),
         )
     }
@@ -885,6 +1101,124 @@ mod tests {
             report.quietest_stream_percent.unwrap() < QUIET_FLOOR,
             "a stream answering every second is never quiet for long, got {:?}",
             report.quietest_stream_percent
+        );
+    }
+
+    /// The regression S18's first run produced, expressed as a test.
+    ///
+    /// Under a partial cut one stream stops and the others carry on by design.
+    /// The whole-workload rule reads that as a fault that never landed, because
+    /// the only question it can ask is whether *everything* went quiet. Run
+    /// 33130077355 hit exactly this: `durable` held 100% of its baseline while
+    /// the Redis partition had plainly landed on `ephemeral`.
+    #[test]
+    fn a_partial_cut_is_not_judged_by_the_streams_it_was_never_going_to_stop() {
+        let records = partial_history(180, 0);
+
+        let shared = build(&records);
+        assert!(
+            shared
+                .findings
+                .iter()
+                .any(|f| f.violation == OutageViolation::OutageNotObserved),
+            "the whole-workload rule is expected to misjudge this, or the test guards nothing"
+        );
+
+        let report = build_partial(&records);
+        assert!(
+            report.findings.is_empty(),
+            "one stream stopping and the rest carrying on is the expected outcome here, got {:?}",
+            report.findings
+        );
+    }
+
+    /// The half no shared rule could state.
+    ///
+    /// A partial cut claims the streams it does not touch keep working, and
+    /// that claim comes from where the code routes each namespace rather than
+    /// from an assumption about faults. A stall on the far side means the
+    /// routing is not what the source says, and the older rule would have
+    /// called it the cleanest possible pass: everything went quiet.
+    #[test]
+    fn a_stream_the_cut_should_not_have_touched_stalling_is_a_finding() {
+        let report = build_partial(&partial_history(0, 0));
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.violation == OutageViolation::UnexpectedStall),
+            "durable does not depend on this endpoint and stopped anyway, got {:?}",
+            report.findings
+        );
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.violation == OutageViolation::OutageNotObserved),
+            "ephemeral did stop, so the cut was observed; got {:?}",
+            report.findings
+        );
+    }
+
+    /// The named stream refusing to stop still fails, which is the check the
+    /// partial rule inherits rather than replaces.
+    #[test]
+    fn a_partial_cut_whose_named_stream_kept_serving_is_still_not_observed() {
+        let report = build_partial(&partial_history(180, 180));
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.violation == OutageViolation::OutageNotObserved
+                    && f.stream == Some(Stream::Ephemeral)),
+            "ephemeral was the stream expected to stop, got {:?}",
+            report.findings
+        );
+    }
+
+    /// Both numbers are reported, and each covers only the streams its own rule
+    /// judges. Reading the quiet figure as run-wide is how the first S18 report
+    /// told its reader to draw the wrong conclusion.
+    #[test]
+    fn each_reported_share_covers_only_the_streams_its_rule_judges() {
+        let report = build_partial(&partial_history(180, 0));
+
+        assert!(
+            report.quietest_stream_percent.unwrap() > QUIET_FLOOR,
+            "the quiet figure must describe ephemeral, which stopped, not durable, got {:?}",
+            report.quietest_stream_percent
+        );
+        assert!(
+            report.least_serving_stream_percent.unwrap() > SERVING_FLOOR,
+            "the serving figure must describe durable, which carried on, got {:?}",
+            report.least_serving_stream_percent
+        );
+    }
+
+    /// The same two verdicts against the shape a real run produces, where the
+    /// stalled operations are recorded rather than absent. A stream that
+    /// offered work and served none of it must read the same as one that
+    /// offered nothing at all.
+    #[test]
+    fn a_recorded_stall_reads_the_same_as_a_stream_that_went_missing() {
+        let as_designed = build_partial(&partial_history_with_stalls(180, 0));
+        assert!(
+            as_designed.findings.is_empty(),
+            "ephemeral stalling and durable carrying on is the expected outcome, got {:?}",
+            as_designed.findings
+        );
+
+        let wrong_stream = build_partial(&partial_history_with_stalls(0, 0));
+        assert!(
+            wrong_stream
+                .findings
+                .iter()
+                .any(|f| f.violation == OutageViolation::UnexpectedStall
+                    && f.stream == Some(Stream::Durable)),
+            "durable served nothing while off the fault path, got {:?}",
+            wrong_stream.findings
         );
     }
 
@@ -968,7 +1302,9 @@ mod tests {
                 recovered_at: Some(t0() + TimeDelta::seconds(fault_secs)),
             }),
             ENDPOINT,
-            QUIET_FLOOR,
+            OutageExpectation::WholeWorkload {
+                quiet_floor_percent: QUIET_FLOOR,
+            },
             Duration::from_secs(120),
         )
     }
@@ -1085,7 +1421,9 @@ mod tests {
             &history(180, true),
             None,
             ENDPOINT,
-            QUIET_FLOOR,
+            OutageExpectation::WholeWorkload {
+                quiet_floor_percent: QUIET_FLOOR,
+            },
             Duration::from_secs(120),
         );
 

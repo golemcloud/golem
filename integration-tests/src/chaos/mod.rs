@@ -59,6 +59,7 @@ pub mod waiters;
 pub mod wakeups;
 pub mod workload;
 
+use crate::chaos::history::Stream;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -687,37 +688,128 @@ pub struct StorageConfig {
     /// hostname. Chaos Mesh resolves it in the controller, so this is the same
     /// string that appears in the NetworkChaos manifest's `externalTargets`.
     pub endpoint: String,
-    /// The least of the fault window every stream must answer nothing at all
-    /// for, as a percentage of that window, for the outage to count as
-    /// observed.
+    /// What this scenario expects its cut to do to the workload, and therefore
+    /// what the run treats as evidence the cut landed.
     ///
-    /// A run below this line did not take the storage away, whatever the fault
-    /// status said, and every other number in the report then describes an
-    /// undisturbed cluster. That is reported as inconclusive rather than clean:
-    /// a healthy-looking result from a fault that never landed is the worst
-    /// artifact this suite can produce.
-    ///
-    /// This used to be a ceiling on during-fault throughput as a share of
-    /// baseline, and that number is still recorded. It stopped being the
-    /// verdict because it is a rate averaged over the whole window while all
-    /// the serving in an absorbed outage happens in the seconds at its edges,
-    /// so the same handful of edge confirmations reads as 8% of a 180s window
-    /// and 26% of a 60s one. The threshold then tracks the window length rather
-    /// than the platform, and shortening S16's window to 60s duly tripped it on
-    /// a partition that had plainly landed.
-    ///
-    /// Quiet time has no such coupling: it is measured against the window's own
-    /// edges, so it means the same thing whatever the window is. Every stream
-    /// is judged rather than the aggregate, because a stream still answering is
-    /// a fault that did not land on it and must not be outvoted by quieter
-    /// ones.
-    pub outage_quiet_floor_percent: f64,
+    /// Deliberately per-scenario rather than one shared rule. The *account* the
+    /// driver produces is shared because it is factual: throughput per stream
+    /// per window, quiet time, latency, what was caught in flight. The
+    /// *verdict* is not, because what a cut is supposed to do depends on what
+    /// it cut, and a rule that reads correctly for one arrangement can be
+    /// confidently wrong about another. See [`OutageExpectation`].
+    pub expect: OutageExpectation,
     /// What serving again may cost once the storage is reachable, and the
     /// number each stream's recovery gap is reported against. Recorded rather
     /// than asserted, like every other budget in the suite: how long a
     /// connection pool may take to notice its database came back is a
     /// judgement, and the number is in the result either way.
     pub recovery_budget_secs: u64,
+}
+
+/// What a storage cut is expected to do to the workload.
+///
+/// The two variants exist because the storage scenarios cut two different
+/// *kinds* of thing, not two instances of one thing. S16, S22 and S14 each take
+/// away a database every stream depends on, so "did anything keep serving" is a
+/// sound test of whether the fault landed. S18 takes away a cache only part of
+/// the workload touches, and under that arrangement the same rule is not merely
+/// too strict — it is backwards. It reported S18's first run as an outage that
+/// never happened while the partition had plainly landed, because `durable`
+/// held 100% of its baseline throughout, exactly as the design says it should.
+///
+/// Parameterising the old rule with a stream list would have fixed that one
+/// message and left the deeper problem: for a partial cut, the streams that
+/// *keep working* carry as much information as the ones that stop. If `durable`
+/// had gone quiet under S18, the status blob would not be off the commit path
+/// the way `AgentStatusFlusher` claims, and the shared rule would have called
+/// that a clean pass. So the partial variant asserts both halves.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum OutageExpectation {
+    /// Everything is behind the cut, so every stream that was serving before it
+    /// must fall silent. S16, S22 and S14.
+    WholeWorkload {
+        /// The least of the fault window each stream must answer nothing at all
+        /// for, as a percentage of that window.
+        ///
+        /// This used to be a ceiling on during-fault throughput as a share of
+        /// baseline, and that number is still recorded. It stopped being the
+        /// verdict because it is a rate averaged over the whole window while
+        /// all the serving in an absorbed outage happens in the seconds at its
+        /// edges, so the same handful of edge confirmations reads as 8% of a
+        /// 180s window and 26% of a 60s one. The threshold then tracks the
+        /// window length rather than the platform, and shortening S16's window
+        /// to 60s duly tripped it on a partition that had plainly landed.
+        ///
+        /// Quiet time has no such coupling: it is measured against the window's
+        /// own edges, so it means the same thing whatever the window is.
+        quiet_floor_percent: f64,
+    },
+    /// Only part of the workload is behind the cut. The named streams must fall
+    /// silent and every other stream that was serving before it must keep
+    /// serving. S18.
+    PartialWorkload {
+        /// The streams this cut is expected to stop. Their silence is the
+        /// evidence the fault landed, so naming a stream the workload never
+        /// drives would leave the run with no such evidence and no complaint —
+        /// which `require_storage` refuses at load time rather than discovering
+        /// during a maintenance window.
+        silenced: Vec<Stream>,
+        /// As [`Self::WholeWorkload::quiet_floor_percent`], but applied only to
+        /// the streams named above.
+        quiet_floor_percent: f64,
+        /// The least of its own baseline rate an *unnamed* stream must still
+        /// hold during the cut.
+        ///
+        /// This is the half a shared rule cannot express. A partial cut makes a
+        /// claim about the streams it does not touch, and that claim is worth
+        /// asserting: it is derived from where the code routes each namespace,
+        /// so a stream stalling here says the routing is not what the source
+        /// says it is.
+        serving_floor_percent: f64,
+    },
+}
+
+impl OutageExpectation {
+    /// The quiet floor, which both variants carry and apply to a different set.
+    pub fn quiet_floor_percent(&self) -> f64 {
+        match self {
+            OutageExpectation::WholeWorkload {
+                quiet_floor_percent,
+            }
+            | OutageExpectation::PartialWorkload {
+                quiet_floor_percent,
+                ..
+            } => *quiet_floor_percent,
+        }
+    }
+
+    /// Whether this stream is one whose silence would prove the cut landed.
+    ///
+    /// `WholeWorkload` says yes to everything, which is what makes it the
+    /// stricter rule rather than merely a different one.
+    pub fn expects_silence(&self, stream: Stream) -> bool {
+        match self {
+            OutageExpectation::WholeWorkload { .. } => true,
+            OutageExpectation::PartialWorkload { silenced, .. } => silenced.contains(&stream),
+        }
+    }
+
+    /// The floor an unnamed stream's during-fault throughput must clear, or
+    /// `None` where the expectation makes no claim about streams still serving.
+    pub fn serving_floor_percent(&self) -> Option<f64> {
+        match self {
+            OutageExpectation::WholeWorkload { .. } => None,
+            OutageExpectation::PartialWorkload {
+                serving_floor_percent,
+                ..
+            } => Some(*serving_floor_percent),
+        }
+    }
 }
 
 impl StorageConfig {
@@ -967,6 +1059,29 @@ impl ScenarioConfig {
     }
 
     /// The storage-outage block. See [`Self::require_workload`].
+    /// Whether this scenario's configuration actually produces operations on a
+    /// stream.
+    ///
+    /// Counts the blocks that drive traffic rather than the streams a run
+    /// happens to record, so it can be answered from the YAML alone before any
+    /// cluster time is spent. `Scheduled` has two possible sources and either
+    /// one counts; the streams that belong to other scenario shapes are not
+    /// reachable from a `storage` scenario's config at all.
+    fn drives_stream(&self, stream: Stream) -> bool {
+        let workload = self.workload.as_ref();
+        match stream {
+            Stream::Durable => workload.is_some_and(|w| w.durable_agents > 0),
+            Stream::Ephemeral => workload.is_some_and(|w| w.ephemeral_agents > 0),
+            Stream::Promise => workload.is_some_and(|w| w.promise_agents > 0),
+            Stream::Quota => workload.is_some_and(|w| w.quota_agents > 0),
+            Stream::Scheduled => {
+                workload.is_some_and(|w| w.scheduled_agents > 0)
+                    || self.scheduled.as_ref().is_some_and(|s| s.targets > 0)
+            }
+            Stream::PinnedHttp | Stream::PromiseWait | Stream::Delete | Stream::Revert => false,
+        }
+    }
+
     pub fn require_storage(&self) -> anyhow::Result<&StorageConfig> {
         let config = self.storage.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
@@ -981,15 +1096,46 @@ impl ScenarioConfig {
         // that exists to catch a fault which never landed would be stuck on. A
         // floor of zero is the opposite failure: every run passes, including
         // the ones where nothing was ever cut off.
-        if !(0.0..100.0).contains(&config.outage_quiet_floor_percent)
-            || config.outage_quiet_floor_percent <= 0.0
+        let quiet_floor = config.expect.quiet_floor_percent();
+        if !(0.0..100.0).contains(&quiet_floor) || quiet_floor <= 0.0 {
+            anyhow::bail!(
+                "chaos scenario {}: expect.quietFloorPercent is {quiet_floor}, which is not a \
+                 share of the fault window a real outage could be judged by",
+                self.code
+            );
+        }
+        if let Some(serving_floor) = config.expect.serving_floor_percent()
+            && (!(0.0..=100.0).contains(&serving_floor) || serving_floor <= 0.0)
         {
             anyhow::bail!(
-                "chaos scenario {}: outageQuietFloorPercent is {}, which is not a share of the \
-                 fault window a real outage could be judged by",
-                self.code,
-                config.outage_quiet_floor_percent
+                "chaos scenario {}: expect.servingFloorPercent is {serving_floor}, which is not a \
+                 share of a stream's own baseline it could be held to",
+                self.code
             );
+        }
+        // A partial cut proves it landed by naming the streams it stops, so a
+        // name the workload never drives leaves the run with no evidence and no
+        // complaint — the exact failure the quiet floor exists to prevent,
+        // reintroduced one level up. Refused here rather than at judge time so
+        // it costs a build rather than a maintenance window.
+        if let OutageExpectation::PartialWorkload { silenced, .. } = &config.expect {
+            if silenced.is_empty() {
+                anyhow::bail!(
+                    "chaos scenario {}: expect.silenced is empty, so nothing in the run would \
+                     show whether the cut landed at all",
+                    self.code
+                );
+            }
+            for stream in silenced {
+                if !self.drives_stream(*stream) {
+                    anyhow::bail!(
+                        "chaos scenario {}: expect.silenced names `{stream}`, which this \
+                         scenario's workload never drives, so its silence during the fault \
+                         would prove nothing",
+                        self.code
+                    );
+                }
+            }
         }
         if config.endpoint.trim().is_empty() {
             anyhow::bail!(
@@ -1312,7 +1458,9 @@ mod tests {
             rollback: None,
             storage: Some(StorageConfig {
                 endpoint: endpoint.to_string(),
-                outage_quiet_floor_percent: quiet_floor,
+                expect: OutageExpectation::WholeWorkload {
+                    quiet_floor_percent: quiet_floor,
+                },
                 recovery_budget_secs: 120,
             }),
             revert: None,
@@ -1333,7 +1481,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("outageQuietFloorPercent"),
+            error.contains("expect.quietFloorPercent"),
             "the message has to name the knob, got: {error}"
         );
     }
@@ -1501,10 +1649,7 @@ mod tests {
                     entry.require_workload().unwrap();
                     entry.require_rollback().unwrap();
                 }
-                ScenarioCode::S14
-                | ScenarioCode::S16
-                | ScenarioCode::S18
-                | ScenarioCode::S22 => {
+                ScenarioCode::S14 | ScenarioCode::S16 | ScenarioCode::S18 | ScenarioCode::S22 => {
                     entry.require_workload().unwrap();
                     entry.require_scheduled().unwrap();
                     entry.require_storage().unwrap();

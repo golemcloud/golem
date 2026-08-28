@@ -132,18 +132,25 @@
 //! staleness safe rather than merely tolerated.
 //!
 //! What does cross Redis synchronously is a lifecycle boundary — suspend, evict,
-//! reattach — and a `get_agent_mode` miss. So the prediction is a *partial*
-//! degradation: `ephemeral`, whose agents are created and torn down per
-//! operation, and `promise`, whose agents suspend, should go quiet; `durable`
-//! may keep serving from memory throughout.
+//! reattach — and a `get_agent_mode` miss. Run 33130077355 settled which
+//! streams that amounts to: `ephemeral` alone. Its agents are created and torn
+//! down per operation, so every one crosses a boundary, and it was silent for
+//! 99.997% of the window while `durable`, `scheduled` and `promise` held
+//! 99.94–100.06% of their baselines.
 //!
-//! Two consequences for reading the report. `shareOfBaselinePercent` should sit
-//! higher here than in S16 or S14 without that meaning the fault was weaker,
-//! and `quietestStreamPercent` is the number that shows the cut landed, because
-//! it reports the stream that stopped rather than the average of one that did
-//! and one that did not. Whether a durable agent that kept committing against a
-//! frozen status cache still recovers correctly is the second open question of
-//! the run, after the exactly-once one.
+//! `promise` was expected to be the second and is not. The mixed workload's
+//! promise stream is `get_promise+complete` in one round trip against a durable
+//! agent and never suspends; the suspending variant is `promise-wait`, which
+//! S11 drives and these scenarios do not enable.
+//!
+//! That partial shape is why S18 does not share the other three scenarios'
+//! verdict. `shareOfBaselinePercent` sits far higher here — 77.83% against
+//! S14's 22.39% — without the fault being weaker, and the run-wide quiet figure
+//! the other three are judged on reads 0.05%, because `durable` never stopped.
+//! Judged by that rule the run reported a partition that had plainly landed as
+//! one that never happened. See [`crate::chaos::OutageExpectation`] for the
+//! split, and for why the streams that keep working are asserted on rather than
+//! merely exempted.
 //!
 //! ## Why the scheduled stream is driven separately
 //!
@@ -553,17 +560,17 @@ pub async fn run(
         &records,
         fault_window,
         &storage_config.endpoint,
-        storage_config.outage_quiet_floor_percent,
+        storage_config.expect.clone(),
         storage_config.recovery_budget(),
     );
     info!(
-        "{code}: storage account — the least quiet stream answered nothing for {:?}% of the fault \
-         window (floor {}%) while {} was unreachable, holding {:?}% of baseline throughput, {} \
-         findings",
+        "{code}: storage account — the streams expected to stop were silent for at least {:?}% of \
+         the fault window (floor {}%) and the streams expected to carry on held at least {:?}% of \
+         their baseline while {} was unreachable, {} findings",
         outage.quietest_stream_percent,
-        outage.outage_quiet_floor_percent,
+        outage.expect.quiet_floor_percent(),
+        outage.least_serving_stream_percent,
         outage.endpoint,
-        outage.share_of_baseline_percent,
         outage.findings.len()
     );
     for finding in &outage.findings {
@@ -710,6 +717,7 @@ async fn sample_fire_count(code: ScenarioCode, ctx: &WorkloadContext, targets: &
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chaos::OutageExpectation;
     use crate::chaos::history::{AttemptRecord, FireRecord, TargetFireLog};
     use crate::chaos::outage::{OutageFinding, OutageViolation};
     use chrono::{DateTime, TimeDelta};
@@ -861,8 +869,15 @@ mod tests {
     /// experiment.
     #[test]
     fn a_storage_finding_does_not_change_the_termination_reason() {
-        let mut outage =
-            StorageOutageReport::build(&[], None, "db.example", 15.0, Duration::from_secs(120));
+        let mut outage = StorageOutageReport::build(
+            &[],
+            None,
+            "db.example",
+            OutageExpectation::WholeWorkload {
+                quiet_floor_percent: 15.0,
+            },
+            Duration::from_secs(120),
+        );
         outage.findings.push(OutageFinding {
             violation: OutageViolation::OutageNotObserved,
             stream: None,

@@ -992,7 +992,13 @@ scenarios:
       # same thing whatever the window is. 50% is far from both outcomes it has
       # to tell apart: a landed outage is quiet for over 90% of the window, an
       # undisturbed cluster for a few percent.
-      outageQuietFloorPercent: 50
+      expect:
+        # Everything is behind this cut, so every stream that was serving is
+        # expected to stop. See `OutageExpectation` for why the rule is named
+        # per scenario rather than shared: S18 cuts a store only part of the
+        # workload touches, and this rule reads that arrangement backwards.
+        kind: whole-workload
+        quietFloorPercent: 50
       # What serving again may cost once the cluster is reachable. Recorded, not
       # asserted: this is really a measure of how long sqlx's pool takes to
       # notice, plus whatever recovery scan the executors run, and how long that
@@ -1081,9 +1087,12 @@ scenarios:
 
     storage:
       endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
-      # Same floor as S16, and it should be met even more comfortably: an
-      # outage this long leaves the streams silent for nearly the whole window.
-      outageQuietFloorPercent: 50
+      # Same rule and floor as S16, and it should be met even more comfortably:
+      # an outage this long leaves the streams silent for nearly the whole
+      # window.
+      expect:
+        kind: whole-workload
+        quietFloorPercent: 50
       # Recorded, not asserted, as everywhere else — but read differently here.
       # In S16 this measures a connection pool noticing. Here it measures a
       # cluster rebuilding itself, and it is the number that says whether the
@@ -1181,8 +1190,10 @@ scenarios:
       # The indexed writer endpoint, not the key-value one. This is the only
       # field that differs materially from S16.
       endpoint: golem-postgres-dev-indexed.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
-      # Same floor and same reasoning as S16.
-      outageQuietFloorPercent: 50
+      # Same rule, floor and reasoning as S16.
+      expect:
+        kind: whole-workload
+        quietFloorPercent: 50
       # Recorded, not asserted. Expected to be small: nothing is replaced here,
       # so this is a connection pool noticing its database is back plus whatever
       # the stalled commits still have to do.
@@ -1277,13 +1288,35 @@ scenarios:
       # The Redis primary endpoint, not either Aurora writer. Both Postgres
       # clusters stay reachable for the whole run.
       endpoint: master.golem-redis-dev.intsie.use1.cache.amazonaws.com
-      # Same floor as the other three, and it means something slightly
-      # different here. The degradation is expected to be partial: `ephemeral`
-      # and `promise` should stop, `durable` may keep serving from memory
-      # because the status blob was taken off the commit path on purpose. The
-      # floor is checked against the quietest stream, so it still reports
-      # whether the cut landed even when the run-wide share stays high.
-      outageQuietFloorPercent: 50
+      # The one scenario in this family that does not use the whole-workload
+      # rule, because this cut is partial by construction and that rule reads a
+      # partial cut backwards. Run 33130077355 proved it: `durable` held 100%
+      # of its baseline throughout, exactly as NamespaceRoutedKeyValueStorage
+      # says it should, and the shared rule reported the partition as one that
+      # never landed.
+      #
+      # `ephemeral` is the only stream named. Its agents are created and torn
+      # down per operation, so every one of them crosses a lifecycle boundary,
+      # which is one of the few things that still reaches this cache
+      # synchronously. It went silent for 99.997% of that first window.
+      #
+      # `promise` was expected to be the second and was not: the mixed
+      # workload's promise stream is get_promise+complete in one round trip
+      # against a durable agent and never suspends. The suspending variant is
+      # `promise-wait`, which S11 drives and this scenario does not enable.
+      #
+      # The serving floor is the half a shared rule cannot state. Durable,
+      # scheduled and promise are claimed to be off this fault path because of
+      # where the code routes their namespaces, and that claim is worth
+      # asserting: a stall there would mean the status blob is not off the
+      # commit path the way AgentStatusFlusher describes. All three held
+      # 99.94-100.06% on the first run, so 50 catches a real regression without
+      # tripping on noise.
+      expect:
+        kind: partial-workload
+        silenced: [ephemeral]
+        quietFloorPercent: 50
+        servingFloorPercent: 50
       # Recorded, not asserted. Expected to be larger than S14's: nothing is
       # replaced, but three minutes of coalesced status writes and buffered
       # commands all arrive at once when the connection returns.
