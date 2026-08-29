@@ -226,6 +226,39 @@ mod tests {
     }
 
     #[test]
+    fn registry_disk_sentinel_resolves_as_unlimited() {
+        let settings = FilesystemStorageConfig::default();
+        let observed_total_bytes = settings.pressure.target_available_bytes();
+        let filesystems = with_binding_space_observation(
+            FilesystemSpace::Observed {
+                total_bytes: observed_total_bytes,
+                available_bytes: observed_total_bytes,
+                total_filesystem_objects: u64::MAX,
+                available_filesystem_objects: u64::MAX,
+            },
+            || AgentFilesystems::new(&settings),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            filesystems
+                .resolved_limits(AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE - 1)
+                .unwrap(),
+            ResolvedStorageLimits::Finite(_)
+        ));
+        assert_eq!(
+            filesystems
+                .resolved_limits(AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE)
+                .unwrap(),
+            ResolvedStorageLimits::Unlimited
+        );
+        assert_eq!(
+            filesystems.resolved_limits(u64::MAX).unwrap(),
+            ResolvedStorageLimits::Unlimited
+        );
+    }
+
+    #[test]
     fn agent_filesystems_binding_rejects_pressure_target_above_observed_capacity() {
         let settings = FilesystemStorageConfig::default();
         let observed_total_bytes = settings.pressure.target_available_bytes() - 1;

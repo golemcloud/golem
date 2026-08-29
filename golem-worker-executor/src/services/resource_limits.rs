@@ -307,8 +307,8 @@ impl AtomicResourceEntry {
     /// Same 10^18 value — fits in i64 (TOML max), safe for SQLite REAL,
     /// consistent with other unlimited sentinels in this codebase.
     pub const UNLIMITED_OPLOG_WRITES_PER_SECOND: u64 = 1_000_000_000_000_000_000;
-    // XFS supports block sizes up to 64 KiB, so this remains exactly representable.
-    pub(crate) const EFFECTIVELY_UNLIMITED_DISK_SPACE: u64 = u64::MAX - u16::MAX as u64;
+    // This matches the existing registry plan sentinel and fits every supported database backend.
+    pub(crate) const EFFECTIVELY_UNLIMITED_DISK_SPACE: u64 = 10_000_000_000_000_000;
 
     pub fn new(
         fuel: u64,

@@ -610,6 +610,44 @@ async fn storage_timeout_does_not_pause_memory_or_fault_the_window() {
 
 #[test]
 #[timeout("5s")]
+async fn unsupported_filesystem_disables_only_storage_metering() {
+    let now = Instant::now();
+    let clock = TestClock::new(now);
+    let reader = ScriptedUsageReader::new(vec![ObservationGate::ready(Ok(
+        FilesystemUsage::Unsupported,
+    ))]);
+    let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 1));
+    let (meter, _) = meter(reader.clone(), clock.clone(), &entry, GIB);
+    let (_, _, permit) = permit(&entry).await;
+    let window = open_window(&meter, permit).await.unwrap();
+    wait_for_calls(&reader, 1).await;
+    wait_for_observations_to_finish(&reader).await;
+    wait_for_observation_state(&window).await;
+
+    assert!(
+        window
+            .shared
+            .as_ref()
+            .unwrap()
+            .state
+            .lock()
+            .unwrap()
+            .storage
+            .is_none()
+    );
+    clock.set(Duration::from_secs(2)).await;
+    meter.flush(clock.now());
+
+    assert_eq!(reader.calls.load(Ordering::Acquire), 1);
+    assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 2);
+    assert_eq!(entry.durable_byte_seconds_delta(), 0);
+    close_window(window, now + Duration::from_secs(3))
+        .await
+        .unwrap();
+}
+
+#[test]
+#[timeout("5s")]
 async fn account_batch_flushes_active_memory_and_storage_without_close_duplication() {
     let now = Instant::now();
     let clock = TestClock::new(now);
@@ -813,6 +851,27 @@ async fn closed_window_queued_baseline_is_discarded_before_observer_call() {
         .unwrap();
 
     assert_eq!(reader.calls.load(Ordering::Acquire), 3);
+}
+
+#[test]
+#[timeout("5s")]
+async fn close_settles_if_the_final_observer_loses_its_meter() {
+    let now = Instant::now();
+    let clock = TestClock::new(now);
+    let baseline = ObservationGate::pending(authoritative(100));
+    let reader = ScriptedUsageReader::new(vec![Arc::clone(&baseline)]);
+    let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 1));
+    let (meter, _) = meter(reader.clone(), clock, &entry, 0);
+    let (_, _, permit) = permit(&entry).await;
+    let window = open_window(&meter, permit).await.unwrap();
+    baseline.wait_started().await;
+
+    let close = tokio::spawn(close_window(window, now + Duration::from_secs(1)));
+    drop(meter);
+    baseline.release();
+
+    close.await.unwrap().unwrap();
+    assert_eq!(reader.calls.load(Ordering::Acquire), 1);
 }
 
 #[test]

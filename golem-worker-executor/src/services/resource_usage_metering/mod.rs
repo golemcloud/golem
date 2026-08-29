@@ -846,9 +846,18 @@ impl WindowShared {
                     .accept(allocated_bytes, accepted_at);
                 true
             }
-            Ok(FilesystemUsage::Unsupported) | Err(_)
+            Ok(FilesystemUsage::Unsupported)
                 if may_accept || state.status == WindowStatus::Closing =>
             {
+                state
+                    .storage
+                    .as_mut()
+                    .expect("filesystem storage state is missing")
+                    .suspend_from(observation.started_at);
+                state.storage = None;
+                false
+            }
+            Err(_) if may_accept || state.status == WindowStatus::Closing => {
                 state
                     .storage
                     .as_mut()
@@ -906,29 +915,40 @@ impl WindowShared {
             let timeout_at =
                 (observation.active.started_at + FILESYSTEM_OBSERVATION_TIMEOUT).min(deadline);
             let result = tokio::select! {
-                result = &mut observation.receiver => Some(result.ok()),
-                () = self.clock.sleep_until(timeout_at) => None,
+                result = &mut observation.receiver => match result {
+                    Ok(result) => FinalAttempt::Completed(result),
+                    Err(_) => FinalAttempt::ObserverLost,
+                },
+                () = self.clock.sleep_until(timeout_at) => FinalAttempt::TimedOut,
             };
-            match result.flatten() {
-                Some(result) => {
+            match result {
+                FinalAttempt::Completed(result) => {
                     let accepted =
                         self.finish_observation(observation.active, result, self.clock.now(), true);
                     if accepted {
                         return;
                     }
                 }
-                None => {
+                FinalAttempt::ObserverLost => {
+                    self.suspend_observation(observation.active);
+                    self.detach_late_observation(observation);
+                    return;
+                }
+                FinalAttempt::TimedOut => {
                     self.suspend_observation(observation.active);
                     if timeout_at >= deadline {
                         self.detach_late_observation(observation);
                         return;
                     }
                     let late = tokio::select! {
-                        result = &mut observation.receiver => Some(result.ok()),
-                        () = self.clock.sleep_until(deadline) => None,
+                        result = &mut observation.receiver => match result {
+                            Ok(result) => FinalAttempt::Completed(result),
+                            Err(_) => FinalAttempt::ObserverLost,
+                        },
+                        () = self.clock.sleep_until(deadline) => FinalAttempt::TimedOut,
                     };
-                    match late.flatten() {
-                        Some(result) => {
+                    match late {
+                        FinalAttempt::Completed(result) => {
                             let accepted = self.finish_observation(
                                 observation.active,
                                 result,
@@ -939,7 +959,7 @@ impl WindowShared {
                                 return;
                             }
                         }
-                        None => {
+                        FinalAttempt::ObserverLost | FinalAttempt::TimedOut => {
                             self.detach_late_observation(observation);
                             return;
                         }
@@ -1053,6 +1073,12 @@ struct Observation {
 enum PeriodicAttempt {
     Completed(Result<FilesystemUsage, FilesystemStorageError>),
     TimedOut,
+}
+
+enum FinalAttempt {
+    Completed(Result<FilesystemUsage, FilesystemStorageError>),
+    TimedOut,
+    ObserverLost,
 }
 
 fn next_periodic_deadline(opened_at: Instant, now: Instant) -> Instant {

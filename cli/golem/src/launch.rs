@@ -41,8 +41,8 @@ use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentWebhooksServiceConfig, EnvironmentStateServiceConfig,
     FilesystemStorageConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
     IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
-    KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, SchedulerStorageConfig,
-    WorkerServiceGrpcConfig,
+    KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceUsageMeteringConfig,
+    SchedulerStorageConfig, WorkerServiceGrpcConfig,
 };
 use golem_worker_service::WorkerService;
 use golem_worker_service::config::{
@@ -398,6 +398,10 @@ fn worker_executor_config(
             ..Default::default()
         },
         resource_limits: ResourceLimitsConfig::default(),
+        resource_usage_metering: ResourceUsageMeteringConfig {
+            memory: true,
+            ..Default::default()
+        },
         agent_types_service: AgentTypesServiceConfig::Grpc(
             golem_worker_executor::services::golem_config::AgentTypesServiceGrpcConfig {
                 ..Default::default()
