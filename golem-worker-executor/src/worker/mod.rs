@@ -1258,7 +1258,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if current.is_defined() {
             for (_, entry) in self
                 .oplog
-                .read_many(OplogIndex::INITIAL, current.as_u64())
+                .read_exact(OplogIndex::INITIAL, current.as_u64())
                 .await
             {
                 let OplogEntry::StreamSession { record, .. } = entry else {
@@ -3745,7 +3745,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let entries = self
             .oplog
-            .read_many(OplogIndex::INITIAL, current.as_u64())
+            .read_exact(OplogIndex::INITIAL, current.as_u64())
             .await;
         let mut records = Vec::new();
         for (_, entry) in entries {
@@ -3778,7 +3778,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let entries = self
             .oplog
-            .read_many(OplogIndex::INITIAL, current.as_u64())
+            .read_exact(OplogIndex::INITIAL, current.as_u64())
             .await;
         let mut prepared = None;
         for (_, entry) in entries {
@@ -3861,7 +3861,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let entries = self
             .oplog
-            .read_many(OplogIndex::INITIAL, current.as_u64())
+            .read_exact(OplogIndex::INITIAL, current.as_u64())
             .await;
         let mut prepared = None;
         for (_, entry) in entries {
@@ -3946,7 +3946,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut finished = false;
         for (_, entry) in self
             .oplog
-            .read_many(OplogIndex::INITIAL, current.as_u64())
+            .read_exact(OplogIndex::INITIAL, current.as_u64())
             .await
         {
             let OplogEntry::StreamSession { record, .. } = entry else {
@@ -4014,7 +4014,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut unfinished = HashSet::new();
         for (_, entry) in self
             .oplog
-            .read_many(OplogIndex::INITIAL, current.as_u64())
+            .read_exact(OplogIndex::INITIAL, current.as_u64())
             .await
         {
             let OplogEntry::StreamSession { record, .. } = entry else {
@@ -4170,7 +4170,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut consumer_deleting = false;
         for (oplog_index, entry) in self
             .oplog
-            .read_many(OplogIndex::INITIAL, current.as_u64())
+            .read_exact(OplogIndex::INITIAL, current.as_u64())
             .await
         {
             if let OplogEntry::PendingAgentInvocation {

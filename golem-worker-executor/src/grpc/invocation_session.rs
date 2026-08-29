@@ -134,6 +134,31 @@ async fn detach_durable_attachment(streams: Option<DurableSessionStreams>) {
     }
 }
 
+fn is_attachment_termination(error: &str) -> bool {
+    error.contains("response stream closed") || error.starts_with("StaleEpoch:")
+}
+
+async fn send_attachment_revocation(
+    responses: &mpsc::Sender<InvocationResponse>,
+    revocation: Result<(), String>,
+) {
+    match revocation {
+        Ok(()) => {
+            let _ = responses
+                .send(InvocationResponse {
+                    response: Some(invocation_response::Response::AttachmentRevoked(
+                        golem_api_grpc::proto::golem::worker::AttachmentRevoked {
+                            details: "the durable attachment was fenced by a later epoch"
+                                .to_string(),
+                        },
+                    )),
+                })
+                .await;
+        }
+        Err(error) => send_protocol_failure(responses, error).await,
+    }
+}
+
 enum AcceptanceRace<A, O, R> {
     Accepted {
         acceptance: A,
@@ -856,6 +881,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             .prepared
                             .as_ref()
                             .map(|prepared| prepared.attempt.expected_callee_fingerprint.0.into()),
+                        method_name: start.method_name.clone(),
                     },
                 )),
             })
@@ -884,6 +910,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
 
         if let Some(durable_streams) = &accepted.durable_streams {
+            let attachment_revoked = durable_streams.wait_for_attachment_revocation();
+            tokio::pin!(attachment_revoked);
             if let Some(request) = early_inbound.take() {
                 match request {
                     Ok(Some(request)) => {
@@ -972,7 +1000,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 Ok(None) | Err(_) => {
                                     return;
                                 }
-                            }
+                            },
+                            revocation = &mut attachment_revoked => {
+                                send_attachment_revocation(&responses, revocation).await;
+                                return;
+                            },
                         }
                     }
                 }
@@ -1074,6 +1106,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             Ok(()) => {
                                 output_pump_finished = true;
                             },
+                            Err(error) if is_attachment_termination(&error) => {
+                                return;
+                            }
                             Err(error) => {
                                 if let Err(finish_error) = durable_streams
                                     .fail_protocol(error.clone())
@@ -1116,8 +1151,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             }
                         }
                         Ok(None) | Err(_) => {
+                            output_pump.shutdown().await;
                             return;
                         }
+                    },
+                    revocation = &mut attachment_revoked => {
+                        output_pump.shutdown().await;
+                        send_attachment_revocation(&responses, revocation).await;
+                        return;
                     }
                 }
             }
@@ -1163,7 +1204,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         Ok(None) | Err(_) => {
                             return;
                         }
-                    }
+                    },
+                    revocation = &mut attachment_revoked => {
+                        send_attachment_revocation(&responses, revocation).await;
+                        return;
+                    },
                 }
             }
             let _ = responses
@@ -1478,6 +1523,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 .0
                                 .into(),
                         ),
+                        method_name: Some(
+                            acceptance
+                                .prepared
+                                .attempt
+                                .invocation
+                                .method_name
+                                .clone(),
+                        ),
                     },
                 )),
             })
@@ -1502,6 +1555,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let _ = forwarder.await;
             return;
         }
+        let attachment_revoked = streams.wait_for_attachment_revocation();
+        tokio::pin!(attachment_revoked);
         let cursor_map = resume
             .cursors
             .iter()
@@ -1553,7 +1608,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         }
                     }
                     Ok(None) | Err(_) => return,
-                }
+                },
+                revocation = &mut attachment_revoked => {
+                    send_attachment_revocation(&responses, revocation).await;
+                    return;
+                },
             }
         };
         if let Some((result, new_stream_mappings)) = persisted_result
@@ -1610,8 +1669,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None => Err("durable output pump task stopped unexpectedly".to_string()),
                         };
                         if let Err(error) = result
-                            && !error.contains("response stream closed")
-                            && !error.starts_with("StaleEpoch:")
+                            && !is_attachment_termination(&error)
                         {
                             send_protocol_failure(&responses, error).await;
                             return;
@@ -1628,7 +1686,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 return;
                             }
                         }
-                        Ok(None) | Err(_) => return,
+                        Ok(None) | Err(_) => {
+                            output_pump.shutdown().await;
+                            return;
+                        },
+                    },
+                    revocation = &mut attachment_revoked => {
+                        output_pump.shutdown().await;
+                        send_attachment_revocation(&responses, revocation).await;
+                        return;
                     }
                 }
             }
@@ -1655,7 +1721,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         }
                     }
                     Ok(None) | Err(_) => return,
-                }
+                },
+                revocation = &mut attachment_revoked => {
+                    send_attachment_revocation(&responses, revocation).await;
+                    return;
+                },
             }
         };
         match result {
@@ -2603,6 +2673,9 @@ async fn route_durable_request(
                 golem_api_grpc::proto::golem::worker::StreamCancelReason::Protocol => {
                     StreamCancelReasonV1::Protocol
                 }
+                golem_api_grpc::proto::golem::worker::StreamCancelReason::ConsumerDrop => {
+                    StreamCancelReasonV1::GuestDrop
+                }
                 golem_api_grpc::proto::golem::worker::StreamCancelReason::Transport => {
                     return Err(
                         "transport loss detaches a durable session and cannot cancel a stream"
@@ -2610,7 +2683,13 @@ async fn route_durable_request(
                     );
                 }
                 golem_api_grpc::proto::golem::worker::StreamCancelReason::SourceUnavailable
-                | golem_api_grpc::proto::golem::worker::StreamCancelReason::ProducerDeleting => {
+                    if role == StreamCancelRoleV1::InputProducer =>
+                {
+                    StreamCancelReasonV1::SourceUnavailable
+                }
+                golem_api_grpc::proto::golem::worker::StreamCancelReason::SourceUnavailable
+                | golem_api_grpc::proto::golem::worker::StreamCancelReason::ProducerDeleting
+                | golem_api_grpc::proto::golem::worker::StreamCancelReason::InvocationFailed => {
                     return Err(
                         "system-authored durable stream cancellation reason is internal"
                             .to_string(),
@@ -2650,7 +2729,7 @@ async fn route_durable_request(
 mod freshness_tests {
     use super::{
         AcceptanceRace, decode_invocation_freshness_disposition, effective_session_identity,
-        pre_acceptance_rejection_reason, race_invocation_acceptance,
+        is_attachment_termination, pre_acceptance_rejection_reason, race_invocation_acceptance,
         require_expected_callee_fingerprint,
     };
     use futures::future;
@@ -2665,6 +2744,17 @@ mod freshness_tests {
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use std::task::Poll;
     use test_r::test;
+
+    #[test]
+    fn output_pump_distinguishes_attachment_termination_from_protocol_failure() {
+        assert!(is_attachment_termination(
+            "invocation response stream closed"
+        ));
+        assert!(is_attachment_termination("StaleEpoch: attachment fenced"));
+        assert!(!is_attachment_termination(
+            "durable output journal is corrupt"
+        ));
+    }
 
     #[test]
     fn invocation_freshness_defaults_unknown_values_to_may_exist() {

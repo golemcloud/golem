@@ -3796,8 +3796,10 @@ name = "golem-client"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "chrono",
+ "futures-util",
  "golem-common",
  "golem-openapi-client-generator",
  "http 1.5.0",
@@ -3808,6 +3810,8 @@ dependencies = [
  "serde_yaml",
  "test-r",
  "thiserror 2.0.20",
+ "tokio",
+ "tokio-tungstenite",
  "tracing",
  "uuid",
 ]
@@ -4455,6 +4459,7 @@ dependencies = [
  "golem-service-base",
  "golem-test-framework",
  "headers",
+ "hmac 0.12.1",
  "http 1.5.0",
  "http-body-util",
  "humantime-serde",
@@ -4486,6 +4491,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2 0.10.9",
  "sqlx",
  "strum",
  "strum_macros",

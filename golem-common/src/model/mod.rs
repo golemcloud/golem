@@ -31,6 +31,7 @@ pub mod environment_plugin_grant;
 pub mod error;
 pub mod http_api_deployment;
 pub mod invocation_context;
+pub mod invocation_session_public;
 pub mod login;
 pub mod lucene;
 pub mod mcp_deployment;

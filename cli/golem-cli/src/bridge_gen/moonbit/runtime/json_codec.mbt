@@ -194,6 +194,21 @@ pub fn schema_value_to_json(value : SchemaValue) -> Json {
     DatetimeValue(v) => node("datetime", obj([("value", Json::string(v))]))
     DurationValue(v) =>
       node("duration", obj([("nanoseconds", json_int64(v))]))
+    QuantityValue(mantissa, scale, unit) =>
+      node(
+        "quantity",
+        obj([
+          ("mantissa", json_int64(mantissa)),
+          ("scale", json_int(scale)),
+          ("unit", Json::string(unit)),
+        ]),
+      )
+    StreamReferenceValue(provisional_ref, stream_token) => {
+      let fields : Array[(String, Json)] = []
+      match provisional_ref { Some(v) => fields.push(("provisionalRef", Json::string(v))); None => () }
+      match stream_token { Some(v) => fields.push(("streamToken", Json::string(v))); None => () }
+      obj([("$stream", obj(fields))])
+    }
     UnionValue(tag, body) =>
       node(
         "union",
@@ -280,6 +295,15 @@ fn double_to_literal(d : Double) -> String {
 ///|
 /// Decodes a [SchemaValue] from the server's schema-native JSON wire form.
 pub fn schema_value_from_json(j : Json) -> SchemaValue raise {
+  if j is Object({ "$stream": stream, .. }) {
+    let m = expect_object(stream)
+    let provisional_ref = match field_opt(m, "provisionalRef") { Some(v) => Some(expect_string(v)); None => None }
+    let stream_token = match field_opt(m, "streamToken") { Some(v) => Some(expect_string(v)); None => None }
+    if (provisional_ref is None) == (stream_token is None) {
+      raise BridgeError("Stream reference must contain exactly one reference field")
+    }
+    return StreamReferenceValue(provisional_ref, stream_token)
+  }
   let outer = expect_object(j)
   let kind = expect_string(get_field(outer, "kind"))
   let value = get_field(outer, "value")
@@ -414,6 +438,14 @@ pub fn schema_value_from_json(j : Json) -> SchemaValue raise {
     "duration" => {
       let m = expect_object(value)
       DurationValue(@string.parse_int64(number_literal(get_field(m, "nanoseconds"))))
+    }
+    "quantity" => {
+      let m = expect_object(value)
+      QuantityValue(
+        @string.parse_int64(number_literal(get_field(m, "mantissa"))),
+        @string.parse_int(number_literal(get_field(m, "scale"))),
+        expect_string(get_field(m, "unit")),
+      )
     }
     "union" => {
       let m = expect_object(value)

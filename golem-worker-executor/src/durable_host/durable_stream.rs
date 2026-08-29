@@ -94,6 +94,7 @@ pub(crate) struct CommittedProducerStreamEventV1 {
     pub(crate) stream_id: StreamId,
     pub(crate) producer_sequence: u64,
     pub(crate) offset: StreamOffsetV1,
+    pub(crate) packed_u8_batch_end: Option<StreamOffsetV1>,
     pub(crate) terminal_author: Option<StreamTerminalAuthorV1>,
     pub(crate) nested_handles: Vec<DurableStreamHandleV1>,
     pub(crate) payload: CommittedProducerStreamEventPayloadV1,
@@ -434,17 +435,19 @@ impl ProducerStreamIndex {
         &mut self,
         record: &StreamSessionRecordV1,
     ) -> Result<(), DurableStreamProducerError> {
-        let (session_key, stream_id, ordinal, terminal) = match record {
+        let (session_key, stream_id, ordinal, item_count, terminal) = match record {
             StreamSessionRecordV1::ConsumerItemValue(record) => (
                 &record.session_key,
                 record.stream_id,
                 record.consumer_read_ordinal,
+                record.logical_item_count(),
                 false,
             ),
             StreamSessionRecordV1::ConsumerTerminal(record) => (
                 &record.session_key,
                 record.stream_id,
                 record.consumer_read_ordinal,
+                1,
                 true,
             ),
             StreamSessionRecordV1::SourceUnavailable(record) => {
@@ -481,7 +484,10 @@ impl ProducerStreamIndex {
         }
         journal.next_read_ordinal = journal
             .next_read_ordinal
-            .checked_add(1)
+            .checked_add(
+                u64::try_from(item_count)
+                    .map_err(|_| DurableStreamProducerError::CounterOverflow)?,
+            )
             .ok_or(DurableStreamProducerError::CounterOverflow)?;
         journal.terminal = terminal;
         Ok(())
@@ -804,6 +810,11 @@ impl ProducerStreamIndex {
                 "item count does not match offset count".to_string(),
             ));
         }
+        let packed_u8_batch_end = if matches!(&record.payload, StreamItemsPayloadV1::PackedU8(_)) {
+            record.offsets.last().copied()
+        } else {
+            None
+        };
         let mut events = Vec::with_capacity(payloads.len());
         for (sub_index, (payload, offset)) in payloads
             .into_iter()
@@ -823,6 +834,7 @@ impl ProducerStreamIndex {
                 stream_id: record.stream_id,
                 producer_sequence: sequence,
                 offset,
+                packed_u8_batch_end,
                 terminal_author: None,
                 nested_handles: nested_handles.clone(),
                 payload,
@@ -862,6 +874,7 @@ impl ProducerStreamIndex {
             stream_id: record.stream_id,
             producer_sequence: record.sequence,
             offset: record.offset,
+            packed_u8_batch_end: None,
             terminal_author: Some(record.authored_by),
             nested_handles: Vec::new(),
             payload: CommittedProducerStreamEventPayloadV1::End(record.result),
@@ -915,6 +928,7 @@ impl ProducerStreamIndex {
             stream_id: record.stream_id,
             producer_sequence: record.sequence,
             offset: record.offset,
+            packed_u8_batch_end: None,
             terminal_author: Some(record.authored_by),
             nested_handles: Vec::new(),
             payload: CommittedProducerStreamEventPayloadV1::Cancel {
@@ -1390,7 +1404,7 @@ impl DurableStreamProducer {
         let current_index = oplog.current_oplog_index().await;
         if current_index.is_defined() {
             let entries = oplog
-                .read_many(OplogIndex::INITIAL, current_index.as_u64())
+                .read_exact(OplogIndex::INITIAL, current_index.as_u64())
                 .await;
             for (oplog_index, entry) in entries {
                 match entry {
@@ -1640,7 +1654,7 @@ impl DurableStreamProducer {
         if current.is_defined() {
             for (_, entry) in self
                 .oplog
-                .read_many(OplogIndex::INITIAL, current.as_u64())
+                .read_exact(OplogIndex::INITIAL, current.as_u64())
                 .await
             {
                 let OplogEntry::StreamSession { record, .. } = entry else {
@@ -1661,7 +1675,16 @@ impl DurableStreamProducer {
                                 "consumer value journal contains a read-ordinal gap".to_string(),
                             ));
                         }
-                        source_offsets.push(record.source_offset);
+                        for index in 0..record.logical_item_count() {
+                            source_offsets.push(record.source_offset_at(index).ok_or_else(
+                                || {
+                                    DurableStreamProducerError::CorruptHistory(
+                                        "packed-u8 consumer journal offset range is invalid"
+                                            .to_string(),
+                                    )
+                                },
+                            )?);
+                        }
                     }
                     StreamSessionRecordV1::ConsumerTerminal(record)
                         if record.session_key == key.session_key
@@ -2140,7 +2163,7 @@ impl DurableStreamProducer {
             if current.is_defined() {
                 for (_, entry) in self
                     .oplog
-                    .read_many(OplogIndex::INITIAL, current.as_u64())
+                    .read_exact(OplogIndex::INITIAL, current.as_u64())
                     .await
                 {
                     let OplogEntry::StreamSession { record, .. } = entry else {
@@ -2219,7 +2242,7 @@ impl DurableStreamProducer {
             if current.is_defined() {
                 for (_, entry) in self
                     .oplog
-                    .read_many(OplogIndex::INITIAL, current.as_u64())
+                    .read_exact(OplogIndex::INITIAL, current.as_u64())
                     .await
                 {
                     let OplogEntry::StreamSession { record, .. } = entry else {
@@ -4118,7 +4141,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         let mut pending_invocations = HashMap::new();
         for (oplog_index, entry) in self
             .oplog_service
-            .read(
+            .read_exact(
                 &session_owner,
                 session_mode,
                 OplogIndex::INITIAL,
@@ -4267,7 +4290,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         let mut deleting = false;
         for (_, entry) in self
             .oplog_service
-            .read(&consumer, agent_mode, OplogIndex::INITIAL, current.as_u64())
+            .read_exact(&consumer, agent_mode, OplogIndex::INITIAL, current.as_u64())
             .await
         {
             let OplogEntry::StreamSession { record, .. } = entry else {
@@ -4381,7 +4404,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         let mut overlay = None;
         for (_, entry) in self
             .oplog_service
-            .read(
+            .read_exact(
                 &consumer,
                 AgentMode::Durable,
                 OplogIndex::INITIAL,
@@ -4407,7 +4430,13 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                             "consumer value journal contains a read-ordinal gap".to_string(),
                         ));
                     }
-                    offsets.push(record.source_offset);
+                    for index in 0..record.logical_item_count() {
+                        offsets.push(record.source_offset_at(index).ok_or_else(|| {
+                            DurableStreamProducerError::CorruptHistory(
+                                "packed-u8 consumer journal offset range is invalid".to_string(),
+                            )
+                        })?);
+                    }
                 }
                 StreamSessionRecordV1::ConsumerTerminal(record)
                     if record.session_key == key.session_key
@@ -5270,7 +5299,7 @@ impl DurableCatchUpReader {
         }
         if let Some(event) = self.history.pop_front() {
             let event = self.deliver(event)?;
-            self.release_subscription_if_complete().await;
+            self.release_subscription_if_complete();
             return Ok(Some(event));
         }
         loop {
@@ -5291,14 +5320,28 @@ impl DurableCatchUpReader {
                 continue;
             }
             let event = self.deliver(event.payload)?;
-            self.release_subscription_if_complete().await;
+            self.release_subscription_if_complete();
             return Ok(Some(event));
         }
     }
 
-    async fn release_subscription_if_complete(&mut self) {
+    fn release_subscription_if_complete(&mut self) {
         if self.terminal_delivered {
-            self.release_subscription().await;
+            self.release_subscription_in_background();
+        }
+    }
+
+    fn release_subscription_in_background(&mut self) {
+        let Some(subscription) = self.subscription.take() else {
+            return;
+        };
+        let reader_id = subscription.reader_id();
+        drop(subscription);
+        let bus = self.bus.clone();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                bus.unsubscribe(reader_id).await;
+            });
         }
     }
 
@@ -5328,16 +5371,7 @@ impl DurableCatchUpReader {
 
 impl Drop for DurableCatchUpReader {
     fn drop(&mut self) {
-        let Some(subscription) = self.subscription.take() else {
-            return;
-        };
-        let reader_id = subscription.reader_id();
-        let bus = self.bus.clone();
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move {
-                bus.unsubscribe(reader_id).await;
-            });
-        }
+        self.release_subscription_in_background();
     }
 }
 
@@ -5345,10 +5379,11 @@ impl Drop for DurableCatchUpReader {
 pub(crate) mod tests {
     use super::{
         AgentError, AttachedStreamSegmentSource, CommittedProducerStreamEventPayloadV1,
-        ConsumerAttachmentStatus, ConsumerJournalInspection, DurableLiveStreamBusError,
-        DurableStreamCommit, DurableStreamProducer, DurableStreamProducerError,
-        ProducerRegistrationRequestV1, ProducerStreamIndex, StreamAttachmentConsumerProbe,
-        StreamAttachmentControl, StreamAttachmentStateV1, StreamSegmentSource, registration_record,
+        CommittedProducerStreamEventV1, ConsumerAttachmentStatus, ConsumerJournalInspection,
+        DurableCatchUpReader, DurableLiveStreamBus, DurableLiveStreamBusError, DurableStreamCommit,
+        DurableStreamProducer, DurableStreamProducerError, ProducerRegistrationRequestV1,
+        ProducerStreamIndex, StreamAttachmentConsumerProbe, StreamAttachmentControl,
+        StreamAttachmentStateV1, StreamSegmentSource, registration_record,
     };
     use crate::services::oplog::{
         CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OrderedOplogStart,
@@ -5379,7 +5414,7 @@ pub(crate) mod tests {
     use golem_common::model::oplog::payload::OplogPayload;
     use golem_common::model::oplog::{OplogEntry, PayloadId, RawOplogPayload};
     use golem_schema::schema::SchemaFingerprintV1;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, VecDeque};
     use std::fmt::Debug;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
@@ -5505,7 +5540,7 @@ pub(crate) mod tests {
                 .expect("missing test oplog entry")
         }
 
-        async fn read_many(
+        async fn read_exact(
             &self,
             oplog_index: OplogIndex,
             n: u64,
@@ -7269,7 +7304,7 @@ pub(crate) mod tests {
                 .replayed
         );
         assert_eq!(oplog.committed_length(), 3);
-        let entries = oplog.read_many(OplogIndex::INITIAL, 3).await;
+        let entries = oplog.read_exact(OplogIndex::INITIAL, 3).await;
         assert!(matches!(
             entries.get(&OplogIndex::from_u64(2)),
             Some(OplogEntry::StreamRegistered { .. })
@@ -8295,6 +8330,66 @@ pub(crate) mod tests {
                 .await,
             Err(DurableStreamProducerError::CursorUnavailable)
         ));
+    }
+
+    #[test]
+    async fn terminal_delivery_does_not_wait_for_live_reader_cleanup() {
+        let bus = Arc::new(DurableLiveStreamBus::new(2).unwrap());
+        let subscription = bus.subscribe().await.unwrap();
+        let stream_id = StreamId(Uuid::from_u128(99));
+        let mut reader = DurableCatchUpReader {
+            bus: bus.clone(),
+            subscription: Some(subscription),
+            history: VecDeque::from([
+                CommittedProducerStreamEventV1 {
+                    stream_id,
+                    producer_sequence: 0,
+                    offset: StreamOffsetV1::new(OplogIndex::from_u64(1), 0),
+                    packed_u8_batch_end: Some(StreamOffsetV1::new(OplogIndex::from_u64(1), 0)),
+                    terminal_author: None,
+                    nested_handles: Vec::new(),
+                    payload: CommittedProducerStreamEventPayloadV1::PackedU8(7),
+                },
+                CommittedProducerStreamEventV1 {
+                    stream_id,
+                    producer_sequence: 1,
+                    offset: StreamOffsetV1::new(OplogIndex::from_u64(2), 0),
+                    packed_u8_batch_end: None,
+                    terminal_author: None,
+                    nested_handles: Vec::new(),
+                    payload: CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok),
+                },
+            ]),
+            join_high_water: None,
+            last_delivered: None,
+            terminal_delivered: false,
+        };
+        assert!(matches!(
+            reader.next().await.unwrap().unwrap().payload,
+            CommittedProducerStreamEventPayloadV1::PackedU8(7)
+        ));
+
+        let (acquired_tx, acquired_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let locked_bus = bus.clone();
+        let lock_task = tokio::spawn(async move {
+            locked_bus
+                .hold_state_lock_until(acquired_tx, release_rx)
+                .await;
+        });
+        acquired_rx.await.unwrap();
+
+        let terminal = tokio::time::timeout(Duration::from_millis(100), reader.next())
+            .await
+            .expect("terminal delivery waited for live-reader cleanup")
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            terminal.payload,
+            CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok)
+        ));
+        release_tx.send(()).unwrap();
+        lock_task.await.unwrap();
     }
 
     #[test]

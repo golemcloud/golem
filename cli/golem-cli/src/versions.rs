@@ -71,7 +71,7 @@ pub mod scala_dep {
 }
 
 pub mod moonbit_dep {
-    pub const ASYNC_VERSION: &str = "0.19.2";
+    pub const ASYNC_VERSION: &str = "0.20.2";
 }
 
 pub mod ai {

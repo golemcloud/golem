@@ -38,20 +38,6 @@ message InvocationStart {
   optional golem.worker.EncodedScopeCard scope_card = 17;
 }
 
-message PublicInvocationStart {
-  string application_name = 1;
-  string environment_name = 2;
-  string agent_type_name = 3;
-  golem.schema.SchemaValue constructor_parameters = 4;
-  optional golem.common.UUID phantom_id = 5;
-  repeated golem.worker.AgentConfigEntryDto config = 6;
-  string method_name = 7;
-  golem.schema.SchemaValue method_parameters = 8;
-  golem.worker.IdempotencyKey idempotency_key = 9;
-  golem.common.UUID attempt_id = 10;
-  golem.common.UUID expected_callee_fingerprint = 11;
-}
-
 message ResumeAttach {
   golem.worker.IdempotencyKey idempotency_key = 1;
   golem.worker.AgentId agent_id = 2;
@@ -145,6 +131,8 @@ message OutputStreamItem {
   bytes durable_offset = 5;
   uint64 epoch = 6;
   repeated DurableStreamMapping new_stream_mappings = 7;
+  bytes packed_u8 = 8;
+  uint64 logical_item_count = 9;
 }
 
 message OutputStreamEnd {
@@ -180,6 +168,8 @@ enum StreamCancelReason {
   STREAM_CANCEL_REASON_PROTOCOL = 3;
   STREAM_CANCEL_REASON_SOURCE_UNAVAILABLE = 4;
   STREAM_CANCEL_REASON_PRODUCER_DELETING = 5;
+  STREAM_CANCEL_REASON_CONSUMER_DROP = 6;
+  STREAM_CANCEL_REASON_INVOCATION_FAILED = 7;
 }
 
 message StreamCancel {
@@ -213,6 +203,7 @@ message InvocationAccepted {
   repeated DurableStreamMapping stream_mappings = 7;
   golem.common.EnvironmentId environment_id = 8;
   golem.common.UUID callee_fingerprint = 9;
+  optional string method_name = 10;
 }
 
 message InvocationSessionResult {
@@ -280,16 +271,6 @@ message InvocationSessionCompletion {
   oneof outcome {
     golem.common.Empty success = 1;
     InvocationFailure failure = 2;
-  }
-}
-
-message PublicInvocationRequest {
-  oneof request {
-    PublicInvocationStart start = 1;
-    ResumeAttach resume_attach = 2;
-    InputStreamItem input_item = 3;
-    InputStreamEnd input_end = 4;
-    StreamCancel stream_cancel = 5;
   }
 }
 

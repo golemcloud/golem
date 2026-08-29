@@ -23,39 +23,45 @@ use crate::model::agent::invocation_session::{
 };
 use crate::model::format::Format;
 use anyhow::{Context as _, anyhow, bail};
-use futures_util::{SinkExt, StreamExt};
-use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
-use golem_api_grpc::proto::golem::schema::{
-    BinaryValue, RecordValue, SchemaValue as ProtoSchemaValue, SchemaValueStreamReference,
-    schema_value,
-};
-use golem_api_grpc::proto::golem::worker::{
-    AgentId, InputStreamEnd, InputStreamItem, InvocationResponse, PublicInvocationRequest,
-    PublicInvocationStart, ResumeAttach, ResumeOperation, StreamCancel, StreamCancelReason,
-    StreamCancelRole, StreamCursor, input_stream_item, invocation_response,
-    invocation_session_completion, invocation_session_result, public_invocation_request,
+use golem_client::invocation_session::{
+    AdmittedInput, DeliveryTracker, InputReplayBuffer, InvocationSession,
+    InvocationSessionRequestProvider, InvocationSessionSender, InvocationSessionStateObserver,
+    InvocationSessionStateSnapshot, ReplayableInput, ServerFrame, SessionTransportError,
+    send_replayable_input,
 };
 use golem_common::model::IdempotencyKey;
+use golem_common::model::invocation_session_public::{
+    BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64,
+    INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientCancelReason, PublicClientMessage,
+    PublicConfigEntry, PublicInvocationOutcome, PublicInvocationResult, PublicOutputStreamOutcome,
+    PublicResumeOperation, PublicServerCancelReason, PublicServerMessage,
+};
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::schema::agent::{
-    AgentMethodSchema, AgentTypeSchema, OutputSchema, ParsedAgentId,
+    AgentMethodSchema, AgentTypeSchema, FieldSource, OutputSchema, ParsedAgentId,
 };
-use golem_common::schema::{BinaryValuePayload, SchemaGraph, SchemaType, SchemaValue};
-use prost::Message as _;
+use golem_common::schema::public_json::{
+    PublicSchemaValueError, PublicStreamReference, PublicStreamReferencePolicy,
+    decode_public_schema_value, encode_public_schema_value, encode_public_schema_value_with_charge,
+};
+use golem_common::schema::stream::SchemaValueStream;
+use golem_common::schema::{
+    BinaryValuePayload, NamedFieldType, ResultValuePayload, SchemaGraph, SchemaType, SchemaValue,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, ErrorKind, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
-use tokio_tungstenite::connect_async_tls_with_config;
+use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_util::sync::CancellationToken;
 
 const PIPELINE_CAPACITY: usize = 16;
 const RAW_CHUNK_SIZE: usize = 64 * 1024;
+const UNACKNOWLEDGED_INPUT_BYTES: usize = 16 * 1024 * 1024;
 const SESSION_CHECKPOINT_VERSION: u8 = 1;
 
 pub(super) enum InvocationSessionMode {
@@ -80,21 +86,81 @@ impl InvocationSessionMode {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct InvocationSessionCheckpoint {
     version: u8,
+    protocol_version: u8,
+    schema_evidence: String,
+    selector: InvocationSelector,
     idempotency_key: String,
-    agent_component_id: uuid::Uuid,
-    agent_name: String,
-    environment_id: uuid::Uuid,
-    attachment_id: uuid::Uuid,
-    callee_fingerprint: uuid::Uuid,
-    epoch: u64,
-    cursors: BTreeMap<uuid::Uuid, Option<Vec<u8>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_token: Option<String>,
+    delivered_output_cursors: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_operation: Option<PendingOperation>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PendingOperationKind {
+    Start,
+    Resume,
+    Takeover,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PendingOperation {
+    request: PublicClientMessage,
+}
+
+struct CliSessionRequestProvider {
+    ctx: Arc<Context>,
+}
+
+#[async_trait::async_trait]
+impl InvocationSessionRequestProvider for CliSessionRequestProvider {
+    async fn request(&self) -> Result<tungstenite::http::Request<()>, SessionTransportError> {
+        websocket_request(&self.ctx)
+            .await
+            .map_err(|error| SessionTransportError::RequestProvider(error.to_string()))
+    }
+}
+
+struct CliCheckpointObserver {
+    checkpoint: Mutex<Option<InvocationSessionCheckpoint>>,
+    path: Option<PathBuf>,
+}
+
+impl InvocationSessionStateObserver for CliCheckpointObserver {
+    fn state_changed(&self, state: &InvocationSessionStateSnapshot) -> Result<(), String> {
+        let mut checkpoint = self
+            .checkpoint
+            .lock()
+            .map_err(|_| "checkpoint state mutex poisoned".to_string())?;
+        let Some(checkpoint) = checkpoint.as_mut() else {
+            return Ok(());
+        };
+        checkpoint.session_token = state.session_token.clone();
+        checkpoint.delivered_output_cursors = state.delivered_output_cursors.clone();
+        checkpoint.pending_operation = state
+            .pending_operation
+            .clone()
+            .map(|request| PendingOperation { request });
+        write_checkpoint(
+            self.path
+                .as_deref()
+                .ok_or_else(|| "checkpoint state has no path".to_string())?,
+            checkpoint,
+        )
+        .map_err(|error| error.to_string())
+    }
 }
 
 #[derive(Clone, Debug)]
 struct InputBinding {
-    stream_id: u64,
+    provisional_ref: uuid::Uuid,
+    stream_token: Option<String>,
+    channel: Option<u32>,
     parameter_name: String,
     item_type: SchemaType,
     raw_kind: Option<RawStreamKind>,
@@ -109,10 +175,10 @@ enum RawStreamKind {
 #[derive(Clone, Debug)]
 struct OutputStream {
     item_type: SchemaType,
-    parent_stream_id: Option<u64>,
+    parent_stream_id: Option<u32>,
     path: String,
     raw_kind: Option<RawStreamKind>,
-    next_offset: u64,
+    next_offset: Option<u64>,
     terminal: bool,
 }
 
@@ -122,25 +188,28 @@ enum OutputJob {
     Event(Box<AgentInvocationSessionEvent>),
 }
 
+struct QueuedOutput {
+    job: OutputJob,
+    written: oneshot::Sender<Result<(), String>>,
+}
+
 struct OutputChannel {
-    tx: mpsc::Sender<OutputJob>,
+    tx: mpsc::Sender<QueuedOutput>,
     interrupt: CancellationToken,
     input_failed: CancellationToken,
 }
 
 struct InputFailure {
     error: anyhow::Error,
-    reason: StreamCancelReason,
+    reason: PublicClientCancelReason,
 }
 
 #[derive(Debug, thiserror::Error)]
 #[error("stdin input failed")]
 struct InputFailureSignal;
 
-#[derive(Default)]
 struct SessionIdentity {
-    agent_id: Option<String>,
-    component_revision: Option<u64>,
+    agent_id: String,
 }
 
 pub(super) struct InvocationSessionArgs {
@@ -154,7 +223,6 @@ pub(super) struct InvocationSessionArgs {
     pub idempotency_key: IdempotencyKey,
     pub stdin_format: InvocationStdinFormat,
     pub stdout_format: InvocationStdoutFormat,
-    pub selected_component_id: uuid::Uuid,
     pub selected_agent_name: String,
     pub session_mode: InvocationSessionMode,
 }
@@ -173,7 +241,8 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         .cloned()
         .ok_or_else(|| anyhow!("Method '{}' not found in agent type", args.method_name))?;
     let source_language = SourceLanguage::from(args.agent_type.source_language.clone());
-    let (method_parameters, input_binding) = prepare_method_parameters(
+    let input_graph = public_input_graph(&args.agent_type.schema, &method.input_schema);
+    let (method_parameters, mut input_binding) = prepare_method_parameters(
         &args.agent_type.schema,
         &method,
         args.arguments,
@@ -183,76 +252,152 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     if args.stdin_format == InvocationStdinFormat::Raw && input_binding.is_none() {
         bail!("--stdin-format raw requires stdin bound to stream<binary> or stream<u8> with '-'");
     }
-    let input_stream_id = input_binding.as_ref().map(|binding| binding.stream_id);
     validate_stdout_format(
         &args.agent_type.schema,
         &method.output_schema,
         args.stdout_format,
     )?;
 
-    let constructor_parameters = args
-        .parsed_agent_id
-        .parameters
-        .value()
-        .clone()
-        .try_into()
-        .map_err(anyhow::Error::msg)?;
+    let constructor_parameters = encode_public_schema_value(
+        args.parsed_agent_id.parameters.graph(),
+        &args.parsed_agent_id.parameters.graph().root,
+        args.parsed_agent_id.parameters.value(),
+        |_, _| {
+            Err(PublicSchemaValueError::new(
+                golem_common::model::invocation_session_public::PublicErrorCode::UnsupportedValue,
+                "constructor parameters cannot contain streams",
+            ))
+        },
+    )?;
+    let method_parameters = encode_public_schema_value(
+        &input_graph,
+        &input_graph.root,
+        &method_parameters,
+        |stream, _| {
+            stream
+                .with_host_endpoint::<uuid::Uuid, _>(|reference| {
+                    PublicStreamReference::Provisional(*reference)
+                })
+                .map_err(|message| {
+                    PublicSchemaValueError::new(
+                        golem_common::model::invocation_session_public::PublicErrorCode::StreamAlreadyConsumed,
+                        message,
+                    )
+                })
+        },
+    )?;
+    let selector = InvocationSelector {
+        agent_type: args.parsed_agent_id.agent_type.to_string(),
+        application: args.application_name.clone(),
+        constructor_parameters,
+        environment: args.environment_name.clone(),
+        method: args.method_name.clone(),
+        phantom_id: args.parsed_agent_id.phantom_id,
+    };
+    let schema_evidence = schema_evidence(&args.agent_type, &method)?;
+    let config = args
+        .config
+        .iter()
+        .cloned()
+        .map(|entry| PublicConfigEntry {
+            path: entry.path,
+            value: entry.value.into(),
+        })
+        .collect::<Vec<_>>();
     let idempotency_key_value = args.idempotency_key.value.clone();
-    let (start, mut checkpoint, checkpoint_path) = match args.session_mode {
-        InvocationSessionMode::Start { save_session } => (
-            PublicInvocationRequest {
-                request: Some(public_invocation_request::Request::Start(
-                    PublicInvocationStart {
-                        application_name: args.application_name,
-                        environment_name: args.environment_name,
-                        agent_type_name: args.parsed_agent_id.agent_type.to_string(),
-                        constructor_parameters: Some(constructor_parameters),
-                        phantom_id: args.parsed_agent_id.phantom_id.map(Into::into),
-                        config: args.config.into_iter().map(Into::into).collect(),
-                        method_name: args.method_name,
-                        method_parameters: Some(method_parameters),
-                        idempotency_key: Some(args.idempotency_key.into()),
-                        attempt_id: Some(uuid::Uuid::new_v4().into()),
-                        expected_callee_fingerprint: None,
-                    },
-                )),
-            },
-            None,
-            save_session,
-        ),
+    let resuming_from_checkpoint =
+        matches!(&args.session_mode, InvocationSessionMode::Resume { .. });
+    let (initial, pending_operation_is_retry, checkpoint, checkpoint_path) = match args.session_mode
+    {
+        InvocationSessionMode::Start { save_session } => {
+            let attempt_id = uuid::Uuid::new_v4();
+            let initial = PublicClientMessage::InvocationStart {
+                attempt_id,
+                config: config.clone(),
+                idempotency_key: idempotency_key_value.clone(),
+                method_parameters: method_parameters.clone(),
+                selector: selector.clone(),
+                version: INVOCATION_SESSION_VERSION,
+            };
+            let checkpoint = save_session.as_ref().map(|_| InvocationSessionCheckpoint {
+                version: SESSION_CHECKPOINT_VERSION,
+                protocol_version: INVOCATION_SESSION_VERSION,
+                schema_evidence: schema_evidence.clone(),
+                selector: selector.clone(),
+                idempotency_key: idempotency_key_value.clone(),
+                session_token: None,
+                delivered_output_cursors: BTreeMap::new(),
+                pending_operation: Some(PendingOperation {
+                    request: initial.clone(),
+                }),
+            });
+            (initial, false, checkpoint, save_session)
+        }
         InvocationSessionMode::Resume { path, takeover } => {
-            let checkpoint = load_checkpoint(&path)?;
-            if checkpoint.agent_component_id != args.selected_component_id
-                || checkpoint.agent_name != args.selected_agent_name
+            let mut checkpoint = load_checkpoint(&path)?;
+            if checkpoint.selector != selector
+                || checkpoint.idempotency_key != idempotency_key_value
+                || checkpoint.schema_evidence != schema_evidence
             {
-                bail!(
-                    "saved invocation session belongs to a different agent than the requested invocation"
-                );
+                bail!("saved invocation session is incompatible with the requested invocation");
             }
-            let request = resume_request(&checkpoint, takeover);
-            (request, Some(checkpoint), Some(path))
+            let pending_operation_is_retry = checkpoint.pending_operation.is_some();
+            let initial = match checkpoint.pending_operation.as_ref() {
+                Some(PendingOperation { request })
+                    if matches!(request, PublicClientMessage::InvocationStart { .. }) =>
+                {
+                    validate_pending_start(
+                        request,
+                        &selector,
+                        &config,
+                        &idempotency_key_value,
+                        &method_parameters,
+                        input_binding.as_mut(),
+                    )?;
+                    request.clone()
+                }
+                Some(PendingOperation { request }) => {
+                    let kind = pending_operation_kind(request)?;
+                    if (kind == PendingOperationKind::Takeover) != takeover {
+                        bail!(
+                            "saved invocation session has an in-flight {} operation",
+                            if kind == PendingOperationKind::Takeover {
+                                "takeover"
+                            } else {
+                                "resume"
+                            }
+                        );
+                    }
+                    validate_pending_resume(&checkpoint, request, kind)?;
+                    request.clone()
+                }
+                None => {
+                    let kind = if takeover {
+                        PendingOperationKind::Takeover
+                    } else {
+                        PendingOperationKind::Resume
+                    };
+                    let attempt_id = uuid::Uuid::new_v4();
+                    let request = resume_request(&checkpoint, kind, attempt_id)?;
+                    checkpoint.pending_operation = Some(PendingOperation {
+                        request: request.clone(),
+                    });
+                    request
+                }
+            };
+            (
+                initial,
+                pending_operation_is_retry,
+                Some(checkpoint),
+                Some(path),
+            )
         }
     };
-
-    let request = websocket_request(&ctx).await?;
     let connector = if ctx.allow_insecure() {
         Some(super::stream::insecure_connector()?)
     } else {
         None
     };
-    let (socket, _) = connect_async_tls_with_config(request, None, false, connector)
-        .await
-        .context("failed to connect to the agent invocation session")?;
-    let (mut socket_sink, mut socket_stream) = socket.split();
-
-    let (wire_tx, mut wire_rx) = mpsc::channel::<Message>(PIPELINE_CAPACITY);
-    let mut wire_writer = tokio::spawn(async move {
-        while let Some(message) = wire_rx.recv().await {
-            socket_sink.send(message).await?;
-        }
-        socket_sink.close().await
-    });
-
     let interrupt = CancellationToken::new();
     let signal_interrupt = interrupt.clone();
     tokio::spawn(async move {
@@ -261,7 +406,35 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         }
     });
 
-    let (input_tx, mut input_rx) = mpsc::channel::<PublicInvocationRequest>(PIPELINE_CAPACITY);
+    let initial_state = InvocationSessionStateSnapshot {
+        delivered_output_cursors: checkpoint
+            .as_ref()
+            .map(|checkpoint| checkpoint.delivered_output_cursors.clone())
+            .unwrap_or_default(),
+        pending_operation: Some(initial),
+        session_token: checkpoint
+            .as_ref()
+            .and_then(|checkpoint| checkpoint.session_token.clone()),
+    };
+    let checkpoint_observer = Arc::new(CliCheckpointObserver {
+        checkpoint: Mutex::new(checkpoint),
+        path: checkpoint_path,
+    });
+    let request_provider = Arc::new(CliSessionRequestProvider { ctx: ctx.clone() });
+    let mut session = tokio::select! {
+        biased;
+        _ = interrupt.cancelled() => bail!(PipedExitCode(130)),
+        result = InvocationSession::open(
+            request_provider,
+            connector,
+            initial_state,
+            pending_operation_is_retry,
+            checkpoint_observer,
+        ) => result.context("failed to connect to the agent invocation session")?,
+    };
+
+    let (input_tx, mut input_rx) = mpsc::channel::<AdmittedInput>(PIPELINE_CAPACITY);
+    let input_buffer = InputReplayBuffer::new(UNACKNOWLEDGED_INPUT_BYTES, PIPELINE_CAPACITY);
     let (input_failure_tx, mut input_failure_rx) = oneshot::channel::<InputFailure>();
     let input_cancelled = CancellationToken::new();
     let input_discarded = CancellationToken::new();
@@ -270,8 +443,19 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     let validate_discarded_input =
         stdin_format == InvocationStdinFormat::Value && !std::io::stdin().is_terminal();
     let has_input = input_binding.is_some();
+    if resuming_from_checkpoint && has_input {
+        eprintln!(
+            "Resumed stdin starts after the server's durable input high-water; stdin bytes lost when the previous CLI process exited cannot be recovered."
+        );
+    }
     let mut input_failure_open = has_input;
-    let mut input_binding = input_binding;
+    if let Some(binding) = input_binding.as_ref() {
+        session.register_input(
+            binding.provisional_ref,
+            binding.stream_token.clone(),
+            input_buffer.clone(),
+        )?;
+    }
     if let Some(binding) = input_binding.clone() {
         let reader_cancelled = input_cancelled.clone();
         let reader_discarded = input_discarded.clone();
@@ -279,6 +463,8 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         let reader_source_language = source_language.clone();
         let reader_graph = args.agent_type.schema.clone();
         let reader_tx = input_tx.clone();
+        let reader_input_buffer = input_buffer.clone();
+        let runtime = tokio::runtime::Handle::current();
         std::thread::spawn(move || {
             if let Err(failure) = read_stdin(
                 binding,
@@ -286,6 +472,8 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 reader_source_language,
                 reader_graph,
                 &reader_tx,
+                &reader_input_buffer,
+                &runtime,
                 &reader_cancelled,
                 &reader_discarded,
             ) && input_failure_tx.send(failure).is_ok()
@@ -297,7 +485,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
 
     let format = ctx.format();
     let structured = format.is_structured() && args.stdout_format == InvocationStdoutFormat::Value;
-    let (output_job_tx, output_rx) = mpsc::channel::<OutputJob>(PIPELINE_CAPACITY);
+    let (output_job_tx, output_rx) = mpsc::channel::<QueuedOutput>(PIPELINE_CAPACITY);
     let output_tx = OutputChannel {
         tx: output_job_tx,
         interrupt: interrupt.clone(),
@@ -309,53 +497,36 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         let _ = output_result_tx.send(write_output(output_rx, format, colorize));
     });
 
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_public_request(&start)
-        .map_err(anyhow::Error::msg)?;
-    send_request(&wire_tx, start, &interrupt).await?;
-
-    let mut output_streams = HashMap::<u64, OutputStream>::new();
+    let mut output_streams = HashMap::<u32, OutputStream>::new();
+    let bindings = session.delivery_tracker();
     let mut failed = false;
     let mut accepted = false;
     let mut stdin_open = has_input;
     let mut input_terminal = !has_input;
-    let mut pending_input_items = 0_usize;
-    let mut pending_input_terminal = false;
-    let mut input_sequence_offset = 0_u64;
-    let mut acknowledged_input_offset = 0_u64;
-    let mut pending_input_request = None;
     let mut fatal_input_failure = None;
-    let mut session_identity = SessionIdentity::default();
-    let mut durable_streams = HashMap::new();
-    let mut attachment_epoch = 0;
-    let mut wire_complete = false;
+    let session_identity = SessionIdentity {
+        agent_id: args.selected_agent_name.clone(),
+    };
+    let mut finished = false;
 
-    'session: while !state.is_complete() {
+    'session: while !finished {
+        let next_unsent_input = input_buffer.next_unsent();
+        let sender = session.sender();
         tokio::select! {
             biased;
             _ = interrupt.cancelled() => {
                 input_cancelled.cancel();
                 input_rx.close();
-                for request in cancel_open_streams(
-                    &mut state,
-                    &durable_streams,
-                    attachment_epoch,
+                let requests = cancel_open_streams(
                     if accepted && !input_terminal {
-                        input_stream_id.map(|stream_id| (stream_id, acknowledged_input_offset))
+                        input_binding.as_ref().and_then(|binding| binding.channel)
                     } else {
                         None
                     },
                     &output_streams,
-                    StreamCancelReason::Cancelled,
-                    "invocation interrupted by the client",
-                ) {
-                    try_send_request(&wire_tx, request);
-                }
-                drop(wire_tx);
-                if !wire_complete && tokio::time::timeout(Duration::from_secs(3), &mut wire_writer).await.is_err() {
-                    wire_writer.abort();
-                }
+                    PublicClientCancelReason::Cancelled,
+                );
+                cancel_before_close(&mut session, requests).await;
                 bail!(PipedExitCode(130));
             }
             failure = &mut input_failure_rx, if input_failure_open => {
@@ -367,188 +538,115 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     }
                 }
             }
-            result = &mut wire_writer, if !wire_complete => {
-                match result {
-                    Ok(Ok(())) => bail!("agent invocation session connection closed before completion"),
-                    Ok(Err(error)) if is_connection_closed(&error) => {
-                        wire_complete = true;
-                        if validate_discarded_input {
-                            input_discarded.cancel();
-                        } else {
-                            input_cancelled.cancel();
-                        }
-                        input_rx.close();
-                        while input_rx.try_recv().is_ok() {}
-                        pending_input_request = None;
-                        stdin_open = false;
-                    }
-                    Ok(Err(error)) => return Err(error.into()),
-                    Err(error) => return Err(error.into()),
-                }
-            }
             result = &mut output_result_rx => {
                 match result {
                     Ok(Ok(())) => bail!("invocation output closed before completion"),
                     Ok(Err(error)) if error.downcast_ref::<PipedExitCode>().is_some_and(|exit| exit.0 == 0) => {
                         input_cancelled.cancel();
                         input_rx.close();
-                        for request in cancel_open_streams(
-                            &mut state,
-                            &durable_streams,
-                            attachment_epoch,
+                        let requests = cancel_open_streams(
                             if accepted && !input_terminal {
-                                input_stream_id.map(|stream_id| (stream_id, acknowledged_input_offset))
+                                input_binding.as_ref().and_then(|binding| binding.channel)
                             } else {
                                 None
                             },
                             &output_streams,
-                            StreamCancelReason::Cancelled,
-                            "invocation output was closed by the consumer",
-                        ) {
-                            try_send_request(&wire_tx, request);
-                        }
-                        drop(wire_tx);
-                        if !wire_complete && tokio::time::timeout(Duration::from_secs(3), &mut wire_writer).await.is_err() {
-                            wire_writer.abort();
-                        }
+                            PublicClientCancelReason::ConsumerDrop,
+                        );
+                        cancel_before_close(&mut session, requests).await;
                         return Err(error);
                     }
                     Ok(Err(error)) => return Err(error),
                     Err(_) => bail!("invocation output writer stopped unexpectedly"),
                 }
             }
-            request = input_rx.recv(), if accepted && stdin_open && pending_input_items < PIPELINE_CAPACITY && pending_input_request.is_none() => {
+            request = input_rx.recv(), if accepted && stdin_open => {
                 match request {
-                    Some(request) => pending_input_request = Some(request),
+                    Some(request) => input_buffer.push(request),
                     None => stdin_open = false,
                 }
             }
-            permit = wire_tx.clone().reserve_owned(), if pending_input_request.is_some() => {
-                let permit = permit.map_err(|_| anyhow!("agent invocation session connection closed"))?;
-                let mut request = pending_input_request
-                    .take()
-                    .expect("wire send selected without a pending input request");
-                bind_durable_request(
-                    &mut request,
-                    &durable_streams,
-                    attachment_epoch,
-                    input_sequence_offset,
-                )?;
-                state.validate_public_request(&request).map_err(anyhow::Error::msg)?;
-                if matches!(request.request, Some(public_invocation_request::Request::InputItem(_))) {
-                    pending_input_items += 1;
-                }
-                if matches!(request.request, Some(public_invocation_request::Request::InputEnd(_))) {
-                    input_terminal = true;
-                    pending_input_terminal = true;
-                }
-                permit.send(encode_request(request)?);
-            }
-            frame = socket_stream.next() => {
-                let response_input_failed = if fatal_input_failure.is_some() && !accepted {
-                    CancellationToken::new()
-                } else {
-                    input_failed.clone()
-                };
-                let response = match receive_response(
-                    frame,
-                    &wire_tx,
-                    &interrupt,
-                    &response_input_failed,
-                ).await {
-                    Ok(Some(response)) => response,
-                    Ok(None) => continue,
-                    Err(error) if error.downcast_ref::<InputFailureSignal>().is_some() => {
-                        input_failure_open = false;
-                        fatal_input_failure = Some(take_input_failure(&mut input_failure_rx)?);
-                        break 'session;
+            result = async {
+                let (index, request, sequence_offset) = next_unsent_input
+                    .as_ref()
+                    .expect("wire send selected without buffered input");
+                let channel = input_binding
+                    .as_ref()
+                    .and_then(|binding| binding.channel)
+                    .expect("wire send selected without an input channel");
+                send_replayable_input(&sender, request, channel, *sequence_offset).await?;
+                Ok::<_, SessionTransportError>(*index)
+            }, if accepted && next_unsent_input.is_some() && input_binding.as_ref().and_then(|binding| binding.channel).is_some() => {
+                match result {
+                    Ok(index) => {
+                        input_buffer.mark_sent(index)?;
+                        input_terminal = input_buffer.is_terminal();
                     }
-                    Err(error) => return Err(error),
-                };
-                state.validate_response(&response).map_err(anyhow::Error::msg)?;
-                if let Some(path) = checkpoint_path.as_deref() {
-                    update_checkpoint(path, &mut checkpoint, &response)?;
+                    Err(error) => {
+                        tokio::select! {
+                            biased;
+                            _ = interrupt.cancelled() => bail!(PipedExitCode(130)),
+                            result = session.recover_after_send_failure(error) => result?,
+                        }
+                        accepted = false;
+                        output_streams.clear();
+                        if let Some(binding) = input_binding.as_mut() {
+                            binding.channel = None;
+                        }
+                        continue 'session;
+                    }
                 }
-                if let Some(invocation_response::Response::Accepted(accepted_response)) =
-                    response.response.as_ref()
+            }
+            frame = session.receive() => {
+                let mut frame = frame?;
+                let server_frame = frame.frame().clone();
+                if let ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. }) =
+                    &server_frame
                 {
                     accepted = true;
-                    attachment_epoch = accepted_response.epoch;
-                    insert_durable_mappings(
-                        &mut durable_streams,
-                        &accepted_response.stream_mappings,
-                    );
-                    if let Some(binding) = input_binding.take() {
-                        let high_water = accepted_response
-                            .stream_mappings
-                            .iter()
-                            .find(|mapping| mapping.transport_stream_id == binding.stream_id)
-                            .and_then(|mapping| mapping.high_water.as_ref());
-                        let initial_offset = high_water
-                            .map(|high_water| {
-                                high_water.highest_contiguous_sequence.checked_add(1).ok_or_else(
-                                    || anyhow!("input high-water offset overflow"),
-                                )
-                            })
-                            .transpose()?
-                            .unwrap_or_default();
-                        if high_water.is_some_and(|high_water| high_water.terminal) {
+                    output_streams.clear();
+                    if let Some(binding) = input_binding.as_mut() {
+                        let (channel, stream_token) = session
+                            .input_binding(&input_buffer)
+                            .ok_or_else(|| anyhow!("invocation acceptance omitted the stdin stream mapping"))?;
+                        binding.stream_token = Some(stream_token);
+                        binding.channel = Some(channel);
+                        if input_buffer.is_terminal() {
                             input_cancelled.cancel();
                             input_rx.close();
+                            while input_rx.try_recv().is_ok() {}
+                            input_buffer.clear();
                             input_failure_open = false;
                             input_failure_rx.close();
                             stdin_open = false;
                             input_terminal = true;
-                        } else {
-                            input_sequence_offset = initial_offset;
                         }
                     }
                     if fatal_input_failure.is_some() {
                         break 'session;
                     }
                 }
-                match response.response.as_ref() {
-                    Some(invocation_response::Response::Result(result)) => {
-                        insert_durable_mappings(
-                            &mut durable_streams,
-                            &result.new_stream_mappings,
-                        );
-                    }
-                    Some(invocation_response::Response::OutputItem(item)) => {
-                        if let Some(stream_id) = &item.durable_stream_id {
-                            durable_streams.insert(item.transport_stream_id, *stream_id);
-                        }
-                        insert_durable_mappings(
-                            &mut durable_streams,
-                            &item.new_stream_mappings,
-                        );
-                    }
-                    Some(invocation_response::Response::OutputEnd(end)) => {
-                        if let Some(stream_id) = &end.durable_stream_id {
-                            durable_streams.insert(end.transport_stream_id, *stream_id);
-                        }
-                    }
-                    Some(invocation_response::Response::OutputError(error)) => {
-                        if let Some(stream_id) = &error.durable_stream_id {
-                            durable_streams.insert(error.transport_stream_id, *stream_id);
-                        }
-                    }
-                    Some(invocation_response::Response::InputAck(ack)) => {
-                        insert_durable_mappings(
-                            &mut durable_streams,
-                            &ack.new_stream_mappings,
-                        );
-                    }
-                    _ => {}
+                if matches!(
+                    &server_frame,
+                    ServerFrame::Message(PublicServerMessage::InvocationRejected { .. })
+                )
+                {
+                    accepted = false;
                 }
-                if let Some(invocation_response::Response::InputAck(ack)) = response.response.as_ref() {
-                    record_input_acknowledgement(
-                        &mut pending_input_items,
-                        &mut pending_input_terminal,
-                    )?;
-                    acknowledged_input_offset = ack.highest_contiguous_sequence.checked_add(1).ok_or_else(|| anyhow!("input acknowledgement offset overflow"))?;
+                if let ServerFrame::Message(PublicServerMessage::InputStreamAck {
+                    channel,
+                    terminal,
+                    ..
+                }) = &server_frame {
+                    if input_binding.as_ref().and_then(|binding| binding.channel) != Some(*channel) {
+                        bail!("received an acknowledgement for an unknown input channel");
+                    }
+                    input_terminal |= *terminal;
                 }
-                if response_cancels_input(&response, input_stream_id) {
+                if response_cancels_input(
+                    &server_frame,
+                    input_binding.as_ref().and_then(|binding| binding.channel),
+                ) {
                     if validate_discarded_input {
                         input_discarded.cancel();
                     } else {
@@ -556,7 +654,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     }
                     input_rx.close();
                     while input_rx.try_recv().is_ok() {}
-                    pending_input_request = None;
+                    input_buffer.clear();
                     if !validate_discarded_input {
                         input_failure_open = false;
                         input_failure_rx.close();
@@ -564,15 +662,23 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     stdin_open = false;
                     input_terminal = true;
                 }
+                if matches!(
+                    &server_frame,
+                    ServerFrame::Message(PublicServerMessage::InvocationFinished { .. })
+                ) && output_streams.values().any(|stream| !stream.terminal)
+                {
+                    bail!("invocation finished before all output streams became terminal");
+                }
                 match handle_response(
-                    response,
+                    server_frame,
                     &args.agent_type.schema,
                     &method.output_schema,
                     &source_language,
                     args.stdout_format,
                     structured,
                     &idempotency_key_value,
-                    &mut session_identity,
+                    &session_identity,
+                    &bindings,
                     &mut output_streams,
                     &output_tx,
                 ).await {
@@ -584,77 +690,38 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     }
                     Err(error) => return Err(error),
                 }
+                frame.mark_delivered()?;
+                finished = matches!(
+                    frame.frame(),
+                    ServerFrame::Message(
+                        PublicServerMessage::InvocationFinished { .. }
+                            | PublicServerMessage::InvocationRejected { .. }
+                    )
+                );
             }
         }
     }
 
+    let sender = session.sender();
     if let Some(failure) = fatal_input_failure {
         input_cancelled.cancel();
         input_rx.close();
         while input_rx.try_recv().is_ok() {}
-        let cancellation_requests = cancel_open_streams(
-            &mut state,
-            &durable_streams,
-            attachment_epoch,
-            if accepted && !input_terminal {
-                input_stream_id.map(|stream_id| (stream_id, acknowledged_input_offset))
-            } else {
-                None
-            },
-            &output_streams,
-            failure.reason,
-            &failure.error.to_string(),
-        );
+        let input_channel = if accepted && !input_terminal {
+            input_binding.as_ref().and_then(|binding| binding.channel)
+        } else {
+            None
+        };
+        let cancellation_requests =
+            cancel_open_streams(input_channel, &output_streams, failure.reason);
         for request in cancellation_requests {
-            if send_request(&wire_tx, request, &interrupt).await.is_err() {
-                break;
-            }
+            send_request(&sender, &request, &interrupt).await?;
         }
-        drop(wire_tx);
-        if !wire_complete
-            && tokio::time::timeout(Duration::from_secs(3), &mut wire_writer)
-                .await
-                .is_err()
-        {
-            wire_writer.abort();
+        if let Some(channel) = input_channel {
+            await_input_cancellation(&mut session, channel, &interrupt).await?;
         }
+        let _ = tokio::time::timeout(Duration::from_secs(3), sender.close()).await;
         return Err(failure.error);
-    }
-
-    if let Err(error) = await_clean_close(
-        &mut socket_stream,
-        &wire_tx,
-        &interrupt,
-        &mut output_result_rx,
-    )
-    .await
-    {
-        input_cancelled.cancel();
-        input_rx.close();
-        for request in cancel_open_streams(
-            &mut state,
-            &durable_streams,
-            attachment_epoch,
-            if accepted && !input_terminal {
-                input_stream_id.map(|stream_id| (stream_id, acknowledged_input_offset))
-            } else {
-                None
-            },
-            &output_streams,
-            StreamCancelReason::Cancelled,
-            "invocation session stopped while waiting for the server to close",
-        ) {
-            try_send_request(&wire_tx, request);
-        }
-        drop(wire_tx);
-        if !wire_complete
-            && tokio::time::timeout(Duration::from_secs(3), &mut wire_writer)
-                .await
-                .is_err()
-        {
-            wire_writer.abort();
-        }
-        return Err(error);
     }
 
     let discarded_input_failure = if input_discarded.is_cancelled() && input_failure_open {
@@ -664,36 +731,12 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         None
     };
     input_cancelled.cancel();
-    drop(wire_tx);
+    let _ = session.close().await;
     drop(output_tx);
     input_rx.close();
-
-    let mut output_complete = false;
-    while !wire_complete || !output_complete {
-        tokio::select! {
-            biased;
-            _ = interrupt.cancelled() => {
-                wire_writer.abort();
-                bail!(PipedExitCode(130));
-            }
-            result = &mut output_result_rx, if !output_complete => {
-                match result {
-                    Ok(result) => result?,
-                    Err(_) => bail!("invocation output writer stopped unexpectedly"),
-                }
-                output_complete = true;
-            }
-            result = &mut wire_writer, if !wire_complete => {
-                match result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) if state.is_complete() && is_connection_closed(&error) => {}
-                    Ok(Err(error)) => return Err(error.into()),
-                    Err(error) => return Err(error.into()),
-                }
-                wire_complete = true;
-            }
-        }
-    }
+    output_result_rx
+        .await
+        .map_err(|_| anyhow!("invocation output writer stopped unexpectedly"))??;
 
     if let Some(failure) = discarded_input_failure {
         return Err(failure.error);
@@ -703,20 +746,6 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     }
     if failed {
         bail!(NonSuccessfulExit);
-    }
-    Ok(())
-}
-
-fn record_input_acknowledgement(
-    pending_items: &mut usize,
-    pending_terminal: &mut bool,
-) -> anyhow::Result<()> {
-    if *pending_items > 0 {
-        *pending_items -= 1;
-    } else if *pending_terminal {
-        *pending_terminal = false;
-    } else {
-        bail!("received an input acknowledgement without a pending item");
     }
     Ok(())
 }
@@ -732,69 +761,142 @@ fn load_checkpoint(path: &Path) -> anyhow::Result<InvocationSessionCheckpoint> {
             checkpoint.version
         );
     }
-    if checkpoint.idempotency_key.is_empty()
-        || checkpoint.agent_component_id.is_nil()
-        || checkpoint.agent_name.is_empty()
-        || checkpoint.environment_id.is_nil()
-        || checkpoint.attachment_id.is_nil()
-        || checkpoint.callee_fingerprint.is_nil()
-        || checkpoint.epoch == 0
+    if checkpoint.protocol_version != INVOCATION_SESSION_VERSION
+        || checkpoint.idempotency_key.is_empty()
+        || checkpoint.schema_evidence.is_empty()
+        || checkpoint.selector.application.is_empty()
+        || checkpoint.selector.environment.is_empty()
+        || checkpoint.selector.agent_type.is_empty()
+        || checkpoint.selector.method.is_empty()
     {
-        bail!("invocation session file contains an invalid durable session identity");
+        bail!("invocation session file contains invalid public session metadata");
     }
-    for (stream_id, cursor) in &checkpoint.cursors {
-        if stream_id.is_nil() {
-            bail!("invocation session file contains a nil durable stream ID");
-        }
-        if let Some(cursor) = cursor {
-            validate_checkpoint_cursor(cursor)?;
-        }
+    if checkpoint
+        .delivered_output_cursors
+        .iter()
+        .any(|(stream, cursor)| stream.is_empty() || cursor.is_empty())
+    {
+        bail!("invocation session file contains an empty stream or output cursor token");
+    }
+    let pending_kind = checkpoint
+        .pending_operation
+        .as_ref()
+        .map(|pending| pending_operation_kind(&pending.request))
+        .transpose()?;
+    if let Some(pending) = &checkpoint.pending_operation {
+        golem_common::model::invocation_session_public::encode_text(&pending.request)
+            .context("invocation session file contains an invalid pending operation")?;
+    }
+    if checkpoint.session_token.is_none() && pending_kind != Some(PendingOperationKind::Start) {
+        bail!("invocation session file has no session token or pending start operation");
     }
     Ok(checkpoint)
 }
 
+fn pending_operation_kind(request: &PublicClientMessage) -> anyhow::Result<PendingOperationKind> {
+    match request {
+        PublicClientMessage::InvocationStart { .. } => Ok(PendingOperationKind::Start),
+        PublicClientMessage::ResumeAttach { operation, .. } => Ok(match operation {
+            PublicResumeOperation::Resume => PendingOperationKind::Resume,
+            PublicResumeOperation::Takeover => PendingOperationKind::Takeover,
+        }),
+        _ => bail!("invocation session file contains a non-attachment pending operation"),
+    }
+}
+
+fn validate_pending_start(
+    request: &PublicClientMessage,
+    selector: &InvocationSelector,
+    config: &[PublicConfigEntry],
+    idempotency_key: &str,
+    method_parameters: &serde_json::Value,
+    input_binding: Option<&mut InputBinding>,
+) -> anyhow::Result<()> {
+    let PublicClientMessage::InvocationStart {
+        attempt_id,
+        method_parameters: saved_parameters,
+        ..
+    } = request
+    else {
+        bail!("pending operation is not an invocation start");
+    };
+    let mut expected_parameters = method_parameters.clone();
+    if let Some(binding) = input_binding {
+        let saved_value = saved_parameters
+            .as_object()
+            .and_then(|parameters| parameters.get(&binding.parameter_name))
+            .cloned()
+            .ok_or_else(|| anyhow!("pending invocation start omitted its stdin stream"))?;
+        binding.provisional_ref = provisional_ref(&saved_value)?;
+        expected_parameters
+            .as_object_mut()
+            .ok_or_else(|| anyhow!("method parameters are not a public record"))?
+            .insert(binding.parameter_name.clone(), saved_value);
+    }
+    let expected = PublicClientMessage::InvocationStart {
+        attempt_id: *attempt_id,
+        config: config.to_vec(),
+        idempotency_key: idempotency_key.to_string(),
+        method_parameters: expected_parameters,
+        selector: selector.clone(),
+        version: INVOCATION_SESSION_VERSION,
+    };
+    if &expected != request {
+        bail!("saved pending invocation start differs from the requested invocation");
+    }
+    Ok(())
+}
+
+fn provisional_ref(value: &serde_json::Value) -> anyhow::Result<uuid::Uuid> {
+    value
+        .as_object()
+        .and_then(|value| value.get("$stream"))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|stream| stream.get("provisionalRef"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow!("pending stdin stream has no provisional reference"))?
+        .parse()
+        .context("pending stdin stream has an invalid provisional reference")
+}
+
+fn validate_pending_resume(
+    checkpoint: &InvocationSessionCheckpoint,
+    request: &PublicClientMessage,
+    kind: PendingOperationKind,
+) -> anyhow::Result<()> {
+    let PublicClientMessage::ResumeAttach { attempt_id, .. } = request else {
+        bail!("pending operation is not a resume attachment");
+    };
+    if resume_request(checkpoint, kind, *attempt_id)? != *request {
+        bail!("saved pending resume differs from its public checkpoint evidence");
+    }
+    Ok(())
+}
+
 fn resume_request(
     checkpoint: &InvocationSessionCheckpoint,
-    takeover: bool,
-) -> PublicInvocationRequest {
-    let cursors = checkpoint
-        .cursors
-        .iter()
-        .map(|(stream_id, cursor)| StreamCursor {
-            stream_id: Some((*stream_id).into()),
-            last_observed_offset: cursor.clone(),
-        })
-        .collect();
-    PublicInvocationRequest {
-        request: Some(public_invocation_request::Request::ResumeAttach(
-            ResumeAttach {
-                idempotency_key: Some(
-                    IdempotencyKey::new(checkpoint.idempotency_key.clone()).into(),
-                ),
-                agent_id: Some(AgentId {
-                    component_id: Some(golem_api_grpc::proto::golem::component::ComponentId {
-                        value: Some(checkpoint.agent_component_id.into()),
-                    }),
-                    name: checkpoint.agent_name.clone(),
-                }),
-                environment_id: Some(golem_api_grpc::proto::golem::common::EnvironmentId {
-                    value: Some(checkpoint.environment_id.into()),
-                }),
-                attachment_id: Some(checkpoint.attachment_id.into()),
-                attempt_id: Some(uuid::Uuid::new_v4().into()),
-                expected_callee_fingerprint: Some(checkpoint.callee_fingerprint.into()),
-                expected_epoch: checkpoint.epoch,
-                operation: if takeover {
-                    ResumeOperation::Takeover as i32
-                } else {
-                    ResumeOperation::Resume as i32
-                },
-                cursors,
-                auth_ctx: None,
-                principal: None,
-            },
-        )),
-    }
+    kind: PendingOperationKind,
+    attempt_id: uuid::Uuid,
+) -> anyhow::Result<PublicClientMessage> {
+    let session_token = checkpoint
+        .session_token
+        .clone()
+        .ok_or_else(|| anyhow!("invocation session has not received a public session token"))?;
+    Ok(PublicClientMessage::ResumeAttach {
+        attempt_id,
+        operation: if kind == PendingOperationKind::Takeover {
+            PublicResumeOperation::Takeover
+        } else {
+            PublicResumeOperation::Resume
+        },
+        output_cursors: checkpoint
+            .delivered_output_cursors
+            .values()
+            .cloned()
+            .collect(),
+        session_token,
+        version: INVOCATION_SESSION_VERSION,
+    })
 }
 
 fn write_checkpoint(path: &Path, checkpoint: &InvocationSessionCheckpoint) -> anyhow::Result<()> {
@@ -825,168 +927,39 @@ fn write_checkpoint(path: &Path, checkpoint: &InvocationSessionCheckpoint) -> an
             error.error
         )
     })?;
+    std::fs::File::open(parent)
+        .with_context(|| format!("failed to open session directory {}", parent.display()))?
+        .sync_all()
+        .with_context(|| format!("failed to sync session directory {}", parent.display()))?;
     Ok(())
 }
 
-fn validate_checkpoint_cursor(cursor: &[u8]) -> anyhow::Result<()> {
-    if cursor.len() != 24
-        || cursor[0] != 1
-        || cursor[1..8].iter().any(|byte| *byte != 0)
-        || cursor[20..24].iter().any(|byte| *byte != 0)
-    {
-        bail!("invocation session file contains an invalid durable stream cursor");
-    }
-    Ok(())
+fn schema_evidence(
+    agent_type: &AgentTypeSchema,
+    method: &AgentMethodSchema,
+) -> anyhow::Result<String> {
+    let encoded = serde_json::to_vec(&(&agent_type.schema, &agent_type.constructor, method))?;
+    Ok(blake3::hash(&encoded).to_hex().to_string())
 }
 
-fn required_checkpoint_uuid(
-    value: &Option<golem_api_grpc::proto::golem::common::Uuid>,
-    field: &str,
-) -> anyhow::Result<uuid::Uuid> {
-    let value = (*value)
-        .map(uuid::Uuid::from)
-        .ok_or_else(|| anyhow!("durable invocation acceptance has no {field}"))?;
-    if value.is_nil() {
-        bail!("durable invocation acceptance has a nil {field}");
+fn public_input_graph(
+    graph: &SchemaGraph,
+    input_schema: &golem_common::schema::agent::InputSchema,
+) -> SchemaGraph {
+    let fields = input_schema
+        .fields()
+        .iter()
+        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+        .map(|field| NamedFieldType {
+            name: field.name.clone(),
+            body: field.schema.clone(),
+            metadata: field.metadata.clone(),
+        })
+        .collect();
+    SchemaGraph {
+        defs: graph.defs.clone(),
+        root: SchemaType::record(fields),
     }
-    Ok(value)
-}
-
-fn update_checkpoint(
-    path: &Path,
-    checkpoint: &mut Option<InvocationSessionCheckpoint>,
-    response: &InvocationResponse,
-) -> anyhow::Result<()> {
-    let mut changed = false;
-    if let Some(invocation_response::Response::Accepted(accepted)) = response.response.as_ref() {
-        let agent_id = accepted
-            .agent_id
-            .as_ref()
-            .ok_or_else(|| anyhow!("durable invocation acceptance has no agent identity"))?;
-        let component_id = agent_id
-            .component_id
-            .as_ref()
-            .ok_or_else(|| anyhow!("durable invocation acceptance has no component identity"))?;
-        let agent_component_id =
-            required_checkpoint_uuid(&component_id.value, "agent component identity")?;
-        let environment_id = accepted
-            .environment_id
-            .as_ref()
-            .ok_or_else(|| anyhow!("durable invocation acceptance has no environment identity"))?;
-        let environment_id =
-            required_checkpoint_uuid(&environment_id.value, "environment identity")?;
-        let attachment_id =
-            required_checkpoint_uuid(&accepted.attachment_id, "attachment identity")?;
-        let callee_fingerprint =
-            required_checkpoint_uuid(&accepted.callee_fingerprint, "callee fingerprint")?;
-        let idempotency_key = accepted
-            .idempotency_key
-            .as_ref()
-            .map(|key| key.value.clone())
-            .filter(|key| !key.is_empty())
-            .ok_or_else(|| anyhow!("durable invocation acceptance has no idempotency key"))?;
-        let current = checkpoint.get_or_insert_with(|| InvocationSessionCheckpoint {
-            version: SESSION_CHECKPOINT_VERSION,
-            idempotency_key: idempotency_key.clone(),
-            agent_component_id,
-            agent_name: agent_id.name.clone(),
-            environment_id,
-            attachment_id,
-            callee_fingerprint,
-            epoch: accepted.epoch,
-            cursors: BTreeMap::new(),
-        });
-        if current.idempotency_key != idempotency_key
-            || current.agent_component_id != agent_component_id
-            || current.agent_name != agent_id.name
-            || current.environment_id != environment_id
-            || current.attachment_id != attachment_id
-            || current.callee_fingerprint != callee_fingerprint
-        {
-            bail!("durable invocation acceptance changed the saved session identity");
-        }
-        current.epoch = accepted.epoch;
-        add_checkpoint_mappings(current, &accepted.stream_mappings)?;
-        changed = true;
-    }
-
-    let Some(current) = checkpoint.as_mut() else {
-        return Ok(());
-    };
-    match response.response.as_ref() {
-        Some(invocation_response::Response::Result(result)) => {
-            add_checkpoint_mappings(current, &result.new_stream_mappings)?;
-            changed = true;
-        }
-        Some(invocation_response::Response::OutputItem(item)) => {
-            add_checkpoint_mappings(current, &item.new_stream_mappings)?;
-            update_checkpoint_cursor(current, &item.durable_stream_id, &item.durable_offset)?;
-            changed = true;
-        }
-        Some(invocation_response::Response::OutputEnd(end)) => {
-            update_checkpoint_cursor(current, &end.durable_stream_id, &end.durable_offset)?;
-            changed = true;
-        }
-        Some(invocation_response::Response::OutputError(error)) => {
-            update_checkpoint_cursor(current, &error.durable_stream_id, &error.durable_offset)?;
-            changed = true;
-        }
-        Some(invocation_response::Response::InputAck(ack)) => {
-            add_checkpoint_mappings(current, &ack.new_stream_mappings)?;
-            update_checkpoint_cursor(current, &ack.durable_stream_id, &ack.resulting_offset)?;
-            changed = true;
-        }
-        Some(invocation_response::Response::StreamCancel(cancel))
-            if cancel.durable_stream_id.is_some() && !cancel.durable_offset.is_empty() =>
-        {
-            update_checkpoint_cursor(current, &cancel.durable_stream_id, &cancel.durable_offset)?;
-            changed = true;
-        }
-        _ => {}
-    }
-    if changed {
-        write_checkpoint(path, current)?;
-    }
-    Ok(())
-}
-
-fn add_checkpoint_mappings(
-    checkpoint: &mut InvocationSessionCheckpoint,
-    mappings: &[golem_api_grpc::proto::golem::worker::DurableStreamMapping],
-) -> anyhow::Result<()> {
-    for mapping in mappings {
-        let stream_id = mapping
-            .handle
-            .as_ref()
-            .ok_or_else(|| anyhow!("durable stream mapping has no handle"))?
-            .stream_id;
-        let stream_id = required_checkpoint_uuid(&stream_id, "durable stream identity")?;
-        let cursor = mapping
-            .high_water
-            .as_ref()
-            .map(|high_water| {
-                validate_checkpoint_cursor(&high_water.resulting_offset)?;
-                Ok::<_, anyhow::Error>(high_water.resulting_offset.clone())
-            })
-            .transpose()?;
-        if let Some(cursor) = cursor {
-            checkpoint.cursors.insert(stream_id, Some(cursor));
-        } else {
-            checkpoint.cursors.entry(stream_id).or_insert(None);
-        }
-    }
-    Ok(())
-}
-
-fn update_checkpoint_cursor(
-    checkpoint: &mut InvocationSessionCheckpoint,
-    stream_id: &Option<golem_api_grpc::proto::golem::common::Uuid>,
-    cursor: &[u8],
-) -> anyhow::Result<()> {
-    let stream_id = required_checkpoint_uuid(stream_id, "durable stream identity")?;
-    validate_checkpoint_cursor(cursor)?;
-    checkpoint.cursors.insert(stream_id, Some(cursor.to_vec()));
-    Ok(())
 }
 
 async fn websocket_request(ctx: &Context) -> anyhow::Result<tungstenite::http::Request<()>> {
@@ -1018,8 +991,13 @@ fn prepare_method_parameters(
     arguments: Vec<String>,
     source_language: &SourceLanguage,
     stdin_format: InvocationStdinFormat,
-) -> anyhow::Result<(ProtoSchemaValue, Option<InputBinding>)> {
-    let fields = method.input_schema.fields();
+) -> anyhow::Result<(SchemaValue, Option<InputBinding>)> {
+    let fields = method
+        .input_schema
+        .fields()
+        .iter()
+        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+        .collect::<Vec<_>>();
     if fields.len() != arguments.len() {
         bail!(
             "wrong number of parameters: expected {}, got {}",
@@ -1030,7 +1008,6 @@ fn prepare_method_parameters(
 
     let mut values = Vec::with_capacity(fields.len());
     let mut input_binding = None;
-    let mut next_stream_id = 1_u64;
     for (field, argument) in fields.iter().zip(arguments) {
         let resolved = graph
             .resolve_ref(&field.schema)
@@ -1063,15 +1040,14 @@ fn prepare_method_parameters(
                     })?)
                 }
             };
-            let stream_id = next_stream_id;
-            next_stream_id += 2;
-            values.push(ProtoSchemaValue {
-                value: Some(schema_value::Value::StreamReference(
-                    SchemaValueStreamReference { stream_id },
-                )),
-            });
+            let provisional_ref = uuid::Uuid::new_v4();
+            values.push(SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                provisional_ref,
+            )));
             input_binding = Some(InputBinding {
-                stream_id,
+                provisional_ref,
+                stream_token: None,
+                channel: None,
                 parameter_name: field.name.clone(),
                 item_type,
                 raw_kind,
@@ -1090,18 +1066,11 @@ fn prepare_method_parameters(
                 source_language,
             )
             .map_err(|error| anyhow!("invalid value for '{}': {}", field.name, error.message))?;
-            values.push(parsed.try_into().map_err(anyhow::Error::msg)?);
+            values.push(parsed);
         }
     }
 
-    Ok((
-        ProtoSchemaValue {
-            value: Some(schema_value::Value::RecordValue(RecordValue {
-                fields: values,
-            })),
-        },
-        input_binding,
-    ))
+    Ok((SchemaValue::Record { fields: values }, input_binding))
 }
 
 fn validate_stdout_format(
@@ -1143,7 +1112,9 @@ fn read_stdin(
     format: InvocationStdinFormat,
     source_language: SourceLanguage,
     graph: SchemaGraph,
-    tx: &mpsc::Sender<PublicInvocationRequest>,
+    tx: &mpsc::Sender<AdmittedInput>,
+    input_buffer: &InputReplayBuffer,
+    runtime: &tokio::runtime::Handle,
     cancelled: &CancellationToken,
     discarded: &CancellationToken,
 ) -> Result<(), InputFailure> {
@@ -1174,7 +1145,7 @@ fn read_stdin(
                                 binding.parameter_name,
                                 offset + 1
                             ),
-                            reason: StreamCancelReason::Transport,
+                            reason: PublicClientCancelReason::SourceUnavailable,
                         });
                     }
                 }
@@ -1195,36 +1166,56 @@ fn read_stdin(
                                 binding.parameter_name,
                                 offset + 1
                             ),
-                            reason: StreamCancelReason::Protocol,
+                            reason: PublicClientCancelReason::SourceUnavailable,
                         });
                     }
                 };
-                let request =
-                    input_value_request(binding.stream_id, offset, value).map_err(|error| {
-                        InputFailure {
-                            error,
-                            reason: StreamCancelReason::Protocol,
-                        }
-                    })?;
-                if !discarded.is_cancelled() && tx.blocking_send(request).is_err() {
+                let (value, byte_charge) = encode_public_schema_value_with_charge(
+                    &graph,
+                    &binding.item_type,
+                    &value,
+                    |_, _| {
+                        Err(PublicSchemaValueError::new(
+                            golem_common::model::invocation_session_public::PublicErrorCode::UnsupportedValue,
+                            "stdin values cannot contain nested streams",
+                        ))
+                    },
+                )
+                .map_err(|error| InputFailure {
+                    error: error.into(),
+                    reason: PublicClientCancelReason::SourceUnavailable,
+                })?;
+                let request = ReplayableInput::Value {
+                    sequence: offset,
+                    value,
+                };
+                if !queue_input(
+                    tx,
+                    input_buffer,
+                    runtime,
+                    request,
+                    byte_charge,
+                    cancelled,
+                    discarded,
+                )? {
                     if cancelled.is_cancelled() {
                         return Ok(());
                     }
                     if discarded.is_cancelled() {
                         offset = offset.checked_add(1).ok_or_else(|| InputFailure {
                             error: anyhow!("stdin stream offset overflow"),
-                            reason: StreamCancelReason::Protocol,
+                            reason: PublicClientCancelReason::SourceUnavailable,
                         })?;
                         continue;
                     }
                     return Err(InputFailure {
                         error: anyhow!("invocation session ended while reading stdin"),
-                        reason: StreamCancelReason::Transport,
+                        reason: PublicClientCancelReason::SourceUnavailable,
                     });
                 }
                 offset = offset.checked_add(1).ok_or_else(|| InputFailure {
                     error: anyhow!("stdin stream offset overflow"),
-                    reason: StreamCancelReason::Protocol,
+                    reason: PublicClientCancelReason::SourceUnavailable,
                 })?;
             }
         }
@@ -1258,7 +1249,7 @@ fn read_stdin(
                                     "failed to read raw stdin for parameter '{}': {error}",
                                     binding.parameter_name
                                 ),
-                                reason: StreamCancelReason::Transport,
+                                reason: PublicClientCancelReason::SourceUnavailable,
                             });
                         }
                     }
@@ -1266,42 +1257,38 @@ fn read_stdin(
                 if count == 0 {
                     break;
                 }
-                let payload = match binding.raw_kind {
-                    Some(RawStreamKind::Binary) => input_stream_item::Payload::Value(
-                        SchemaValue::Binary(BinaryValuePayload {
-                            bytes: buffer[..count].to_vec(),
-                            mime_type: None,
-                        })
-                        .try_into()
-                        .map_err(|error| InputFailure {
-                            error: anyhow::Error::msg(error),
-                            reason: StreamCancelReason::Protocol,
-                        })?,
-                    ),
-                    Some(RawStreamKind::U8) => {
-                        input_stream_item::Payload::PackedU8(buffer[..count].to_vec())
-                    }
+                let (kind, item_count) = match binding.raw_kind {
+                    Some(RawStreamKind::Binary) => (BinaryMessageKind::InputBinary, 1),
+                    Some(RawStreamKind::U8) => (BinaryMessageKind::InputU8, count as u64),
                     None => unreachable!("raw stdin was validated before reading"),
                 };
-                if tx
-                    .blocking_send(PublicInvocationRequest {
-                        request: Some(public_invocation_request::Request::InputItem(
-                            InputStreamItem {
-                                transport_stream_id: binding.stream_id,
-                                sequence: offset,
-                                payload: Some(payload),
-                                ..Default::default()
-                            },
-                        )),
-                    })
-                    .is_err()
-                {
+                let request = ReplayableInput::Binary(BinaryMessage {
+                    metadata: BinaryMessageMetadata {
+                        channel: 1,
+                        cursor_token: None,
+                        item_count: DecimalU64(item_count),
+                        kind,
+                        mime_type: None,
+                        sequence: DecimalU64(offset),
+                        version: INVOCATION_SESSION_VERSION,
+                    },
+                    payload: buffer[..count].to_vec(),
+                });
+                if !queue_input(
+                    tx,
+                    input_buffer,
+                    runtime,
+                    request,
+                    count,
+                    cancelled,
+                    discarded,
+                )? {
                     if cancelled.is_cancelled() || discarded.is_cancelled() {
                         return Ok(());
                     }
                     return Err(InputFailure {
                         error: anyhow!("invocation session ended while reading stdin"),
-                        reason: StreamCancelReason::Transport,
+                        reason: PublicClientCancelReason::SourceUnavailable,
                     });
                 }
                 let logical_item_count = if binding.raw_kind == Some(RawStreamKind::U8) {
@@ -1313,7 +1300,7 @@ fn read_stdin(
                     .checked_add(logical_item_count)
                     .ok_or_else(|| InputFailure {
                         error: anyhow!("stdin stream offset overflow"),
-                        reason: StreamCancelReason::Protocol,
+                        reason: PublicClientCancelReason::SourceUnavailable,
                     })?;
                 if eof {
                     break;
@@ -1324,198 +1311,128 @@ fn read_stdin(
     if cancelled.is_cancelled() || discarded.is_cancelled() {
         return Ok(());
     }
-    if tx
-        .blocking_send(PublicInvocationRequest {
-            request: Some(public_invocation_request::Request::InputEnd(
-                InputStreamEnd {
-                    transport_stream_id: binding.stream_id,
-                    sequence: offset,
-                    ..Default::default()
-                },
-            )),
-        })
-        .is_err()
-    {
+    if !queue_input(
+        tx,
+        input_buffer,
+        runtime,
+        ReplayableInput::End { sequence: offset },
+        1,
+        cancelled,
+        discarded,
+    )? {
         if cancelled.is_cancelled() || discarded.is_cancelled() {
             return Ok(());
         }
         return Err(InputFailure {
             error: anyhow!("invocation session ended before stdin reached EOF"),
-            reason: StreamCancelReason::Transport,
+            reason: PublicClientCancelReason::SourceUnavailable,
         });
     }
     Ok(())
 }
 
-fn input_cancel_request(
-    stream_id: u64,
-    offset: u64,
-    reason: StreamCancelReason,
-    details: String,
-) -> PublicInvocationRequest {
-    PublicInvocationRequest {
-        request: Some(public_invocation_request::Request::StreamCancel(
-            StreamCancel {
-                transport_stream_id: stream_id,
-                producer_sequence: offset,
-                role: StreamCancelRole::InputProducer as i32,
-                reason: reason as i32,
-                details: Some(details),
-                ..Default::default()
-            },
-        )),
-    }
-}
-
-fn bind_durable_request(
-    request: &mut PublicInvocationRequest,
-    streams: &HashMap<u64, golem_api_grpc::proto::golem::common::Uuid>,
-    epoch: u64,
-    input_sequence_offset: u64,
-) -> anyhow::Result<()> {
-    let (transport_stream_id, durable_stream_id, frame_epoch) = match request.request.as_mut() {
-        Some(public_invocation_request::Request::InputItem(item)) => {
-            item.sequence = item
-                .sequence
-                .checked_add(input_sequence_offset)
-                .ok_or_else(|| anyhow!("input stream sequence overflow"))?;
-            (
-                item.transport_stream_id,
-                &mut item.durable_stream_id,
-                &mut item.epoch,
-            )
+#[allow(clippy::too_many_arguments)]
+fn queue_input(
+    tx: &mpsc::Sender<AdmittedInput>,
+    input_buffer: &InputReplayBuffer,
+    runtime: &tokio::runtime::Handle,
+    request: ReplayableInput,
+    byte_charge: usize,
+    cancelled: &CancellationToken,
+    discarded: &CancellationToken,
+) -> Result<bool, InputFailure> {
+    let admitted = runtime.block_on(async {
+        tokio::select! {
+            _ = cancelled.cancelled() => None,
+            _ = discarded.cancelled() => None,
+            result = input_buffer.admit(request, byte_charge) => Some(result),
         }
-        Some(public_invocation_request::Request::InputEnd(end)) => {
-            end.sequence = end
-                .sequence
-                .checked_add(input_sequence_offset)
-                .ok_or_else(|| anyhow!("input stream sequence overflow"))?;
-            (
-                end.transport_stream_id,
-                &mut end.durable_stream_id,
-                &mut end.epoch,
-            )
-        }
-        Some(public_invocation_request::Request::StreamCancel(cancel)) => (
-            cancel.transport_stream_id,
-            &mut cancel.durable_stream_id,
-            &mut cancel.epoch,
-        ),
-        _ => return Ok(()),
+    });
+    let Some(admitted) = admitted else {
+        return Ok(false);
     };
-    *durable_stream_id = Some(
-        streams
-            .get(&transport_stream_id)
-            .cloned()
-            .ok_or_else(|| anyhow!("no durable mapping for stream {transport_stream_id}"))?,
-    );
-    *frame_epoch = epoch;
-    Ok(())
-}
-
-fn insert_durable_mappings(
-    streams: &mut HashMap<u64, golem_api_grpc::proto::golem::common::Uuid>,
-    mappings: &[golem_api_grpc::proto::golem::worker::DurableStreamMapping],
-) {
-    for mapping in mappings {
-        if let Some(stream_id) = mapping
-            .handle
-            .as_ref()
-            .and_then(|handle| handle.stream_id.as_ref())
-        {
-            streams.insert(mapping.transport_stream_id, *stream_id);
-        }
-    }
-}
-
-fn output_cancel_request(
-    stream_id: u64,
-    offset: u64,
-    reason: StreamCancelReason,
-    details: String,
-) -> PublicInvocationRequest {
-    PublicInvocationRequest {
-        request: Some(public_invocation_request::Request::StreamCancel(
-            StreamCancel {
-                transport_stream_id: stream_id,
-                producer_sequence: offset,
-                role: StreamCancelRole::OutputConsumer as i32,
-                reason: reason as i32,
-                details: Some(details),
-                ..Default::default()
-            },
-        )),
+    let admitted = admitted.map_err(|error| InputFailure {
+        error: error.into(),
+        reason: PublicClientCancelReason::SourceUnavailable,
+    })?;
+    match tx.blocking_send(admitted) {
+        Ok(()) => Ok(true),
+        Err(_) if cancelled.is_cancelled() || discarded.is_cancelled() => Ok(false),
+        Err(_) => Err(InputFailure {
+            error: anyhow!("invocation session ended while reading stdin"),
+            reason: PublicClientCancelReason::SourceUnavailable,
+        }),
     }
 }
 
 fn cancel_open_streams(
-    state: &mut InvocationSessionState,
-    durable_streams: &HashMap<u64, golem_api_grpc::proto::golem::common::Uuid>,
-    attachment_epoch: u64,
-    input: Option<(u64, u64)>,
-    output_streams: &HashMap<u64, OutputStream>,
-    reason: StreamCancelReason,
-    details: &str,
-) -> Vec<PublicInvocationRequest> {
+    input: Option<u32>,
+    output_streams: &HashMap<u32, OutputStream>,
+    reason: PublicClientCancelReason,
+) -> Vec<PublicClientMessage> {
     let mut requests = Vec::new();
-    if let Some((stream_id, offset)) = input {
-        let mut request = input_cancel_request(stream_id, offset, reason, details.to_string());
-        if bind_durable_request(&mut request, durable_streams, attachment_epoch, 0).is_ok()
-            && state.validate_public_request(&request).is_ok()
-        {
-            requests.push(request);
-        }
+    if let Some(channel) = input {
+        requests.push(PublicClientMessage::StreamCancel {
+            channel,
+            reason,
+            version: INVOCATION_SESSION_VERSION,
+        });
     }
 
     let mut open_outputs = output_streams
         .iter()
-        .filter_map(|(stream_id, stream)| {
-            (!stream.terminal).then_some((*stream_id, stream.next_offset))
-        })
+        .filter_map(|(channel, stream)| (!stream.terminal).then_some(*channel))
         .collect::<Vec<_>>();
-    open_outputs.sort_unstable_by_key(|(stream_id, _)| *stream_id);
-    for (stream_id, offset) in open_outputs {
-        let mut request = output_cancel_request(stream_id, offset, reason, details.to_string());
-        if bind_durable_request(&mut request, durable_streams, attachment_epoch, 0).is_ok()
-            && state.validate_public_request(&request).is_ok()
-        {
-            requests.push(request);
-        }
+    open_outputs.sort_unstable();
+    for channel in open_outputs {
+        requests.push(PublicClientMessage::StreamCancel {
+            channel,
+            reason,
+            version: INVOCATION_SESSION_VERSION,
+        });
     }
     requests
 }
 
-fn input_value_request(
-    stream_id: u64,
-    sequence: u64,
-    value: SchemaValue,
-) -> anyhow::Result<PublicInvocationRequest> {
-    Ok(PublicInvocationRequest {
-        request: Some(public_invocation_request::Request::InputItem(
-            InputStreamItem {
-                transport_stream_id: stream_id,
-                sequence,
-                payload: Some(input_stream_item::Payload::Value(
-                    value.try_into().map_err(anyhow::Error::msg)?,
-                )),
-                ..Default::default()
-            },
-        )),
-    })
-}
-
 async fn send_request(
-    tx: &mpsc::Sender<Message>,
-    request: PublicInvocationRequest,
+    sender: &InvocationSessionSender,
+    request: &PublicClientMessage,
     interrupt: &CancellationToken,
 ) -> anyhow::Result<()> {
-    send_message(tx, encode_request(request)?, interrupt).await
+    tokio::select! {
+        biased;
+        _ = interrupt.cancelled() => bail!(PipedExitCode(130)),
+        result = sender.send_message(request) => result.map_err(Into::into),
+    }
 }
 
-fn try_send_request(tx: &mpsc::Sender<Message>, request: PublicInvocationRequest) {
-    if let Ok(message) = encode_request(request) {
-        let _ = tx.try_send(message);
-    }
+async fn cancel_before_close(session: &mut InvocationSession, requests: Vec<PublicClientMessage>) {
+    let _ = tokio::time::timeout(Duration::from_secs(3), async {
+        let sender = session.sender();
+        for request in requests {
+            if sender.send_message(&request).await.is_err() {
+                return;
+            }
+        }
+        loop {
+            let Ok(mut frame) = session.receive().await else {
+                return;
+            };
+            let terminal = matches!(
+                frame.frame(),
+                ServerFrame::Message(
+                    PublicServerMessage::InvocationFinished { .. }
+                        | PublicServerMessage::InvocationRejected { .. }
+                        | PublicServerMessage::AttachmentRevoked { .. }
+                )
+            );
+            if frame.mark_delivered().is_err() || terminal {
+                return;
+            }
+        }
+    })
+    .await;
+    let _ = tokio::time::timeout(Duration::from_secs(3), session.close()).await;
 }
 
 fn take_input_failure(
@@ -1531,180 +1448,87 @@ fn take_input_failure(
     })
 }
 
-fn encode_request(request: PublicInvocationRequest) -> anyhow::Result<Message> {
-    let mut bytes = Vec::new();
-    request.encode(&mut bytes)?;
-    Ok(Message::Binary(bytes.into()))
-}
-
-async fn send_message(
-    tx: &mpsc::Sender<Message>,
-    message: Message,
-    interrupt: &CancellationToken,
-) -> anyhow::Result<()> {
-    tokio::select! {
-        biased;
-        _ = interrupt.cancelled() => bail!(PipedExitCode(130)),
-        result = tx.send(message) => result.map_err(|_| anyhow!("agent invocation session connection closed")),
-    }
-}
-
-async fn send_active_message(
-    tx: &mpsc::Sender<Message>,
-    message: Message,
-    interrupt: &CancellationToken,
-    input_failed: &CancellationToken,
-) -> anyhow::Result<()> {
-    tokio::select! {
-        biased;
-        _ = input_failed.cancelled() => bail!(InputFailureSignal),
-        _ = interrupt.cancelled() => bail!(PipedExitCode(130)),
-        result = tx.send(message) => result.map_err(|_| anyhow!("agent invocation session connection closed")),
-    }
-}
-
-async fn receive_response(
-    frame: Option<Result<Message, tungstenite::Error>>,
-    wire_tx: &mpsc::Sender<Message>,
-    interrupt: &CancellationToken,
-    input_failed: &CancellationToken,
-) -> anyhow::Result<Option<InvocationResponse>> {
-    match frame {
-        Some(Ok(Message::Binary(bytes))) => Ok(Some(InvocationResponse::decode(bytes)?)),
-        Some(Ok(Message::Ping(payload))) => {
-            send_active_message(wire_tx, Message::Pong(payload), interrupt, input_failed).await?;
-            Ok(None)
-        }
-        Some(Ok(Message::Pong(_))) => Ok(None),
-        Some(Ok(Message::Close(close))) => {
-            bail!("agent invocation session closed before completion: {close:?}");
-        }
-        Some(Ok(message)) => {
-            bail!("unexpected WebSocket frame in invocation session: {message:?}");
-        }
-        Some(Err(error)) => Err(error.into()),
-        None => bail!("agent invocation session ended before completion"),
-    }
-}
-
-fn response_cancels_input(response: &InvocationResponse, input_stream_id: Option<u64>) -> bool {
-    let Some(input_stream_id) = input_stream_id else {
+fn response_cancels_input(response: &ServerFrame, input_channel: Option<u32>) -> bool {
+    let Some(input_channel) = input_channel else {
         return false;
     };
     matches!(
-        response.response.as_ref(),
-        Some(invocation_response::Response::StreamCancel(cancel))
-            if cancel.transport_stream_id == input_stream_id
-                && cancel.role() == StreamCancelRole::InputConsumer
+        response,
+        ServerFrame::Message(PublicServerMessage::StreamCancel { channel, .. })
+            if *channel == input_channel
     )
 }
 
-async fn await_clean_close<S>(
-    socket_stream: &mut S,
-    wire_tx: &mpsc::Sender<Message>,
+async fn await_input_cancellation(
+    session: &mut InvocationSession,
+    input_channel: u32,
     interrupt: &CancellationToken,
-    output_result_rx: &mut oneshot::Receiver<anyhow::Result<()>>,
-) -> anyhow::Result<()>
-where
-    S: futures_util::Stream<Item = Result<Message, tungstenite::Error>> + Unpin,
-{
-    let close_timeout = tokio::time::sleep(Duration::from_secs(3));
-    tokio::pin!(close_timeout);
+) -> anyhow::Result<()> {
     loop {
-        tokio::select! {
+        let mut frame = tokio::select! {
             biased;
             _ = interrupt.cancelled() => bail!(PipedExitCode(130)),
-            result = &mut *output_result_rx => {
-                match result {
-                    Ok(result) => return result,
-                    Err(_) => bail!("invocation output writer stopped unexpectedly"),
-                }
-            }
-            _ = &mut close_timeout => {
-                bail!("invocation session did not close after completion");
-            }
-            frame = socket_stream.next() => {
-                match frame {
-                    Some(Ok(Message::Close(_))) | None => return Ok(()),
-                    Some(Ok(Message::Ping(payload))) => {
-                        send_message(wire_tx, Message::Pong(payload), interrupt).await?;
-                    }
-                    Some(Ok(Message::Pong(_))) => {}
-                    Some(Ok(Message::Binary(_))) => {
-                        bail!("invocation session sent an event after completion");
-                    }
-                    Some(Ok(message)) => {
-                        bail!("unexpected WebSocket frame after invocation completion: {message:?}");
-                    }
-                    Some(Err(error)) if is_connection_closed(&error) => return Ok(()),
-                    Some(Err(error)) => return Err(error.into()),
-                }
-            }
+            result = session.receive() => result?,
+        };
+        let terminal = response_cancels_input(frame.frame(), Some(input_channel))
+            || matches!(
+                frame.frame(),
+                ServerFrame::Message(
+                    PublicServerMessage::InvocationFinished { .. }
+                        | PublicServerMessage::InvocationRejected { .. }
+                        | PublicServerMessage::AttachmentRevoked { .. }
+                )
+            );
+        frame.mark_delivered()?;
+        if terminal {
+            return Ok(());
         }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn handle_response(
-    response: InvocationResponse,
+    response: ServerFrame,
     graph: &SchemaGraph,
     output_schema: &OutputSchema,
     source_language: &SourceLanguage,
     stdout_format: InvocationStdoutFormat,
     structured: bool,
     idempotency_key: &str,
-    session_identity: &mut SessionIdentity,
-    output_streams: &mut HashMap<u64, OutputStream>,
+    session_identity: &SessionIdentity,
+    bindings: &DeliveryTracker,
+    output_streams: &mut HashMap<u32, OutputStream>,
     output_tx: &OutputChannel,
 ) -> anyhow::Result<bool> {
     let mut failed = false;
-    match response.response {
-        Some(invocation_response::Response::Accepted(accepted)) => {
-            session_identity.agent_id = accepted.agent_id.as_ref().map(|id| id.name.clone());
-            session_identity.component_revision = accepted.component_revision;
+    match response {
+        ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. }) => {
             if structured {
                 let mut event = event(AgentInvocationSessionEventKind::Accepted, idempotency_key);
-                event.agent_id = session_identity.agent_id.clone();
-                event.component_revision = session_identity.component_revision;
+                event.agent_id = Some(session_identity.agent_id.clone());
                 emit(output_tx, OutputJob::Event(event)).await?;
             }
         }
-        Some(invocation_response::Response::Rejected(rejected)) => {
+        ServerFrame::Message(PublicServerMessage::InvocationRejected { code, message, .. }) => {
             failed = true;
-            let reason = format!("{:?}", rejected.reason());
+            let reason = code.as_str().to_string();
             if structured {
                 let mut event = event(AgentInvocationSessionEventKind::Rejected, idempotency_key);
-                event.agent_id = rejected.agent_id.map(|id| id.name);
-                event.component_revision = rejected.component_revision;
+                event.agent_id = Some(session_identity.agent_id.clone());
                 event.reason = Some(reason);
-                event.error = Some(rejected.error);
+                event.error = Some(message);
                 emit(output_tx, OutputJob::Event(event)).await?;
             } else {
-                eprintln!("Invocation rejected ({reason}): {}", rejected.error);
+                eprintln!("Invocation rejected ({reason}): {message}");
             }
         }
-        Some(invocation_response::Response::Result(result)) => {
-            let result_agent_id = result
-                .agent_id
-                .map(|id| id.name)
-                .or_else(|| session_identity.agent_id.clone());
-            let result_component_revision = result
-                .component_revision
-                .or(session_identity.component_revision);
-            match result.result {
-                Some(invocation_session_result::Result::MethodResult(value)) => {
+        ServerFrame::Message(PublicServerMessage::InvocationResult { result, .. }) => {
+            match result {
+                PublicInvocationResult::Value { value } => {
                     let Some(output_type) = output_schema.schema() else {
-                        if structured {
-                            let mut event =
-                                event(AgentInvocationSessionEventKind::Result, idempotency_key);
-                            event.agent_id = result_agent_id;
-                            event.component_revision = result_component_revision;
-                            emit(output_tx, OutputJob::Event(event)).await?;
-                        } else {
-                            emit(output_tx, OutputJob::Text("void".to_string())).await?;
-                        }
-                        return Ok(failed);
+                        bail!("session returned a value for a unit-returning method");
                     };
+                    let value = decode_output_value(graph, output_type, &value, bindings)?;
                     discover_streams(
                         graph,
                         output_type,
@@ -1717,9 +1541,8 @@ async fn handle_response(
                     if structured {
                         let mut event =
                             event(AgentInvocationSessionEventKind::Result, idempotency_key);
-                        event.agent_id = result_agent_id;
-                        event.component_revision = result_component_revision;
-                        event.value = Some(proto_value_to_json(graph, output_type, &value)?);
+                        event.agent_id = Some(session_identity.agent_id.clone());
+                        event.value = Some(schema_value_to_json(graph, output_type, &value)?);
                         emit(output_tx, OutputJob::Event(event)).await?;
                     } else if stdout_format == InvocationStdoutFormat::Value {
                         for (path, rendered) in
@@ -1734,136 +1557,149 @@ async fn handle_response(
                         }
                     }
                 }
-                Some(invocation_session_result::Result::NoResult(_)) => {
+                PublicInvocationResult::None => {
                     if !matches!(output_schema, OutputSchema::Unit) {
                         bail!("session returned no result for a value-returning method");
                     }
                     if structured {
                         let mut event =
                             event(AgentInvocationSessionEventKind::Result, idempotency_key);
-                        event.agent_id = result_agent_id;
-                        event.component_revision = result_component_revision;
+                        event.agent_id = Some(session_identity.agent_id.clone());
                         emit(output_tx, OutputJob::Event(event)).await?;
                     } else {
                         emit(output_tx, OutputJob::Text("void".to_string())).await?;
                     }
                 }
-                None => bail!("invocation result has no value"),
             }
         }
-        Some(invocation_response::Response::OutputItem(item)) => {
+        ServerFrame::Message(PublicServerMessage::OutputStreamItem {
+            channel,
+            sequence,
+            value,
+            ..
+        }) => {
             let stream = output_streams
-                .get(&item.transport_stream_id)
-                .cloned()
-                .ok_or_else(|| {
-                    anyhow!("output stream {} has no schema", item.transport_stream_id)
-                })?;
-            let value = item
-                .value
-                .ok_or_else(|| anyhow!("output stream item has no value"))?;
-            discover_streams(
+                .get(&channel)
+                .ok_or_else(|| anyhow!("output stream {channel} has no schema"))?;
+            let value = decode_output_value(graph, &stream.item_type, &value, bindings)?;
+            handle_output_item(
+                channel,
+                sequence.0,
+                value,
                 graph,
-                &stream.item_type,
-                &value,
-                &format!("{}[{}]", stream.path, item.producer_sequence),
-                Some(item.transport_stream_id),
-                InvocationStdoutFormat::Value,
+                source_language,
+                stdout_format,
+                structured,
+                idempotency_key,
                 output_streams,
-            )?;
-            output_streams
-                .get_mut(&item.transport_stream_id)
-                .expect("output stream disappeared while processing an item")
-                .next_offset = item
-                .producer_sequence
-                .checked_add(1)
-                .ok_or_else(|| anyhow!("output stream offset overflow"))?;
-            if structured {
-                let mut event = event(AgentInvocationSessionEventKind::Item, idempotency_key);
-                event.stream_id = Some(item.transport_stream_id);
-                event.parent_stream_id = stream.parent_stream_id;
-                event.path = Some(stream.path);
-                event.offset = Some(item.producer_sequence);
-                event.value = Some(proto_value_to_json(graph, &stream.item_type, &value)?);
-                emit(output_tx, OutputJob::Event(event)).await?;
-            } else if stdout_format == InvocationStdoutFormat::Raw {
-                emit(output_tx, OutputJob::Raw(raw_output_bytes(&stream, value)?)).await?;
-            } else {
-                for (path, rendered) in render_text_fragments(
-                    graph,
-                    &stream.item_type,
-                    &value,
-                    &stream.path,
-                    source_language,
-                )? {
-                    let rendered =
-                        if path != stream.path || output_streams.len() > 1 || stream.path != "$" {
-                            format!("{path}: {rendered}")
-                        } else {
-                            rendered
-                        };
-                    emit(output_tx, OutputJob::Text(rendered)).await?;
+                output_tx,
+            )
+            .await?;
+        }
+        ServerFrame::Binary(message) => {
+            let channel = message.metadata.channel;
+            match message.metadata.kind {
+                BinaryMessageKind::OutputBinary => {
+                    handle_output_item(
+                        channel,
+                        message.metadata.sequence.0,
+                        SchemaValue::Binary(BinaryValuePayload {
+                            bytes: message.payload,
+                            mime_type: message.metadata.mime_type,
+                        }),
+                        graph,
+                        source_language,
+                        stdout_format,
+                        structured,
+                        idempotency_key,
+                        output_streams,
+                        output_tx,
+                    )
+                    .await?;
                 }
+                BinaryMessageKind::OutputU8 => {
+                    for (index, value) in message.payload.into_iter().enumerate() {
+                        let sequence = message
+                            .metadata
+                            .sequence
+                            .0
+                            .checked_add(index as u64)
+                            .ok_or_else(|| anyhow!("output stream sequence overflow"))?;
+                        handle_output_item(
+                            channel,
+                            sequence,
+                            SchemaValue::U8(value),
+                            graph,
+                            source_language,
+                            stdout_format,
+                            structured,
+                            idempotency_key,
+                            output_streams,
+                            output_tx,
+                        )
+                        .await?;
+                    }
+                }
+                _ => bail!("server sent a client-to-server binary message kind"),
             }
         }
-        Some(invocation_response::Response::OutputEnd(end)) => {
-            output_streams
-                .get_mut(&end.transport_stream_id)
-                .ok_or_else(|| anyhow!("output stream {} has no schema", end.transport_stream_id))?
-                .terminal = true;
+        ServerFrame::Message(PublicServerMessage::OutputStreamEnd {
+            channel,
+            sequence,
+            outcome,
+            ..
+        }) => {
+            let stream = output_streams
+                .get_mut(&channel)
+                .ok_or_else(|| anyhow!("output stream {channel} has no schema"))?;
+            if stream.terminal {
+                bail!("output stream {channel} received a second terminal event");
+            }
+            if stream
+                .next_offset
+                .is_some_and(|expected| expected != sequence.0)
+            {
+                bail!("output stream {channel} terminal sequence is not contiguous");
+            }
+            stream.terminal = true;
+            let (kind, error, reason) = match outcome {
+                PublicOutputStreamOutcome::Ok => (AgentInvocationSessionEventKind::End, None, None),
+                PublicOutputStreamOutcome::Error { code, message } => {
+                    failed = true;
+                    (
+                        AgentInvocationSessionEventKind::StreamError,
+                        Some(message),
+                        Some(code.as_str().to_string()),
+                    )
+                }
+                PublicOutputStreamOutcome::Cancelled { reason } => {
+                    failed |= server_cancellation_is_failure(reason);
+                    (
+                        AgentInvocationSessionEventKind::StreamCancel,
+                        None,
+                        Some(format!("{reason:?}")),
+                    )
+                }
+            };
             if structured {
-                let stream = output_streams
-                    .get(&end.transport_stream_id)
-                    .ok_or_else(|| {
-                        anyhow!("output stream {} has no schema", end.transport_stream_id)
-                    })?;
-                let mut event = event(AgentInvocationSessionEventKind::End, idempotency_key);
-                event.stream_id = Some(end.transport_stream_id);
-                event.parent_stream_id = stream.parent_stream_id;
+                let mut event = event(kind, idempotency_key);
+                event.stream_id = Some(channel as u64);
+                event.parent_stream_id = stream.parent_stream_id.map(u64::from);
                 event.path = Some(stream.path.clone());
-                event.offset = Some(end.producer_sequence);
+                event.offset = Some(sequence.0);
+                event.error = error;
+                event.reason = reason;
                 emit(output_tx, OutputJob::Event(event)).await?;
+            } else if let Some(error) = error {
+                eprintln!("Output stream {channel} failed: {error}");
             }
         }
-        Some(invocation_response::Response::OutputError(error)) => {
-            failed = true;
-            output_streams
-                .get_mut(&error.transport_stream_id)
-                .ok_or_else(|| {
-                    anyhow!("output stream {} has no schema", error.transport_stream_id)
-                })?
-                .terminal = true;
-            if structured {
-                let stream = output_streams
-                    .get(&error.transport_stream_id)
-                    .ok_or_else(|| {
-                        anyhow!("output stream {} has no schema", error.transport_stream_id)
-                    })?;
-                let mut event = event(
-                    AgentInvocationSessionEventKind::StreamError,
-                    idempotency_key,
-                );
-                event.stream_id = Some(error.transport_stream_id);
-                event.parent_stream_id = stream.parent_stream_id;
-                event.path = Some(stream.path.clone());
-                event.offset = Some(error.producer_sequence);
-                event.error = Some(error.details);
-                emit(output_tx, OutputJob::Event(event)).await?;
-            } else {
-                eprintln!(
-                    "Output stream {} failed: {}",
-                    error.transport_stream_id, error.details
-                );
-            }
-        }
-        Some(invocation_response::Response::InputAck(_)) => {}
-        Some(invocation_response::Response::StreamCancel(cancel)) => {
-            failed |= cancel.reason() != StreamCancelReason::Cancelled;
-            let output_stream = if cancel.role() == StreamCancelRole::OutputProducer {
-                let stream = output_streams
-                    .get_mut(&cancel.transport_stream_id)
-                    .ok_or_else(|| {
-                        anyhow!("output stream {} has no schema", cancel.transport_stream_id)
-                    })?;
+        ServerFrame::Message(PublicServerMessage::InputStreamAck { .. }) => {}
+        ServerFrame::Message(PublicServerMessage::StreamCancel {
+            channel, reason, ..
+        }) => {
+            failed |= server_cancellation_is_failure(reason);
+            let output_stream = if let Some(stream) = output_streams.get_mut(&channel) {
                 stream.terminal = true;
                 Some(stream.clone())
             } else {
@@ -1874,37 +1710,31 @@ async fn handle_response(
                     AgentInvocationSessionEventKind::StreamCancel,
                     idempotency_key,
                 );
-                event.stream_id = Some(cancel.transport_stream_id);
+                event.stream_id = Some(channel as u64);
                 if let Some(stream) = output_stream {
-                    event.parent_stream_id = stream.parent_stream_id;
+                    event.parent_stream_id = stream.parent_stream_id.map(u64::from);
                     event.path = Some(stream.path);
                 }
-                event.offset = Some(cancel.producer_sequence);
-                event.reason = Some(format!("{:?}", cancel.reason()));
-                event.error = cancel.details;
+                event.reason = Some(format!("{reason:?}"));
                 emit(output_tx, OutputJob::Event(event)).await?;
             } else {
-                eprintln!("Stream {} was cancelled", cancel.transport_stream_id);
+                eprintln!("Stream {channel} was cancelled");
             }
         }
-        Some(invocation_response::Response::AttachmentRevoked(revoked)) => {
-            bail!("invocation attachment was revoked: {}", revoked.details);
+        ServerFrame::Message(PublicServerMessage::AttachmentRevoked { reason, .. }) => {
+            bail!("invocation attachment was revoked: {reason:?}");
         }
-        Some(invocation_response::Response::Finished(finished)) => {
-            let (outcome, error) = match finished.outcome {
-                Some(invocation_session_completion::Outcome::Success(_)) => {
-                    ("success".to_string(), None)
-                }
-                Some(invocation_session_completion::Outcome::Failure(failure)) => {
+        ServerFrame::Message(PublicServerMessage::InvocationFinished { outcome, .. }) => {
+            let (outcome, error) = match outcome {
+                PublicInvocationOutcome::Success => ("success".to_string(), None),
+                PublicInvocationOutcome::Failure { code, message } => {
                     failed = true;
-                    (format!("{:?}", failure.kind()), Some(failure.message))
+                    (code.as_str().to_string(), Some(message))
                 }
-                None => bail!("invocation completion has no outcome"),
             };
             if structured {
                 let mut event = event(AgentInvocationSessionEventKind::Finished, idempotency_key);
-                event.agent_id = session_identity.agent_id.clone();
-                event.component_revision = session_identity.component_revision;
+                event.agent_id = Some(session_identity.agent_id.clone());
                 event.outcome = Some(outcome);
                 event.error = error;
                 emit(output_tx, OutputJob::Event(event)).await?;
@@ -1912,9 +1742,132 @@ async fn handle_response(
                 eprintln!("Invocation failed: {error}");
             }
         }
-        None => bail!("empty invocation response"),
     }
     Ok(failed)
+}
+
+fn server_cancellation_is_failure(reason: PublicServerCancelReason) -> bool {
+    matches!(
+        reason,
+        PublicServerCancelReason::TransportDetached
+            | PublicServerCancelReason::SourceUnavailable
+            | PublicServerCancelReason::ProducerDeleted
+            | PublicServerCancelReason::InvocationFailed
+            | PublicServerCancelReason::ProtocolError
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_output_item(
+    channel: u32,
+    sequence: u64,
+    value: SchemaValue,
+    graph: &SchemaGraph,
+    source_language: &SourceLanguage,
+    stdout_format: InvocationStdoutFormat,
+    structured: bool,
+    idempotency_key: &str,
+    output_streams: &mut HashMap<u32, OutputStream>,
+    output_tx: &OutputChannel,
+) -> anyhow::Result<()> {
+    let stream = output_streams
+        .get(&channel)
+        .cloned()
+        .ok_or_else(|| anyhow!("output stream {channel} has no schema"))?;
+    if stream.terminal {
+        bail!("output stream {channel} produced an item after its terminal event");
+    }
+    if stream
+        .next_offset
+        .is_some_and(|expected| expected != sequence)
+    {
+        bail!("output stream {channel} item sequence is not contiguous");
+    }
+    discover_streams(
+        graph,
+        &stream.item_type,
+        &value,
+        &format!("{}[{sequence}]", stream.path),
+        Some(channel),
+        InvocationStdoutFormat::Value,
+        output_streams,
+    )?;
+    let next_offset = sequence
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("output stream offset overflow"))?;
+    output_streams
+        .get_mut(&channel)
+        .expect("output stream disappeared while processing an item")
+        .next_offset = Some(next_offset);
+    if structured {
+        let mut event = event(AgentInvocationSessionEventKind::Item, idempotency_key);
+        event.stream_id = Some(channel as u64);
+        event.parent_stream_id = stream.parent_stream_id.map(u64::from);
+        event.path = Some(stream.path);
+        event.offset = Some(sequence);
+        event.value = Some(schema_value_to_json(graph, &stream.item_type, &value)?);
+        emit(output_tx, OutputJob::Event(event)).await?;
+    } else if stdout_format == InvocationStdoutFormat::Raw {
+        emit(output_tx, OutputJob::Raw(raw_output_bytes(&stream, value)?)).await?;
+    } else {
+        for (path, rendered) in render_text_fragments(
+            graph,
+            &stream.item_type,
+            &value,
+            &stream.path,
+            source_language,
+        )? {
+            let rendered = if path != stream.path || output_streams.len() > 1 || stream.path != "$"
+            {
+                format!("{path}: {rendered}")
+            } else {
+                rendered
+            };
+            emit(output_tx, OutputJob::Text(rendered)).await?;
+        }
+    }
+    Ok(())
+}
+
+fn decode_output_value(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    value: &serde_json::Value,
+    bindings: &DeliveryTracker,
+) -> anyhow::Result<SchemaValue> {
+    decode_public_schema_value(
+        graph,
+        ty,
+        value,
+        PublicStreamReferencePolicy::Stable,
+        |reference, element_type| {
+            let PublicStreamReference::Stable(token) = reference else {
+                unreachable!("stable stream policy returned a provisional reference")
+            };
+            let channel = bindings.channel_for_stream(&token).ok_or_else(|| {
+                PublicSchemaValueError::new(
+                    golem_common::model::invocation_session_public::PublicErrorCode::InvalidChannel,
+                    "stream value has no public channel mapping",
+                )
+            })?;
+            let schema_evidence = serde_json::to_string(&(graph, element_type)).map_err(|_| {
+                PublicSchemaValueError::new(
+                    golem_common::model::invocation_session_public::PublicErrorCode::ValidationError,
+                    "failed to canonicalize stream element schema",
+                )
+            })?;
+            bindings
+                .bind_schema(&token, schema_evidence)
+                .map_err(|error| {
+                    PublicSchemaValueError::new(
+                        golem_common::model::invocation_session_public::PublicErrorCode::StreamConflict,
+                        error.to_string(),
+                    )
+                })?;
+            Ok(SchemaValueStream::from_host_endpoint(channel))
+        },
+    )
+    .map_err(Into::into)
 }
 
 fn event(
@@ -1925,37 +1878,70 @@ fn event(
 }
 
 async fn emit(output: &OutputChannel, job: OutputJob) -> anyhow::Result<()> {
+    let (written, completed) = oneshot::channel();
     tokio::select! {
         biased;
         _ = output.input_failed.cancelled() => bail!(InputFailureSignal),
         _ = output.interrupt.cancelled() => bail!(PipedExitCode(130)),
-        result = output.tx.send(job) => result.map_err(|_| anyhow!("invocation output closed unexpectedly")),
+        result = output.tx.send(QueuedOutput { job, written }) => {
+            result.map_err(|_| anyhow!("invocation output closed unexpectedly"))?;
+        },
+    }
+    tokio::select! {
+        biased;
+        _ = output.input_failed.cancelled() => bail!(InputFailureSignal),
+        _ = output.interrupt.cancelled() => bail!(PipedExitCode(130)),
+        result = completed => match result {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) if error == "broken-pipe" => bail!(PipedExitCode(0)),
+            Ok(Err(error)) => bail!(error),
+            Err(_) => bail!("invocation output closed before acknowledging a write"),
+        },
     }
 }
 
 fn write_output(
-    mut rx: mpsc::Receiver<OutputJob>,
+    mut rx: mpsc::Receiver<QueuedOutput>,
     format: Format,
     colorize: bool,
 ) -> anyhow::Result<()> {
-    while let Some(job) = rx.blocking_recv() {
-        let bytes = render_output_job(job, format, colorize)?;
+    while let Some(QueuedOutput { job, written }) = rx.blocking_recv() {
+        let bytes = match render_output_job(job, format, colorize) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let _ = written.send(Err(error.to_string()));
+                return Err(error);
+            }
+        };
         let stdout = std::io::stdout();
-        write_and_flush(&mut stdout.lock(), &bytes)?;
+        if let Err(error) = write_and_flush(&mut stdout.lock(), &bytes) {
+            let diagnostic = if error
+                .downcast_ref::<PipedExitCode>()
+                .is_some_and(|exit| exit.0 == 0)
+            {
+                "broken-pipe".to_string()
+            } else {
+                error.to_string()
+            };
+            let _ = written.send(Err(diagnostic));
+            return Err(error);
+        }
+        let _ = written.send(Ok(()));
     }
     Ok(())
 }
 
 #[cfg(test)]
 fn write_output_to<W: Write>(
-    mut rx: mpsc::Receiver<OutputJob>,
+    mut rx: mpsc::Receiver<QueuedOutput>,
     format: Format,
     colorize: bool,
     output: &mut W,
 ) -> anyhow::Result<()> {
-    while let Some(job) = rx.blocking_recv() {
+    while let Some(QueuedOutput { job, written }) = rx.blocking_recv() {
         let bytes = render_output_job(job, format, colorize)?;
         write_and_flush(output, &bytes)?;
+        let _ = written.send(Ok(()));
     }
     Ok(())
 }
@@ -1985,33 +1971,18 @@ fn write_and_flush(output: &mut impl Write, bytes: &[u8]) -> anyhow::Result<()> 
     Ok(())
 }
 
-fn raw_output_bytes(stream: &OutputStream, value: ProtoSchemaValue) -> anyhow::Result<Vec<u8>> {
-    match (stream.raw_kind, value.value) {
-        (
-            Some(RawStreamKind::Binary),
-            Some(schema_value::Value::BinaryValue(BinaryValue { bytes, .. })),
-        ) => Ok(bytes),
-        (Some(RawStreamKind::U8), Some(schema_value::Value::U8Value(value))) => Ok(vec![
-            u8::try_from(value).map_err(|_| anyhow!("u8 stream item is out of range"))?,
-        ]),
+fn raw_output_bytes(stream: &OutputStream, value: SchemaValue) -> anyhow::Result<Vec<u8>> {
+    match (stream.raw_kind, value) {
+        (Some(RawStreamKind::Binary), SchemaValue::Binary(value)) => Ok(value.bytes),
+        (Some(RawStreamKind::U8), SchemaValue::U8(value)) => Ok(vec![value]),
         _ => bail!("raw output stream item does not match its declared type"),
     }
-}
-
-fn render_value(
-    graph: &SchemaGraph,
-    ty: &SchemaType,
-    value: ProtoSchemaValue,
-    source_language: &SourceLanguage,
-) -> anyhow::Result<String> {
-    let value = SchemaValue::try_from(value).map_err(anyhow::Error::msg)?;
-    Ok(render_schema_value(graph, ty, &value, source_language))
 }
 
 fn render_text_fragments(
     graph: &SchemaGraph,
     ty: &SchemaType,
-    value: &ProtoSchemaValue,
+    value: &SchemaValue,
     path: &str,
     source_language: &SourceLanguage,
 ) -> anyhow::Result<Vec<(String, String)>> {
@@ -2023,7 +1994,7 @@ fn render_text_fragments(
 fn collect_text_fragments(
     graph: &SchemaGraph,
     ty: &SchemaType,
-    value: &ProtoSchemaValue,
+    value: &SchemaValue,
     path: &str,
     source_language: &SourceLanguage,
     fragments: &mut Vec<(String, String)>,
@@ -2031,29 +2002,28 @@ fn collect_text_fragments(
     let ty = graph
         .resolve_ref(ty)
         .map_err(|error| anyhow!(error.to_string()))?;
-    let value_body = value
-        .value
-        .as_ref()
-        .ok_or_else(|| anyhow!("schema value at {path} is empty"))?;
 
     if matches!(ty, SchemaType::Stream { .. }) {
-        if matches!(value_body, schema_value::Value::StreamReference(_)) {
+        if matches!(value, SchemaValue::Stream(_)) {
             return Ok(());
         }
         bail!("stream value at {path} is not a stream reference");
     }
 
-    if let Ok(rendered) = render_value(graph, ty, value.clone(), source_language) {
-        fragments.push((path.to_string(), rendered));
+    if !schema_value_contains_stream(value) {
+        fragments.push((
+            path.to_string(),
+            render_schema_value(graph, ty, value, source_language),
+        ));
         return Ok(());
     }
 
-    match (ty, value_body) {
-        (SchemaType::Record { fields, .. }, schema_value::Value::RecordValue(record)) => {
-            if fields.len() != record.fields.len() {
+    match (ty, value) {
+        (SchemaType::Record { fields, .. }, SchemaValue::Record { fields: values }) => {
+            if fields.len() != values.len() {
                 bail!("record value at {path} has the wrong number of fields");
             }
-            for (field, value) in fields.iter().zip(&record.fields) {
+            for (field, value) in fields.iter().zip(values) {
                 collect_text_fragments(
                     graph,
                     &field.body,
@@ -2064,11 +2034,11 @@ fn collect_text_fragments(
                 )?;
             }
         }
-        (SchemaType::Tuple { elements, .. }, schema_value::Value::TupleValue(tuple)) => {
-            if elements.len() != tuple.elements.len() {
+        (SchemaType::Tuple { elements, .. }, SchemaValue::Tuple { elements: values }) => {
+            if elements.len() != values.len() {
                 bail!("tuple value at {path} has the wrong number of elements");
             }
-            for (index, (ty, value)) in elements.iter().zip(&tuple.elements).enumerate() {
+            for (index, (ty, value)) in elements.iter().zip(values).enumerate() {
                 collect_text_fragments(
                     graph,
                     ty,
@@ -2079,8 +2049,8 @@ fn collect_text_fragments(
                 )?;
             }
         }
-        (SchemaType::List { element, .. }, schema_value::Value::ListValue(list)) => {
-            for (index, value) in list.elements.iter().enumerate() {
+        (SchemaType::List { element, .. }, SchemaValue::List { elements }) => {
+            for (index, value) in elements.iter().enumerate() {
                 collect_text_fragments(
                     graph,
                     element,
@@ -2091,8 +2061,8 @@ fn collect_text_fragments(
                 )?;
             }
         }
-        (SchemaType::FixedList { element, .. }, schema_value::Value::FixedListValue(list)) => {
-            for (index, value) in list.elements.iter().enumerate() {
+        (SchemaType::FixedList { element, .. }, SchemaValue::FixedList { elements }) => {
+            for (index, value) in elements.iter().enumerate() {
                 collect_text_fragments(
                     graph,
                     element,
@@ -2109,16 +2079,13 @@ fn collect_text_fragments(
                 value: value_type,
                 ..
             },
-            schema_value::Value::MapValue(map),
+            SchemaValue::Map { entries },
         ) => {
-            for (index, entry) in map.entries.iter().enumerate() {
+            for (index, (key_value, value)) in entries.iter().enumerate() {
                 collect_text_fragments(
                     graph,
                     key,
-                    entry
-                        .key
-                        .as_ref()
-                        .ok_or_else(|| anyhow!("map entry at {path}[{index}] has no key"))?,
+                    key_value,
                     &format!("{path}[{index}].key"),
                     source_language,
                     fragments,
@@ -2126,18 +2093,15 @@ fn collect_text_fragments(
                 collect_text_fragments(
                     graph,
                     value_type,
-                    entry
-                        .value
-                        .as_ref()
-                        .ok_or_else(|| anyhow!("map entry at {path}[{index}] has no value"))?,
+                    value,
                     &format!("{path}[{index}].value"),
                     source_language,
                     fragments,
                 )?;
             }
         }
-        (SchemaType::Option { inner, .. }, schema_value::Value::OptionValue(option)) => {
-            if let Some(value) = option.inner.as_deref() {
+        (SchemaType::Option { inner, .. }, SchemaValue::Option { inner: value }) => {
+            if let Some(value) = value.as_deref() {
                 collect_text_fragments(
                     graph,
                     inner,
@@ -2148,7 +2112,7 @@ fn collect_text_fragments(
                 )?;
             }
         }
-        (SchemaType::Variant { cases, .. }, schema_value::Value::VariantValue(variant)) => {
+        (SchemaType::Variant { cases, .. }, SchemaValue::Variant(variant)) => {
             let case = cases
                 .get(variant.case as usize)
                 .ok_or_else(|| anyhow!("variant case at {path} is out of range"))?;
@@ -2163,34 +2127,30 @@ fn collect_text_fragments(
                 )?;
             }
         }
-        (SchemaType::Result { spec, .. }, schema_value::Value::ResultValue(result)) => {
-            use golem_api_grpc::proto::golem::schema::result_value::Result;
-            match result.result.as_ref() {
-                Some(Result::Ok(value)) => collect_text_fragments(
-                    graph,
-                    spec.ok
-                        .as_deref()
-                        .ok_or_else(|| anyhow!("unexpected ok payload at {path}"))?,
-                    value,
-                    &format!("{path}.ok"),
-                    source_language,
-                    fragments,
-                )?,
-                Some(Result::Err(value)) => collect_text_fragments(
-                    graph,
-                    spec.err
-                        .as_deref()
-                        .ok_or_else(|| anyhow!("unexpected err payload at {path}"))?,
-                    value,
-                    &format!("{path}.err"),
-                    source_language,
-                    fragments,
-                )?,
-                Some(Result::OkUnit(_)) | Some(Result::ErrUnit(_)) => {}
-                None => bail!("result value at {path} has no case"),
-            }
-        }
-        (SchemaType::Union { spec, .. }, schema_value::Value::UnionValue(union)) => {
+        (SchemaType::Result { spec, .. }, SchemaValue::Result(result)) => match result {
+            ResultValuePayload::Ok { value: Some(value) } => collect_text_fragments(
+                graph,
+                spec.ok
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("unexpected ok payload at {path}"))?,
+                value,
+                &format!("{path}.ok"),
+                source_language,
+                fragments,
+            )?,
+            ResultValuePayload::Err { value: Some(value) } => collect_text_fragments(
+                graph,
+                spec.err
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("unexpected err payload at {path}"))?,
+                value,
+                &format!("{path}.err"),
+                source_language,
+                fragments,
+            )?,
+            ResultValuePayload::Ok { value: None } | ResultValuePayload::Err { value: None } => {}
+        },
+        (SchemaType::Union { spec, .. }, SchemaValue::Union(union)) => {
             let branch = spec
                 .branches
                 .iter()
@@ -2199,10 +2159,7 @@ fn collect_text_fragments(
             collect_text_fragments(
                 graph,
                 &branch.body,
-                union
-                    .body
-                    .as_deref()
-                    .ok_or_else(|| anyhow!("union value at {path} has no body"))?,
+                &union.body,
                 &format!("{path}.{}", union.tag),
                 source_language,
                 fragments,
@@ -2213,28 +2170,52 @@ fn collect_text_fragments(
     Ok(())
 }
 
+fn schema_value_contains_stream(value: &SchemaValue) -> bool {
+    match value {
+        SchemaValue::Stream(_) => true,
+        SchemaValue::Record { fields } => fields.iter().any(schema_value_contains_stream),
+        SchemaValue::Variant(variant) => variant
+            .payload
+            .as_deref()
+            .is_some_and(schema_value_contains_stream),
+        SchemaValue::Tuple { elements }
+        | SchemaValue::List { elements }
+        | SchemaValue::FixedList { elements } => elements.iter().any(schema_value_contains_stream),
+        SchemaValue::Map { entries } => entries.iter().any(|(key, value)| {
+            schema_value_contains_stream(key) || schema_value_contains_stream(value)
+        }),
+        SchemaValue::Option { inner } => inner.as_deref().is_some_and(schema_value_contains_stream),
+        SchemaValue::Result(ResultValuePayload::Ok { value })
+        | SchemaValue::Result(ResultValuePayload::Err { value }) => {
+            value.as_deref().is_some_and(schema_value_contains_stream)
+        }
+        SchemaValue::Union(union) => schema_value_contains_stream(&union.body),
+        _ => false,
+    }
+}
+
 fn discover_streams(
     graph: &SchemaGraph,
     ty: &SchemaType,
-    value: &ProtoSchemaValue,
+    value: &SchemaValue,
     path: &str,
-    parent_stream_id: Option<u64>,
+    parent_stream_id: Option<u32>,
     stdout_format: InvocationStdoutFormat,
-    output: &mut HashMap<u64, OutputStream>,
+    output: &mut HashMap<u32, OutputStream>,
 ) -> anyhow::Result<()> {
     let ty = graph
         .resolve_ref(ty)
         .map_err(|error| anyhow!(error.to_string()))?;
-    let Some(value) = value.value.as_ref() else {
-        bail!("schema value at {path} is empty");
-    };
     match (ty, value) {
         (
             SchemaType::Stream {
                 inner: Some(inner), ..
             },
-            schema_value::Value::StreamReference(reference),
+            SchemaValue::Stream(reference),
         ) => {
+            let channel = reference
+                .with_host_endpoint::<u32, _>(|channel| *channel)
+                .map_err(anyhow::Error::msg)?;
             let raw_kind = if stdout_format == InvocationStdoutFormat::Raw {
                 raw_stream_kind(graph, inner)
             } else {
@@ -2242,26 +2223,23 @@ fn discover_streams(
             };
             if output
                 .insert(
-                    reference.stream_id,
+                    channel,
                     OutputStream {
                         item_type: (**inner).clone(),
                         parent_stream_id,
                         path: path.to_string(),
                         raw_kind,
-                        next_offset: 0,
+                        next_offset: None,
                         terminal: false,
                     },
                 )
                 .is_some()
             {
-                bail!(
-                    "output stream {} was discovered more than once",
-                    reference.stream_id
-                );
+                bail!("output stream {channel} was discovered more than once");
             }
         }
-        (SchemaType::Record { fields, .. }, schema_value::Value::RecordValue(record)) => {
-            for (field, value) in fields.iter().zip(&record.fields) {
+        (SchemaType::Record { fields, .. }, SchemaValue::Record { fields: values }) => {
+            for (field, value) in fields.iter().zip(values) {
                 discover_streams(
                     graph,
                     &field.body,
@@ -2273,8 +2251,8 @@ fn discover_streams(
                 )?;
             }
         }
-        (SchemaType::Tuple { elements, .. }, schema_value::Value::TupleValue(tuple)) => {
-            for (index, (ty, value)) in elements.iter().zip(&tuple.elements).enumerate() {
+        (SchemaType::Tuple { elements, .. }, SchemaValue::Tuple { elements: values }) => {
+            for (index, (ty, value)) in elements.iter().zip(values).enumerate() {
                 discover_streams(
                     graph,
                     ty,
@@ -2286,8 +2264,8 @@ fn discover_streams(
                 )?;
             }
         }
-        (SchemaType::List { element, .. }, schema_value::Value::ListValue(list)) => {
-            for (index, value) in list.elements.iter().enumerate() {
+        (SchemaType::List { element, .. }, SchemaValue::List { elements }) => {
+            for (index, value) in elements.iter().enumerate() {
                 discover_streams(
                     graph,
                     element,
@@ -2299,8 +2277,8 @@ fn discover_streams(
                 )?;
             }
         }
-        (SchemaType::FixedList { element, .. }, schema_value::Value::FixedListValue(list)) => {
-            for (index, value) in list.elements.iter().enumerate() {
+        (SchemaType::FixedList { element, .. }, SchemaValue::FixedList { elements }) => {
+            for (index, value) in elements.iter().enumerate() {
                 discover_streams(
                     graph,
                     element,
@@ -2318,47 +2296,41 @@ fn discover_streams(
                 value: value_type,
                 ..
             },
-            schema_value::Value::MapValue(map),
+            SchemaValue::Map { entries },
         ) => {
-            for (index, entry) in map.entries.iter().enumerate() {
-                if let Some(value) = &entry.key {
-                    discover_streams(
-                        graph,
-                        key,
-                        value,
-                        &format!("{path}[{index}].key"),
-                        parent_stream_id,
-                        stdout_format,
-                        output,
-                    )?;
-                }
-                if let Some(value) = &entry.value {
-                    discover_streams(
-                        graph,
-                        value_type,
-                        value,
-                        &format!("{path}[{index}].value"),
-                        parent_stream_id,
-                        stdout_format,
-                        output,
-                    )?;
-                }
-            }
-        }
-        (SchemaType::Option { inner, .. }, schema_value::Value::OptionValue(option)) => {
-            if let Some(value) = &option.inner {
+            for (index, (key_value, value)) in entries.iter().enumerate() {
                 discover_streams(
                     graph,
-                    inner,
+                    key,
+                    key_value,
+                    &format!("{path}[{index}].key"),
+                    parent_stream_id,
+                    stdout_format,
+                    output,
+                )?;
+                discover_streams(
+                    graph,
+                    value_type,
                     value,
-                    &format!("{path}.some"),
+                    &format!("{path}[{index}].value"),
                     parent_stream_id,
                     stdout_format,
                     output,
                 )?;
             }
         }
-        (SchemaType::Variant { cases, .. }, schema_value::Value::VariantValue(variant)) => {
+        (SchemaType::Option { inner, .. }, SchemaValue::Option { inner: Some(value) }) => {
+            discover_streams(
+                graph,
+                inner,
+                value,
+                &format!("{path}.some"),
+                parent_stream_id,
+                stdout_format,
+                output,
+            )?
+        }
+        (SchemaType::Variant { cases, .. }, SchemaValue::Variant(variant)) => {
             if let Some(case) = cases.get(variant.case as usize)
                 && let (Some(ty), Some(value)) = (&case.payload, &variant.payload)
             {
@@ -2373,19 +2345,18 @@ fn discover_streams(
                 )?;
             }
         }
-        (SchemaType::Result { spec, .. }, schema_value::Value::ResultValue(result)) => {
-            use golem_api_grpc::proto::golem::schema::result_value::Result;
-            match result.result.as_ref() {
-                Some(Result::Ok(value)) if spec.ok.is_some() => discover_streams(
-                    graph,
-                    spec.ok.as_deref().unwrap(),
-                    value,
-                    &format!("{path}.ok"),
-                    parent_stream_id,
-                    stdout_format,
-                    output,
-                )?,
-                Some(Result::Err(value)) if spec.err.is_some() => discover_streams(
+        (SchemaType::Result { spec, .. }, SchemaValue::Result(result)) => match result {
+            ResultValuePayload::Ok { value: Some(value) } if spec.ok.is_some() => discover_streams(
+                graph,
+                spec.ok.as_deref().unwrap(),
+                value,
+                &format!("{path}.ok"),
+                parent_stream_id,
+                stdout_format,
+                output,
+            )?,
+            ResultValuePayload::Err { value: Some(value) } if spec.err.is_some() => {
+                discover_streams(
                     graph,
                     spec.err.as_deref().unwrap(),
                     value,
@@ -2393,18 +2364,16 @@ fn discover_streams(
                     parent_stream_id,
                     stdout_format,
                     output,
-                )?,
-                _ => {}
+                )?
             }
-        }
-        (SchemaType::Union { spec, .. }, schema_value::Value::UnionValue(union)) => {
-            if let Some(branch) = spec.branches.iter().find(|branch| branch.tag == union.tag)
-                && let Some(value) = &union.body
-            {
+            _ => {}
+        },
+        (SchemaType::Union { spec, .. }, SchemaValue::Union(union)) => {
+            if let Some(branch) = spec.branches.iter().find(|branch| branch.tag == union.tag) {
                 discover_streams(
                     graph,
                     &branch.body,
-                    value,
+                    &union.body,
                     &format!("{path}.{}", union.tag),
                     parent_stream_id,
                     stdout_format,
@@ -2420,64 +2389,63 @@ fn discover_streams(
     Ok(())
 }
 
-fn proto_value_to_json(
+fn schema_value_to_json(
     graph: &SchemaGraph,
     ty: &SchemaType,
-    value: &ProtoSchemaValue,
+    value: &SchemaValue,
 ) -> anyhow::Result<serde_json::Value> {
-    if let Ok(value) = SchemaValue::try_from(value.clone()) {
-        return golem_common::schema::render::to_json_value(graph, ty, &value).map_err(Into::into);
+    if !schema_value_contains_stream(value) {
+        return golem_common::schema::render::to_json_value(graph, ty, value).map_err(Into::into);
     }
 
     let ty = graph
         .resolve_ref(ty)
         .map_err(|error| anyhow!(error.to_string()))?;
-    let value = value
-        .value
-        .as_ref()
-        .ok_or_else(|| anyhow!("empty schema value"))?;
     Ok(match (ty, value) {
-        (SchemaType::Stream { .. }, schema_value::Value::StreamReference(reference)) => {
-            serde_json::json!({ "$stream": reference.stream_id })
+        (SchemaType::Stream { .. }, SchemaValue::Stream(reference)) => {
+            let channel = reference
+                .with_host_endpoint::<u32, _>(|channel| *channel)
+                .map_err(anyhow::Error::msg)?;
+            serde_json::json!({ "$stream": channel })
         }
-        (SchemaType::Record { fields, .. }, schema_value::Value::RecordValue(record)) => {
-            if fields.len() != record.fields.len() {
+        (SchemaType::Record { fields, .. }, SchemaValue::Record { fields: values }) => {
+            if fields.len() != values.len() {
                 bail!("record result has the wrong number of fields");
             }
             let mut result = serde_json::Map::new();
-            for (field, value) in fields.iter().zip(&record.fields) {
+            for (field, value) in fields.iter().zip(values) {
                 result.insert(
                     field.name.clone(),
-                    proto_value_to_json(graph, &field.body, value)?,
+                    schema_value_to_json(graph, &field.body, value)?,
                 );
             }
             serde_json::Value::Object(result)
         }
-        (SchemaType::Tuple { elements, .. }, schema_value::Value::TupleValue(tuple)) => {
-            if elements.len() != tuple.elements.len() {
+        (SchemaType::Tuple { elements, .. }, SchemaValue::Tuple { elements: values }) => {
+            if elements.len() != values.len() {
                 bail!("tuple result has the wrong number of elements");
             }
             serde_json::Value::Array(
                 elements
                     .iter()
-                    .zip(&tuple.elements)
-                    .map(|(ty, value)| proto_value_to_json(graph, ty, value))
+                    .zip(values)
+                    .map(|(ty, value)| schema_value_to_json(graph, ty, value))
                     .collect::<Result<_, _>>()?,
             )
         }
-        (SchemaType::List { element, .. }, schema_value::Value::ListValue(list)) => {
+        (SchemaType::List { element, .. }, SchemaValue::List { elements }) => {
             serde_json::Value::Array(
-                list.elements
+                elements
                     .iter()
-                    .map(|value| proto_value_to_json(graph, element, value))
+                    .map(|value| schema_value_to_json(graph, element, value))
                     .collect::<Result<_, _>>()?,
             )
         }
-        (SchemaType::FixedList { element, .. }, schema_value::Value::FixedListValue(list)) => {
+        (SchemaType::FixedList { element, .. }, SchemaValue::FixedList { elements }) => {
             serde_json::Value::Array(
-                list.elements
+                elements
                     .iter()
-                    .map(|value| proto_value_to_json(graph, element, value))
+                    .map(|value| schema_value_to_json(graph, element, value))
                     .collect::<Result<_, _>>()?,
             )
         }
@@ -2487,340 +2455,182 @@ fn proto_value_to_json(
                 value: value_type,
                 ..
             },
-            schema_value::Value::MapValue(map),
+            SchemaValue::Map { entries },
         ) => serde_json::Value::Array(
-            map.entries
+            entries
                 .iter()
-                .map(|entry| {
+                .map(|(key_value, value)| {
                     Ok(serde_json::Value::Array(vec![
-                        proto_value_to_json(
-                            graph,
-                            key,
-                            entry
-                                .key
-                                .as_ref()
-                                .ok_or_else(|| anyhow!("map entry has no key"))?,
-                        )?,
-                        proto_value_to_json(
-                            graph,
-                            value_type,
-                            entry
-                                .value
-                                .as_ref()
-                                .ok_or_else(|| anyhow!("map entry has no value"))?,
-                        )?,
+                        schema_value_to_json(graph, key, key_value)?,
+                        schema_value_to_json(graph, value_type, value)?,
                     ]))
                 })
                 .collect::<anyhow::Result<_>>()?,
         ),
-        (SchemaType::Option { inner, .. }, schema_value::Value::OptionValue(option)) => option
-            .inner
+        (SchemaType::Option { inner, .. }, SchemaValue::Option { inner: value }) => value
             .as_deref()
-            .map(|value| proto_value_to_json(graph, inner, value))
+            .map(|value| schema_value_to_json(graph, inner, value))
             .transpose()?
             .unwrap_or(serde_json::Value::Null),
-        (SchemaType::Variant { cases, .. }, schema_value::Value::VariantValue(variant)) => {
+        (SchemaType::Variant { cases, .. }, SchemaValue::Variant(variant)) => {
             let case = cases
                 .get(variant.case as usize)
                 .ok_or_else(|| anyhow!("variant case is out of range"))?;
             match (&case.payload, variant.payload.as_deref()) {
                 (None, None) => case.name.clone().into(),
                 (Some(ty), Some(value)) => serde_json::json!({
-                    case.name.clone(): proto_value_to_json(graph, ty, value)?
+                    case.name.clone(): schema_value_to_json(graph, ty, value)?
                 }),
                 _ => bail!("variant payload does not match its declared case"),
             }
         }
-        (SchemaType::Result { spec, .. }, schema_value::Value::ResultValue(result)) => {
-            use golem_api_grpc::proto::golem::schema::result_value::Result;
-            match result.result.as_ref() {
-                Some(Result::Ok(value)) => serde_json::json!({
-                    "ok": proto_value_to_json(
-                        graph,
-                        spec.ok.as_deref().ok_or_else(|| anyhow!("unexpected ok payload"))?,
-                        value,
-                    )?
-                }),
-                Some(Result::Err(value)) => serde_json::json!({
-                    "err": proto_value_to_json(
-                        graph,
-                        spec.err.as_deref().ok_or_else(|| anyhow!("unexpected err payload"))?,
-                        value,
-                    )?
-                }),
-                Some(Result::OkUnit(_)) => serde_json::json!({ "ok": null }),
-                Some(Result::ErrUnit(_)) => serde_json::json!({ "err": null }),
-                None => bail!("result has no case"),
-            }
-        }
-        (SchemaType::Union { spec, .. }, schema_value::Value::UnionValue(union)) => {
+        (SchemaType::Result { spec, .. }, SchemaValue::Result(result)) => match result {
+            ResultValuePayload::Ok { value: Some(value) } => serde_json::json!({
+                "ok": schema_value_to_json(
+                    graph,
+                    spec.ok.as_deref().ok_or_else(|| anyhow!("unexpected ok payload"))?,
+                    value,
+                )?
+            }),
+            ResultValuePayload::Err { value: Some(value) } => serde_json::json!({
+                "err": schema_value_to_json(
+                    graph,
+                    spec.err.as_deref().ok_or_else(|| anyhow!("unexpected err payload"))?,
+                    value,
+                )?
+            }),
+            ResultValuePayload::Ok { value: None } => serde_json::json!({ "ok": null }),
+            ResultValuePayload::Err { value: None } => serde_json::json!({ "err": null }),
+        },
+        (SchemaType::Union { spec, .. }, SchemaValue::Union(union)) => {
             let branch = spec
                 .branches
                 .iter()
                 .find(|branch| branch.tag == union.tag)
                 .ok_or_else(|| anyhow!("unknown union branch '{}'", union.tag))?;
-            proto_value_to_json(
-                graph,
-                &branch.body,
-                union
-                    .body
-                    .as_deref()
-                    .ok_or_else(|| anyhow!("union has no body"))?,
-            )?
+            schema_value_to_json(graph, &branch.body, &union.body)?
         }
         _ => bail!("invocation result does not match its declared schema"),
     })
 }
 
-fn is_connection_closed(error: &tungstenite::Error) -> bool {
-    matches!(
-        error,
-        tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed
-    ) || matches!(error, tungstenite::Error::Io(error) if error.kind() == ErrorKind::BrokenPipe)
-}
-
 #[cfg(test)]
-mod tests {
+mod public_tests {
     use super::*;
-    use golem_common::schema::agent::{InputSchema, NamedField};
+    use golem_common::model::invocation_session_public::{
+        PublicStreamDirection, PublicStreamMapping,
+    };
     use golem_common::schema::metadata::MetadataEnvelope;
-    use golem_common::schema::schema_type::{BinaryRestrictions, NamedFieldType};
     use test_r::test;
-
-    fn method(parameters: Vec<NamedField>, output_schema: OutputSchema) -> AgentMethodSchema {
-        AgentMethodSchema {
-            name: "test".to_string(),
-            description: String::new(),
-            prompt_hint: None,
-            input_schema: InputSchema::parameters(parameters),
-            output_schema,
-            http_endpoint: Vec::new(),
-            read_only: None,
-        }
-    }
-
-    fn checkpoint_cursor(value: u8) -> Vec<u8> {
-        let mut cursor = vec![0; 24];
-        cursor[0] = 1;
-        cursor[19] = value;
-        cursor
-    }
 
     fn checkpoint() -> InvocationSessionCheckpoint {
         InvocationSessionCheckpoint {
             version: SESSION_CHECKPOINT_VERSION,
-            idempotency_key: "session-key".to_string(),
-            agent_component_id: uuid::Uuid::from_u128(1),
-            agent_name: "agent".to_string(),
-            environment_id: uuid::Uuid::from_u128(2),
-            attachment_id: uuid::Uuid::from_u128(3),
-            callee_fingerprint: uuid::Uuid::from_u128(4),
-            epoch: 1,
-            cursors: BTreeMap::from([
-                (uuid::Uuid::from_u128(6), Some(checkpoint_cursor(6))),
-                (uuid::Uuid::from_u128(5), None),
-            ]),
+            protocol_version: INVOCATION_SESSION_VERSION,
+            schema_evidence: "schema-v1".to_string(),
+            selector: InvocationSelector {
+                agent_type: "counter".to_string(),
+                application: "app".to_string(),
+                constructor_parameters: serde_json::json!({}),
+                environment: "prod".to_string(),
+                method: "run".to_string(),
+                phantom_id: None,
+            },
+            idempotency_key: "invocation-key".to_string(),
+            session_token: Some("opaque-session-token".to_string()),
+            delivered_output_cursors: BTreeMap::from([(
+                "opaque-stream-token".to_string(),
+                "opaque-cursor".to_string(),
+            )]),
+            pending_operation: None,
         }
     }
 
     #[test]
-    fn session_checkpoint_is_atomically_replaced_and_validated() {
+    fn public_checkpoint_is_atomically_replaced_and_validated() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("invocation-session.json");
         let mut expected = checkpoint();
         write_checkpoint(&path, &expected).unwrap();
-        assert_eq!(load_checkpoint(&path).unwrap().epoch, 1);
+        assert_eq!(load_checkpoint(&path).unwrap().selector, expected.selector);
 
-        expected.epoch = 2;
         expected
-            .cursors
-            .insert(uuid::Uuid::from_u128(5), Some(checkpoint_cursor(7)));
+            .delivered_output_cursors
+            .insert("opaque-stream-token".to_string(), "new-cursor".to_string());
         write_checkpoint(&path, &expected).unwrap();
-        let actual = load_checkpoint(&path).unwrap();
-        assert_eq!(actual.epoch, 2);
-        assert_eq!(actual.cursors, expected.cursors);
-    }
-
-    #[test]
-    fn terminal_input_acknowledgement_does_not_consume_item_capacity() {
-        let mut pending_items = 1;
-        let mut pending_terminal = true;
-
-        record_input_acknowledgement(&mut pending_items, &mut pending_terminal).unwrap();
-        assert_eq!(pending_items, 0);
-        assert!(pending_terminal);
-
-        record_input_acknowledgement(&mut pending_items, &mut pending_terminal).unwrap();
-        assert_eq!(pending_items, 0);
-        assert!(!pending_terminal);
-
-        assert!(record_input_acknowledgement(&mut pending_items, &mut pending_terminal).is_err());
-    }
-
-    #[test]
-    fn durable_binding_offsets_preparsed_input_sequences() {
-        let durable_stream_id = uuid::Uuid::from_u128(5).into();
-        let streams = HashMap::from([(7, durable_stream_id)]);
-        let mut request = input_value_request(7, 3, SchemaValue::U32(1)).unwrap();
-
-        bind_durable_request(&mut request, &streams, 4, 10).unwrap();
-
-        let Some(public_invocation_request::Request::InputItem(item)) = request.request else {
-            panic!("expected input item");
-        };
-        assert_eq!(item.sequence, 13);
-        assert_eq!(item.durable_stream_id, Some(durable_stream_id));
-        assert_eq!(item.epoch, 4);
-    }
-
-    #[test]
-    fn durable_binding_attaches_input_cancellation_authority() {
-        let durable_stream_id = uuid::Uuid::from_u128(5).into();
-        let streams = HashMap::from([(7, durable_stream_id)]);
-        let mut request = input_cancel_request(
-            7,
-            3,
-            StreamCancelReason::Protocol,
-            "invalid input".to_string(),
+        assert_eq!(
+            load_checkpoint(&path).unwrap().delivered_output_cursors,
+            BTreeMap::from([("opaque-stream-token".to_string(), "new-cursor".to_string(),)])
         );
-
-        bind_durable_request(&mut request, &streams, 4, 0).unwrap();
-
-        let Some(public_invocation_request::Request::StreamCancel(cancel)) = request.request else {
-            panic!("expected input cancellation");
-        };
-        assert_eq!(cancel.durable_stream_id, Some(durable_stream_id));
-        assert_eq!(cancel.epoch, 4);
+        let encoded = std::fs::read_to_string(path).unwrap();
+        for private_name in [
+            "attachmentId",
+            "epoch",
+            "calleeFingerprint",
+            "durableStreamId",
+            "offset",
+        ] {
+            assert!(!encoded.contains(private_name));
+        }
     }
 
     #[test]
-    fn explicit_resume_and_takeover_use_fresh_attempts_and_sorted_cursors() {
+    fn resume_uses_opaque_public_tokens_and_the_supplied_attempt() {
         let checkpoint = checkpoint();
-        let resume = resume_request(&checkpoint, false);
-        let takeover = resume_request(&checkpoint, true);
-        let Some(public_invocation_request::Request::ResumeAttach(resume)) = resume.request else {
-            panic!("expected resume request");
-        };
-        let Some(public_invocation_request::Request::ResumeAttach(takeover)) = takeover.request
-        else {
-            panic!("expected takeover request");
-        };
-        assert_eq!(resume.operation(), ResumeOperation::Resume);
-        assert_eq!(takeover.operation(), ResumeOperation::Takeover);
-        assert_ne!(resume.attempt_id, takeover.attempt_id);
-        assert_eq!(resume.expected_epoch, checkpoint.epoch);
+        let attempt_id = uuid::Uuid::new_v4();
+        let request =
+            resume_request(&checkpoint, PendingOperationKind::Takeover, attempt_id).unwrap();
         assert_eq!(
-            resume
-                .cursors
-                .iter()
-                .map(|cursor| uuid::Uuid::from(cursor.stream_id.unwrap()))
-                .collect::<Vec<_>>(),
-            checkpoint.cursors.keys().copied().collect::<Vec<_>>()
+            request,
+            PublicClientMessage::ResumeAttach {
+                attempt_id,
+                operation: PublicResumeOperation::Takeover,
+                output_cursors: vec!["opaque-cursor".to_string()],
+                session_token: "opaque-session-token".to_string(),
+                version: INVOCATION_SESSION_VERSION,
+            }
         );
     }
 
     #[test]
-    fn checkpoint_advances_on_acceptance_and_each_durable_observation() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("invocation-session.json");
-        let stream_id = uuid::Uuid::from_u128(5);
-        let acceptance = InvocationResponse {
-            response: Some(invocation_response::Response::Accepted(
-                golem_api_grpc::proto::golem::worker::InvocationAccepted {
-                    agent_id: Some(AgentId {
-                        component_id: Some(golem_api_grpc::proto::golem::component::ComponentId {
-                            value: Some(uuid::Uuid::from_u128(1).into()),
-                        }),
-                        name: "agent".to_string(),
-                    }),
-                    idempotency_key: Some(IdempotencyKey::new("session-key".to_string()).into()),
-                    component_revision: Some(1),
-                    attachment_id: Some(uuid::Uuid::from_u128(3).into()),
-                    attempt_id: Some(uuid::Uuid::from_u128(7).into()),
-                    epoch: 2,
-                    stream_mappings: vec![
-                        golem_api_grpc::proto::golem::worker::DurableStreamMapping {
-                            transport_stream_id: 9,
-                            handle: Some(
-                                golem_api_grpc::proto::golem::worker::DurableStreamHandle {
-                                    stream_id: Some(stream_id.into()),
-                                    ..Default::default()
-                                },
-                            ),
-                            role: golem_api_grpc::proto::golem::worker::StreamMappingRole::Output
-                                as i32,
-                            ..Default::default()
-                        },
-                    ],
-                    environment_id: Some(golem_api_grpc::proto::golem::common::EnvironmentId {
-                        value: Some(uuid::Uuid::from_u128(2).into()),
-                    }),
-                    callee_fingerprint: Some(uuid::Uuid::from_u128(4).into()),
-                },
-            )),
+    fn pending_start_reuses_its_frozen_attempt_and_provisional_reference() {
+        let saved_reference = uuid::Uuid::new_v4();
+        let current_reference = uuid::Uuid::new_v4();
+        let selector = checkpoint().selector;
+        let request = PublicClientMessage::InvocationStart {
+            attempt_id: uuid::Uuid::new_v4(),
+            config: Vec::new(),
+            idempotency_key: "invocation-key".to_string(),
+            method_parameters: serde_json::json!({
+                "source":{"$stream":{"provisionalRef":saved_reference}}
+            }),
+            selector: selector.clone(),
+            version: INVOCATION_SESSION_VERSION,
         };
-        let mut current = None;
-        update_checkpoint(&path, &mut current, &acceptance).unwrap();
-        assert_eq!(load_checkpoint(&path).unwrap().epoch, 2);
-
-        let item = InvocationResponse {
-            response: Some(invocation_response::Response::OutputItem(
-                golem_api_grpc::proto::golem::worker::OutputStreamItem {
-                    transport_stream_id: 9,
-                    durable_stream_id: Some(stream_id.into()),
-                    durable_offset: checkpoint_cursor(9),
-                    ..Default::default()
-                },
-            )),
+        let mut binding = InputBinding {
+            provisional_ref: current_reference,
+            stream_token: None,
+            channel: None,
+            parameter_name: "source".to_string(),
+            item_type: SchemaType::u8(),
+            raw_kind: None,
         };
-        update_checkpoint(&path, &mut current, &item).unwrap();
-        assert_eq!(
-            load_checkpoint(&path).unwrap().cursors[&stream_id],
-            Some(checkpoint_cursor(9))
-        );
-    }
-
-    #[test]
-    fn raw_stream_kind_resolves_refs() {
-        let graph = SchemaGraph::empty();
-        assert_eq!(
-            raw_stream_kind(&graph, &SchemaType::u8()),
-            Some(RawStreamKind::U8)
-        );
-        assert_eq!(raw_stream_kind(&graph, &SchemaType::string()), None);
-    }
-
-    #[test]
-    fn value_stdin_parser_preserves_blank_strings() {
-        let value = parse_method_argument_schema_value(
-            "",
-            &SchemaGraph::empty(),
-            &SchemaType::string(),
-            &SourceLanguage::Rust,
+        validate_pending_start(
+            &request,
+            &selector,
+            &[],
+            "invocation-key",
+            &serde_json::json!({
+                "source":{"$stream":{"provisionalRef":current_reference}}
+            }),
+            Some(&mut binding),
         )
         .unwrap();
-        assert_eq!(value, SchemaValue::String(String::new()));
+        assert_eq!(binding.provisional_ref, saved_reference);
     }
 
     #[test]
-    fn input_failure_uses_producer_cancellation() {
-        let request = input_cancel_request(
-            1,
-            4,
-            StreamCancelReason::Protocol,
-            "invalid input".to_string(),
-        );
-        let Some(public_invocation_request::Request::StreamCancel(cancel)) = request.request else {
-            panic!("expected stream cancellation");
-        };
-        assert_eq!(cancel.transport_stream_id, 1);
-        assert_eq!(cancel.producer_sequence, 4);
-        assert_eq!(cancel.role(), StreamCancelRole::InputProducer);
-        assert_eq!(cancel.reason(), StreamCancelReason::Protocol);
-    }
-
-    #[test]
-    fn discovers_nested_output_streams() {
+    fn nested_output_streams_use_public_channels() {
         let graph = SchemaGraph::empty();
         let ty = SchemaType::Record {
             fields: vec![NamedFieldType {
@@ -2830,14 +2640,10 @@ mod tests {
             }],
             metadata: MetadataEnvelope::default(),
         };
-        let value = ProtoSchemaValue {
-            value: Some(schema_value::Value::RecordValue(RecordValue {
-                fields: vec![ProtoSchemaValue {
-                    value: Some(schema_value::Value::StreamReference(
-                        SchemaValueStreamReference { stream_id: 3 },
-                    )),
-                }],
-            })),
+        let value = SchemaValue::Record {
+            fields: vec![SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                7_u32,
+            ))],
         };
         let mut streams = HashMap::new();
         discover_streams(
@@ -2850,432 +2656,106 @@ mod tests {
             &mut streams,
         )
         .unwrap();
-        assert_eq!(streams.get(&3).unwrap().path, "$.items");
-    }
-
-    #[test]
-    async fn raw_output_rejects_result_that_does_not_match_stream_schema() {
-        let graph = SchemaGraph::empty();
-        let output_schema =
-            OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::u8()))));
-        let response = InvocationResponse {
-            response: Some(invocation_response::Response::Result(
-                golem_api_grpc::proto::golem::worker::InvocationSessionResult {
-                    result: Some(invocation_session_result::Result::MethodResult(
-                        SchemaValue::U8(1).try_into().unwrap(),
-                    )),
-                    ..Default::default()
-                },
-            )),
-        };
-        let (tx, _rx) = mpsc::channel(1);
-        let output = OutputChannel {
-            tx,
-            interrupt: CancellationToken::new(),
-            input_failed: CancellationToken::new(),
-        };
-
-        let result = handle_response(
-            response,
-            &graph,
-            &output_schema,
-            &SourceLanguage::Rust,
-            InvocationStdoutFormat::Raw,
-            false,
-            "session-key",
-            &mut SessionIdentity::default(),
-            &mut HashMap::new(),
-            &output,
-        )
-        .await;
-
-        assert!(
-            result.is_err(),
-            "raw output must reject a scalar result for a declared stream schema"
-        );
-    }
-
-    #[test]
-    fn text_rendering_preserves_scalar_fragments_around_streams() {
-        let graph = SchemaGraph::empty();
-        let ty = SchemaType::Tuple {
-            elements: vec![
-                SchemaType::string(),
-                SchemaType::stream(Some(SchemaType::u32())),
-            ],
-            metadata: MetadataEnvelope::default(),
-        };
-        let value = ProtoSchemaValue {
-            value: Some(schema_value::Value::TupleValue(
-                golem_api_grpc::proto::golem::schema::TupleValue {
-                    elements: vec![
-                        SchemaValue::String("metadata".to_string())
-                            .try_into()
-                            .unwrap(),
-                        ProtoSchemaValue {
-                            value: Some(schema_value::Value::StreamReference(
-                                SchemaValueStreamReference { stream_id: 3 },
-                            )),
-                        },
-                    ],
-                },
-            )),
-        };
-
+        assert_eq!(streams[&7].path, "$.items");
         assert_eq!(
-            render_text_fragments(&graph, &ty, &value, "$", &SourceLanguage::Rust).unwrap(),
-            vec![("$[0]".to_string(), "\"metadata\"".to_string())]
+            schema_value_to_json(&graph, &ty, &value).unwrap(),
+            serde_json::json!({"items":{"$stream":7}})
         );
     }
 
     #[test]
-    fn direct_stream_parameter_binds_stdin_with_odd_client_id() {
-        let graph = SchemaGraph::empty();
-        let method = method(
-            vec![NamedField::user_supplied(
-                "values",
-                SchemaType::stream(Some(SchemaType::u32())),
-            )],
-            OutputSchema::Unit,
+    fn cancellation_contains_only_public_channel_identity() {
+        let streams = HashMap::from([(
+            4,
+            OutputStream {
+                item_type: SchemaType::u8(),
+                parent_stream_id: None,
+                path: "$".to_string(),
+                raw_kind: Some(RawStreamKind::U8),
+                next_offset: Some(3),
+                terminal: false,
+            },
+        )]);
+        assert_eq!(
+            cancel_open_streams(None, &streams, PublicClientCancelReason::ConsumerDrop),
+            vec![PublicClientMessage::StreamCancel {
+                channel: 4,
+                reason: PublicClientCancelReason::ConsumerDrop,
+                version: INVOCATION_SESSION_VERSION,
+            }]
         );
-        let (parameters, binding) = prepare_method_parameters(
-            &graph,
-            &method,
-            vec!["-".to_string()],
-            &SourceLanguage::Rust,
-            InvocationStdinFormat::Value,
-        )
-        .unwrap();
+    }
 
-        let binding = binding.unwrap();
-        assert_eq!(binding.stream_id, 1);
-        assert_eq!(binding.parameter_name, "values");
-        let Some(schema_value::Value::RecordValue(record)) = parameters.value else {
-            panic!("expected parameter record");
-        };
-        assert!(matches!(
-            record.fields[0].value,
-            Some(schema_value::Value::StreamReference(
-                SchemaValueStreamReference { stream_id: 1 }
-            ))
+    #[test]
+    fn explicit_and_consumer_drop_cancellation_are_not_cli_failures() {
+        assert!(!server_cancellation_is_failure(
+            PublicServerCancelReason::Cancelled
         ));
+        assert!(!server_cancellation_is_failure(
+            PublicServerCancelReason::ConsumerDrop
+        ));
+        for reason in [
+            PublicServerCancelReason::TransportDetached,
+            PublicServerCancelReason::SourceUnavailable,
+            PublicServerCancelReason::ProducerDeleted,
+            PublicServerCancelReason::InvocationFailed,
+            PublicServerCancelReason::ProtocolError,
+        ] {
+            assert!(server_cancellation_is_failure(reason));
+        }
     }
 
     #[test]
-    fn multiple_and_nested_input_streams_are_rejected() {
-        let graph = SchemaGraph::empty();
-        let direct = method(
-            vec![
-                NamedField::user_supplied("left", SchemaType::stream(Some(SchemaType::u32()))),
-                NamedField::user_supplied("right", SchemaType::stream(Some(SchemaType::u32()))),
-            ],
-            OutputSchema::Unit,
-        );
-        assert!(
-            prepare_method_parameters(
-                &graph,
-                &direct,
-                vec!["-".to_string(), "-".to_string()],
-                &SourceLanguage::Rust,
-                InvocationStdinFormat::Value,
-            )
-            .unwrap_err()
-            .to_string()
-            .contains("one stream parameter")
-        );
-
-        let nested = method(
-            vec![NamedField::user_supplied(
-                "nested",
-                SchemaType::record(vec![NamedFieldType {
-                    name: "values".to_string(),
-                    body: SchemaType::stream(Some(SchemaType::u32())),
-                    metadata: MetadataEnvelope::default(),
-                }]),
-            )],
-            OutputSchema::Unit,
-        );
-        assert!(
-            prepare_method_parameters(
-                &graph,
-                &nested,
-                vec!["-".to_string()],
-                &SourceLanguage::Rust,
-                InvocationStdinFormat::Value,
-            )
-            .unwrap_err()
-            .to_string()
-            .contains("direct stream")
-        );
-
-        let nested_item = method(
-            vec![NamedField::user_supplied(
-                "nested-item",
-                SchemaType::stream(Some(SchemaType::record(vec![NamedFieldType {
-                    name: "values".to_string(),
-                    body: SchemaType::stream(Some(SchemaType::u32())),
-                    metadata: MetadataEnvelope::default(),
-                }]))),
-            )],
-            OutputSchema::Unit,
-        );
-        assert!(
-            prepare_method_parameters(
-                &graph,
-                &nested_item,
-                vec!["-".to_string()],
-                &SourceLanguage::Rust,
-                InvocationStdinFormat::Value,
-            )
-            .unwrap_err()
-            .to_string()
-            .contains("cannot contain nested streams")
-        );
+    fn public_mapping_rebinding_is_rejected() {
+        let bindings = DeliveryTracker::default();
+        let mapping = PublicStreamMapping {
+            channel: 3,
+            direction: PublicStreamDirection::Output,
+            input_high_water: None,
+            provisional_ref: None,
+            stream_token: "stream-one".to_string(),
+        };
+        bindings.begin_connection(&[mapping.clone()]).unwrap();
+        let rebound = PublicStreamMapping {
+            channel: 4,
+            ..mapping
+        };
+        assert!(bindings.install_mappings(&[rebound]).is_err());
     }
 
     #[test]
-    fn raw_formats_accept_only_direct_byte_streams() {
-        let graph = SchemaGraph::empty();
-        let invalid_input = method(
-            vec![NamedField::user_supplied(
-                "values",
-                SchemaType::stream(Some(SchemaType::u32())),
-            )],
-            OutputSchema::Unit,
-        );
-        assert!(
-            prepare_method_parameters(
-                &graph,
-                &invalid_input,
-                vec!["-".to_string()],
-                &SourceLanguage::Rust,
-                InvocationStdinFormat::Raw,
-            )
-            .unwrap_err()
-            .to_string()
-            .contains("stream<binary> or stream<u8>")
-        );
-
-        validate_stdout_format(
-            &graph,
-            &OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::binary(
-                BinaryRestrictions::default(),
-            ))))),
-            InvocationStdoutFormat::Raw,
-        )
-        .unwrap();
-        assert!(
-            validate_stdout_format(
-                &graph,
-                &OutputSchema::Single(Box::new(SchemaType::record(vec![NamedFieldType {
-                    name: "bytes".to_string(),
-                    body: SchemaType::stream(Some(SchemaType::u8())),
-                    metadata: MetadataEnvelope::default(),
-                }]))),
-                InvocationStdoutFormat::Raw,
-            )
-            .unwrap_err()
-            .to_string()
-            .contains("one direct stream")
-        );
-    }
-
-    #[test]
-    fn structured_values_preserve_field_names_and_stream_references() {
-        let graph = SchemaGraph::empty();
-        let ty = SchemaType::record(vec![
-            NamedFieldType {
-                name: "count".to_string(),
-                body: SchemaType::u32(),
-                metadata: MetadataEnvelope::default(),
-            },
-            NamedFieldType {
-                name: "items".to_string(),
-                body: SchemaType::stream(Some(SchemaType::string())),
-                metadata: MetadataEnvelope::default(),
-            },
-        ]);
-        let value = ProtoSchemaValue {
-            value: Some(schema_value::Value::RecordValue(RecordValue {
-                fields: vec![
-                    SchemaValue::U32(2).try_into().unwrap(),
-                    ProtoSchemaValue {
-                        value: Some(schema_value::Value::StreamReference(
-                            SchemaValueStreamReference { stream_id: 9 },
-                        )),
+    async fn terminal_input_acknowledgement_does_not_consume_item_capacity() {
+        let buffer = InputReplayBuffer::new(2, 2);
+        buffer.push(
+            buffer
+                .admit(
+                    ReplayableInput::Value {
+                        sequence: 0,
+                        value: serde_json::json!(1),
                     },
-                ],
-            })),
-        };
-
-        assert_eq!(
-            proto_value_to_json(&graph, &ty, &value).unwrap(),
-            serde_json::json!({ "count": 2, "items": { "$stream": 9 } })
+                    1,
+                )
+                .await
+                .unwrap(),
         );
+        buffer.push(
+            buffer
+                .admit(ReplayableInput::End { sequence: 1 }, 1)
+                .await
+                .unwrap(),
+        );
+        buffer.mark_sent(0).unwrap();
+        buffer.mark_sent(1).unwrap();
+        buffer.acknowledge(1, false).unwrap();
+        assert_eq!(buffer.len(), 1);
+        buffer.acknowledge(1, true).unwrap();
+        assert!(buffer.is_empty());
     }
 
-    #[test]
-    fn input_cancellation_is_detected_for_the_bound_stream_only() {
-        let response = InvocationResponse {
-            response: Some(invocation_response::Response::StreamCancel(
-                golem_api_grpc::proto::golem::worker::StreamCancel {
-                    transport_stream_id: 1,
-                    producer_sequence: 0,
-                    role: StreamCancelRole::InputConsumer as i32,
-                    reason: StreamCancelReason::Cancelled as i32,
-                    details: None,
-                    ..Default::default()
-                },
-            )),
-        };
-        assert!(response_cancels_input(&response, Some(1)));
-        assert!(!response_cancels_input(&response, Some(3)));
-    }
-
-    #[test]
-    async fn connection_truncation_before_finish_is_an_error() {
-        let (wire_tx, _wire_rx) = mpsc::channel(1);
-        let error = receive_response(
-            None,
-            &wire_tx,
-            &CancellationToken::new(),
-            &CancellationToken::new(),
-        )
-        .await
-        .unwrap_err();
-        assert!(error.to_string().contains("ended before completion"));
-    }
-
-    #[test]
-    async fn event_after_finish_is_an_error() {
-        let (wire_tx, _wire_rx) = mpsc::channel(1);
-        let (_output_tx, mut output_rx) = oneshot::channel();
-        let mut frames = futures_util::stream::iter([Ok(Message::Binary(Vec::new().into()))]);
-        let error = await_clean_close(
-            &mut frames,
-            &wire_tx,
-            &CancellationToken::new(),
-            &mut output_rx,
-        )
-        .await
-        .unwrap_err();
-        assert!(error.to_string().contains("event after completion"));
-    }
-
-    #[test]
-    async fn clean_close_wait_is_interrupted() {
-        let (wire_tx, _wire_rx) = mpsc::channel(1);
-        let (_output_tx, mut output_rx) = oneshot::channel();
-        let mut frames = futures_util::stream::pending();
-        let interrupt = CancellationToken::new();
-        interrupt.cancel();
-
-        let error = await_clean_close(&mut frames, &wire_tx, &interrupt, &mut output_rx)
-            .await
-            .unwrap_err();
-        assert_eq!(error.downcast_ref::<PipedExitCode>().unwrap().0, 130);
-    }
-
-    #[test]
-    async fn clean_close_wait_reports_broken_pipe() {
-        let (wire_tx, _wire_rx) = mpsc::channel(1);
-        let (output_tx, mut output_rx) = oneshot::channel();
-        let mut frames = futures_util::stream::pending();
-        output_tx
-            .send(Err(anyhow!(PipedExitCode(0))))
-            .expect("failed to send output error");
-
-        let error = await_clean_close(
-            &mut frames,
-            &wire_tx,
-            &CancellationToken::new(),
-            &mut output_rx,
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(error.downcast_ref::<PipedExitCode>().unwrap().0, 0);
-    }
-
-    #[test]
-    async fn saturated_wire_send_is_interrupted() {
-        let (wire_tx, _wire_rx) = mpsc::channel(1);
-        wire_tx.try_send(Message::Ping(Vec::new().into())).unwrap();
-        let interrupt = CancellationToken::new();
-        let cancel = interrupt.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            cancel.cancel();
-        });
-
-        let error = tokio::time::timeout(
-            Duration::from_secs(1),
-            send_message(&wire_tx, Message::Pong(Vec::new().into()), &interrupt),
-        )
-        .await
-        .expect("saturated send did not observe cancellation")
-        .unwrap_err();
-        assert_eq!(error.downcast_ref::<PipedExitCode>().unwrap().0, 130);
-    }
-
-    #[test]
-    async fn saturated_pong_send_observes_input_failure() {
-        let (wire_tx, _wire_rx) = mpsc::channel(1);
-        wire_tx.try_send(Message::Ping(Vec::new().into())).unwrap();
-        let input_failed = CancellationToken::new();
-        let cancel = input_failed.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            cancel.cancel();
-        });
-
-        let error = tokio::time::timeout(
-            Duration::from_secs(1),
-            receive_response(
-                Some(Ok(Message::Ping(Vec::new().into()))),
-                &wire_tx,
-                &CancellationToken::new(),
-                &input_failed,
-            ),
-        )
-        .await
-        .expect("saturated Pong send did not observe input failure")
-        .unwrap_err();
-        assert!(error.downcast_ref::<InputFailureSignal>().is_some());
-    }
-
-    #[test]
-    async fn saturated_output_send_observes_input_failure() {
-        let (tx, _rx) = mpsc::channel(1);
-        tx.try_send(OutputJob::Text("first".to_string())).unwrap();
-        let input_failed = CancellationToken::new();
-        let cancel = input_failed.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            cancel.cancel();
-        });
-        let output = OutputChannel {
-            tx,
-            interrupt: CancellationToken::new(),
-            input_failed,
-        };
-
-        let error = tokio::time::timeout(
-            Duration::from_secs(1),
-            emit(&output, OutputJob::Text("second".to_string())),
-        )
-        .await
-        .expect("saturated output send did not observe input failure")
-        .unwrap_err();
-        assert!(error.downcast_ref::<InputFailureSignal>().is_some());
-    }
-
-    struct BrokenOnFlush {
-        bytes: Vec<u8>,
-    }
+    struct BrokenOnFlush;
 
     impl Write for BrokenOnFlush {
         fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-            self.bytes.extend_from_slice(buffer);
             Ok(buffer.len())
         }
 
@@ -3285,14 +2765,19 @@ mod tests {
     }
 
     #[test]
-    fn output_flush_detects_broken_pipe_after_one_raw_item() {
-        let (output_tx, output_rx) = mpsc::channel(1);
-        assert!(output_tx.try_send(OutputJob::Raw(vec![1])).is_ok());
-        drop(output_tx);
-        let mut output = BrokenOnFlush { bytes: Vec::new() };
-
-        let error = write_output_to(output_rx, Format::Text, false, &mut output).unwrap_err();
-        assert_eq!(output.bytes, vec![1]);
+    fn output_is_not_acknowledged_until_flush_succeeds() {
+        let (tx, rx) = mpsc::channel(1);
+        let (written, completed) = oneshot::channel();
+        assert!(
+            tx.try_send(QueuedOutput {
+                job: OutputJob::Raw(vec![1]),
+                written,
+            })
+            .is_ok()
+        );
+        drop(tx);
+        let error = write_output_to(rx, Format::Text, false, &mut BrokenOnFlush).unwrap_err();
         assert_eq!(error.downcast_ref::<PipedExitCode>().unwrap().0, 0);
+        assert!(completed.blocking_recv().is_err());
     }
 }

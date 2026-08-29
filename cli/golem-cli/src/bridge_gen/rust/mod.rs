@@ -33,12 +33,12 @@ use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{AgentConfigSource, AgentMode};
 use golem_common::schema::agent::{
     AgentConfigDeclarationSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
-    typed_schema_value_with_projected_defs,
+    contains_stream_in_graph, typed_schema_value_with_projected_defs,
 };
-use golem_common::schema::graph::SchemaTypeDef;
+use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef};
 use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::schema_type::{
-    BinaryRestrictions, SchemaType, TextRestrictions, VariantCaseType,
+    BinaryRestrictions, NamedFieldType, SchemaType, TextRestrictions, VariantCaseType,
 };
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::unstructured::{
@@ -411,11 +411,29 @@ impl RustBridgeGenerator {
                 .collect();
             let value_encode =
                 self.emit_encode_expr(quote! { value }, &config.value_type, false, 0)?;
+            let config_graph = typed_schema_value_with_projected_defs(
+                &self.agent_type.schema,
+                config.value_type.clone(),
+                SchemaValue::Bool(false),
+            )
+            .graph()
+            .clone();
+            let config_graph_json = serde_json::to_string(&config_graph)?;
             config_encode_stmts.push(quote! {
                 if let Some(value) = #param_name {
                     let __config_value: crate::__golem_bridge_runtime::schema::SchemaValue = (|| -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
                         #value_encode
                     })().map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to encode config value: {__e}") })?;
+                    let __config_graph: crate::__golem_bridge_runtime::schema::SchemaGraph =
+                        serde_json::from_str(#config_graph_json)
+                            .map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to load config schema: {__e}") })?;
+                    session_config.push(golem_common::model::invocation_session_public::PublicConfigEntry {
+                        path: vec![#(#path_segments),*],
+                        value: golem_client::invocation_session::encode_generated_streamless_value(
+                            &__config_graph,
+                            &__config_value,
+                        ).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to encode public config value: {__e}") })?,
+                    });
                     let __config_json = serde_json::to_value(&__config_value).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to serialize config value: {__e}") })?;
                     agent_config.push(golem_client::model::AgentConfigEntryDto {
                         path: vec![#(#path_segments),*],
@@ -432,8 +450,9 @@ impl RustBridgeGenerator {
                 pub async fn get_with_config(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
                     let mut agent_config = Vec::new();
+                    let mut session_config = Vec::new();
                     #(#config_encode_stmts)*
-                    Self::__create(constructor_parameters, None, agent_config).await
+                    Self::__create(constructor_parameters, None, agent_config, session_config).await
                 }
             }
         } else {
@@ -450,8 +469,9 @@ impl RustBridgeGenerator {
                 pub async fn get_phantom_with_config(uuid: uuid::Uuid, #(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
                     let mut agent_config = Vec::new();
+                    let mut session_config = Vec::new();
                     #(#config_encode_stmts)*
-                    Self::__create(constructor_parameters, Some(uuid), agent_config).await
+                    Self::__create(constructor_parameters, Some(uuid), agent_config, session_config).await
                 }
             });
             let new_phantom_id = if self.agent_type.mode == AgentMode::Durable {
@@ -467,8 +487,9 @@ impl RustBridgeGenerator {
                 pub async fn new_phantom_with_config(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
                     let mut agent_config = Vec::new();
+                    let mut session_config = Vec::new();
                     #(#config_encode_stmts)*
-                    Self::__create(constructor_parameters, #new_phantom_id, agent_config).await
+                    Self::__create(constructor_parameters, #new_phantom_id, agent_config, session_config).await
                 }
             }
         } else {
@@ -481,7 +502,7 @@ impl RustBridgeGenerator {
             quote! {
                 pub async fn get(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
-                    Self::__create(constructor_parameters, None, vec![]).await
+                    Self::__create(constructor_parameters, None, vec![], vec![]).await
                 }
             }
         } else {
@@ -490,7 +511,7 @@ impl RustBridgeGenerator {
         let get_phantom_method = (self.agent_type.mode == AgentMode::Durable).then(|| quote! {
             pub async fn get_phantom(uuid: uuid::Uuid, #(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                 let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
-                Self::__create(constructor_parameters, Some(uuid), vec![]).await
+                Self::__create(constructor_parameters, Some(uuid), vec![], vec![]).await
             }
         });
         let new_phantom_id = if self.agent_type.mode == AgentMode::Durable {
@@ -510,7 +531,7 @@ impl RustBridgeGenerator {
         });
         let ephemeral_local_return = (self.agent_type.mode == AgentMode::Ephemeral).then(|| {
             quote! {
-                return Ok(Self { constructor_parameters, phantom_id: None, agent_config });
+                return Ok(Self { constructor_parameters, phantom_id: None, agent_config, session_config });
             }
         });
         let invocation_config = if self.agent_type.mode == AgentMode::Ephemeral {
@@ -519,10 +540,10 @@ impl RustBridgeGenerator {
             quote! { None }
         };
         let created_fields = if self.agent_type.mode == AgentMode::Durable {
-            quote! { constructor_parameters, phantom_id, agent_id: response.agent_id }
+            quote! { constructor_parameters, phantom_id, agent_id: response.agent_id, session_config }
         } else {
             {
-                quote! { constructor_parameters, phantom_id: None, agent_config }
+                quote! { constructor_parameters, phantom_id: None, agent_config, session_config }
             }
         };
 
@@ -548,6 +569,7 @@ impl RustBridgeGenerator {
             pub struct #client_struct_name {
                 constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue,
                 phantom_id: Option<uuid::Uuid>,
+                session_config: Vec<golem_common::model::invocation_session_public::PublicConfigEntry>,
                 #agent_config_field
                 #agent_id_field
             }
@@ -560,7 +582,7 @@ impl RustBridgeGenerator {
                 #[doc = #new_phantom_doc]
                 pub async fn new_phantom(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
-                    Self::__create(constructor_parameters, #new_phantom_id, vec![]).await
+                    Self::__create(constructor_parameters, #new_phantom_id, vec![], vec![]).await
                 }
 
                 #with_config_methods
@@ -581,6 +603,7 @@ impl RustBridgeGenerator {
                     constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue,
                     phantom_id: Option<uuid::Uuid>,
                     agent_config: Vec<golem_client::model::AgentConfigEntryDto>,
+                    session_config: Vec<golem_common::model::invocation_session_public::PublicConfigEntry>,
                 ) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     #ephemeral_local_return
                     let config = CONFIG.get().expect("Configuration has not been set");
@@ -1026,12 +1049,200 @@ impl RustBridgeGenerator {
     // --- Method generation --------------------------------------------------
 
     fn methods(&mut self, method: &AgentMethodSchema) -> anyhow::Result<Vec<TokenStream>> {
+        if method.uses_streams(&self.agent_type.schema) {
+            return Ok(vec![self.streaming_method(method)?]);
+        }
         Ok(vec![
             self.await_method(method)?,
             self.trigger_method(method)?,
             self.schedule_method(method)?,
             self.internal_method(method)?,
         ])
+    }
+
+    fn streaming_method(&mut self, method: &AgentMethodSchema) -> anyhow::Result<TokenStream> {
+        let name = self.method_ident(method);
+        let method_name = method.name.as_str();
+        let param_names = self.input_param_ident_names_unique(&method.input_schema)?;
+        let param_defs =
+            self.input_param_defs_with_ident_names(&method.input_schema, &param_names)?;
+        let method_parameters =
+            self.streaming_input_value_with_ident_names(&method.input_schema, &param_names)?;
+        let return_type = self.output_return_type(&method.output_schema)?;
+        let return_type = return_type.unwrap_or_else(|| quote! { () });
+
+        let input_graph = self.projected_input_graph(&method.input_schema);
+        let constructor_graph =
+            self.projected_input_graph(&self.agent_type.constructor.input_schema);
+        let output_graph = method.output_schema.schema().map(|root| SchemaGraph {
+            defs: self.agent_type.schema.defs.clone(),
+            root: root.clone(),
+        });
+        let input_graph_json = serde_json::to_string(&input_graph)?;
+        let constructor_graph_json = serde_json::to_string(&constructor_graph)?;
+        let output_graph_json = output_graph
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        let output_graph = match output_graph_json {
+            Some(graph) => quote! {
+                Some(serde_json::from_str::<crate::__golem_bridge_runtime::schema::SchemaGraph>(#graph)
+                    .map_err(|__error| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
+                        message: format!("Failed to load output schema: {__error}"),
+                    })?)
+            },
+            None => quote! { None },
+        };
+        let decode = match self.rust_output(&method.output_schema)? {
+            RustOutput::Single(output) => {
+                let decode =
+                    self.emit_streaming_decode_expr(quote! { __value }, &output, false, 0)?;
+                quote! {
+                    |__value, __stream_context| {
+                        let __value = __value.ok_or_else(||
+                            "streaming invocation returned no result value".to_string()
+                        )?;
+                        #decode
+                    }
+                }
+            }
+            RustOutput::Multimodal(cases) => {
+                let decode = self.multimodal_list_decode_mode(&cases, quote! { __value }, true)?;
+                quote! {
+                    |__value, __stream_context| {
+                        let __value = __value.ok_or_else(||
+                            "streaming invocation returned no result value".to_string()
+                        )?;
+                        #decode
+                    }
+                }
+            }
+            RustOutput::Unit => quote! {
+                |__value, _stream_context| {
+                    if __value.is_some() {
+                        Err("unit streaming invocation returned a value".to_string())
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+        };
+        let agent_type_name = self.agent_type.type_name.0.as_str();
+
+        Ok(quote! {
+            pub async fn #name(
+                &self,
+                #(#param_defs),*
+            ) -> Result<#return_type, crate::__golem_bridge_runtime::ClientError> {
+                let __input_graph: crate::__golem_bridge_runtime::schema::SchemaGraph =
+                    serde_json::from_str(#input_graph_json)
+                        .map_err(|__error| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
+                            message: format!("Failed to load input schema: {__error}"),
+                        })?;
+                let __constructor_graph: crate::__golem_bridge_runtime::schema::SchemaGraph =
+                    serde_json::from_str(#constructor_graph_json)
+                        .map_err(|__error| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
+                            message: format!("Failed to load constructor schema: {__error}"),
+                        })?;
+                let __stream_context =
+                    golem_client::invocation_session::GeneratedEncodeContext::new(__input_graph.clone());
+                let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue =
+                    #method_parameters;
+                let constructor_parameters =
+                    golem_client::invocation_session::encode_generated_streamless_value(
+                        &__constructor_graph,
+                        &self.constructor_parameters,
+                    ).map_err(|__error| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
+                        message: format!("Failed to encode constructor parameters: {__error}"),
+                    })?;
+                let config = CONFIG.get().expect("Configuration has not been set");
+                let request = golem_client::invocation_session::GeneratedInvocationRequest {
+                    base_url: config.server.url(),
+                    security: config.server.token(),
+                    selector: golem_common::model::invocation_session_public::InvocationSelector {
+                        agent_type: #agent_type_name.to_string(),
+                        application: config.app_name.clone(),
+                        constructor_parameters,
+                        environment: config.env_name.clone(),
+                        method: #method_name.to_string(),
+                        phantom_id: self.phantom_id,
+                    },
+                    config: self.session_config.clone(),
+                    idempotency_key: uuid::Uuid::new_v4().to_string(),
+                    input_graph: __input_graph,
+                    output_graph: #output_graph,
+                };
+                golem_client::invocation_session::invoke_generated(
+                    request,
+                    method_parameters,
+                    __stream_context,
+                    #decode,
+                ).await.map_err(|__error| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
+                    message: __error.to_string(),
+                })
+            }
+        })
+    }
+
+    fn projected_input_graph(&self, input: &InputSchema) -> SchemaGraph {
+        let fields = user_supplied_fields(input)
+            .into_iter()
+            .map(|field| NamedFieldType {
+                name: field.name.clone(),
+                body: field.schema.clone(),
+                metadata: field.metadata.clone(),
+            })
+            .collect();
+        SchemaGraph {
+            defs: self.agent_type.schema.defs.clone(),
+            root: SchemaType::record(fields),
+        }
+    }
+
+    fn streaming_input_value_with_ident_names(
+        &mut self,
+        input: &InputSchema,
+        names: &[String],
+    ) -> anyhow::Result<TokenStream> {
+        let record_body = match self.rust_input(input)? {
+            RustInput::Params(params) => {
+                if params.len() != names.len() {
+                    bail!("parameter name allocation does not match input parameter count");
+                }
+                let mut field_encodings = Vec::new();
+                for ((_, schema), name) in params.iter().zip(names) {
+                    let ident = Self::ident_from_name(name);
+                    let encoding =
+                        self.emit_streaming_encode_expr(quote! { #ident }, schema, false, 0)?;
+                    field_encodings.push(quote! { #encoding? });
+                }
+                quote! {
+                    Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Record {
+                        fields: vec![#(#field_encodings),*],
+                    })
+                }
+            }
+            RustInput::Multimodal(cases) => {
+                if names.len() != 1 {
+                    bail!("multimodal input must have exactly one allocated parameter name");
+                }
+                let parameter = Self::ident_from_name(&names[0]);
+                let encoded =
+                    self.multimodal_list_encode_mode(&cases, quote! { #parameter }, true)?;
+                quote! {
+                    Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Record {
+                        fields: vec![#encoded?],
+                    })
+                }
+            }
+        };
+        Ok(quote! {
+            (|| -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
+                #record_body
+            })().map_err(|__error| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
+                message: format!("Failed to encode streaming parameters: {__error}"),
+            })?
+        })
     }
 
     fn guest_methods(
@@ -1663,12 +1874,32 @@ impl RustBridgeGenerator {
         cases: &[(String, SchemaType)],
         values_expr: TokenStream,
     ) -> anyhow::Result<TokenStream> {
+        self.multimodal_list_encode_mode(cases, values_expr, false)
+    }
+
+    fn multimodal_list_encode_mode(
+        &mut self,
+        cases: &[(String, SchemaType)],
+        values_expr: TokenStream,
+        streaming: bool,
+    ) -> anyhow::Result<TokenStream> {
         let name = self.get_or_create_multimodal(cases);
-        let encode_fn = Ident::new(&format!("encode_{name}"), Span::call_site());
+        let encode_fn = Ident::new(
+            &format!(
+                "{}_{name}",
+                if streaming {
+                    "encode_streaming"
+                } else {
+                    "encode"
+                }
+            ),
+            Span::call_site(),
+        );
+        let context = streaming.then(|| quote! { , &__stream_context });
         Ok(quote! {
             #values_expr
                 .into_iter()
-                .map(|__m| #encode_fn(__m))
+                .map(|__m| #encode_fn(__m #context))
                 .collect::<Result<Vec<crate::__golem_bridge_runtime::schema::SchemaValue>, String>>()
                 .map(|__elems| crate::__golem_bridge_runtime::schema::SchemaValue::List { elements: __elems })
         })
@@ -1681,13 +1912,33 @@ impl RustBridgeGenerator {
         cases: &[(String, SchemaType)],
         value_expr: TokenStream,
     ) -> anyhow::Result<TokenStream> {
+        self.multimodal_list_decode_mode(cases, value_expr, false)
+    }
+
+    fn multimodal_list_decode_mode(
+        &mut self,
+        cases: &[(String, SchemaType)],
+        value_expr: TokenStream,
+        streaming: bool,
+    ) -> anyhow::Result<TokenStream> {
         let name = self.get_or_create_multimodal(cases);
         let enum_ident = Ident::new(&name, Span::call_site());
-        let decode_fn = Ident::new(&format!("decode_{name}"), Span::call_site());
+        let decode_fn = Ident::new(
+            &format!(
+                "{}_{name}",
+                if streaming {
+                    "decode_streaming"
+                } else {
+                    "decode"
+                }
+            ),
+            Span::call_site(),
+        );
+        let context = streaming.then(|| quote! { , &__stream_context });
         Ok(quote! {
             match #value_expr {
                 crate::__golem_bridge_runtime::schema::SchemaValue::List { elements } => {
-                    elements.into_iter().map(|__e| #decode_fn(__e)).collect::<Result<Vec<#enum_ident>, String>>()
+                    elements.into_iter().map(|__e| #decode_fn(__e #context)).collect::<Result<Vec<#enum_ident>, String>>()
                 }
                 __other => Err(format!("Expected a multimodal list value, got {:?}", __other)),
             }
@@ -1702,10 +1953,15 @@ impl RustBridgeGenerator {
         let mut items = Vec::new();
         for (cases, name) in self.known_multimodals.clone() {
             let enum_ident = Ident::new(&name, Span::call_site());
+            let streaming = cases
+                .iter()
+                .any(|(_, payload)| contains_stream_in_graph(&self.agent_type.schema, payload));
 
             let mut variants = Vec::new();
             let mut encode_arms = Vec::new();
             let mut decode_arms = Vec::new();
+            let mut streaming_encode_arms = Vec::new();
+            let mut streaming_decode_arms = Vec::new();
 
             for (idx, (case_name, payload)) in cases.iter().enumerate() {
                 let case_ident = Ident::new(&self.to_rust_case_name(case_name), Span::call_site());
@@ -1713,43 +1969,102 @@ impl RustBridgeGenerator {
                 variants.push(quote! { #case_ident(#payload_type) });
 
                 let idx_u32 = idx as u32;
-                let enc = self.emit_encode_expr(quote! { __inner }, payload, false, 0)?;
-                encode_arms.push(quote! {
+                if !streaming {
+                    let enc = self.emit_encode_expr(quote! { __inner }, payload, false, 0)?;
+                    encode_arms.push(quote! {
+                        #enum_ident::#case_ident(__inner) => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Variant(crate::__golem_bridge_runtime::schema::VariantValuePayload {
+                            case: #idx_u32,
+                            payload: Some(Box::new(#enc?)),
+                        })),
+                    });
+
+                    let dec = self.emit_decode_expr(quote! { __pv }, payload, false, 0)?;
+                    decode_arms.push(quote! {
+                        #idx_u32 => {
+                            let __p = payload.ok_or_else(|| format!("Missing multimodal payload for case {}", #case_name))?;
+                            let __pv = *__p;
+                            Ok(#enum_ident::#case_ident(#dec?))
+                        }
+                    });
+                }
+
+                let streaming_enc =
+                    self.emit_streaming_encode_expr(quote! { __inner }, payload, false, 0)?;
+                streaming_encode_arms.push(quote! {
                     #enum_ident::#case_ident(__inner) => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Variant(crate::__golem_bridge_runtime::schema::VariantValuePayload {
                         case: #idx_u32,
-                        payload: Some(Box::new(#enc?)),
+                        payload: Some(Box::new(#streaming_enc?)),
                     })),
                 });
 
-                let dec = self.emit_decode_expr(quote! { __pv }, payload, false, 0)?;
-                decode_arms.push(quote! {
+                let streaming_dec =
+                    self.emit_streaming_decode_expr(quote! { __pv }, payload, false, 0)?;
+                streaming_decode_arms.push(quote! {
                     #idx_u32 => {
                         let __p = payload.ok_or_else(|| format!("Missing multimodal payload for case {}", #case_name))?;
                         let __pv = *__p;
-                        Ok(#enum_ident::#case_ident(#dec?))
+                        Ok(#enum_ident::#case_ident(#streaming_dec?))
                     }
                 });
             }
 
             let encode_fn = Ident::new(&format!("encode_{name}"), Span::call_site());
             let decode_fn = Ident::new(&format!("decode_{name}"), Span::call_site());
+            let streaming_encode_fn =
+                Ident::new(&format!("encode_streaming_{name}"), Span::call_site());
+            let streaming_decode_fn =
+                Ident::new(&format!("decode_streaming_{name}"), Span::call_site());
+            let derive = if streaming {
+                quote! { #[derive(Debug)] }
+            } else {
+                quote! { #[derive(Debug, Clone)] }
+            };
+            let ordinary_codecs = if streaming {
+                quote! {}
+            } else {
+                quote! {
+                    fn #encode_fn(value: #enum_ident) -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
+                        match value {
+                            #(#encode_arms)*
+                        }
+                    }
+
+                    fn #decode_fn(value: crate::__golem_bridge_runtime::schema::SchemaValue) -> Result<#enum_ident, String> {
+                        match value {
+                            crate::__golem_bridge_runtime::schema::SchemaValue::Variant(crate::__golem_bridge_runtime::schema::VariantValuePayload { case, payload }) => match case {
+                                #(#decode_arms)*
+                                __other => Err(format!("Invalid multimodal variant case index: {}", __other)),
+                            },
+                            __other => Err(format!("Expected variant value, got {:?}", __other)),
+                        }
+                    }
+                }
+            };
 
             items.push(quote! {
-                #[derive(Debug, Clone)]
+                #derive
                 pub enum #enum_ident {
                     #(#variants),*
                 }
 
-                fn #encode_fn(value: #enum_ident) -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
+                #ordinary_codecs
+
+                fn #streaming_encode_fn(
+                    value: #enum_ident,
+                    __stream_context: &golem_client::invocation_session::GeneratedEncodeContext,
+                ) -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
                     match value {
-                        #(#encode_arms)*
+                        #(#streaming_encode_arms)*
                     }
                 }
 
-                fn #decode_fn(value: crate::__golem_bridge_runtime::schema::SchemaValue) -> Result<#enum_ident, String> {
+                fn #streaming_decode_fn(
+                    value: crate::__golem_bridge_runtime::schema::SchemaValue,
+                    __stream_context: &golem_client::invocation_session::GeneratedDecodeContext,
+                ) -> Result<#enum_ident, String> {
                     match value {
                         crate::__golem_bridge_runtime::schema::SchemaValue::Variant(crate::__golem_bridge_runtime::schema::VariantValuePayload { case, payload }) => match case {
-                            #(#decode_arms)*
+                            #(#streaming_decode_arms)*
                             __other => Err(format!("Invalid multimodal variant case index: {}", __other)),
                         },
                         __other => Err(format!("Expected variant value, got {:?}", __other)),
@@ -1766,6 +2081,12 @@ impl RustBridgeGenerator {
     // --- Type definitions + codecs -----------------------------------------
 
     fn type_definitions(&mut self) -> anyhow::Result<TokenStream> {
+        let generate_streaming_codecs = self.mode == RustBridgeMode::ExternalRest
+            && self
+                .agent_type
+                .methods
+                .iter()
+                .any(|method| method.uses_streams(&self.agent_type.schema));
         let types: Vec<(SchemaType, RustTypeName)> = self
             .type_naming
             .types()
@@ -1783,19 +2104,55 @@ impl RustBridgeGenerator {
             let typedef = self.emit_typedef(&name_ident, &resolved)?;
             let encode_fn = Ident::new(&format!("encode_{name_str}"), Span::call_site());
             let decode_fn = Ident::new(&format!("decode_{name_str}"), Span::call_site());
-            let encode_body = self.emit_encode_body(&name_ident, &resolved)?;
-            let decode_body = self.emit_decode_body(&name_ident, &resolved)?;
+            let ordinary_codecs = if contains_stream_in_graph(&self.agent_type.schema, &resolved) {
+                quote! {}
+            } else {
+                let encode_body = self.emit_encode_body(&name_ident, &resolved)?;
+                let decode_body = self.emit_decode_body(&name_ident, &resolved)?;
+                quote! {
+                    fn #encode_fn(value: #name_ident) -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
+                        #encode_body
+                    }
+
+                    fn #decode_fn(value: crate::__golem_bridge_runtime::schema::SchemaValue) -> Result<#name_ident, String> {
+                        #decode_body
+                    }
+                }
+            };
+            let streaming_codecs = if generate_streaming_codecs {
+                let streaming_encode_fn =
+                    Ident::new(&format!("encode_streaming_{name_str}"), Span::call_site());
+                let streaming_decode_fn =
+                    Ident::new(&format!("decode_streaming_{name_str}"), Span::call_site());
+                let streaming_encode_body =
+                    self.emit_encode_body_mode(&name_ident, &resolved, true)?;
+                let streaming_decode_body =
+                    self.emit_decode_body_mode(&name_ident, &resolved, true)?;
+                quote! {
+                    fn #streaming_encode_fn(
+                        value: #name_ident,
+                        __stream_context: &golem_client::invocation_session::GeneratedEncodeContext,
+                    ) -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
+                        #streaming_encode_body
+                    }
+
+                    fn #streaming_decode_fn(
+                        value: crate::__golem_bridge_runtime::schema::SchemaValue,
+                        __stream_context: &golem_client::invocation_session::GeneratedDecodeContext,
+                    ) -> Result<#name_ident, String> {
+                        #streaming_decode_body
+                    }
+                }
+            } else {
+                quote! {}
+            };
 
             defs.push(quote! {
                 #typedef
 
-                fn #encode_fn(value: #name_ident) -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
-                    #encode_body
-                }
+                #ordinary_codecs
 
-                fn #decode_fn(value: crate::__golem_bridge_runtime::schema::SchemaValue) -> Result<#name_ident, String> {
-                    #decode_body
-                }
+                #streaming_codecs
             });
         }
 
@@ -1805,6 +2162,13 @@ impl RustBridgeGenerator {
     /// Emit the `pub struct` / `pub enum` / `pub type` definition for a named
     /// type, given its already-resolved body.
     fn emit_typedef(&mut self, name: &Ident, resolved: &SchemaType) -> anyhow::Result<TokenStream> {
+        let derive = if self.mode == RustBridgeMode::ExternalRest
+            && contains_stream_in_graph(&self.agent_type.schema, resolved)
+        {
+            quote! { #[derive(Debug)] }
+        } else {
+            quote! { #[derive(Debug, Clone)] }
+        };
         match resolved {
             SchemaType::Record { fields, .. } => {
                 let mut emitted = Vec::new();
@@ -1814,7 +2178,7 @@ impl RustBridgeGenerator {
                     emitted.push(quote! { pub #ident: #ty });
                 }
                 Ok(quote! {
-                    #[derive(Debug, Clone)]
+                    #derive
                     pub struct #name {
                         #(#emitted),*
                     }
@@ -1834,7 +2198,7 @@ impl RustBridgeGenerator {
                     }
                 }
                 Ok(quote! {
-                    #[derive(Debug, Clone)]
+                    #derive
                     pub enum #name {
                         #(#emitted),*
                     }
@@ -1849,7 +2213,7 @@ impl RustBridgeGenerator {
                     })
                     .collect::<Vec<_>>();
                 Ok(quote! {
-                    #[derive(Debug, Clone)]
+                    #derive
                     pub enum #name {
                         #(#emitted),*
                     }
@@ -1864,7 +2228,7 @@ impl RustBridgeGenerator {
                     })
                     .collect::<Vec<_>>();
                 Ok(quote! {
-                    #[derive(Debug, Clone)]
+                    #derive
                     pub struct #name {
                         #(#emitted),*
                     }
@@ -1879,7 +2243,7 @@ impl RustBridgeGenerator {
                     emitted.push(quote! { #branch_ident(#ty) });
                 }
                 Ok(quote! {
-                    #[derive(Debug, Clone)]
+                    #derive
                     pub enum #name {
                         #(#emitted),*
                     }
@@ -1900,6 +2264,15 @@ impl RustBridgeGenerator {
         name: &Ident,
         resolved: &SchemaType,
     ) -> anyhow::Result<TokenStream> {
+        self.emit_encode_body_mode(name, resolved, false)
+    }
+
+    fn emit_encode_body_mode(
+        &mut self,
+        name: &Ident,
+        resolved: &SchemaType,
+        streaming: bool,
+    ) -> anyhow::Result<TokenStream> {
         match resolved {
             SchemaType::Record { fields, .. } => {
                 let field_idents = fields
@@ -1908,7 +2281,13 @@ impl RustBridgeGenerator {
                     .collect::<Vec<_>>();
                 let mut field_encs = Vec::new();
                 for (field, ident) in fields.iter().zip(&field_idents) {
-                    let enc = self.emit_encode_expr(quote! { #ident }, &field.body, true, 0)?;
+                    let enc = self.emit_encode_expr_mode(
+                        quote! { #ident },
+                        &field.body,
+                        true,
+                        0,
+                        streaming,
+                    )?;
                     field_encs.push(quote! { #enc? });
                 }
                 Ok(quote! {
@@ -1924,8 +2303,9 @@ impl RustBridgeGenerator {
                     let idx_u32 = idx as u32;
                     match &case.payload {
                         Some(payload) => {
-                            let enc =
-                                self.emit_encode_expr(quote! { __inner }, payload, true, 0)?;
+                            let enc = self.emit_encode_expr_mode(
+                                quote! { __inner }, payload, true, 0, streaming,
+                            )?;
                             arms.push(quote! {
                                 #name::#case_ident(__inner) => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Variant(crate::__golem_bridge_runtime::schema::VariantValuePayload {
                                     case: #idx_u32,
@@ -1978,7 +2358,13 @@ impl RustBridgeGenerator {
                     let branch_ident =
                         Ident::new(&self.to_rust_case_name(&branch.tag), Span::call_site());
                     let tag = branch.tag.as_str();
-                    let enc = self.emit_encode_expr(quote! { __inner }, &branch.body, true, 0)?;
+                    let enc = self.emit_encode_expr_mode(
+                        quote! { __inner },
+                        &branch.body,
+                        true,
+                        0,
+                        streaming,
+                    )?;
                     arms.push(quote! {
                         #name::#branch_ident(__inner) => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Union(crate::__golem_bridge_runtime::schema::UnionValuePayload {
                             tag: #tag.to_string(),
@@ -1992,7 +2378,7 @@ impl RustBridgeGenerator {
                     }
                 })
             }
-            other => self.emit_encode_structural(quote! { value }, other, true, 0),
+            other => self.emit_encode_structural_mode(quote! { value }, other, true, 0, streaming),
         }
     }
 
@@ -2003,17 +2389,27 @@ impl RustBridgeGenerator {
         name: &Ident,
         resolved: &SchemaType,
     ) -> anyhow::Result<TokenStream> {
+        self.emit_decode_body_mode(name, resolved, false)
+    }
+
+    fn emit_decode_body_mode(
+        &mut self,
+        name: &Ident,
+        resolved: &SchemaType,
+        streaming: bool,
+    ) -> anyhow::Result<TokenStream> {
         match resolved {
             SchemaType::Record { fields, .. } => {
                 let n = fields.len();
                 let mut field_inits = Vec::new();
                 for field in fields {
                     let ident = Ident::new(&self.to_rust_ident(&field.name), Span::call_site());
-                    let dec = self.emit_decode_expr(
+                    let dec = self.emit_decode_expr_mode(
                         quote! { __it.next().unwrap() },
                         &field.body,
                         true,
                         0,
+                        streaming,
                     )?;
                     field_inits.push(quote! { #ident: #dec? });
                 }
@@ -2038,7 +2434,13 @@ impl RustBridgeGenerator {
                     let idx_u32 = idx as u32;
                     match &case.payload {
                         Some(payload) => {
-                            let dec = self.emit_decode_expr(quote! { __pv }, payload, true, 0)?;
+                            let dec = self.emit_decode_expr_mode(
+                                quote! { __pv },
+                                payload,
+                                true,
+                                0,
+                                streaming,
+                            )?;
                             arms.push(quote! {
                                 #idx_u32 => {
                                     let __p = payload.ok_or_else(|| format!("Missing payload for variant case {}", #idx_u32))?;
@@ -2104,7 +2506,13 @@ impl RustBridgeGenerator {
                     let branch_ident =
                         Ident::new(&self.to_rust_case_name(&branch.tag), Span::call_site());
                     let tag = branch.tag.as_str();
-                    let dec = self.emit_decode_expr(quote! { __bv }, &branch.body, true, 0)?;
+                    let dec = self.emit_decode_expr_mode(
+                        quote! { __bv },
+                        &branch.body,
+                        true,
+                        0,
+                        streaming,
+                    )?;
                     arms.push(quote! {
                         #tag => Ok(#name::#branch_ident(#dec?)),
                     });
@@ -2122,7 +2530,7 @@ impl RustBridgeGenerator {
                     }
                 })
             }
-            other => self.emit_decode_structural(quote! { value }, other, true, 0),
+            other => self.emit_decode_structural_mode(quote! { value }, other, true, 0, streaming),
         }
     }
 
@@ -2138,18 +2546,55 @@ impl RustBridgeGenerator {
         box_recursive: bool,
         depth: usize,
     ) -> anyhow::Result<TokenStream> {
+        self.emit_encode_expr_mode(val, typ, box_recursive, depth, false)
+    }
+
+    fn emit_streaming_encode_expr(
+        &mut self,
+        val: TokenStream,
+        typ: &SchemaType,
+        box_recursive: bool,
+        depth: usize,
+    ) -> anyhow::Result<TokenStream> {
+        self.emit_encode_expr_mode(val, typ, box_recursive, depth, true)
+    }
+
+    fn emit_encode_expr_mode(
+        &mut self,
+        val: TokenStream,
+        typ: &SchemaType,
+        box_recursive: bool,
+        depth: usize,
+        streaming: bool,
+    ) -> anyhow::Result<TokenStream> {
         let inner = if let Some(name) = self.type_naming.type_name_for_type(typ).cloned() {
             let RustTypeName::Derived(n) = name else {
                 bail!("Remapped type names are not supported yet");
             };
-            let encode_fn = Ident::new(&format!("encode_{n}"), Span::call_site());
-            if box_recursive && self.type_naming.is_recursive_ref(typ) {
-                quote! { #encode_fn(*#val) }
+            let encode_fn = Ident::new(
+                &if streaming {
+                    format!("encode_streaming_{n}")
+                } else {
+                    format!("encode_{n}")
+                },
+                Span::call_site(),
+            );
+            let call = if streaming {
+                quote! { #encode_fn(#val, &__stream_context) }
             } else {
                 quote! { #encode_fn(#val) }
+            };
+            if box_recursive && self.type_naming.is_recursive_ref(typ) {
+                if streaming {
+                    quote! { #encode_fn(*#val, &__stream_context) }
+                } else {
+                    quote! { #encode_fn(*#val) }
+                }
+            } else {
+                call
             }
         } else {
-            self.emit_encode_structural(val, typ, box_recursive, depth)?
+            self.emit_encode_structural_mode(val, typ, box_recursive, depth, streaming)?
         };
         // Pin the error type to `String` so callers can apply `?` to the
         // expression regardless of context (a bare `Ok(..)` leaf would
@@ -2166,30 +2611,67 @@ impl RustBridgeGenerator {
         box_recursive: bool,
         depth: usize,
     ) -> anyhow::Result<TokenStream> {
+        self.emit_decode_expr_mode(val, typ, box_recursive, depth, false)
+    }
+
+    fn emit_streaming_decode_expr(
+        &mut self,
+        val: TokenStream,
+        typ: &SchemaType,
+        box_recursive: bool,
+        depth: usize,
+    ) -> anyhow::Result<TokenStream> {
+        self.emit_decode_expr_mode(val, typ, box_recursive, depth, true)
+    }
+
+    fn emit_decode_expr_mode(
+        &mut self,
+        val: TokenStream,
+        typ: &SchemaType,
+        box_recursive: bool,
+        depth: usize,
+        streaming: bool,
+    ) -> anyhow::Result<TokenStream> {
         let inner = if let Some(name) = self.type_naming.type_name_for_type(typ).cloned() {
             let RustTypeName::Derived(n) = name else {
                 bail!("Remapped type names are not supported yet");
             };
-            let decode_fn = Ident::new(&format!("decode_{n}"), Span::call_site());
+            let decode_fn = Ident::new(
+                &if streaming {
+                    format!("decode_streaming_{n}")
+                } else {
+                    format!("decode_{n}")
+                },
+                Span::call_site(),
+            );
             if box_recursive && self.type_naming.is_recursive_ref(typ) {
-                quote! { #decode_fn(#val).map(Box::new) }
+                if streaming {
+                    quote! { #decode_fn(#val, __stream_context).map(Box::new) }
+                } else {
+                    quote! { #decode_fn(#val).map(Box::new) }
+                }
             } else {
-                quote! { #decode_fn(#val) }
+                if streaming {
+                    quote! { #decode_fn(#val, __stream_context) }
+                } else {
+                    quote! { #decode_fn(#val) }
+                }
             }
         } else {
-            self.emit_decode_structural(val, typ, box_recursive, depth)?
+            self.emit_decode_structural_mode(val, typ, box_recursive, depth, streaming)?
         };
         // Pin the error type to `String` so callers can apply `?` to the
         // expression regardless of context.
         Ok(quote! { { let __r: Result<_, String> = { #inner }; __r } })
     }
 
-    fn emit_encode_structural(
+    fn emit_encode_structural_mode(
         &mut self,
         val: TokenStream,
         typ: &SchemaType,
         box_recursive: bool,
         depth: usize,
+        streaming: bool,
     ) -> anyhow::Result<TokenStream> {
         // Role-marked unstructured-text/binary variant → ergonomic wrapper.
         let text_restrictions = {
@@ -2261,7 +2743,13 @@ impl RustBridgeGenerator {
                 quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::String(#val)) }
             }
             SchemaType::Option { inner, .. } => {
-                let inner_enc = self.emit_encode_expr(quote! { #e }, inner, box_recursive, next)?;
+                let inner_enc = self.emit_encode_expr_mode(
+                    quote! { #e },
+                    inner,
+                    box_recursive,
+                    next,
+                    streaming,
+                )?;
                 quote! {
                     match #val {
                         Some(#e) => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Option { inner: Some(Box::new(#inner_enc?)) }),
@@ -2270,7 +2758,8 @@ impl RustBridgeGenerator {
                 }
             }
             SchemaType::List { element, .. } => {
-                let inner_enc = self.emit_encode_expr(quote! { #e }, element, false, next)?;
+                let inner_enc =
+                    self.emit_encode_expr_mode(quote! { #e }, element, false, next, streaming)?;
                 quote! {
                     #val
                         .into_iter()
@@ -2282,7 +2771,8 @@ impl RustBridgeGenerator {
             SchemaType::FixedList {
                 element, length, ..
             } => {
-                let inner_enc = self.emit_encode_expr(quote! { #e }, element, false, next)?;
+                let inner_enc =
+                    self.emit_encode_expr_mode(quote! { #e }, element, false, next, streaming)?;
                 let len = *length as usize;
                 quote! {
                     {
@@ -2301,8 +2791,10 @@ impl RustBridgeGenerator {
             SchemaType::Map { key, value, .. } => {
                 let k = Ident::new(&format!("__k{depth}"), Span::call_site());
                 let v = Ident::new(&format!("__v{depth}"), Span::call_site());
-                let key_enc = self.emit_encode_expr(quote! { #k }, key, false, next)?;
-                let val_enc = self.emit_encode_expr(quote! { #v }, value, false, next)?;
+                let key_enc =
+                    self.emit_encode_expr_mode(quote! { #k }, key, false, next, streaming)?;
+                let val_enc =
+                    self.emit_encode_expr_mode(quote! { #v }, value, false, next, streaming)?;
                 quote! {
                     #val
                         .into_iter()
@@ -2316,8 +2808,13 @@ impl RustBridgeGenerator {
                 let mut parts = Vec::new();
                 for (idx, item) in elements.iter().enumerate() {
                     let index = Index::from(idx);
-                    let enc =
-                        self.emit_encode_expr(quote! { #t.#index }, item, box_recursive, next)?;
+                    let enc = self.emit_encode_expr_mode(
+                        quote! { #t.#index },
+                        item,
+                        box_recursive,
+                        next,
+                        streaming,
+                    )?;
                     parts.push(quote! { #enc? });
                 }
                 quote! {
@@ -2330,8 +2827,13 @@ impl RustBridgeGenerator {
             SchemaType::Result { spec, .. } => {
                 let ok_arm = match spec.ok.as_deref() {
                     Some(ok_type) => {
-                        let enc =
-                            self.emit_encode_expr(quote! { __r }, ok_type, box_recursive, next)?;
+                        let enc = self.emit_encode_expr_mode(
+                            quote! { __r },
+                            ok_type,
+                            box_recursive,
+                            next,
+                            streaming,
+                        )?;
                         quote! { Ok(__r) => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Ok { value: Some(Box::new(#enc?)) })), }
                     }
                     None => {
@@ -2340,8 +2842,13 @@ impl RustBridgeGenerator {
                 };
                 let err_arm = match spec.err.as_deref() {
                     Some(err_type) => {
-                        let enc =
-                            self.emit_encode_expr(quote! { __r }, err_type, box_recursive, next)?;
+                        let enc = self.emit_encode_expr_mode(
+                            quote! { __r },
+                            err_type,
+                            box_recursive,
+                            next,
+                            streaming,
+                        )?;
                         quote! { Err(__r) => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Err { value: Some(Box::new(#enc?)) })), }
                     }
                     None => {
@@ -2355,11 +2862,22 @@ impl RustBridgeGenerator {
                     }
                 }
             }
-            SchemaType::Text { .. } | SchemaType::Binary { .. } => {
+            SchemaType::Text { .. } => {
                 bail!(
-                    "Bare text/binary rich scalars have no Rust bridge surface; \
-                     wrap them in the unstructured text/binary variant (type = {typ:?})"
+                    "Bare text rich scalars have no Rust bridge surface; \
+                     wrap them in the unstructured text variant (type = {typ:?})"
                 )
+            }
+            SchemaType::Binary { .. } if self.mode == RustBridgeMode::ExternalRest => quote! {
+                Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Binary(
+                    crate::__golem_bridge_runtime::schema::BinaryValuePayload {
+                        bytes: #val.bytes,
+                        mime_type: #val.mime_type,
+                    }
+                ))
+            },
+            SchemaType::Binary { .. } => {
+                bail!("Bare binary rich scalars have no guest Rust bridge surface")
             }
             SchemaType::Path { .. } => {
                 quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Path { path: #val }) }
@@ -2389,20 +2907,39 @@ impl RustBridgeGenerator {
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
-            | SchemaType::Future { .. }
-            | SchemaType::Stream { .. } => {
+            | SchemaType::Future { .. } => {
                 bail!("SchemaType variant has no Rust bridge encoding yet; type = {typ:?}")
+            }
+            SchemaType::Stream { inner, .. } if streaming => {
+                let item = inner
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("Cannot generate an untyped Rust AgentStream"))?;
+                let item_json = serde_json::to_string(&item)?;
+                let item_encode =
+                    self.emit_encode_expr_mode(quote! { __stream_item }, item, false, next, true)?;
+                quote! {
+                    __stream_context.register_input(
+                        #val,
+                        serde_json::from_str::<crate::__golem_bridge_runtime::schema::SchemaType>(#item_json)
+                            .map_err(|__error| __error.to_string())?,
+                        |__stream_item, __stream_context| #item_encode,
+                    )
+                }
+            }
+            SchemaType::Stream { .. } => {
+                bail!("stream values require the public streaming invocation codec")
             }
         };
         Ok(rendered)
     }
 
-    fn emit_decode_structural(
+    fn emit_decode_structural_mode(
         &mut self,
         val: TokenStream,
         typ: &SchemaType,
         box_recursive: bool,
         depth: usize,
+        streaming: bool,
     ) -> anyhow::Result<TokenStream> {
         // Role-marked unstructured-text/binary variant → ergonomic wrapper.
         let text_restrictions = {
@@ -2480,7 +3017,13 @@ impl RustBridgeGenerator {
                 match #val { crate::__golem_bridge_runtime::schema::SchemaValue::String(__b) => Ok(__b), __other => Err(format!("Expected string value, got {:?}", __other)) }
             },
             SchemaType::Option { inner, .. } => {
-                let inner_dec = self.emit_decode_expr(quote! { #e }, inner, box_recursive, next)?;
+                let inner_dec = self.emit_decode_expr_mode(
+                    quote! { #e },
+                    inner,
+                    box_recursive,
+                    next,
+                    streaming,
+                )?;
                 quote! {
                     match #val {
                         crate::__golem_bridge_runtime::schema::SchemaValue::Option { inner } => match inner {
@@ -2492,7 +3035,8 @@ impl RustBridgeGenerator {
                 }
             }
             SchemaType::List { element, .. } => {
-                let inner_dec = self.emit_decode_expr(quote! { #e }, element, false, next)?;
+                let inner_dec =
+                    self.emit_decode_expr_mode(quote! { #e }, element, false, next, streaming)?;
                 quote! {
                     match #val {
                         crate::__golem_bridge_runtime::schema::SchemaValue::List { elements } => {
@@ -2505,7 +3049,8 @@ impl RustBridgeGenerator {
             SchemaType::FixedList {
                 element, length, ..
             } => {
-                let inner_dec = self.emit_decode_expr(quote! { #e }, element, false, next)?;
+                let inner_dec =
+                    self.emit_decode_expr_mode(quote! { #e }, element, false, next, streaming)?;
                 let len = *length as usize;
                 quote! {
                     match #val {
@@ -2522,8 +3067,10 @@ impl RustBridgeGenerator {
             SchemaType::Map { key, value, .. } => {
                 let k = Ident::new(&format!("__k{depth}"), Span::call_site());
                 let v = Ident::new(&format!("__v{depth}"), Span::call_site());
-                let key_dec = self.emit_decode_expr(quote! { #k }, key, false, next)?;
-                let val_dec = self.emit_decode_expr(quote! { #v }, value, false, next)?;
+                let key_dec =
+                    self.emit_decode_expr_mode(quote! { #k }, key, false, next, streaming)?;
+                let val_dec =
+                    self.emit_decode_expr_mode(quote! { #v }, value, false, next, streaming)?;
                 quote! {
                     match #val {
                         crate::__golem_bridge_runtime::schema::SchemaValue::Map { entries } => {
@@ -2545,11 +3092,12 @@ impl RustBridgeGenerator {
                     let n = elements.len();
                     let mut parts = Vec::new();
                     for item in elements {
-                        let dec = self.emit_decode_expr(
+                        let dec = self.emit_decode_expr_mode(
                             quote! { __it.next().unwrap() },
                             item,
                             box_recursive,
                             next,
+                            streaming,
                         )?;
                         parts.push(quote! { #dec? });
                     }
@@ -2575,8 +3123,13 @@ impl RustBridgeGenerator {
             SchemaType::Result { spec, .. } => {
                 let ok_arm = match spec.ok.as_deref() {
                     Some(ok_type) => {
-                        let dec =
-                            self.emit_decode_expr(quote! { __ov }, ok_type, box_recursive, next)?;
+                        let dec = self.emit_decode_expr_mode(
+                            quote! { __ov },
+                            ok_type,
+                            box_recursive,
+                            next,
+                            streaming,
+                        )?;
                         quote! {
                             crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Ok { value }) => {
                                 let __ov = *value.ok_or_else(|| "Missing ok value".to_string())?;
@@ -2590,8 +3143,13 @@ impl RustBridgeGenerator {
                 };
                 let err_arm = match spec.err.as_deref() {
                     Some(err_type) => {
-                        let dec =
-                            self.emit_decode_expr(quote! { __ev }, err_type, box_recursive, next)?;
+                        let dec = self.emit_decode_expr_mode(
+                            quote! { __ev },
+                            err_type,
+                            box_recursive,
+                            next,
+                            streaming,
+                        )?;
                         quote! {
                             crate::__golem_bridge_runtime::schema::SchemaValue::Result(crate::__golem_bridge_runtime::schema::ResultValuePayload::Err { value }) => {
                                 let __ev = *value.ok_or_else(|| "Missing err value".to_string())?;
@@ -2611,11 +3169,25 @@ impl RustBridgeGenerator {
                     }
                 }
             }
-            SchemaType::Text { .. } | SchemaType::Binary { .. } => {
+            SchemaType::Text { .. } => {
                 bail!(
-                    "Bare text/binary rich scalars have no Rust bridge surface; \
-                     wrap them in the unstructured text/binary variant (type = {typ:?})"
+                    "Bare text rich scalars have no Rust bridge surface; \
+                     wrap them in the unstructured text variant (type = {typ:?})"
                 )
+            }
+            SchemaType::Binary { .. } if self.mode == RustBridgeMode::ExternalRest => quote! {
+                match #val {
+                    crate::__golem_bridge_runtime::schema::SchemaValue::Binary(__binary) => {
+                        Ok(golem_client::invocation_session::AgentBinary {
+                            bytes: __binary.bytes,
+                            mime_type: __binary.mime_type,
+                        })
+                    }
+                    __other => Err(format!("Expected binary value, got {:?}", __other)),
+                }
+            },
+            SchemaType::Binary { .. } => {
+                bail!("Bare binary rich scalars have no guest Rust bridge surface")
             }
             SchemaType::Path { .. } => quote! {
                 match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Path { path } => Ok(path), __other => Err(format!("Expected path value, got {:?}", __other)) }
@@ -2641,9 +3213,32 @@ impl RustBridgeGenerator {
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
-            | SchemaType::Future { .. }
-            | SchemaType::Stream { .. } => {
+            | SchemaType::Future { .. } => {
                 bail!("SchemaType variant has no Rust bridge decoding yet; type = {typ:?}")
+            }
+            SchemaType::Stream { inner, .. } if streaming => {
+                let item = inner
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("Cannot generate an untyped Rust AgentStream"))?;
+                let item_json = serde_json::to_string(&item)?;
+                let item_decode =
+                    self.emit_decode_expr_mode(quote! { __stream_item }, item, false, next, true)?;
+                quote! {
+                    match #val {
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Stream(__stream) => {
+                            __stream_context.register_output(
+                                __stream,
+                                serde_json::from_str::<crate::__golem_bridge_runtime::schema::SchemaType>(#item_json)
+                                    .map_err(|__error| __error.to_string())?,
+                                |__stream_item, __stream_context| #item_decode,
+                            )
+                        }
+                        __other => Err(format!("Expected stream value, got {:?}", __other)),
+                    }
+                }
+            }
+            SchemaType::Stream { .. } => {
+                bail!("stream values require the public streaming invocation codec")
             }
         };
         Ok(rendered)
@@ -2739,9 +3334,16 @@ impl RustBridgeGenerator {
                 };
                 Ok(quote! { Result<#ok, #err> })
             }
-            SchemaType::Text { .. } | SchemaType::Binary { .. } => Err(anyhow!(
-                "Bare text/binary rich scalars have no Rust bridge type; \
-                 wrap them in the unstructured text/binary variant ({typ:?})"
+            SchemaType::Text { .. } => Err(anyhow!(
+                "Bare text rich scalars have no Rust bridge type; \
+                 wrap them in the unstructured text variant ({typ:?})"
+            )),
+            SchemaType::Binary { .. } if self.mode == RustBridgeMode::ExternalRest => {
+                Ok(quote! { golem_client::invocation_session::AgentBinary })
+            }
+            SchemaType::Binary { .. } => Err(anyhow!(
+                "Bare binary rich scalars have no guest Rust bridge type; \
+                 wrap them in the unstructured binary variant ({typ:?})"
             )),
             SchemaType::Path { .. } => Ok(quote! { String }),
             SchemaType::Url { .. } => Ok(quote! { String }),
@@ -2757,9 +3359,20 @@ impl RustBridgeGenerator {
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
-            | SchemaType::Future { .. }
-            | SchemaType::Stream { .. } => Err(anyhow!(
+            | SchemaType::Future { .. } => Err(anyhow!(
                 "Cannot emit Rust type reference for unsupported schema variant: {typ:?}"
+            )),
+            SchemaType::Stream {
+                inner: Some(inner), ..
+            } if self.mode == RustBridgeMode::ExternalRest => {
+                let item = self.type_reference(inner, false)?;
+                Ok(quote! { golem_client::invocation_session::AgentStream<#item> })
+            }
+            SchemaType::Stream { inner: None, .. } if self.mode == RustBridgeMode::ExternalRest => {
+                Err(anyhow!("Cannot generate an untyped Rust AgentStream"))
+            }
+            SchemaType::Stream { .. } => Err(anyhow!(
+                "Guest Rust bridge stream generation is not supported"
             )),
         }
     }
@@ -3064,7 +3677,10 @@ mod tests {
     use super::*;
     use golem_common::model::Empty;
     use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
-    use golem_common::schema::{AgentConstructorSchema, SchemaGraph, SchemaType};
+    use golem_common::schema::{
+        AgentConstructorSchema, AgentMethodSchema, InputSchema, NamedField, OutputSchema,
+        SchemaGraph, SchemaType,
+    };
     use test_r::test;
 
     #[test]
@@ -3155,6 +3771,54 @@ mod tests {
             );
         }
         assert!(!lib_rs.contains("golem_rust"));
+    }
+
+    #[test]
+    fn external_streaming_method_uses_shared_session_runtime_recursively() {
+        let mut agent_type = minimal_agent_type("AlphaAgent");
+        agent_type.methods.push(AgentMethodSchema {
+            name: "exchange".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters(vec![NamedField::user_supplied(
+                "sources",
+                SchemaType::list(SchemaType::stream(Some(SchemaType::u8()))),
+            )]),
+            output_schema: OutputSchema::Single(Box::new(SchemaType::result(
+                golem_common::schema::ResultSpec {
+                    ok: Some(Box::new(SchemaType::option(SchemaType::stream(Some(
+                        SchemaType::binary(BinaryRestrictions::default()),
+                    ))))),
+                    err: Some(Box::new(SchemaType::string())),
+                },
+            ))),
+            http_endpoint: vec![],
+            read_only: None,
+        });
+        agent_type.methods.push(AgentMethodSchema {
+            name: "status".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters(vec![]),
+            output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
+            http_endpoint: vec![],
+            read_only: None,
+        });
+        let mut generator = RustBridgeGenerator::new(agent_type, Utf8Path::new("."), true).unwrap();
+
+        let rendered = prettyplease::unparse(
+            &syn::parse2(generator.generate_lib_rs_tokens().unwrap()).unwrap(),
+        );
+
+        assert!(rendered.contains("AgentStream<u8>"));
+        assert!(rendered.contains("golem_client::invocation_session::AgentBinary"));
+        assert!(rendered.contains("invoke_generated("));
+        assert!(rendered.contains("register_input("));
+        assert!(rendered.contains("register_output("));
+        assert!(!rendered.contains("pub async fn trigger_exchange("));
+        assert!(!rendered.contains("pub async fn schedule_exchange("));
+        assert!(rendered.contains("pub async fn trigger_status("));
+        assert!(rendered.contains("pub async fn schedule_status("));
     }
 
     #[test]
