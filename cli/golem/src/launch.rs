@@ -313,7 +313,7 @@ fn shard_manager_config(
             port: 0,
             ..Default::default()
         },
-        db: DbConfig::Sqlite(DbSqliteConfig {
+        persistence: golem_shard_manager::config::PersistenceConfig::Sqlite(DbSqliteConfig {
             database: args
                 .data_dir
                 .join("shard_manager.db")

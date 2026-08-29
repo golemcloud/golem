@@ -16,7 +16,7 @@
 use crate::config::HealthCheckMode::K8s;
 use golem_common::SafeDisplay;
 use golem_common::config::{
-    ConfigExample, ConfigLoader, DbConfig, DbSqliteConfig, HasConfigExamples,
+    ConfigExample, ConfigLoader, DbPostgresConfig, DbSqliteConfig, HasConfigExamples,
 };
 use golem_common::model::{Empty, RetryConfig};
 use golem_common::tracing::TracingConfig;
@@ -31,7 +31,7 @@ use std::time::Duration;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShardManagerConfig {
     pub tracing: TracingConfig,
-    pub db: DbConfig,
+    pub persistence: PersistenceConfig,
     pub worker_executors: WorkerExecutorServiceConfig,
     pub health_check: HealthCheckConfig,
     pub http_port: u16,
@@ -52,8 +52,12 @@ impl SafeDisplay for ShardManagerConfig {
         let mut result = String::new();
         let _ = writeln!(&mut result, "tracing:");
         let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
-        let _ = writeln!(&mut result, "db:");
-        let _ = writeln!(&mut result, "{}", self.db.to_safe_string_indented());
+        let _ = writeln!(&mut result, "persistence:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.persistence.to_safe_string_indented()
+        );
         let _ = writeln!(&mut result, "worker executors:");
         let _ = writeln!(
             &mut result,
@@ -109,10 +113,7 @@ impl Default for ShardManagerConfig {
     fn default() -> Self {
         Self {
             tracing: TracingConfig::local_dev("shard-manager"),
-            db: DbConfig::Sqlite(DbSqliteConfig {
-                database: "golem_shard_manager.db".to_string(),
-                ..Default::default()
-            }),
+            persistence: PersistenceConfig::default(),
             worker_executors: WorkerExecutorServiceConfig::default(),
             health_check: HealthCheckConfig::default(),
             http_port: 8081,
@@ -130,27 +131,119 @@ impl Default for ShardManagerConfig {
 
 impl HasConfigExamples<ShardManagerConfig> for ShardManagerConfig {
     fn examples() -> Vec<ConfigExample<ShardManagerConfig>> {
+        let etcd_example: ConfigExample<ShardManagerConfig> = (
+            "with etcd persistence (distributed mode)",
+            Self {
+                persistence: PersistenceConfig::Etcd(EtcdConfig::default()),
+                ..Self::default()
+            },
+        );
+
         #[cfg(feature = "kubernetes")]
         {
-            vec![(
-                "with k8s healthcheck",
-                Self {
-                    health_check: HealthCheckConfig {
-                        delay: Duration::from_secs(1),
-                        mode: K8s(HealthCheckK8sConfig {
-                            namespace: "namespace".to_string(),
-                        }),
-                        silent: false,
+            vec![
+                (
+                    "with k8s healthcheck",
+                    Self {
+                        health_check: HealthCheckConfig {
+                            delay: Duration::from_secs(1),
+                            mode: K8s(HealthCheckK8sConfig {
+                                namespace: "namespace".to_string(),
+                            }),
+                            silent: false,
+                        },
+                        ..Self::default()
                     },
-                    ..Self::default()
-                },
-            )]
+                ),
+                etcd_example,
+            ]
         }
 
         #[cfg(not(feature = "kubernetes"))]
         {
-            Vec::new()
+            vec![etcd_example]
         }
+    }
+}
+
+/// Where the shard manager persists its state, which also selects the deployment mode.
+///
+/// * `Postgres` / `Sqlite` - **local mode**: a single shard manager instance, with the shard
+///   lease state and the quota state in one SQL database.
+/// * `Etcd` - **distributed mode**: the shard lease state lives in etcd behind a
+///   compare-and-swap on the key's `mod_revision`. Quota state is not durable in this mode.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum PersistenceConfig {
+    Postgres(DbPostgresConfig),
+    Sqlite(DbSqliteConfig),
+    Etcd(EtcdConfig),
+}
+
+impl Default for PersistenceConfig {
+    fn default() -> Self {
+        Self::Sqlite(DbSqliteConfig {
+            database: "golem_shard_manager.db".to_string(),
+            ..Default::default()
+        })
+    }
+}
+
+impl SafeDisplay for PersistenceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            PersistenceConfig::Postgres(postgres) => {
+                let _ = writeln!(&mut result, "postgres:");
+                let _ = writeln!(&mut result, "{}", postgres.to_safe_string_indented());
+            }
+            PersistenceConfig::Sqlite(sqlite) => {
+                let _ = writeln!(&mut result, "sqlite:");
+                let _ = writeln!(&mut result, "{}", sqlite.to_safe_string_indented());
+            }
+            PersistenceConfig::Etcd(etcd) => {
+                let _ = writeln!(&mut result, "etcd:");
+                let _ = writeln!(&mut result, "{}", etcd.to_safe_string_indented());
+            }
+        }
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EtcdConfig {
+    /// Client URLs of the etcd cluster.
+    ///
+    /// TLS is not configurable, so only `http://` endpoints are accepted; the shard manager
+    /// refuses to start otherwise.
+    ///
+    /// An environment override must be bracketed, otherwise it is read as a single string and
+    /// fails to deserialize:
+    /// `GOLEM__PERSISTENCE__CONFIG__ENDPOINTS=["http://a:2379","http://b:2379"]`
+    pub endpoints: Vec<String>,
+    #[serde(with = "humantime_serde")]
+    pub connect_timeout: Duration,
+    #[serde(with = "humantime_serde")]
+    pub request_timeout: Duration,
+}
+
+impl Default for EtcdConfig {
+    fn default() -> Self {
+        Self {
+            endpoints: vec!["http://localhost:2379".to_string()],
+            connect_timeout: Duration::from_secs(10),
+            request_timeout: Duration::from_secs(5),
+        }
+    }
+}
+
+impl SafeDisplay for EtcdConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "endpoints: {}", self.endpoints.join(", "));
+        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
+        let _ = writeln!(&mut result, "request timeout: {:?}", self.request_timeout);
+        result
     }
 }
 

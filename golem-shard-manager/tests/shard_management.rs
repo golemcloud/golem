@@ -16,10 +16,11 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::{Pod, ShardId};
 use golem_shard_manager::{
-    ExecutorAddr, ExecutorId, HealthCheck, HealthCheckError, RoutingTablePersistence, ShardEpoch,
-    ShardLeaseState, ShardManagement, ShardManagerError, WorkerExecutorService,
+    ExecutorAddr, ExecutorId, ExternalRevision, HealthCheck, HealthCheckError, NO_REVISION,
+    RoutingTablePersistence, ShardEpoch, ShardLeaseState, ShardManagement, ShardManagerError,
+    WorkerExecutorService,
 };
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,35 +32,92 @@ use uuid::Uuid;
 
 const LEASE_TTL: Duration = Duration::from_secs(60);
 
+#[derive(Debug)]
+struct TestStore {
+    shard_state: ShardLeaseState,
+    revision: ExternalRevision,
+}
+
+/// An in-memory [`RoutingTablePersistence`] with the same compare-and-swap semantics as the real
+/// backends, plus a hook for failing writes.
 #[derive(Clone, Debug)]
 struct TestPersistence {
-    shard_state: Arc<Mutex<ShardLeaseState>>,
-    writes: Arc<Mutex<Vec<ShardLeaseState>>>,
+    store: Arc<Mutex<TestStore>>,
+    /// `(prev_revision, written_state)` for every accepted write.
+    writes: Arc<Mutex<Vec<(ExternalRevision, ShardLeaseState)>>>,
+    /// Every `write` call, accepted or not. The gap between this and `writes` is how a test sees
+    /// that a write was rejected.
+    attempts: Arc<Mutex<usize>>,
+    /// Per-write script: a `None` entry lets a write through, a `Some(err)` entry fails it before
+    /// it reaches the store. Writes past the end of the script always succeed.
+    injected: Arc<Mutex<VecDeque<Option<ShardManagerError>>>>,
 }
 
 impl TestPersistence {
+    /// Seeds a store that already holds state. Revision 1 rather than `NO_REVISION`, because the
+    /// real backends can never hold state at revision 0 - that value means "nothing stored".
     fn new(initial: ShardLeaseState) -> Self {
+        Self::at_revision(initial, 1)
+    }
+
+    fn at_revision(initial: ShardLeaseState, revision: ExternalRevision) -> Self {
         Self {
-            shard_state: Arc::new(Mutex::new(initial)),
+            store: Arc::new(Mutex::new(TestStore {
+                shard_state: initial,
+                revision,
+            })),
             writes: Arc::new(Mutex::new(Vec::new())),
+            attempts: Arc::new(Mutex::new(0)),
+            injected: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
     async fn latest(&self) -> ShardLeaseState {
-        self.shard_state.lock().await.clone()
+        self.store.lock().await.shard_state.clone()
+    }
+
+    /// Scripts the outcome of the next writes. `vec![None, Some(err)]` fails only the second one.
+    async fn fail_writes(&self, script: Vec<Option<ShardManagerError>>) {
+        *self.injected.lock().await = script.into();
+    }
+
+    async fn write_count(&self) -> usize {
+        self.writes.lock().await.len()
+    }
+
+    async fn attempt_count(&self) -> usize {
+        *self.attempts.lock().await
     }
 }
 
 #[async_trait]
 impl RoutingTablePersistence for TestPersistence {
-    async fn write(&self, shard_state: &ShardLeaseState) -> Result<(), ShardManagerError> {
-        *self.shard_state.lock().await = shard_state.clone();
-        self.writes.lock().await.push(shard_state.clone());
-        Ok(())
+    async fn write(
+        &self,
+        shard_state: &ShardLeaseState,
+        prev_revision: ExternalRevision,
+    ) -> Result<ExternalRevision, ShardManagerError> {
+        *self.attempts.lock().await += 1;
+        if let Some(err) = self.injected.lock().await.pop_front().flatten() {
+            return Err(err);
+        }
+
+        let mut store = self.store.lock().await;
+        if prev_revision != store.revision {
+            return Err(ShardManagerError::ConcurrentModification);
+        }
+        store.revision += 1;
+        store.shard_state = shard_state.clone();
+        self.writes
+            .lock()
+            .await
+            .push((prev_revision, shard_state.clone()));
+        Ok(store.revision)
     }
 
-    async fn read(&self) -> Result<ShardLeaseState, ShardManagerError> {
-        Ok(self.shard_state.lock().await.clone())
+    async fn read(&self) -> Result<(ShardLeaseState, ExternalRevision), ShardManagerError> {
+        let store = self.store.lock().await;
+        Ok((store.shard_state.clone(), store.revision))
     }
 }
 
@@ -282,8 +340,26 @@ async fn new_shard_management(
     .expect("failed to create shard management");
 
     tokio::time::sleep(Duration::from_millis(50)).await;
+    // The startup pass persists exactly twice (executor changes, then the applied rebalance).
+    // Wait for both before handing the fixture over, so a test that scripts write failures cannot
+    // have one of them swallowed by a startup write that had not landed yet.
+    wait_for_writes(&persistence, 2).await;
 
     (shard_management, persistence, join_set)
+}
+
+/// Waits until the loop has performed at least `count` accepted writes.
+async fn wait_for_writes(persistence: &TestPersistence, count: usize) {
+    let start = Instant::now();
+    while persistence.write_count().await < count {
+        if start.elapsed() > Duration::from_secs(5) {
+            panic!(
+                "timed out waiting for {count} writes, saw {}",
+                persistence.write_count().await
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 #[test]
@@ -632,12 +708,148 @@ async fn same_address_reregistration_transfers_shards_and_reconciles() {
     assert!(shard_state.get_unassigned_shards().is_empty());
 
     // every persisted state along the way kept all four shards routable
-    for written in persistence.writes.lock().await.iter() {
+    for (_, written) in persistence.writes.lock().await.iter() {
         assert!(
             written.get_unassigned_shards().is_empty(),
             "shards became unassigned during re-registration: {written}"
         );
     }
+
+    join_set.abort_all();
+}
+
+#[test]
+// Snapshot-and-rollback: a failed persist restores the in-memory state, and the loop
+// does not carry on against a store it can no longer trust - the task ends with the error, so
+// the process restarts and re-reads. A revision conflict in particular means another shard
+// manager is writing the state; the cached revision is deliberately not refreshed, because it is
+// the fencing token and the loser of it has to stop.
+async fn a_persistence_failure_rolls_back_the_state_and_stops_the_loop() {
+    let existing_pod = pod(1, 9000);
+    let new_pod = pod(2, 9001);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+
+    let (shard_management, persistence, mut join_set) = new_shard_management(
+        shard_state_with_executors(
+            4,
+            vec![(
+                executor(1),
+                existing_pod,
+                "worker-executor-0",
+                &[0, 1, 2, 3],
+            )],
+        ),
+        worker_executors.clone(),
+    )
+    .await;
+    let before = shard_management.current_snapshot().await;
+    let persisted_before = persistence.latest().await;
+
+    persistence
+        .fail_writes(vec![Some(ShardManagerError::ConcurrentModification)])
+        .await;
+    let new_executor = shard_management
+        .register_executor(
+            ExecutorAddr::from(new_pod),
+            Some("worker-executor-1".into()),
+        )
+        .await;
+
+    let outcome = tokio::time::timeout(Duration::from_secs(5), join_set.join_next())
+        .await
+        .expect("the shard management loop should have stopped")
+        .expect("the loop task should exist")
+        .expect("the loop task should not panic");
+    assert!(
+        outcome.is_err(),
+        "the loop must end with the persistence error, got {outcome:?}"
+    );
+
+    // Rolled back: the registration reached neither memory nor the store, and nothing was pushed
+    // to the executor that never made it in.
+    let after = shard_management.current_snapshot().await;
+    assert!(!after.has_executor(new_executor));
+    assert_eq!(after, before);
+    assert_eq!(persistence.latest().await, persisted_before);
+    assert!(worker_executors.local_assignment(new_pod).await.is_empty());
+}
+
+#[test]
+// First boot through the loop: nothing is stored, so the very first write must be guarded on
+// NO_REVISION. Getting this wrong is rejected by both real backends, not silently tolerated.
+async fn the_first_write_on_an_empty_store_uses_no_revision() {
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let persistence = TestPersistence::at_revision(ShardLeaseState::new(4), NO_REVISION);
+    let health_check = Arc::new(TestHealthCheck::all_healthy());
+    let mut join_set = JoinSet::new();
+
+    let _shard_management = ShardManagement::new(
+        Arc::new(persistence.clone()),
+        worker_executors,
+        health_check,
+        0.0,
+        LEASE_TTL,
+        &mut join_set,
+    )
+    .await
+    .expect("failed to create shard management");
+
+    wait_for_writes(&persistence, 1).await;
+
+    let writes = persistence.writes.lock().await;
+    let (first_prev_revision, _) = writes.first().expect("the loop should have written once");
+    assert_eq!(*first_prev_revision, NO_REVISION);
+    drop(writes);
+
+    join_set.abort_all();
+}
+
+#[test]
+// The loop must write with the revision it read at startup, not with a hardcoded one.
+async fn the_first_write_uses_the_revision_read_at_startup() {
+    let existing_pod = pod(1, 9000);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let shard_state = shard_state_with_executors(
+        1,
+        vec![(executor(1), existing_pod, "worker-executor-0", &[0])],
+    );
+
+    let persistence = TestPersistence::at_revision(shard_state, 7);
+    let health_check = Arc::new(TestHealthCheck::all_healthy());
+    let mut join_set = JoinSet::new();
+
+    let _shard_management = ShardManagement::new(
+        Arc::new(persistence.clone()),
+        worker_executors,
+        health_check,
+        0.0,
+        LEASE_TTL,
+        &mut join_set,
+    )
+    .await
+    .expect("failed to create shard management");
+
+    wait_for_writes(&persistence, 2).await;
+
+    let prev_revisions: Vec<ExternalRevision> = persistence
+        .writes
+        .lock()
+        .await
+        .iter()
+        .map(|(prev, _)| *prev)
+        .collect();
+
+    // The first write is guarded on the revision `read()` returned at startup, the second on what
+    // the first write returned.
+    assert_eq!(prev_revisions, vec![7, 8]);
+
+    // ...and both were accepted first time. This pins the cached revision being advanced on
+    // success: without it the second write of the startup pass would conflict and stop the loop.
+    assert_eq!(
+        persistence.attempt_count().await,
+        2,
+        "a conflict-free startup pass must not need a retry"
+    );
 
     join_set.abort_all();
 }

@@ -100,6 +100,67 @@ pub trait QuotaRepo: Send + Sync {
     ) -> Result<(), QuotaRepoError>;
 }
 
+/// A [`QuotaRepo`] that persists nothing.
+///
+/// Quota state then lives only in the quota service's memory: it starts empty and is rebuilt as
+/// executors acquire their leases. Used in distributed (etcd) mode, which has no durable quota
+/// repository, and by the quota service unit tests.
+#[derive(Debug, Default)]
+pub struct InMemoryQuotaRepo;
+
+#[async_trait]
+impl QuotaRepo for InMemoryQuotaRepo {
+    async fn save_lease_change(
+        &self,
+        _resource: &QuotaResourceRecord,
+        _previous_resource_revision: i64,
+        _lease: &QuotaLeaseRecord,
+        _expired_pods: &[(Blob<IpAddr>, i32)],
+    ) -> Result<(), QuotaRepoError> {
+        Ok(())
+    }
+
+    async fn save_lease_release(
+        &self,
+        _resource: &QuotaResourceRecord,
+        _previous_resource_revision: i64,
+        _pod_ip: Blob<IpAddr>,
+        _pod_port: i32,
+    ) -> Result<(), QuotaRepoError> {
+        Ok(())
+    }
+
+    async fn save_resource(
+        &self,
+        _record: &QuotaResourceRecord,
+        _previous_revision: i64,
+    ) -> Result<(), QuotaRepoError> {
+        Ok(())
+    }
+
+    async fn delete_resource_and_leases(
+        &self,
+        _resource_definition_id: ResourceDefinitionId,
+    ) -> Result<(), QuotaRepoError> {
+        Ok(())
+    }
+
+    async fn get_all_resources(&self) -> Result<Vec<QuotaResourceRecord>, QuotaRepoError> {
+        Ok(Vec::new())
+    }
+
+    async fn get_all_leases(&self) -> Result<Vec<QuotaLeaseRecord>, QuotaRepoError> {
+        Ok(Vec::new())
+    }
+
+    async fn delete_leases_for_resource(
+        &self,
+        _resource_definition_id: ResourceDefinitionId,
+    ) -> Result<(), QuotaRepoError> {
+        Ok(())
+    }
+}
+
 static SPAN_NAME: &str = "quota repository";
 
 pub struct LoggedQuotaRepo<Repo: QuotaRepo> {
