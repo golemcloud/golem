@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use crate::durability::assert_snapshot_recovery_loaded;
+use crate::durability::{assert_snapshot_recovery_failed, assert_snapshot_recovery_loaded};
 use async_lock::Mutex;
 use axum::Router;
 use axum::routing::post;
@@ -24,10 +24,10 @@ use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::dsl::{TestDsl, update_counts};
 
-use golem_worker_executor::services::golem_config::SnapshotPolicy;
+use golem_worker_executor::services::golem_config::{OplogConfig, SnapshotPolicy};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
-    start_with_snapshot_policy,
+    start_customized, start_with_snapshot_policy,
 };
 use http::StatusCode;
 use log::info;
@@ -469,6 +469,156 @@ async fn snapshot_after_auto_update_recovers_with_updated_component_context(
     assert_eq!(update_counts(&metadata), (0, 1, 0));
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum AutomaticSnapshotLoadFailure {
+    InvalidEntry,
+    PayloadDownload,
+}
+
+async fn assert_automatic_snapshot_load_failure_recreates_replay_context(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_update_v1: &PrecompiledComponent,
+    failure: AutomaticSnapshotLoadFailure,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let oplog_config = OplogConfig {
+        max_payload_size: 0,
+        default_snapshotting: SnapshotPolicy::EveryNInvocation { count: 1 },
+        ..Default::default()
+    };
+    let executor = start_customized(
+        deps,
+        &context,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(oplog_config.clone()),
+    )
+    .await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(
+            &worker_id,
+            updated_component.revision,
+            Duration::from_secs(30),
+        )
+        .await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    let snapshot_index = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .rev()
+        .find_map(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Snapshot(_)).then_some(entry.oplog_index)
+        })
+        .expect("Expected an automatic snapshot after the post-update invocation");
+
+    drop(executor);
+    let executor = start_customized(
+        deps,
+        &context,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(oplog_config),
+    )
+    .await?;
+
+    let expected_error = match failure {
+        AutomaticSnapshotLoadFailure::InvalidEntry => {
+            // Context initialization reads the snapshot boundary once before recovery loads it.
+            executor.return_no_op_after_oplog_reads(&worker_id, snapshot_index, 1);
+            "Expected Snapshot entry"
+        }
+        AutomaticSnapshotLoadFailure::PayloadDownload => {
+            executor.fail_next_oplog_download(&worker_id);
+            "Failed to download snapshot payload"
+        }
+    };
+    let mut events = executor.capture_output(&worker_id).await?;
+
+    let replay_revision = executor
+        .invoke_and_await_agent(&component, &agent_id, "replay_revision", data_value!())
+        .await?;
+    assert_snapshot_recovery_failed(&mut events, expected_error).await;
+    let revision_two_only = executor
+        .invoke_and_await_agent(&component, &agent_id, "revision_two_only", data_value!())
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    assert_eq!(replay_revision.into_typed::<u32>()?, 0);
+    assert_eq!(revision_two_only.into_typed::<u32>()?, 2);
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn automatic_snapshot_invalid_entry_fallback_recreates_replay_context(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    assert_automatic_snapshot_load_failure_recreates_replay_context(
+        last_unique_id,
+        deps,
+        agent_update_v1,
+        AutomaticSnapshotLoadFailure::InvalidEntry,
+    )
+    .await
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn automatic_snapshot_download_failure_recreates_replay_context(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    assert_automatic_snapshot_load_failure_recreates_replay_context(
+        last_unique_id,
+        deps,
+        agent_update_v1,
+        AutomaticSnapshotLoadFailure::PayloadDownload,
+    )
+    .await
 }
 
 #[test]

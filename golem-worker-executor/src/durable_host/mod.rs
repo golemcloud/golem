@@ -62,7 +62,8 @@ use crate::metrics::storage::{
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
-    AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
+    AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, SnapshotSource,
+    TrapType,
 };
 use crate::services::active_agents::MemoryGrant;
 use crate::services::agent_storage_meter::AgentStorageMeter;
@@ -1058,6 +1059,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             pending_update,
             original_phantom_id,
             worker_config.last_snapshot_index,
+            worker_config.last_snapshot_source,
             per_invocation_http_call_limit,
             per_invocation_rpc_call_limit,
             resource_limits.clone(),
@@ -3804,12 +3806,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
     ) -> SnapshotRecoveryResult {
-        let snapshot_index = store
-            .as_context()
-            .data()
-            .durable_ctx()
-            .state
-            .last_snapshot_index;
+        let (snapshot_index, snapshot_source) = {
+            let state = &store.as_context().data().durable_ctx().state;
+            (state.last_snapshot_index, state.last_snapshot_source)
+        };
 
         let snapshot_index = match snapshot_index {
             Some(idx) => idx,
@@ -3843,6 +3843,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 );
                 warn!("{error}");
                 Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
+                if snapshot_source == Some(SnapshotSource::Automatic) {
+                    return SnapshotRecoveryResult::Failed;
+                }
                 if let Err(err) = store
                     .as_context_mut()
                     .data_mut()
@@ -3872,6 +3875,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 );
                 warn!("{error}");
                 Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
+                if snapshot_source == Some(SnapshotSource::Automatic) {
+                    return SnapshotRecoveryResult::Failed;
+                }
                 if let Err(err) = store
                     .as_context_mut()
                     .data_mut()
@@ -9509,6 +9515,7 @@ struct PrivateDurableWorkerState {
     /// Stores the phantom ID associated with the currently replayed oplog region. Forks can change it
     current_phantom_id: Option<Uuid>,
     last_snapshot_index: Option<OplogIndex>,
+    last_snapshot_source: Option<SnapshotSource>,
 
     /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).
     /// Reset to 0 at the start of each exported function invocation.
@@ -9612,6 +9619,7 @@ impl PrivateDurableWorkerState {
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
         last_snapshot_index: Option<OplogIndex>,
+        last_snapshot_source: Option<SnapshotSource>,
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
         resource_limit_entry: Arc<AtomicResourceEntry>,
@@ -9775,6 +9783,7 @@ impl PrivateDurableWorkerState {
             min_exposed_marker: None,
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
+            last_snapshot_source,
             resource_limit_entry,
         })
     }

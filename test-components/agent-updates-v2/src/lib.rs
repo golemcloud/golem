@@ -168,11 +168,13 @@ impl RevisionEnvAgent for RevisionEnvAgentImpl {
 pub trait SnapshotUpdateTest {
     fn new() -> Self;
     fn loaded_snapshot_revision(&self) -> u32;
+    fn replay_revision(&self) -> u32;
     fn revision_two_only(&self) -> u32;
 }
 
 struct SnapshotUpdateTestImpl {
     loaded_snapshot_revision: u32,
+    replay_revision: u32,
 }
 
 #[agent_implementation]
@@ -180,11 +182,19 @@ impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
     fn new() -> Self {
         Self {
             loaded_snapshot_revision: 0,
+            replay_revision: std::env::var("GOLEM_COMPONENT_REVISION")
+                .ok()
+                .and_then(|revision| revision.parse().ok())
+                .unwrap_or_default(),
         }
     }
 
     fn loaded_snapshot_revision(&self) -> u32 {
         self.loaded_snapshot_revision
+    }
+
+    fn replay_revision(&self) -> u32 {
+        self.replay_revision
     }
 
     fn revision_two_only(&self) -> u32 {

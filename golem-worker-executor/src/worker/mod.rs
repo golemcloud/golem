@@ -47,7 +47,9 @@ use crate::durable_host::{
 };
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::metrics::workers::AdmissionPhase;
-use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
+use crate::model::{
+    AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, SnapshotSource, TrapType,
+};
 use crate::services::active_agents::{
     FilesystemStoragePermit, MemoryGrant, RegisteredConcurrentAccount, WorkerComponentCharge,
 };
@@ -1038,6 +1040,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 worker_metadata.created_by,
                 worker_metadata.created_by_email,
                 initial_agent_config,
+                None,
                 None,
                 agent_effective_surface,
                 Some(owner_component_metadata),
@@ -6529,6 +6532,7 @@ impl RunningWorker {
         let mut last_snapshot_index = worker_metadata
             .last_known_status
             .last_manual_update_snapshot_index;
+        let mut last_snapshot_source = last_snapshot_index.map(|_| SnapshotSource::ManualUpdate);
 
         // Automatic snapshots are only considered until the first failure and while they match
         // the active component revision. Pending updates temporarily ignore them so compatibility
@@ -6542,6 +6546,7 @@ impl RunningWorker {
             skipped_regions.set_override(snapshot_skip);
 
             last_snapshot_index = Some(snapshot_idx);
+            last_snapshot_source = Some(SnapshotSource::Automatic);
         }
 
         let context = Ctx::create(
@@ -6579,6 +6584,7 @@ impl RunningWorker {
                 worker_metadata.created_by_email,
                 worker_metadata.config,
                 last_snapshot_index,
+                last_snapshot_source,
                 agent_effective_surface,
                 None,
             ),
