@@ -1212,13 +1212,14 @@ where
                     let read_frame = async {
                         if pending_reissue {
                             // First live read of a replayed response's placeholder body:
-                            // the durable consume-body scope turned out to be incomplete
-                            // (the original run was interrupted mid-body-stream, so the
-                            // scope claim jumped to live), and the placeholder carries no
-                            // data. Re-issue the recorded request now and stream the
-                            // fresh body instead. This only fires on a real guest demand:
-                            // a dropped stream or a cleanly replaying scope never
-                            // re-issues.
+                            // the durable consume-body scope was either missing entirely
+                            // (the crash happened before its `Start` was committed, so a
+                            // synthetic scope was recovered live) or incomplete (the
+                            // original run was interrupted mid-body-stream, so the scope
+                            // claim jumped to live), and the placeholder carries no data.
+                            // Re-issue the recorded request now and stream the fresh body
+                            // instead. This only fires on a real guest demand: a dropped
+                            // stream or a cleanly replaying scope never re-issues.
                             pending_reissue = false;
                             match resend.as_ref() {
                                 Some(resend) => {

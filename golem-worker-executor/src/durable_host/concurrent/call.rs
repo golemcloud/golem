@@ -374,10 +374,14 @@ impl ScopeReplayRecovery {
         match self {
             Self::Default => assume_idempotence,
             Self::Forbidden => false,
-            // `Reexecute` authorizes only recovery of a missing synthetic scope Start after its
-            // readiness proof. An existing but incomplete scope cannot poll that proof without
-            // risking a duplex upload/response deadlock, so it must not re-execute.
-            Self::Reexecute { .. } => false,
+            // `Reexecute` is only constructed for an effectively idempotent replayed
+            // request (idempotent method or the `assume_idempotence` override) with
+            // recorded resend metadata, so an existing but incomplete scope may
+            // re-execute (jump to live) — the same authorization the missing-`Start`
+            // recovery relies on. The readiness proof guards only the missing-`Start`
+            // path; request-body replayability is validated lazily before any network
+            // re-issue, refusing (retry-exempt) if the recording is incomplete.
+            Self::Reexecute { .. } => true,
         }
     }
 
@@ -399,10 +403,17 @@ mod scope_replay_recovery_tests {
     use test_r::test;
 
     #[test]
-    fn reexecute_policy_does_not_authorize_existing_incomplete_scope() {
+    fn reexecute_policy_authorizes_existing_incomplete_scope() {
         let recovery = ScopeReplayRecovery::reexecute_when(async { Ok(()) });
 
-        assert!(!recovery.can_reexecute_incomplete(true));
+        assert!(recovery.can_reexecute_incomplete(true));
+        assert!(recovery.can_reexecute_incomplete(false));
+    }
+
+    #[test]
+    fn forbidden_policy_does_not_authorize_existing_incomplete_scope() {
+        assert!(!ScopeReplayRecovery::Forbidden.can_reexecute_incomplete(true));
+        assert!(!ScopeReplayRecovery::Forbidden.can_reexecute_incomplete(false));
     }
 }
 

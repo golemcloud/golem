@@ -1444,6 +1444,172 @@ async fn outgoing_http_recovers_missing_consume_body_scope_start(
     Ok(())
 }
 
+/// A restart after the consume-body scope `Start` and some chunk children committed, but before
+/// the scope `End` did (a crash mid-response-body-stream), must jump the incomplete scope to live
+/// and safely re-issue the idempotent request instead of failing the replay.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_reissues_incomplete_consume_body_scope_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const BODY_FIRST: &[u8] = b"streamed";
+    const BODY_REST: &[u8] = b"-body";
+    const RESPONSE: &str = "streamed-body";
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let host_http_port = listener.local_addr()?.port();
+    let (first_chunk_tx, mut first_chunk_rx) = mpsc::unbounded_channel();
+    let rest_release = Arc::new(tokio::sync::Semaphore::new(0));
+
+    let http_server = spawn({
+        let request_count = request_count.clone();
+        let rest_release = rest_release.clone();
+        async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let request_count = request_count.clone();
+                let rest_release = rest_release.clone();
+                let first_chunk_tx = first_chunk_tx.clone();
+                spawn(
+                    async move {
+                        let result = async {
+                            let request = read_request_headers(&mut stream).await?;
+                            anyhow::ensure!(
+                                request.starts_with(b"GET / "),
+                                "unexpected request: {}",
+                                String::from_utf8_lossy(&request)
+                            );
+                            let count = request_count.fetch_add(1, Ordering::SeqCst) + 1;
+                            stream
+                                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 13\r\n\r\n")
+                                .await?;
+                            if count == 1 {
+                                // Trickle the body in two flushes so at least one chunk's
+                                // durable record forces the scope `Start` to become durable
+                                // before the gated scope `End`. (The two flushes do not
+                                // guarantee two distinct recorded chunks; the parent-scope
+                                // shape asserted below does not depend on chunk count.)
+                                stream.write_all(BODY_FIRST).await?;
+                                stream.flush().await?;
+                                let _ = first_chunk_tx.send(Ok(()));
+                                let _permit = rest_release.acquire().await?;
+                                stream.write_all(BODY_REST).await?;
+                            } else {
+                                stream.write_all(BODY_FIRST).await?;
+                                stream.write_all(BODY_REST).await?;
+                            }
+                            stream.flush().await?;
+                            Ok(())
+                        }
+                        .await;
+                        if let Err(error) = result {
+                            let _ = first_chunk_tx.send(Err(error));
+                        }
+                    }
+                    .in_current_span(),
+                );
+            }
+        }
+        .in_current_span()
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let mut gate = executor.gate_next_consume_body_scope_end(&worker_id).await;
+
+    executor
+        .invoke_agent_with_key(&component, &agent_id, &key, "get_idempotent", data_value!())
+        .await?;
+    recv_request_event(&mut first_chunk_rx).await?;
+    rest_release.add_permits(1);
+    timeout(Duration::from_secs(20), gate.reached()).await?;
+    assert_eq!(request_count.load(Ordering::SeqCst), 1);
+
+    let before_restart = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        partition_starts(&before_restart, "http::client::send").counts(),
+        (0, 1, 0)
+    );
+    assert_eq!(
+        partition_starts(&before_restart, "http::types::response::consume-body").counts(),
+        (0, 0, 1),
+        "the consume-body scope must have a committed Start but no End before the crash"
+    );
+
+    gate.abort_append();
+    drop(gate);
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let result = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &key,
+            "get_idempotent",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+
+    assert_eq!(result, format!("200 {RESPONSE}"));
+    assert_eq!(
+        request_count.load(Ordering::SeqCst),
+        2,
+        "recovery must perform exactly one body re-issue"
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        partition_starts(&oplog, "http::client::send").counts(),
+        (0, 1, 0),
+        "the body re-issue must not record a second guest-visible send"
+    );
+    let bodies = partition_starts(&oplog, "http::types::response::consume-body");
+    assert_eq!(
+        bodies.counts(),
+        (0, 1, 1),
+        "the re-issued live consume-body must complete with an End, while the pre-crash \
+         Start stays physically recorded inside the jumped region: {bodies:?}"
+    );
+    let jump_regions: Vec<_> = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            golem_common::model::oplog::PublicOplogEntry::Jump(params) => Some(params.jump.clone()),
+            _ => None,
+        })
+        .collect();
+    let incomplete_start = bodies.incomplete[0];
+    assert!(
+        jump_regions
+            .iter()
+            .any(|region| region.contains(incomplete_start)),
+        "the incomplete pre-crash consume-body Start at {incomplete_start} must be covered \
+         by a Jump's deleted region so it is skipped on any later replay: {jump_regions:?}"
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+    Ok(())
+}
+
 /// The same missing-scope crash window must never duplicate a non-idempotent POST.
 #[test]
 #[tracing::instrument]
