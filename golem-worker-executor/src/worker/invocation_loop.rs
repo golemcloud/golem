@@ -1417,6 +1417,18 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     kind,
                 )
             }
+            Err(WorkerExecutorError::Interrupted { kind }) => {
+                let decision = self
+                    .store
+                    .data_mut()
+                    .on_invocation_failure(&full_function_name, &TrapType::Interrupt(kind))
+                    .await;
+                let _ = self
+                    .parent
+                    .fail_durable_streaming_session(idempotency_key, kind.to_string())
+                    .await;
+                failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
+            }
             Err(error) => {
                 self.store
                     .data_mut()

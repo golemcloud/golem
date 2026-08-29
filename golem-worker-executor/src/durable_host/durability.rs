@@ -17,6 +17,7 @@ use crate::durable_host::call_coordinator::{
     DurableCallAdmission, DurableCallBoundary, DurableCallCoordinator,
 };
 use crate::durable_host::concurrent::{self, DropEvent, Resolution, ResolutionOutcome};
+use crate::durable_host::replay_state::{ReplayToLiveOutcome, ReplayToLiveRole};
 use crate::metrics::wasm::{
     record_custom_invocation_scope_open, record_host_function_call, record_in_function_retry,
 };
@@ -1529,7 +1530,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             oplog,
             worker,
             replay_state,
-            owner_execution,
             linear_memory,
             child_initiation,
             cleanup_sink,
@@ -1628,7 +1628,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                 ctx.state.oplog.clone(),
                 ctx.public_state.worker(),
                 ctx.state.replay_state.clone(),
-                ctx.owner_execution.clone(),
                 ctx.linear_memory_tracker(),
                 child_initiation,
                 ctx.state
@@ -1737,10 +1736,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             .await?
         {
             ResolutionOutcome::Incomplete => {
-                let incomplete_calls = replay_state.switch_to_live().await;
-                owner_execution
-                    .release_incomplete_historical_reconstruction_fences(&incomplete_calls);
-                linear_memory.switch_to_live();
+                let outcome = replay_state
+                    .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
+                    .await?;
+                if outcome == ReplayToLiveOutcome::ReplayResumed {
+                    return Err(WorkerExecutorError::runtime(
+                        "replay target grew while an incomplete custom invocation was settling",
+                    )
+                    .into());
+                }
                 accessor.with(|mut access| {
                     access.get().state.active_custom_invocations.insert(
                         start_index,

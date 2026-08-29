@@ -243,6 +243,14 @@ pub(crate) struct OwnerToolOperations {
     changed: Notify,
 }
 
+impl std::fmt::Debug for OwnerToolOperations {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OwnerToolOperations")
+            .field("next_id", &self.next_id.load(Ordering::Relaxed))
+            .finish_non_exhaustive()
+    }
+}
+
 impl OwnerToolOperations {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
@@ -424,6 +432,16 @@ impl OwnerToolOperations {
 
     pub(crate) fn selected_owner_failure(&self) -> Option<OwnerFailureWinner> {
         self.state.lock().unwrap().owner_winner.clone()
+    }
+
+    pub(crate) async fn wait_for_owner_failure(&self) -> OwnerFailureWinner {
+        loop {
+            let changed = self.changed.notified();
+            if let Some(winner) = self.selected_owner_failure() {
+                return winner;
+            }
+            changed.await;
+        }
     }
 
     pub(crate) fn has_active_operations(&self) -> bool {

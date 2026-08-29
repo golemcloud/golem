@@ -17,6 +17,7 @@ use crate::preview2::golem::tool::host::{
 };
 use crate::services::active_agents::{ActiveAgents, MemoryGrant};
 use crate::workerctx::WorkerCtx;
+use bytes::Bytes;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
@@ -125,6 +126,7 @@ pub struct ToolAttachmentMetadata {
     pub terminal: Option<ToolAttachmentTerminalMetadata>,
     pub owner_fenced: bool,
     pub host_resource_exhausted: bool,
+    pub producer_operation_active: bool,
     pub producer_active: bool,
     pub consumer_active: bool,
 }
@@ -623,6 +625,7 @@ impl ByteAttachment {
             terminal,
             owner_fenced: state.owner_fenced,
             host_resource_exhausted: state.host_resource_exhausted,
+            producer_operation_active: self.producer_operation.load(Ordering::Acquire),
             producer_active: state.producer_active,
             consumer_active: state.consumer_active,
         }
@@ -800,6 +803,14 @@ impl AttachmentConsumer {
 
     pub(crate) fn into_stream_producer(self) -> AttachmentStreamProducer {
         AttachmentStreamProducer {
+            consumer: Some(self),
+            in_flight_charge: None,
+            finished: false,
+        }
+    }
+
+    pub(crate) fn into_raw_stream_producer(self) -> RawAttachmentStreamProducer {
+        RawAttachmentStreamProducer {
             consumer: Some(self),
             in_flight_charge: None,
             finished: false,
@@ -1044,6 +1055,115 @@ impl<D> StreamProducer<D> for AttachmentStreamProducer {
     }
 }
 
+pub(crate) struct RawAttachmentStreamProducer {
+    consumer: Option<AttachmentConsumer>,
+    in_flight_charge: Option<AttachmentCharge>,
+    finished: bool,
+}
+
+impl<D> StreamProducer<D> for RawAttachmentStreamProducer {
+    type Item = u8;
+    type Buffer = Bytes;
+
+    fn poll_produce<'a>(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        mut store: wasmtime::StoreContextMut<'a, D>,
+        mut dst: Destination<'a, Self::Item, Self::Buffer>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        drop(self.in_flight_charge.take());
+        if self.finished {
+            return Poll::Ready(Ok(StreamResult::Dropped));
+        }
+        let attachment = self
+            .consumer
+            .as_ref()
+            .expect("raw attachment stream producer lost its consumer")
+            .attachment
+            .clone();
+        let remaining = dst.remaining(store.as_context_mut());
+        if finish {
+            attachment.consumer_cancel();
+            self.finished = true;
+            return Poll::Ready(Ok(StreamResult::Cancelled));
+        }
+        if remaining == Some(0) {
+            return Poll::Ready(Ok(StreamResult::Completed));
+        }
+
+        enum Produced {
+            Item(Vec<u8>, AttachmentCharge),
+            End,
+            Cancelled,
+            Failed(ByteStreamFailure),
+            OwnerFenced,
+            Pending,
+        }
+
+        let produced = {
+            let mut state = attachment.state.lock().unwrap();
+            let chunks_visible = matches!(state.mode, AttachmentMode::Live)
+                || matches!(state.mode, AttachmentMode::Completion { published: true });
+            let terminal_visible =
+                chunks_visible || matches!(state.mode, AttachmentMode::TerminalOnly);
+            if state.owner_fenced {
+                Produced::OwnerFenced
+            } else if chunks_visible && !state.chunks.is_empty() {
+                let chunk = state.chunks.pop_front().unwrap();
+                state.buffered_bytes -= chunk.bytes.len();
+                state.delivered_bytes = state
+                    .delivered_bytes
+                    .saturating_add(chunk.bytes.len() as u64);
+                Produced::Item(chunk.bytes, chunk.charge)
+            } else if !terminal_visible {
+                state.reader_waker = Some(cx.waker().clone());
+                Produced::Pending
+            } else {
+                match state.terminal.clone() {
+                    Some(ByteStreamCloseCause::Finished) => Produced::End,
+                    Some(ByteStreamCloseCause::Failed(failure)) => Produced::Failed(failure),
+                    Some(ByteStreamCloseCause::ConsumerCancelled) => Produced::Cancelled,
+                    None => {
+                        state.reader_waker = Some(cx.waker().clone());
+                        Produced::Pending
+                    }
+                }
+            }
+        };
+
+        match produced {
+            Produced::Item(bytes, charge) => {
+                self.in_flight_charge = Some(charge);
+                dst.set_buffer(Bytes::from(bytes));
+                attachment.changed.notify_waiters();
+                Poll::Ready(Ok(StreamResult::Completed))
+            }
+            Produced::End => {
+                self.finished = true;
+                Poll::Ready(Ok(StreamResult::Dropped))
+            }
+            Produced::Cancelled => {
+                self.finished = true;
+                Poll::Ready(Ok(StreamResult::Cancelled))
+            }
+            Produced::Failed(failure) => {
+                self.finished = true;
+                Poll::Ready(Err(wasmtime::Error::msg(format!(
+                    "underlying tool stdout failed: {failure:?}"
+                ))))
+            }
+            Produced::OwnerFenced => {
+                self.finished = true;
+                Poll::Ready(Err(wasmtime::Error::msg(
+                    "owner generation fenced tool attachment",
+                )))
+            }
+            Produced::Pending => Poll::Pending,
+        }
+    }
+}
+
 pub(crate) fn attachment_pair(
     limit: usize,
     memory: AttachmentMemory,
@@ -1160,6 +1280,35 @@ mod tests {
             for item in received {
                 let _ = self.items.send(item);
             }
+            Poll::Ready(Ok(if finish {
+                StreamResult::Dropped
+            } else {
+                StreamResult::Completed
+            }))
+        }
+    }
+
+    struct CollectRawConsumer {
+        chunks: mpsc::UnboundedSender<Vec<u8>>,
+    }
+
+    impl<D> StreamConsumer<D> for CollectRawConsumer {
+        type Item = u8;
+
+        fn poll_consume(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            mut store: StoreContextMut<'_, D>,
+            source: Source<'_, Self::Item>,
+            finish: bool,
+        ) -> Poll<wasmtime::Result<StreamResult>> {
+            let mut source = source.as_direct(store.as_context_mut());
+            let remaining = source.remaining();
+            let count = remaining.len();
+            if !remaining.is_empty() {
+                let _ = self.chunks.send(remaining.to_vec());
+            }
+            source.mark_read(count);
             Poll::Ready(Ok(if finish {
                 StreamResult::Dropped
             } else {
@@ -1305,6 +1454,7 @@ mod tests {
         let (producer, consumer, _) = pair(4);
         let target = ToolStdoutEntry {
             producer: Some(producer),
+            completion_only: false,
         };
         let mut read =
             tokio::spawn(async move { (consumer.read_next().await, consumer.read_next().await) });
@@ -1329,6 +1479,7 @@ mod tests {
         let (producer, consumer, _) = pair(4);
         let target = ToolStdoutEntry {
             producer: Some(producer),
+            completion_only: false,
         };
         target.reject_unconfigured();
         drop(target);
@@ -1399,6 +1550,7 @@ mod tests {
         let (producer, reader, observer) = pair(4);
         let target = ToolStdoutEntry {
             producer: Some(producer),
+            completion_only: false,
         };
         drop(target);
         assert!(matches!(
@@ -1414,6 +1566,7 @@ mod tests {
         let (producer, reader, observer) = pair(4);
         let target = ToolStdoutEntry {
             producer: Some(producer),
+            completion_only: false,
         };
         drop(reader);
         assert!(matches!(
@@ -1429,6 +1582,7 @@ mod tests {
         let (producer, reader, observer) = pair(4);
         let writer: ToolStdoutWriterEntry = ToolStdoutEntry {
             producer: Some(producer),
+            completion_only: false,
         }
         .into_writer();
         drop(writer);
@@ -1445,6 +1599,7 @@ mod tests {
         let (producer, reader, observer) = pair(4);
         let writer: ToolStdoutWriterEntry = ToolStdoutEntry {
             producer: Some(producer),
+            completion_only: false,
         }
         .into_writer();
         drop(reader);
@@ -1572,6 +1727,40 @@ mod tests {
                 ByteStreamCloseCause::ConsumerCancelled
             ))
         ));
+    }
+
+    #[test]
+    async fn unread_raw_completion_stream_retains_grants_until_wasmtime_consumes_bytes() {
+        let (producer, consumer, _) = pair(8);
+        assert!(producer.configure_completion());
+        producer.write(vec![1, 2, 3, 4]).await.unwrap();
+        producer.finish().unwrap();
+        assert!(producer.publish_completion());
+
+        let mut config = Config::new();
+        config.concurrency_support(true);
+        let engine = Engine::new(&config).unwrap();
+        let mut store = Store::new(&engine, ());
+        let reader = StreamReader::new(&mut store, consumer.into_raw_stream_producer()).unwrap();
+        assert_eq!(producer.attachment.activity().charged_bytes, 4);
+
+        let (chunks, mut received) = mpsc::unbounded_channel();
+        let collected = store
+            .run_concurrent(async move |accessor| -> wasmtime::Result<Vec<u8>> {
+                accessor
+                    .with(|mut store| reader.pipe(&mut store, CollectRawConsumer { chunks }))?;
+                let mut collected = Vec::new();
+                while let Some(chunk) = received.recv().await {
+                    collected.extend(chunk);
+                }
+                Ok(collected)
+            })
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(collected, vec![1, 2, 3, 4]);
+        assert_eq!(producer.attachment.activity().charged_bytes, 0);
     }
 
     #[test]

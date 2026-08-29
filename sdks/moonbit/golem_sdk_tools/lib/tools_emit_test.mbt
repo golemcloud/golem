@@ -77,6 +77,7 @@ test "pure dispatcher, subtree authoring, and stdout support" {
   assert_true(
     stdout_registration.contains("Some(__golem_output) => __golem_output"),
   )
+  assert_false(stdout_registration.contains("@tool.new_stdout()"))
   assert_true(stdout_registration.contains("@tool.invocation_result_empty()"))
   let stdout_client = @formatter.impls_to_string(
     @lib.generate_tool_client_code(stdout_tools),
@@ -193,7 +194,7 @@ test "async tool commands use async ownership-aware invokers" {
 }
 
 ///|
-test "generated invokers create stdout only after fallible input decoding" {
+test "generated invokers claim stdout only after fallible input decoding" {
   let source =
     #|#derive.tool
     #|struct StreamAfterInput {}
@@ -209,7 +210,9 @@ test "generated invokers create stdout only after fallible input decoding" {
       @lib.parse_tools([("stdout-after-input.mbt", source)]),
     ),
   )
-  let before_stdout = generated.split("@tool.new_stdout()").collect()[0]
+  let before_stdout = generated
+    .split("Some(__golem_output) => __golem_output")
+    .collect()[0]
   assert_true(before_stdout.contains("@tool.decode_canonical_field"))
 }
 

@@ -25,7 +25,11 @@ pub fn[T : @schema.FromSchema] decode_param(Array[@schema_model.SchemaValue], In
 
 pub fn[E] decode_result_empty(InvocationResult) -> Result[Unit, ToolError[E]]
 
+pub fn[E] decode_result_stdout_only(InvocationResult) -> Result[@async-core.Stream[Byte], ToolError[E]]
+
 pub fn[T : @schema.FromSchema, E] decode_result_value(InvocationResult) -> Result[T, ToolError[E]]
+
+pub fn[T : @schema.FromSchema, E] decode_result_with_stdout(InvocationResult) -> Result[(T, @async-core.Stream[Byte]), ToolError[E]]
 
 pub fn discover_tools() -> Array[@golemcloud/golem_sdk/interface/golem/tool/common.Tool]
 
@@ -35,7 +39,11 @@ pub fn encode_invocation_input(@schema_model.SchemaGraph, Array[@schema_model.Sc
 
 pub async fn[T : @schema.IntoSchema] encode_result_value(T) -> @types.TypedSchemaValue raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
 
+pub fn[E] expect_no_stdout(@async-core.Stream[Byte]?) -> Result[Unit, ToolError[E]]
+
 pub fn[E] expect_no_value(@schema_model.TypedSchemaValue?) -> Result[Unit, ToolError[E]]
+
+pub fn[E] expect_stdout(@async-core.Stream[Byte]?) -> Result[@async-core.Stream[Byte], ToolError[E]]
 
 pub fn[E] expect_value(@schema_model.TypedSchemaValue?) -> Result[@schema_model.TypedSchemaValue, ToolError[E]]
 
@@ -45,7 +53,11 @@ pub fn get_registered_tool(String) -> Result[@golemcloud/golem_sdk/interface/gol
 
 pub fn invocation_result_empty() -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
-pub fn[T : @schema.IntoSchema] invocation_result_value(T) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+pub fn invocation_result_stdout(@async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
+
+pub async fn[T : @schema.IntoSchema] invocation_result_value(T) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+
+pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(T, @async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
 
 pub async fn[E] invoke_and_await(@host.ToolRpc, Array[String], @schema_model.TypedSchemaValue, @async-core.Stream[Byte]?, (@schema_model.TypedSchemaValue) -> Result[E, String]) -> Result[InvocationResult, ToolError[E]]
 
@@ -80,6 +92,12 @@ pub fn register_tool_def_invoker(ToolDef, async (Array[String], @types.TypedSche
 pub fn register_wire_tool(@golemcloud/golem_sdk/interface/golem/tool/common.Tool) -> Unit raise ToolBuildError
 
 pub fn register_wire_tool_invoker(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, @async-core.Sink[Byte]?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]) -> Unit raise ToolBuildError
+
+pub fn reject_decoded_invocation(Array[CanonicalInputValue], @async-core.Stream[Byte]?, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
+
+pub fn reject_undecoded_invocation(@async-core.Stream[Byte]?, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
+
+pub fn reject_wire_invocation(@types.TypedSchemaValue, @async-core.Stream[Byte]?, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
 
 pub fn render_argument_help(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, Array[String], String) -> Result[String, ToolBuildError]
 
@@ -199,6 +217,7 @@ pub(all) struct ImpliesDef {
 
 pub(all) struct InvocationResult {
   result : @schema_model.TypedSchemaValue?
+  stdout : @async-core.Stream[Byte]?
 }
 
 pub(all) enum NoToolError {

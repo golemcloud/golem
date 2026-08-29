@@ -49,11 +49,15 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
-use golem_common::model::entity::{EntityInvocationScope, FilesystemCapability, OwnerRuntime};
+use golem_common::model::entity::{
+    EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
+};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::{AgentError, TimestampedUpdateDescription};
+use golem_common::model::oplog::{
+    AgentError, HostResponseEntityInvocation, TimestampedUpdateDescription,
+};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex,
     OwnedAgentId,
@@ -78,6 +82,28 @@ pub trait P3HttpBodyProducerHook: Send + Sync {
     fn should_defer_ready_reply(&self) -> bool;
 
     fn ready_reply_deferred(&self);
+}
+
+/// Test-harness coordination after an entity body returns but before its completion is published.
+#[doc(hidden)]
+#[async_trait]
+pub trait EntityInvocationBodyHook: Send + Sync {
+    async fn before_invocation(&self, _execution_mode: InvocationExecutionMode) {}
+
+    async fn before_completion(&self, execution_mode: InvocationExecutionMode);
+
+    fn mutate_completed_reconstruction_response(
+        &self,
+        _response: &mut HostResponseEntityInvocation,
+    ) {
+    }
+}
+
+/// Test-harness coordination immediately after a historical entity `Start` is claimed.
+#[doc(hidden)]
+#[async_trait]
+pub trait EntityReconstructionClaimHook: Send + Sync {
+    async fn after_claim(&self, start_index: OplogIndex);
 }
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
@@ -135,6 +161,12 @@ pub trait WorkerCtx:
     /// Supplies optional test-harness coordination for P3 HTTP body delivery.
     #[doc(hidden)]
     fn p3_http_body_producer_hook(&self) -> Option<Arc<dyn P3HttpBodyProducerHook>> {
+        None
+    }
+
+    /// Supplies optional test-harness coordination for entity body execution.
+    #[doc(hidden)]
+    fn entity_invocation_body_hook(&self) -> Option<Arc<dyn EntityInvocationBodyHook>> {
         None
     }
 

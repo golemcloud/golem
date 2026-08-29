@@ -1003,6 +1003,7 @@ impl WorkerCtx for Context {
             runtime,
             owner_execution,
             owner_resources,
+            None,
             filesystem,
             executable_component,
             entity_activation,

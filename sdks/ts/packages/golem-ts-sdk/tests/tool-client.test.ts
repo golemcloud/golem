@@ -23,6 +23,7 @@ import {
   type ToolClientInvocationResult,
   type ToolClientTransport,
 } from '../src/tool';
+import { client, ToolCallError } from '../src/toolClient';
 import type { ByteStreamItem } from 'golem:tool/host@0.1.0';
 import { compileSchema } from '../src/schema/adapter';
 import {

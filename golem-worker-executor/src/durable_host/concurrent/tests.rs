@@ -1197,7 +1197,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
     let persist = tokio::spawn(async move {
         let response = HostResponseMonotonicClockTimestamp { nanos: 42 };
         let result = DurableCallSession::<host_functions::MonotonicClockNow, NotCancellable>::
-                persist_access_terminal(persist_oplog, completion_marker_recorder, &mut guard, start_idx, &response, None)
+                persist_access_terminal(persist_oplog, completion_marker_recorder, &mut guard, start_idx, response, None)
             .await;
         (result, guard)
     });

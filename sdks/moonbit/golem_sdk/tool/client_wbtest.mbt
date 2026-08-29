@@ -14,7 +14,9 @@ test "collect preserves structured-result error precedence over stdout failure" 
 test "collect reports stdout failure after structured success" {
   try
     select_collected_terminals(
-      (Ok({ result: None }) : Result[InvocationResult, ToolError[NoToolError]]),
+      (
+        Ok({ result: None, stdout: None }) :
+        Result[InvocationResult, ToolError[NoToolError]]),
       CollectedStdout::Failed(ToolStreamError::Failed("stdout failed")),
     )
   catch {

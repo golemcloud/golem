@@ -672,6 +672,7 @@ impl WorkerCtx for DebugContext {
             runtime,
             owner_execution,
             owner_resources,
+            None,
             filesystem,
             executable_component,
             entity_activation,

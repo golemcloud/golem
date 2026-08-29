@@ -1372,7 +1372,7 @@ impl EchoMiddleware for Policy {
         };
 
         let result = instance
-            .__tool_invoke_on(vec![], input, None, anonymous_principal())
+            .__tool_invoke_on(vec![], input, None, None, anonymous_principal())
             .await
             .expect("instance invocation succeeds");
         let result = result.result.expect("plain return is encoded as a result");

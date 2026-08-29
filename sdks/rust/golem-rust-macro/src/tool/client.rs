@@ -14,7 +14,8 @@
 
 //! Typed same-language tool client generation.
 
-use crate::tool::helpers::{StreamKind, is_stream_type, stream_type, to_kebab_case};
+pub(crate) use crate::tool::helpers::is_stream_type;
+use crate::tool::helpers::{StreamKind, stream_type, to_kebab_case};
 use crate::tool::ir::{ArgPlacement, ArgSubKind, CommandIr, ParamIr, ToolDefinitionIr};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -1155,7 +1156,7 @@ fn is_flag_param(cmd: &CommandIr, param: &ParamIr) -> bool {
         || type_last_ident(&param.ty).as_deref() == Some("bool")
 }
 
-fn stream_idents(cmd: &CommandIr) -> (Option<(Ident, bool)>, bool) {
+pub(crate) fn stream_idents(cmd: &CommandIr) -> (Option<(Ident, bool)>, bool) {
     let mut stdin = None;
     let mut stdout = false;
     for param in &cmd.params {
@@ -1325,7 +1326,7 @@ fn pascal_case(input: &str) -> String {
     out
 }
 
-fn is_principal_type(ty: &Type) -> bool {
+pub(crate) fn is_principal_type(ty: &Type) -> bool {
     let Type::Path(tp) = ty else {
         return false;
     };

@@ -902,11 +902,9 @@ fn tool_wit_uses_directional_started_stream_contract() {
         .and_then(|(_, rest)| rest.split_once("\n  }").map(|(body, _)| body))
         .expect("host WIT must define rpc-error");
 
-    assert!(
-        common
-            .contains("record invocation-result {\n    %result: option<typed-schema-value>,\n  }")
-    );
-    assert!(!common.contains("stdout:  option<stream<u8>>"));
+    assert!(common.contains(
+        "record invocation-result {\n    %result: option<typed-schema-value>,\n    stdout:  option<stream<u8>>,\n  }"
+    ));
 
     for required in [
         "type byte-stream-item = result<list<u8>, byte-stream-failure>;",

@@ -62,7 +62,9 @@ pub(crate) async fn without_entity_cancellation<F: Future>(future: F) -> F::Outp
 use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
-use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
+use crate::durable_host::replay_state::{
+    OplogEntryLookupResult, ReplayState, ReplayToLiveOutcome, ReplayToLiveRole,
+};
 use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::storage::{
     STORAGE_TYPE_FILESYSTEM, record_storage_bytes_deleted, record_storage_bytes_written,
@@ -383,6 +385,8 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     invocation_principal: Option<Principal>,
     owner_execution: Arc<OwnerExecution>,
     owner_resources: Arc<OwnerRuntimeResources>,
+    entity_reconstruction_claim_hook:
+        Option<Arc<dyn crate::workerctx::EntityReconstructionClaimHook>>,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
     owner_filesystem: OwnerFilesystemAttachment,
@@ -637,6 +641,32 @@ fn validate_unshared_memory_growth(
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn test_should_skip_monotonic_clock_now_durability(&self) -> bool {
+        self.owner_execution
+            .test_should_skip_monotonic_clock_now_durability()
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn test_should_skip_wall_clock_now_durability(&self) -> bool {
+        self.owner_execution
+            .test_should_skip_wall_clock_now_durability()
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub async fn test_commit_pending_oplog_entries(&self) {
+        self.public_state
+            .worker()
+            .commit_oplog_and_update_state(CommitLevel::Always)
+            .await;
+    }
+
+    pub(crate) fn entity_reconstruction_claim_hook(
+        &self,
+    ) -> Option<Arc<dyn crate::workerctx::EntityReconstructionClaimHook>> {
+        self.entity_reconstruction_claim_hook.clone()
+    }
+
     pub(crate) fn derive_card_id(
         &self,
         invocation_key: &IdempotencyKey,
@@ -750,6 +780,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         runtime: OwnerRuntime,
         owner_execution: Arc<OwnerExecution>,
         owner_resources: Arc<OwnerRuntimeResources>,
+        entity_reconstruction_claim_hook: Option<
+            Arc<dyn crate::workerctx::EntityReconstructionClaimHook>,
+        >,
         filesystem: FilesystemCapability,
         executable_component: Component,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
@@ -1109,6 +1142,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             invocation_principal: None,
             owner_execution,
             owner_resources,
+            entity_reconstruction_claim_hook,
             websocket_connection_pool,
             public_state: PublicDurableWorkerState {
                 promise_service: promise_service.clone(),
@@ -2377,19 +2411,26 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.linear_memory.clone()
     }
 
-    async fn switch_to_live(&self) {
-        let incomplete_calls = self.state.replay_state.switch_to_live().await;
-        self.owner_execution
-            .release_incomplete_historical_reconstruction_fences(&incomplete_calls);
-        if self.runtime == OwnerRuntime::Agent {
-            // Completed reconstructions retain their fence until their coordinator exits. An
-            // incomplete outer Start releases its fence with the resolver decision above, before
-            // an exclusive P2 transition could block the accessor coordinator that observes it.
-            self.owner_execution
-                .wait_for_historical_reconstructions()
-                .await;
+    async fn switch_to_live(&self) -> Result<(), WorkerExecutorError> {
+        let role = if self.runtime == OwnerRuntime::Agent {
+            ReplayToLiveRole::PrimaryAgent
+        } else {
+            ReplayToLiveRole::NonPrimary
+        };
+        let outcome = self
+            .state
+            .replay_state
+            .switch_to_live(&self.linear_memory, role)
+            .await?;
+        if outcome == ReplayToLiveOutcome::ReplayResumed {
+            return Err(WorkerExecutorError::runtime(
+                "replay target grew while the primary runtime was settling",
+            ));
         }
-        self.linear_memory.switch_to_live();
+        if role == ReplayToLiveRole::NonPrimary {
+            self.state.local_live_tail.store(true, Ordering::Release);
+        }
+        Ok(())
     }
 
     fn cleanup_custom_durability_state(&mut self) {
@@ -3005,7 +3046,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .await;
                     if end_index.is_none() {
                         // Must switch to live mode before failing to be able to commit an Error entry
-                        self.switch_to_live().await;
+                        self.switch_to_live().await?;
                         Err(WorkerExecutorError::runtime(
                             "Non-idempotent remote write operation was not completed, cannot retry",
                         ))
@@ -3040,7 +3081,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             violates_for_all: true,
                         } => {
                             // Must switch to live mode before failing to be able to commit an Error entry
-                            self.switch_to_live().await;
+                            self.switch_to_live().await?;
                             Err(WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",
                             ))
@@ -3049,7 +3090,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             violates_for_all: false,
                         } if self.state.assume_idempotence => {
                             // We need to jump to the end of the oplog
-                            self.switch_to_live().await;
+                            self.switch_to_live().await?;
 
                             // But this is not enough, because if the retried batched write operation succeeds,
                             // and later we replay it, we need to skip the first attempt and only replay the second.
@@ -3074,7 +3115,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         OplogEntryLookupResult::NotFound { .. } => {
                             // assume_idempotence is false and the operation was not completed —
                             // we cannot safely retry a non-idempotent batched write.
-                            self.switch_to_live().await;
+                            self.switch_to_live().await?;
                             Err(WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",
                             ))
@@ -3406,7 +3447,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             violates_for_all: true,
                         } => {
                             // Must switch to live mode before failing to be able to commit an Error entry
-                            self.switch_to_live().await;
+                            self.switch_to_live().await?;
                             return Err(WorkerExecutorError::runtime(
                                 "Transaction overlapped with other side effects was not completed, cannot retry",
                             ).into());
@@ -3422,7 +3463,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     violates_for_all: true,
                 } => {
                     // Must switch to live mode before failing to be able to commit an Error entry
-                    self.switch_to_live().await;
+                    self.switch_to_live().await?;
                     return Err(WorkerExecutorError::runtime(
                         "Transaction overlapped with other side effects was not completed, cannot retry",
                     ).into());
@@ -3431,7 +3472,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             let (result, tx) = if should_restart {
                 // We need to jump to the end of the oplog
-                self.switch_to_live().await;
+                self.switch_to_live().await?;
 
                 if !assume_idempotence {
                     Err(WorkerExecutorError::runtime(
@@ -4498,7 +4539,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");
-                    self.linear_memory.switch_to_live();
                     let pending_update = self.state.pending_update.lock().await.take();
                     if let Some(pending_update) = pending_update {
                         match pending_update.description {
@@ -5099,7 +5139,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         consumed_fuel: u64,
         output: &mut AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
-        let is_live = self.state.is_live();
+        let mut is_live = self.state.is_live();
         if is_live && !self.state.snapshotting_mode {
             concurrent::drain_queued_dropped_call_events(self)
                 .await
@@ -5114,105 +5154,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             ));
         }
 
-        if is_live {
-            if !self.state.durability_is_suppressed() {
-                let component_revision = output.component_revision.ok_or_else(|| {
-                    WorkerExecutorError::runtime(
-                        "component_revision missing in AgentInvocationOutput during replay",
-                    )
-                })?;
-
-                // Classify the just-completed invocation up front so we can
-                // bump the read-only cache epoch on successful mutating
-                // completion. For non-AgentMethod results
-                // (initialization, manual update, snapshot
-                // load/save, oplog processing) we always invalidate — these
-                // are all state-changing. For AgentMethod results we ask the
-                // worker whether the method is `read_only`.
-                let invalidates_read_only_cache = match &output.result {
-                    AgentInvocationResult::AgentMethod { .. } => self
-                        .public_state
-                        .worker()
-                        .agent_method_invalidates_read_only_cache(full_function_name),
-                    AgentInvocationResult::AgentInitialization
-                    | AgentInvocationResult::ManualUpdate
-                    | AgentInvocationResult::LoadSnapshot { .. }
-                    | AgentInvocationResult::SaveSnapshot { .. }
-                    | AgentInvocationResult::ProcessOplogEntries { .. } => true,
-                };
-
-                // Only `AgentMethod` results need the method name persisted so the
-                // public oplog renderer can resolve the correct output schema.
-                let method_name = match &output.result {
-                    AgentInvocationResult::AgentMethod { .. } => {
-                        Some(full_function_name.to_string())
-                    }
-                    _ => None,
-                };
-
-                self.public_state
-                    .worker()
-                    .oplog()
-                    .add_agent_invocation_finished(
-                        &output.result,
-                        method_name,
-                        consumed_fuel,
-                        component_revision,
-                    )
-                    .await
-                    .unwrap_or_else(|err| {
-                        panic!("could not encode function result for {full_function_name}: {err}")
-                    });
-
-                self.public_state
-                    .worker()
-                    .commit_oplog_and_update_state(CommitLevel::Always)
-                    .await;
-
-                // Bump the read-only cache epoch after the
-                // `AgentInvocationFinished` entry is committed, but *before*
-                // we publish `InvocationCompleted` to waiters via
-                // `store_invocation_success`. Ordering matters: any client
-                // that observes the completion event must also see an
-                // invalidated cache, otherwise it could read a stale cached
-                // result for the now-mutated state.
-                if invalidates_read_only_cache {
-                    self.public_state.worker().bump_read_only_cache_epoch();
-                }
-
-                // Capture the agent's oplog index right after
-                // `AgentInvocationFinished` was committed, together with the
-                // worker's per-instance fingerprint, so the response carries
-                // an unambiguous identification of the agent state it was
-                // produced from.
-                output.oplog_index = Some(
-                    self.public_state
-                        .worker()
-                        .oplog()
-                        .current_oplog_index()
-                        .await,
-                );
-                output.agent_fingerprint = Some(
-                    self.public_state
-                        .worker()
-                        .get_initial_worker_metadata()
-                        .fingerprint,
-                );
-
-                if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
-                    self.public_state
-                        .worker()
-                        .store_invocation_success(&idempotency_key, output.clone())
-                        .await;
-
-                    self.public_state.event_service().emit_invocation_finished(
-                        full_function_name,
-                        &idempotency_key,
-                        is_live,
-                    );
-                }
-            }
-        } else {
+        if !is_live {
             // Mirror the live-path drain: events enqueued from synchronous drops during replay
             // (e.g. `DropEvent::FinishSpan` for a p3 HTTP response dropped unconsumed) must consume
             // their positional entries (recorded by the live drain at this same point) before the
@@ -5226,19 +5168,123 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .replay_state
                 .get_oplog_entry_agent_invocation_finished()
                 .await?;
-            if let Some(recorded_result) = response
-                && !recorded_result.replay_equivalent(&output.result)
-            {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    format!(
-                        "{full_function_name} => {:?}",
-                        recorded_result.redacted_debug()
-                    ),
-                    format!(
-                        "{full_function_name} => {:?}",
-                        output.result.redacted_debug()
-                    ),
-                ));
+            if let Some(recorded_result) = response {
+                if !recorded_result.replay_equivalent(&output.result) {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        format!(
+                            "{full_function_name} => {:?}",
+                            recorded_result.redacted_debug()
+                        ),
+                        format!(
+                            "{full_function_name} => {:?}",
+                            output.result.redacted_debug()
+                        ),
+                    ));
+                }
+                debug!("Function {full_function_name} finished");
+                return Ok(());
+            }
+
+            // An incomplete historical invocation can finish after a non-primary entity repair
+            // has moved the shared cursor into Settling. Complete the primary transition before
+            // publishing this newly repaired invocation as a live success.
+            self.switch_to_live().await?;
+            is_live = true;
+        }
+
+        if is_live && !self.state.durability_is_suppressed() {
+            let component_revision = output.component_revision.ok_or_else(|| {
+                WorkerExecutorError::runtime(
+                    "component_revision missing in AgentInvocationOutput during replay",
+                )
+            })?;
+
+            // Classify the just-completed invocation up front so we can
+            // bump the read-only cache epoch on successful mutating
+            // completion. For non-AgentMethod results
+            // (initialization, manual update, snapshot
+            // load/save, oplog processing) we always invalidate — these
+            // are all state-changing. For AgentMethod results we ask the
+            // worker whether the method is `read_only`.
+            let invalidates_read_only_cache = match &output.result {
+                AgentInvocationResult::AgentMethod { .. } => self
+                    .public_state
+                    .worker()
+                    .agent_method_invalidates_read_only_cache(full_function_name),
+                AgentInvocationResult::AgentInitialization
+                | AgentInvocationResult::ManualUpdate
+                | AgentInvocationResult::LoadSnapshot { .. }
+                | AgentInvocationResult::SaveSnapshot { .. }
+                | AgentInvocationResult::ProcessOplogEntries { .. } => true,
+            };
+
+            // Only `AgentMethod` results need the method name persisted so the
+            // public oplog renderer can resolve the correct output schema.
+            let method_name = match &output.result {
+                AgentInvocationResult::AgentMethod { .. } => Some(full_function_name.to_string()),
+                _ => None,
+            };
+
+            self.public_state
+                .worker()
+                .oplog()
+                .add_agent_invocation_finished(
+                    &output.result,
+                    method_name,
+                    consumed_fuel,
+                    component_revision,
+                )
+                .await
+                .unwrap_or_else(|err| {
+                    panic!("could not encode function result for {full_function_name}: {err}")
+                });
+
+            self.public_state
+                .worker()
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await;
+
+            // Bump the read-only cache epoch after the
+            // `AgentInvocationFinished` entry is committed, but *before*
+            // we publish `InvocationCompleted` to waiters via
+            // `store_invocation_success`. Ordering matters: any client
+            // that observes the completion event must also see an
+            // invalidated cache, otherwise it could read a stale cached
+            // result for the now-mutated state.
+            if invalidates_read_only_cache {
+                self.public_state.worker().bump_read_only_cache_epoch();
+            }
+
+            // Capture the agent's oplog index right after
+            // `AgentInvocationFinished` was committed, together with the
+            // worker's per-instance fingerprint, so the response carries
+            // an unambiguous identification of the agent state it was
+            // produced from.
+            output.oplog_index = Some(
+                self.public_state
+                    .worker()
+                    .oplog()
+                    .current_oplog_index()
+                    .await,
+            );
+            output.agent_fingerprint = Some(
+                self.public_state
+                    .worker()
+                    .get_initial_worker_metadata()
+                    .fingerprint,
+            );
+
+            if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
+                self.public_state
+                    .worker()
+                    .store_invocation_success(&idempotency_key, output.clone())
+                    .await;
+
+                self.public_state.event_service().emit_invocation_finished(
+                    full_function_name,
+                    &idempotency_key,
+                    is_live,
+                );
             }
         }
         debug!("Function {full_function_name} finished");
@@ -5916,10 +5962,8 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     .as_context_mut()
                     .data_mut()
                     .durable_ctx_mut()
-                    .state
-                    .replay_state
                     .switch_to_live()
-                    .await;
+                    .await?;
 
                 // Appending a Restart marker
                 store
@@ -9762,6 +9806,7 @@ impl PrivateDurableWorkerState {
             (OwnerRuntime::Agent, None) => golem_common::model::card::EffectiveSurface::default(),
             (OwnerRuntime::Entity(_), _) => configured_agent_effective_surface,
         };
+        let local_live_tail = matches!(runtime, OwnerRuntime::Entity(_)) && replay_state.is_live();
         Ok(Self {
             oplog_service,
             oplog,
@@ -9792,7 +9837,7 @@ impl PrivateDurableWorkerState {
             worker_proxy,
             resources: HashMap::new(),
             last_resource_id: AgentResourceId::INITIAL,
-            local_live_tail: Arc::new(AtomicBool::new(false)),
+            local_live_tail: Arc::new(AtomicBool::new(local_live_tail)),
             assume_idempotence: true,
             active_custom_invocations: HashMap::new(),
             custom_invocation_ordinals: HashMap::new(),
@@ -10320,7 +10365,7 @@ impl PrivateDurableWorkerState {
 
     /// Returns whether we are in live mode where we are executing new calls.
     pub fn is_live(&self) -> bool {
-        self.local_live_tail.load(Ordering::Acquire) || self.replay_state.is_live()
+        self.local_live_tail.load(Ordering::Acquire) || self.replay_state.is_live_published()
     }
 
     pub(crate) fn local_live_tail(&self) -> Arc<AtomicBool> {

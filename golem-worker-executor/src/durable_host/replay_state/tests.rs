@@ -5,18 +5,22 @@ use golem_common::model::card::{
     AgentCardHolder, Card, CardHolder, CardId, InvocationWalletPin, StoredCard, WalletVersionToken,
 };
 use golem_common::model::component::ComponentId;
+use golem_common::model::entity::{
+    EntityCallMode, ToolInvocationClaimIdentity, ToolInvocationRejectedIdentity,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::payload::types::{
-    SerializableP3HttpBodyChunk, SerializableP3HttpConsumeBodyResult,
+    SerializableP3HttpBodyChunk, SerializableP3HttpConsumeBodyResult, SerializableToolRpcError,
 };
 use golem_common::model::oplog::{
-    AgentError, DurableFunctionType, HostRequest, HostRequestNoInput, HostRequestPollCount,
-    HostResponseMonotonicClockTimestamp, HostResponseP3HttpClientConsumeBodyChunk,
-    HostResponseP3HttpClientConsumeBodyResult, HostStreamKind, OplogPayload, PayloadId,
-    RawOplogPayload,
+    AgentError, DurableFunctionType, HostRequest, HostRequestGolemToolInvocationRejected,
+    HostRequestNoInput, HostRequestPollCount, HostResponseMonotonicClockTimestamp,
+    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
+    HostStreamKind, OplogPayload, PayloadId, RawOplogPayload,
 };
 use golem_common::model::regions::OplogRegion;
+use golem_common::model::tool::ToolName;
 use golem_common::model::{AgentId, AgentInvocationPayload, IdempotencyKey, Timestamp};
 use golem_common::schema::IntoTypedSchemaValue;
 use std::collections::BTreeMap;
@@ -231,6 +235,70 @@ fn start_now() -> OplogEntry {
             HostRequestNoInput {},
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
+    }
+}
+
+fn rejected_tool_reconstruction_start(
+    parent_start_index: OplogIndex,
+) -> (OplogEntry, ToolInvocationClaimIdentity) {
+    let tool_name = ToolName::try_from("reconstruction-test").unwrap();
+    let identity = ToolInvocationClaimIdentity {
+        accepted: None,
+        rejected: ToolInvocationRejectedIdentity {
+            tool_name: tool_name.clone(),
+            command_path: vec!["run".to_string()],
+            input: None,
+            input_decode_failure: None,
+            has_stdin: false,
+            has_stdout: false,
+            call_mode: EntityCallMode::Synchronous,
+        },
+    };
+    let request =
+        HostRequest::GolemToolInvocationRejected(HostRequestGolemToolInvocationRejected {
+            tool_name: tool_name.into_inner(),
+            command_path: vec!["run".to_string()],
+            input: None,
+            input_decode_failure: None,
+            has_stdin: false,
+            has_stdout: false,
+            call_mode: EntityCallMode::Synchronous,
+            error: SerializableToolRpcError::Denied("recorded rejection".to_string()),
+        });
+    (
+        OplogEntry::Start {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: Some(parent_start_index),
+            function_name: HostFunctionName::GolemToolInvocationRejected,
+            invocation_id: None,
+            observational_owner: None,
+            request: Some(OplogPayload::Inline(Box::new(request))),
+            durable_function_type: DurableFunctionType::WriteLocal,
+        },
+        identity,
+    )
+}
+
+async fn claim_rejected_tool_reconstruction(
+    replay: &ReplayState,
+    parent_start_index: OplogIndex,
+    identity: &ToolInvocationClaimIdentity,
+) -> ReplayCallHandle {
+    match replay
+        .claim_start_or_replay_end(StartClaim::owned_tool_invocation(
+            &HostFunctionName::GolemEntityInvoke,
+            &HostFunctionName::GolemToolInvocationRejected,
+            &DurableFunctionType::WriteLocal,
+            parent_start_index,
+            identity,
+        ))
+        .await
+        .unwrap()
+    {
+        ReplayStartClaimOutcome::Claimed { handle, .. } => handle,
+        ReplayStartClaimOutcome::ReplayEnded | ReplayStartClaimOutcome::DeletedRegion => {
+            panic!("expected rejected tool reconstruction Start")
+        }
     }
 }
 
@@ -954,6 +1022,295 @@ async fn replay_state_over(entries: Vec<OplogEntry>) -> ReplayState {
         .expect("failed to build replay state")
 }
 
+fn replay_linear_memory() -> crate::services::linear_memory::LinearMemoryTracker {
+    crate::services::linear_memory::LinearMemoryTracker::new(
+        2,
+        2,
+        golem_common::model::agent::AgentMode::Durable,
+        true,
+        Arc::new(crate::services::resource_limits::AtomicResourceEntry::new(
+            0, 10, 0, 0, 0,
+        )),
+        Arc::new(std::sync::Mutex::new(
+            crate::services::active_agents::MemoryGrant::inert(2),
+        )),
+        std::time::Instant::now(),
+    )
+}
+
+async fn held_completed_reconstruction() -> (
+    ReplayState,
+    Arc<InMemoryOplog>,
+    crate::durable_host::concurrent::HistoricalReconstruction,
+) {
+    let parent = OplogIndex::from_u64(1);
+    let (start, identity) = rejected_tool_reconstruction_start(parent);
+    let oplog = Arc::new(InMemoryOplog::new());
+    oplog.add(noop()).await;
+    oplog.add(start).await;
+    oplog.add(end_for(2, 1)).await;
+    let replay = ReplayState::new(
+        test_agent_id(),
+        oplog.clone(),
+        DeletedRegions::default(),
+        None,
+    )
+    .await
+    .expect("failed to build replay state");
+    let mut handle = claim_rejected_tool_reconstruction(&replay, parent, &identity).await;
+    let mut reconstruction = handle
+        .take_historical_reconstruction()
+        .expect("reconstruction guard");
+    assert!(matches!(
+        replay.await_resolution_outcome(handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { .. })
+    ));
+    reconstruction.body_settled();
+    (replay, oplog, reconstruction)
+}
+
+#[test]
+async fn growing_replay_target_revokes_published_live_state() {
+    let oplog = Arc::new(InMemoryOplog::new());
+    oplog.add(noop()).await;
+    let replay = ReplayState::new(
+        test_agent_id(),
+        oplog.clone(),
+        DeletedRegions::default(),
+        None,
+    )
+    .await
+    .expect("failed to build replay state");
+    assert!(replay.is_live_published());
+
+    let new_target = oplog.add(noop()).await;
+    replay
+        .set_replay_target(new_target)
+        .await
+        .expect("failed to grow replay target");
+
+    assert!(replay.is_replay());
+    assert!(
+        !replay.is_live_published(),
+        "resuming replay must revoke owner live publication"
+    );
+}
+
+#[test]
+async fn growing_replay_target_revokes_an_active_settling_transition() {
+    let (replay, oplog, reconstruction) = held_completed_reconstruction().await;
+    let linear_memory = replay_linear_memory();
+    let transition = tokio::spawn({
+        let replay = replay.clone();
+        let linear_memory = linear_memory.clone();
+        async move {
+            replay
+                .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while replay.cursor.transition_phase.load(Ordering::Acquire)
+            != ReplayTransitionPhase::Settling as u8
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("primary transition did not enter settling");
+
+    let new_target = oplog.add(noop()).await;
+    replay
+        .set_replay_target(new_target)
+        .await
+        .expect("failed to grow replay target while settling");
+    drop(reconstruction);
+
+    assert_eq!(
+        transition.await.unwrap().unwrap(),
+        ReplayToLiveOutcome::ReplayResumed
+    );
+    assert!(replay.is_replay());
+    assert!(!replay.is_live_published());
+    assert_eq!(
+        linear_memory.reconciliation_grant_bytes(1),
+        2,
+        "a revoked settling waiter must not switch linear memory to live"
+    );
+
+    assert_eq!(
+        replay
+            .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
+            .await
+            .unwrap(),
+        ReplayToLiveOutcome::Live
+    );
+    assert_eq!(
+        replay.take_new_replay_events(),
+        vec![ReplayEvent::ReplayFinished],
+        "target growth must discard the stale ReplayFinished event"
+    );
+}
+
+#[test]
+async fn replay_finished_is_withheld_while_reconstruction_settles() {
+    let (replay, _oplog, reconstruction) = held_completed_reconstruction().await;
+    let linear_memory = replay_linear_memory();
+    let transition = tokio::spawn({
+        let replay = replay.clone();
+        let linear_memory = linear_memory.clone();
+        async move {
+            replay
+                .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while replay.cursor.transition_phase.load(Ordering::Acquire)
+            != ReplayTransitionPhase::Settling as u8
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("primary transition did not enter settling");
+
+    assert!(
+        replay.take_new_replay_events().is_empty(),
+        "ReplayFinished must not be consumable before reconstruction validation"
+    );
+    drop(reconstruction);
+
+    assert_eq!(
+        transition.await.unwrap().unwrap(),
+        ReplayToLiveOutcome::Live
+    );
+    assert_eq!(
+        replay.take_new_replay_events(),
+        vec![ReplayEvent::ReplayFinished]
+    );
+}
+
+#[test]
+async fn concurrent_same_target_transitions_are_idempotent() {
+    let (replay, _oplog, reconstruction) = held_completed_reconstruction().await;
+    let first_memory = replay_linear_memory();
+    let second_memory = replay_linear_memory();
+    let first = tokio::spawn({
+        let replay = replay.clone();
+        let linear_memory = first_memory.clone();
+        async move {
+            replay
+                .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while replay.cursor.transition_phase.load(Ordering::Acquire)
+            != ReplayTransitionPhase::Settling as u8
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("first primary transition did not enter settling");
+    let second = tokio::spawn({
+        let replay = replay.clone();
+        let linear_memory = second_memory.clone();
+        async move {
+            replay
+                .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
+                .await
+        }
+    });
+
+    drop(reconstruction);
+
+    assert_eq!(first.await.unwrap().unwrap(), ReplayToLiveOutcome::Live);
+    assert_eq!(second.await.unwrap().unwrap(), ReplayToLiveOutcome::Live);
+    assert_eq!(first_memory.reconciliation_grant_bytes(1), 1);
+    assert_eq!(second_memory.reconciliation_grant_bytes(1), 1);
+    assert!(replay.is_live_published());
+}
+
+#[test]
+async fn old_settler_cannot_publish_a_grown_target() {
+    let (replay, oplog, reconstruction) = held_completed_reconstruction().await;
+    let old_target = replay.switch_cursor_to_live().await.unwrap();
+    let new_target = oplog.add(noop()).await;
+    replay
+        .set_replay_target(new_target)
+        .await
+        .expect("failed to grow replay target while settling");
+    let second_target = replay.switch_cursor_to_live().await.unwrap();
+    assert_eq!(second_target, new_target);
+    drop(reconstruction);
+
+    let stale_memory = replay_linear_memory();
+    let stale_publication = replay
+        .run_owned_cursor_op({
+            let stale_memory = stale_memory.clone();
+            move |state| async move {
+                state
+                    .with_tx(async |tx| {
+                        Ok(tx.publish_live_if_still_settling(old_target, &stale_memory))
+                    })
+                    .await
+            }
+        })
+        .await
+        .unwrap();
+    assert_eq!(stale_publication, LivePublicationOutcome::ReplayResumed);
+    assert_eq!(stale_memory.reconciliation_grant_bytes(1), 2);
+
+    let current_memory = replay_linear_memory();
+    let current_publication = replay
+        .run_owned_cursor_op({
+            let current_memory = current_memory.clone();
+            move |state| async move {
+                state
+                    .with_tx(async |tx| {
+                        Ok(tx.publish_live_if_still_settling(second_target, &current_memory))
+                    })
+                    .await
+            }
+        })
+        .await
+        .unwrap();
+    assert_eq!(current_publication, LivePublicationOutcome::Published);
+    assert_eq!(current_memory.reconciliation_grant_bytes(1), 1);
+    assert!(replay.is_live_published());
+}
+
+#[test]
+async fn owner_failure_wins_when_reconstruction_barrier_is_already_empty() {
+    let oplog = Arc::new(InMemoryOplog::new());
+    oplog.add(noop()).await;
+    let owner_operations = crate::durable_host::tool::operation::OwnerToolOperations::new();
+    let replay = ReplayState::new_for_owner(
+        test_agent_id(),
+        oplog,
+        DeletedRegions::default(),
+        None,
+        owner_operations.clone(),
+    )
+    .await
+    .expect("failed to build replay state");
+    owner_operations
+        .select_owner_failure(
+            crate::durable_host::tool::operation::OwnerFailureWinner::Infrastructure(
+                WorkerExecutorError::runtime("ready owner failure"),
+            ),
+        )
+        .await;
+
+    let error = replay
+        .test_wait_for_reconstruction_fences()
+        .await
+        .expect_err("biased barrier must prefer a ready owner failure");
+    assert!(error.to_string().contains("ready owner failure"));
+}
+
 #[test]
 async fn permission_events_replay_after_invocation_wallet_pin() {
     let owned_agent_id = test_agent_id();
@@ -1064,6 +1421,12 @@ async fn recorded_success_replays_without_live_expiry_or_authority_inputs() {
     }
 
     assert!(rs.is_live());
+    assert_eq!(
+        rs.switch_to_live(&replay_linear_memory(), ReplayToLiveRole::PrimaryAgent)
+            .await
+            .unwrap(),
+        ReplayToLiveOutcome::Live
+    );
     assert_eq!(
         rs.take_new_replay_events(),
         vec![
@@ -3346,18 +3709,135 @@ async fn switch_to_live_wakes_parked_awaiter_as_incomplete() {
         "A must park on the unclaimed Start(B)"
     );
 
-    let incomplete_calls = rs.switch_to_live().await;
+    rs.switch_cursor_to_live().await.unwrap();
 
     match a_fut.await.unwrap() {
         ResolutionOutcome::Incomplete => {}
         other => panic!("expected Incomplete, got {other:?}"),
     }
-    assert_eq!(incomplete_calls, HashSet::from([start_idx]));
     let internal = rs.cursor.state.lock().await;
     assert!(
         !internal.concurrent_resolver.is_pending(start_idx),
         "switch_to_live must unregister the parked awaiter"
     );
+}
+
+#[test]
+async fn reconstruction_claim_is_barrier_visible_when_atomic_claim_returns() {
+    let parent = OplogIndex::from_u64(1);
+    let (start, identity) = rejected_tool_reconstruction_start(parent);
+    let replay = replay_state_over(vec![noop(), start, end_for(2, 1)]).await;
+    let handle = claim_rejected_tool_reconstruction(&replay, parent, &identity).await;
+    let claim_state = replay.cursor.reconstruction_claims.clone();
+    let start_index = handle.start_idx();
+
+    assert_eq!(claim_state.active_fences(), HashSet::from([start_index]));
+    assert_eq!(claim_state.active_bodies(), HashSet::from([start_index]));
+    let wait = claim_state.wait_for_fences();
+    tokio::pin!(wait);
+    assert!(
+        futures::poll!(wait.as_mut()).is_pending(),
+        "the primary barrier must see the reconstruction before claim returns"
+    );
+
+    drop(handle);
+    wait.await;
+    assert!(claim_state.active_fences().is_empty());
+    assert!(claim_state.active_bodies().is_empty());
+}
+
+#[test]
+async fn incomplete_reconstruction_resolution_removes_only_its_fence() {
+    let parent = OplogIndex::from_u64(1);
+    let (start, identity) = rejected_tool_reconstruction_start(parent);
+    let replay = replay_state_over(vec![noop(), start]).await;
+    let mut handle = claim_rejected_tool_reconstruction(&replay, parent, &identity).await;
+    let start_index = handle.start_idx();
+    let mut reconstruction = handle
+        .take_historical_reconstruction()
+        .expect("reconstruction guard");
+    let claim_state = replay.cursor.reconstruction_claims.clone();
+
+    replay.switch_cursor_to_live().await.unwrap();
+    assert!(claim_state.active_fences().is_empty());
+    assert_eq!(claim_state.active_bodies(), HashSet::from([start_index]));
+    assert!(matches!(
+        replay.await_resolution_outcome(handle).await.unwrap(),
+        ResolutionOutcome::Incomplete
+    ));
+
+    reconstruction.body_settled();
+    drop(reconstruction);
+    assert!(claim_state.active_bodies().is_empty());
+}
+
+#[test]
+async fn consumed_reconstruction_terminal_blocks_until_body_validation() {
+    let parent = OplogIndex::from_u64(1);
+    let (start, identity) = rejected_tool_reconstruction_start(parent);
+    let replay = replay_state_over(vec![noop(), start, end_for(2, 1)]).await;
+    let mut handle = claim_rejected_tool_reconstruction(&replay, parent, &identity).await;
+    let start_index = handle.start_idx();
+    let mut reconstruction = handle
+        .take_historical_reconstruction()
+        .expect("reconstruction guard");
+    let claim_state = replay.cursor.reconstruction_claims.clone();
+
+    assert!(matches!(
+        replay.await_resolution_outcome(handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { .. })
+    ));
+    replay.switch_cursor_to_live().await.unwrap();
+    reconstruction.body_settled();
+    assert_eq!(claim_state.active_fences(), HashSet::from([start_index]));
+    assert!(claim_state.active_bodies().is_empty());
+    let wait = claim_state.wait_for_fences();
+    tokio::pin!(wait);
+    assert!(
+        futures::poll!(wait.as_mut()).is_pending(),
+        "terminal consumption must not release the validation fence"
+    );
+
+    drop(reconstruction);
+    wait.await;
+    assert!(claim_state.active_fences().is_empty());
+}
+
+#[test]
+async fn replay_generation_install_check_rejects_leaked_fence_or_body() {
+    let parent = OplogIndex::from_u64(1);
+    let (start, identity) = rejected_tool_reconstruction_start(parent);
+    let replay = replay_state_over(vec![noop(), start, end_for(2, 1)]).await;
+    let mut handle = claim_rejected_tool_reconstruction(&replay, parent, &identity).await;
+    let mut reconstruction = handle
+        .take_historical_reconstruction()
+        .expect("reconstruction guard");
+
+    assert!(replay.ensure_reconstruction_claims_empty().is_err());
+    reconstruction.body_settled();
+    assert!(
+        replay.ensure_reconstruction_claims_empty().is_err(),
+        "a consumed body cannot hide its still-unvalidated fence"
+    );
+    drop(reconstruction);
+    replay.ensure_reconstruction_claims_empty().unwrap();
+    drop(handle);
+
+    let (start, identity) = rejected_tool_reconstruction_start(parent);
+    let replay = replay_state_over(vec![noop(), start]).await;
+    let mut handle = claim_rejected_tool_reconstruction(&replay, parent, &identity).await;
+    let mut reconstruction = handle
+        .take_historical_reconstruction()
+        .expect("reconstruction guard");
+    replay.switch_cursor_to_live().await.unwrap();
+    assert!(
+        replay.ensure_reconstruction_claims_empty().is_err(),
+        "an incomplete claim's active body must still reject generation replacement"
+    );
+    reconstruction.body_settled();
+    drop(reconstruction);
+    replay.ensure_reconstruction_claims_empty().unwrap();
+    drop(handle);
 }
 
 #[test]
@@ -3564,6 +4044,12 @@ async fn replay_finished_emitted_when_skipped_region_reaches_target() {
         rs.is_live(),
         "consuming the Start must jump over the deleted tail to the target"
     );
+    assert_eq!(
+        rs.switch_to_live(&replay_linear_memory(), ReplayToLiveRole::PrimaryAgent)
+            .await
+            .unwrap(),
+        ReplayToLiveOutcome::Live
+    );
     let events = rs.take_new_replay_events();
     let finished = events
         .iter()
@@ -3594,6 +4080,12 @@ async fn replay_finished_emitted_when_target_entry_consumed() {
     rs.await_resolution(handle).await.unwrap();
 
     assert!(rs.is_live());
+    assert_eq!(
+        rs.switch_to_live(&replay_linear_memory(), ReplayToLiveRole::PrimaryAgent)
+            .await
+            .unwrap(),
+        ReplayToLiveOutcome::Live
+    );
     let events = rs.take_new_replay_events();
     let finished = events
         .iter()

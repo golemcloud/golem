@@ -30,8 +30,6 @@ use crate::bindings::golem::tool::host::{
 use crate::golem_agentic::golem::tool::host as agentic_host_api;
 use crate::schema::{FromSchema, FromSchemaError};
 
-pub use crate::tool::InvocationResult;
-
 /// RPC-level failures reported while invoking a remote tool.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RpcError {
@@ -184,6 +182,17 @@ pub trait ToolRpcClient {
     ) -> Result<host::InvocationResult, WitRpcError>;
 }
 
+#[doc(hidden)]
+pub trait StartedToolRpcClient {
+    fn async_invoke_and_await_tool(
+        &self,
+        command_path: &[String],
+        input: crate::schema::wit::wire::TypedSchemaValue,
+        stdin: Option<agentic_host_api::ToolStdin>,
+        stdout: Option<agentic_host_api::ToolStdout>,
+    ) -> agentic_host_api::FutureInvokeResult;
+}
+
 impl ToolRpcClient for HostToolRpc {
     type Stdin = HostToolStdin;
     type Stdout = HostToolStdout;
@@ -201,15 +210,33 @@ impl ToolRpcClient for HostToolRpc {
 }
 
 impl ToolRpcClient for AmbientToolRpc {
+    type Stdin = agentic_host_api::ToolStdin;
+    type Stdout = agentic_host_api::ToolStdout;
+
     async fn invoke_and_await_tool(
         &self,
         command_path: &[String],
         input: crate::schema::wit::wire::TypedSchemaValue,
-        stdin: Option<InputStream>,
+        stdin: Option<Self::Stdin>,
+        stdout: Option<Self::Stdout>,
     ) -> Result<host::InvocationResult, WitRpcError> {
         self.inner
-            .invoke_and_await(command_path.to_vec(), input, stdin)
+            .invoke_and_await(command_path.to_vec(), input, stdin, stdout)
             .await
+            .map_err(Into::into)
+    }
+}
+
+impl StartedToolRpcClient for AmbientToolRpc {
+    fn async_invoke_and_await_tool(
+        &self,
+        command_path: &[String],
+        input: crate::schema::wit::wire::TypedSchemaValue,
+        stdin: Option<agentic_host_api::ToolStdin>,
+        stdout: Option<agentic_host_api::ToolStdout>,
+    ) -> agentic_host_api::FutureInvokeResult {
+        self.inner
+            .async_invoke_and_await(command_path, input, stdin, stdout)
     }
 }
 
@@ -227,6 +254,18 @@ impl ToolRpcClient for crate::golem_agentic::golem::tool::host::ToolRpc {
         self.invoke_and_await(command_path.to_vec(), input, stdin, stdout)
             .await
             .map_err(Into::into)
+    }
+}
+
+impl StartedToolRpcClient for crate::golem_agentic::golem::tool::host::ToolRpc {
+    fn async_invoke_and_await_tool(
+        &self,
+        command_path: &[String],
+        input: crate::schema::wit::wire::TypedSchemaValue,
+        stdin: Option<agentic_host_api::ToolStdin>,
+        stdout: Option<agentic_host_api::ToolStdout>,
+    ) -> agentic_host_api::FutureInvokeResult {
+        self.async_invoke_and_await(command_path, input, stdin, stdout)
     }
 }
 
@@ -276,16 +315,7 @@ async fn invoke_and_await_with_error_decoder<E, R: ToolRpcClient>(
         .await
         .map_err(|error| map_rpc_error(error, &decode_error))?;
 
-    let result_value = result
-        .result
-        .as_ref()
-        .map(crate::decode_typed_schema_value)
-        .transpose()
-        .map_err(|error| protocol_error(format!("failed to decode tool result: {error}")))?;
-
-    Ok(InvocationResult {
-        result: result_value,
-    })
+    decode_wire_invocation_result(result)
 }
 
 /// Invokes a zero-error tool and treats remote custom errors as protocol failures.
@@ -303,24 +333,7 @@ pub async fn invoke_and_await_infallible<R: ToolRpcClient>(
         .await
         .map_err(map_infallible_rpc_error)?;
 
-    let result_value = result
-        .result
-        .as_ref()
-        .map(crate::decode_typed_schema_value)
-        .transpose()
-        .map_err(|error| protocol_error(format!("failed to decode tool result: {error}")))?;
-
-    Ok(InvocationResult {
-        result: result_value,
-    })
-}
-
-impl From<crate::golem_agentic::golem::tool::host::InvocationResult> for host::InvocationResult {
-    fn from(result: crate::golem_agentic::golem::tool::host::InvocationResult) -> Self {
-        Self {
-            result: result.result,
-        }
-    }
+    decode_wire_invocation_result(result)
 }
 
 impl From<crate::golem_agentic::golem::tool::host::RpcError> for WitRpcError {
@@ -334,26 +347,9 @@ impl From<crate::golem_agentic::golem::tool::host::RpcError> for WitRpcError {
             agentic_host::RpcError::RemoteInternalError(message) => {
                 Self::RemoteInternalError(message)
             }
-            agentic_host::RpcError::RemoteToolError(error) => Self::RemoteToolError(error.into()),
+            agentic_host::RpcError::RemoteToolError(error) => Self::RemoteToolError(error),
             agentic_host::RpcError::Cancelled => Self::Cancelled,
             agentic_host::RpcError::ResourceExhausted(message) => Self::ResourceExhausted(message),
-        }
-    }
-}
-
-impl From<crate::golem_agentic::golem::tool::host::ToolError> for host::ToolError {
-    fn from(error: crate::golem_agentic::golem::tool::host::ToolError) -> Self {
-        use crate::golem_agentic::golem::tool::host as agentic_host;
-
-        match error {
-            agentic_host::ToolError::InvalidToolName(name) => Self::InvalidToolName(name),
-            agentic_host::ToolError::InvalidCommandPath(path) => Self::InvalidCommandPath(path),
-            agentic_host::ToolError::InvalidInput(message) => Self::InvalidInput(message),
-            agentic_host::ToolError::ConstraintViolation(message) => {
-                Self::ConstraintViolation(message)
-            }
-            agentic_host::ToolError::InvalidResult(message) => Self::InvalidResult(message),
-            agentic_host::ToolError::CustomError(value) => Self::CustomError(value),
         }
     }
 }
@@ -502,10 +498,15 @@ impl<T, E> ToolInvocation<T, E> {
 }
 
 fn decode_wire_invocation_result<E>(
-    result: agentic_host_api::InvocationResult,
+    result: host::InvocationResult,
 ) -> Result<InvocationResult, ToolError<E>> {
+    let host::InvocationResult { result, stdout } = result;
+    if stdout.is_some() {
+        return Err(protocol_error(
+            "tool result unexpectedly contained an embedded stdout stream".to_string(),
+        ));
+    }
     let result = result
-        .result
         .map(|value| crate::decode_typed_schema_value(&value))
         .transpose()
         .map_err(|error| protocol_error(format!("failed to decode tool result: {error}")))?;
@@ -514,7 +515,7 @@ fn decode_wire_invocation_result<E>(
 
 /// Starts a stdout-bearing invocation with a generated structured-result decoder.
 pub fn start_tool_invocation<T: 'static, E: 'static>(
-    rpc: &agentic_host_api::ToolRpc,
+    rpc: &impl StartedToolRpcClient,
     command_path: &[String],
     input: &TypedSchemaValue,
     stdin: Option<InputStream>,
@@ -525,7 +526,7 @@ pub fn start_tool_invocation<T: 'static, E: 'static>(
         .map_err(|error| protocol_error(format!("failed to encode tool input: {error}")))?;
     let stdin = stdin.map(pump_tool_stdin);
     let (stdout_target, stdout) = agentic_host_api::create_stdout();
-    let future = rpc.async_invoke_and_await(command_path, input, stdin, Some(stdout_target));
+    let future = rpc.async_invoke_and_await_tool(command_path, input, stdin, Some(stdout_target));
     Ok(ToolInvocation {
         stdout,
         future: Rc::new(future),

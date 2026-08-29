@@ -31,14 +31,15 @@ use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::{AgentFilePermissions, InitialAgentFile};
 use golem_common::model::entity::{
-    EntityActivation, EntityInvocationScope, ExecutableTarget, FilesystemCapability, OwnerRuntime,
+    EntityActivation, EntityInvocationScope, ExecutableTarget, FilesystemCapability,
+    InvocationExecutionMode, OwnerRuntime,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::component::Component as ComponentMetadata;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
@@ -46,7 +47,6 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use tempfile::TempDir;
-use tokio::sync::watch;
 use tracing::warn;
 use wasmtime::component::{Component, Instance};
 use wasmtime::{AsContextMut, Store, StoreMemory, UpdateDeadline};
@@ -432,122 +432,45 @@ pub struct OwnerExecution {
     tool_operations: Arc<OwnerToolOperations>,
     deferred_tool_admission: Arc<DeferredAdmissionTable>,
     reached_oplog_marker: AtomicU64,
-    historical_reconstructions: Arc<HistoricalReconstructionTracker>,
+    #[cfg(feature = "test-utils")]
+    monotonic_clock_now_gate: Mutex<Option<Arc<ClockNowGate>>>,
+    #[cfg(feature = "test-utils")]
+    wall_clock_now_gate: Mutex<Option<Arc<ClockNowGate>>>,
+    #[cfg(feature = "test-utils")]
+    skip_monotonic_clock_now_durability: AtomicBool,
+    #[cfg(feature = "test-utils")]
+    skip_wall_clock_now_durability: AtomicBool,
 }
 
-#[derive(Default)]
-struct HistoricalReconstructionState {
-    resolved_before_registration: HashSet<OplogIndex>,
+#[cfg(feature = "test-utils")]
+struct ClockNowGate {
+    entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: tokio::sync::Semaphore,
 }
 
-struct HistoricalReconstructionTracker {
-    state: Mutex<HistoricalReconstructionState>,
-    active_fences: watch::Sender<HashSet<OplogIndex>>,
-    active_bodies: watch::Sender<HashSet<OplogIndex>>,
+#[cfg(feature = "test-utils")]
+pub struct ClockNowGateHandle {
+    entered: tokio::sync::oneshot::Receiver<()>,
+    gate: Arc<ClockNowGate>,
 }
 
-pub(crate) struct HistoricalReconstruction {
-    tracker: Arc<HistoricalReconstructionTracker>,
-    start_index: OplogIndex,
-    body: Option<OplogIndex>,
+#[cfg(feature = "test-utils")]
+impl ClockNowGateHandle {
+    pub async fn entered(&mut self) {
+        (&mut self.entered)
+            .await
+            .expect("clock now gate was dropped without firing");
+    }
+
+    pub fn release(&self) {
+        self.gate.release.add_permits(1);
+    }
 }
 
-impl HistoricalReconstructionTracker {
-    fn new() -> Arc<Self> {
-        let (active_fences, _) = watch::channel(HashSet::new());
-        let (active_bodies, _) = watch::channel(HashSet::new());
-        Arc::new(Self {
-            state: Mutex::new(HistoricalReconstructionState::default()),
-            active_fences,
-            active_bodies,
-        })
-    }
-
-    fn register(self: &Arc<Self>, start_index: OplogIndex) -> HistoricalReconstruction {
-        let active = {
-            let mut state = self.state.lock().unwrap();
-            if !state.resolved_before_registration.remove(&start_index) {
-                self.active_fences.send_modify(|active| {
-                    assert!(
-                        active.insert(start_index),
-                        "historical entity reconstruction at {start_index} was registered twice"
-                    );
-                });
-            }
-            self.active_bodies.send_modify(|active| {
-                assert!(
-                    active.insert(start_index),
-                    "entity body reconstruction at {start_index} was registered twice"
-                );
-            });
-            self.active_fences.borrow().len()
-        };
-        tracing::debug!(
-            start_index = start_index.as_u64(),
-            active,
-            "Registered historical entity reconstruction"
-        );
-        HistoricalReconstruction {
-            tracker: self.clone(),
-            start_index,
-            body: Some(start_index),
-        }
-    }
-
-    fn release_incomplete(&self, incomplete_calls: &HashSet<OplogIndex>) -> (Vec<u64>, usize) {
-        let mut state = self.state.lock().unwrap();
-        let mut released = Vec::new();
-        let mut unresolved = Vec::new();
-        let mut remaining = 0;
-        self.active_fences.send_modify(|active| {
-            for start_index in incomplete_calls {
-                if active.remove(start_index) {
-                    released.push(start_index.as_u64());
-                } else {
-                    unresolved.push(*start_index);
-                }
-            }
-            remaining = active.len();
-        });
-        state.resolved_before_registration.extend(unresolved);
-        (released, remaining)
-    }
-
-    fn settle_fence(&self, start_index: OplogIndex) -> (bool, usize) {
-        let _state = self.state.lock().unwrap();
-        let mut removed = false;
-        let mut remaining = 0;
-        self.active_fences.send_modify(|active| {
-            removed = active.remove(&start_index);
-            remaining = active.len();
-        });
-        (removed, remaining)
-    }
-
-    fn settle_body(&self, start_index: OplogIndex) {
-        let _state = self.state.lock().unwrap();
-        self.active_bodies.send_modify(|active| {
-            assert!(
-                active.remove(&start_index),
-                "entity body reconstruction at {start_index} was not registered"
-            );
-        });
-    }
-
-    fn subscribe_fences(&self) -> watch::Receiver<HashSet<OplogIndex>> {
-        self.active_fences.subscribe()
-    }
-
-    fn subscribe_bodies(&self) -> watch::Receiver<HashSet<OplogIndex>> {
-        self.active_bodies.subscribe()
-    }
-
-    fn begin_generation(&self) {
-        self.state
-            .lock()
-            .unwrap()
-            .resolved_before_registration
-            .clear();
+#[cfg(feature = "test-utils")]
+impl Drop for ClockNowGateHandle {
+    fn drop(&mut self) {
+        self.gate.release.add_permits(1);
     }
 }
 
@@ -569,7 +492,14 @@ impl OwnerExecution {
             primary_tail_work,
             deferred_tool_admission: Arc::new(DeferredAdmissionTable::default()),
             reached_oplog_marker: AtomicU64::new(OplogIndex::NONE.into()),
-            historical_reconstructions: HistoricalReconstructionTracker::new(),
+            #[cfg(feature = "test-utils")]
+            monotonic_clock_now_gate: Mutex::new(None),
+            #[cfg(feature = "test-utils")]
+            wall_clock_now_gate: Mutex::new(None),
+            #[cfg(feature = "test-utils")]
+            skip_monotonic_clock_now_durability: AtomicBool::new(false),
+            #[cfg(feature = "test-utils")]
+            skip_wall_clock_now_durability: AtomicBool::new(false),
         }
     }
 
@@ -613,50 +543,6 @@ impl OwnerExecution {
         (marker != OplogIndex::NONE).then_some(marker)
     }
 
-    pub(crate) fn register_historical_reconstruction(
-        &self,
-        start_index: OplogIndex,
-    ) -> HistoricalReconstruction {
-        self.historical_reconstructions.register(start_index)
-    }
-
-    pub(crate) fn release_incomplete_historical_reconstruction_fences(
-        &self,
-        incomplete_calls: &HashSet<OplogIndex>,
-    ) {
-        if incomplete_calls.is_empty() {
-            return;
-        }
-        let (mut released, remaining) = self
-            .historical_reconstructions
-            .release_incomplete(incomplete_calls);
-        if !released.is_empty() {
-            released.sort_unstable();
-            tracing::debug!(
-                ?released,
-                active = remaining,
-                "Released incomplete historical entity reconstruction fences"
-            );
-        }
-    }
-
-    pub(crate) fn historical_reconstruction_bodies(&self) -> watch::Receiver<HashSet<OplogIndex>> {
-        self.historical_reconstructions.subscribe_bodies()
-    }
-
-    pub(crate) async fn wait_for_historical_reconstructions(&self) {
-        let mut active = self.historical_reconstructions.subscribe_fences();
-        tracing::debug!(
-            active = active.borrow().len(),
-            "Waiting for historical entity reconstructions"
-        );
-        active
-            .wait_for(|active| active.is_empty())
-            .await
-            .expect("owner execution retains the reconstruction tracker");
-        tracing::debug!("Historical entity reconstructions settled");
-    }
-
     pub(crate) async fn begin_replay_generation(
         &self,
         deleted_regions: DeletedRegions,
@@ -675,16 +561,19 @@ impl OwnerExecution {
         deleted_regions: DeletedRegions,
         initial_snapshot_skip_end: Option<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
+        if let Some(replay) = self.replay.read().await.as_ref() {
+            replay.ensure_reconstruction_claims_empty()?;
+        }
         self.tool_operations.begin_generation()?;
         self.deferred_tool_admission.begin_generation()?;
-        self.historical_reconstructions.begin_generation();
         self.reached_oplog_marker
             .store(OplogIndex::NONE.into(), Ordering::Release);
-        let replay = ReplayState::new(
+        let replay = ReplayState::new_for_owner(
             self.owner_id.clone(),
             self.oplog.clone(),
             deleted_regions,
             initial_snapshot_skip_end,
+            self.tool_operations.clone(),
         )
         .await?;
         *self.replay.write().await = Some(replay.clone());
@@ -700,6 +589,143 @@ impl OwnerExecution {
         })
     }
 
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_drain_terminal_clamp_then_reconstruction_barrier(
+        &self,
+        start_index: OplogIndex,
+    ) -> Result<Pin<Box<dyn Future<Output = ()> + Send + 'static>>, WorkerExecutorError> {
+        let replay = self.replay().await?;
+        replay
+            .test_drain_terminal_clamp_then_reconstruction_barrier(start_index)
+            .await
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_drain_reconstruction_terminal(
+        &self,
+        start_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        self.replay()
+            .await?
+            .test_drain_reconstruction_terminal(start_index)
+            .await
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_clamp_after_claim(
+        &self,
+        start_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        self.replay()
+            .await?
+            .test_clamp_after_claim(start_index)
+            .await
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_replay_is_live(&self) -> Result<bool, WorkerExecutorError> {
+        Ok(self.replay().await?.is_live_published())
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_replay_is_settling(&self) -> Result<bool, WorkerExecutorError> {
+        Ok(self.replay().await?.test_is_settling())
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_wait_for_tool_owner_failure(
+        &self,
+    ) -> crate::durable_host::tool::ToolOperationSetMetadata {
+        self.tool_operations.wait_for_owner_failure().await;
+        self.tool_operation_metadata()
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub fn test_gate_next_monotonic_clock_now(&self) -> ClockNowGateHandle {
+        let (entered_tx, entered) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(ClockNowGate {
+            entered: Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        *self.monotonic_clock_now_gate.lock().unwrap() = Some(gate.clone());
+        ClockNowGateHandle { entered, gate }
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub fn test_gate_next_wall_clock_now(&self) -> ClockNowGateHandle {
+        let (entered_tx, entered) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(ClockNowGate {
+            entered: Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        *self.wall_clock_now_gate.lock().unwrap() = Some(gate.clone());
+        ClockNowGateHandle { entered, gate }
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub fn test_skip_next_monotonic_clock_now_durability(&self) {
+        self.skip_monotonic_clock_now_durability
+            .store(true, Ordering::Release);
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub fn test_skip_next_wall_clock_now_durability(&self) {
+        self.skip_wall_clock_now_durability
+            .store(true, Ordering::Release);
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn test_should_skip_monotonic_clock_now_durability(&self) -> bool {
+        self.skip_monotonic_clock_now_durability
+            .swap(false, Ordering::AcqRel)
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn test_should_skip_wall_clock_now_durability(&self) -> bool {
+        self.skip_wall_clock_now_durability
+            .swap(false, Ordering::AcqRel)
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) async fn test_before_monotonic_clock_now(&self) {
+        let gate = self.monotonic_clock_now_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            if let Some(entered) = gate.entered.lock().unwrap().take() {
+                let _ = entered.send(());
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("monotonic-clock now gate was closed")
+                .forget();
+        }
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) async fn test_before_wall_clock_now(&self) {
+        let gate = self.wall_clock_now_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            if let Some(entered) = gate.entered.lock().unwrap().take() {
+                let _ = entered.send(());
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("wall-clock now gate was closed")
+                .forget();
+        }
+    }
+
     pub async fn commit(&self, level: CommitLevel) -> OplogIndex {
         self.commit.commit_and_update_state(level).await.0
     }
@@ -708,28 +734,6 @@ impl OwnerExecution {
         let index = self.oplog.add(entry).await;
         self.commit(CommitLevel::Always).await;
         index
-    }
-}
-
-impl Drop for HistoricalReconstruction {
-    fn drop(&mut self) {
-        self.body_settled();
-        let (removed, remaining) = self.tracker.settle_fence(self.start_index);
-        if removed {
-            tracing::debug!(
-                start_index = self.start_index.as_u64(),
-                active = remaining,
-                "Historical entity reconstruction settled"
-            );
-        }
-    }
-}
-
-impl HistoricalReconstruction {
-    pub(crate) fn body_settled(&mut self) {
-        if let Some(start_index) = self.body.take() {
-            self.tracker.settle_body(start_index);
-        }
     }
 }
 
@@ -1309,6 +1313,8 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
 
         registration
             .attach_linear_memory(self.store.data().durable_ctx().linear_memory_tracker())?;
+        let execution_mode = scope.mode();
+        let body_hook = self.store.data().entity_invocation_body_hook();
 
         match self.store.data().entity_invocation_scope() {
             Some(installed) if installed != &scope => {
@@ -1322,9 +1328,27 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
                 .data_mut()
                 .set_entity_invocation_scope(Some(scope))?,
         }
-        let result = std::panic::AssertUnwindSafe(invoke.invoke(&self.instance, &mut self.store))
-            .catch_unwind()
-            .await;
+        if let Some(hook) = body_hook.as_ref() {
+            hook.before_invocation(execution_mode).await;
+        }
+        let mut result =
+            std::panic::AssertUnwindSafe(invoke.invoke(&self.instance, &mut self.store))
+                .catch_unwind()
+                .await;
+        if result.is_ok()
+            && let Some(hook) = body_hook.as_ref()
+        {
+            hook.before_completion(execution_mode).await;
+        }
+        if execution_mode == InvocationExecutionMode::ReplayingCompleted
+            && let Ok(Ok(response)) = &mut result
+            && let Some(response) = (response as &mut dyn std::any::Any)
+                .downcast_mut::<golem_common::model::oplog::HostResponseEntityInvocation>(
+            )
+            && let Some(hook) = body_hook
+        {
+            hook.mutate_completed_reconstruction_response(response);
+        }
         let cleanup = self.finish_scoped_invocation();
 
         match result {
@@ -1353,7 +1377,7 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HistoricalReconstructionTracker, OwnerFilesystem, StoreFuelGuard};
+    use super::{OwnerFilesystem, StoreFuelGuard};
     use crate::worker::owner_lane::OwnerLane;
     use crate::workerctx::FuelManagement;
     use golem_common::model::component::ComponentId;
@@ -1361,7 +1385,6 @@ mod tests {
     use golem_common::model::oplog::AgentError;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{AgentId, OwnedAgentId};
-    use std::collections::HashSet;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
     use test_r::test;
@@ -1412,73 +1435,6 @@ mod tests {
 
         assert_eq!(returned_at.load(Ordering::Acquire), 123);
         Ok(())
-    }
-
-    #[test]
-    async fn incomplete_reconstruction_release_before_registration_cannot_install_a_late_fence() {
-        let tracker = HistoricalReconstructionTracker::new();
-        let start = OplogIndex::from_u64(12);
-        let release_start = Arc::new(tokio::sync::Barrier::new(2));
-        let release_done = Arc::new(tokio::sync::Barrier::new(2));
-        let releasing_tracker = tracker.clone();
-        let releasing_start = release_start.clone();
-        let releasing_done = release_done.clone();
-        let release = tokio::spawn(async move {
-            releasing_start.wait().await;
-            assert_eq!(
-                releasing_tracker.release_incomplete(&HashSet::from([start])),
-                (Vec::new(), 0)
-            );
-            releasing_done.wait().await;
-        });
-
-        release_start.wait().await;
-        release_done.wait().await;
-        release.await.unwrap();
-        let mut active_fences = tracker.subscribe_fences();
-        let active_bodies = tracker.subscribe_bodies();
-        let mut reconstruction = tracker.register(start);
-
-        assert!(active_fences.borrow().is_empty());
-        tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            active_fences.wait_for(HashSet::is_empty),
-        )
-        .await
-        .expect("primary fence wait must not block after release-before-registration")
-        .expect("tracker retains the primary-fence sender");
-        assert!(!active_fences.has_changed().unwrap());
-        assert_eq!(&*active_bodies.borrow(), &HashSet::from([start]));
-        reconstruction.body_settled();
-        assert!(active_bodies.borrow().is_empty());
-        drop(reconstruction);
-        assert!(active_fences.borrow().is_empty());
-
-        tracker.begin_generation();
-        let reconstruction = tracker.register(start);
-        assert_eq!(&*active_fences.borrow(), &HashSet::from([start]));
-        drop(reconstruction);
-        assert!(active_fences.borrow().is_empty());
-    }
-
-    #[test]
-    fn incomplete_reconstruction_registration_before_release_removes_the_existing_fence() {
-        let tracker = HistoricalReconstructionTracker::new();
-        let start = OplogIndex::from_u64(13);
-        let active_fences = tracker.subscribe_fences();
-        let active_bodies = tracker.subscribe_bodies();
-        let mut reconstruction = tracker.register(start);
-
-        assert_eq!(&*active_fences.borrow(), &HashSet::from([start]));
-        assert_eq!(
-            tracker.release_incomplete(&HashSet::from([start])),
-            (vec![start.as_u64()], 0)
-        );
-        assert!(active_fences.borrow().is_empty());
-        assert_eq!(&*active_bodies.borrow(), &HashSet::from([start]));
-        reconstruction.body_settled();
-        drop(reconstruction);
-        assert!(active_bodies.borrow().is_empty());
     }
 
     #[test]

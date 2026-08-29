@@ -261,6 +261,20 @@ impl StartClaim {
         }
     }
 
+    pub(super) fn is_reconstruction_claim(&self) -> bool {
+        match self {
+            Self::Owned {
+                matching_request: Some(RequestClaimIdentity::EntityInvocation(_)),
+                ..
+            }
+            | Self::OwnedToolInvocation { .. } => true,
+            Self::Unowned { .. }
+            | Self::Owned { .. }
+            | Self::Scope { .. }
+            | Self::AnyUnownedCall => false,
+        }
+    }
+
     pub(super) fn matches_start_identity(&self, entry: &OplogEntry) -> bool {
         matches!(entry, OplogEntry::Start {
             function_name,

@@ -13,19 +13,12 @@
 // limitations under the License.
 
 use super::*;
-use crate::durable_host::{
-    LiveAuthorizationPermit, authority_snapshot_is_current_at, authorize_effective_surface,
-    record_permission_decisions,
-    replay_state::{ReplayStartClaimOutcome, StartClaim},
-};
-use crate::services::card::CardState;
-use crate::worker::instance::OwnerExecution;
-use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
+use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
 use golem_common::model::entity::{
     EntityInvocationRequestIdentity, InvocationExecutionMode, OwnerRuntime,
     ToolInvocationClaimIdentity,
 };
-use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
+use golem_service_base::model::auth::AuthCtx;
 use std::sync::atomic::AtomicBool;
 
 pub(super) fn ambient_trap_context<Ctx: WorkerCtx>(
@@ -298,7 +291,6 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
     unpersisted: bool,
     oplog: Arc<dyn Oplog>,
     public_state: PublicDurableWorkerState<Ctx>,
-    owner_execution: Arc<OwnerExecution>,
     primary_runtime: bool,
     replaying_incomplete_entity: bool,
     local_live_tail: Arc<AtomicBool>,
@@ -325,25 +317,35 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
 }
 
 impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<Pair, P, Ctx> {
-    async fn switch_to_live(&self) {
-        let incomplete_calls = self.replay_state.switch_to_live().await;
-        self.owner_execution
-            .release_incomplete_historical_reconstruction_fences(&incomplete_calls);
-        if self.primary_runtime {
-            self.owner_execution
-                .wait_for_historical_reconstructions()
-                .await;
+    async fn switch_to_live(&self) -> Result<(), WorkerExecutorError> {
+        let role = if self.primary_runtime {
+            ReplayToLiveRole::PrimaryAgent
+        } else {
+            ReplayToLiveRole::NonPrimary
+        };
+        let outcome = self
+            .replay_state
+            .switch_to_live(&self.linear_memory, role)
+            .await?;
+        if outcome == ReplayToLiveOutcome::ReplayResumed {
+            return Err(WorkerExecutorError::runtime(
+                "replay target grew while a durable call was settling",
+            ));
         }
-        self.linear_memory.switch_to_live();
+        if role == ReplayToLiveRole::NonPrimary {
+            self.local_live_tail.store(true, Ordering::Release);
+        }
+        Ok(())
     }
 
-    async fn continue_entity_live(&self, replay_ended: bool) {
+    async fn continue_entity_live(&self, replay_ended: bool) -> Result<(), WorkerExecutorError> {
         if replay_ended {
-            self.switch_to_live().await;
+            self.switch_to_live().await?;
         } else {
             self.local_live_tail.store(true, Ordering::Release);
             self.linear_memory.switch_to_live();
         }
+        Ok(())
     }
 }
 
@@ -884,7 +886,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 "p3 accessor durable call path currently supports only ReadLocal/WriteLocal/ReadRemote/WriteRemote/WriteRemoteBatched, got {function_type:?}"
             )));
         }
-        let (is_live, replaying_incomplete_entity, replay_state, owner_execution, linear_memory) =
+        let (is_live, replaying_incomplete_entity, replay_state, linear_memory, local_live_tail) =
             store.with(|mut access| {
                 let ctx = get_ctx(access.data_mut());
                 (
@@ -893,16 +895,19 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         scope.mode() == InvocationExecutionMode::ReplayingIncomplete
                     }),
                     ctx.state.replay_state.clone(),
-                    ctx.owner_execution.clone(),
                     ctx.linear_memory.clone(),
+                    ctx.state.local_live_tail(),
                 )
             });
         if is_live {
             return if replaying_incomplete_entity {
-                let incomplete_calls = replay_state.switch_to_live().await;
-                owner_execution
-                    .release_incomplete_historical_reconstruction_fences(&incomplete_calls);
-                linear_memory.switch_to_live();
+                // This Store belongs to an incomplete entity's live repair, not the primary
+                // agent runtime. It releases incomplete resolver claims but must not wait on
+                // completed sibling reconstructions.
+                replay_state
+                    .switch_to_live(&linear_memory, ReplayToLiveRole::NonPrimary)
+                    .await?;
+                local_live_tail.store(true, Ordering::Release);
                 Ok(ReplayAccessStartOutcome::ReplayEnded)
             } else {
                 Err(WorkerExecutorError::unexpected_oplog_entry(
@@ -919,7 +924,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let mut start_guard = AccessStartAtomicGuard::new(prepared.atomic_lease.clone());
 
         if prepared.is_live {
-            prepared.switch_to_live().await;
+            prepared.switch_to_live().await?;
             store.with(|mut access| {
                 Self::cleanup_access_start(
                     get_ctx(access.data_mut()),
@@ -951,14 +956,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             return Err(err.source);
         }
 
+        let replay_state = prepared.replay_state.clone();
+        let linear_memory = prepared.linear_memory.clone();
+        let transition_role = if prepared.primary_runtime {
+            ReplayToLiveRole::PrimaryAgent
+        } else {
+            ReplayToLiveRole::NonPrimary
+        };
         let execution_scope = prepared.execution_scope;
         let retry = prepared.retry;
         let claim = Self::replay_start_claim(&prepared.claim_options, &execution_scope, &retry)?;
-        match prepared
-            .replay_state
-            .claim_start_or_replay_end(claim)
-            .await?
-        {
+        match replay_state.claim_start_or_replay_end(claim).await? {
             ReplayStartClaimOutcome::Claimed { handle, .. } => {
                 let start_idx = handle.start_idx();
                 let atomic_lease = unregistered_atomic_lease(
@@ -1001,17 +1009,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     ));
                 }
                 if matches!(outcome, ReplayStartClaimOutcome::ReplayEnded) {
-                    let incomplete_calls = prepared.replay_state.switch_to_live().await;
-                    prepared
-                        .owner_execution
-                        .release_incomplete_historical_reconstruction_fences(&incomplete_calls);
-                    if prepared.primary_runtime {
-                        prepared
-                            .owner_execution
-                            .wait_for_historical_reconstructions()
-                            .await;
+                    let transition = replay_state
+                        .switch_to_live(&linear_memory, transition_role)
+                        .await?;
+                    if transition == ReplayToLiveOutcome::ReplayResumed {
+                        return Err(WorkerExecutorError::runtime(
+                            "replay target grew while a reconstructed durable call was settling",
+                        ));
                     }
-                    prepared.linear_memory.switch_to_live();
+                    if transition_role == ReplayToLiveRole::NonPrimary {
+                        prepared.local_live_tail.store(true, Ordering::Release);
+                    }
                 } else {
                     prepared.local_live_tail.store(true, Ordering::Release);
                     prepared.linear_memory.switch_to_live();
@@ -1186,7 +1194,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             unpersisted,
             oplog: ctx.state.oplog.clone(),
             public_state: ctx.public_state.clone(),
-            owner_execution: ctx.owner_execution.clone(),
             primary_runtime: ctx.runtime == OwnerRuntime::Agent,
             replaying_incomplete_entity: ctx
                 .entity_invocation_scope()
@@ -1315,6 +1322,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             None
         };
 
+        let replay_state = prepared.replay_state.clone();
+        let linear_memory = prepared.linear_memory.clone();
+        let transition_role = if prepared.primary_runtime {
+            ReplayToLiveRole::PrimaryAgent
+        } else {
+            ReplayToLiveRole::NonPrimary
+        };
         let mut execution_scope = prepared.execution_scope;
         let mut retry = prepared.retry;
         let mut is_live = prepared.is_live;
@@ -1344,78 +1358,96 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         // cursor transaction lets an incomplete entity continuation build with live semantics.
         // Missing claims while the cursor remains replaying are still strict divergence.
         let replay = if !is_live {
-            let claim = Self::replay_start_claim(&prepared.claim_options, &execution_scope, &retry)
-                .map_err(|err| {
-                    (
-                        err,
-                        AccessStartCleanup {
-                            atomic_lease: prepared.atomic_lease.clone(),
-                        },
-                    )
-                })?;
-            match prepared
-                .replay_state
-                .claim_start_or_replay_end(claim)
-                .await
-                .map_err(|err| {
-                    (
-                        err,
-                        AccessStartCleanup {
-                            atomic_lease: prepared.atomic_lease.clone(),
-                        },
-                    )
-                })? {
-                ReplayStartClaimOutcome::Claimed { handle, .. } => Some(handle),
-                outcome @ (ReplayStartClaimOutcome::ReplayEnded
-                | ReplayStartClaimOutcome::DeletedRegion) => {
-                    if !prepared.replaying_incomplete_entity {
-                        return Err((
-                            WorkerExecutorError::unexpected_oplog_entry(
-                                format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
-                                format!(
-                                    "replay continuation at {} is valid only for an incomplete entity",
-                                    prepared.replay_state.last_replayed_index()
-                                ),
-                            ),
+            loop {
+                let claim =
+                    Self::replay_start_claim(&prepared.claim_options, &execution_scope, &retry)
+                        .map_err(|err| {
+                            (
+                                err,
+                                AccessStartCleanup {
+                                    atomic_lease: prepared.atomic_lease.clone(),
+                                },
+                            )
+                        })?;
+                let outcome = prepared
+                    .replay_state
+                    .claim_start_or_replay_end(claim)
+                    .await
+                    .map_err(|err| {
+                        (
+                            err,
                             AccessStartCleanup {
                                 atomic_lease: prepared.atomic_lease.clone(),
                             },
-                        ));
-                    }
-
-                    if matches!(outcome, ReplayStartClaimOutcome::ReplayEnded) {
-                        let incomplete_calls = prepared.replay_state.switch_to_live().await;
-                        prepared
-                            .owner_execution
-                            .release_incomplete_historical_reconstruction_fences(&incomplete_calls);
-                        if prepared.primary_runtime {
-                            prepared
-                                .owner_execution
-                                .wait_for_historical_reconstructions()
-                                .await;
+                        )
+                    })?;
+                match outcome {
+                    ReplayStartClaimOutcome::Claimed { handle, .. } => break Some(handle),
+                    outcome @ (ReplayStartClaimOutcome::ReplayEnded
+                    | ReplayStartClaimOutcome::DeletedRegion) => {
+                        let primary_replay_tail = prepared.primary_runtime
+                            && matches!(outcome, ReplayStartClaimOutcome::ReplayEnded);
+                        if !prepared.replaying_incomplete_entity && !primary_replay_tail {
+                            return Err((
+                                WorkerExecutorError::unexpected_oplog_entry(
+                                    format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
+                                    format!(
+                                        "replay continuation at {} is valid only for an incomplete entity",
+                                        prepared.replay_state.last_replayed_index()
+                                    ),
+                                ),
+                                AccessStartCleanup {
+                                    atomic_lease: prepared.atomic_lease.clone(),
+                                },
+                            ));
                         }
-                        prepared.linear_memory.switch_to_live();
-                    } else {
-                        prepared.local_live_tail.store(true, Ordering::Release);
-                        prepared.linear_memory.switch_to_live();
+
+                        tracing::debug!(
+                            function = Pair::FQFN,
+                            replay_ended = matches!(outcome, ReplayStartClaimOutcome::ReplayEnded),
+                            primary_replay_tail,
+                            "Accessor durable call continued live after replay"
+                        );
+                        if matches!(outcome, ReplayStartClaimOutcome::ReplayEnded) {
+                            let transition = replay_state
+                                .switch_to_live(&linear_memory, transition_role)
+                                .await
+                                .map_err(|error| {
+                                    (
+                                        error,
+                                        AccessStartCleanup {
+                                            atomic_lease: prepared.atomic_lease.clone(),
+                                        },
+                                    )
+                                })?;
+                            if transition == ReplayToLiveOutcome::ReplayResumed {
+                                continue;
+                            }
+                            if transition_role == ReplayToLiveRole::NonPrimary {
+                                prepared.local_live_tail.store(true, Ordering::Release);
+                            }
+                        } else {
+                            prepared.local_live_tail.store(true, Ordering::Release);
+                            prepared.linear_memory.switch_to_live();
+                        }
+                        let previous = retry.durable_execution_state();
+                        retry = InFunctionRetryController::new(
+                            retry.function_type().clone(),
+                            DurableExecutionState {
+                                is_live: true,
+                                snapshotting_mode: previous.snapshotting_mode,
+                                assume_idempotence: previous.assume_idempotence,
+                                max_in_function_retry_delay: previous.max_in_function_retry_delay,
+                            },
+                            Pair::FQFN,
+                        );
+                        is_live = true;
+                        if live_call_permit.is_none() {
+                            live_call_permit =
+                                Some(LiveCallPermit::new(prepared.live_host_calls.clone()));
+                        }
+                        break None;
                     }
-                    let previous = retry.durable_execution_state();
-                    retry = InFunctionRetryController::new(
-                        retry.function_type().clone(),
-                        DurableExecutionState {
-                            is_live: true,
-                            snapshotting_mode: previous.snapshotting_mode,
-                            assume_idempotence: previous.assume_idempotence,
-                            max_in_function_retry_delay: previous.max_in_function_retry_delay,
-                        },
-                        Pair::FQFN,
-                    );
-                    is_live = true;
-                    if live_call_permit.is_none() {
-                        live_call_permit =
-                            Some(LiveCallPermit::new(prepared.live_host_calls.clone()));
-                    }
-                    None
                 }
             }
         } else {
@@ -1644,7 +1676,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             outcome,
                             ReplayStartClaimOutcome::ReplayEnded
                         ))
-                        .await;
+                        .await
+                        .map_err(|error| {
+                            (
+                                error,
+                                AccessStartCleanup {
+                                    atomic_lease: prepared.atomic_lease.clone(),
+                                },
+                            )
+                        })?;
                     let entry = OplogEntry::Start {
                         timestamp: Timestamp::now_utc(),
                         parent_start_index: prepared.entity_parent_start_index,
@@ -1676,7 +1716,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     .await
                     .is_none()
                 {
-                    prepared.switch_to_live().await;
+                    prepared.switch_to_live().await.map_err(|error| {
+                        (
+                            error,
+                            AccessStartCleanup {
+                                atomic_lease: prepared.atomic_lease.clone(),
+                            },
+                        )
+                    })?;
                     return Err((
                         WorkerExecutorError::runtime(
                             "Non-idempotent remote write operation was not completed, cannot retry",
@@ -1713,7 +1760,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     OplogEntryLookupResult::NotFound {
                         violates_for_all: false,
                     } if prepared.retry.durable_execution_state().assume_idempotence => {
-                        prepared.switch_to_live().await;
+                        prepared.switch_to_live().await.map_err(|error| {
+                            (
+                                error,
+                                AccessStartCleanup {
+                                    atomic_lease: prepared.atomic_lease.clone(),
+                                },
+                            )
+                        })?;
                         let deleted_region = OplogRegion {
                             start: begin_index.next(),
                             end: prepared.replay_state.replay_target().next(),
@@ -1735,7 +1789,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         })
                     }
                     OplogEntryLookupResult::NotFound { .. } => {
-                        prepared.switch_to_live().await;
+                        prepared.switch_to_live().await.map_err(|error| {
+                            (
+                                error,
+                                AccessStartCleanup {
+                                    atomic_lease: prepared.atomic_lease.clone(),
+                                },
+                            )
+                        })?;
                         Err((
                             WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",
@@ -1945,6 +2006,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
     pub fn start_index(&self) -> OplogIndex {
         self.start_idx
+    }
+
+    pub(crate) fn take_historical_reconstruction(&mut self) -> Option<HistoricalReconstruction> {
+        self.replay
+            .as_mut()
+            .and_then(ReplayCallHandle::take_historical_reconstruction)
     }
 
     pub async fn recorded_request<Ctx: WorkerCtx>(
@@ -2459,18 +2526,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         // downstream commit / scope close (`?` below) does not drop the handle "unfinished" and trip
         // the drop policy. The host-call `End` is what makes the call durable, not these follow-ups.
         self.finished = true;
-        if self.persisted {
+        let response = if self.persisted {
             let oplog = ctx.state.oplog.clone();
-            let host_response: HostResponse = response.clone().into();
-            let end = match prepare_end_entry(
+            let (response, end) = match prepare_end_entry::<Pair>(
                 &oplog,
                 &self.request_upload,
                 self.start_idx,
-                &host_response,
+                response,
             )
             .await
             {
-                Ok(end) => end,
+                Ok(prepared) => prepared,
                 Err(err) => {
                     self.execution_scope.release_atomic_lease();
                     return Err(err);
@@ -2492,7 +2558,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             DurableCallCoordinator::new(ctx)
                 .finish(self.retry.function_type(), self.boundary, false)
                 .await?;
-        }
+            response
+        } else {
+            response
+        };
         Ok(response)
     }
 
@@ -2599,18 +2668,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 self.cleanup_sink.clone(),
             );
             self.finished = true;
-            let persist_result: Result<(), WorkerExecutorError> = if self.persisted {
+            let persist_result: Result<Pair::Resp, WorkerExecutorError> = if self.persisted {
                 Self::persist_access_terminal(
                     oplog,
                     completion_marker_recorder,
                     &mut guard,
                     self.start_idx,
-                    &response,
+                    response,
                     post_end_entry,
                 )
                 .await
             } else {
-                Ok(())
+                Ok(response)
             };
 
             // Read the current owner through the lease *after* the terminal is persisted, so a
@@ -2633,10 +2702,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             });
             guard.release_atomic_lease();
 
-            if let Err(err) = persist_result {
-                guard.disarm();
-                return Err(err);
-            }
+            let response = match persist_result {
+                Ok(response) => response,
+                Err(err) => {
+                    guard.disarm();
+                    return Err(err);
+                }
+            };
             // From here on the `End` is persisted, but these error returns are *observed* by the
             // caller (the worker traps): the completion was not silently discarded by the guest,
             // so the marker must not be recorded — while the terminal join / permit release must
@@ -2671,18 +2743,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         completion_marker_recorder: CompletionMarkerRecorder,
         guard: &mut AccessTerminalGuard<P>,
         start_idx: OplogIndex,
-        response: &Pair::Resp,
+        response: Pair::Resp,
         post_end_entry: Option<OplogEntry>,
-    ) -> Result<(), WorkerExecutorError> {
-        let host_response: HostResponse = response.clone().into();
-        let end = prepare_end_entry(
+    ) -> Result<Pair::Resp, WorkerExecutorError> {
+        let (response, end) = prepare_end_entry::<Pair>(
             &oplog,
             &guard
                 .call()
                 .expect("terminal guard is armed")
                 .request_upload,
             start_idx,
-            &host_response,
+            response,
         )
         .await?;
         // Reserve both entries synchronously in oplog order before arming the terminal guard. A
@@ -2711,7 +2782,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 recorder: completion_marker_recorder,
             }),
         );
-        guard.wait_terminal().await
+        guard.wait_terminal().await?;
+        Ok(response)
     }
 
     /// Replays a call: drive the cursor until the call resolves, decode its response, then close the
@@ -2969,6 +3041,59 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     },
                 )?;
                 Ok(ReconstructionReplayOutcome::Incomplete(self))
+            }
+        }
+    }
+
+    pub(in crate::durable_host) async fn resolve_completed_reconstruction(
+        mut self,
+        replay_state: ReplayState,
+        oplog: Arc<dyn Oplog>,
+        completion_marker_recorder: CompletionMarkerRecorder,
+    ) -> Result<(Pair::Resp, ResolvedReconstructionTerminal), WorkerExecutorError> {
+        self.ensure_accessor_terminal_supported("resolve_completed_reconstruction")?;
+        let function_type = self.retry.function_type().clone();
+        let begin_index = self.begin_index();
+        let replay = self
+            .replay
+            .take()
+            .expect("resolve_completed_reconstruction() called on a live handle");
+        let outcome = replay_state.await_resolution_outcome(replay).await?;
+        match classify_replay_resolution(outcome) {
+            ReplayedResolution::Delivered(payload, disposition) => {
+                self.finished = true;
+                let cancelled = matches!(payload, ReplayedPayload::CancelledPartial(_));
+                let response = decode_replayed_payload::<Pair>(&oplog, payload).await?;
+                let delivery = CompletionDelivery::replay_delivered(
+                    disposition,
+                    self.start_idx,
+                    completion_marker_recorder,
+                    self.trap_context(),
+                    self.cleanup_sink.clone(),
+                );
+                Ok((
+                    response,
+                    ResolvedReconstructionTerminal {
+                        function_type,
+                        begin_index,
+                        delivery,
+                        cancelled,
+                    },
+                ))
+            }
+            ReplayedResolution::Undelivered(terminal) => {
+                self.finished = true;
+                Err(terminal.direct_divergence_error())
+            }
+            ReplayedResolution::Incomplete => {
+                self.finished = true;
+                Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "completed entity invocation terminal",
+                    format!(
+                        "end of replay after entity Start at {}; the completed reconstruction was unresolved",
+                        self.start_idx
+                    ),
+                ))
             }
         }
     }
@@ -3557,17 +3682,39 @@ pub(super) fn classify_replay_resolution(outcome: ResolutionOutcome) -> Replayed
 /// Serializes and uploads a cancellation's optional partial response payload, shared by the
 /// direct and accessor cancellation paths. The caller is responsible for site-specific failure
 /// cleanup (releasing the atomic lease / terminal guard handling).
-async fn upload_partial_response<Resp: Into<HostResponse>>(
+async fn upload_partial_response<Resp: Into<HostResponse> + Send + 'static>(
     oplog: &Arc<dyn Oplog>,
     partial: Option<Resp>,
 ) -> Result<Option<OplogPayload<HostResponse>>, WorkerExecutorError> {
     match partial {
         Some(partial) => {
-            let host_response: HostResponse = partial.into();
-            Ok(Some(oplog.upload_payload(&host_response).await.map_err(
+            let partial = Box::new(partial);
+            let prepared = tokio::task::spawn_blocking(move || {
+                let host_response: HostResponse = (*partial).into();
+                let bytes = golem_common::serialization::serialize(&host_response)?;
+                Ok::<_, String>(Box::new((bytes, Arc::new(host_response))))
+            })
+            .await
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "partial durable call response encoding task failed: {err}"
+                ))
+            })?
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to serialize partial durable call response: {err}"
+                ))
+            })?;
+            let (bytes, cached) = *prepared;
+            let raw_payload = oplog.upload_raw_payload(bytes).await.map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to store partial durable call response: {err}"
+                ))
+            })?;
+            Ok(Some(raw_payload.into_payload_with_cache(cached).map_err(
                 |err| {
                     WorkerExecutorError::runtime(format!(
-                        "failed to serialize and store partial durable call response: {err}"
+                        "failed to prepare partial durable call response payload: {err}"
                     ))
                 },
             )?))
@@ -3636,17 +3783,17 @@ fn expect_cancelled_resolution(resolution: &Resolution) -> Result<(), WorkerExec
 }
 
 /// Store-free persistence preparation shared by the direct ([`DurableCallSession::complete`]) and
-/// accessor ([`DurableCallSession::persist_access_terminal`]) completion paths: waits for the (possibly
-/// deferred) request upload, uploads the response payload, and constructs the terminal `End`
-/// entry — without appending it, touching atomic-region state, or closing scopes, which the two
-/// paths deliberately order differently (direct appends inline; accessor hands the append to an
-/// owned task via its terminal guard).
-async fn prepare_end_entry(
+/// accessor ([`DurableCallSession::persist_access_terminal`]) completion paths: waits for the
+/// (possibly deferred) request upload, encodes and uploads the response payload, and constructs
+/// the terminal `End` entry — without appending it, touching atomic-region state, or closing
+/// scopes, which the two paths deliberately order differently (direct appends inline; accessor
+/// hands the append to an owned task via its terminal guard).
+async fn prepare_end_entry<Pair: HostPayloadPair>(
     oplog: &Arc<dyn Oplog>,
     request_upload: &PendingUpload,
     start_idx: OplogIndex,
-    host_response: &HostResponse,
-) -> Result<OplogEntry, WorkerExecutorError> {
+    response: Pair::Resp,
+) -> Result<(Pair::Resp, OplogEntry), WorkerExecutorError> {
     // Surface a deferred request-upload failure here, at the call site, before recording the
     // `End` that references the request. The leaf oplog's commit barrier is the backstop, but
     // awaiting here turns an upload failure into a graceful error instead of a commit-time
@@ -3656,17 +3803,62 @@ async fn prepare_end_entry(
             "failed to serialize and store durable call request: {err}"
         ))
     })?;
-    let response_payload = oplog.upload_payload(host_response).await.map_err(|err| {
+
+    // Host responses can carry deeply nested schema graphs. Clone and serialize them on a fresh
+    // blocking-task stack rather than on a Tokio worker stack that may already be deep inside a
+    // Wasmtime guest call. Box both the task input and output: passing the response inline in the
+    // blocking task envelope can overflow the caller's stack before the task starts. Keep the typed
+    // cache so this changes neither the oplog representation nor same-process payload-read behavior.
+    let response = Box::new(response);
+    let prepared = tokio::task::spawn_blocking(move || {
+        let host_response: HostResponse = response.as_ref().clone().into();
+        let bytes = golem_common::serialization::serialize(&host_response)?;
+        Ok::<_, String>(Box::new((response, bytes, Arc::new(host_response))))
+    })
+    .await
+    .map_err(|err| {
+        WorkerExecutorError::runtime(format!("durable call response encoding task failed: {err}"))
+    })?
+    .map_err(|err| {
+        WorkerExecutorError::runtime(format!("failed to serialize durable call response: {err}"))
+    })?;
+    let (response, bytes, cached) = *prepared;
+    let raw_payload = oplog.upload_raw_payload(bytes).await.map_err(|err| {
+        WorkerExecutorError::runtime(format!("failed to store durable call response: {err}"))
+    })?;
+    let response_payload = raw_payload.into_payload_with_cache(cached).map_err(|err| {
         WorkerExecutorError::runtime(format!(
-            "failed to serialize and store durable call response: {err}"
+            "failed to prepare durable call response payload: {err}"
         ))
     })?;
-    Ok(OplogEntry::End {
-        timestamp: Timestamp::now_utc(),
-        start_index: start_idx,
-        response: Some(response_payload),
-        forced_commit: false,
-    })
+    Ok((
+        *response,
+        OplogEntry::End {
+            timestamp: Timestamp::now_utc(),
+            start_index: start_idx,
+            response: Some(response_payload),
+            forced_commit: false,
+        },
+    ))
+}
+
+impl ResolvedReconstructionTerminal {
+    pub(in crate::durable_host) async fn finish_access<T, D, Ctx>(
+        self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    ) -> Result<bool, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        let cancelled = self.cancelled();
+        end_durable_function_access(store, get_ctx, self.function_type, self.begin_index, false)
+            .await?;
+        self.delivery.deliver_at_accessor_terminal(store).await?;
+        Ok(cancelled)
+    }
 }
 
 pub(crate) async fn end_durable_function_access<T, D, Ctx>(
@@ -4109,52 +4301,74 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             !self.is_live(),
             "replay continuation started from live state"
         );
-        let outcome = ctx
-            .state
-            .replay_state
-            .claim_start_or_replay_end(self.replay_claim())
-            .await?;
-        match outcome {
-            ReplayStartClaimOutcome::Claimed { handle, .. } => Ok(self.finish_replay(handle)),
-            outcome @ (ReplayStartClaimOutcome::ReplayEnded
-            | ReplayStartClaimOutcome::DeletedRegion) => {
-                if !ctx.entity_invocation_scope().is_some_and(|scope| {
-                    scope.mode() == InvocationExecutionMode::ReplayingIncomplete
-                }) {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
-                        format!(
-                            "replay continuation at {} is valid only for an incomplete entity",
-                            ctx.state.replay_state.last_replayed_index()
-                        ),
-                    ));
+        loop {
+            let outcome = ctx
+                .state
+                .replay_state
+                .claim_start_or_replay_end(self.replay_claim())
+                .await?;
+            match outcome {
+                ReplayStartClaimOutcome::Claimed { handle, .. } => {
+                    return Ok(self.finish_replay(handle));
                 }
+                outcome @ (ReplayStartClaimOutcome::ReplayEnded
+                | ReplayStartClaimOutcome::DeletedRegion) => {
+                    let replaying_incomplete_entity =
+                        ctx.entity_invocation_scope().is_some_and(|scope| {
+                            scope.mode() == InvocationExecutionMode::ReplayingIncomplete
+                        });
+                    let primary_replay_tail = ctx.runtime == OwnerRuntime::Agent
+                        && matches!(outcome, ReplayStartClaimOutcome::ReplayEnded);
+                    if !replaying_incomplete_entity && !primary_replay_tail {
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
+                            format!(
+                                "replay continuation at {} is valid only for an incomplete entity",
+                                ctx.state.replay_state.last_replayed_index()
+                            ),
+                        ));
+                    }
 
-                tracing::debug!(
-                    function = Pair::FQFN,
-                    replay_ended = matches!(outcome, ReplayStartClaimOutcome::ReplayEnded),
-                    "Incomplete entity durable call continued live after replay"
-                );
-                if matches!(outcome, ReplayStartClaimOutcome::ReplayEnded) {
-                    let incomplete_calls = ctx.state.replay_state.switch_to_live().await;
-                    ctx.owner_execution
-                        .release_incomplete_historical_reconstruction_fences(&incomplete_calls);
-                } else {
-                    ctx.state.local_live_tail.store(true, Ordering::Release);
+                    tracing::debug!(
+                        function = Pair::FQFN,
+                        replay_ended = matches!(outcome, ReplayStartClaimOutcome::ReplayEnded),
+                        primary_replay_tail,
+                        "Durable call continued live after replay"
+                    );
+                    if matches!(outcome, ReplayStartClaimOutcome::ReplayEnded) {
+                        let role = if ctx.runtime == OwnerRuntime::Agent {
+                            ReplayToLiveRole::PrimaryAgent
+                        } else {
+                            ReplayToLiveRole::NonPrimary
+                        };
+                        let transition = ctx
+                            .state
+                            .replay_state
+                            .switch_to_live(&ctx.linear_memory, role)
+                            .await?;
+                        if transition == ReplayToLiveOutcome::ReplayResumed {
+                            continue;
+                        }
+                        if role == ReplayToLiveRole::NonPrimary {
+                            ctx.state.local_live_tail.store(true, Ordering::Release);
+                        }
+                    } else {
+                        ctx.state.local_live_tail.store(true, Ordering::Release);
+                        ctx.linear_memory.switch_to_live();
+                    }
+                    let previous = self.retry.durable_execution_state();
+                    self.retry = InFunctionRetryController::new(
+                        self.retry.function_type().clone(),
+                        DurableExecutionState {
+                            is_live: true,
+                            snapshotting_mode: previous.snapshotting_mode,
+                            assume_idempotence: previous.assume_idempotence,
+                            max_in_function_retry_delay: previous.max_in_function_retry_delay,
+                        },
+                        Pair::FQFN,
+                    );
+                    return self.start_live(ctx, request).await;
                 }
-                ctx.linear_memory.switch_to_live();
-                let previous = self.retry.durable_execution_state();
-                self.retry = InFunctionRetryController::new(
-                    self.retry.function_type().clone(),
-                    DurableExecutionState {
-                        is_live: true,
-                        snapshotting_mode: previous.snapshotting_mode,
-                        assume_idempotence: previous.assume_idempotence,
-                        max_in_function_retry_delay: previous.max_in_function_retry_delay,
-                    },
-                    Pair::FQFN,
-                );
-                self.start_live(ctx, request).await
             }
         }
     }

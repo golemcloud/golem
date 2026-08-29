@@ -17,6 +17,7 @@
 use proc_macro2::{Group, Ident, Span, TokenStream, TokenTree};
 use std::collections::BTreeSet;
 use syn::spanned::Spanned;
+use syn::visit_mut::VisitMut;
 use syn::{Error, Expr, ExprArray, ExprLit, GenericArgument, Lit, PathArguments, Token, Type};
 
 /// Direction of an SDK stream parameter in a tool method signature.

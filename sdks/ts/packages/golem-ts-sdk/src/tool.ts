@@ -25,18 +25,12 @@ import type {
   ToolError as WireToolError,
   TypedSchemaValue as WireTypedSchemaValue,
 } from 'golem:tool/common@0.1.0';
+import type { ByteStreamItem } from 'golem:tool/host@0.1.0';
 import {
-  type RpcError,
-  type TypedSchemaValue as WireTypedSchemaValue,
-} from 'golem:tool/host@0.1.0';
-import {
-  createToolClientTransport,
-  isRpcError,
   startedToolInvocation,
-  type RawToolInvocation,
   type StartedToolInvocation,
   type ToolInputStream,
-} from './bridge/tool';
+} from './internal/tool/startedToolInvocation';
 import type { Principal } from './principal';
 import {
   type ExtendedCommandBody,
@@ -79,7 +73,7 @@ import { compileSchema } from './schema/adapter';
 import type { SchemaCodec } from './schema/codec';
 import type { StandardSchemaV1 } from './schema/standardSchema';
 
-export type { ToolInputStream } from './bridge/tool';
+export type { ToolInputStream } from './internal/tool/startedToolInvocation';
 
 export type CamelCase<Name extends string> = Name extends `${infer Head}-${infer Tail}`
   ? `${Head}${Capitalize<CamelCase<Tail>>}`
@@ -524,7 +518,258 @@ type RootClient<Model> =
 
 export type ToolClient<Definition> = Simplify<RootClient<ToolCommandModelOf<Definition>>>;
 
-export type ToolClientInvocationResult = RawToolInvocation;
+type UnderlyingStdin<Body> = StreamContextField<'stdin', BodyStdin<Body>, AsyncIterable<number>>;
+
+type UnderlyingResult<Body> =
+  BodyStdout<Body> extends 'required'
+    ? [BodySuccess<Body>] extends [undefined]
+      ? AsyncIterable<number>
+      : { result: BodySuccess<Body>; stdout: AsyncIterable<number> }
+    : BodyStdout<Body> extends 'optional'
+      ? [BodySuccess<Body>] extends [undefined]
+        ? AsyncIterable<number> | undefined
+        : { result: BodySuccess<Body>; stdout?: AsyncIterable<number> }
+      : [BodySuccess<Body>] extends [undefined]
+        ? void
+        : BodySuccess<Body>;
+
+type UnderlyingMethodFor<Model, Inherited> =
+  Model extends ToolCommandModel<string, infer Globals, infer Body, object>
+    ? Body extends AnyToolBodyModel
+      ? ToolClientMethod<
+          GlobalArguments<MergeGlobalArguments<Inherited, Globals>> &
+            BodyArgs<Body> &
+            UnderlyingStdin<Body>,
+          Promise<UnderlyingResult<Body>>,
+          BodyErrors<Body>
+        >
+      : never
+    : never;
+
+type UnderlyingChildClients<Children, Inherited> = {
+  [Name in keyof Children]: UnderlyingNodeClient<Children[Name], Inherited>;
+};
+
+type UnderlyingNodeClient<Model, Inherited, Reconcile extends boolean = false> =
+  Model extends ToolSubtreeModel<infer Command>
+    ? UnderlyingNodeClient<Command, Inherited, true>
+    : Model extends ToolCommandModel<string, infer Globals, infer Body, infer Children>
+      ? UnderlyingNodeClientWithGlobals<
+          Model,
+          Inherited,
+          Reconcile extends true ? ReconcileGlobalArguments<Globals, Inherited> : Globals,
+          Reconcile extends true ? ReconcileBodyModel<Body, Inherited> : Body,
+          Children
+        >
+      : never;
+
+type UnderlyingNodeClientWithGlobals<Model, Inherited, Globals, Body, Children> =
+  Model extends ToolCommandModel<infer Name, unknown, AnyToolBodyModel | undefined, object>
+    ? Body extends AnyToolBodyModel
+      ? UnderlyingMethodFor<ToolCommandModel<Name, Globals, Body, Children>, Inherited> &
+          UnderlyingChildClients<Children, MergeGlobalArguments<Inherited, Globals>>
+      : UnderlyingChildClients<Children, MergeGlobalArguments<Inherited, Globals>>
+    : never;
+
+type RootUnderlyingClient<Model> =
+  Model extends ToolCommandModel<infer Name, infer Globals, infer Body, infer Children>
+    ? (Body extends AnyToolBodyModel ? { [Key in Name]: UnderlyingMethodFor<Model, {}> } : {}) &
+        UnderlyingChildClients<Children, Globals>
+    : never;
+
+export type ToolUnderlying<Definition> = Simplify<
+  RootUnderlyingClient<ToolCommandModelOf<Definition>>
+>;
+export type ToolUnderlyingErrors<Method> = ToolClientErrors<Method>;
+
+export type ToolMiddlewareInvocationContext<
+  UnderlyingDefinition,
+  Stdin extends StreamPresence = StreamPresence,
+> = Simplify<
+  {
+    readonly principal: Principal;
+    readonly underlying: ToolUnderlying<UnderlyingDefinition>;
+  } & StreamContextField<'stdin', Stdin, AsyncIterable<number>>
+>;
+
+export type ToolMiddlewareHandler<Args, Result, Context> = (
+  args: Simplify<Args>,
+  context: Context,
+) => Result | Promise<Result>;
+
+type MiddlewareHandlerFor<Model, Inherited, UnderlyingDefinition> =
+  Model extends ToolCommandModel<string, infer Globals, infer Body, object>
+    ? Body extends AnyToolBodyModel
+      ? ToolMiddlewareHandler<
+          GlobalArguments<MergeGlobalArguments<Inherited, Globals>> & BodyArgs<Body>,
+          UnderlyingResult<Body>,
+          ToolMiddlewareInvocationContext<UnderlyingDefinition, BodyStdin<Body>>
+        >
+      : never
+    : never;
+
+type MiddlewareChildImplementations<Children, Inherited, UnderlyingDefinition> = {
+  [Name in keyof Children]: MiddlewareNodeImplementation<
+    Children[Name],
+    Inherited,
+    UnderlyingDefinition
+  >;
+};
+
+type MiddlewareNodeImplementation<
+  Model,
+  Inherited,
+  UnderlyingDefinition,
+  Reconcile extends boolean = false,
+> =
+  Model extends ToolSubtreeModel<infer Command>
+    ? MiddlewareNodeImplementation<Command, Inherited, UnderlyingDefinition, true>
+    : Model extends ToolCommandModel<string, infer Globals, infer Body, infer Children>
+      ? MiddlewareNodeImplementationWithGlobals<
+          Model,
+          Inherited,
+          UnderlyingDefinition,
+          Reconcile extends true ? ReconcileGlobalArguments<Globals, Inherited> : Globals,
+          Reconcile extends true ? ReconcileBodyModel<Body, Inherited> : Body,
+          Children
+        >
+      : never;
+
+type MiddlewareNodeImplementationWithGlobals<
+  Model,
+  Inherited,
+  UnderlyingDefinition,
+  Globals,
+  Body,
+  Children,
+> =
+  Model extends ToolCommandModel<infer Name, unknown, AnyToolBodyModel | undefined, object>
+    ? keyof Children extends never
+      ? Body extends AnyToolBodyModel
+        ? MiddlewareHandlerFor<
+            ToolCommandModel<Name, Globals, Body, Children>,
+            Inherited,
+            UnderlyingDefinition
+          >
+        : NestedCommandImplementation<undefined, {}>
+      : Body extends AnyToolBodyModel
+        ? NestedCommandImplementation<
+            MiddlewareHandlerFor<
+              ToolCommandModel<Name, Globals, Body, Children>,
+              Inherited,
+              UnderlyingDefinition
+            >,
+            MiddlewareChildImplementations<
+              Children,
+              MergeGlobalArguments<Inherited, Globals>,
+              UnderlyingDefinition
+            >
+          >
+        : NestedCommandImplementation<
+            undefined,
+            MiddlewareChildImplementations<
+              Children,
+              MergeGlobalArguments<Inherited, Globals>,
+              UnderlyingDefinition
+            >
+          >
+    : never;
+
+type RootMiddlewareImplementation<Model, UnderlyingDefinition> =
+  Model extends ToolCommandModel<infer Name, infer Globals, infer Body, infer Children>
+    ? Simplify<
+        (Body extends AnyToolBodyModel
+          ? {
+              [Key in Name]: MiddlewareHandlerFor<Model, {}, UnderlyingDefinition>;
+            }
+          : {}) &
+          MiddlewareChildImplementations<Children, Globals, UnderlyingDefinition>
+      >
+    : never;
+
+export type ToolMiddlewareImplementation<
+  PresentedDefinition,
+  ExpectedDefinition = PresentedDefinition,
+> = RootMiddlewareImplementation<ToolCommandModelOf<PresentedDefinition>, ExpectedDefinition>;
+
+export interface ImplementedToolMiddleware<Name extends string = string> {
+  readonly name: Name;
+}
+
+interface ToolMiddlewareMetadataOptions<Name extends string> {
+  readonly name: Name;
+  readonly aliases?: readonly string[];
+  readonly doc?: DocInput;
+}
+
+export type ToolMiddlewareOptions<
+  Name extends string,
+  PresentedDefinition,
+  ExpectedDefinition = PresentedDefinition,
+> =
+  | TransparentToolMiddlewareOptions<Name, PresentedDefinition>
+  | AdapterToolMiddlewareOptions<Name, PresentedDefinition, ExpectedDefinition>;
+
+type TransparentToolMiddlewareOptions<
+  Name extends string,
+  Definition,
+> = ToolMiddlewareMetadataOptions<Name> & {
+  readonly wraps?: undefined;
+  readonly implementation: ToolMiddlewareImplementation<Definition>;
+};
+
+type AdapterToolMiddlewareOptions<
+  Name extends string,
+  PresentedDefinition,
+  ExpectedDefinition,
+> = ToolMiddlewareMetadataOptions<Name> & {
+  readonly wraps: ExpectedDefinition;
+  readonly implementation: ToolMiddlewareImplementation<PresentedDefinition, ExpectedDefinition>;
+};
+
+export interface UniversalToolUnderlying {
+  readonly invoke: UniversalToolUnderlyingInvoke;
+}
+
+export interface UniversalToolUnderlyingInvoke {
+  (
+    commandPath: readonly string[],
+    input: WireTypedSchemaValue,
+    stdin: AsyncIterable<number> | undefined,
+  ): Promise<WireInvocationResult>;
+  readonly [TOOL_CLIENT_ERRORS]: WireTypedSchemaValue;
+}
+
+export interface UniversalToolMiddlewareInvocation {
+  readonly toolName: string;
+  readonly toolMetadata: WireTool;
+  readonly commandPath: readonly string[];
+  readonly input: WireTypedSchemaValue;
+  readonly stdin?: AsyncIterable<number>;
+  readonly principal: Principal;
+}
+
+export interface UniversalToolMiddlewareContext {
+  readonly underlying: UniversalToolUnderlying;
+}
+
+export type UniversalToolMiddlewareInvoke = (
+  invocation: UniversalToolMiddlewareInvocation,
+  context: UniversalToolMiddlewareContext,
+) => WireInvocationResult | Promise<WireInvocationResult>;
+
+export interface UniversalToolMiddlewareOptions<Name extends string> {
+  readonly name: Name;
+  readonly aliases?: readonly string[];
+  readonly doc?: DocInput;
+  readonly invoke: UniversalToolMiddlewareInvoke;
+}
+
+export interface ToolClientInvocationResult {
+  readonly stdout?: AsyncIterable<ByteStreamItem>;
+  readonly result: Promise<{ readonly result?: WireTypedSchemaValue }>;
+  cancel(): void;
+}
 
 /** Raw WIT invocation seam used by typed tool clients. */
 export interface ToolClientTransport {
@@ -1397,7 +1642,7 @@ function assembleToolClientNode(
   mapFailure: ToolClientFailureMapper,
 ): unknown {
   const result: Record<string, unknown> | ((args: Record<string, unknown>) => unknown) = node.body
-    ? createToolClientMethod(tool, node, commandPath, transport)
+    ? createToolClientMethod(tool, node, commandPath, transport, mapFailure)
     : {};
 
   node.subcommands.forEach((child) => {
@@ -1424,6 +1669,7 @@ function createToolClientMethod(
   node: ExtendedCommandNode,
   commandPath: readonly string[],
   transport: ToolClientTransport,
+  mapFailure: ToolClientFailureMapper,
 ): (args: Record<string, unknown>) => unknown {
   const body = node.body;
   if (!body) throw new Error(`tool command "${node.name}" has no callable body`);
@@ -1438,6 +1684,8 @@ function createToolClientMethod(
     return startToolClientCall();
 
     function startToolClientCall(): unknown {
+      let input: WireTypedSchemaValue;
+      let stdin: ToolInputStream | undefined;
       try {
         if (!isImplementationObject(args)) {
           throw new Error('tool client arguments must be an object');
@@ -1448,38 +1696,48 @@ function createToolClientMethod(
             return [field.name, hasOwn(args, projectedName) ? args[projectedName] : undefined];
           }),
         );
-        const input = typedSchemaValueToWit(inputModel.encodeTyped(canonicalInput));
-        const stdin = commandBody.stdin ? (args.stdin as ToolInputStream | undefined) : undefined;
+        input = typedSchemaValueToWit(inputModel.encodeTyped(canonicalInput));
+        stdin = commandBody.stdin ? (args.stdin as ToolInputStream | undefined) : undefined;
         if (stdin !== undefined && !isReadableStream(stdin)) {
           throw new Error('stdin must be a readable stream');
         }
         if (commandBody.stdin?.required && stdin === undefined) {
           throw new Error('required stdin stream is missing');
         }
-        const invocation = transport.start(
-          commandPath,
-          input,
-          stdin,
-          commandBody.stdout !== undefined,
-        );
-        const result = invocation.result
-          .then((terminal) => decodeToolClientResult(commandBody, terminal, callName))
-          .catch((error: unknown) => {
-            if (error instanceof ToolCallError) throw error;
-            if (isRpcError(error)) throw mapToolRpcError(commandBody, error, callName);
-            throw protocolToolCallError(`${callName}: ${errorMessage(error)}`);
-          });
-        if (!commandBody.stdout) return result;
-        if (!invocation.stdout) {
-          invocation.cancel();
-          throw protocolToolCallError(`${callName}: required stdout stream is missing`);
-        }
-        return startedToolInvocation(invocation.stdout, result, () => invocation.cancel());
       } catch (error) {
-        if (error instanceof ToolCallError) throw error;
-        if (isRpcError(error)) throw mapToolRpcError(commandBody, error, callName);
-        throw protocolToolCallError(`${callName}: ${errorMessage(error)}`);
+        throw mapFailure(error, { phase: 'input', body: commandBody, callName });
       }
+
+      let invocation: ToolClientInvocationResult;
+      try {
+        invocation = transport.start(commandPath, input, stdin, commandBody.stdout !== undefined);
+      } catch (error) {
+        throw mapFailure(error, { phase: 'invoke', body: commandBody, callName });
+      }
+
+      const result = invocation.result
+        .then((terminal) => decodeToolClientResult(commandBody, terminal, callName))
+        .catch((error: unknown) => {
+          throw mapFailure(error, { phase: 'result', body: commandBody, callName });
+        });
+      if (!commandBody.stdout) return result;
+      if (!invocation.stdout) {
+        invocation.cancel();
+        throw mapFailure(new Error('required stdout stream is missing'), {
+          phase: 'result',
+          body: commandBody,
+          callName,
+        });
+      }
+      if (!isAsyncIterable(invocation.stdout)) {
+        invocation.cancel();
+        throw mapFailure(new Error('stdout must be an async iterable'), {
+          phase: 'result',
+          body: commandBody,
+          callName,
+        });
+      }
+      return startedToolInvocation(invocation.stdout, result, () => invocation.cancel());
     }
   };
 }
@@ -1491,37 +1749,145 @@ function decodeToolClientResult(
 ): unknown {
   const hasResult = invocation.result !== undefined;
 
-  try {
-    if (!body.result && hasResult) {
-      throw protocolToolCallError(`${callName}: unit command returned an unexpected result`);
-    }
-    if (body.result && !hasResult) {
-      throw protocolToolCallError(`${callName}: structured command result is missing`);
-    }
-    const decodedResult = body.result
-      ? decodeWireValue(body.result.codec, invocation.result!, `${callName} result`)
-      : undefined;
-    return decodedResult;
-  } catch (error) {
-    throw error;
+  if (!body.result && hasResult) {
+    throw new Error('unit command returned an unexpected result');
   }
+  if (body.result && !hasResult) {
+    throw new Error('structured command result is missing');
+  }
+  return body.result
+    ? decodeWireValue(body.result.codec, invocation.result!, `${callName} result`)
+    : undefined;
 }
 
-function isReadableStream(value: unknown): value is ToolInputStream {
-  return (
-    value !== null &&
-    (typeof value === 'object' || typeof value === 'function') &&
-    typeof (value as Record<PropertyKey, unknown>).getReader === 'function'
-  );
+interface ToolUnderlyingInvocationResult {
+  readonly result?: WireTypedSchemaValue;
+  readonly stdout?: AsyncIterable<number>;
 }
 
-function mapToolRpcError(
+interface ToolUnderlyingTransport {
+  invokeAndAwait(
+    commandPath: readonly string[],
+    input: WireTypedSchemaValue,
+    stdin: AsyncIterable<number> | undefined,
+  ): ToolUnderlyingInvocationResult | Promise<ToolUnderlyingInvocationResult>;
+}
+
+/** @internal Assemble the completion-returning client exposed to a tool middleware. */
+export function createToolUnderlyingForExtendedTool(
+  tool: ExtendedToolType,
+  transport: ToolUnderlyingTransport,
+  mapFailure: ToolClientFailureMapper,
+): object {
+  const result: Record<string, unknown> = {};
+
+  if (tool.root.body) {
+    defineClientMember(
+      result,
+      tool.root.name,
+      createToolUnderlyingMethod(tool, tool.root, [], transport, mapFailure),
+    );
+  }
+  tool.root.subcommands.forEach((child) => {
+    defineClientMember(
+      result,
+      child.name,
+      assembleToolUnderlyingNode(tool, child, [child.name], transport, mapFailure),
+    );
+  });
+
+  return result;
+}
+
+function assembleToolUnderlyingNode(
+  tool: ExtendedToolType,
+  node: ExtendedCommandNode,
+  commandPath: readonly string[],
+  transport: ToolUnderlyingTransport,
+  mapFailure: ToolClientFailureMapper,
+): unknown {
+  const result: Record<string, unknown> | ((args: Record<string, unknown>) => Promise<unknown>) =
+    node.body ? createToolUnderlyingMethod(tool, node, commandPath, transport, mapFailure) : {};
+
+  node.subcommands.forEach((child) => {
+    defineClientMember(
+      result,
+      child.name,
+      assembleToolUnderlyingNode(tool, child, [...commandPath, child.name], transport, mapFailure),
+    );
+  });
+  return result;
+}
+
+function createToolUnderlyingMethod(
+  tool: ExtendedToolType,
+  node: ExtendedCommandNode,
+  commandPath: readonly string[],
+  transport: ToolUnderlyingTransport,
+  mapFailure: ToolClientFailureMapper,
+): (args: Record<string, unknown>) => Promise<unknown> {
+  const body = node.body;
+  if (!body) throw new Error(`tool command "${node.name}" has no callable body`);
+  const inputModel = tool.canonicalInputModel(node);
+  const callName = [tool.toolName, ...commandPath].join(' ');
+
+  return async (args: Record<string, unknown>): Promise<unknown> => {
+    let input: WireTypedSchemaValue;
+    let stdin: AsyncIterable<number> | undefined;
+    try {
+      if (!isImplementationObject(args)) {
+        throw new Error('tool client arguments must be an object');
+      }
+      const canonicalInput = Object.fromEntries(
+        inputModel.fields.map((field) => {
+          const projectedName = camelCase(field.name);
+          return [field.name, hasOwn(args, projectedName) ? args[projectedName] : undefined];
+        }),
+      );
+      input = typedSchemaValueToWit(inputModel.encodeTyped(canonicalInput));
+      stdin = body.stdin ? (args.stdin as AsyncIterable<number> | undefined) : undefined;
+      if (stdin !== undefined && !isAsyncIterable(stdin)) {
+        throw new Error('stdin must be an async iterable');
+      }
+      if (body.stdin?.required && stdin === undefined) {
+        throw new Error('required stdin stream is missing');
+      }
+    } catch (error) {
+      throw mapFailure(error, { phase: 'input', body, callName });
+    }
+
+    let invocation: ToolUnderlyingInvocationResult;
+    try {
+      invocation = await transport.invokeAndAwait(commandPath, input, stdin);
+    } catch (error) {
+      throw mapFailure(error, { phase: 'invoke', body, callName });
+    }
+
+    try {
+      return decodeToolUnderlyingResult(body, invocation, callName);
+    } catch (error) {
+      await closeAsyncIterable(invocation.stdout);
+      throw mapFailure(error, { phase: 'result', body, callName });
+    }
+  };
+}
+
+function decodeToolUnderlyingResult(
   body: ExtendedCommandBody,
-  error: RpcError,
+  invocation: ToolUnderlyingInvocationResult,
   callName: string,
-): ToolCallError<unknown> {
-  if (error.tag !== 'remote-tool-error' || error.val.tag !== 'custom-error') {
-    return new ToolCallError({ tag: 'rpc', error });
+): unknown {
+  const hasResult = invocation.result !== undefined;
+  const hasStdout = invocation.stdout !== undefined;
+
+  if (hasStdout && !isAsyncIterable(invocation.stdout)) {
+    throw new Error('stdout must be an async iterable');
+  }
+  if (!body.result && hasResult) {
+    throw new Error('unit command returned an unexpected result');
+  }
+  if (body.result && !hasResult) {
+    throw new Error('structured command result is missing');
   }
   if (!body.stdout && hasStdout) {
     throw new Error('command returned undeclared stdout');
@@ -1538,6 +1904,14 @@ function mapToolRpcError(
   return hasStdout
     ? { result: decodedResult, stdout: invocation.stdout }
     : { result: decodedResult };
+}
+
+function isReadableStream(value: unknown): value is ToolInputStream {
+  return (
+    value !== null &&
+    (typeof value === 'object' || typeof value === 'function') &&
+    typeof (value as Record<PropertyKey, unknown>).getReader === 'function'
+  );
 }
 
 export function decodeDeclaredToolError(
@@ -1605,11 +1979,6 @@ function formatToolInvokeError(cause: ToolInvokeErrorCause<unknown>): string {
         : 'Underlying tool returned a declared error';
     }
   }
-  return cause.error.tag === 'remote-tool-error'
-    ? `Remote tool call failed: ${cause.error.val.tag}`
-    : cause.error.tag === 'cancelled'
-      ? 'Remote tool call failed: cancelled'
-      : `Remote tool call failed: ${cause.error.tag}: ${cause.error.val}`;
 }
 
 function errorMessage(error: unknown): string {

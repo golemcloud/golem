@@ -86,6 +86,7 @@ impl OutputStream {
     }
 }
 
+#[cfg(feature = "export_golem_agentic")]
 impl Guest for Component {
     fn discover_tools() -> Result<Vec<Tool>, ToolError> {
         Ok(get_all_tools())

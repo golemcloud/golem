@@ -507,12 +507,46 @@ pub async fn[T : @schema.IntoSchema] encode_result_value(
 
 ///|
 pub fn invocation_result_empty() -> @toolCommon.InvocationResult {
-  { result: None }
+  { result: None, stdout: None }
 }
 
 ///|
 pub async fn[T : @schema.IntoSchema] invocation_result_value(
   value : T,
 ) -> @toolCommon.InvocationResult raise @toolCommon.ToolError {
-  { result: Some(encode_result_value(value)) }
+  { result: Some(encode_result_value(value)), stdout: None }
+}
+
+///|
+pub fn invocation_result_stdout(
+  stdout : @async-core.Stream[Byte],
+) -> @toolCommon.InvocationResult {
+  { result: None, stdout: Some(stdout) }
+}
+
+///|
+pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(
+  value : T,
+  stdout : @async-core.Stream[Byte],
+) -> @toolCommon.InvocationResult raise @toolCommon.ToolError {
+  { result: Some(encode_result_value(value)), stdout: Some(stdout) } catch {
+    error => {
+      stdout.drop_sync()
+      raise error
+    }
+  }
+}
+
+///|
+pub async fn encode_error_payload(
+  payload : @model.TypedSchemaValue,
+) -> @types.TypedSchemaValue raise @toolCommon.ToolError {
+  @model.typed_schema_value_to_wit_async(payload) catch {
+    error => {
+      payload.value.release_resources(@model_host.resource_drops())
+      raise @toolCommon.ToolError::InvalidResult(
+        "failed serializing custom tool error: \{error}",
+      )
+    }
+  }
 }

@@ -600,15 +600,6 @@ function createToolOutputStream(writer: ToolStdoutWriter): ToolOutputStreamAdapt
   };
 }
 
-async function closeAsyncIterable(input: AsyncIterable<unknown> | undefined): Promise<void> {
-  if (!input) return;
-  try {
-    await input[Symbol.asyncIterator]().return?.();
-  } catch {
-    // Input stream cleanup is best-effort.
-  }
-}
-
 function closeReadableStream(controller: ReadableStreamDefaultController<Uint8Array>): void {
   try {
     controller.close();

@@ -20,6 +20,18 @@ pub(all) enum ToolError[E] {
 ///|
 pub(all) struct InvocationResult {
   result : @model.TypedSchemaValue?
+  stdout : @async-core.Stream[Byte]?
+}
+
+///|
+fn release_optional_value(
+  value : @model.TypedSchemaValue?,
+  drops : @model.SchemaValueResourceDrops,
+) -> Unit {
+  match value {
+    Some(value) => value.value.release_resources(drops)
+    None => ()
+  }
 }
 
 ///|
@@ -345,21 +357,107 @@ fn[E] decode_invocation_result(
     }
     None => None
   }
-  Ok({ result: decoded })
+  Ok({ result: decoded, stdout: result.stdout })
+}
+
+///|
+pub fn[T : @schema.FromSchema, E] decode_result_with_stdout(
+  result : InvocationResult,
+) -> Result[(T, @async-core.Stream[Byte]), ToolError[E]] {
+  let drops = @model_host.resource_drops()
+  let stdout = match expect_stdout(result.stdout) {
+    Ok(stdout) => stdout
+    Err(e) => {
+      release_optional_value(result.result, drops)
+      return Err(e)
+    }
+  }
+  match decode_expected_value(result.result, drops) {
+    Ok(value) => Ok((value, stdout))
+    Err(e) => {
+      stdout.drop_sync()
+      Err(e)
+    }
+  }
 }
 
 ///|
 pub fn[T : @schema.FromSchema, E] decode_result_value(
   result : InvocationResult,
 ) -> Result[T, ToolError[E]] {
-  decode_expected_value(result.result)
+  let drops = @model_host.resource_drops()
+  match expect_no_stdout(result.stdout) {
+    Err(e) => {
+      release_optional_value(result.result, drops)
+      Err(e)
+    }
+    Ok(_) => decode_expected_value(result.result, drops)
+  }
+}
+
+///|
+pub fn[E] decode_result_stdout_only(
+  result : InvocationResult,
+) -> Result[@async-core.Stream[Byte], ToolError[E]] {
+  let drops = @model_host.resource_drops()
+  let stdout = match expect_stdout(result.stdout) {
+    Ok(stdout) => stdout
+    Err(e) => {
+      release_optional_value(result.result, drops)
+      return Err(e)
+    }
+  }
+  match expect_no_value_with_resource_drops(result.result, drops) {
+    Ok(_) => Ok(stdout)
+    Err(e) => {
+      stdout.drop_sync()
+      Err(e)
+    }
+  }
 }
 
 ///|
 pub fn[E] decode_result_empty(
   result : InvocationResult,
 ) -> Result[Unit, ToolError[E]] {
-  expect_no_value(result.result)
+  let drops = @model_host.resource_drops()
+  match expect_no_stdout(result.stdout) {
+    Err(e) => {
+      release_optional_value(result.result, drops)
+      Err(e)
+    }
+    Ok(_) => expect_no_value_with_resource_drops(result.result, drops)
+  }
+}
+
+///|
+pub fn[E] expect_stdout(
+  stdout : @async-core.Stream[Byte]?,
+) -> Result[@async-core.Stream[Byte], ToolError[E]] {
+  match stdout {
+    Some(stdout) => Ok(stdout)
+    None =>
+      Err(
+        tool_protocol_error(
+          "tool result did not contain declared stdout stream",
+        ),
+      )
+  }
+}
+
+///|
+pub fn[E] expect_no_stdout(
+  stdout : @async-core.Stream[Byte]?,
+) -> Result[Unit, ToolError[E]] {
+  match stdout {
+    Some(stdout) => {
+      stdout.drop_sync()
+      Err(
+        tool_protocol_error("tool result unexpectedly contained stdout stream"),
+      )
+    }
+    None => Ok(())
+  }
 }
 
 ///|

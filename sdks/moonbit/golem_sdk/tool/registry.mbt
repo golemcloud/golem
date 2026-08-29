@@ -226,6 +226,7 @@ pub async fn invoke_registered_tool(
     command_path,
     input,
     stdin,
+    stdout,
     principal,
     @model_host.resource_drops(),
   )
@@ -237,6 +238,7 @@ async fn invoke_registered_tool_with_resource_drops(
   command_path : Array[String],
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
+  stdout : @async-core.Sink[Byte]?,
   principal : @agentCommon.Principal,
   drops : @model.SchemaValueResourceDrops,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
@@ -259,7 +261,7 @@ async fn invoke_registered_tool_with_resource_drops(
     _ => ()
   }
   invoke_registered_invoker(
-    tool_name, command_path, input, stdin, stdout, principal,
+    tool_name, command_path, input, stdin, stdout, principal, drops,
   )
 }
 
@@ -275,12 +277,38 @@ async fn invoke_registered_invoker(
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   match state.invokers.get(tool_name) {
     Some(invoker) => invoker(command_path, input, stdin, stdout, principal)
-    None => Err(@toolCommon.ToolError::InvalidToolName(tool_name))
+    None =>
+      reject_wire_invocation_with_resource_drops(
+        input,
+        stdin,
+        @toolCommon.ToolError::InvalidToolName(tool_name),
+        drops,
+      )
   }
 }
 
 ///|
 pub async fn invoke_registered_subtool(
+  tool_name : String,
+  command_path : Array[String],
+  fields : Array[CanonicalInputValue],
+  stdin : @async-core.Stream[Byte]?,
+  stdout : @async-core.Sink[Byte]?,
+  principal : @agentCommon.Principal,
+) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+  invoke_registered_subtool_with_resource_drops(
+    tool_name,
+    command_path,
+    fields,
+    stdin,
+    stdout,
+    principal,
+    @model_host.resource_drops(),
+  )
+}
+
+///|
+async fn invoke_registered_subtool_with_resource_drops(
   tool_name : String,
   command_path : Array[String],
   fields : Array[CanonicalInputValue],
@@ -314,7 +342,7 @@ pub async fn invoke_registered_subtool(
   }
   release_canonical_input_values(fields, drops)
   invoke_registered_invoker(
-    tool_name, command_path, input, stdin, principal, drops,
+    tool_name, command_path, input, stdin, stdout, principal, drops,
   )
 }
 
@@ -397,7 +425,4 @@ fn drop_optional_stdin(stdin : @async-core.Stream[Byte]?) -> Unit {
     Some(stdin) => stdin.drop_sync()
     None => ()
   }
-  invoke_registered_invoker(
-    tool_name, command_path, input, stdin, stdout, principal,
-  )
 }

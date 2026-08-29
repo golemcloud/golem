@@ -14,6 +14,8 @@
 
 use super::*;
 use std::collections::HashSet;
+use std::sync::Mutex;
+use tokio::sync::watch;
 
 /// Replayable single-shot channel used to deliver a call's [`Resolution`] from the replay cursor
 /// to the awaiting [`DurableCallSession`].
@@ -105,6 +107,19 @@ pub enum ReconstructionReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
     Incomplete(DurableCallSession<Pair, P>),
 }
 
+pub(in crate::durable_host) struct ResolvedReconstructionTerminal {
+    pub(super) function_type: DurableFunctionType,
+    pub(super) begin_index: OplogIndex,
+    pub(super) delivery: CompletionDelivery,
+    pub(super) cancelled: bool,
+}
+
+impl ResolvedReconstructionTerminal {
+    pub(in crate::durable_host) fn cancelled(&self) -> bool {
+        self.cancelled
+    }
+}
+
 /// The result of [`DurableCallSession::replay_access_deferred`]: like [`CallReplayOutcome`], but each
 /// replayed response carries the [`CompletionDelivery`] token describing the recorded delivery
 /// status the caller must mirror.
@@ -126,7 +141,7 @@ pub enum DeferredCallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
 /// Lives inside the replay state behind its lock. It is fed **only** from the committed-consume
 /// hook (see [`crate::durable_host::replay_state::ReplayState`]); speculative cursor reads that
 /// roll back must never reach it.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ConcurrentReplayResolver {
     /// Awaiters that have registered but whose resolution has not been observed yet.
     pending: HashMap<OplogIndex, ReplayableOneshot<ResolutionOutcome>>,
@@ -139,9 +154,183 @@ pub struct ConcurrentReplayResolver {
     /// replay path this stays empty; it covers the resolver's own unit tests and any future entry
     /// point that resolves without that ordering guarantee.
     buffered: HashMap<OplogIndex, ResolutionOutcome>,
+    reconstruction_claims: Arc<ReconstructionClaimState>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ReconstructionClaimState {
+    active_fences: watch::Sender<HashSet<OplogIndex>>,
+    active_bodies: watch::Sender<HashSet<OplogIndex>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct HistoricalReconstruction {
+    inner: Arc<HistoricalReconstructionInner>,
+}
+
+#[derive(Debug)]
+struct HistoricalReconstructionInner {
+    state: Arc<ReconstructionClaimState>,
+    start_index: OplogIndex,
+    body: Mutex<Option<OplogIndex>>,
+}
+
+impl Default for ConcurrentReplayResolver {
+    fn default() -> Self {
+        let (active_fences, _) = watch::channel(HashSet::new());
+        let (active_bodies, _) = watch::channel(HashSet::new());
+        Self {
+            pending: HashMap::new(),
+            prefetched_terminals: HashMap::new(),
+            buffered: HashMap::new(),
+            reconstruction_claims: Arc::new(ReconstructionClaimState {
+                active_fences,
+                active_bodies,
+            }),
+        }
+    }
+}
+
+impl ReconstructionClaimState {
+    fn register(self: &Arc<Self>, start_index: OplogIndex) -> HistoricalReconstruction {
+        let mut active = 0;
+        self.active_fences.send_modify(|fences| {
+            assert!(
+                fences.insert(start_index),
+                "historical entity reconstruction at {start_index} was registered twice"
+            );
+            active = fences.len();
+        });
+        self.active_bodies.send_modify(|bodies| {
+            assert!(
+                bodies.insert(start_index),
+                "entity body reconstruction at {start_index} was registered twice"
+            );
+        });
+        tracing::debug!(
+            start_index = start_index.as_u64(),
+            active,
+            "Registered resolver-owned historical entity reconstruction"
+        );
+        HistoricalReconstruction {
+            inner: Arc::new(HistoricalReconstructionInner {
+                state: self.clone(),
+                start_index,
+                body: Mutex::new(Some(start_index)),
+            }),
+        }
+    }
+
+    fn release_incomplete(&self, start_index: OplogIndex) {
+        let mut removed = false;
+        let mut remaining = 0;
+        self.active_fences.send_modify(|fences| {
+            removed = fences.remove(&start_index);
+            remaining = fences.len();
+        });
+        if removed {
+            tracing::debug!(
+                start_index = start_index.as_u64(),
+                active = remaining,
+                "Released incomplete resolver-owned historical entity reconstruction fence"
+            );
+        }
+    }
+
+    fn settle_fence(&self, start_index: OplogIndex) {
+        let mut removed = false;
+        let mut remaining = 0;
+        self.active_fences.send_modify(|fences| {
+            removed = fences.remove(&start_index);
+            remaining = fences.len();
+        });
+        if removed {
+            tracing::debug!(
+                start_index = start_index.as_u64(),
+                active = remaining,
+                "Historical entity reconstruction validated"
+            );
+        }
+    }
+
+    fn settle_body(&self, start_index: OplogIndex) {
+        self.active_bodies.send_modify(|bodies| {
+            assert!(
+                bodies.remove(&start_index),
+                "entity body reconstruction at {start_index} was not registered"
+            );
+        });
+    }
+
+    pub(crate) fn subscribe_bodies(&self) -> watch::Receiver<HashSet<OplogIndex>> {
+        self.active_bodies.subscribe()
+    }
+
+    pub(crate) async fn wait_for_fences(&self) {
+        let mut active = self.active_fences.subscribe();
+        tracing::debug!(
+            active = active.borrow().len(),
+            "Waiting for resolver-owned historical entity reconstructions"
+        );
+        active
+            .wait_for(HashSet::is_empty)
+            .await
+            .expect("replay cursor retains the reconstruction claim state");
+        tracing::debug!("Resolver-owned historical entity reconstructions settled");
+    }
+
+    pub(crate) fn ensure_empty(&self) -> Result<(), WorkerExecutorError> {
+        let fences = self.active_fences.borrow().clone();
+        let bodies = self.active_bodies.borrow().clone();
+        if fences.is_empty() && bodies.is_empty() {
+            Ok(())
+        } else {
+            Err(WorkerExecutorError::runtime(format!(
+                "cannot install a replay generation while historical reconstruction claims remain active (fences: {fences:?}, bodies: {bodies:?})"
+            )))
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_fences(&self) -> HashSet<OplogIndex> {
+        self.active_fences.borrow().clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_bodies(&self) -> HashSet<OplogIndex> {
+        self.active_bodies.borrow().clone()
+    }
+}
+
+impl HistoricalReconstruction {
+    pub(crate) fn body_settled(&mut self) {
+        if let Some(start_index) = self.inner.body.lock().unwrap().take() {
+            self.inner.state.settle_body(start_index);
+        }
+    }
+}
+
+impl Drop for HistoricalReconstructionInner {
+    fn drop(&mut self) {
+        if let Some(start_index) = self.body.lock().unwrap().take() {
+            self.state.settle_body(start_index);
+        }
+        self.state.settle_fence(self.start_index);
+    }
 }
 
 impl ConcurrentReplayResolver {
+    pub(crate) fn reconstruction_claims(&self) -> Arc<ReconstructionClaimState> {
+        self.reconstruction_claims.clone()
+    }
+
+    pub(crate) fn register_reconstruction(
+        &self,
+        start_index: OplogIndex,
+    ) -> HistoricalReconstruction {
+        self.reconstruction_claims.register(start_index)
+    }
+
     /// Registers an awaiter for the call started at `start_idx` and returns the receiver it should
     /// await on. If the resolution was already observed (buffered), the returned receiver is
     /// pre-resolved.
@@ -220,6 +409,24 @@ impl ConcurrentReplayResolver {
         let _ = tx.send(ResolutionOutcome::Resolved(resolution));
     }
 
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn resolve_prefetched_for_test(
+        &mut self,
+        start_idx: OplogIndex,
+        terminal_idx: OplogIndex,
+        resolution: Resolution,
+    ) {
+        if self.pending.contains_key(&start_idx) {
+            self.resolve_prefetched(start_idx, terminal_idx, resolution);
+        } else {
+            assert_eq!(
+                self.prefetched_terminals.get(&start_idx),
+                Some(&terminal_idx),
+                "test replay driver expected an active claim for Start {start_idx}"
+            );
+        }
+    }
+
     /// Resolves every still-registered awaiter as [`ResolutionOutcome::Incomplete`].
     ///
     /// Called when replay reaches the end of the oplog ([`crate::durable_host::replay_state::ReplayState::switch_to_live`]):
@@ -228,14 +435,12 @@ impl ConcurrentReplayResolver {
     /// itself) is what lets a call that is *suspended* waiting for the cursor to advance — because a
     /// concurrently-replaying sibling call owns the cursor head — make progress once replay finishes
     /// instead of hanging forever.
-    pub fn fail_all_pending_incomplete(&mut self) -> HashSet<OplogIndex> {
-        let mut incomplete = HashSet::with_capacity(self.pending.len());
+    pub fn fail_all_pending_incomplete(&mut self) {
         for (start_idx, tx) in self.pending.drain() {
-            incomplete.insert(start_idx);
+            self.reconstruction_claims.release_incomplete(start_idx);
             let _ = tx.send(ResolutionOutcome::Incomplete);
         }
         self.prefetched_terminals.clear();
-        incomplete
     }
 
     /// Removes a registered awaiter without resolving it. Used when a claimed call turns out to be
@@ -243,6 +448,11 @@ impl ConcurrentReplayResolver {
     /// switched to live completion, so its pending registration must not linger in the resolver.
     pub fn unregister(&mut self, start_idx: OplogIndex) {
         self.pending.remove(&start_idx);
+    }
+
+    pub fn unregister_incomplete(&mut self, start_idx: OplogIndex) {
+        self.pending.remove(&start_idx);
+        self.reconstruction_claims.release_incomplete(start_idx);
     }
 
     /// Returns whether the terminal at `terminal_idx` belongs to an active resolver claim. This is
@@ -283,6 +493,7 @@ impl ConcurrentReplayResolver {
 pub struct ReplayCallHandle {
     start_idx: OplogIndex,
     receiver: ReplayableOneshotReceiver<ResolutionOutcome>,
+    historical_reconstruction: Option<HistoricalReconstruction>,
 }
 
 impl ReplayCallHandle {
@@ -293,6 +504,7 @@ impl ReplayCallHandle {
         Self {
             start_idx,
             receiver,
+            historical_reconstruction: None,
         }
     }
 
@@ -300,8 +512,35 @@ impl ReplayCallHandle {
         self.start_idx
     }
 
+    pub(crate) fn attach_historical_reconstruction(
+        &mut self,
+        reconstruction: HistoricalReconstruction,
+    ) {
+        assert!(
+            self.historical_reconstruction
+                .replace(reconstruction)
+                .is_none(),
+            "replay call at {} received two historical reconstruction claims",
+            self.start_idx
+        );
+    }
+
+    pub(crate) fn take_historical_reconstruction(&mut self) -> Option<HistoricalReconstruction> {
+        self.historical_reconstruction.take()
+    }
+
     /// Consumes the handle into its parts (used by the replay-state driver).
-    pub fn into_parts(self) -> (OplogIndex, ReplayableOneshotReceiver<ResolutionOutcome>) {
-        (self.start_idx, self.receiver)
+    pub fn into_parts(
+        self,
+    ) -> (
+        OplogIndex,
+        ReplayableOneshotReceiver<ResolutionOutcome>,
+        Option<HistoricalReconstruction>,
+    ) {
+        (
+            self.start_idx,
+            self.receiver,
+            self.historical_reconstruction,
+        )
     }
 }

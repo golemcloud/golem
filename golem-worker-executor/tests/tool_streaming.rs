@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use anyhow::Context;
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, Request, State};
@@ -37,12 +38,13 @@ use golem_common::schema::{
 };
 use golem_common::{
     data_value,
-    model::{OwnedAgentId, RetryConfig},
+    model::{AgentStatus, OwnedAgentId, RetryConfig},
 };
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::durable_host::tool::{
-    ToolAttachmentModeMetadata, ToolBodyAdmissionMetadata, ToolOperationLaneMetadata,
-    ToolOperationMetadata, ToolOperationWinnerMetadata,
+    ToolAttachmentModeMetadata, ToolAttachmentTerminalMetadata, ToolBodyAdmissionMetadata,
+    ToolOperationLaneMetadata, ToolOperationMetadata, ToolOperationWinnerMetadata,
+    ToolOwnerFailureMetadata,
 };
 use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
@@ -394,6 +396,112 @@ async fn wait_for_active_tool_operations(
     .await
     .map_err(|_| anyhow::anyhow!("timed out waiting for {expected} active tool operations"))?;
     Ok(())
+}
+
+async fn wait_for_tool_stdin_state(
+    executor: &TestWorkerExecutor,
+    agent_id: &OwnedAgentId,
+    accepted_bytes: u64,
+    delivered_bytes: u64,
+    buffered_bytes: usize,
+    capacity_bytes: usize,
+    backpressured: bool,
+    terminal: Option<ToolAttachmentTerminalMetadata>,
+    producer_operation_active: bool,
+    producer_active: bool,
+    consumer_active: bool,
+) -> anyhow::Result<()> {
+    let result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            if let Some(active) = executor.active_entity_metadata(agent_id).await
+                && let Some(stdin) = active
+                    .tool_operations
+                    .operations
+                    .first()
+                    .and_then(|operation| operation.stdin.as_ref())
+                && stdin.accepted_bytes == accepted_bytes
+                && stdin.delivered_bytes == delivered_bytes
+                && stdin.buffered_bytes == buffered_bytes
+                && stdin.capacity_bytes == capacity_bytes
+                && stdin.backpressured == backpressured
+                && stdin.terminal == terminal
+                && stdin.producer_operation_active == producer_operation_active
+                && stdin.producer_active == producer_active
+                && stdin.consumer_active == consumer_active
+            {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    if result.is_err() {
+        let active = executor.active_entity_metadata(agent_id).await;
+        anyhow::bail!(
+            "timed out waiting for tool stdin state accepted={accepted_bytes}, delivered={delivered_bytes}, buffered={buffered_bytes}, capacity={capacity_bytes}, backpressured={backpressured}, terminal={terminal:?}, producer-operation-active={producer_operation_active}, producer-active={producer_active}, consumer-active={consumer_active}; active metadata: {active:#?}"
+        );
+    }
+    Ok(())
+}
+
+async fn wait_for_owner_replay_settling(
+    executor: &TestWorkerExecutor,
+    agent_id: &OwnedAgentId,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            if executor.owner_replay_is_settling(agent_id).await? {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("timed out waiting for owner replay to enter settlement"))??;
+    Ok(())
+}
+
+async fn wait_for_completed_entity_terminal(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+) -> anyhow::Result<OplogIndex> {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+            if let Some(start_index) = oplog.iter().find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::entity::invoke"
+                        && oplog.iter().any(|candidate| {
+                            matches!(
+                                &candidate.entry,
+                                PublicOplogEntry::End(params)
+                                    if params.start_index == entry.oplog_index
+                            )
+                        }) =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            }) {
+                return Ok::<_, anyhow::Error>(start_index);
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("timed out waiting for completed entity terminal"))?
+}
+
+async fn next_crash_checkpoint(
+    arrivals: &mut tokio::sync::mpsc::UnboundedReceiver<CrashCheckpointArrival>,
+    expected: &str,
+) -> anyhow::Result<CrashCheckpointArrival> {
+    let arrival = tokio::time::timeout(std::time::Duration::from_secs(30), arrivals.recv())
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting for `{expected}` checkpoint"))?
+        .ok_or_else(|| anyhow::anyhow!("checkpoint server stopped before `{expected}`"))?;
+    assert_eq!(arrival.name, expected);
+    Ok(arrival)
 }
 
 #[test]
@@ -2276,6 +2384,800 @@ async fn active_stream_crash_replays_pinned_activation_with_fresh_attachments(
         assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
     }
 
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CompletedReconstructionExclusiveCase {
+    Success,
+    Divergence,
+    BackpressuredStdin,
+}
+
+async fn run_completed_reconstruction_exclusive_p2_case(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    case: CompletedReconstructionExclusiveCase,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            configure: Some(Arc::new(|config| {
+                config.limits.max_tool_attachment_bytes = 64;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    let deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment.clone()),
+    );
+
+    let case_name = match case {
+        CompletedReconstructionExclusiveCase::Success => "exclusive-p2-success",
+        CompletedReconstructionExclusiveCase::Divergence => "exclusive-p2-divergence",
+        CompletedReconstructionExclusiveCase::BackpressuredStdin => {
+            "exclusive-p2-backpressured-stdin"
+        }
+    };
+    let agent_id = agent_id!("ToolStreamingCaller", case_name);
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let metadata = executor.get_worker_metadata(&worker_id).await?;
+            if metadata.status == AgentStatus::Idle
+                && metadata.pending_invocation_count == 0
+                && metadata.last_oplog_index > OplogIndex::INITIAL
+            {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("timed out waiting for caller initialization"))??;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let first = vec![0x31u8; 64];
+    let second = vec![0x32u8; 64];
+    let mut original_start = (case == CompletedReconstructionExclusiveCase::BackpressuredStdin)
+        .then(|| executor.gate_next_entity_body_start(&worker_id));
+    let mut original_success = executor.gate_next_agent_invocation_success(&worker_id);
+    match case {
+        CompletedReconstructionExclusiveCase::Success
+        | CompletedReconstructionExclusiveCase::Divergence => {
+            executor
+                .skip_next_wall_clock_now_durability(&owned_agent_id)
+                .await?;
+        }
+        CompletedReconstructionExclusiveCase::BackpressuredStdin => {
+            executor
+                .skip_next_monotonic_clock_now_durability(&owned_agent_id)
+                .await?;
+        }
+    }
+    let invocation = match case {
+        CompletedReconstructionExclusiveCase::Success
+        | CompletedReconstructionExclusiveCase::Divergence => executor.invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "hold_completed_reconstruction_before_exclusive_clock",
+            data_value!(),
+        ),
+        CompletedReconstructionExclusiveCase::BackpressuredStdin => executor
+            .invoke_and_await_agent(
+                &caller_component,
+                &agent_id,
+                "hold_reconstruction_backpressure_before_exclusive_clock",
+                data_value!(first.clone(), second.clone()),
+            ),
+    };
+    tokio::pin!(invocation);
+
+    if let Some(start) = original_start.as_mut() {
+        tokio::select! {
+            () = start.entered() => {}
+            result = &mut invocation => {
+                result.context("original invocation finished before reaching the entity body start gate")?;
+                anyhow::bail!("original invocation succeeded without reaching the entity body start gate");
+            }
+            () = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+                anyhow::bail!("original entity body start gate was not reached");
+            }
+        }
+        wait_for_tool_stdin_state(
+            &executor,
+            &owned_agent_id,
+            first.len() as u64,
+            0,
+            first.len(),
+            first.len(),
+            true,
+            None,
+            true,
+            true,
+            true,
+        )
+        .await?;
+        start.release();
+    }
+
+    let validate_recovery = async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            original_success.entered(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("original agent invocation did not reach success gate"))?;
+        wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
+        let reconstruction_start =
+            wait_for_completed_entity_terminal(&executor, &worker_id).await?;
+        if case == CompletedReconstructionExclusiveCase::Divergence {
+            let updated_component = executor
+                .update_component(&caller_component.id, caller.wasm_name.as_str())
+                .await?;
+            environment_state.set_tool_deployment(
+                context.default_environment_id,
+                caller_component.id,
+                updated_component.revision,
+                Some(deployment.clone()),
+            );
+            executor
+                .auto_update_worker(&worker_id, updated_component.revision, true)
+                .await?;
+        }
+
+        let mut reconstruction_body =
+            executor.gate_next_completed_entity_reconstruction(&worker_id);
+        if case == CompletedReconstructionExclusiveCase::Divergence {
+            executor.diverge_next_completed_entity_reconstruction(&worker_id);
+        }
+        let mut replayed_start = (case == CompletedReconstructionExclusiveCase::BackpressuredStdin)
+            .then(|| executor.gate_next_entity_body_start(&worker_id));
+        let mut replayed_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
+        executor.simulated_crash(&worker_id).await?;
+        drop(original_start);
+        original_success.abort_as_restart();
+        drop(original_success);
+        let claimed_start =
+            tokio::time::timeout(std::time::Duration::from_secs(30), replayed_claim.entered())
+                .await
+                .map_err(|_| anyhow::anyhow!("replayed reconstruction claim was not reached"))?;
+        assert_eq!(claimed_start, reconstruction_start);
+        let mut replayed_clock = match case {
+            CompletedReconstructionExclusiveCase::Success
+            | CompletedReconstructionExclusiveCase::Divergence => {
+                executor.gate_next_wall_clock_now(&owned_agent_id).await?
+            }
+            CompletedReconstructionExclusiveCase::BackpressuredStdin => {
+                executor
+                    .gate_next_monotonic_clock_now(&owned_agent_id)
+                    .await?
+            }
+        };
+        replayed_claim.release();
+        tokio::time::timeout(std::time::Duration::from_secs(30), replayed_clock.entered())
+            .await
+            .map_err(|_| anyhow::anyhow!("replayed clock gate was not reached"))?;
+        let mut replayed_success = (case != CompletedReconstructionExclusiveCase::Divergence)
+            .then(|| executor.gate_next_agent_invocation_success(&worker_id));
+
+        match case {
+            CompletedReconstructionExclusiveCase::Success => {
+                let replayed_success = replayed_success.as_mut().unwrap();
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    reconstruction_body.entered(),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("completed reconstruction did not reach body validation gate")
+                })?;
+                replayed_clock.release();
+                wait_for_owner_replay_settling(&executor, &owned_agent_id).await?;
+                assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
+                assert!(
+                    tokio::time::timeout(
+                        std::time::Duration::from_millis(250),
+                        replayed_success.entered()
+                    )
+                    .await
+                    .is_err(),
+                    "exclusive P2 clock call finished before completed reconstruction validation"
+                );
+                reconstruction_body.release();
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    replayed_success.entered(),
+                )
+                .await
+                .map_err(|_| anyhow::anyhow!("replayed agent invocation did not finish"))?;
+                replayed_success.release();
+            }
+            CompletedReconstructionExclusiveCase::Divergence => {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    reconstruction_body.entered(),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("divergent reconstruction did not reach body validation gate")
+                })?;
+                replayed_clock.release();
+                wait_for_owner_replay_settling(&executor, &owned_agent_id).await?;
+                assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
+                let settling_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+                assert!(
+                    settling_oplog
+                        .iter()
+                        .all(|entry| !matches!(entry.entry, PublicOplogEntry::SuccessfulUpdate(_))),
+                    "ReplayFinished finalized the pending update before reconstruction validation"
+                );
+                let owner_failure = executor.wait_for_tool_owner_failure(&owned_agent_id);
+                tokio::pin!(owner_failure);
+                assert!(matches!(
+                    futures::poll!(owner_failure.as_mut()),
+                    std::task::Poll::Pending
+                ));
+                reconstruction_body.release();
+                let owner_failure =
+                    tokio::time::timeout(std::time::Duration::from_secs(30), owner_failure)
+                        .await
+                        .map_err(|_| {
+                            anyhow::anyhow!("divergence did not select an owner failure")
+                        })??;
+                assert!(owner_failure.owner_failure_selected);
+                assert_eq!(
+                    owner_failure.owner_failure,
+                    Some(ToolOwnerFailureMetadata::Infrastructure)
+                );
+                let failed_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+                assert!(
+                    failed_oplog
+                        .iter()
+                        .all(|entry| !matches!(entry.entry, PublicOplogEntry::SuccessfulUpdate(_))),
+                    "divergent reconstruction permitted ReplayFinished update finalization"
+                );
+            }
+            CompletedReconstructionExclusiveCase::BackpressuredStdin => {
+                let replayed_success = replayed_success.as_mut().unwrap();
+                let replayed_start = replayed_start.as_mut().unwrap();
+                tokio::time::timeout(std::time::Duration::from_secs(30), replayed_start.entered())
+                    .await
+                    .map_err(|_| {
+                        anyhow::anyhow!("replayed entity body start gate was not reached")
+                    })?;
+                wait_for_tool_stdin_state(
+                    &executor,
+                    &owned_agent_id,
+                    first.len() as u64,
+                    0,
+                    first.len(),
+                    first.len(),
+                    true,
+                    None,
+                    true,
+                    true,
+                    true,
+                )
+                .await?;
+                replayed_start.release();
+                wait_for_tool_stdin_state(
+                    &executor,
+                    &owned_agent_id,
+                    (first.len() + second.len()) as u64,
+                    (first.len() + second.len()) as u64,
+                    0,
+                    first.len(),
+                    false,
+                    Some(ToolAttachmentTerminalMetadata::ConsumerCancelled),
+                    false,
+                    true,
+                    false,
+                )
+                .await?;
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    reconstruction_body.entered(),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("backpressured reconstruction did not reach body validation")
+                })?;
+                replayed_clock.release();
+                wait_for_owner_replay_settling(&executor, &owned_agent_id).await?;
+                assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
+                assert!(
+                    tokio::time::timeout(
+                        std::time::Duration::from_millis(250),
+                        replayed_success.entered()
+                    )
+                    .await
+                    .is_err(),
+                    "Store pumping published live before completed body validation"
+                );
+                reconstruction_body.release();
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    replayed_success.entered(),
+                )
+                .await
+                .map_err(|_| anyhow::anyhow!("replayed agent invocation did not finish"))?;
+                replayed_success.release();
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    };
+
+    let (invocation_result, validation_result) = tokio::join!(
+        tokio::time::timeout(std::time::Duration::from_secs(60), &mut invocation),
+        validate_recovery
+    );
+    validation_result?;
+    let invocation_result = invocation_result
+        .map_err(|_| anyhow::anyhow!("exclusive-P2 reconstruction invocation timed out"))?;
+    if case == CompletedReconstructionExclusiveCase::Divergence {
+        assert!(
+            invocation_result.is_err(),
+            "divergent reconstruction must fail the owner invocation"
+        );
+    } else {
+        invocation_result?;
+    }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn completed_reconstruction_settles_while_exclusive_p2_waits(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_completed_reconstruction_exclusive_p2_case(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        CompletedReconstructionExclusiveCase::Success,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn completed_reconstruction_divergence_fails_exclusive_p2_wait(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_completed_reconstruction_exclusive_p2_case(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        CompletedReconstructionExclusiveCase::Divergence,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn settling_accessor_p2_keeps_backpressured_reconstruction_store_polling(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_completed_reconstruction_exclusive_p2_case(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        CompletedReconstructionExclusiveCase::BackpressuredStdin,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn completed_reconstruction_claim_blocks_concurrent_replay_to_live(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
+    let (
+        provider_checkpoint_port,
+        provider_checkpoint_gate_port,
+        provider_checkpoint_server,
+        mut provider_checkpoints,
+    ) = start_crash_checkpoint_server().await;
+    let (
+        caller_checkpoint_port,
+        caller_checkpoint_gate_port,
+        caller_checkpoint_server,
+        mut caller_checkpoints,
+    ) = start_crash_checkpoint_server().await;
+    let agent_id = agent_id!("ToolStreamingCaller", "completed-reconstruction-barrier");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
+                    provider_checkpoint_port.to_string(),
+                ),
+                (
+                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    provider_checkpoint_gate_port.to_string(),
+                ),
+                (
+                    "CALLER_CRASH_CHECKPOINT_PORT".to_string(),
+                    caller_checkpoint_port.to_string(),
+                ),
+                (
+                    "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    caller_checkpoint_gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent_id,
+        "hold_completed_reconstruction_barrier",
+        data_value!(),
+    );
+    let crash_and_validate = async {
+        let original_body =
+            next_crash_checkpoint(&mut provider_checkpoints, "historical-reconstruction-body")
+                .await?;
+        wait_for_active_tool_operations(&executor, &owned_agent_id, 1).await?;
+        original_body
+            .release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("original reconstruction body gate was dropped"))?;
+        wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
+        let original_live =
+            next_crash_checkpoint(&mut caller_checkpoints, "reconstruction-live-effect").await?;
+        let mut reconstruction_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
+        executor.simulated_crash(&worker_id).await?;
+        drop(original_live.release);
+        let reconstruction_start = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            reconstruction_claim.entered(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("historical reconstruction claim was not reached"))?;
+        let barrier = executor
+            .drain_terminal_clamp_then_reconstruction_barrier(&owned_agent_id, reconstruction_start)
+            .await?;
+        tokio::pin!(barrier);
+        assert!(
+            matches!(futures::poll!(barrier.as_mut()), std::task::Poll::Pending),
+            "the primary replay-to-live barrier ignored the atomically registered reconstruction claim"
+        );
+
+        reconstruction_claim.release();
+        let replayed_body =
+            next_crash_checkpoint(&mut provider_checkpoints, "historical-reconstruction-body")
+                .await?;
+        replayed_body
+            .release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("replayed reconstruction body gate was dropped"))?;
+        tokio::time::timeout(std::time::Duration::from_secs(30), barrier)
+            .await
+            .map_err(|_| anyhow::anyhow!("validated reconstruction did not release the barrier"))?;
+        let replayed_live = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            caller_checkpoints.recv(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("replayed live effect remained blocked"))?
+        .ok_or_else(|| anyhow::anyhow!("caller checkpoint server stopped"))?;
+        assert_eq!(replayed_live.name, original_live.name);
+        replayed_live
+            .release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("replayed live-effect gate was dropped"))?;
+        Ok::<_, anyhow::Error>(())
+    };
+    let _ = tokio::try_join!(invocation, crash_and_validate)?;
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(params)
+                        if params.function_name == "golem::entity::invoke"
+                )
+            })
+            .count(),
+        1
+    );
+    provider_checkpoint_server.abort();
+    caller_checkpoint_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn incomplete_custom_durability_waits_for_completed_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
+    let (
+        provider_checkpoint_port,
+        provider_checkpoint_gate_port,
+        provider_checkpoint_server,
+        mut provider_checkpoints,
+    ) = start_crash_checkpoint_server().await;
+    let (
+        caller_checkpoint_port,
+        caller_checkpoint_gate_port,
+        caller_checkpoint_server,
+        mut caller_checkpoints,
+    ) = start_crash_checkpoint_server().await;
+    let agent_id = agent_id!(
+        "ToolStreamingCaller",
+        "incomplete-custom-reconstruction-barrier"
+    );
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
+                    provider_checkpoint_port.to_string(),
+                ),
+                (
+                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    provider_checkpoint_gate_port.to_string(),
+                ),
+                (
+                    "CALLER_CRASH_CHECKPOINT_PORT".to_string(),
+                    caller_checkpoint_port.to_string(),
+                ),
+                (
+                    "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    caller_checkpoint_gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent_id,
+        "hold_completed_reconstruction_before_incomplete_custom",
+        data_value!(),
+    );
+    let crash_and_validate = async {
+        let original_body =
+            next_crash_checkpoint(&mut provider_checkpoints, "historical-reconstruction-body")
+                .await?;
+        let original_before_custom = next_crash_checkpoint(
+            &mut caller_checkpoints,
+            "before-reconstruction-custom-effect",
+        )
+        .await?;
+        wait_for_active_tool_operations(&executor, &owned_agent_id, 1).await?;
+        original_body
+            .release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("original reconstruction body gate was dropped"))?;
+        wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
+        original_before_custom
+            .release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("original custom-start gate was dropped"))?;
+        let original_custom =
+            next_crash_checkpoint(&mut caller_checkpoints, "reconstruction-custom-effect").await?;
+        let custom_start = executor
+            .get_oplog(&worker_id, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem-it::reconstruction-barrier-custom-effect" =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("recorded custom durability Start was not found"))?;
+        let mut reconstruction_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
+        let mut reconstruction_body =
+            executor.gate_next_completed_entity_reconstruction(&worker_id);
+        executor.simulated_crash(&worker_id).await?;
+        drop(original_custom.release);
+        let reconstruction_start = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            reconstruction_claim.entered(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("historical reconstruction claim was not reached"))?;
+        executor
+            .drain_reconstruction_terminal(&owned_agent_id, reconstruction_start)
+            .await?;
+        reconstruction_claim.release();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            reconstruction_body.entered(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("completed reconstruction body did not settle"))?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            executor.clamp_after_claim(&owned_agent_id, custom_start),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("custom durability did not reach replay-to-live"))??;
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(250),
+                caller_checkpoints.recv()
+            )
+            .await
+            .is_err(),
+            "the incomplete custom invocation bypassed the primary reconstruction barrier"
+        );
+        reconstruction_body.release();
+        let replayed_custom = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            caller_checkpoints.recv(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("replayed custom effect remained blocked"))?
+        .ok_or_else(|| anyhow::anyhow!("caller checkpoint server stopped"))?;
+        assert_eq!(replayed_custom.name, original_custom.name);
+        replayed_custom
+            .release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("replayed custom-effect gate was dropped"))?;
+        Ok::<_, anyhow::Error>(())
+    };
+    let _ = tokio::try_join!(invocation, crash_and_validate)?;
+
+    assert_eq!(
+        executor
+            .get_file_contents(&worker_id, "/reconstruction-custom-order.log")
+            .await?,
+        b"C".as_slice(),
+        "the repaired custom effect must commit exactly once after body validation"
+    );
+    provider_checkpoint_server.abort();
+    caller_checkpoint_server.abort();
     Ok(())
 }
 

@@ -1809,11 +1809,6 @@ fn emit_empty_invocation(command : ToolCommandInfo) -> String {
 fn emit_custom_error(command : ToolCommandInfo, error_value : String) -> String {
   let error_type = command.error_type.map(emit_type).unwrap()
   "{\n" +
-  (if output_stream_source(command) is Some(_) {
-    "__golem_stdout.drop_sync()\n"
-  } else {
-    ""
-  }) +
   "let payload = match " +
   error_type +
   "::to_error_payload_value(" +
@@ -1958,28 +1953,10 @@ fn emit_invoker(
         "      if __golem_stdin is Some(_) {\n        return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @toolCommon.ToolError::InvalidInput(\"command does not accept a stdin stream\"))\n      }\n",
       )
     }
-    let call_args : Array[String] = []
     for arg in args {
       match arg.placement {
-        Hidden(Principal) => call_args.push("__golem_principal")
-        Hidden(InputStream) => {
-          buf.write_string(
-            "      let " +
-            arg.source +
-            " = match __golem_stdin {\n        Some(__golem_stream) => __golem_stream\n        None => return Err(@toolCommon.ToolError::InvalidInput(\"required stdin stream is missing\"))\n      }\n",
-          )
-          call_args.push(arg.source)
-        }
-        Hidden(OutputStream) => {
-          buf.write_string(
-            "      let " +
-            arg.source +
-            " = match __golem_stdout {\n        Some(__golem_output) => __golem_output\n        None => return Err(@toolCommon.ToolError::InvalidInput(\"required stdout stream is missing\"))\n      }\n",
-          )
-          call_args.push(arg.source)
-        }
-        Hidden(OutputStream) => call_args.push(arg.source)
-        _ => {
+        Hidden(_) => ()
+        _ =>
           buf.write_string(
             "      let " +
             arg.source +
@@ -1991,16 +1968,24 @@ fn emit_invoker(
             escape_string_lit(command_context) +
             "\") catch { __golem_error => return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, __golem_error) }\n",
           )
-          call_args.push(arg.source)
-        }
       }
     }
-    match output_stream_source(command) {
-      Some(source) =>
-        buf.write_string(
-          "      let (__golem_stdout, " + source + ") = @tool.new_stdout()\n",
-        )
-      None => ()
+    for arg in args {
+      match arg.placement {
+        Hidden(InputStream) =>
+          buf.write_string(
+            "      let " +
+            arg.source +
+            " = match __golem_stdin {\n        Some(__golem_stream) => __golem_stream\n        None => return Err(@toolCommon.ToolError::InvalidInput(\"required stdin stream is missing\"))\n      }\n",
+          )
+        Hidden(OutputStream) =>
+          buf.write_string(
+            "      let " +
+            arg.source +
+            " = match __golem_stdout {\n        Some(__golem_output) => __golem_output\n        None => return Err(@toolCommon.ToolError::InvalidInput(\"required stdout stream is missing\"))\n      }\n",
+          )
+        _ => ()
+      }
     }
     let invocation = tool.source_name +
       "::" +
@@ -2008,8 +1993,13 @@ fn emit_invoker(
       "(" +
       ({
         let emitted_call_args : Array[String] = []
-        for index, value in call_args {
-          emitted_call_args.push(value + args[index].call_suffix)
+        for arg in args {
+          let value = if arg.placement is Hidden(Principal) {
+            "__golem_principal"
+          } else {
+            arg.source
+          }
+          emitted_call_args.push(value + arg.call_suffix)
         }
         emitted_call_args.join(", ")
       }) +

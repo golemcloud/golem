@@ -24,7 +24,10 @@ use crate::tool::arg::parse_arg;
 use crate::tool::command::{CommandAttr, parse_command_into};
 use crate::tool::constraint::parse_constraint;
 use crate::tool::doc::parse_doc_full;
-use crate::tool::helpers::{SeenKeys, StreamKind, stream_type, to_kebab_case};
+use crate::tool::helpers::{
+    SeenKeys, StreamKind, fresh_internal_ident, normalize_sdk_paths_in_item_trait,
+    resolve_generated_sdk_paths, stream_type, to_kebab_case,
+};
 use crate::tool::ir::{ArgIr, ArgPlacement, CommandIr, ParamIr, ToolDefinitionIr};
 use crate::tool::result::parse_result;
 use proc_macro::TokenStream;
@@ -398,6 +401,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                         __input_graph,
                         __input_fields,
                         __stdin,
+                        __stdout,
                         __principal,
                     )
                     .await
@@ -449,6 +453,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
             __command_path: ::std::vec::Vec<::std::string::String>,
             __input: golem_rust::golem_agentic::exports::golem::tool::guest::TypedSchemaValue,
             __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
+            __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::host::ToolStdoutWriter>,
             __principal: golem_rust::golem_agentic::golem::agent::common::Principal,
         ) -> golem_rust::agentic::ToolInvokeFutureFor<'a>
         where
@@ -464,6 +469,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                     __input_graph,
                     __input_fields,
                     __stdin,
+                    __stdout,
                     __principal,
                 )
                 .await
@@ -481,6 +487,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
             __input_graph: golem_rust::SchemaGraph,
             mut __input_fields: ::std::vec::Vec<golem_rust::agentic::CanonicalInputValue>,
             mut __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
+            mut __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::host::ToolStdoutWriter>,
             __principal: golem_rust::golem_agentic::golem::agent::common::Principal,
         ) -> golem_rust::agentic::ToolInvokeFutureFor<'a>
         where
@@ -499,6 +506,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                         .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidResult(__err.to_string()))?;
                     ::std::result::Result::Ok(golem_rust::golem_agentic::exports::golem::tool::guest::InvocationResult {
                         result: ::std::option::Option::Some(__value),
+                        stdout: ::std::option::Option::None,
                     })
                 }
 
@@ -508,6 +516,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                 > {
                     ::std::result::Result::Ok(golem_rust::golem_agentic::exports::golem::tool::guest::InvocationResult {
                         result: ::std::option::Option::None,
+                        stdout: ::std::option::Option::None,
                     })
                 }
 
