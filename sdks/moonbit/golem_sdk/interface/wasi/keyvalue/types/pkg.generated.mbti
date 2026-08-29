@@ -30,4 +30,3 @@ pub fn OutgoingValue::outgoing_value_write_body_sync(Self, FixedArray[Byte]) -> 
 // Type aliases
 
 // Traits
-

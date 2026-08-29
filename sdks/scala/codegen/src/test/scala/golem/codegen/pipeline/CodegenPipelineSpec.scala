@@ -107,6 +107,176 @@ class CodegenPipelineSpec extends munit.FunSuite {
     assert(content.contains("ToolImplementation.registerClass[example.Grep, example.GrepImpl]"))
   }
 
+  test("auto-register emits transparent, adapter, and universal middleware helpers") {
+    val source = SourceDiscovery.SourceInput(
+      "Middleware.scala",
+      """|package example.middleware
+         |import golem.runtime.annotations._
+         |
+         |@toolDefinition(name = "presented", version = "1.0.0")
+         |trait Presented { def call(value: String): String }
+         |
+         |@toolDefinition(name = "expected", version = "1.0.0")
+         |trait Expected { def execute(value: String): Long }
+         |
+         |@toolMiddleware(name = "transparent")
+         |final class Transparent extends PresentedMiddleware
+         |
+         |@toolMiddleware(name = "adapter")
+         |final class Adapter extends PresentedMiddleware.Adapter[ExpectedUnderlying]
+         |
+         |@universalToolMiddleware(name = "universal")
+         |final class Universal extends golem.tool.UniversalToolMiddleware
+         |""".stripMargin
+    )
+    val result       = CodegenPipeline.run(discover(source), Some("example"), rpcEnabled = true)
+    val autoRegister = result.autoRegister.get
+    val content      = autoRegister.files
+      .find(_.relativePath.endsWith("__GolemAutoRegister_example_middleware.scala"))
+      .get
+      .content
+
+    assertEquals(autoRegister.implCount, 3)
+    assert(content.contains("import golem.runtime.autowire.ToolMiddlewareImplementation"), content)
+    assert(
+      content.contains(
+        "ToolMiddlewareImplementation.registerTransparent[example.middleware.Presented, example.middleware.PresentedUnderlying, example.middleware.PresentedMiddleware, example.middleware.Transparent](example.middleware.PresentedUnderlying.__golemFromRaw)"
+      ),
+      content
+    )
+    assert(
+      content.contains(
+        "ToolMiddlewareImplementation.registerAdapter[example.middleware.Presented, example.middleware.Expected, example.middleware.ExpectedUnderlying, example.middleware.PresentedMiddleware.Adapter[example.middleware.ExpectedUnderlying], example.middleware.Adapter](example.middleware.ExpectedUnderlying.__golemFromRaw)"
+      ),
+      content
+    )
+    assert(
+      content.contains(
+        "ToolMiddlewareImplementation.registerUniversal[example.middleware.Universal]"
+      ),
+      content
+    )
+    val initializer = autoRegister.files.find(_.relativePath.endsWith("RegisterAgents.scala")).get.content
+    assert(initializer.contains("private var registered = false"), initializer)
+    assert(initializer.contains("if (!registered)"), initializer)
+  }
+
+  test("pure universal middleware generates registration without agent or tool implementations") {
+    val source = SourceDiscovery.SourceInput(
+      "Universal.scala",
+      """|package example.pure
+         |import golem.runtime.annotations.universalToolMiddleware
+         |
+         |@universalToolMiddleware(name = "universal-only")
+         |final class UniversalOnly extends golem.tool.UniversalToolMiddleware
+         |""".stripMargin
+    )
+    val autoRegister = CodegenPipeline.run(discover(source), Some("example"), rpcEnabled = true).autoRegister.get
+    val content      = autoRegister.files
+      .find(_.relativePath.endsWith("__GolemAutoRegister_example_pure.scala"))
+      .get
+      .content
+
+    assertEquals(autoRegister.implCount, 1)
+    assertEquals(autoRegister.packageCount, 1)
+    assert(content.contains("import golem.runtime.autowire.ToolMiddlewareImplementation"), content)
+    assert(content.contains("ToolMiddlewareImplementation.registerUniversal[example.pure.UniversalOnly]"), content)
+    assert(!content.contains("AgentImplementation"), content)
+    assert(!content.contains("ToolImplementation.registerClass"), content)
+  }
+
+  test("universal middleware surface changes invalidate auto-registration") {
+    def generated(description: String): String = {
+      val source = SourceDiscovery.SourceInput(
+        "Universal.scala",
+        s"""|package example.pure
+            |import golem.runtime.annotations._
+            |
+            |@universalToolMiddleware(name = "universal-only")
+            |@description("$description")
+            |final class UniversalOnly extends golem.tool.UniversalToolMiddleware
+            |""".stripMargin
+      )
+      CodegenPipeline
+        .run(discover(source), Some("example"), rpcEnabled = false)
+        .autoRegister
+        .get
+        .files
+        .find(_.relativePath.endsWith("__GolemAutoRegister_example_pure.scala"))
+        .get
+        .content
+    }
+
+    assertNotEquals(generated("first"), generated("second"))
+  }
+
+  test("auto-register keeps a no-op initializer when no implementations remain") {
+    val autoRegister = CodegenPipeline.run(discover(), Some("example"), rpcEnabled = false).autoRegister.get
+
+    assertEquals(autoRegister.implCount, 0)
+    assertEquals(autoRegister.packageCount, 0)
+    assertEquals(
+      autoRegister.files.map(_.relativePath),
+      Seq("golem/runtime/__generated/autoregister/example/RegisterAgents.scala")
+    )
+    val initializer = autoRegister.files.head.content
+    assert(initializer.contains("private var registered = false"), initializer)
+    assert(initializer.contains("def main(): Unit = registerAll()"), initializer)
+    assert(!initializer.contains("__GolemAutoRegister_"), initializer)
+  }
+
+  test("auto-register disambiguates package names with the same sanitized suffix") {
+    val nested = SourceDiscovery.SourceInput(
+      "Nested.scala",
+      """|package example.a.b
+         |import golem.runtime.annotations.universalToolMiddleware
+         |@universalToolMiddleware(name = "nested")
+         |final class Nested extends golem.tool.UniversalToolMiddleware
+         |""".stripMargin
+    )
+    val underscored = SourceDiscovery.SourceInput(
+      "Underscored.scala",
+      """|package example.a_b
+         |import golem.runtime.annotations.universalToolMiddleware
+         |@universalToolMiddleware(name = "underscored")
+         |final class Underscored extends golem.tool.UniversalToolMiddleware
+         |""".stripMargin
+    )
+    val hashShaped = SourceDiscovery.SourceInput(
+      "HashShaped.scala",
+      """|package example.a_b_f90db42a12efee4ae48754aedbe534e7232876209a0e3714ae790604a97b41cf
+         |import golem.runtime.annotations.universalToolMiddleware
+         |@universalToolMiddleware(name = "hash-shaped")
+         |final class HashShaped extends golem.tool.UniversalToolMiddleware
+         |""".stripMargin
+    )
+    val autoRegister =
+      CodegenPipeline
+        .run(discover(nested, underscored, hashShaped), Some("example"), rpcEnabled = false)
+        .autoRegister
+        .get
+    val packageFiles = autoRegister.files.filterNot(_.relativePath.endsWith("RegisterAgents.scala"))
+    val initializer  = autoRegister.files.find(_.relativePath.endsWith("RegisterAgents.scala")).get.content
+
+    assertEquals(packageFiles.size, 3)
+    assertEquals(packageFiles.map(_.relativePath).distinct.size, 3)
+    assertEquals(packageFiles.map(_.relativePath).map(_.contains('$')).count(identity), 2)
+    assert(packageFiles.exists(_.content.contains("registerUniversal[example.a.b.Nested]")), packageFiles)
+    assert(packageFiles.exists(_.content.contains("registerUniversal[example.a_b.Underscored]")), packageFiles)
+    assert(
+      packageFiles.exists(
+        _.content.contains(
+          "registerUniversal[example.a_b_f90db42a12efee4ae48754aedbe534e7232876209a0e3714ae790604a97b41cf.HashShaped]"
+        )
+      ),
+      packageFiles
+    )
+    packageFiles.foreach { file =>
+      val objectName = file.relativePath.split('/').last.stripSuffix(".scala")
+      assertEquals(java.util.regex.Pattern.quote(objectName).r.findAllMatchIn(initializer).length, 1)
+    }
+  }
+
   test("auto-register source changes when tool definition version changes") {
     def source(version: String) = SourceDiscovery.SourceInput(
       "Grep.scala",
@@ -518,7 +688,7 @@ class CodegenPipelineSpec extends munit.FunSuite {
     )
 
     def generated(childCommand: String) = CodegenPipeline
-      .run(discover(sources(childCommand)*), Some("example"), rpcEnabled = false)
+      .run(SourceDiscovery.discover(sources(childCommand)), Some("example"), rpcEnabled = false)
       .autoRegister
       .get
       .files
@@ -563,7 +733,7 @@ class CodegenPipelineSpec extends munit.FunSuite {
     )
 
     def generated(exitCode: Int) = CodegenPipeline
-      .run(discover(sources(exitCode)*), Some("example"), rpcEnabled = false)
+      .run(SourceDiscovery.discover(sources(exitCode)), Some("example"), rpcEnabled = false)
       .autoRegister
       .get
       .files
@@ -1147,7 +1317,7 @@ class CodegenPipelineSpec extends munit.FunSuite {
     )
 
     val originalAutoRegister = CodegenPipeline
-      .run(discover(source("1.0.0")*), Some("example"), rpcEnabled = false)
+      .run(SourceDiscovery.discover(source("1.0.0")), Some("example"), rpcEnabled = false)
       .autoRegister
       .get
       .files
@@ -1156,7 +1326,7 @@ class CodegenPipelineSpec extends munit.FunSuite {
       .content
 
     val updatedAutoRegister = CodegenPipeline
-      .run(discover(source("1.0.1")*), Some("example"), rpcEnabled = false)
+      .run(SourceDiscovery.discover(source("1.0.1")), Some("example"), rpcEnabled = false)
       .autoRegister
       .get
       .files
@@ -1418,7 +1588,7 @@ class CodegenPipelineSpec extends munit.FunSuite {
     )
 
     val originalAutoRegister = CodegenPipeline
-      .run(discover(source("")*), Some("example"), rpcEnabled = false)
+      .run(SourceDiscovery.discover(source("")), Some("example"), rpcEnabled = false)
       .autoRegister
       .get
       .files
@@ -1427,7 +1597,7 @@ class CodegenPipelineSpec extends munit.FunSuite {
       .content
 
     val updatedAutoRegister = CodegenPipeline
-      .run(discover(source("  def decrement(): Int")*), Some("example"), rpcEnabled = false)
+      .run(SourceDiscovery.discover(source("  def decrement(): Int")), Some("example"), rpcEnabled = false)
       .autoRegister
       .get
       .files
@@ -1462,6 +1632,80 @@ class CodegenPipelineSpec extends munit.FunSuite {
 
     assert(result.autoRegister.isEmpty)
     assert(result.rpc.files.isEmpty)
+  }
+
+  test("pipeline emits typed middleware projections with ordinary tool clients") {
+    val discovered = discover(toolSource)
+    val result     = CodegenPipeline.run(discovered, None, rpcEnabled = true)
+
+    assertEquals(
+      result.rpc.files.map(_.relativePath),
+      Seq("example/GrepClient.scala", "example/GrepMiddleware.scala")
+    )
+    assert(result.rpc.files.last.content.contains("trait GrepUnderlying"))
+    assert(
+      result.rpc.files.last.content.contains("trait GrepMiddleware extends GrepMiddleware.Adapter[GrepUnderlying]")
+    )
+  }
+
+  test("pipeline rejects ambiguous flattened middleware methods") {
+    val source = SourceDiscovery.SourceInput(
+      "Collision.scala",
+      """|package example
+         |import golem.runtime.annotations._
+         |@toolDefinition(name = "root")
+         |trait Root {
+         |  def first(): First
+         |  def second(): Second
+         |}
+         |@toolDefinition(name = "first")
+         |trait First { def run(): String }
+         |@toolDefinition(name = "second")
+         |trait Second { def run(): String }
+         |""".stripMargin
+    )
+
+    val error = intercept[CodegenPipeline.PipelineException] {
+      CodegenPipeline.run(discover(source), None, rpcEnabled = true)
+    }
+    assert(error.getMessage.contains("first run"), error.getMessage)
+    assert(error.getMessage.contains("second run"), error.getMessage)
+  }
+
+  test("pipeline rejects middleware subtree cycles with path and trait cycle") {
+    val source = SourceDiscovery.SourceInput(
+      "Cycle.scala",
+      """|package example
+         |import golem.runtime.annotations._
+         |@toolDefinition(name = "a")
+         |trait A { def b(): B }
+         |@toolDefinition(name = "b")
+         |trait B { def a(): A }
+         |""".stripMargin
+    )
+
+    val error = intercept[CodegenPipeline.PipelineException] {
+      CodegenPipeline.run(discover(source), None, rpcEnabled = true)
+    }
+    assert(error.getMessage.contains("subtree cycle"), error.getMessage)
+    assert(error.getMessage.contains("b a"), error.getMessage)
+    assert(error.getMessage.contains("example.A -> example.B -> example.A"), error.getMessage)
+  }
+
+  test("pipeline rejects middleware parameters in the generated internal namespace") {
+    val source = SourceDiscovery.SourceInput(
+      "Reserved.scala",
+      """|package example
+         |import golem.runtime.annotations._
+         |@toolDefinition(name = "reserved")
+         |trait Reserved { def call(__golemInput: String): String }
+         |""".stripMargin
+    )
+
+    val error = intercept[CodegenPipeline.PipelineException] {
+      CodegenPipeline.run(discover(source), None, rpcEnabled = true)
+    }
+    assert(error.getMessage.contains("parameter name `__golemInput` is reserved"), error.getMessage)
   }
 
   test("pipeline converts discovery methods to IR with principalParams") {

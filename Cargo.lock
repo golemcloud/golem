@@ -2635,9 +2635,9 @@ dependencies = [
 
 [[package]]
 name = "desert_core"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99e561700fe8c3a51189d8f8b5e83344fb1747b88cc0343e14d3c22842459624"
+checksum = "623ecd066d1ec74037f703e5a5833304a5621a0c0201ad72ea04a80054483fc7"
 dependencies = [
  "bigdecimal",
  "bit-vec 0.6.3",
@@ -2658,9 +2658,9 @@ dependencies = [
 
 [[package]]
 name = "desert_macro"
-version = "0.1.9"
+version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e622883bc90493a0921717f5363f8adf7cb5307419abda5126bfd624379ca785"
+checksum = "d9ed06e04bc6899b2609b595a931e84d79a5f4187225d6f4cd942b2ebf54db81"
 dependencies = [
  "bytes",
  "desert_core",
@@ -2672,9 +2672,9 @@ dependencies = [
 
 [[package]]
 name = "desert_rust"
-version = "0.1.9"
+version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94677f3ac0a0b303a8b3dd01576348652c85e55da1b71a60f6b92f25180b66dd"
+checksum = "0fd78c31bbbee1a0cd9203362cb1b00306344759d064fc1e8636d5c8c64bfc61"
 dependencies = [
  "desert_core",
  "desert_macro",
@@ -3671,6 +3671,7 @@ dependencies = [
 name = "golem-api-grpc"
 version = "0.0.0"
 dependencies = [
+ "blake3",
  "desert_rust",
  "miette",
  "prost 0.14.4",
@@ -3712,6 +3713,7 @@ dependencies = [
  "futures-util",
  "fuzzy-matcher",
  "goldenfile",
+ "golem-api-grpc",
  "golem-client",
  "golem-common",
  "heck",
@@ -3734,6 +3736,7 @@ dependencies = [
  "prettyplease",
  "proc-macro2",
  "proptest",
+ "prost 0.14.4",
  "quote",
  "regex",
  "reqwest 0.13.4",
@@ -3760,6 +3763,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-tungstenite",
+ "tokio-util",
  "toml 0.9.12+spec-1.1.0",
  "toml_edit 0.23.10+spec-1.0.0",
  "tracing",
@@ -4067,6 +4071,7 @@ dependencies = [
  "base64 0.22.1",
  "bigdecimal",
  "bit-vec 0.6.3",
+ "blake3",
  "bytes",
  "chrono",
  "combine",
@@ -4291,6 +4296,7 @@ dependencies = [
  "applying",
  "arc-swap",
  "assert2",
+ "async-broadcast",
  "async-lock",
  "async-recursion",
  "async-scoped",
@@ -4412,6 +4418,7 @@ dependencies = [
  "tempfile",
  "test-r",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tonic 0.14.6",
  "tonic-tracing-opentelemetry",
@@ -5335,6 +5342,7 @@ dependencies = [
  "opentelemetry 0.30.0",
  "opentelemetry_sdk 0.30.0",
  "pretty_assertions",
+ "prost 0.14.4",
  "rand 0.9.5",
  "redis",
  "reqwest 0.13.4",
@@ -11512,9 +11520,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c3f4f07c06f38d6858db65eed7975674f19aca749e6fd8bd56dd6e9376b8d33"
+checksum = "e870a6b59731416c8ebe60fe42dedd65fc92df7820d4f387a68330bd06ed1212"
 dependencies = [
  "anyhow",
  "camino",

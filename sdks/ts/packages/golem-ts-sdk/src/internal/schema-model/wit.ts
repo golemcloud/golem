@@ -33,6 +33,7 @@ import type {
   DefIndex,
   TypedSchemaValue as WitTypedSchemaValue,
 } from 'golem:core/types@2.0.0';
+import { SchemaValueStream } from 'golem:core/types@2.0.0';
 
 import {
   type SchemaGraph,
@@ -50,6 +51,7 @@ import { GuestSecretHandle } from './secretHandle';
 import { SECRET_INTERNAL } from './secretInternal';
 import { GuestQuotaTokenHandle } from './quotaTokenHandle';
 import { QUOTA_INTERNAL } from './quotaInternal';
+import { GuestSchemaValueStreamHandle } from './schemaValueStreamHandle';
 import { GuestPermissionCardHandle } from './permissionCardHandle';
 import { PERMISSION_CARD_INTERNAL } from './permissionCardInternal';
 import { SchemaDecodeError, SchemaEncodeError } from './errors';
@@ -508,7 +510,10 @@ function assertDenseModelArray(value: unknown, name: string): asserts value is u
  * underlying owned resource (peeked without consuming), not merely by holder
  * identity, so two holders that somehow wrap the same resource are also rejected.
  */
-export function assertSchemaValueRepresentable(value: SchemaValue): void {
+export function assertSchemaValueRepresentable(
+  value: SchemaValue,
+  allowNativeStreams = false,
+): void {
   const seen = new Set<unknown>();
   const visit = (v: SchemaValue): void => {
     switch (v.tag) {
@@ -626,6 +631,23 @@ export function assertSchemaValueRepresentable(value: SchemaValue): void {
           );
         }
         seen.add(raw);
+        return;
+      }
+      case 'stream': {
+        if (!(v.handle instanceof GuestSchemaValueStreamHandle)) {
+          throw new SchemaEncodeError('stream value contains an invalid stream handle');
+        }
+        const stream = v.handle.peek();
+        if (stream === undefined) {
+          throw new SchemaEncodeError('schema value stream was already transferred');
+        }
+        if (stream.kind === 'native' && !allowNativeStreams) {
+          throw new SchemaEncodeError('native schema value streams require asynchronous encoding');
+        }
+        if (seen.has(stream.value)) {
+          throw new SchemaEncodeError('the same schema value stream appeared more than once');
+        }
+        seen.add(stream.value);
         return;
       }
       case 'permission-card': {
@@ -847,6 +869,16 @@ export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
         }
         return { tag: 'quota-token-handle', val: raw };
       }
+      case 'stream': {
+        const stream = v.handle.take();
+        if (stream === undefined) {
+          throw new SchemaEncodeError('schema value stream was already transferred');
+        }
+        if (stream.kind !== 'wrapped') {
+          throw new SchemaEncodeError('native schema value streams require asynchronous encoding');
+        }
+        return { tag: 'stream-value', val: stream.value };
+      }
       case 'permission-card': {
         const raw = v.handle.take();
         if (raw === undefined) {
@@ -863,6 +895,94 @@ export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
 
   const root = emit(value);
   return { valueNodes, root };
+}
+
+export async function schemaValueToWitAsync(value: SchemaValue): Promise<WitSchemaValueTree> {
+  // This walk is deliberately complete and side-effect free. In particular,
+  // do not start wrapping an earlier stream until malformed, consumed, or
+  // aliased capabilities anywhere else in the tree have been rejected.
+  assertSchemaValueRepresentable(value, true);
+
+  const newlyWrapped: Array<{
+    handle: Pick<GuestSchemaValueStreamHandle, 'peek' | 'take'>;
+    value: unknown;
+  }> = [];
+
+  async function prepare(current: SchemaValue): Promise<void> {
+    switch (current.tag) {
+      case 'stream': {
+        const stream = current.handle.peek();
+        if (stream === undefined) {
+          throw new SchemaEncodeError('schema value stream was already transferred');
+        }
+        if (stream.kind === 'wrapped') return;
+
+        // Capability movement is intentionally serialized. Besides preserving
+        // deterministic ownership, this avoids starting sibling wraps after an
+        // earlier wrap has already failed.
+        current.handle.take();
+        const wrapped = await SchemaValueStream.wrap(stream.value);
+        current.handle = new GuestSchemaValueStreamHandle({
+          kind: 'wrapped',
+          value: wrapped,
+        });
+        newlyWrapped.push({ handle: current.handle, value: wrapped });
+        return;
+      }
+      case 'record': {
+        for (const field of current.fields) await prepare(field);
+        return;
+      }
+      case 'tuple':
+      case 'list':
+      case 'fixed-list': {
+        for (const element of current.elements) await prepare(element);
+        return;
+      }
+      case 'variant':
+        if (current.payload !== undefined) await prepare(current.payload);
+        return;
+      case 'map':
+        for (const entry of current.entries) {
+          await prepare(entry.key);
+          await prepare(entry.value);
+        }
+        return;
+      case 'option':
+        if (current.value !== undefined) await prepare(current.value);
+        return;
+      case 'result':
+        if (current.result.value !== undefined) await prepare(current.result.value);
+        return;
+      case 'union':
+        await prepare(current.body);
+        return;
+      default:
+        return;
+    }
+  }
+
+  try {
+    await prepare(value);
+    return schemaValueToWit(value);
+  } catch (error) {
+    // A successful wrap creates an owned WIT resource. If a subsequent wrap or
+    // the final flattening fails, none of those resources can be returned to
+    // the caller, so explicitly destroy every one that this invocation made.
+    for (let i = newlyWrapped.length - 1; i >= 0; i--) {
+      const wrapped = newlyWrapped[i]!;
+      wrapped.handle.take();
+      const dispose = (wrapped.value as { [Symbol.dispose]?: () => void })[Symbol.dispose];
+      if (dispose !== undefined) {
+        try {
+          dispose.call(wrapped.value);
+        } catch {
+          // Preserve the conversion failure while still attempting all cleanup.
+        }
+      }
+    }
+    throw error;
+  }
 }
 
 /**
@@ -929,6 +1049,7 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
 
   const onPath = new Uint8Array(nodes.length);
   const secretReached = new Set<number>();
+  const streamReached = new Set<number>();
   // Indices of owned quota-token and permission-card nodes already reached. An
   // owned handle is affine, so reaching one twice is rejected.
   const ownedHandleReached = new Set<number>();
@@ -1141,6 +1262,21 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
         ownedHandleReached.add(idx);
         return;
       }
+      case 'stream-value': {
+        if (streamReached.has(idx)) {
+          throw new SchemaDecodeError('schema value stream referenced more than once');
+        }
+        const raw = n.val;
+        if (raw === undefined) {
+          throw new SchemaDecodeError('schema value stream was already transferred');
+        }
+        if (seenRaw.has(raw)) {
+          throw new SchemaDecodeError('the same schema value stream appeared more than once');
+        }
+        seenRaw.add(raw);
+        streamReached.add(idx);
+        return;
+      }
       default:
         throw new SchemaDecodeError(
           `unknown schema value node tag '${(n as { tag: string }).tag}'`,
@@ -1162,6 +1298,9 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
     }
     if (node.tag === 'quota-token-handle' && !ownedHandleReached.has(i)) {
       throw new SchemaDecodeError(`quota-token handle not referenced from the root: ${i}`);
+    }
+    if (node.tag === 'stream-value' && !streamReached.has(i)) {
+      throw new SchemaDecodeError(`schema value stream not referenced from the root: ${i}`);
     }
     if (node.tag === 'permission-card-handle' && !ownedHandleReached.has(i)) {
       throw new SchemaDecodeError(`permission-card handle not referenced from the root: ${i}`);
@@ -1337,6 +1476,17 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
         (n as { val: unknown }).val = undefined;
         return { tag: 'quota-token', handle: GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, raw) };
       }
+      case 'stream-value': {
+        const raw = n.val as typeof n.val | undefined;
+        if (raw === undefined) {
+          throw new SchemaDecodeError('schema value stream referenced more than once');
+        }
+        (n as { val: unknown }).val = undefined;
+        return {
+          tag: 'stream',
+          handle: new GuestSchemaValueStreamHandle({ kind: 'wrapped', value: raw }),
+        };
+      }
       case 'permission-card-handle': {
         const raw = n.val as typeof n.val | undefined;
         if (raw === undefined) {
@@ -1381,7 +1531,7 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
 }
 
 /**
- * Clear every owned quota-token or permission-card handle still present in
+ * Clear every owned quota-token, permission-card, or schema-value-stream handle still present in
  * `nodes` (i.e. not moved out during decode) and return the index of the first
  * one found, or `undefined` if none remained.
  */
@@ -1393,7 +1543,9 @@ export function drainUnconsumedQuotaAndPermissionCardHandles(
     const node = nodes[i];
     if (typeof node !== 'object' || node === null || Array.isArray(node)) continue;
     if (
-      (node.tag === 'quota-token-handle' || node.tag === 'permission-card-handle') &&
+      (node.tag === 'quota-token-handle' ||
+        node.tag === 'permission-card-handle' ||
+        node.tag === 'stream-value') &&
       (node as { val: unknown }).val !== undefined
     ) {
       if (first === undefined) first = i;

@@ -71,6 +71,11 @@ message RawOplogEntry {
     RawCardTransferredParameters card_transferred = 56;
     RawCardRevokedCascadeParameters card_revoked_cascade = 57;
     RawCardTransferConfirmedParameters card_transfer_confirmed = 58;
+    RawDurableStreamRecordParameters stream_registered = 59;
+    RawDurableStreamRecordParameters stream_items = 60;
+    RawDurableStreamRecordParameters stream_end = 61;
+    RawDurableStreamRecordParameters stream_cancel = 62;
+    RawDurableStreamRecordParameters stream_session = 63;
   }
 }
 
@@ -474,6 +479,10 @@ message RawHostStreamFrameParameters {
   uint64 parent_start_index = 1;
   HostStreamKind kind = 2;
   RawOplogPayload payload = 3;
+}
+
+message RawDurableStreamRecordParameters {
+  RawOplogPayload record = 1;
 }
 
 message RawOplogEntryWithIndex {

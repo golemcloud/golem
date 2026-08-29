@@ -50,4 +50,3 @@ pub fn Span::started_at(Self) -> @system-clock.Instant
 // Type aliases
 
 // Traits
-

@@ -149,4 +149,3 @@ pub(all) struct TlsAlertReceivedPayload {
 // Type aliases
 
 // Traits
-

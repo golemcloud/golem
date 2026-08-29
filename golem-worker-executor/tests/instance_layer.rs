@@ -665,7 +665,7 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
     let after = owner_oplog.current_oplog_index().await;
     assert!(after > before);
     let appended = owner_oplog
-        .read_many(before.next(), u64::from(after) - u64::from(before))
+        .read_exact(before.next(), u64::from(after) - u64::from(before))
         .await;
     assert!(
         appended
@@ -780,7 +780,7 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
             let latest = owner_oplog.current_oplog_index().await;
             if latest > before_sleep {
                 let entries = owner_oplog
-                    .read_many(
+                    .read_exact(
                         before_sleep.next(),
                         u64::from(latest) - u64::from(before_sleep),
                     )

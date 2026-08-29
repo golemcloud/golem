@@ -119,7 +119,8 @@ use golem_worker_executor::services::golem_config::{
 };
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{
-    CommitLevel, Oplog, OplogAddReceipt, OplogService, OrderedOplogStart,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
+    OplogService, OrderedOplogStart,
 };
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::quota::QuotaService;
@@ -147,7 +148,7 @@ use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
     CallCountManagement, EntityInvocationManagement, ExternalOperations, FileSystemReading,
     FuelManagement, InvocationContextManagement, InvocationHooks, InvocationManagement,
-    LogEventEmitBehaviour, StatusManagement, UpdateManagement, WorkerCtx,
+    LogEventEmitBehaviour, P3HttpBodyProducerHook, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor::{Bootstrap, RunDetails, bootstrap_and_run_worker_executor};
 use prometheus::Registry;
@@ -168,7 +169,7 @@ use tower::ServiceBuilder;
 use tracing::{Level, debug, info};
 use uuid::{Uuid, uuid};
 use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
-use wasmtime::{AsContextMut, Engine, MemoryKind, ResourceLimiterAsync};
+use wasmtime::{Engine, MemoryKind, ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;
 
 #[cfg(test)]
@@ -757,6 +758,19 @@ impl TestWorkerExecutor {
             .await
     }
 
+    /// Defers the first ready consume-body reply until the matching guest read
+    /// is polled again, allowing a test to initiate `stream.cancel-read` while
+    /// the reply is queued. Must be armed before the invocation creates its
+    /// response body.
+    pub async fn defer_first_consume_body_reply(
+        &self,
+        agent_id: &AgentId,
+    ) -> ConsumeBodyReplyDeferHandle {
+        self.additional_test_deps
+            .defer_first_consume_body_reply(agent_id.clone())
+            .await
+    }
+
     /// Returns the per-worker memory requirement that the executor uses when
     /// reserving from the worker memory semaphore. Lets tests sanity-check that
     /// they have constrained the memory budget tightly enough to force
@@ -1336,6 +1350,8 @@ async fn run(
 
 pub struct TestWorkerCtx {
     durable_ctx: DurableWorkerCtx<TestWorkerCtx>,
+    additional_test_deps: AdditionalTestDeps,
+    agent_id: AgentId,
 }
 
 impl DurableWorkerCtxView<TestWorkerCtx> for TestWorkerCtx {
@@ -1423,7 +1439,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     }
 
     async fn resume_replay(
-        store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
+        store: &mut Store<TestWorkerCtx>,
         instance: &Instance,
         refresh_replay_target: bool,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
@@ -1434,7 +1450,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     async fn prepare_instance(
         agent_id: &AgentId,
         instance: &Instance,
-        store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
+        store: &mut Store<TestWorkerCtx>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(agent_id, instance, store).await
     }
@@ -1628,6 +1644,11 @@ impl WorkerCtx for TestWorkerCtx {
         Arc::new(TestOplog::new(owned_agent_id, oplog, extra_deps))
     }
 
+    fn p3_http_body_producer_hook(&self) -> Option<Arc<dyn P3HttpBodyProducerHook>> {
+        self.additional_test_deps
+            .p3_http_body_producer_hook(self.agent_id.clone())
+    }
+
     async fn create(
         _account_id: AccountId,
         owned_agent_id: OwnedAgentId,
@@ -1676,6 +1697,7 @@ impl WorkerCtx for TestWorkerCtx {
         // it, so test helpers (e.g. `worker_is_loaded`) can observe worker
         // shells under memory-pressure eviction (#3393 T5).
         extra_deps.set_active_agents(active_agents.clone());
+        let worker_agent_id = owned_agent_id.agent_id.clone();
 
         if !Arc::ptr_eq(&execution_status, &owner_resources.execution_status()) {
             return Err(WorkerExecutorError::runtime(
@@ -1728,7 +1750,11 @@ impl WorkerCtx for TestWorkerCtx {
             entity_activation,
         )
         .await?;
-        Ok(Self { durable_ctx })
+        Ok(Self {
+            durable_ctx,
+            additional_test_deps: extra_deps,
+            agent_id: worker_agent_id,
+        })
     }
 
     fn as_wasi_view(&mut self) -> impl WasiView {
@@ -2384,7 +2410,10 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
             &mut linker,
             <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
-        golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+        golem_schema::schema::wit::wire::add_to_linker::<
+            _,
+            golem_worker_executor::durable_host::CoreTypesHost<Context>,
+        >(
             &mut linker,
             <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
@@ -2911,6 +2940,13 @@ impl Oplog for TestOplog {
         })
     }
 
+    async fn add_durable_stream_batch(
+        &self,
+        make_batch: DurableStreamBatchBuilder,
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+        self.oplog.add_durable_stream_batch(make_batch).await
+    }
+
     async fn fallible_add(&self, entry: OplogEntry) -> Result<(), String> {
         self.check_oplog_add(&entry).await?;
         self.oplog.fallible_add(entry).await
@@ -2952,10 +2988,22 @@ impl Oplog for TestOplog {
         self.oplog.read(oplog_index).await
     }
 
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn read_exact(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
         self.additional_test_deps
-            .record_oplog_call(&self.owned_agent_id, "read_many");
-        self.oplog.read_many(oplog_index, n).await
+            .record_oplog_call(&self.owned_agent_id, "read_exact");
+        self.oplog.read_exact(oplog_index, n).await
+    }
+
+    async fn read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.oplog.read_source(oplog_index, n).await
     }
 
     async fn length(&self) -> u64 {
@@ -2982,6 +3030,34 @@ impl Oplog for TestOplog {
         let ordered = self
             .oplog
             .add_start_with_reserved_raw_payload(serialized_request, build_start)
+            .await?;
+        if matches!(
+            &ordered.entry,
+            OplogEntry::Start {
+                function_name: HostFunctionName::P3HttpClientConsumeBodyChunk,
+                ..
+            }
+        ) && self
+            .additional_test_deps
+            .consume_body_chunk_end_gate(&self.owned_agent_id.agent_id)
+            .await
+            .is_some()
+        {
+            self.consume_body_chunk_starts
+                .lock()
+                .unwrap()
+                .insert(ordered.index);
+        }
+        Ok(ordered)
+    }
+
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        build_request: IndexedReservedStartBuilder,
+    ) -> Result<OrderedOplogStart, String> {
+        let ordered = self
+            .oplog
+            .add_start_with_indexed_reserved_raw_payload(build_request)
             .await?;
         if matches!(
             &ordered.entry,
@@ -3229,6 +3305,7 @@ pub struct AdditionalTestDeps {
     /// to deterministically race a guest-side body-reader drop against an
     /// already-persisted chunk delivery.
     consume_body_chunk_end_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyChunkEndGate>>>,
+    consume_body_reply_defer_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyReplyDeferGate>>>,
     /// Captured once on first call to [`TestWorkerCtx::create`]. Used by the
     /// read-only test helpers (`worker_is_loaded`,
     /// `worker_eviction_class`, `worker_memory_requirement`) to observe
@@ -3252,6 +3329,7 @@ impl AdditionalTestDeps {
             oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             rdbms_tx_failures,
             consume_body_chunk_end_gates: Arc::new(scc::HashMap::new()),
+            consume_body_reply_defer_gates: Arc::new(scc::HashMap::new()),
             active_agents: Arc::new(std::sync::OnceLock::new()),
         }
     }
@@ -3288,6 +3366,37 @@ impl AdditionalTestDeps {
         self.consume_body_chunk_end_gates
             .read_async(agent_id, |_, gate| gate.clone())
             .await
+    }
+
+    pub async fn defer_first_consume_body_reply(
+        &self,
+        agent_id: AgentId,
+    ) -> ConsumeBodyReplyDeferHandle {
+        let (deferred_tx, deferred_rx) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(ConsumeBodyReplyDeferGate {
+            armed: AtomicBool::new(true),
+            deferred_tx: std::sync::Mutex::new(Some(deferred_tx)),
+        });
+        self.consume_body_reply_defer_gates
+            .entry_async(agent_id)
+            .await
+            .and_modify(|existing| *existing = gate.clone())
+            .or_insert_with(|| gate.clone());
+        ConsumeBodyReplyDeferHandle { deferred_rx }
+    }
+
+    fn p3_http_body_producer_hook(
+        &self,
+        agent_id: AgentId,
+    ) -> Option<Arc<dyn P3HttpBodyProducerHook>> {
+        self.consume_body_reply_defer_gates
+            .contains_sync(&agent_id)
+            .then(|| {
+                Arc::new(TestP3HttpBodyProducerHook {
+                    agent_id,
+                    gates: self.consume_body_reply_defer_gates.clone(),
+                }) as Arc<dyn P3HttpBodyProducerHook>
+            })
     }
 
     fn record_oplog_call(&self, owned_agent_id: &OwnedAgentId, api: &'static str) {
@@ -3410,6 +3519,48 @@ impl Drop for ConsumeBodyChunkEndGateHandle {
     /// release because the gate fires at most once.
     fn drop(&mut self) {
         self.gate.release.add_permits(1);
+    }
+}
+
+struct ConsumeBodyReplyDeferGate {
+    armed: AtomicBool,
+    deferred_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
+pub struct ConsumeBodyReplyDeferHandle {
+    deferred_rx: tokio::sync::oneshot::Receiver<()>,
+}
+
+impl ConsumeBodyReplyDeferHandle {
+    /// Resolves after the body producer has taken a ready reply off its
+    /// channel but left it pending for the next guest poll.
+    pub async fn deferred(&mut self) {
+        (&mut self.deferred_rx)
+            .await
+            .expect("the consume-body reply defer gate was dropped without firing");
+    }
+}
+
+struct TestP3HttpBodyProducerHook {
+    agent_id: AgentId,
+    gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyReplyDeferGate>>>,
+}
+
+impl P3HttpBodyProducerHook for TestP3HttpBodyProducerHook {
+    fn should_defer_ready_reply(&self) -> bool {
+        self.gates
+            .read_sync(&self.agent_id, |_, gate| gate.armed.load(Ordering::SeqCst))
+            .unwrap_or(false)
+    }
+
+    fn ready_reply_deferred(&self) {
+        self.gates.read_sync(&self.agent_id, |_, gate| {
+            if gate.armed.swap(false, Ordering::SeqCst)
+                && let Some(deferred_tx) = gate.deferred_tx.lock().unwrap().take()
+            {
+                let _ = deferred_tx.send(());
+            }
+        });
     }
 }
 

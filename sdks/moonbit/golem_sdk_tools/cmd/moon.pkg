@@ -5,6 +5,7 @@ import {
   "moonbitlang/formatter",
   "moonbitlang/parser/syntax",
   "moonbitlang/x/fs",
+  "moonbitlang/x/sys",
   "golemcloud/golem_sdk_tools/lib",
 }
 

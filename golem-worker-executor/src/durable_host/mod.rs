@@ -23,6 +23,8 @@ mod clocks;
 mod concurrent;
 mod config;
 pub mod durability;
+pub(crate) mod durable_session;
+pub(crate) mod durable_stream;
 pub mod entity;
 mod filesystem;
 pub mod golem;
@@ -36,8 +38,13 @@ pub mod quota;
 mod random;
 pub mod rdbms;
 pub(crate) mod replay_state;
+pub(crate) mod schema_value_stream;
 mod secrets;
+pub use schema_value_stream::CoreTypesHost;
 mod sockets;
+pub(crate) mod stream_bus;
+pub(crate) mod stream_session;
+pub(crate) mod stream_transport;
 mod suspendable_wait;
 pub mod tail_work;
 pub mod tool;
@@ -167,6 +174,7 @@ use std::time::{Duration, Instant, SystemTime};
 use std::vec;
 use tokio::sync::RwLock as TRwLock;
 
+type PreparedFilesystemStorageReservation<Ctx> = (Arc<Worker<Ctx>>, u64);
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use tokio_util::codec::{BytesCodec, FramedRead};
@@ -174,7 +182,7 @@ use tracing::{Instrument, Level, debug, error, info, span, warn};
 use try_match::try_match;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
-use wasmtime::{AsContext, AsContextMut, MemoryKind};
+use wasmtime::{AsContext, AsContextMut, MemoryKind, Store};
 use wasmtime_wasi::p2::FsResult;
 use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
 use wasmtime_wasi::{
@@ -369,6 +377,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     state: PrivateDurableWorkerState,
     owner_filesystem: OwnerFilesystemAttachment,
     execution_status: Arc<RwLock<ExecutionStatus>>,
+    stream_runtime_teardown: Arc<AtomicBool>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
     linear_memory: LinearMemoryTracker,
@@ -1089,6 +1098,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             state,
             owner_filesystem,
             execution_status,
+            stream_runtime_teardown: Arc::new(AtomicBool::new(false)),
             resource_limits,
             linear_memory,
             storage_meter,
@@ -1940,7 +1950,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .unread_range(current_idx);
 
         if let Some((start, count)) = unread_range {
-            let entries = oplog.read_many(start, count).await;
+            let entries = oplog.read_exact(start, count).await;
             self.state
                 .card_event_boundary_scan
                 .as_mut()
@@ -2449,14 +2459,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) fn prepare_filesystem_storage_reservation(
         &mut self,
         new_bytes: u64,
-    ) -> anyhow::Result<Option<Arc<Worker<Ctx>>>> {
+    ) -> anyhow::Result<Option<PreparedFilesystemStorageReservation<Ctx>>> {
         if new_bytes == 0 || self.state.is_replay() {
             return Ok(None);
         }
         self.check_filesystem_storage_quota(new_bytes)?;
         self.state.current_filesystem_storage_usage =
             self.owner_resources.acquire_filesystem_storage(new_bytes);
-        Ok(Some(self.public_state.worker()))
+        Ok(Some((self.public_state.worker(), new_bytes)))
     }
 
     pub(crate) fn rollback_filesystem_storage_reservation(&mut self, new_bytes: u64) {
@@ -2875,7 +2885,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
     ) -> Result<OplogIndex, WorkerExecutorError> {
-        if self.state.snapshotting_mode {
+        if self.state.durability_is_suppressed() {
             let begin_index = self.state.current_oplog_index().await;
             self.state.current_retry_point = begin_index;
             return Ok(begin_index);
@@ -3060,7 +3070,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.state.snapshotting_mode {
+        if self.state.durability_is_suppressed() {
             return Ok(());
         }
 
@@ -3184,7 +3194,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     where
         Err: From<WorkerExecutorError>,
     {
-        if self.state.snapshotting_mode {
+        if self.state.durability_is_suppressed() {
             let (_, tx) = handler.create_new().await?;
             let begin_index = self.state.current_oplog_index().await;
             Ok((begin_index, tx))
@@ -3414,7 +3424,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.state.snapshotting_mode {
+        if self.state.durability_is_suppressed() {
             Ok(())
         } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
@@ -3443,7 +3453,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.state.snapshotting_mode {
+        if self.state.durability_is_suppressed() {
             Ok(())
         } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
@@ -3472,7 +3482,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.state.snapshotting_mode {
+        if self.state.durability_is_suppressed() {
             return Ok(());
         } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
@@ -3523,7 +3533,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.state.snapshotting_mode {
+        if self.state.durability_is_suppressed() {
             return Ok(());
         } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
@@ -4048,6 +4058,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// [`tail_work::TailWorkTracker`].
     pub fn tail_work_tracker(&self) -> tail_work::TailWorkTracker {
         self.state.tail_work_tracker()
+    }
+
+    pub(crate) fn live_stream_event_capacity(&self) -> usize {
+        self.state
+            .config
+            .limits
+            .live_stream_event_broadcast_capacity
+            .get()
+    }
+
+    pub(crate) fn stream_runtime_teardown_probe(
+        &self,
+    ) -> Arc<dyn Fn() -> bool + Send + Sync + 'static> {
+        let stream_runtime_teardown = self.stream_runtime_teardown.clone();
+        Arc::new(move || stream_runtime_teardown.load(Ordering::Acquire))
+    }
+
+    pub(crate) fn begin_stream_runtime_teardown(&self) {
+        self.stream_runtime_teardown.store(true, Ordering::Release);
     }
 
     /// Arms the optional per-invocation wall-clock deadline (`limits.max_invocation_duration`)
@@ -4719,7 +4748,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         &mut self,
         mut invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
-        if !self.state.snapshotting_mode {
+        if !self.state.durability_is_suppressed() {
             let stack = self.get_current_invocation_context().await;
 
             let scope_card = match &invocation {
@@ -4805,7 +4834,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         full_function_name: &str,
         trap_type: &TrapType,
     ) -> RetryDecision {
-        self.cleanup_custom_durability_state();
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
         if self.state.is_live()
@@ -5004,7 +5032,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         }
 
         if is_live {
-            if !self.state.snapshotting_mode {
+            if !self.state.durability_is_suppressed() {
                 let component_revision = output.component_revision.ok_or_else(|| {
                     WorkerExecutorError::runtime(
                         "component_revision missing in AgentInvocationOutput during replay",
@@ -5188,7 +5216,6 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
     }
 
     fn begin_call_snapshotting_function(&mut self) {
-        // Snapshot load/save calls do not write durable host-call entries.
         if self.state.snapshotting_mode {
             warn!(
                 "begin_call_snapshotting_function called while snapshotting is already active; \
@@ -5374,7 +5401,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                     span_id.clone(),
                 ))
                 .await;
-        } else {
+        } else if !self.is_live() {
             crate::get_oplog_entry!(self.state.replay_state, OplogEntry::FinishSpan)?;
         }
 
@@ -5417,7 +5444,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                     value,
                 ))
                 .await;
-        } else {
+        } else if !self.is_live() {
             crate::get_oplog_entry!(self.state.replay_state, OplogEntry::SetSpanAttribute)?;
         }
         Ok(())
@@ -5450,7 +5477,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
     }
 
     async fn resume_replay(
-        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        store: &mut Store<Ctx>,
         instance: &Instance,
         refresh_replay_target: bool,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
@@ -5546,6 +5573,10 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             .metadata
                             .clone();
 
+                        let worker = store.as_context().data().get_public_state().worker();
+                        let agent_invocation = worker
+                            .rehydrate_durable_streaming_invocation(agent_invocation)
+                            .await?;
                         let agent_id = store.as_context().data().parsed_agent_id();
                         let lowered = lower_invocation(
                             agent_invocation,
@@ -5577,7 +5608,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         store
                             .as_context_mut()
                             .data_mut()
-                            .set_current_idempotency_key(idempotency_key)
+                            .set_current_idempotency_key(idempotency_key.clone())
                             .await;
 
                         let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
@@ -5613,9 +5644,70 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
                         match invoke_result {
                             Ok(InvokeResult::Succeeded {
-                                result: invocation_result,
+                                result: mut invocation_result,
                                 consumed_fuel,
                             }) => {
+                                if let AgentInvocationResult::AgentMethod { output } =
+                                    &mut invocation_result
+                                {
+                                    let (graph, root, component_revision) = {
+                                        let component = store.data().component_metadata();
+                                        let agent_id = store.data().parsed_agent_id();
+                                        let agent_type = agent_id
+                                            .as_ref()
+                                            .and_then(|agent_id| {
+                                                component
+                                                    .metadata
+                                                    .find_agent_type_by_name_ref(
+                                                        &agent_id.agent_type,
+                                                    )
+                                            })
+                                            .ok_or_else(|| {
+                                                WorkerExecutorError::runtime(
+                                                    "durable invocation result schema is unavailable",
+                                                )
+                                            })?;
+                                        let method = agent_type
+                                            .methods
+                                            .iter()
+                                            .find(|method| method.name == full_function_name)
+                                            .ok_or_else(|| {
+                                                WorkerExecutorError::runtime(
+                                                    "durable invocation result method schema is unavailable",
+                                                )
+                                            })?;
+                                        (
+                                            agent_type.schema.clone(),
+                                            method.output_schema.schema().cloned().unwrap_or_else(
+                                                || {
+                                                    golem_common::schema::SchemaType::tuple(
+                                                        Vec::new(),
+                                                    )
+                                                },
+                                            ),
+                                            component.revision,
+                                        )
+                                    };
+                                    let worker = worker.clone();
+                                    let result_value = output.clone();
+                                    let replay_idempotency_key = idempotency_key.clone();
+                                    *output = store
+                                        .run_concurrent(async move |_accessor| {
+                                            worker
+                                                .materialize_durable_streaming_result(
+                                                    &replay_idempotency_key,
+                                                    result_value,
+                                                    &graph,
+                                                    &root,
+                                                    component_revision,
+                                                )
+                                                .await
+                                        })
+                                        .await
+                                        .map_err(|error| {
+                                            WorkerExecutorError::runtime(error.to_string())
+                                        })??;
+                                }
                                 let component_revision =
                                     store.as_context().data().component_metadata().revision;
                                 let mut output = AgentInvocationOutput {
@@ -5722,7 +5814,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
     async fn prepare_instance(
         agent_id: &AgentId,
         instance: &Instance,
-        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        store: &mut Store<Ctx>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         debug!("Starting prepare_instance");
         let start = Instant::now();
@@ -8442,7 +8534,12 @@ async fn last_error<T: HasOplogService + HasConfig>(
         let window_start = backward_scan_window_start(window_end);
         let entries = this
             .oplog_service()
-            .read_range(owned_agent_id, agent_mode, window_start, window_end)
+            .read_exact(
+                owned_agent_id,
+                agent_mode,
+                window_start,
+                window_end.as_u64() - window_start.as_u64() + 1,
+            )
             .await;
 
         let mut idx = window_end;
@@ -8543,7 +8640,12 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
         let window_start = backward_scan_window_start(window_end);
         let entries = this
             .oplog_service()
-            .read_range(owned_agent_id, agent_mode, window_start, window_end)
+            .read_exact(
+                owned_agent_id,
+                agent_mode,
+                window_start,
+                window_end.as_u64() - window_start.as_u64() + 1,
+            )
             .await;
 
         let mut idx = window_end;
@@ -9767,13 +9869,13 @@ impl PrivateDurableWorkerState {
     /// [`DurableWorkerCtx::end_function`] — namely a non-idempotent remote write or the first
     /// (`None`) call of a batched remote write.
     ///
-    /// Snapshotting turns off persistence entirely, and `persist`/`replay` skip `end_function`
-    /// while snapshotting, so no scope must be opened either: otherwise the scope `Start` would be
+    /// Unpersisted execution turns off persistence entirely, and `persist`/`replay` skip
+    /// `end_function`, so no scope must be opened either: otherwise the scope `Start` would be
     /// committed with no matching `End`, corrupting later replay.
-    /// A snapshotting region never straddles a single scope's begin/end, so guarding both ends with
-    /// the same predicate keeps the durable-scope stack balanced.
+    /// An unpersisted execution never straddles a single scope's begin/end, so guarding both ends
+    /// with the same predicate keeps the durable-scope stack balanced.
     fn opens_durable_scope(&self, function_type: &DurableFunctionType) -> bool {
-        !self.snapshotting_mode
+        !self.durability_is_suppressed()
             && ((*function_type == DurableFunctionType::WriteRemote && !self.assume_idempotence)
                 || matches!(
                     *function_type,
@@ -9876,6 +9978,14 @@ impl PrivateDurableWorkerState {
 
     fn next_suspendable_wait_id(&self) -> u64 {
         self.next_suspendable_wait_id.fetch_add(1, Ordering::AcqRel)
+    }
+
+    fn register_passive_suspendable_wait(&self) -> suspendable_wait::SuspendableWaitRegistration {
+        suspendable_wait::SuspendableWaitRegistration::new(
+            self.next_suspendable_wait_id(),
+            None,
+            self.suspendable_waits(),
+        )
     }
 
     fn safe_to_suspend(&self) -> bool {
@@ -10125,6 +10235,10 @@ impl PrivateDurableWorkerState {
         self.replay_state.is_live()
     }
 
+    fn durability_is_suppressed(&self) -> bool {
+        self.snapshotting_mode
+    }
+
     /// Whether the current oplog tip is a structurally clean boundary at which a mid-invocation
     /// status checkpoint may be taken: we are live, no rollback-capable region is open (so no later
     /// trap/replay can append a jump that deletes the tip), and snapshotting is not active. The
@@ -10135,7 +10249,7 @@ impl PrivateDurableWorkerState {
             !self.is_live(),
             !self.active_atomic_regions.is_empty(),
             !self.active_durable_scopes.is_empty(),
-            self.snapshotting_mode,
+            self.durability_is_suppressed(),
         )
     }
 

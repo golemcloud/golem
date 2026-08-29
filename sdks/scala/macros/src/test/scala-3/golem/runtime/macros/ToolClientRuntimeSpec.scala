@@ -160,7 +160,7 @@ object ToolClientRuntimeSpec extends ZIOSpecDefault {
       test("remote custom errors decode into the declared error type") {
         val payload   = gitErrorSchema.toErrorPayloadValue(GitError.Bad("nope")).toOption.get
         val transport = new RecordingTransport(
-          Left(ToolRpcFailure.RemoteToolError(ToolInvokeError.Custom(payload)))
+          Left(ToolRpcFailure.RemoteToolError(ToolInvokeError.Tool(payload)))
         )
         val params = ToolClientRuntime.encodeParams(
           List(

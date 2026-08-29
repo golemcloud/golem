@@ -40,7 +40,9 @@ use golem_common::model::oplog::public_oplog_entry::{
     PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
     RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
-    SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+    SnapshotParams, StartParams, StartSpanParams, StreamCancelParams, StreamEndParams,
+    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams,
+    SuspendParams,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
@@ -60,8 +62,8 @@ use golem_common::model::{
 };
 use golem_common::schema::agent::FieldSource;
 use golem_common::schema::{
-    InputSchema, NamedFieldType, OutputSchema, SchemaGraph, SchemaType, SchemaValue,
-    TypedSchemaValue,
+    InputSchema, IntoTypedSchemaValue, NamedFieldType, OutputSchema, SchemaGraph, SchemaType,
+    SchemaValue, TypedSchemaValue,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
@@ -97,17 +99,22 @@ pub async fn get_public_oplog_chunk(
     initial_oplog_index: OplogIndex,
     count: usize,
 ) -> Result<PublicOplogChunk, String> {
+    let initial_oplog_index = initial_oplog_index.max(OplogIndex::INITIAL);
+    let last_index = oplog_service
+        .get_last_index(owned_agent_id, agent_mode)
+        .await;
+    let available = if initial_oplog_index <= last_index {
+        last_index.as_u64() - initial_oplog_index.as_u64() + 1
+    } else {
+        0
+    };
     let raw_entries = oplog_service
-        .read(
+        .read_exact(
             owned_agent_id,
             agent_mode,
             initial_oplog_index,
-            count as u64,
+            (count as u64).min(available),
         )
-        .await;
-
-    let last_index = oplog_service
-        .get_last_index(owned_agent_id, agent_mode)
         .await;
 
     let mut entries = Vec::new();
@@ -225,11 +232,9 @@ pub async fn find_component_revision_at(
     while current < start && current <= last_oplog_index {
         // NOTE: could be reading in pages for optimization
         let entry = oplog_service
-            .read(owned_agent_id, agent_mode, current, 1)
+            .read_exact(owned_agent_id, agent_mode, current, 1)
             .await
-            .iter()
-            .next()
-            .map(|(_, v)| v.clone());
+            .remove(&current);
 
         if let Some(revision) = entry.and_then(|entry| entry.specifies_component_revision()) {
             initial_component_revision = revision;
@@ -961,6 +966,61 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     parent_start_index,
                     kind,
                     payload: host_request
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
+                }))
+            }
+            OplogEntry::StreamRegistered { timestamp, record } => {
+                let record = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, record)
+                    .await?;
+                Ok(PublicOplogEntry::StreamRegistered(StreamRegisteredParams {
+                    timestamp,
+                    record: record
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
+                }))
+            }
+            OplogEntry::StreamItems { timestamp, record } => {
+                let record = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, record)
+                    .await?;
+                Ok(PublicOplogEntry::StreamItems(StreamItemsParams {
+                    timestamp,
+                    record: record
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
+                }))
+            }
+            OplogEntry::StreamEnd { timestamp, record } => {
+                let record = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, record)
+                    .await?;
+                Ok(PublicOplogEntry::StreamEnd(StreamEndParams {
+                    timestamp,
+                    record: record
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
+                }))
+            }
+            OplogEntry::StreamCancel { timestamp, record } => {
+                let record = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, record)
+                    .await?;
+                Ok(PublicOplogEntry::StreamCancel(StreamCancelParams {
+                    timestamp,
+                    record: record
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
+                }))
+            }
+            OplogEntry::StreamSession { timestamp, record } => {
+                let record = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, record)
+                    .await?;
+                Ok(PublicOplogEntry::StreamSession(StreamSessionParams {
+                    timestamp,
+                    record: record
                         .into_typed_schema_value()
                         .map_err(|e| e.to_string())?,
                 }))

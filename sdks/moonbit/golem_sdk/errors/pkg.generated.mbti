@@ -9,7 +9,7 @@ import {
 // Values
 pub fn custom_error(String) -> @common.AgentError
 
-pub fn[T : @schema.IntoSchema] custom_error_of(T) -> @common.AgentError raise
+pub async fn[T : @schema.IntoSchema] custom_error_of(T) -> @common.AgentError
 
 pub fn[T : @schema.FromSchema] decode_custom_error(@common.AgentError) -> T? raise
 

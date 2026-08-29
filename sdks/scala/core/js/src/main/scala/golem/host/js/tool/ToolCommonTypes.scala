@@ -618,3 +618,56 @@ object JsInvocationResult {
     o.asInstanceOf[JsInvocationResult]
   }
 }
+
+@js.native
+sealed trait JsMonomorphicToolMiddlewareScope extends js.Object {
+  def presented: JsTool            = js.native
+  def expected: js.UndefOr[JsTool] = js.native
+}
+object JsMonomorphicToolMiddlewareScope {
+  def apply(presented: JsTool, expected: js.UndefOr[JsTool]): JsMonomorphicToolMiddlewareScope = {
+    val o = js.Dynamic.literal("presented" -> presented)
+    expected.foreach(v => o.updateDynamic("expected")(v))
+    o.asInstanceOf[JsMonomorphicToolMiddlewareScope]
+  }
+}
+
+@js.native
+sealed trait JsToolMiddlewareScope extends js.Object {
+  def tag: String = js.native
+}
+object JsToolMiddlewareScope {
+  def monomorphic(value: JsMonomorphicToolMiddlewareScope): JsToolMiddlewareScope =
+    JsShape.tagged[JsToolMiddlewareScope]("monomorphic", value)
+
+  val universal: JsToolMiddlewareScope =
+    js.Dynamic.literal("tag" -> "universal").asInstanceOf[JsToolMiddlewareScope]
+}
+
+@js.native
+sealed trait JsToolMiddleware extends js.Object {
+  def name: String                 = js.native
+  def aliases: js.Array[String]    = js.native
+  def doc: JsDoc                   = js.native
+  def scope: JsToolMiddlewareScope = js.native
+}
+object JsToolMiddleware {
+  def apply(
+    name: String,
+    aliases: js.Array[String],
+    doc: JsDoc,
+    scope: JsToolMiddlewareScope
+  ): JsToolMiddleware =
+    js.Dynamic
+      .literal("name" -> name, "aliases" -> aliases, "doc" -> doc, "scope" -> scope)
+      .asInstanceOf[JsToolMiddleware]
+}
+
+@js.native
+trait JsUnderlyingTool extends js.Object {
+  def invoke(
+    commandPath: js.Array[String],
+    input: JsTypedSchemaValue,
+    stdin: js.UndefOr[JsWasiInputStream]
+  ): js.Promise[JsInvocationResult] = js.native
+}

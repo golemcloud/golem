@@ -48,4 +48,3 @@ pub fn Vacancy::vacancy_fill(Self, UInt?) -> @types.OutgoingValue
 // Type aliases
 
 // Traits
-

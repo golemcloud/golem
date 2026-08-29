@@ -42,4 +42,3 @@ pub(all) struct PersistedDurableFunctionInvocation {
 // Type aliases
 
 // Traits
-

@@ -624,6 +624,20 @@ fn ValueEncoder::emit_node(
             "quota-token handle was already transferred; an owned quota-token can only be sent once",
           )
       }
+    Stream(handle) =>
+      match handle.take() {
+        Some(Wrapped(raw)) => @types.StreamValue(raw)
+        Some(Native(reader)) => {
+          handle.cell = Some(Native(reader))
+          raise EncodeError(
+            "native schema value stream was not prepared for transfer",
+          )
+        }
+        None =>
+          raise EncodeError(
+            "schema-value-stream handle was already transferred; an owned stream can only be sent once",
+          )
+      }
     PermissionCard(handle) =>
       // Move the owned `permission-card` resource out exactly once after the
       // full value tree has passed the affine-handle preflight.
@@ -667,7 +681,82 @@ fn preflight_value(value : SchemaValue) -> Unit raise SchemaModelError {
   let seen_secrets : Array[@types.Secret] = []
   let seen_quota_tokens : Array[@types.QuotaToken] = []
   let seen_permission_cards : Array[@types.PermissionCard] = []
+  preflight_streams(value, [])
   preflight_walk(value, seen_secrets, seen_quota_tokens, seen_permission_cards)
+}
+
+///|
+fn preflight_streams(
+  value : SchemaValue,
+  seen : Array[GuestSchemaValueStreamHandle],
+) -> Unit raise SchemaModelError {
+  match value {
+    Stream(handle) => {
+      guard handle.is_present() else {
+        raise EncodeError(
+          "schema-value-stream handle was already transferred; an owned stream can only be sent once",
+        )
+      }
+      for previous in seen {
+        if previous.same_endpoint(handle) {
+          raise EncodeError(
+            "the same schema-value-stream endpoint appeared more than once in one value tree",
+          )
+        }
+      }
+      seen.push(handle)
+    }
+    Record(xs) | Tuple(xs) | List(xs) | FixedList(xs) =>
+      for x in xs {
+        preflight_streams(x, seen)
+      }
+    Variant(_, x) | Option(x) | ResultOk(x) | ResultErr(x) =>
+      match x {
+        Some(x) => preflight_streams(x, seen)
+        None => ()
+      }
+    Map(xs) =>
+      for x in xs {
+        preflight_streams(x.key, seen)
+        preflight_streams(x.value, seen)
+      }
+    Union(_, x) => preflight_streams(x, seen)
+    _ => ()
+  }
+}
+
+///|
+pub async fn schema_value_to_wit_async(
+  value : SchemaValue,
+) -> @types.SchemaValueTree raise SchemaModelError {
+  preflight_value(value)
+  prepare_outgoing_streams(value)
+  schema_value_to_wit(value)
+}
+
+///|
+async fn prepare_outgoing_streams(
+  value : SchemaValue,
+) -> Unit raise SchemaModelError {
+  match value {
+    Stream(handle) => handle.prepare_outgoing()
+    Record(xs) | Tuple(xs) | List(xs) | FixedList(xs) =>
+      for x in xs {
+        prepare_outgoing_streams(x)
+      }
+    Variant(_, x) | Option(x) | ResultOk(x) | ResultErr(x) =>
+      match x {
+        Some(x) => prepare_outgoing_streams(x)
+        None => ()
+      }
+    Map(xs) =>
+      for x in xs {
+        prepare_outgoing_streams(x.key)
+        prepare_outgoing_streams(x.value)
+      }
+    Union(_, x) => prepare_outgoing_streams(x)
+    _ => ()
+  }
 }
 
 ///|
@@ -733,6 +822,12 @@ fn preflight_walk(
       }
       seen_quota_tokens.push(raw)
     }
+    Stream(handle) =>
+      if !handle.is_present() {
+        raise EncodeError(
+          "schema-value-stream handle was already transferred; an owned stream can only be sent once",
+        )
+      }
     PermissionCard(handle) => {
       let raw = match handle.with_handle(r => r) {
         Some(raw) => raw
@@ -834,6 +929,154 @@ fn preflight_walk(
 // ============================================================
 
 ///|
+priv struct ValuePreflight {
+  nodes : Array[@types.SchemaValueNode]
+  on_path : Array[Bool]
+  referenced_handles : Array[Bool]
+  seen_secrets : Array[@types.Secret]
+  seen_quota_tokens : Array[@types.QuotaToken]
+  seen_streams : Array[@types.SchemaValueStream]
+  seen_permission_cards : Array[@types.PermissionCard]
+}
+
+///|
+fn ValuePreflight::new(nodes : Array[@types.SchemaValueNode]) -> ValuePreflight {
+  {
+    nodes,
+    on_path: Array::make(nodes.length(), false),
+    referenced_handles: Array::make(nodes.length(), false),
+    seen_secrets: [],
+    seen_quota_tokens: [],
+    seen_streams: [],
+    seen_permission_cards: [],
+  }
+}
+
+///|
+fn ValuePreflight::visit_idx(
+  self : ValuePreflight,
+  idx : Int,
+) -> Unit raise SchemaModelError {
+  if idx < 0 || idx >= self.nodes.length() {
+    raise DecodeError(
+      "value node index out of range: \{idx} (nodes: \{self.nodes.length()})",
+    )
+  }
+  if self.on_path[idx] {
+    raise DecodeError("cyclic value node reference at index \{idx}")
+  }
+  self.on_path[idx] = true
+  self.visit_node(idx, self.nodes[idx])
+  self.on_path[idx] = false
+}
+
+///|
+fn[R : Eq] ValuePreflight::claim_handle(
+  self : ValuePreflight,
+  idx : Int,
+  raw : R,
+  seen : Array[R],
+  name : String,
+) -> Unit raise SchemaModelError {
+  if self.referenced_handles[idx] {
+    raise DecodeError(
+      "\{name} handle node referenced more than once at index \{idx}",
+    )
+  }
+  if seen.contains(raw) {
+    raise DecodeError(
+      "the same owned \{name} resource appeared in more than one handle node",
+    )
+  }
+  self.referenced_handles[idx] = true
+  seen.push(raw)
+}
+
+///|
+fn ValuePreflight::visit_opt(
+  self : ValuePreflight,
+  idx : Int?,
+) -> Unit raise SchemaModelError {
+  match idx {
+    Some(idx) => self.visit_idx(idx)
+    None => ()
+  }
+}
+
+///|
+fn ValuePreflight::visit_node(
+  self : ValuePreflight,
+  idx : Int,
+  node : @types.SchemaValueNode,
+) -> Unit raise SchemaModelError {
+  match node {
+    @types.S8Value(value) =>
+      if !s8_in_range(value) {
+        raise DecodeError("s8 value out of range: \{value}")
+      }
+    @types.S16Value(value) =>
+      if !s16_in_range(value) {
+        raise DecodeError("s16 value out of range: \{value}")
+      }
+    @types.U16Value(value) =>
+      if !u16_in_range(value) {
+        raise DecodeError("u16 value out of range: \{value}")
+      }
+    @types.DatetimeValue(value) =>
+      if !datetime_valid(value) {
+        raise DecodeError(
+          "invalid datetime value: nanoseconds must be < 1_000_000_000, got \{value.nanoseconds}",
+        )
+      }
+    @types.RecordValue(indices)
+    | @types.TupleValue(indices)
+    | @types.ListValue(indices)
+    | @types.FixedListValue(indices) =>
+      for idx in indices {
+        self.visit_idx(idx)
+      }
+    @types.VariantValue(value) => self.visit_opt(value.payload)
+    @types.MapValue(entries) =>
+      for entry in entries {
+        self.visit_idx(entry.key)
+        self.visit_idx(entry.value)
+      }
+    @types.OptionValue(value) => self.visit_opt(value)
+    @types.ResultValue(value) =>
+      match value {
+        @types.OkValue(value) | @types.ErrValue(value) => self.visit_opt(value)
+      }
+    @types.UnionValue(value) => self.visit_idx(value.body)
+    @types.SecretValue(raw) =>
+      self.claim_handle(idx, raw, self.seen_secrets, "secret")
+    @types.QuotaTokenHandle(raw) =>
+      self.claim_handle(idx, raw, self.seen_quota_tokens, "quota-token")
+    @types.StreamValue(raw) =>
+      self.claim_handle(idx, raw, self.seen_streams, "schema-value-stream")
+    @types.PermissionCardHandle(raw) =>
+      self.claim_handle(idx, raw, self.seen_permission_cards, "permission-card")
+    _ => ()
+  }
+}
+
+///|
+fn ValuePreflight::first_unreferenced_handle(self : ValuePreflight) -> Int? {
+  for i in 0..<self.nodes.length() {
+    match self.nodes[i] {
+      @types.SecretValue(_)
+      | @types.QuotaTokenHandle(_)
+      | @types.StreamValue(_)
+      | @types.PermissionCardHandle(_) =>
+        if !self.referenced_handles[i] {
+          return Some(i)
+        }
+      _ => ()
+    }
+  }
+  None
+}
+
+///|
 priv struct ValueDecoder {
   nodes : Array[@types.SchemaValueNode]
   on_path : Array[Bool]
@@ -843,11 +1086,13 @@ priv struct ValueDecoder {
   // resource in two handles.
   lifted_secrets : Array[Bool]
   lifted_quota_tokens : Array[Bool]
+  lifted_streams : Array[Bool]
   lifted_permission_cards : Array[Bool]
   // Underlying owned resources already lifted, so a malformed tree that carries
   // the same raw resource in two *different* handle nodes is also rejected.
   lifted_secret_raws : Array[@types.Secret]
   lifted_quota_token_raws : Array[@types.QuotaToken]
+  lifted_stream_raws : Array[@types.SchemaValueStream]
   lifted_permission_card_raws : Array[@types.PermissionCard]
 }
 
@@ -858,41 +1103,49 @@ fn ValueDecoder::new(nodes : Array[@types.SchemaValueNode]) -> ValueDecoder {
     on_path: Array::make(nodes.length(), false),
     lifted_secrets: Array::make(nodes.length(), false),
     lifted_quota_tokens: Array::make(nodes.length(), false),
+    lifted_streams: Array::make(nodes.length(), false),
     lifted_permission_cards: Array::make(nodes.length(), false),
     lifted_secret_raws: [],
     lifted_quota_token_raws: [],
+    lifted_stream_raws: [],
     lifted_permission_card_raws: [],
   }
 }
 
 ///|
-/// Return the index of the first owned capability handle node that was never
-/// lifted into the decoded value tree, or `None` if every handle node was
-/// referenced exactly once from the root. Used after a successful decode to
-/// reject a tree that carries handles unreachable from the root.
-///
-/// This only inspects the node tags; it does not release the owned resources.
-/// MoonBit has no resource finalizer, so an owned capability left in a
-/// rejected or partially-decoded tree is released only when the guest instance
-/// is torn down. (Other SDKs lean on host/runtime GC for the same cleanup; a
-/// guest-side host `resource-drop` call here would pull the `golem:core/types`
-/// host import into this otherwise host-free package.)
-fn ValueDecoder::first_unreferenced_handle(self : ValueDecoder) -> Int? {
-  for i in 0..<self.nodes.length() {
-    match self.nodes[i] {
-      @types.SecretValue(_) => if not(self.lifted_secrets[i]) { return Some(i) }
-      @types.QuotaTokenHandle(_) =>
-        if not(self.lifted_quota_tokens[i]) {
-          return Some(i)
+fn drop_unique_resources(
+  nodes : Array[@types.SchemaValueNode],
+  drops : SchemaValueResourceDrops,
+) -> Unit {
+  let dropped_secrets : Array[@types.Secret] = []
+  let dropped_quota_tokens : Array[@types.QuotaToken] = []
+  let dropped_streams : Array[@types.SchemaValueStream] = []
+  let dropped_permission_cards : Array[@types.PermissionCard] = []
+  for node in nodes {
+    match node {
+      @types.SecretValue(raw) =>
+        if !dropped_secrets.contains(raw) {
+          dropped_secrets.push(raw)
+          (drops.drop_secret)(raw)
         }
-      @types.PermissionCardHandle(_) =>
-        if not(self.lifted_permission_cards[i]) {
-          return Some(i)
+      @types.QuotaTokenHandle(raw) =>
+        if !dropped_quota_tokens.contains(raw) {
+          dropped_quota_tokens.push(raw)
+          (drops.drop_quota_token)(raw)
+        }
+      @types.StreamValue(raw) =>
+        if !dropped_streams.contains(raw) {
+          dropped_streams.push(raw)
+          (drops.drop_stream)(raw)
+        }
+      @types.PermissionCardHandle(raw) =>
+        if !dropped_permission_cards.contains(raw) {
+          dropped_permission_cards.push(raw)
+          raw.drop()
         }
       _ => ()
     }
   }
-  None
 }
 
 ///|
@@ -1039,6 +1292,23 @@ fn ValueDecoder::from_node(
       self.lifted_quota_token_raws.push(raw)
       QuotaToken(GuestQuotaTokenHandle::new(raw))
     }
+    @types.StreamValue(raw) => {
+      guard !self.lifted_streams[idx] else {
+        raise DecodeError(
+          "schema-value-stream handle node referenced more than once at index \{idx}",
+        )
+      }
+      for previous in self.lifted_stream_raws {
+        if previous == raw {
+          raise DecodeError(
+            "the same owned schema-value-stream resource appeared in more than one handle node",
+          )
+        }
+      }
+      self.lifted_streams[idx] = true
+      self.lifted_stream_raws.push(raw)
+      Stream(GuestSchemaValueStreamHandle::from_wrapped(raw))
+    }
     @types.PermissionCardHandle(raw) => {
       // The generated resource wrapper is copyable, so enforce affine
       // ownership when lifting it into the recursive schema value.
@@ -1069,21 +1339,30 @@ fn ValueDecoder::from_node(
 /// reference is rejected), and a valid tree must reference every handle node
 /// exactly once from the root. After a successful decode any handle node left
 /// unreferenced was unreachable and the tree is rejected as malformed.
-///
-/// Owned resources in a rejected or partially-decoded tree are not explicitly
-/// released here (see `first_unreferenced_handle`); MoonBit has no resource
-/// finalizer, so they are reclaimed when the guest instance is torn down.
+/// Resource drop callbacks are mandatory because rejecting a tree retains no
+/// owner for any capability resources carried by it.
 pub fn schema_value_from_wit(
   wit : @types.SchemaValueTree,
+  drops : SchemaValueResourceDrops,
 ) -> SchemaValue raise SchemaModelError {
-  let decoder = ValueDecoder::new(wit.value_nodes)
-  let result = decoder.from_idx(wit.root)
-  match decoder.first_unreferenced_handle() {
-    Some(idx) =>
+  let preflight = ValuePreflight::new(wit.value_nodes)
+  preflight.visit_idx(wit.root) catch {
+    error => {
+      drop_unique_resources(wit.value_nodes, drops)
+      raise error
+    }
+  }
+  match preflight.first_unreferenced_handle() {
+    Some(idx) => {
+      drop_unique_resources(wit.value_nodes, drops)
       raise DecodeError(
         "capability handle node at index \{idx} is not referenced from the root",
       )
-    None => result
+    }
+    None => {
+      let decoder = ValueDecoder::new(wit.value_nodes)
+      decoder.from_idx(wit.root)
+    }
   }
 }
 
@@ -1100,12 +1379,28 @@ pub fn typed_schema_value_to_wit(
 }
 
 ///|
+/// Asynchronously encode a recursive `TypedSchemaValue`, wrapping any native
+/// streams nested in its value tree before transferring their handles.
+pub async fn typed_schema_value_to_wit_async(
+  tv : TypedSchemaValue,
+) -> @types.TypedSchemaValue raise SchemaModelError {
+  {
+    graph: schema_graph_to_wit(tv.graph),
+    value: schema_value_to_wit_async(tv.value),
+  }
+}
+
+///|
 /// Decode a flat `@types.TypedSchemaValue` into the recursive form.
 pub fn typed_schema_value_from_wit(
   wit : @types.TypedSchemaValue,
+  drops : SchemaValueResourceDrops,
 ) -> TypedSchemaValue raise SchemaModelError {
-  {
-    graph: schema_graph_from_wit(wit.graph),
-    value: schema_value_from_wit(wit.value),
+  let graph = schema_graph_from_wit(wit.graph) catch {
+    error => {
+      drop_unique_resources(wit.value.value_nodes, drops)
+      raise error
+    }
   }
+  { graph, value: schema_value_from_wit(wit.value, drops) }
 }

@@ -20,6 +20,8 @@ import golem.host.SchemaWireInterop
 import golem.host.js.schema.{JsSchemaGraph, JsSchemaValueTree}
 import golem.schema.{FromSchema, FromSchemaError, IntoSchema, SchemaGraph}
 import golem.schema.wire.SchemaWire
+import scala.concurrent.Future
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
 /**
  * The `golem:core/types@2.0.0` host-payload bridge: the single hub that turns
@@ -51,4 +53,9 @@ object SchemaPayload {
   /** Decode a JS schema value tree into a value of `A`. */
   def decode[A](tree: JsSchemaValueTree)(implicit ev: FromSchema[A]): Either[FromSchemaError, A] =
     ev.fromValue(SchemaWire.schemaValueFromWit(SchemaWireInterop.valueTreeFromJs(tree)))
+
+  /** Stream-aware encoding used by invocation boundaries. */
+  def encodeAsync[A](value: A)(implicit ev: IntoSchema[A]): Future[JsSchemaValueTree] =
+    SchemaWireInterop.valueTreeToJsAsync(SchemaWire.schemaValueToWit(ev.toValue(value)))
+
 }

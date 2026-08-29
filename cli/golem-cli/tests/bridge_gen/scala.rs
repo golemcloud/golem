@@ -429,7 +429,7 @@ fn guest_wasm_rpc_does_not_emit_external_rest_runtime_references() {
 
 /// Guest agent bridges expose the Scala SDK RPC surface: constructors resolve
 /// remote agents through `RemoteAgentClient`, methods invoke Wasm RPC via
-/// `invokeAndAwait`, and the generated Scala.js build is ready for a real
+/// `asyncInvokeAndAwait`, and the generated Scala.js build is ready for a real
 /// compile once the in-tree Scala SDK has been published locally.
 #[test]
 fn guest_agent_client_surface_targets_scala_sdk_rpc() {
@@ -459,7 +459,7 @@ fn guest_agent_client_surface_targets_scala_sdk_rpc() {
     assert!(client_source.contains("_root_.scala.Either"));
     assert!(client_source.contains("CounterAgentRemote"));
     assert!(client_source.contains("_root_.golem.runtime.rpc.RemoteAgentClient.resolve"));
-    assert!(client_source.contains("resolved.invokeAndAwait"));
+    assert!(client_source.contains("resolved.asyncInvokeAndAwait"));
     assert!(client_source.contains("resolved.cancelableAsyncInvokeAndAwait"));
     assert!(client_source.contains("_root_.golem.runtime.rpc.CancellationToken"));
     assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.encodeValue"));
@@ -517,7 +517,7 @@ fn guest_ephemeral_agent_uses_per_invocation_identity() {
         client_source
             .contains("_root_.golem.runtime.rpc.CancelableAsyncInvocation[_root_.scala.Unit]")
     );
-    assert!(client_source.contains("resolved.invokeAndAwaitWithMetadata("));
+    assert!(client_source.contains("resolved.cancelableAsyncInvokeAndAwaitWithMetadata("));
     assert!(client_source.contains("resolved.invokeWithMetadata("));
     assert!(client_source.contains("resolved.scheduleInvocationWithMetadata("));
     assert!(client_source.contains("resolved.scheduleCancelableInvocationWithMetadata("));

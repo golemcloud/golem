@@ -35,4 +35,3 @@ pub fn WebsocketConnection::send(Self, Message) -> Result[Unit, Error_]
 // Type aliases
 
 // Traits
-

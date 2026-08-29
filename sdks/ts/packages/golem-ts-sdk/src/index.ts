@@ -17,14 +17,8 @@ import { AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
 import type { Snapshot } from 'golem:api/host@1.5.0';
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
-import { schemaValueConforms, type ExtendedCommandBody } from './internal/tool';
-import {
-  schemaValueFromWit,
-  t,
-  typedSchemaValueFromWit,
-  typedSchemaValueToWit,
-  v,
-} from './internal/schema-model';
+import type { ExtendedCommandBody } from './internal/tool';
+import { schemaValueFromWit, typedSchemaValueFromWit } from './internal/schema-model';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
@@ -34,7 +28,13 @@ import { encodeMultipart, decodeMultipart } from './internal/multipart';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { ToolRegistry } from './internal/registry/toolRegistry';
 import { sdkPrincipalFromHost } from './principal';
-import { sourceValueIsCanonical, type SchemaCodec } from './schema/codec';
+import {
+  encodeDeclaredToolErrorPayload,
+  encodeToolValue,
+  invalidToolResult,
+  isDeclaredToolError,
+} from './internal/tool/invocationResult';
+import { closeAsyncIterable } from './internal/tool/asyncIterable';
 import { awaitAbortable, throwIfAborted } from './internal/pollableUtils';
 import './schema/zod';
 import './schema/valibot';
@@ -80,6 +80,9 @@ export type {
   MethodsRecord,
 } from './defineAgent';
 export { Secret } from './secret';
+export { AgentStream } from './schema/agentStream';
+export { schemaFingerprintV1, SchemaFingerprintError } from './internal/schema-model/fingerprint';
+export type { SchemaGraph, SchemaType } from './internal/schema-model/model';
 export { method } from './method';
 export type { InputRecord, MethodSpec } from './method';
 export type { StandardSchemaV1 } from './schema/standardSchema';
@@ -96,15 +99,16 @@ export { SchemaRef, SchemaRenderError } from './schema/ref';
 export type { JsonValue, SchemaIssue, SchemaValidationResult } from './schema/ref';
 export {
   c,
-  client,
   command,
   err,
   ok,
   renderArgumentHelp,
   renderHelp,
-  ToolCallError,
+  ToolInvokeError,
   toolDefinition,
+  universalToolMiddleware,
 } from './tool';
+export { client, ToolCallError } from './toolClient';
 export type {
   CamelCase,
   ConstraintRef,
@@ -116,6 +120,7 @@ export type {
   GlobalFlagOptions,
   GlobalValueOptions,
   ImplementedTool,
+  ImplementedToolMiddleware,
   NestedCommandImplementation,
   OptionOptions,
   PositionalOptions,
@@ -124,12 +129,10 @@ export type {
   StreamOptions,
   TailOptions,
   ToolBodyModel,
-  ToolCallErrorCause,
   ToolClient,
   ToolClientErrors,
   ToolClientInvocationResult,
   ToolClientMethod,
-  ToolClientOptions,
   ToolClientTransport,
   ToolCommandModel,
   ToolCommandModelOf,
@@ -141,11 +144,25 @@ export type {
   ToolHelpResult,
   ToolImplementation,
   ToolInvocationContext,
+  ToolInvokeErrorCause,
+  ToolMiddlewareHandler,
+  ToolMiddlewareImplementation,
+  ToolMiddlewareInvocationContext,
+  ToolMiddlewareOptions,
   ToolOk,
   ToolResult,
   ToolSubtreeModel,
+  ToolUnderlying,
+  ToolUnderlyingErrors,
+  UniversalToolMiddlewareContext,
+  UniversalToolMiddlewareInvocation,
+  UniversalToolMiddlewareInvoke,
+  UniversalToolMiddlewareOptions,
+  UniversalToolUnderlying,
+  UniversalToolUnderlyingInvoke,
 } from './tool';
 export { defineAgentClient, isRemoteCallError, RemoteCallError, RemoteOutputError } from './client';
+export type { ToolCallErrorCause, ToolClientOptions } from './toolClient';
 export type {
   AgentClientFactory,
   AgentClientSpec,
@@ -158,6 +175,10 @@ export type {
   RemoteClient,
   RemoteClientFactory,
 } from './client';
+export {
+  golemTool010ToolMiddlewareGuest,
+  toolMiddlewareGuest,
+} from './internal/tool/middlewareGuest';
 export * from './keyvalue';
 export * from './blobstore';
 export * from './websocket';
@@ -260,7 +281,6 @@ async function invokeAgent(
   if (!resolvedAgent) {
     throw createCustomError(`Failed to invoke method ${methodName}: agent is not initialized`);
   }
-
   const result = await resolvedAgent.invoke(methodName, input, principal);
 
   if (result.tag === 'ok') {
@@ -374,7 +394,7 @@ function projectToolOutcome(
   }
 
   if (outcome.tag === 'err') {
-    if (typeof outcome.name !== 'string' || typeof outcome.hasPayload !== 'boolean') {
+    if (!isDeclaredToolError(outcome)) {
       throw invalidToolResult('tool handler returned an invalid declared error');
     }
     const errorCase = body.errors.find((candidate) => candidate.name === outcome.name);
@@ -382,44 +402,15 @@ function projectToolOutcome(
       throw invalidToolResult(`tool handler returned undeclared error "${outcome.name}"`);
     }
 
-    let payload: TypedSchemaValue;
-    if (errorCase.payloadCodec) {
-      if (!outcome.hasPayload || !Object.prototype.hasOwnProperty.call(outcome, 'payload')) {
-        throw invalidToolResult(`tool error "${outcome.name}" requires a payload`);
-      }
-      payload = encodeToolValue(
-        errorCase.payloadCodec,
-        outcome.payload,
-        `tool error "${outcome.name}" payload`,
-      );
-    } else {
-      if (outcome.hasPayload || Object.prototype.hasOwnProperty.call(outcome, 'payload')) {
-        throw invalidToolResult(`tool error "${outcome.name}" does not declare a payload`);
-      }
-      payload = typedSchemaValueToWit({
-        graph: { defs: new Map(), root: t.tuple([]) },
-        value: v.tuple([]),
-      });
-    }
+    const payload = encodeDeclaredToolErrorPayload(
+      errorCase,
+      outcome,
+      `tool error "${outcome.name}"`,
+    );
     throw { tag: 'custom-error', val: payload } satisfies ToolError;
   }
 
   throw invalidToolResult(`tool handler returned unknown outcome tag "${outcome.tag}"`);
-}
-
-function encodeToolValue(codec: SchemaCodec, value: unknown, position: string): TypedSchemaValue {
-  try {
-    const encoded = codec.toValue(value);
-    if (!schemaValueConforms(codec.graph, codec.graph.root, encoded)) {
-      throw new Error('does not match its declared schema');
-    }
-    if (!sourceValueIsCanonical(codec, value, encoded)) {
-      throw new Error('is not canonical for its declared schema');
-    }
-    return typedSchemaValueToWit({ graph: codec.graph, value: encoded });
-  } catch (error) {
-    throw invalidToolResult(`${position}: ${errorMessage(error)}`);
-  }
 }
 
 interface ToolInputStreamAdapter {
@@ -612,15 +603,6 @@ async function* bytesFromChunks(chunks: readonly Uint8Array[]): AsyncIterable<nu
   }
 }
 
-async function closeAsyncIterable(input: AsyncIterable<number> | undefined): Promise<void> {
-  if (!input) return;
-  try {
-    await input[Symbol.asyncIterator]().return?.();
-  } catch {
-    // Input stream cleanup is best-effort.
-  }
-}
-
 function closeReadableStream(controller: ReadableStreamDefaultController<Uint8Array>): void {
   try {
     controller.close();
@@ -635,10 +617,6 @@ function invalidToolName(name: string): ToolError {
 
 function invalidToolInput(message: string): ToolError {
   return { tag: 'invalid-input', val: message };
-}
-
-function invalidToolResult(message: string): ToolError {
-  return { tag: 'invalid-result', val: message };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

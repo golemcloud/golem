@@ -81,6 +81,15 @@ vi.mock('golem:tool/host@0.1.0', () => ({
 }));
 
 vi.mock('golem:core/types@2.0.0', () => ({
+  SchemaValueStream: {
+    unwrap: async (value: { reader: AsyncIterable<unknown> }) => value.reader,
+    wrap: async (
+      reader: AsyncIterable<unknown> & { failWrap?: boolean; onDispose?: () => void },
+    ) => {
+      if (reader.failWrap) throw new Error('test schema value stream wrap failure');
+      return { reader, [Symbol.dispose]: () => reader.onDispose?.() };
+    },
+  },
   parseUuid: (uuid: string) => {
     const parts = uuid.replace(/-/g, '');
     return {

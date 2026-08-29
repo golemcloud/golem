@@ -56,12 +56,51 @@ test "QuotaToken lowers to an opaque quota-token schema value" {
 }
 
 ///|
-test "QuotaToken lifts back from an opaque quota-token schema value" {
+test "QuotaToken lifting shares the take-once holder" {
   let handle = @model.GuestQuotaTokenHandle::new(
     @types.QuotaToken::QuotaToken(0),
   )
   let sv : @model.SchemaValue = QuotaToken(handle)
-  let _ : QuotaToken = @schema.from_value_as(sv)
+  let token : QuotaToken = @schema.from_value_as(sv)
+  assert_true(handle.is_present())
+  assert_true(token.handle.is_present())
+  let dropped = [0]
+  let drops : @model.SchemaValueResourceDrops = {
+    drop_secret: fn(_) {  },
+    drop_quota_token: fn(_) { dropped[0] += 1 },
+    drop_stream: fn(_) {  },
+    drop_native_stream: fn(_) {  },
+  }
+  @model.SchemaValue::QuotaToken(token.handle).release_resources(drops)
+  sv.release_resources(drops)
+  assert_eq(dropped[0], 1)
+}
+
+///|
+test "QuotaToken compound conversion rolls back through the source tree" {
+  let handle = @model.GuestQuotaTokenHandle::new(
+    @types.QuotaToken::QuotaToken(1),
+  )
+  let source = @model.SchemaValue::List([
+    @model.SchemaValue::QuotaToken(handle),
+    @model.SchemaValue::String("not a quota token"),
+  ])
+  let result : Result[Array[QuotaToken], @schema.FromSchemaError] = try? @schema.from_value_as(
+    source,
+  )
+  guard result is Err(_) else {
+    fail("the second array element must reject the conversion")
+  }
+  let dropped = [0]
+  let drops : @model.SchemaValueResourceDrops = {
+    drop_secret: fn(_) {  },
+    drop_quota_token: fn(_) { dropped[0] += 1 },
+    drop_stream: fn(_) {  },
+    drop_native_stream: fn(_) {  },
+  }
+  source.release_resources(drops)
+  assert_false(handle.is_present())
+  assert_eq(dropped[0], 1)
 }
 
 ///|

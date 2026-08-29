@@ -8,6 +8,7 @@ import {
   typedSchemaValueToWit,
   type TypedSchemaValue,
 } from '../internal/schema-model';
+import { closeAsyncIterable } from '../internal/tool/asyncIterable';
 
 export interface ToolInvocationResult {
   readonly result?: TypedSchemaValue;
@@ -68,14 +69,6 @@ export function createToolClientRuntime(
 /** Close a returned stdout iterator when generated post-invocation validation fails. */
 export async function disposeToolStdout(stdout: AsyncIterable<number> | undefined): Promise<void> {
   await closeAsyncIterable(stdout);
-}
-
-async function closeAsyncIterable(value: AsyncIterable<number> | undefined): Promise<void> {
-  try {
-    await value?.[Symbol.asyncIterator]().return?.();
-  } catch {
-    // Stream cleanup is best-effort when response validation fails.
-  }
 }
 
 export type ToolRuntimeError<Declared> =

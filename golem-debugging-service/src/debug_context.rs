@@ -86,7 +86,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 use uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
-use wasmtime::{AsContextMut, MemoryKind, ResourceLimiterAsync};
+use wasmtime::{MemoryKind, ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;
 
 pub struct DebugContext {
@@ -162,7 +162,7 @@ impl ExternalOperations<Self> for DebugContext {
     }
 
     async fn resume_replay(
-        store: &mut (impl AsContextMut<Data = Self> + Send),
+        store: &mut Store<Self>,
         instance: &Instance,
         refresh_replay_target: bool,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
@@ -172,7 +172,7 @@ impl ExternalOperations<Self> for DebugContext {
     async fn prepare_instance(
         agent_id: &AgentId,
         instance: &Instance,
-        store: &mut (impl AsContextMut<Data = Self> + Send),
+        store: &mut Store<Self>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         DurableWorkerCtx::<Self>::prepare_instance(agent_id, instance, store).await
     }

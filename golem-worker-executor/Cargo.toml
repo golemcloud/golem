@@ -36,6 +36,7 @@ golem-service-base = { workspace = true, features = ["worker-executor"] }
 anyhow = { workspace = true }
 applying = { workspace = true }
 arc-swap = { workspace = true }
+async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-recursion = { workspace = true }
 async-scoped = { workspace = true, features = ["use-tokio"] }
@@ -118,6 +119,10 @@ harness = false
 
 [[bench]]
 name = "authorization"
+harness = false
+
+[[bench]]
+name = "oplog_read"
 harness = false
 
 [dev-dependencies]

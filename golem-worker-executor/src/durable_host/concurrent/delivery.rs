@@ -173,7 +173,7 @@ pub struct CompletionDelivery {
 pub(super) enum CompletionDeliveryState {
     /// Live, armed: the `End` is persisted and a torn/failed delivery must record a marker.
     Live(Box<LiveDelivery>),
-    /// Live, but the call was not persisted (snapshotting): nothing to reconcile.
+    /// Live, but the call was not persisted: nothing to reconcile.
     Unarmed,
     /// Replay of a recorded terminal the guest observed (or must observe): see [`ReplayDelivery`]
     /// for the per-disposition gating.
@@ -319,6 +319,16 @@ impl CompletionDelivery {
     /// deterministic post-`End` continuation.
     pub fn is_replay_discarded(&self) -> bool {
         matches!(self.state, CompletionDeliveryState::ReplayDiscarded)
+    }
+
+    /// Whether this replayed completion has a recorded delivery marker that must be reached
+    /// before cancellation can settle the guest-facing transfer. Callers inspect this before
+    /// [`Self::prepare_delivery`] replaces the marker position with an armed barrier.
+    pub fn is_replay_at_marker(&self) -> bool {
+        matches!(
+            self.state,
+            CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtMarker { .. })
+        )
     }
 
     /// Whether the token is live and armed (a torn delivery would record a marker). Callers use
@@ -468,7 +478,7 @@ impl CompletionDelivery {
     /// lets a markerless `End` be tail-gated on replay — a completion consumed host-internally
     /// would legitimize durable tail entries that depend on an unmarked delivery.
     ///
-    /// Non-live tokens (replay, unpersisted snapshotting calls) settle immediately; if the
+    /// Non-live tokens (replay and unpersisted calls) settle immediately; if the
     /// accessor has no guest-visible host subtask (e.g. a spawned background task), the token
     /// settles without a marker, matching the pre-observer behavior of consuming it at the host
     /// return. A tail-gated markerless replay token checks for that subtask *before* gating:

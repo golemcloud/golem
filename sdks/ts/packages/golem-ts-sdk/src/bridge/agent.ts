@@ -14,6 +14,7 @@ import { awaitAbortable, throwIfAborted } from '../internal/pollableUtils';
 import {
   schemaValueFromWit,
   schemaValueToWit,
+  schemaValueToWitAsync,
   typedSchemaValueFromWit,
   typedSchemaValueToWit,
   type SchemaValue,
@@ -267,7 +268,11 @@ function resolveRemoteAgentWith(
     signal?: AbortSignal,
   ): Promise<RemoteInvocationResult> => {
     throwIfAborted(signal);
-    const invocation = rpc.asyncInvokeAndAwait(method, schemaValueToWit(params), undefined);
+    const invocation = rpc.asyncInvokeAndAwait(
+      method,
+      await schemaValueToWitAsync(params),
+      undefined,
+    );
     const future = invocation.future;
     let result;
     try {

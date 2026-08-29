@@ -21,4 +21,3 @@ pub fn Level::ordinal(Self) -> Int
 // Type aliases
 
 // Traits
-

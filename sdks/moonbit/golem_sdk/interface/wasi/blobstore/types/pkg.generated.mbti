@@ -41,4 +41,3 @@ pub fn OutgoingValue::outgoing_value_write_body(Self, @async-core.Stream[Byte]) 
 // Type aliases
 
 // Traits
-

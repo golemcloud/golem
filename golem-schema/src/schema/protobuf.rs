@@ -15,6 +15,7 @@
 //! Conversions between the recursive in-memory schema model and its protobuf
 //! mirror in the `golem.schema` package.
 
+#[cfg(not(all(feature = "guest", not(feature = "host"))))]
 use crate::model::EnvironmentId;
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
@@ -25,10 +26,11 @@ use crate::schema::schema_type::{
     UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
 };
 use crate::schema::schema_value::{
-    BinaryValuePayload, DurationValuePayload, PermissionCardValuePayload, QuotaTokenValuePayload,
-    ResultValuePayload, SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload,
-    VariantValuePayload,
+    BinaryValuePayload, DurationValuePayload, PermissionCardValuePayload, ResultValuePayload,
+    SchemaValue, TextValuePayload, UnionValuePayload, VariantValuePayload,
 };
+#[cfg(not(all(feature = "guest", not(feature = "host"))))]
+use crate::schema::schema_value::{QuotaTokenValuePayload, SecretValuePayload};
 use chrono::{DateTime, TimeZone, Utc};
 use golem_api_grpc::proto::golem::common::Empty as ProtoEmpty;
 use golem_api_grpc::proto::golem::schema as proto;
@@ -88,8 +90,8 @@ fn req_box_from_proto(
 
 // --- value-side helpers ------------------------------------------------------
 
-fn value_to_boxed_proto(value: SchemaValue) -> Box<proto::SchemaValue> {
-    Box::new(value.into())
+fn value_to_boxed_proto(value: SchemaValue) -> Result<Box<proto::SchemaValue>, String> {
+    Ok(Box::new(value.try_into()?))
 }
 
 fn opt_box_value_from_proto(
@@ -930,8 +932,10 @@ impl TryFrom<proto::SchemaTypeDef> for SchemaTypeDef {
 
 // --- SchemaValue / TypedSchemaValue ------------------------------------------
 
-impl From<SchemaValue> for proto::SchemaValue {
-    fn from(value: SchemaValue) -> Self {
+impl TryFrom<SchemaValue> for proto::SchemaValue {
+    type Error = String;
+
+    fn try_from(value: SchemaValue) -> Result<Self, Self::Error> {
         let body = match value {
             SchemaValue::Bool(b) => ValueBody::BoolValue(b),
             SchemaValue::S8(v) => ValueBody::S8Value(v as i32),
@@ -947,45 +951,64 @@ impl From<SchemaValue> for proto::SchemaValue {
             SchemaValue::Char(c) => ValueBody::CharValue(c as u32),
             SchemaValue::String(s) => ValueBody::StringValue(s),
             SchemaValue::Record { fields } => ValueBody::RecordValue(proto::RecordValue {
-                fields: fields.into_iter().map(Into::into).collect(),
+                fields: fields
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
             }),
             SchemaValue::Variant(p) => ValueBody::VariantValue(Box::new(proto::VariantValue {
                 case: p.case,
-                payload: p.payload.map(|value| value_to_boxed_proto(*value)),
+                payload: p
+                    .payload
+                    .map(|value| value_to_boxed_proto(*value))
+                    .transpose()?,
             })),
             SchemaValue::Enum { case } => ValueBody::EnumValue(case),
             SchemaValue::Flags { bits } => ValueBody::FlagsValue(proto::FlagsValue { bits }),
             SchemaValue::Tuple { elements } => ValueBody::TupleValue(proto::TupleValue {
-                elements: elements.into_iter().map(Into::into).collect(),
+                elements: elements
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
             }),
             SchemaValue::List { elements } => ValueBody::ListValue(proto::ListValue {
-                elements: elements.into_iter().map(Into::into).collect(),
+                elements: elements
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
             }),
             SchemaValue::FixedList { elements } => {
                 ValueBody::FixedListValue(proto::FixedListValue {
-                    elements: elements.into_iter().map(Into::into).collect(),
+                    elements: elements
+                        .into_iter()
+                        .map(TryInto::try_into)
+                        .collect::<Result<_, _>>()?,
                 })
             }
             SchemaValue::Map { entries } => ValueBody::MapValue(proto::MapValue {
                 entries: entries
                     .into_iter()
-                    .map(|(k, v)| proto::MapEntry {
-                        key: Some(k.into()),
-                        value: Some(v.into()),
+                    .map(|(k, v)| {
+                        Ok(proto::MapEntry {
+                            key: Some(k.try_into()?),
+                            value: Some(v.try_into()?),
+                        })
                     })
-                    .collect(),
+                    .collect::<Result<_, String>>()?,
             }),
             SchemaValue::Option { inner } => ValueBody::OptionValue(Box::new(proto::OptionValue {
-                inner: inner.map(|value| value_to_boxed_proto(*value)),
+                inner: inner
+                    .map(|value| value_to_boxed_proto(*value))
+                    .transpose()?,
             })),
             SchemaValue::Result(r) => ValueBody::ResultValue(Box::new(proto::ResultValue {
                 result: Some(match r {
                     ResultValuePayload::Ok { value } => match value {
-                        Some(v) => ResultBody::Ok(value_to_boxed_proto(*v)),
+                        Some(v) => ResultBody::Ok(value_to_boxed_proto(*v)?),
                         None => ResultBody::OkUnit(ProtoEmpty {}),
                     },
                     ResultValuePayload::Err { value } => match value {
-                        Some(v) => ResultBody::Err(value_to_boxed_proto(*v)),
+                        Some(v) => ResultBody::Err(value_to_boxed_proto(*v)?),
                         None => ResultBody::ErrUnit(ProtoEmpty {}),
                     },
                 }),
@@ -1007,8 +1030,9 @@ impl From<SchemaValue> for proto::SchemaValue {
             SchemaValue::Quantity(q) => ValueBody::QuantityValue(q.into()),
             SchemaValue::Union(u) => ValueBody::UnionValue(Box::new(proto::UnionValue {
                 tag: u.tag,
-                body: Some(value_to_boxed_proto(*u.body)),
+                body: Some(value_to_boxed_proto(*u.body)?),
             })),
+            #[cfg(not(all(feature = "guest", not(feature = "host"))))]
             SchemaValue::Secret(s) => ValueBody::SecretValue(proto::SecretValue {
                 secret_id: Some(s.secret_id.into()),
                 config_key: s.config_key.map(|items| proto::StringList { items }),
@@ -1016,6 +1040,7 @@ impl From<SchemaValue> for proto::SchemaValue {
                 resolved_at: Some(datetime_to_proto(s.resolved_at)),
                 category: s.category,
             }),
+            #[cfg(not(all(feature = "guest", not(feature = "host"))))]
             SchemaValue::QuotaToken(q) => ValueBody::QuotaTokenValue(proto::QuotaTokenValue {
                 environment_id: Some(q.environment_id.uuid.into()),
                 resource_name: q.resource_name,
@@ -1023,6 +1048,23 @@ impl From<SchemaValue> for proto::SchemaValue {
                 last_credit: q.last_credit,
                 last_credit_at: Some(datetime_to_proto(q.last_credit_at)),
             }),
+            #[cfg(all(feature = "guest", not(feature = "host")))]
+            SchemaValue::Secret(_) => {
+                return Err(
+                    "live secret handles cannot be converted to protobuf values".to_string()
+                );
+            }
+            #[cfg(all(feature = "guest", not(feature = "host")))]
+            SchemaValue::QuotaToken(_) => {
+                return Err(
+                    "live quota-token handles cannot be converted to protobuf values".to_string(),
+                );
+            }
+            SchemaValue::Stream(_) => {
+                return Err(
+                    "live schema value streams cannot be converted to protobuf values".to_string(),
+                );
+            }
             SchemaValue::PermissionCard(p) => {
                 ValueBody::PermissionCardValue(proto::PermissionCardValue {
                     card_id: Some(p.card_id.into()),
@@ -1032,7 +1074,7 @@ impl From<SchemaValue> for proto::SchemaValue {
                 })
             }
         };
-        Self { value: Some(body) }
+        Ok(Self { value: Some(body) })
     }
 }
 
@@ -1139,6 +1181,7 @@ impl TryFrom<proto::SchemaValue> for SchemaValue {
                     body: req_box_value_from_proto(uv.body, "UnionValue.body")?,
                 })
             }
+            #[cfg(not(all(feature = "guest", not(feature = "host"))))]
             ValueBody::SecretValue(s) => SchemaValue::Secret(SecretValuePayload {
                 secret_id: s
                     .secret_id
@@ -1152,6 +1195,7 @@ impl TryFrom<proto::SchemaValue> for SchemaValue {
                 )?,
                 category: s.category,
             }),
+            #[cfg(not(all(feature = "guest", not(feature = "host"))))]
             ValueBody::QuotaTokenValue(q) => SchemaValue::QuotaToken(QuotaTokenValuePayload {
                 environment_id: EnvironmentId::new(
                     q.environment_id
@@ -1167,6 +1211,20 @@ impl TryFrom<proto::SchemaValue> for SchemaValue {
                     })?,
                 )?,
             }),
+            #[cfg(all(feature = "guest", not(feature = "host")))]
+            ValueBody::SecretValue(_) => {
+                return Err("protobuf values cannot create live secret handles".to_string());
+            }
+            #[cfg(all(feature = "guest", not(feature = "host")))]
+            ValueBody::QuotaTokenValue(_) => {
+                return Err("protobuf values cannot create live quota-token handles".to_string());
+            }
+            ValueBody::StreamReference(reference) => {
+                return Err(format!(
+                    "live schema value stream reference {} cannot be decoded outside its session",
+                    reference.stream_id
+                ));
+            }
             ValueBody::PermissionCardValue(p) => {
                 SchemaValue::PermissionCard(PermissionCardValuePayload {
                     card_id: p
@@ -1186,13 +1244,15 @@ impl TryFrom<proto::SchemaValue> for SchemaValue {
     }
 }
 
-impl From<TypedSchemaValue> for proto::TypedSchemaValue {
-    fn from(value: TypedSchemaValue) -> Self {
+impl TryFrom<TypedSchemaValue> for proto::TypedSchemaValue {
+    type Error = String;
+
+    fn try_from(value: TypedSchemaValue) -> Result<Self, Self::Error> {
         let (graph, val) = value.into_parts();
-        Self {
+        Ok(Self {
             graph: Some(graph.into()),
-            value: Some(val.into()),
-        }
+            value: Some(val.try_into()?),
+        })
     }
 }
 
@@ -1216,6 +1276,35 @@ impl TryFrom<proto::TypedSchemaValue> for TypedSchemaValue {
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[cfg(all(feature = "host", not(feature = "guest")))]
+    #[test]
+    fn generic_protobuf_encoding_rejects_live_streams() {
+        let value = SchemaValue::Stream(crate::schema::SchemaValueStream::from_host_endpoint(()));
+
+        let error = proto::SchemaValue::try_from(value).unwrap_err();
+
+        assert_eq!(
+            error,
+            "live schema value streams cannot be converted to protobuf values"
+        );
+    }
+
+    #[test]
+    fn generic_protobuf_decoding_rejects_live_stream_references() {
+        let value = proto::SchemaValue {
+            value: Some(ValueBody::StreamReference(
+                proto::SchemaValueStreamReference { stream_id: 42 },
+            )),
+        };
+
+        let error = SchemaValue::try_from(value).unwrap_err();
+
+        assert_eq!(
+            error,
+            "live schema value stream reference 42 cannot be decoded outside its session"
+        );
+    }
 
     #[test]
     fn proto_secret_spec_defaults_inner_to_string_when_absent() {

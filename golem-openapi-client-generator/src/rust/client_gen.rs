@@ -260,7 +260,9 @@ fn tag_operations(
     if let Some(item) = path_item.as_item() {
         if let Some(tag) = tag {
             item.iter()
-                .filter(|(_, op)| op.tags.contains(&tag.name))
+                .filter(|(_, op)| {
+                    op.tags.contains(&tag.name) && !is_websocket_upgrade_operation(op)
+                })
                 .map(|(method, op)| PathOperation {
                     path: Path::from_string(path),
                     original_path: path.to_string(),
@@ -270,7 +272,7 @@ fn tag_operations(
                 .collect()
         } else {
             item.iter()
-                .filter(|(_, op)| op.tags.is_empty())
+                .filter(|(_, op)| op.tags.is_empty() && !is_websocket_upgrade_operation(op))
                 .map(|(method, op)| PathOperation {
                     path: Path::from_string(path),
                     original_path: path.to_string(),
@@ -282,6 +284,13 @@ fn tag_operations(
     } else {
         Vec::new()
     }
+}
+
+fn is_websocket_upgrade_operation(operation: &Operation) -> bool {
+    operation
+        .responses
+        .responses
+        .contains_key(&StatusCode::Code(101))
 }
 
 fn match_tag(tag: &Option<Tag>, path_item: &ReferenceOr<PathItem>) -> bool {

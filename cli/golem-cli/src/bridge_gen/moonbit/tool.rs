@@ -17,7 +17,8 @@ use super::moonbit::{
     to_moonbit_constructor_ident, to_moonbit_term_ident, unique_idents_with_reserved,
 };
 use super::{
-    MoonBitBridgeGenerator, emit_schema_graph_literal, guest_codec_source, moonbit_string_literal,
+    MoonBitBridgeGenerator, emit_schema_graph_literal, guest_codec_source,
+    moonbit_char_option_literal, moonbit_string_literal,
 };
 use crate::bridge_gen::tool_bridge_client_directory_name;
 use crate::bridge_gen::tool_common::{
@@ -581,9 +582,10 @@ impl MoonBitToolBridgeGenerator {
             .zip(&field_graphs)
             .map(|(field, field_graph)| {
                 format!(
-                    "@tool.CanonicalInputField::{{ name: {}, aliases: {}, type_: {} }}",
+                    "@tool.CanonicalInputField::{{ name: {}, aliases: {}, short: {}, type_: {} }}",
                     moonbit_string_literal(&field.name),
                     moonbit_string_array(&field.aliases),
+                    moonbit_char_option_literal(field.short),
                     emit_schema_graph_literal(&field_graph.graph)
                 )
             })

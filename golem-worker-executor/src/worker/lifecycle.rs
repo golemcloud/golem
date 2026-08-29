@@ -207,8 +207,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             await_interruption.recv().await.unwrap();
         }
 
-        // Dropping the resident worker also closes live connections associated with it.
-        worker.remove_from_active_agents().await;
+        if decision == InterruptDecision::Interrupt {
+            // Dropping the resident worker also closes live connections associated with it.
+            worker.remove_from_active_agents().await;
+        }
         Ok(())
     }
 
@@ -477,7 +479,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         loop {
             let entries = oplog_service
-                .read(owned_agent_id, agent_mode, current, 1)
+                .read_exact(owned_agent_id, agent_mode, current, 1)
                 .await;
             let entry = entries.get(&current).ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(

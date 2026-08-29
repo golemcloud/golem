@@ -687,7 +687,7 @@ impl WorkerService for DefaultWorkerService {
 
         let initial_oplog_entry = self
             .oplog_service
-            .read(owned_agent_id, agent_mode, OplogIndex::INITIAL, 1)
+            .read_exact(owned_agent_id, agent_mode, OplogIndex::INITIAL, 1)
             .await
             .into_iter()
             .next();

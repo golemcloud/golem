@@ -27,4 +27,3 @@ pub fn Container::write_data(Self, String, @types.OutgoingValue) -> Result[Unit,
 // Type aliases
 
 // Traits
-

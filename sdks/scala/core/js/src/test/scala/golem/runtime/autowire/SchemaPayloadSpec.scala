@@ -17,8 +17,11 @@
 package golem.runtime.autowire
 
 import golem.host.SchemaWireInterop
-import golem.schema.{IntoSchema, SchemaGraph}
+import golem.schema.{AgentStream, IntoSchema, SchemaGraph}
 import golem.schema.wire.SchemaWire
+import scala.concurrent.Future
+import scala.scalajs.js
+import zio.ZIO
 import zio.blocks.schema.Schema
 import zio.test._
 
@@ -75,6 +78,42 @@ object SchemaPayloadSpec extends ZIOSpecDefault {
   override def spec: Spec[TestEnvironment, Any] =
     suite("SchemaPayloadSpec")(
       suite("encode/decode round-trips through the JS boundary")(
+        test("stream decoding uses the standard path and unwraps on first pull") {
+          ZIO.fromFuture { implicit ec =>
+            var item   = Option("first")
+            val source = AgentStream.fromPull { () =>
+              val result = item
+              item = None
+              Future.successful(result)
+            }
+
+            SchemaPayload.encodeAsync(source).flatMap { encoded =>
+              SchemaPayload.decode[AgentStream[String]](encoded) match {
+                case Left(error)   => Future.failed(error)
+                case Right(stream) =>
+                  for {
+                    first <- stream.pull()
+                    end   <- stream.pull()
+                  } yield assertTrue(first.contains("first"), end.isEmpty)
+              }
+            }
+          }
+        },
+        test("an unread received stream forwards its original endpoint") {
+          ZIO.fromFuture { implicit ec =>
+            val source = AgentStream.fromPull(() => Future.successful(None: Option[String]))
+
+            for {
+              encoded   <- SchemaPayload.encodeAsync(source)
+              stream     = SchemaPayload.decode[AgentStream[String]](encoded).fold(throw _, identity)
+              forwarded <- SchemaPayload.encodeAsync(stream)
+            } yield {
+              val originalEndpoint  = encoded.valueNodes(0).asInstanceOf[js.Dynamic].selectDynamic("val")
+              val forwardedEndpoint = forwarded.valueNodes(0).asInstanceOf[js.Dynamic].selectDynamic("val")
+              assertTrue(originalEndpoint.asInstanceOf[AnyRef] eq forwardedEndpoint.asInstanceOf[AnyRef])
+            }
+          }
+        },
         test("primitive Int") {
           assertTrue(roundtrip(42) == Right(42))
         },
