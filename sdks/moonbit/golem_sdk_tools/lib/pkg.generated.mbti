@@ -8,6 +8,10 @@ import {
 }
 
 // Values
+pub fn component_role_marker(ComponentRole) -> String
+
+pub fn component_target_dir(String, String) -> String
+
 pub fn config_has_overridable_fields(ConfigTypeInfo, Map[String, ConfigTypeInfo]) -> Bool
 
 pub fn decode_qualified(String) -> (String, String)?
@@ -18,7 +22,11 @@ pub fn discover_packages(String) -> Array[PackageInfo] raise
 
 pub fn encode_qualified(String, String) -> ParamType
 
-pub fn ensure_pkg_import(String, String, String) -> String
+pub fn ensure_pkg_import(String, String, String) -> String raise ComponentRoleError
+
+pub fn ensure_role_gen_import(String, String) -> String raise ComponentRoleError
+
+pub fn ensure_role_tool_import(String, String) -> String raise ComponentRoleError
 
 pub fn find_config_param(Array[(String, ParamType)]) -> (String, String, Int)?
 
@@ -40,9 +48,13 @@ pub fn generate_reexports(Array[FnSignature], String) -> @list.List[@syntax.Impl
 
 pub fn generate_tool_client_code(Array[ToolInfo]) -> @list.List[@syntax.Impl] raise ToolEmitError
 
+pub fn generate_tool_middleware_registration(Array[ToolMiddlewareInfo], Array[ToolInfo], ComponentRole) -> @list.List[@syntax.Impl] raise ToolMiddlewareEmitError
+
 pub fn generate_tool_registration(Array[ToolInfo]) -> @list.List[@syntax.Impl] raise ToolEmitError
 
 pub fn generate_value_type_impls(Array[ValueTypeInfo], type_id_prefix? : String) -> @list.List[@syntax.Impl]
+
+pub fn has_middleware_annotations(Array[(String, String)]) -> Bool raise ComponentRoleError
 
 pub fn is_config_type(ParamType) -> Bool
 
@@ -60,6 +72,12 @@ pub fn param_type_to_type_string(ParamType) -> String
 
 pub fn parse_agents(Array[(String, String)]) -> Array[AgentInfo] raise AgentParseError
 
+pub fn parse_agents_command_args(Array[String]) -> AgentsCommandOptions raise ComponentRoleError
+
+pub fn parse_component_role(String) -> ComponentRole raise ComponentRoleError
+
+pub fn parse_component_role_marker(String) -> ComponentRole raise ComponentRoleError
+
 pub fn parse_config_types(Array[(String, String)], package? : String) -> Array[ConfigTypeInfo] raise AgentParseError
 
 pub fn parse_duration_seconds(String) -> UInt64 raise AgentParseError
@@ -74,9 +92,19 @@ pub fn parse_path_only(String) -> Array[PathSegmentInfo] raise HttpPathParseErro
 
 pub fn parse_pkg_exports(String) -> Array[String]
 
+pub fn parse_reexports_command_args(Array[String]) -> ReexportsCommandOptions raise ComponentRoleError
+
+pub fn parse_tool_middlewares(Array[(String, String)]) -> Array[ToolMiddlewareInfo] raise ToolMiddlewareParseError
+
 pub fn parse_tools(Array[(String, String)]) -> Array[ToolInfo] raise ToolParseError
 
 pub fn parse_value_types(Array[(String, String)]) -> Array[ValueTypeInfo] raise AgentParseError
+
+pub fn raise_component_role_error(String) -> Unit raise ComponentRoleError
+
+pub fn reconcile_generated_pkg_imports(String, Array[(String, String)], forbid_ambient_tool? : Bool) -> String raise ComponentRoleError
+
+pub fn reconcile_pure_role_pkg_imports(String) -> String raise ComponentRoleError
 
 pub fn rpc_function_name(String, String) -> String
 
@@ -92,6 +120,8 @@ pub fn unwrap_secret_type(ParamType) -> ParamType?
 
 pub fn update_pkg_link(String, Array[String]) -> String
 
+pub fn validate_component_role(ComponentRole, Int, Bool) -> Unit raise ComponentRoleError
+
 pub fn validate_config_types(Array[AgentInfo], Array[ConfigTypeInfo], agent_package? : String) -> Unit raise AgentParseError
 
 pub fn validate_http_routes(Array[AgentInfo]) -> Unit raise AgentParseError
@@ -105,6 +135,10 @@ pub suberror AgentParseError {
   AgentParseError(String)
 } derive(@debug.Debug)
 
+pub suberror ComponentRoleError {
+  ComponentRoleError(String)
+} derive(@debug.Debug)
+
 pub suberror HttpPathParseError {
   HttpPathParseError(String)
 } derive(@debug.Debug)
@@ -112,6 +146,14 @@ pub suberror HttpPathParseError {
 pub suberror ToolEmitError {
   ToolEmitError(String)
 } derive(Eq, @debug.Debug)
+
+pub suberror ToolMiddlewareEmitError {
+  ToolMiddlewareEmitError(String)
+} derive(Eq, @debug.Debug)
+
+pub suberror ToolMiddlewareParseError {
+  ToolMiddlewareParseError(String)
+} derive(@debug.Debug)
 
 pub suberror ToolParseError {
   ToolParseError(String)
@@ -146,6 +188,23 @@ pub(all) enum AgentSnapshotting {
   Periodic(UInt64)
   EveryNInvocation(UInt)
 } derive(Eq, @debug.Debug)
+
+pub(all) struct AgentsCommandOptions {
+  project_root : String
+  component_dir : String
+  role : ComponentRole
+} derive(Eq, @debug.Debug)
+
+pub(all) enum ComponentRole {
+  Ordinary
+  ToolMiddleware
+  Combined
+} derive(Eq, @debug.Debug)
+pub fn ComponentRole::allows_agent_registration(Self) -> Bool
+pub fn ComponentRole::allows_tool_middleware_registration(Self) -> Bool
+pub fn ComponentRole::allows_tool_registration(Self) -> Bool
+pub fn ComponentRole::gen_package(Self) -> String
+pub fn ComponentRole::name(Self) -> String
 
 pub(all) struct ConfigTypeInfo {
   name : String
@@ -185,6 +244,13 @@ pub(all) struct MethodInfo {
   http_endpoint : HttpEndpointInfo?
   read_only : ReadOnlyInfo?
 } derive(@debug.Debug)
+
+pub(all) struct MonomorphicToolMiddlewareInfo {
+  presented : ToolInfo
+  expected : ToolInfo
+  handlers : Array[ToolMiddlewareCommandInfo]
+  underlying_methods : Array[ToolMiddlewareCommandInfo]
+} derive(Eq, @debug.Debug)
 
 pub(all) struct MultimodalEnumInfo {
   name : String
@@ -235,6 +301,12 @@ pub(all) enum ReadOnlyCachePolicy {
 
 pub(all) struct ReadOnlyInfo {
   cache_policy : ReadOnlyCachePolicy
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ReexportsCommandOptions {
+  sdk_path : String
+  target_dir : String
+  role : ComponentRole
 } derive(Eq, @debug.Debug)
 
 pub(all) enum SystemVariableKind {
@@ -341,6 +413,35 @@ pub(all) struct ToolInfo {
 pub fn ToolInfo::client_pascal_case(Self) -> String
 pub fn ToolInfo::wire_name(Self) -> String
 
+pub(all) struct ToolMiddlewareCommandInfo {
+  command_path : Array[String]
+  handler_name : String
+  params : Array[(String, ParamType)]
+  param_sources : Array[ToolMiddlewareParamSource]
+  success_type : ParamType
+  error_type : ParamType
+  has_stdout : Bool
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ToolMiddlewareInfo {
+  source_name : String
+  name : String
+  aliases : Array[String]
+  description : String
+  scope : ToolMiddlewareScopeInfo
+} derive(Eq, @debug.Debug)
+
+pub(all) enum ToolMiddlewareParamSource {
+  CanonicalInput(String)
+  Stdin
+  Principal
+} derive(Eq, @debug.Debug)
+
+pub(all) enum ToolMiddlewareScopeInfo {
+  Monomorphic(MonomorphicToolMiddlewareInfo)
+  Universal(UniversalToolMiddlewareInfo)
+} derive(Eq, @debug.Debug)
+
 pub(all) enum ToolParamType {
   Public(ParamType)
   LabelledPublic(ParamType)
@@ -353,6 +454,10 @@ pub(all) struct ToolResultInfo {
   formatters : Array[String]
   options : Array[(String, String)]
   defaults : Array[String]
+} derive(Eq, @debug.Debug)
+
+pub(all) struct UniversalToolMiddlewareInfo {
+  handler_name : String
 } derive(Eq, @debug.Debug)
 
 pub(all) struct ValueTypeInfo {

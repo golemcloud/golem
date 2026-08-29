@@ -40,6 +40,37 @@ object ToolWireInterop {
   // Public entry points
   // ===========================================================================
 
+  def toolMiddlewareToJs(middleware: ToolMiddlewareDescriptor): JsToolMiddleware =
+    JsToolMiddleware(
+      middleware.name,
+      middleware.aliases.toJSArray,
+      docToJs(middleware.doc),
+      middleware.scope match {
+        case ToolMiddlewareScope.Monomorphic(presented, expected) =>
+          JsToolMiddlewareScope.monomorphic(
+            JsMonomorphicToolMiddlewareScope(toolToJs(presented), expected.map(toolToJs).orUndefined)
+          )
+        case ToolMiddlewareScope.Universal => JsToolMiddlewareScope.universal
+      }
+    )
+
+  def toolMiddlewareFromJs(middleware: JsToolMiddleware): ToolMiddlewareDescriptor =
+    ToolMiddlewareDescriptor(
+      middleware.name,
+      middleware.aliases.toList,
+      docFromJs(middleware.doc),
+      middleware.scope.tag match {
+        case "monomorphic" =>
+          val value = valOf(middleware.scope).asInstanceOf[JsMonomorphicToolMiddlewareScope]
+          ToolMiddlewareScope.Monomorphic(
+            toolFromJs(value.presented),
+            value.expected.toOption.map(toolFromJs)
+          )
+        case "universal" => ToolMiddlewareScope.Universal
+        case other       => throw new IllegalArgumentException(s"unknown tool middleware scope tag: $other")
+      }
+    )
+
   def toolToJs(t: WitTool): JsTool =
     JsTool(
       t.version,

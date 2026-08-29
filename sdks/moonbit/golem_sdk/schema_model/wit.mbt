@@ -1120,6 +1120,7 @@ fn drop_unique_resources(
   let dropped_secrets : Array[@types.Secret] = []
   let dropped_quota_tokens : Array[@types.QuotaToken] = []
   let dropped_streams : Array[@types.SchemaValueStream] = []
+  let dropped_permission_cards : Array[@types.PermissionCard] = []
   for node in nodes {
     match node {
       @types.SecretValue(raw) =>
@@ -1136,6 +1137,11 @@ fn drop_unique_resources(
         if !dropped_streams.contains(raw) {
           dropped_streams.push(raw)
           (drops.drop_stream)(raw)
+        }
+      @types.PermissionCardHandle(raw) =>
+        if !dropped_permission_cards.contains(raw) {
+          dropped_permission_cards.push(raw)
+          raw.drop()
         }
       _ => ()
     }

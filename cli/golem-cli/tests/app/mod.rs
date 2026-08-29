@@ -21,7 +21,9 @@ mod app;
 mod build_and_deploy_all;
 mod cards;
 mod directory_source_ifs;
+mod moonbit_tool_middleware;
 mod plugins;
+mod scala_tool_middleware;
 mod tool_middleware;
 
 inherit_test_dep!(Tracing);

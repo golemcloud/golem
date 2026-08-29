@@ -45,6 +45,14 @@ import golem.codegen.pipeline.CodegenPipeline
  */
 object GolemPlugin extends AutoPlugin {
 
+  private final case class GuestArtifact(fileName: String)
+
+  private val AgentGuestArtifact               = GuestArtifact("agent_guest.wasm")
+  private val ToolMiddlewareGuestArtifact      = GuestArtifact("tool_middleware_guest.wasm")
+  private val AgentToolMiddlewareGuestArtifact = GuestArtifact("agent_tool_middleware_guest.wasm")
+  private val GuestArtifacts                   =
+    Seq(AgentGuestArtifact, ToolMiddlewareGuestArtifact, AgentToolMiddlewareGuestArtifact)
+
   private lazy val scalafmt: Scalafmt = Scalafmt.create(getClass.getClassLoader)
 
   private def formatCode(content: String, configFile: File, fileName: String): String =
@@ -71,8 +79,12 @@ object GolemPlugin extends AutoPlugin {
       )
     }
 
-  private def embeddedAgentGuestWasmBytes(cl: ClassLoader, repoRootFallback: File): Array[Byte] = {
-    val resourcePath = "golem/wasm/agent_guest.wasm"
+  private def embeddedGuestWasmBytes(
+    artifact: GuestArtifact,
+    cl: ClassLoader,
+    repoRootFallback: File
+  ): Array[Byte] = {
+    val resourcePath = s"golem/wasm/${artifact.fileName}"
     Option(cl.getResourceAsStream(resourcePath)) match {
       case Some(in) =>
         val bos = new ByteArrayOutputStream()
@@ -82,13 +94,52 @@ object GolemPlugin extends AutoPlugin {
       case None =>
         // Fallback for monorepo builds, where the plugin source is compiled into the meta-build.
         val candidate =
-          repoRootFallback / "golem" / "sbt" / "src" / "main" / "resources" / "golem" / "wasm" / "agent_guest.wasm"
+          repoRootFallback / "golem" / "sbt" / "src" / "main" / "resources" / "golem" / "wasm" / artifact.fileName
         if (candidate.exists()) IO.readBytes(candidate)
         else
           sys.error(
             s"[golem] Missing embedded resource '$resourcePath' (and no repo fallback at ${candidate.getAbsolutePath})."
           )
     }
+  }
+
+  private def writeGuestWasm(out: File, bytes: Array[Byte]): Unit = {
+    IO.createDirectory(out.getParentFile)
+    val fos = new FileOutputStream(out)
+    try fos.write(bytes)
+    finally fos.close()
+  }
+
+  private def ensureGuestWasm(
+    artifact: GuestArtifact,
+    out: File,
+    cl: ClassLoader,
+    repoRootFallback: File,
+    log: sbt.util.Logger
+  ): File = {
+    val bytes = embeddedGuestWasmBytes(artifact, cl, repoRootFallback)
+    if (!sameSha256(out, sha256(bytes))) {
+      val reason = if (!out.exists() || out.length() == 0) "missing" else "out-of-date"
+      log.info(s"[golem] ${artifact.fileName} is $reason at ${out.getAbsolutePath}; writing embedded copy.")
+      writeGuestWasm(out, bytes)
+    }
+    out
+  }
+
+  private def appGeneratedArtifactFile(projectRoot: File, fileName: String): File = {
+    @annotation.tailrec
+    def findAppRoot(dir: File): Option[File] =
+      if (dir == null) None
+      else {
+        val manifest      = dir / "golem.yaml"
+        val isAppManifest =
+          manifest.exists() && IO.read(manifest).linesIterator.exists(line => line.trim.startsWith("app:"))
+        if (isAppManifest) Some(dir) else findAppRoot(dir.getParentFile)
+      }
+
+    findAppRoot(projectRoot)
+      .map(appRoot => appRoot / ".generated" / fileName)
+      .getOrElse(projectRoot / ".generated" / fileName)
   }
 
   object autoImport {
@@ -102,6 +153,16 @@ object GolemPlugin extends AutoPlugin {
         "Where to write the embedded base guest runtime WASM (agent_guest.wasm) for use by app manifests."
       )
 
+    val golemToolMiddlewareGuestWasmFile: SettingKey[File] =
+      settingKey[File](
+        "Where to write the embedded pure tool middleware guest runtime WASM."
+      )
+
+    val golemAgentToolMiddlewareGuestWasmFile: SettingKey[File] =
+      settingKey[File](
+        "Where to write the embedded combined agent and tool middleware guest runtime WASM."
+      )
+
     val golemWriteAgentGuestWasm: TaskKey[File] =
       taskKey[File]("Writes the embedded base guest runtime WASM (agent_guest.wasm) to golemAgentGuestWasmFile.")
 
@@ -110,9 +171,15 @@ object GolemPlugin extends AutoPlugin {
         "Ensures the base guest runtime WASM (agent_guest.wasm) exists at golemAgentGuestWasmFile; writes it if missing."
       )
 
+    val golemEnsureToolMiddlewareGuestWasm: TaskKey[File] =
+      taskKey[File]("Ensures the pure tool middleware guest runtime WASM exists and is up-to-date.")
+
+    val golemEnsureAgentToolMiddlewareGuestWasm: TaskKey[File] =
+      taskKey[File]("Ensures the combined agent and tool middleware guest runtime WASM exists and is up-to-date.")
+
     val golemPrepare: TaskKey[Unit] =
       taskKey[Unit](
-        "Prepares the app directory for golem-cli by ensuring agent_guest.wasm exists and is up-to-date."
+        "Prepares the app directory for golem-cli by ensuring every role runtime WASM exists and is up-to-date."
       )
 
     val golemBuildComponent: InputKey[File] =
@@ -140,39 +207,24 @@ object GolemPlugin extends AutoPlugin {
       golemBasePackage        := None,
       golemAgentGuestWasmFile := {
         val projectRoot = (ThisProject / baseDirectory).value
-        val buildRoot   = (ThisBuild / baseDirectory).value
-
-        @annotation.tailrec
-        def findAppRoot(dir: File): Option[File] =
-          if (dir == null) None
-          else {
-            val manifest      = dir / "golem.yaml"
-            val isAppManifest =
-              manifest.exists() && IO.read(manifest).linesIterator.exists(line => line.trim.startsWith("app:"))
-            if (isAppManifest) Some(dir) else findAppRoot(dir.getParentFile)
-          }
-
-        findAppRoot(projectRoot)
-          .map(appRoot => appRoot / ".generated" / "agent_guest.wasm")
-          .getOrElse {
-            projectRoot / ".generated" / "agent_guest.wasm"
-          }
+        appGeneratedArtifactFile(projectRoot, AgentGuestArtifact.fileName)
+      },
+      golemToolMiddlewareGuestWasmFile := {
+        val projectRoot = (ThisProject / baseDirectory).value
+        appGeneratedArtifactFile(projectRoot, ToolMiddlewareGuestArtifact.fileName)
+      },
+      golemAgentToolMiddlewareGuestWasmFile := {
+        val projectRoot = (ThisProject / baseDirectory).value
+        appGeneratedArtifactFile(projectRoot, AgentToolMiddlewareGuestArtifact.fileName)
       },
       golemWriteAgentGuestWasm := {
         val out = golemAgentGuestWasmFile.value
         val log = streams.value.log
 
         val repoRootFallback = (LocalRootProject / baseDirectory).value
-        val bytes            = embeddedAgentGuestWasmBytes(getClass.getClassLoader, repoRootFallback)
+        val bytes            = embeddedGuestWasmBytes(AgentGuestArtifact, getClass.getClassLoader, repoRootFallback)
 
-        IO.createDirectory(out.getParentFile)
-
-        val fos = new FileOutputStream(out)
-        try {
-          fos.write(bytes)
-        } finally {
-          fos.close()
-        }
+        writeGuestWasm(out, bytes)
 
         log.info(s"[golem] Wrote embedded agent_guest.wasm to ${out.getAbsolutePath}")
         out
@@ -181,7 +233,7 @@ object GolemPlugin extends AutoPlugin {
         Def.taskDyn {
           val out              = golemAgentGuestWasmFile.value
           val repoRootFallback = (LocalRootProject / baseDirectory).value
-          val bytes            = embeddedAgentGuestWasmBytes(getClass.getClassLoader, repoRootFallback)
+          val bytes            = embeddedGuestWasmBytes(AgentGuestArtifact, getClass.getClassLoader, repoRootFallback)
           val expectedSha      = sha256(bytes)
 
           if (sameSha256(out, expectedSha)) Def.task(out)
@@ -195,8 +247,28 @@ object GolemPlugin extends AutoPlugin {
             }
         }.value
       },
+      golemEnsureToolMiddlewareGuestWasm := {
+        ensureGuestWasm(
+          ToolMiddlewareGuestArtifact,
+          golemToolMiddlewareGuestWasmFile.value,
+          getClass.getClassLoader,
+          (LocalRootProject / baseDirectory).value,
+          streams.value.log
+        )
+      },
+      golemEnsureAgentToolMiddlewareGuestWasm := {
+        ensureGuestWasm(
+          AgentToolMiddlewareGuestArtifact,
+          golemAgentToolMiddlewareGuestWasmFile.value,
+          getClass.getClassLoader,
+          (LocalRootProject / baseDirectory).value,
+          streams.value.log
+        )
+      },
       golemPrepare := {
         golemEnsureAgentGuestWasm.value
+        golemEnsureToolMiddlewareGuestWasm.value
+        golemEnsureAgentToolMiddlewareGuestWasm.value
         ()
       },
       golemBuildComponent := Def.inputTaskDyn {
@@ -209,15 +281,14 @@ object GolemPlugin extends AutoPlugin {
           val log = streams.value.log
 
           agentWasmOpt.foreach { p =>
-            val target = file(p)
-            val bytes  = embeddedAgentGuestWasmBytes(getClass.getClassLoader, (LocalRootProject / baseDirectory).value)
-            val sha    = sha256(bytes)
+            val target   = file(p)
+            val artifact = GuestArtifacts.find(_.fileName == target.getName).getOrElse(AgentGuestArtifact)
+            val bytes    =
+              embeddedGuestWasmBytes(artifact, getClass.getClassLoader, (LocalRootProject / baseDirectory).value)
+            val sha = sha256(bytes)
             if (!sameSha256(target, sha)) {
-              IO.createDirectory(target.getParentFile)
-              val fos = new FileOutputStream(target)
-              try fos.write(bytes)
-              finally fos.close()
-              log.info(s"[golem] Wrote embedded agent_guest.wasm to ${target.getAbsolutePath}")
+              writeGuestWasm(target, bytes)
+              log.info(s"[golem] Wrote embedded ${artifact.fileName} to ${target.getAbsolutePath}")
             }
           }
 
@@ -314,7 +385,7 @@ object GolemPlugin extends AutoPlugin {
                 val written = writePipelineFiles(ar.files, autoRegRoot)
                 cleanStale(autoRegRoot, written.toSet)
                 log.info(
-                  s"[golem] Generated Scala.js agent registration for ${basePackageOpt.get} into ${ar.generatedPackage} (${ar.implCount} impls, ${ar.packageCount} pkgs)."
+                  s"[golem] Generated Scala.js component registration for ${basePackageOpt.get} into ${ar.generatedPackage} (${ar.implCount} impls, ${ar.packageCount} pkgs)."
                 )
                 written
               }
@@ -328,7 +399,7 @@ object GolemPlugin extends AutoPlugin {
             else {
               val written = writePipelineFiles(pipeline.rpc.files, rpcRoot)
               cleanStale(rpcRoot, written.toSet)
-              log.info(s"[golem] Generated ${pipeline.rpc.files.size} RPC client object(s).")
+              log.info(s"[golem] Generated ${pipeline.rpc.files.size} typed RPC and middleware source file(s).")
               written
             }
           }

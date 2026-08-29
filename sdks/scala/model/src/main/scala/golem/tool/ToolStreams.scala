@@ -16,13 +16,17 @@
 
 package golem.tool
 
+import scala.concurrent.Future
+
 /**
  * Opaque handle to the byte stream supplied as a tool invocation's stdin. A
  * tool method parameter of this type is auto-injected from the invocation and
  * excluded from the tool's input schema. The platform layer (Scala.js guest)
  * provides the concrete implementation carrying the underlying WASI stream.
  */
-trait ToolInputStream
+trait ToolInputStream {
+  private[golem] def close(): Future[Unit] = Future.successful(())
+}
 
 /**
  * Opaque handle to the process stdout stream a tool invocation may write to. A
@@ -30,4 +34,6 @@ trait ToolInputStream
  * tool's input schema; when present, the invocation result carries the stream
  * back to the caller.
  */
-trait ToolOutputStream
+trait ToolOutputStream {
+  private[golem] def close(): Future[Unit] = Future.successful(())
+}

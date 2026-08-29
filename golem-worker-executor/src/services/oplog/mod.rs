@@ -62,6 +62,9 @@ pub mod rate_limited;
 mod reader;
 
 #[cfg(test)]
+pub(crate) use reader::{OplogReadSource, checked_range_end, exact_from_source, fail_stop};
+
+#[cfg(test)]
 pub mod tests;
 
 /// A top-level service for managing worker oplogs

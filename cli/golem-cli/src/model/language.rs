@@ -119,12 +119,28 @@ mod tests {
     #[test]
     fn component_template_names_retain_their_language_prefix() {
         assert_eq!(
+            GuestLanguage::from_component_template_name("moonbit-tool-middleware"),
+            Some(GuestLanguage::MoonBit)
+        );
+        assert_eq!(
             GuestLanguage::from_component_template_name("ts-tool-middleware"),
             Some(GuestLanguage::TypeScript)
         );
         assert_eq!(
+            GuestLanguage::from_component_template_name("ts-agent-tool-middleware"),
+            Some(GuestLanguage::TypeScript)
+        );
+        assert_eq!(
+            GuestLanguage::from_component_template_name("scala-tool-middleware"),
+            Some(GuestLanguage::Scala)
+        );
+        assert_eq!(
             GuestLanguage::from_component_template_name("rust"),
             Some(GuestLanguage::Rust)
+        );
+        assert_eq!(
+            GuestLanguage::from_component_template_name("custom-moonbit"),
+            None
         );
         assert_eq!(
             GuestLanguage::from_component_template_name("custom-ts"),

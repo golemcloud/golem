@@ -172,3 +172,12 @@ test "typed decode drops value resources when its graph is malformed" {
   }
   assert_eq(counts, [0, 0, 1])
 }
+
+///|
+test "generic owned capability cleanup consumes schema streams" {
+  let stream = GuestSchemaValueStreamHandle::from_wrapped(
+    @types.SchemaValueStream::SchemaValueStream(23),
+  )
+  drop_owned_capabilities(Stream(stream))
+  assert_false(stream.is_present())
+}

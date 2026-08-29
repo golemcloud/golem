@@ -257,6 +257,11 @@ pub fn SchemaValue::release_resources(
         Some(value) => (drops.drop_quota_token)(value)
         None => ()
       }
+    PermissionCard(handle) =>
+      match handle.take() {
+        Some(value) => value.drop()
+        None => ()
+      }
     Stream(handle) =>
       handle.release(drops.drop_stream, drops.drop_native_stream)
     _ => ()
