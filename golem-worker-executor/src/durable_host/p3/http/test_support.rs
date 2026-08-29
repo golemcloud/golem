@@ -66,6 +66,10 @@ impl FrameTestOplog {
         self.upload_gate.add_permits(n);
     }
 
+    pub(super) fn fail_uploads(&self) {
+        self.upload_gate.close();
+    }
+
     pub(super) fn entry_count(&self) -> usize {
         self.entries.lock().unwrap().len()
     }
