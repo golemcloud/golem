@@ -65,6 +65,7 @@ else
     export GOLEM_BENCHMARK_RESULTS_PATH="$results"
 
     cargo clean
+    rm -rf /tmp/ittest-local-object-store
 
     mapfile -t postgres_containers < <(
         docker ps --all --quiet --filter ancestor=postgres:17.7
