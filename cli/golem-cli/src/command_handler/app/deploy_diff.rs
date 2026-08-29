@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component::ComponentDeployProperties;
+use crate::model::component::{ComponentDeployProperties, PendingRemoteInitialFile};
 use crate::model::deploy::{
     DeploymentDisplay, DeploymentDisplayContext, DeploymentDisplayMode, EnvironmentSetupPlan,
 };
@@ -32,14 +32,18 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentCurrentDeploymentView;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::mcp_deployment::McpDeployment;
+use golem_common::model::tool::{RemoteToolDeployment, ToolName};
 use golem_common::schema::agent::AgentTypeSchema;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use tracing::debug;
 
 #[derive(Debug)]
 pub struct DeployQuickDiff {
     pub environment: ResolvedEnvironmentIdentity,
     pub deployable_manifest_components: BTreeMap<ComponentName, ComponentDeployProperties>,
+    pub remote_tool_deployments: Vec<RemoteToolDeployment>,
+    pub published_tools: BTreeSet<ToolName>,
+    pub pending_remote_initial_files: Vec<PendingRemoteInitialFile>,
     pub deployable_manifest_http_api_deployments:
         BTreeMap<Domain, HttpApiDeploymentDeployProperties>,
     #[allow(dead_code)]
@@ -80,6 +84,9 @@ pub enum DeployDiffKind {
 pub struct DeployDiff {
     pub environment: ResolvedEnvironmentIdentity,
     pub deployable_components: BTreeMap<ComponentName, ComponentDeployProperties>,
+    pub remote_tool_deployments: Vec<RemoteToolDeployment>,
+    pub published_tools: BTreeSet<ToolName>,
+    pub pending_remote_initial_files: Vec<PendingRemoteInitialFile>,
     pub deployable_http_api_deployments: BTreeMap<Domain, HttpApiDeploymentDeployProperties>,
     pub deployable_mcp_deployments: BTreeMap<Domain, McpDeploymentDeployProperties>,
     pub diffable_local_deployment: diff::Deployment,
@@ -107,6 +114,8 @@ impl DeployDiff {
         !self.diff.components.is_empty()
             || !self.diff.http_api_deployments.is_empty()
             || !self.diff.mcp_deployments.is_empty()
+            || !self.diff.remote_tools.is_empty()
+            || !self.diff.published_tools.is_empty()
     }
 
     pub fn has_environment_setup_entries_to_apply(&self) -> bool {
@@ -131,6 +140,8 @@ impl DeployDiff {
             components: BTreeMap::new(),
             http_api_deployments: BTreeMap::new(),
             mcp_deployments: BTreeMap::new(),
+            remote_tools: BTreeMap::new(),
+            published_tools: BTreeMap::new(),
         }
     }
 

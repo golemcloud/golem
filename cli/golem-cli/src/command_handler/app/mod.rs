@@ -49,11 +49,13 @@ use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
     WithSource,
 };
+use crate::model::component::{DeployableManifestComponents, PendingRemoteInitialFile};
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{
-    DeployConfig, DeployError, DeployResult, DeploySummary, EnvironmentSetupPlan, PostDeployError,
-    PostDeployResult, PostDeploySummary, UpdateStagedComponentError, build_environment_setup_plan,
-    preferred_source_language_for_setup,
+    DeployConfig, DeployError, DeployResult, DeploySummary, EnvironmentSetupPlan,
+    EnvironmentToolGrantPlanAction, EnvironmentToolGrantPlanEntry, EnvironmentToolGrantPlanView,
+    PostDeployError, PostDeployResult, PostDeploySummary, UpdateStagedComponentError,
+    build_environment_setup_plan, preferred_source_language_for_setup,
 };
 use crate::model::deploy::{DeployPlanView, log_unified_diff, log_unified_diff_for_path};
 use crate::model::deploy::{DeploymentListView, DeploymentNewView};
@@ -65,8 +67,8 @@ use anyhow::{anyhow, bail};
 use colored::Colorize;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use golem_client::api::{
-    AgentSecretsClient, ApplicationClient, ComponentClient, EnvironmentClient, ResourcesClient,
-    RetryPoliciesClient,
+    AgentSecretsClient, ApplicationClient, ComponentClient, EnvironmentClient,
+    EnvironmentToolGrantsClient, ResourcesClient, RetryPoliciesClient,
 };
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
@@ -83,6 +85,10 @@ use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment_tool_grant::{
+    EnvironmentToolGrantCreation, EnvironmentToolGrantId, EnvironmentToolGrantWithDetails,
+};
+use golem_common::model::tool_release::ToolReleaseReference;
 use golem_common::schema::schema_type::SchemaType;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -97,6 +103,109 @@ mod version_strategy;
 
 pub struct AppCommandHandler {
     ctx: Arc<Context>,
+}
+
+struct ToolGrantReconciliationPlan {
+    creations: Vec<ToolReleaseReference>,
+    deletions: Vec<EnvironmentToolGrantId>,
+    view: EnvironmentToolGrantPlanView,
+}
+
+impl ToolGrantReconciliationPlan {
+    fn has_changes(&self) -> bool {
+        self.view.has_changes()
+    }
+}
+
+fn tool_grant_matches_reference(
+    grant: &EnvironmentToolGrantWithDetails,
+    reference: &ToolReleaseReference,
+) -> bool {
+    match reference {
+        ToolReleaseReference::ById(reference) => grant.release.id == reference.release_id,
+        ToolReleaseReference::ByCoordinates(reference) => {
+            grant.release_owner.email == reference.account
+                && grant.release.name == reference.name
+                && grant.release.version == reference.version
+        }
+    }
+}
+
+fn tool_grant_plan_entry(
+    action: EnvironmentToolGrantPlanAction,
+    reference: &ToolReleaseReference,
+    grant_id: Option<EnvironmentToolGrantId>,
+) -> EnvironmentToolGrantPlanEntry {
+    match reference {
+        ToolReleaseReference::ById(reference) => EnvironmentToolGrantPlanEntry {
+            action,
+            release_id: Some(reference.release_id),
+            account: None,
+            name: None,
+            version: None,
+            grant_id,
+        },
+        ToolReleaseReference::ByCoordinates(reference) => EnvironmentToolGrantPlanEntry {
+            action,
+            release_id: None,
+            account: Some(reference.account.to_string()),
+            name: Some(reference.name.to_string()),
+            version: Some(reference.version.clone()),
+            grant_id,
+        },
+    }
+}
+
+fn build_tool_grant_reconciliation_plan(
+    desired: &[ToolReleaseReference],
+    current: &[EnvironmentToolGrantWithDetails],
+) -> ToolGrantReconciliationPlan {
+    let mut creations = Vec::new();
+    let mut deletions = Vec::new();
+    let mut entries = Vec::new();
+
+    for reference in desired {
+        if !current
+            .iter()
+            .any(|grant| tool_grant_matches_reference(grant, reference))
+        {
+            creations.push(reference.clone());
+            entries.push(tool_grant_plan_entry(
+                EnvironmentToolGrantPlanAction::Create,
+                reference,
+                None,
+            ));
+        }
+    }
+
+    for grant in current {
+        if desired
+            .iter()
+            .any(|reference| tool_grant_matches_reference(grant, reference))
+        {
+            continue;
+        }
+        let action = if grant.grant.protected {
+            EnvironmentToolGrantPlanAction::RetainProtected
+        } else {
+            deletions.push(grant.grant.id);
+            EnvironmentToolGrantPlanAction::Delete
+        };
+        entries.push(EnvironmentToolGrantPlanEntry {
+            action,
+            release_id: Some(grant.release.id),
+            account: Some(grant.release_owner.email.to_string()),
+            name: Some(grant.release.name.to_string()),
+            version: Some(grant.release.version.clone()),
+            grant_id: Some(grant.grant.id),
+        });
+    }
+
+    ToolGrantReconciliationPlan {
+        creations,
+        deletions,
+        view: EnvironmentToolGrantPlanView { entries },
+    }
 }
 
 impl AppCommandHandler {
@@ -748,6 +857,39 @@ impl AppCommandHandler {
             .await
             .map_err(DeployError::PrepareError)?;
 
+        let tool_grant_plan = self
+            .plan_tool_grant_reconciliation(&environment)
+            .await
+            .map_err(DeployError::PrepareError)?;
+        if !tool_grant_plan.view.entries.is_empty() {
+            log_action("Planning", "environment tool grant reconciliation");
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
+            self.ctx
+                .log_handler()
+                .log_output(tool_grant_plan.view.clone())
+                .map_err(DeployError::PrepareError)?;
+        }
+        if tool_grant_plan.has_changes() {
+            if config.plan {
+                return Ok(DeploySummary::PlanOk);
+            }
+            if !self
+                .ctx
+                .interactive_handler()
+                .confirm_deploy_by_plan(
+                    &environment.application_name,
+                    &environment.environment_name,
+                    &self.ctx.selected_server_description(),
+                )
+                .map_err(DeployError::PrepareError)?
+            {
+                return Err(DeployError::Cancelled);
+            }
+            self.apply_tool_grant_reconciliation(&environment, tool_grant_plan)
+                .await
+                .map_err(DeployError::PrepareError)?;
+        }
+
         if !config.skip_build {
             self.build(&build_config, vec![], &ApplicationComponentSelectMode::All)
                 .await
@@ -1044,7 +1186,13 @@ impl AppCommandHandler {
         &self,
         environment: ResolvedEnvironmentIdentity,
     ) -> anyhow::Result<DeployQuickDiff> {
-        let deployable_manifest_components = self
+        let DeployableManifestComponents {
+            components: deployable_manifest_components,
+            remote_tool_deployments,
+            diffable_remote_tool_deployments,
+            published_tools,
+            pending_remote_initial_files,
+        } = self
             .ctx
             .component_handler()
             .deployable_manifest_components(&environment)
@@ -1121,6 +1269,8 @@ impl AppCommandHandler {
             components: diffable_local_components,
             http_api_deployments: diffable_local_http_api_deployments,
             mcp_deployments: diffable_local_mcp_deployments,
+            remote_tools: diffable_remote_tool_deployments,
+            published_tools: published_tools.iter().map(ToString::to_string).collect(),
         };
 
         let local_deployment_hash = diffable_local_deployment.hash()?;
@@ -1128,6 +1278,9 @@ impl AppCommandHandler {
         Ok(DeployQuickDiff {
             environment,
             deployable_manifest_components,
+            remote_tool_deployments,
+            published_tools,
+            pending_remote_initial_files,
             deployable_manifest_http_api_deployments,
             deployable_manifest_mcp_deployments,
             diffable_local_deployment,
@@ -1183,6 +1336,9 @@ impl AppCommandHandler {
         Ok(DeployDiff {
             environment: deploy_quick_diff.environment,
             deployable_components: deploy_quick_diff.deployable_manifest_components,
+            remote_tool_deployments: deploy_quick_diff.remote_tool_deployments,
+            published_tools: deploy_quick_diff.published_tools,
+            pending_remote_initial_files: deploy_quick_diff.pending_remote_initial_files,
             deployable_http_api_deployments: deploy_quick_diff
                 .deployable_manifest_http_api_deployments,
             deployable_mcp_deployments: deploy_quick_diff.deployable_manifest_mcp_deployments,
@@ -1333,6 +1489,58 @@ impl AppCommandHandler {
             &declared_secret_types,
             &source_language,
         )
+    }
+
+    async fn plan_tool_grant_reconciliation(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<ToolGrantReconciliationPlan> {
+        let desired = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            app_ctx
+                .some_or_err()?
+                .application()
+                .selected_tool_grants()
+                .map(|reference| reference.to_release_reference().map_err(anyhow::Error::msg))
+                .collect::<anyhow::Result<Vec<_>>>()?
+        };
+        let current = self
+            .ctx
+            .golem_clients()
+            .await?
+            .environment_tool_grants
+            .list_environment_tool_grants(&environment.environment_id.0)
+            .await
+            .map_service_error()?
+            .values;
+
+        Ok(build_tool_grant_reconciliation_plan(&desired, &current))
+    }
+
+    async fn apply_tool_grant_reconciliation(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        plan: ToolGrantReconciliationPlan,
+    ) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients().await?;
+        for release in plan.creations {
+            clients
+                .environment_tool_grants
+                .create_environment_tool_grant(
+                    &environment.environment_id.0,
+                    &EnvironmentToolGrantCreation { release },
+                )
+                .await
+                .map_service_error()?;
+        }
+        for grant_id in plan.deletions {
+            clients
+                .environment_tool_grants
+                .delete_environment_tool_grant(&grant_id.0)
+                .await
+                .map_service_error()?;
+        }
+        Ok(())
     }
 
     async fn collect_deploy_diff_details(
@@ -2132,6 +2340,12 @@ impl AppCommandHandler {
 
         log_action("Deploying", "staged changes to the environment");
 
+        self.upload_remote_initial_files(
+            &deploy_diff.environment.environment_id,
+            &deploy_diff.pending_remote_initial_files,
+        )
+        .await?;
+
         let mut reset_fallback_applied = false;
         let mut replace_incompatible_agent_secrets = false;
         let result = loop {
@@ -2143,6 +2357,8 @@ impl AppCommandHandler {
                         current_revision: deploy_diff.current_deployment_revision(),
                         expected_deployment_hash: deploy_diff.local_deployment_hash,
                         version: deployment_version.clone(),
+                        publish_tools: deploy_diff.published_tools.iter().cloned().collect(),
+                        remote_tools: deploy_diff.remote_tool_deployments.clone(),
                         agent_secret_defaults: if replace_incompatible_agent_secrets {
                             let mut defaults = environment_setup.agent_secret_defaults.clone();
                             defaults.extend(
@@ -2208,6 +2424,38 @@ impl AppCommandHandler {
         })?;
 
         Ok(result)
+    }
+
+    async fn upload_remote_initial_files(
+        &self,
+        environment_id: &EnvironmentId,
+        files: &[PendingRemoteInitialFile],
+    ) -> anyhow::Result<()> {
+        if files.is_empty() {
+            return Ok(());
+        }
+
+        let clients = self.ctx.golem_clients().await?;
+        for file in files {
+            let uploaded = clients
+                .environment
+                .upload_environment_initial_agent_file(&environment_id.0, file.content.clone())
+                .await
+                .map_service_error()?;
+            let uploaded_hash =
+                golem_common::model::agent::AgentFileContentHash(uploaded.content_hash.parse()?);
+            if uploaded_hash != file.content_hash || uploaded.size != file.size {
+                bail!(
+                    "Environment initial file upload returned unexpected identity: expected {} ({} bytes), got {} ({} bytes)",
+                    file.content_hash,
+                    file.size,
+                    uploaded_hash,
+                    uploaded.size,
+                );
+            }
+        }
+
+        Ok(())
     }
 
     async fn rollback_environment(
@@ -2391,16 +2639,46 @@ impl AppCommandHandler {
     ) -> anyhow::Result<()> {
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
+        let requires_registry_metadata = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            app_ctx
+                .some_or_err()?
+                .application()
+                .requires_registry_bridge_metadata()
+        };
+        let effective_build_config =
+            if requires_registry_metadata && build_config.registry_tool_grants.is_empty() {
+                let environment = self
+                    .ctx
+                    .environment_handler()
+                    .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+                    .await?;
+                let grants = self
+                    .ctx
+                    .golem_clients()
+                    .await?
+                    .environment_tool_grants
+                    .list_environment_tool_grants(&environment.environment_id.0)
+                    .await
+                    .map_service_error()?
+                    .values;
+                build_config.clone().with_registry_tool_grants(grants)
+            } else {
+                build_config.clone()
+            };
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
 
         // NOTE: dependency checks are done here, as they are interactive, and they modify
         //       the projects, tool checks are done as part of app_ctx.build
-        if build_config.should_run_step(AppBuildStep::Check) {
-            self.plan_and_apply_dependency_fixes(&BuildContext::new(app_ctx, build_config))?;
+        if effective_build_config.should_run_step(AppBuildStep::Check) {
+            self.plan_and_apply_dependency_fixes(&BuildContext::new(
+                app_ctx,
+                &effective_build_config,
+            ))?;
         }
 
-        app_ctx.build(build_config).await
+        app_ctx.build(&effective_build_config).await
     }
 
     fn plan_and_apply_dependency_fixes(&self, build_ctx: &BuildContext<'_>) -> anyhow::Result<()> {
@@ -2902,8 +3180,23 @@ fn duplicate_component_matches(found: &[Match]) -> Vec<(String, Vec<String>)> {
 
 #[cfg(test)]
 mod tests {
-    use super::duplicate_component_matches;
+    use super::{build_tool_grant_reconciliation_plan, duplicate_component_matches};
     use crate::fuzzy::Match;
+    use chrono::Utc;
+    use golem_common::model::account::{AccountEmail, AccountId, AccountSummary};
+    use golem_common::model::diff::Hash;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::environment_tool_grant::{
+        EnvironmentToolGrant, EnvironmentToolGrantId, EnvironmentToolGrantLifecycle,
+        EnvironmentToolGrantWithDetails,
+    };
+    use golem_common::model::tool::ToolName;
+    use golem_common::model::tool_release::{
+        ToolReleaseByCoordinates, ToolReleaseById, ToolReleaseId, ToolReleaseMetadata,
+        ToolReleaseReference,
+    };
+    use golem_common::schema::SchemaGraph;
+    use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
     use test_r::test;
 
     fn matched(option: &str, pattern: &str) -> Match {
@@ -2933,5 +3226,96 @@ mod tests {
     fn no_collision_for_distinct_components() {
         let found = vec![matched("a", "a"), matched("b", "b")];
         assert!(duplicate_component_matches(&found).is_empty());
+    }
+
+    #[test]
+    fn tool_grant_reconciliation_is_idempotent_for_an_existing_exact_grant() {
+        let current = grant("search", "1.2.0", "publisher@example.com", false);
+        let desired = vec![ToolReleaseReference::ById(ToolReleaseById {
+            release_id: current.release.id,
+        })];
+
+        let plan = build_tool_grant_reconciliation_plan(&desired, &[current]);
+
+        assert!(plan.creations.is_empty());
+        assert!(plan.deletions.is_empty());
+        assert!(plan.view.entries.is_empty());
+    }
+
+    #[test]
+    fn tool_grant_reconciliation_creates_missing_deletes_ordinary_and_retains_protected() {
+        let ordinary = grant("old-search", "1.0.0", "old@example.com", false);
+        let protected = grant("host-clock", "1.0.0", "system@example.com", true);
+        let desired = vec![ToolReleaseReference::ByCoordinates(
+            ToolReleaseByCoordinates {
+                account: AccountEmail::new("publisher@example.com"),
+                name: ToolName::try_from("search").unwrap(),
+                version: "1.2.0".to_string(),
+            },
+        )];
+
+        let plan =
+            build_tool_grant_reconciliation_plan(&desired, &[ordinary.clone(), protected.clone()]);
+
+        assert_eq!(plan.creations, desired);
+        assert_eq!(plan.deletions, vec![ordinary.grant.id]);
+        assert_eq!(plan.view.entries.len(), 3);
+        assert!(plan.view.entries.iter().any(|entry| {
+            entry.action == crate::model::deploy::EnvironmentToolGrantPlanAction::RetainProtected
+                && entry.grant_id == Some(protected.grant.id)
+        }));
+    }
+
+    fn grant(
+        name: &str,
+        version: &str,
+        owner_email: &str,
+        protected: bool,
+    ) -> EnvironmentToolGrantWithDetails {
+        let release_id = ToolReleaseId::new();
+        let actor = AccountId::new();
+        let now = Utc::now();
+        let name = ToolName::try_from(name).unwrap();
+        let definition = Tool {
+            version: version.to_string(),
+            commands: CommandTree {
+                nodes: vec![CommandNode {
+                    name: name.to_string(),
+                    aliases: Vec::new(),
+                    doc: Doc::default(),
+                    globals: Globals::default(),
+                    subcommands: Vec::new(),
+                    body: None,
+                }],
+            },
+            schema: SchemaGraph::empty(),
+        };
+        EnvironmentToolGrantWithDetails {
+            grant: EnvironmentToolGrant {
+                id: EnvironmentToolGrantId::new(),
+                environment_id: EnvironmentId::new(),
+                tool_release_id: release_id,
+                protected,
+                lifecycle: EnvironmentToolGrantLifecycle::Active,
+                created_at: now,
+                created_by: actor,
+                state_changed_at: now,
+                state_changed_by: actor,
+            },
+            release: ToolReleaseMetadata {
+                id: release_id,
+                name,
+                version: version.to_string(),
+                definition,
+                metadata_version: "0.1.0".to_string(),
+                metadata_digest: Hash::empty(),
+                source_digest: Hash::empty(),
+            },
+            release_owner: AccountSummary {
+                id: AccountId::new(),
+                name: "publisher".to_string(),
+                email: AccountEmail::new(owner_email),
+            },
+        }
     }
 }

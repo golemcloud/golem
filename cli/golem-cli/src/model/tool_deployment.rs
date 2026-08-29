@@ -14,6 +14,7 @@
 
 use crate::validation::ValidationBuilder;
 use golem_common::model::component::ComponentName;
+use golem_common::model::environment_tool_grant::EnvironmentToolGrantWithDetails;
 use golem_common::schema::tool::Tool;
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -47,6 +48,7 @@ pub enum ToolValidationCode {
     DuplicateImplementation,
     MissingDeclaration,
     MissingImplementation,
+    RegistryReleaseNotFound,
     UnknownToolReference,
     UnknownAgentReference,
     VersionMismatch,
@@ -190,16 +192,29 @@ pub fn add_tool_issues(
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ToolImplementationSource {
-    Component { component_name: ComponentName },
+    Component {
+        component_name: ComponentName,
+    },
+    Registry {
+        grant: Box<EnvironmentToolGrantWithDetails>,
+    },
 }
 
 impl ToolImplementationSource {
     pub fn local_component_name(&self) -> Option<&ComponentName> {
         match self {
             Self::Component { component_name } => Some(component_name),
+            Self::Registry { .. } => None,
+        }
+    }
+
+    pub fn registry_grant(&self) -> Option<&EnvironmentToolGrantWithDetails> {
+        match self {
+            Self::Component { .. } => None,
+            Self::Registry { grant } => Some(grant),
         }
     }
 }

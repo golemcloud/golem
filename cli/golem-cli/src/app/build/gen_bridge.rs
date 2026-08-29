@@ -17,8 +17,8 @@ use crate::fs;
 use crate::log::log_error;
 use crate::log::{LogColorize, LogIndent, log_action, log_skipping_up_to_date, logln};
 use crate::model::app::{
-    BridgeSdkTarget, BridgeSdkTargetKind, BridgeSdkTargetSubject, ComponentDependency,
-    CustomBridgeSdkTarget,
+    BridgeSdkTarget, BridgeSdkTargetKind, BridgeSdkTargetSource, BridgeSdkTargetSubject,
+    ComponentDependency, CustomBridgeSdkTarget,
 };
 use crate::model::cli_output::StructuredOutput;
 use crate::model::language::GuestLanguage;
@@ -306,7 +306,7 @@ pub(crate) async fn collect_custom_targets_lenient(
                 });
 
             targets.push(BridgeSdkTarget {
-                component_name: component_name.clone(),
+                source: BridgeSdkTargetSource::local(component_name.clone()),
                 subject: BridgeSdkTargetSubject::Agent(agent_type),
                 target_language,
                 bridge_mode: BridgeMode::External,
@@ -396,7 +396,7 @@ async fn collect_manifest_targets_for_components_and_mode(
             target_language,
             sdk_targets
                 .tools
-                .map(|tools| tools.clone().into_set())
+                .map(|tools| tools.local_aliases())
                 .unwrap_or_default(),
             &application_component_names,
             ignore_unmatched_matchers,
@@ -404,6 +404,17 @@ async fn collect_manifest_targets_for_components_and_mode(
             &mut targets,
         )
         .await?;
+
+        if let Some(tool_targets) = sdk_targets.tools {
+            collect_sourced_tool_manifest_targets_for_entry(
+                ctx,
+                bridge_mode,
+                target_language,
+                tool_targets.sourced(),
+                &mut targets,
+            )
+            .await?;
+        }
     }
 
     if include_dependency_targets
@@ -480,7 +491,7 @@ async fn collect_agent_manifest_targets_for_entry(
                 bridge_mode,
             );
             targets.push(BridgeSdkTarget {
-                component_name: component_name.clone(),
+                source: BridgeSdkTargetSource::local(component_name.clone()),
                 subject: BridgeSdkTargetSubject::Agent(agent_type),
                 target_language,
                 bridge_mode,
@@ -510,6 +521,76 @@ async fn collect_agent_manifest_targets_for_entry(
         bail!(NonSuccessfulExit)
     }
 
+    Ok(())
+}
+
+async fn collect_sourced_tool_manifest_targets_for_entry<'a>(
+    ctx: &BuildContext<'_>,
+    bridge_mode: BridgeMode,
+    target_language: GuestLanguage,
+    references: impl Iterator<Item = &'a crate::model::app_raw::SubjectReference>,
+    targets: &mut Vec<BridgeSdkTarget>,
+) -> anyhow::Result<()> {
+    for reference in references {
+        let (source, tool) = match (&reference.source.local, &reference.source.registry) {
+            (Some(local), None) => {
+                let component_name = ComponentName::try_from(local.component.as_str())
+                    .map_err(anyhow::Error::msg)?;
+                if !ctx.application().contains_component(&component_name) {
+                    bail!(
+                        "Local bridge source component '{}' not found",
+                        local.component
+                    );
+                }
+                let tool = extract_and_store_component_metadata(ctx, &component_name)
+                    .await?
+                    .tools
+                    .into_iter()
+                    .find(|tool| tool.name() == Some(local.name.as_str()))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Tool '{}' not found in local bridge source component '{}'",
+                            local.name,
+                            local.component,
+                        )
+                    })?;
+                (BridgeSdkTargetSource::local(component_name), tool)
+            }
+            (None, Some(registry)) => {
+                let grant = ctx.registry_tool_grant(registry).ok_or_else(|| {
+                    anyhow::anyhow!("Registry bridge source not found in the selected environment")
+                })?;
+                (
+                    BridgeSdkTargetSource::Registry {
+                        release_id: grant.release.id,
+                        version: grant.release.version.clone(),
+                        metadata_version: grant.release.metadata_version.clone(),
+                        metadata_digest: grant.release.metadata_digest,
+                        source_digest: grant.release.source_digest,
+                    },
+                    grant.release.definition.clone(),
+                )
+            }
+            _ => bail!("Bridge tool source must specify exactly one of local or registry"),
+        };
+
+        let name = tool
+            .name()
+            .ok_or_else(|| anyhow::anyhow!("Bridge tool definition has no root name"))?
+            .to_string();
+        if let Some(error) = BridgeSdkTargetKind::Tool.support_error(bridge_mode, target_language) {
+            bail!(error);
+        }
+        targets.push(BridgeSdkTarget {
+            source,
+            subject: BridgeSdkTargetSubject::Tool(tool),
+            target_language,
+            bridge_mode,
+            output_dir: ctx
+                .application()
+                .tool_bridge_sdk_dir(&name, target_language),
+        });
+    }
     Ok(())
 }
 
@@ -576,7 +657,7 @@ async fn collect_tool_manifest_targets_for_entry(
 
             let output_dir = ctx.application().tool_bridge_sdk_dir(name, target_language);
             targets.push(BridgeSdkTarget {
-                component_name: component_name.clone(),
+                source: BridgeSdkTargetSource::local(component_name.clone()),
                 subject: BridgeSdkTargetSubject::Tool(tool),
                 target_language,
                 bridge_mode,
@@ -629,7 +710,9 @@ async fn collect_dependency_guest_bridge_targets(
         let metadata = extract_and_store_component_metadata(ctx, component_name).await?;
         for agent_type in &metadata.agent_types {
             let dependency = ComponentDependency::Agent {
-                component_name: component_name.clone(),
+                source: crate::model::app::SubjectSource::Local {
+                    component_name: component_name.clone(),
+                },
                 agent_type_name: agent_type.type_name.clone(),
             };
             let target_languages = dependency_guest_bridge_target_languages(
@@ -643,7 +726,7 @@ async fn collect_dependency_guest_bridge_targets(
                     .application()
                     .dependency_bridge_sdk_dir(&agent_type.type_name, target_language);
                 targets.push(BridgeSdkTarget {
-                    component_name: component_name.clone(),
+                    source: BridgeSdkTargetSource::local(component_name.clone()),
                     subject: BridgeSdkTargetSubject::Agent(agent_type.clone()),
                     target_language,
                     bridge_mode: BridgeMode::Guest,
@@ -660,8 +743,10 @@ async fn collect_dependency_guest_bridge_targets(
                 continue;
             };
             let dependency = ComponentDependency::Tool {
-                component_name: component_name.clone(),
-                tool_name: tool_dependency_name,
+                source: crate::model::app::SubjectSource::Local {
+                    component_name: component_name.clone(),
+                },
+                tool_name: Some(tool_dependency_name),
             };
             let target_languages = dependency_guest_bridge_target_languages(
                 ctx,
@@ -674,13 +759,77 @@ async fn collect_dependency_guest_bridge_targets(
                     .application()
                     .dependency_tool_bridge_sdk_dir(tool_name, target_language);
                 targets.push(BridgeSdkTarget {
-                    component_name: component_name.clone(),
+                    source: BridgeSdkTargetSource::local(component_name.clone()),
                     subject: BridgeSdkTargetSubject::Tool(tool.clone()),
                     target_language,
                     bridge_mode: BridgeMode::Guest,
                     output_dir,
                 });
             }
+        }
+    }
+
+    let registry_dependencies = selection_scope_component_names
+        .iter()
+        .flat_map(|component_name| {
+            ctx.application()
+                .component(component_name)
+                .properties()
+                .dependencies
+                .clone()
+                .into_iter()
+        })
+        .filter(|dependency| {
+            matches!(
+                dependency,
+                ComponentDependency::Tool {
+                    source: crate::model::app::SubjectSource::Registry { .. },
+                    ..
+                }
+            )
+        })
+        .collect::<BTreeSet<_>>();
+
+    for dependency in registry_dependencies {
+        let ComponentDependency::Tool {
+            source: crate::model::app::SubjectSource::Registry { reference },
+            tool_name,
+        } = &dependency
+        else {
+            unreachable!()
+        };
+        let grant = ctx.registry_tool_grant(reference).ok_or_else(|| {
+            anyhow::anyhow!("Registry tool dependency not found in the selected environment")
+        })?;
+        if let Some(expected_name) = tool_name
+            && expected_name != &grant.release.name
+        {
+            bail!(
+                "Registry tool dependency name '{}' does not match granted release name '{}'",
+                expected_name,
+                grant.release.name,
+            );
+        }
+        for target_language in dependency_guest_bridge_target_languages(
+            ctx,
+            &dependency,
+            selection_scope_component_names,
+        ) {
+            targets.push(BridgeSdkTarget {
+                source: BridgeSdkTargetSource::Registry {
+                    release_id: grant.release.id,
+                    version: grant.release.version.clone(),
+                    metadata_version: grant.release.metadata_version.clone(),
+                    metadata_digest: grant.release.metadata_digest,
+                    source_digest: grant.release.source_digest,
+                },
+                subject: BridgeSdkTargetSubject::Tool(grant.release.definition.clone()),
+                target_language,
+                bridge_mode: BridgeMode::Guest,
+                output_dir: ctx
+                    .application()
+                    .dependency_tool_bridge_sdk_dir(grant.release.name.as_str(), target_language),
+            });
         }
     }
 
@@ -770,7 +919,7 @@ async fn collect_custom_targets(
                 });
 
             targets.push(BridgeSdkTarget {
-                component_name: component_name.clone(),
+                source: BridgeSdkTargetSource::local(component_name.clone()),
                 subject: BridgeSdkTargetSubject::Agent(agent_type),
                 target_language,
                 bridge_mode: BridgeMode::External,
@@ -798,21 +947,27 @@ async fn gen_bridge_sdk_target(
     ctx: &BuildContext<'_>,
     target: BridgeSdkTarget,
 ) -> anyhow::Result<()> {
-    let component = ctx.application().component(&target.component_name);
-    let final_wasm = component.final_wasm();
+    let freshness_source = match &target.source {
+        BridgeSdkTargetSource::Local { component_name } => {
+            ctx.application().component(component_name).final_wasm()
+        }
+        BridgeSdkTargetSource::Registry { .. } => {
+            ctx.application().bridge_sdks_source().to_path_buf()
+        }
+    };
     let target_name = target.subject.display_name().to_string();
     let target_kind = target.subject.kind().as_str();
     let output_dir = Utf8PathBuf::try_from(target.output_dir)?;
 
     new_task_up_to_date_check(ctx)
         .with_task_result_marker(GenerateBridgeSdkMarkerHash {
-            component_name: &target.component_name,
+            source: &target.source,
             target_name: &target_name,
             kind: target_kind,
             language: &target.target_language,
             bridge_mode: target.bridge_mode,
         })?
-        .with_sources(|| vec![&final_wasm])
+        .with_sources(|| vec![&freshness_source])
         .with_targets(|| vec![&output_dir])
         .run_async_or_skip(
             || async {
@@ -1053,7 +1208,7 @@ mod tests {
                 tempdir().unwrap().path().join("bridge/alpha-guest-client"),
             );
             let tool_target = BridgeSdkTarget {
-                component_name: ComponentName("component".to_string()),
+                source: BridgeSdkTargetSource::local(ComponentName("component".to_string())),
                 subject: BridgeSdkTargetSubject::Tool(tool("MyTool")),
                 target_language: language,
                 bridge_mode: BridgeMode::Guest,
@@ -1090,7 +1245,7 @@ mod tests {
     #[test]
     fn validate_supported_bridge_targets_reports_external_tool_mode_separately() {
         let target = BridgeSdkTarget {
-            component_name: ComponentName("component".to_string()),
+            source: BridgeSdkTargetSource::local(ComponentName("component".to_string())),
             subject: BridgeSdkTargetSubject::Tool(tool("MyTool")),
             target_language: GuestLanguage::Rust,
             bridge_mode: BridgeMode::External,
@@ -1109,12 +1264,14 @@ mod tests {
     fn dependency_guest_bridge_support_accepts_all_current_languages_for_agents_and_tools() {
         let component_name = ComponentName("component".to_string());
         let agent_dependency = ComponentDependency::Agent {
-            component_name: component_name.clone(),
+            source: crate::model::app::SubjectSource::Local {
+                component_name: component_name.clone(),
+            },
             agent_type_name: AgentTypeName("Agent".to_string()),
         };
         let tool_dependency = ComponentDependency::Tool {
-            component_name,
-            tool_name: ToolName::try_from("tool").unwrap(),
+            source: crate::model::app::SubjectSource::Local { component_name },
+            tool_name: Some(ToolName::try_from("tool").unwrap()),
         };
 
         for language in GuestLanguage::iter() {
@@ -1159,7 +1316,7 @@ mod tests {
         output_dir: impl Into<std::path::PathBuf>,
     ) -> BridgeSdkTarget {
         BridgeSdkTarget {
-            component_name: ComponentName("component".to_string()),
+            source: BridgeSdkTargetSource::local(ComponentName("component".to_string())),
             subject: BridgeSdkTargetSubject::Agent(agent_type(agent_type_name)),
             target_language,
             bridge_mode,

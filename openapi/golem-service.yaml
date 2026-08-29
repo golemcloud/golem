@@ -5975,6 +5975,434 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/envs/{environment_id}/tool-grants:
+    get:
+      tags:
+      - RegistryService
+      - EnvironmentToolGrants
+      - Environment
+      summary: List active tool grants in an environment
+      operationId: list_environment_tool_grants
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_EnvironmentToolGrantWithDetails'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    post:
+      tags:
+      - RegistryService
+      - EnvironmentToolGrants
+      - Environment
+      summary: Grant an exact published tool release to an environment
+      operationId: create_environment_tool_grant
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/EnvironmentToolGrantCreation'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/EnvironmentToolGrantWithDetails'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/environment-tool-grants/{grant_id}:
+    get:
+      tags:
+      - RegistryService
+      - EnvironmentToolGrants
+      summary: Get an active environment tool grant
+      operationId: get_environment_tool_grant
+      parameters:
+      - in: path
+        name: grant_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/EnvironmentToolGrantWithDetails'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - RegistryService
+      - EnvironmentToolGrants
+      summary: Delete an environment tool grant
+      operationId: delete_environment_tool_grant
+      parameters:
+      - in: path
+        name: grant_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '204':
+          description: ''
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/environment-tool-grants/{grant_id}/restore:
+    post:
+      tags:
+      - RegistryService
+      - EnvironmentToolGrants
+      summary: Restore a deleted environment tool grant
+      operationId: restore_environment_tool_grant
+      parameters:
+      - in: path
+        name: grant_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/EnvironmentToolGrantWithDetails'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/initial-agent-files:
+    post:
+      tags:
+      - RegistryService
+      - Environment
+      summary: Upload a content-addressed initial agent file for deployment in this environment
+      operationId: upload_environment_initial_agent_file
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+              required:
+              - file
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InitialAgentFileUpload'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/apps/{application_id}/envs:
     get:
       tags:
@@ -11196,6 +11624,282 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/Empty'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/accounts/{account_id}/tool-releases:
+    get:
+      tags:
+      - RegistryService
+      - ToolReleases
+      - Account
+      summary: List tool releases owned by an account
+      operationId: list_account_tool_releases
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_ToolRelease'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/tool-releases/{release_id}:
+    get:
+      tags:
+      - RegistryService
+      - ToolReleases
+      summary: Get an account-owned tool release by ID
+      operationId: get_tool_release
+      parameters:
+      - in: path
+        name: release_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ToolRelease'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - RegistryService
+      - ToolReleases
+      summary: De-publish an account-owned tool release
+      operationId: de_publish_tool_release
+      parameters:
+      - in: path
+        name: release_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ToolRelease'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/tool-releases/{release_id}/restore:
+    post:
+      tags:
+      - RegistryService
+      - ToolReleases
+      summary: Restore a de-published account-owned tool release
+      operationId: restore_tool_release
+      parameters:
+      - in: path
+        name: release_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ToolRelease'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -18802,6 +19506,9 @@ components:
         deploymentRevision:
           type: integer
           format: uint64
+        releaseId:
+          type: string
+          format: uuid
         definition:
           $ref: '#/components/schemas/Tool'
         source:
@@ -18813,6 +19520,9 @@ components:
           type: string
         metadataVersion:
           type: string
+        metadataDigest:
+          type: string
+          format: hash
       required:
       - deploymentRevision
       - definition
@@ -18820,6 +19530,7 @@ components:
       - ownerAccountId
       - ownerAccountEmail
       - metadataVersion
+      - metadataDigest
     Deployment:
       title: Deployment
       type: object
@@ -18880,6 +19591,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentRetryPolicyDefault'
+        publishTools:
+          default: []
+          type: array
+          items:
+            type: string
+        remoteTools:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/RemoteToolDeployment'
         replaceIncompatibleAgentSecrets:
           default: false
           type: boolean
@@ -18912,11 +19633,21 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanMcpDeploymentEntry'
+        remoteTools:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanRemoteToolEntry'
+        publishedTools:
+          type: array
+          items:
+            type: string
       required:
       - deploymentHash
       - components
       - httpApiDeployments
       - mcpDeployments
+      - remoteTools
+      - publishedTools
     DeploymentPlanComponentEntry:
       title: DeploymentPlanComponentEntry
       type: object
@@ -18977,6 +19708,18 @@ components:
       - revision
       - domain
       - hash
+    DeploymentPlanRemoteToolEntry:
+      title: DeploymentPlanRemoteToolEntry
+      type: object
+      properties:
+        name:
+          type: string
+        hash:
+          type: string
+          format: hash
+      required:
+      - name
+      - hash
     DeploymentRetryPolicyDefault:
       title: DeploymentRetryPolicyDefault
       description: Default retry policy to create as part of deployment
@@ -19032,12 +19775,22 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanMcpDeploymentEntry'
+        remoteTools:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanRemoteToolEntry'
+        publishedTools:
+          type: array
+          items:
+            type: string
       required:
       - deploymentRevision
       - deploymentHash
       - components
       - httpApiDeployments
       - mcpDeployments
+      - remoteTools
+      - publishedTools
     Doc:
       type: object
       properties:
@@ -19246,6 +19999,72 @@ components:
       - compatibilityCheck
       - versionCheck
       - securityOverrides
+    EnvironmentToolGrant:
+      title: EnvironmentToolGrant
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        environmentId:
+          type: string
+          format: uuid
+        toolReleaseId:
+          type: string
+          format: uuid
+        protected:
+          type: boolean
+        lifecycle:
+          $ref: '#/components/schemas/EnvironmentToolGrantLifecycle'
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+          format: uuid
+        stateChangedAt:
+          type: string
+          format: date-time
+        stateChangedBy:
+          type: string
+          format: uuid
+      required:
+      - id
+      - environmentId
+      - toolReleaseId
+      - protected
+      - lifecycle
+      - createdAt
+      - createdBy
+      - stateChangedAt
+      - stateChangedBy
+    EnvironmentToolGrantCreation:
+      title: EnvironmentToolGrantCreation
+      type: object
+      properties:
+        release:
+          $ref: '#/components/schemas/ToolReleaseReference'
+      required:
+      - release
+    EnvironmentToolGrantLifecycle:
+      type: string
+      enum:
+      - active
+      - deleted
+    EnvironmentToolGrantWithDetails:
+      title: EnvironmentToolGrantWithDetails
+      type: object
+      properties:
+        grant:
+          $ref: '#/components/schemas/EnvironmentToolGrant'
+        release:
+          $ref: '#/components/schemas/ToolReleaseMetadata'
+        releaseOwner:
+          $ref: '#/components/schemas/AccountSummary'
+      required:
+      - grant
+      - release
+      - releaseOwner
     EnvironmentUpdate:
       title: EnvironmentUpdate
       type: object
@@ -19765,6 +20584,19 @@ components:
       - contentHash
       - path
       - permissions
+      - size
+    InitialAgentFileUpload:
+      title: InitialAgentFileUpload
+      type: object
+      properties:
+        contentHash:
+          type: string
+          format: hash
+        size:
+          type: integer
+          format: uint64
+      required:
+      - contentHash
       - size
     InputSchema:
       type: object
@@ -20326,6 +21158,16 @@ components:
             $ref: '#/components/schemas/EnvironmentPluginGrantWithDetails'
       required:
       - values
+    Page_EnvironmentToolGrantWithDetails:
+      title: Page_EnvironmentToolGrantWithDetails
+      type: object
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvironmentToolGrantWithDetails'
+      required:
+      - values
     Page_EnvironmentWithDetails:
       title: Page_EnvironmentWithDetails
       type: object
@@ -20414,6 +21256,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Token'
+      required:
+      - values
+    Page_ToolRelease:
+      title: Page_ToolRelease
+      type: object
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolRelease'
       required:
       - values
     PathSegment:
@@ -21023,6 +21875,27 @@ components:
       - componentName
       - accountId
       - accountEmail
+    RemoteToolDeployment:
+      title: RemoteToolDeployment
+      type: object
+      properties:
+        name:
+          type: string
+        release:
+          $ref: '#/components/schemas/ToolReleaseReference'
+        provision:
+          $ref: '#/components/schemas/ToolProvisionConfig'
+        environmentBinding:
+          $ref: '#/components/schemas/ToolBindingInput'
+        agentBindings:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
+      required:
+      - name
+      - release
+      - provision
     RepeatableListShape:
       type: object
       properties:
@@ -21669,6 +22542,12 @@ components:
       - doc
       - mime
       - required
+    SystemToolAvailability:
+      type: string
+      enum:
+      - grantable
+      - auto-granted
+      - ambient
     SystemVariable:
       type: string
       enum:
@@ -21946,6 +22825,161 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/AgentFilePermissions'
+    ToolRelease:
+      title: ToolRelease
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        ownerAccountId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        version:
+          type: string
+        source:
+          $ref: '#/components/schemas/ToolSource'
+        definition:
+          $ref: '#/components/schemas/Tool'
+        metadataVersion:
+          type: string
+        metadataDigest:
+          type: string
+          format: hash
+        lifecycle:
+          $ref: '#/components/schemas/ToolReleaseLifecycle'
+        origin:
+          $ref: '#/components/schemas/ToolReleaseOrigin'
+        systemAvailability:
+          $ref: '#/components/schemas/SystemToolAvailability'
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+          format: uuid
+        stateChangedAt:
+          type: string
+          format: date-time
+        stateChangedBy:
+          type: string
+          format: uuid
+      required:
+      - id
+      - ownerAccountId
+      - name
+      - version
+      - source
+      - definition
+      - metadataVersion
+      - metadataDigest
+      - lifecycle
+      - origin
+      - createdAt
+      - createdBy
+      - stateChangedAt
+      - stateChangedBy
+    ToolReleaseByCoordinates:
+      title: ToolReleaseByCoordinates
+      type: object
+      properties:
+        account:
+          type: string
+        name:
+          type: string
+        version:
+          type: string
+      required:
+      - account
+      - name
+      - version
+    ToolReleaseById:
+      title: ToolReleaseById
+      type: object
+      properties:
+        releaseId:
+          type: string
+          format: uuid
+      required:
+      - releaseId
+    ToolReleaseLifecycle:
+      type: string
+      enum:
+      - published
+      - de-published
+    ToolReleaseMetadata:
+      title: ToolReleaseMetadata
+      description: |-
+        Safe release metadata available to a consumer through an active environment grant.
+        Executable source identities remain publisher-only.
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        version:
+          type: string
+        definition:
+          $ref: '#/components/schemas/Tool'
+        metadataVersion:
+          type: string
+        metadataDigest:
+          type: string
+          format: hash
+        sourceDigest:
+          type: string
+          format: hash
+      required:
+      - id
+      - name
+      - version
+      - definition
+      - metadataVersion
+      - metadataDigest
+      - sourceDigest
+    ToolReleaseOrigin:
+      type: string
+      enum:
+      - ordinary
+      - protected-system
+    ToolReleaseReference:
+      discriminator:
+        propertyName: type
+        mapping:
+          ById: '#/components/schemas/ToolReleaseReference_ToolReleaseById'
+          ByCoordinates: '#/components/schemas/ToolReleaseReference_ToolReleaseByCoordinates'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ToolReleaseReference_ToolReleaseById'
+      - $ref: '#/components/schemas/ToolReleaseReference_ToolReleaseByCoordinates'
+    ToolReleaseReference_ToolReleaseByCoordinates:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ByCoordinates
+            type: string
+            enum:
+            - ByCoordinates
+        required:
+        - type
+      - $ref: '#/components/schemas/ToolReleaseByCoordinates'
+    ToolReleaseReference_ToolReleaseById:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ById
+            type: string
+            enum:
+            - ById
+        required:
+        - type
+      - $ref: '#/components/schemas/ToolReleaseById'
     ToolResultSpec:
       type: object
       properties:
@@ -21997,6 +23031,20 @@ components:
         - componentId
         - componentRevision
         - componentName
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - host
+          hostToolId:
+            type: string
+          implementationVersion:
+            type: string
+        required:
+        - kind
+        - hostToolId
+        - implementationVersion
     UntypedJsonBody:
       description: A json body without a static schema
       type: object
@@ -22048,6 +23096,7 @@ tags:
 - name: Deployment
 - name: Environment
 - name: EnvironmentPluginGrants
+- name: EnvironmentToolGrants
 - name: HealthCheck
 - name: Login
   description: The login endpoints are implementing an OAuth2 flow.
@@ -22061,4 +23110,5 @@ tags:
 - name: RetryPolicies
 - name: Token
   description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
+- name: ToolReleases
 - name: Worker

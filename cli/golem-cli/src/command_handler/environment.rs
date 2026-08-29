@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command::environment::EnvironmentSubcommand;
+use crate::command::environment::{
+    EnvironmentSubcommand, EnvironmentToolGrantArgs, EnvironmentToolSubcommand,
+};
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::HintError;
@@ -25,14 +27,21 @@ use crate::log::{
 use crate::model::deploy::log_unified_diff;
 use crate::model::environment::{EnvironmentListView, EnvironmentSyncDeploymentOptionsResult};
 use crate::model::environment::{
-    EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
+    EnvironmentReference, EnvironmentResolveMode, EnvironmentToolGrantCreateView,
+    EnvironmentToolGrantDeleteView, EnvironmentToolGrantListView, EnvironmentToolGrantRestoreView,
+    EnvironmentToolGrantView, ResolvedEnvironmentIdentity,
 };
 use crate::model::help::EnvironmentNameHelp;
 use crate::model::plugin::PluginNameAndVersion;
 use crate::model::text_format::log_text_view;
 use anyhow::{anyhow, bail};
-use golem_client::api::{EnvironmentClient, MeClient};
+use golem_client::api::{EnvironmentClient, EnvironmentToolGrantsClient, MeClient};
 use golem_client::model::{EnvironmentCreation, EnvironmentPluginGrantWithDetails};
+use golem_common::base_model::account::AccountEmail;
+use golem_common::base_model::environment_tool_grant::EnvironmentToolGrantCreation;
+use golem_common::base_model::tool_release::{
+    ToolReleaseByCoordinates, ToolReleaseById, ToolReleaseReference,
+};
 use golem_common::cache::SimpleCache;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::diff;
@@ -57,6 +66,128 @@ impl EnvironmentCommandHandler {
             }
 
             EnvironmentSubcommand::List => self.cmd_list().await,
+            EnvironmentSubcommand::Tool { subcommand } => self.cmd_tool(subcommand).await,
+        }
+    }
+
+    async fn cmd_tool(&self, subcommand: EnvironmentToolSubcommand) -> anyhow::Result<()> {
+        match subcommand {
+            EnvironmentToolSubcommand::Grant(args) => self.cmd_tool_grant(args).await,
+            EnvironmentToolSubcommand::List { environment } => {
+                let environment = self.resolve_tool_environment(&environment).await?;
+                let grants = self
+                    .ctx
+                    .golem_clients()
+                    .await?
+                    .environment_tool_grants
+                    .list_environment_tool_grants(&environment.environment_id.0)
+                    .await
+                    .map_service_error()?
+                    .values
+                    .into_iter()
+                    .map(Into::into)
+                    .collect();
+                self.ctx
+                    .log_handler()
+                    .log_output(EnvironmentToolGrantListView { grants })?;
+                Ok(())
+            }
+            EnvironmentToolSubcommand::Delete { grant_id } => {
+                self.ctx
+                    .golem_clients()
+                    .await?
+                    .environment_tool_grants
+                    .delete_environment_tool_grant(&grant_id.0)
+                    .await
+                    .map_service_error()?;
+                self.ctx
+                    .log_handler()
+                    .log_output(EnvironmentToolGrantDeleteView { grant_id })?;
+                Ok(())
+            }
+            EnvironmentToolSubcommand::Restore { grant_id } => {
+                let grant = self
+                    .ctx
+                    .golem_clients()
+                    .await?
+                    .environment_tool_grants
+                    .restore_environment_tool_grant(&grant_id.0)
+                    .await
+                    .map_service_error()?;
+                self.ctx
+                    .log_handler()
+                    .log_output(EnvironmentToolGrantRestoreView {
+                        grant: grant.into(),
+                    })?;
+                Ok(())
+            }
+        }
+    }
+
+    async fn cmd_tool_grant(&self, args: EnvironmentToolGrantArgs) -> anyhow::Result<()> {
+        let environment = self.resolve_tool_environment(&args.environment).await?;
+        let release = match (args.release_id, args.account, args.name, args.version) {
+            (Some(release_id), None, None, None) => {
+                ToolReleaseReference::ById(ToolReleaseById { release_id })
+            }
+            (None, Some(account), Some(name), Some(version)) => {
+                ToolReleaseReference::ByCoordinates(ToolReleaseByCoordinates {
+                    account: AccountEmail::new(account),
+                    name,
+                    version,
+                })
+            }
+            _ => unreachable!("clap validates the tool release reference"),
+        };
+        let grant = self
+            .ctx
+            .golem_clients()
+            .await?
+            .environment_tool_grants
+            .create_environment_tool_grant(
+                &environment.environment_id.0,
+                &EnvironmentToolGrantCreation { release },
+            )
+            .await
+            .map_service_error()?;
+        self.ctx
+            .log_handler()
+            .log_output(EnvironmentToolGrantCreateView {
+                grant: EnvironmentToolGrantView::from(grant),
+            })?;
+        Ok(())
+    }
+
+    async fn resolve_tool_environment(
+        &self,
+        reference: &EnvironmentReference,
+    ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
+        if let EnvironmentReference::Environment { environment_name } = reference {
+            let manifest_environment = self.ctx.manifest_environment().ok_or_else(|| {
+                anyhow!("An application manifest is required for an environment name reference")
+            })?;
+            let summary = self
+                .ctx
+                .golem_clients()
+                .await?
+                .me
+                .list_visible_environments(
+                    manifest_environment.environment.account.as_deref(),
+                    Some(&manifest_environment.application_name.0),
+                    Some(&environment_name.0),
+                )
+                .await
+                .map_service_error()?
+                .values
+                .pop()
+                .ok_or_else(|| anyhow!("Environment {reference} not found"))?;
+            self.ensure_diff_model_version_compatible(ResolvedEnvironmentIdentity::from_summary(
+                Some(reference),
+                summary,
+            ))
+        } else {
+            self.resolve_environment_reference(EnvironmentResolveMode::Any, reference)
+                .await
         }
     }
 

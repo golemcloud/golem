@@ -531,6 +531,45 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         let deleted_cards = self
             .with_tx_err("delete", |tx| {
                 async move {
+                    let environment_id = tx
+                        .fetch_optional(
+                            sqlx::query(indoc! { r#"
+                                SELECT environment_id
+                                FROM components
+                                WHERE component_id = $1
+                                    AND deleted_at IS NULL
+                            "#})
+                            .bind(component_id),
+                        )
+                        .await?
+                        .ok_or(ComponentRepoError::ConcurrentModification)?
+                        .try_get::<Uuid, _>("environment_id")
+                        .map_err(RepoError::from)?;
+                    Self::lock_live_environment(tx, environment_id).await?;
+
+                    let source_reference = tx
+                        .fetch_optional(
+                            sqlx::query(indoc! { r#"
+                                SELECT component_id
+                                FROM tool_releases
+                                WHERE component_id = $1
+                                UNION ALL
+                                SELECT component_id
+                                FROM deployment_component_revisions
+                                WHERE component_id = $1
+                                UNION ALL
+                                SELECT component_id
+                                FROM deployment_registered_tools
+                                WHERE component_id = $1
+                                LIMIT 1
+                            "#})
+                            .bind(component_id),
+                        )
+                        .await?;
+                    if source_reference.is_some() {
+                        return Err(ComponentRepoError::ComponentSourceInUse);
+                    }
+
                     let active_revisions: Vec<ComponentRevisionRecord> = tx
                         .fetch_all_as(
                             sqlx::query_as(indoc! { r#"

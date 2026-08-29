@@ -648,6 +648,9 @@ impl ComponentWriteService {
             .await
             .map_err(|err| match err {
                 ComponentRepoError::ConcurrentModification => ComponentError::ConcurrentUpdate,
+                ComponentRepoError::ComponentSourceInUse => {
+                    ComponentError::ComponentSourceInUse(component_id)
+                }
                 other => other.into(),
             })?
             .signal_new_events_available(self.registry_change_notifier.as_ref());

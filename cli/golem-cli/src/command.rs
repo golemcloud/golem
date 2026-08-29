@@ -774,10 +774,11 @@ pub enum GolemCliSubcommand {
         ///
         /// In `--format json/yaml/toon`, `deploy` may emit multiple structured
         /// documents. Depending on the plan, stdout can contain
-        /// `deploy.diff` and/or `deploy.plan`, followed by a final
-        /// `deploy` success document. Parse stdout as a sequence of
-        /// documents and branch on `$type`; do not assume every possible
-        /// document appears.
+        /// `deploy.diff`, `deploy.plan`, `deploy.environment-setup-plan`,
+        /// and/or `deploy.environment-tool-grants`, followed by a final
+        /// `deploy` success document. Parse stdout as a sequence of documents
+        /// and branch on `$type`; do not assume every possible document
+        /// appears.
         #[arg(long, conflicts_with_all = ["stage", "approve_staging_steps"])]
         plan: bool,
         /// Only plan and stage changes, but do not apply them to the environment; used for testing
@@ -1141,7 +1142,11 @@ pub mod exec {
 }
 
 pub mod environment {
-    use clap::Subcommand;
+    use crate::model::environment::EnvironmentReference;
+    use clap::{ArgGroup, Args, Subcommand};
+    use golem_common::base_model::environment_tool_grant::EnvironmentToolGrantId;
+    use golem_common::base_model::tool::ToolName;
+    use golem_common::base_model::tool_release::ToolReleaseId;
 
     #[derive(Debug, Subcommand)]
     pub enum EnvironmentSubcommand {
@@ -1172,6 +1177,41 @@ pub mod environment {
         /// List application environments on the current server
         #[command(after_help = crate::command_examples::ENVIRONMENT_LIST)]
         List,
+        /// Manage tool grants
+        Tool {
+            #[command(subcommand)]
+            subcommand: EnvironmentToolSubcommand,
+        },
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum EnvironmentToolSubcommand {
+        /// Grant a published tool release to an environment
+        Grant(EnvironmentToolGrantArgs),
+        /// List active tool grants in an environment
+        List { environment: EnvironmentReference },
+        /// Delete a tool grant
+        Delete { grant_id: EnvironmentToolGrantId },
+        /// Restore a deleted tool grant
+        Restore { grant_id: EnvironmentToolGrantId },
+    }
+
+    #[derive(Debug, Args)]
+    #[command(group(ArgGroup::new("release").required(true).multiple(false).args(["release_id", "account"])))]
+    pub struct EnvironmentToolGrantArgs {
+        pub environment: EnvironmentReference,
+        /// Published tool release ID
+        #[arg(long)]
+        pub release_id: Option<ToolReleaseId>,
+        /// Publisher account email
+        #[arg(long, requires_all = ["name", "version"])]
+        pub account: Option<String>,
+        /// Published tool name
+        #[arg(long, requires_all = ["account", "version"])]
+        pub name: Option<ToolName>,
+        /// Published tool version
+        #[arg(long, requires_all = ["account", "name"])]
+        pub version: Option<String>,
     }
 }
 

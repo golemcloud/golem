@@ -34,10 +34,16 @@ use crate::preview2::golem::tool::host::{
     HostToolRpcWithStore, InvocationResult, RegisteredTool as WitRegisteredTool, RpcError,
     TypedSchemaValue,
 };
-use crate::services::environment_state::ToolDiscoveryError;
+use crate::services::environment_state::{
+    ToolActivationOutcome, ToolDiscoveryError, ToolDispatchTarget,
+};
 use crate::workerctx::WorkerCtx;
 use anyhow::{Context, anyhow};
+use golem_common::model::account::AccountEmail;
+use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::ToolOwnerPattern;
+use golem_common::model::component::ComponentName;
+use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::host_functions::{
     GolemToolGetAllTools, GolemToolGetTool, GolemToolRpcAsyncInvokeAndAwait, GolemToolRpcInvoke,
     GolemToolRpcInvokeAndAwait,
@@ -50,7 +56,7 @@ use golem_common::model::oplog::{
     HostRequestNoInput, HostResponseGolemToolInvokeResult, HostResponseGolemToolTool,
     HostResponseGolemToolTools, HostResponseGolemToolUnitOrFailure,
 };
-use golem_common::model::tool::{RegisteredTool, ToolName, ToolSource};
+use golem_common::model::tool::ToolName;
 use golem_common::schema::render::cli_text::value_to_cli_text_unredacted;
 use golem_common::schema::tool::DiscoveredTool;
 use golem_common::schema::tool::canonical::CanonicalSurfaceRef;
@@ -441,19 +447,19 @@ fn project_tool_unit<Ctx: WorkerCtx>(
     response.map_err(|error| project_tool_rpc_error(error, ctx))
 }
 
-fn tool_owner<Ctx: WorkerCtx>(
-    ctx: &DurableWorkerCtx<Ctx>,
-    rpc: &ToolRpcEntry,
-    registered_tool: &RegisteredTool,
+fn caller_tool_owner(
+    account: &AccountEmail,
+    application: &ApplicationName,
+    environment: &EnvironmentName,
+    component: &ComponentName,
+    tool_name: &ToolName,
 ) -> ToolOwnerPattern {
-    let component = ctx.component_metadata();
-    let ToolSource::Component { component_name, .. } = &registered_tool.source;
     ToolOwnerPattern::Tool {
-        account: registered_tool.owner_account_email.clone(),
-        application: component.application_name.clone(),
-        environment: component.environment_name.clone(),
-        component: component_name.clone(),
-        tool: rpc.tool_name.to_string(),
+        account: account.clone(),
+        application: application.clone(),
+        environment: environment.clone(),
+        component: component.clone(),
+        tool: tool_name.to_string(),
     }
 }
 
@@ -486,6 +492,7 @@ struct PreparedToolCall {
     stdin: Option<StreamReader<u8>>,
     request: HostRequestGolemToolInvoke,
     permit: LiveAuthorizationPermit,
+    dispatch_target: ToolDispatchTarget,
 }
 
 enum ToolCallPreparation {
@@ -509,23 +516,33 @@ where
     Ctx: WorkerCtx,
 {
     let has_stdin = stdin.is_some();
-    let (rpc, input, environment_state_service, environment_id, agent_type) =
-        accessor.with(|mut access| {
-            let ctx = access.get();
-            let rpc = ctx.table().get(resource)?.clone();
-            let input = decode_typed_tool_value(input, ctx);
-            let agent_type = ctx
-                .parsed_agent_id()
-                .map(|agent_id| agent_id.agent_type)
-                .ok_or_else(|| anyhow!("tool invocation requires an agent caller"))?;
-            Ok::<_, anyhow::Error>((
-                rpc,
-                input,
-                ctx.state.environment_state_service.clone(),
-                ctx.state.owned_agent_id.environment_id,
-                agent_type,
-            ))
-        })?;
+    let (
+        rpc,
+        input,
+        environment_state_service,
+        environment_id,
+        owner_component_id,
+        owner_component_revision,
+        agent_type,
+    ) = accessor.with(|mut access| {
+        let ctx = access.get();
+        let rpc = ctx.table().get(resource)?.clone();
+        let input = decode_typed_tool_value(input, ctx);
+        let owner_component = ctx.owner_component_metadata();
+        let agent_type = ctx
+            .parsed_agent_id()
+            .map(|agent_id| agent_id.agent_type)
+            .ok_or_else(|| anyhow!("tool invocation requires an agent caller"))?;
+        Ok::<_, anyhow::Error>((
+            rpc,
+            input,
+            ctx.state.environment_state_service.clone(),
+            ctx.state.owned_agent_id.environment_id,
+            owner_component.id,
+            owner_component.revision,
+            agent_type,
+        ))
+    })?;
 
     let input = match input {
         Ok(input) => input,
@@ -546,17 +563,50 @@ where
         }
     };
 
-    let registered_tool = environment_state_service
-        .get_registered_tool(environment_id, &rpc.tool_name)
-        .await?
-        .ok_or_else(|| {
-            SerializableToolRpcError::NotFound(format!(
-                "tool '{}' is not registered",
-                rpc.tool_name
-            ))
-        });
-    let registered_tool = match registered_tool {
-        Ok(registered_tool) => registered_tool,
+    let activation = match environment_state_service
+        .get_tool_activation(
+            environment_id,
+            owner_component_id,
+            owner_component_revision,
+            &agent_type,
+            &rpc.tool_name,
+        )
+        .await
+    {
+        Ok(ToolActivationOutcome::Ready(activation)) => activation,
+        Ok(ToolActivationOutcome::NotBound) => {
+            return Ok(ToolCallPreparation::Rejected {
+                request: Box::new(invocation_request(
+                    &rpc,
+                    &command_path,
+                    Vec::new(),
+                    input,
+                    has_stdin,
+                )),
+                response: Err(SerializableToolRpcError::Denied(format!(
+                    "tool '{}' is not bound to agent type '{agent_type}'",
+                    rpc.tool_name
+                ))),
+                stdin,
+            });
+        }
+        Ok(ToolActivationOutcome::NotRegistered) => {
+            return Ok(ToolCallPreparation::Rejected {
+                request: Box::new(invocation_request(
+                    &rpc,
+                    &command_path,
+                    Vec::new(),
+                    input,
+                    has_stdin,
+                )),
+                response: Err(SerializableToolRpcError::NotFound(format!(
+                    "tool '{}' is not registered",
+                    rpc.tool_name
+                ))),
+                stdin,
+            });
+        }
+        Err(ToolDiscoveryError::Retrieval(error)) => return Err(error.into()),
         Err(error) => {
             return Ok(ToolCallPreparation::Rejected {
                 request: Box::new(invocation_request(
@@ -566,54 +616,19 @@ where
                     input,
                     has_stdin,
                 )),
-                response: Err(error),
-                stdin,
-            });
-        }
-    };
-    let binding = environment_state_service
-        .get_agent_tool_binding(environment_id, &agent_type, &rpc.tool_name)
-        .await?
-        .ok_or_else(|| {
-            SerializableToolRpcError::Denied(format!(
-                "tool '{}' is not bound to agent type '{agent_type}'",
-                rpc.tool_name
-            ))
-        });
-    let binding = match binding {
-        Ok(binding) => binding,
-        Err(error) => {
-            return Ok(ToolCallPreparation::Rejected {
-                request: Box::new(invocation_request(
-                    &rpc,
-                    &command_path,
-                    Vec::new(),
-                    input,
-                    has_stdin,
+                response: Err(SerializableToolRpcError::RemoteInternalError(
+                    error.to_string(),
                 )),
-                response: Err(error),
                 stdin,
             });
         }
     };
-    if registered_tool.deployment_revision != binding.deployment_revision {
-        return Ok(ToolCallPreparation::Rejected {
-            request: Box::new(invocation_request(
-                &rpc,
-                &command_path,
-                Vec::new(),
-                input,
-                has_stdin,
-            )),
-            response: Err(SerializableToolRpcError::RemoteInternalError(format!(
-                "tool '{}' changed while resolving its binding",
-                rpc.tool_name
-            ))),
-            stdin,
-        });
-    }
 
-    let args = match canonical_tool_args(&registered_tool.definition, &command_path, &input) {
+    let args = match canonical_tool_args(
+        &activation.registered_tool().definition,
+        &command_path,
+        &input,
+    ) {
         Ok(args) => args,
         Err(error) => {
             return Ok(ToolCallPreparation::Rejected {
@@ -630,9 +645,28 @@ where
         }
     };
     let request = invocation_request(&rpc, &command_path, args.clone(), input.clone(), has_stdin);
+    let dispatch_target = match activation.into_dispatch_target() {
+        Ok(dispatch_target) => dispatch_target,
+        Err(error) => {
+            return Ok(ToolCallPreparation::Rejected {
+                request: Box::new(request),
+                response: Err(SerializableToolRpcError::RemoteInternalError(
+                    error.to_string(),
+                )),
+                stdin,
+            });
+        }
+    };
 
     let target = accessor.with(|mut access| {
-        let owner = tool_owner(access.get(), &rpc, &registered_tool);
+        let component = access.get().owner_component_metadata();
+        let owner = caller_tool_owner(
+            &component.account_email,
+            &component.application_name,
+            &component.environment_name,
+            &component.component_name,
+            &rpc.tool_name,
+        );
         let command_path = command_path.iter().map(String::as_str).collect::<Vec<_>>();
         let args = args.iter().map(String::as_str).collect::<Vec<_>>();
         tool_target(owner, &command_path, &args)
@@ -668,6 +702,7 @@ where
         stdin,
         request,
         permit,
+        dispatch_target,
     }))
 }
 
@@ -723,8 +758,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) async fn get_all_tools_model(&mut self) -> anyhow::Result<Vec<Arc<DiscoveredTool>>> {
         let agent_type = self.parsed_agent_id().map(|agent_id| agent_id.agent_type);
         let environment_id = self.state.owned_agent_id.environment_id;
-        let component_id = self.state.owned_agent_id.agent_id.component_id;
-        let component_revision = self.state.component_metadata.revision;
+        let owner_component = self.owner_component_metadata();
+        let component_id = owner_component.id;
+        let component_revision = owner_component.revision;
 
         let mut handle = DurableCallSession::<GolemToolGetAllTools, NotCancellable>::start(
             self,
@@ -793,8 +829,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let agent_type = self.parsed_agent_id().map(|agent_id| agent_id.agent_type);
         let valid_tool_name = ToolName::try_from(tool_name.as_str()).ok();
         let environment_id = self.state.owned_agent_id.environment_id;
-        let component_id = self.state.owned_agent_id.agent_id.component_id;
-        let component_revision = self.state.component_metadata.revision;
+        let owner_component = self.owner_component_metadata();
+        let component_id = owner_component.id;
+        let component_revision = owner_component.revision;
 
         let mut handle = DurableCallSession::<GolemToolGetTool, NotCancellable>::start(
             self,
@@ -1018,6 +1055,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         .await?;
         close_stdin(accessor, prepared.stdin).await?;
         let _permit = prepared.permit;
+        let _dispatch_target = prepared.dispatch_target;
         let result = Err(SerializableToolRpcError::RemoteInternalError(
             NOT_IMPLEMENTED.to_string(),
         ));
@@ -1130,6 +1168,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         .await?;
         close_stdin(accessor, prepared.stdin).await?;
         let _permit = prepared.permit;
+        let _dispatch_target = prepared.dispatch_target;
         let result = Err(SerializableToolRpcError::RemoteInternalError(
             NOT_IMPLEMENTED.to_string(),
         ));
@@ -1252,6 +1291,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
             .await?;
         close_stdin(accessor, prepared.stdin).await?;
         let _permit = prepared.permit;
+        let _dispatch_target = prepared.dispatch_target;
         let result = admit_tool_response_secret_holds(
             accessor,
             Err(SerializableToolRpcError::RemoteInternalError(
@@ -1329,13 +1369,19 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
 #[cfg(test)]
 mod tests {
-    use super::{WitRegisteredTool, classify_tool_discovery_error, terminal_tool_discovery_error};
+    use super::{
+        WitRegisteredTool, caller_tool_owner, classify_tool_discovery_error,
+        terminal_tool_discovery_error,
+    };
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use crate::services::environment_state::ToolDiscoveryError;
     use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::application::ApplicationName;
+    use golem_common::model::card::owner::ToolOwnerPattern;
     use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
     use golem_common::model::deployment::DeploymentRevision;
-    use golem_common::model::tool::{RegisteredTool, ToolProvisionConfig, ToolSource};
+    use golem_common::model::environment::EnvironmentName;
+    use golem_common::model::tool::{RegisteredTool, ToolName, ToolProvisionConfig, ToolSource};
     use golem_common::schema::tool::{
         CommandBody, CommandNode, CommandTree, DiscoveredTool, Doc, Globals, Positional,
         Positionals, Tool,
@@ -1393,6 +1439,7 @@ mod tests {
         (
             RegisteredTool {
                 deployment_revision: DeploymentRevision::try_from(1_u64).unwrap(),
+                release_id: None,
                 definition,
                 provision: ToolProvisionConfig::default(),
                 source: ToolSource::Component {
@@ -1403,6 +1450,7 @@ mod tests {
                 owner_account_id: AccountId::new(),
                 owner_account_email: AccountEmail::new("owner@example.com"),
                 metadata_version: "0.1.0".to_string(),
+                metadata_digest: Default::default(),
             },
             component_id,
         )
@@ -1423,6 +1471,40 @@ mod tests {
             expected_definition
         );
         assert_eq!(ComponentId::from(wit.implemented_by), component_id);
+    }
+
+    #[test]
+    fn tool_authorization_owner_is_entirely_caller_derived() {
+        let caller_account = AccountEmail::new("consumer@example.com");
+        let publisher_account = AccountEmail::new("publisher@example.com");
+        let application = ApplicationName::try_from("consumer-application").unwrap();
+        let environment = EnvironmentName::try_from("consumer-environment").unwrap();
+        let component = ComponentName("consumer:agent".to_string());
+        let tool_name = ToolName::try_from("search").unwrap();
+
+        let owner = caller_tool_owner(
+            &caller_account,
+            &application,
+            &environment,
+            &component,
+            &tool_name,
+        );
+
+        assert_eq!(
+            owner,
+            ToolOwnerPattern::Tool {
+                account: caller_account.clone(),
+                application,
+                environment,
+                component,
+                tool: tool_name.to_string(),
+            }
+        );
+        let ToolOwnerPattern::Tool { account, .. } = owner else {
+            panic!("authorization owner must identify one caller-owned tool")
+        };
+        assert_eq!(account, caller_account);
+        assert_ne!(account, publisher_account);
     }
 
     #[test]

@@ -116,8 +116,11 @@ impl<C: Serialize> TemplateRender<C> for app_raw::ComponentDependencyReference {
             app_raw::ComponentDependencyReference::Shortcut(shortcut) => Ok(
                 app_raw::ComponentDependencyReference::Shortcut(shortcut.render(env, ctx)?),
             ),
-            app_raw::ComponentDependencyReference::Structured(structured) => Ok(
-                app_raw::ComponentDependencyReference::Structured(structured.render(env, ctx)?),
+            app_raw::ComponentDependencyReference::LocalAlias(structured) => Ok(
+                app_raw::ComponentDependencyReference::LocalAlias(structured.render(env, ctx)?),
+            ),
+            app_raw::ComponentDependencyReference::Sourced(reference) => Ok(
+                app_raw::ComponentDependencyReference::Sourced(reference.render(env, ctx)?),
             ),
         }
     }
@@ -128,6 +131,49 @@ impl<C: Serialize> TemplateRender<C> for app_raw::ComponentDependencyReferenceSt
         Ok(app_raw::ComponentDependencyReferenceStruct {
             component: self.component.render(env, ctx)?,
             name: self.name.render(env, ctx)?,
+        })
+    }
+}
+
+impl<C: Serialize> TemplateRender<C> for app_raw::SubjectReference {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
+        Ok(app_raw::SubjectReference {
+            source: self.source.render(env, ctx)?,
+        })
+    }
+}
+
+impl<C: Serialize> TemplateRender<C> for app_raw::SubjectSource {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
+        Ok(app_raw::SubjectSource {
+            local: self.local.render(env, ctx)?,
+            registry: self.registry.render(env, ctx)?,
+        })
+    }
+}
+
+impl<C: Serialize> TemplateRender<C> for app_raw::LocalSubject {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
+        Ok(app_raw::LocalSubject {
+            component: self.component.render(env, ctx)?,
+            name: self.name.render(env, ctx)?,
+        })
+    }
+}
+
+impl<C: Serialize> TemplateRender<C> for app_raw::RegistrySubject {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
+        Ok(match self {
+            app_raw::RegistrySubject::ById(reference) => {
+                app_raw::RegistrySubject::ById(reference.clone())
+            }
+            app_raw::RegistrySubject::ByCoordinates(reference) => {
+                app_raw::RegistrySubject::ByCoordinates(app_raw::RegistrySubjectByCoordinates {
+                    account: reference.account.render(env, ctx)?,
+                    name: reference.name.render(env, ctx)?,
+                    version: reference.version.render(env, ctx)?,
+                })
+            }
         })
     }
 }

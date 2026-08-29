@@ -43,6 +43,8 @@ use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::diff;
 use golem_common::model::environment::EnvironmentName;
+use golem_common::model::environment_tool_grant::EnvironmentToolGrantWithDetails;
+use golem_common::model::tool_release::ToolReleaseId;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -104,6 +106,28 @@ impl<'a> BuildContext<'a> {
 
     pub fn tools_with_ensured_common_deps(&self) -> &ToolsWithEnsuredCommonDeps {
         &self.application_context.tools_with_ensured_common_deps
+    }
+
+    pub fn registry_tool_grants(&self) -> &[EnvironmentToolGrantWithDetails] {
+        &self.build_config.registry_tool_grants
+    }
+
+    pub fn registry_tool_grant(
+        &self,
+        reference: &app_raw::RegistrySubject,
+    ) -> Option<&EnvironmentToolGrantWithDetails> {
+        self.registry_tool_grants()
+            .iter()
+            .find(|grant| match reference {
+                app_raw::RegistrySubject::ById(reference) => {
+                    grant.release.id == ToolReleaseId(reference.release_id.0)
+                }
+                app_raw::RegistrySubject::ByCoordinates(reference) => {
+                    grant.release_owner.email.as_str() == reference.account
+                        && grant.release.name.as_str() == reference.name
+                        && grant.release.version == reference.version
+                }
+            })
     }
 }
 

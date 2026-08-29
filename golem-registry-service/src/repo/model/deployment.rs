@@ -19,6 +19,8 @@ use super::agent_secrets::{
 use super::audit::DeletableRevisionAuditFields;
 use super::resource_definition::{ResourceDefinitionCreationArgs, ResourceDefinitionRepoError};
 use super::retry_policy::{RetryPolicyCreationRecord, RetryPolicyRepoError};
+use super::tool_release::ToolReleaseRecord;
+use super::tool_release::{TOOL_RELEASE_SOURCE_COMPONENT, TOOL_RELEASE_SOURCE_HOST};
 use crate::model::agent_secret::{
     DeploymentAgentSecretCreation, DeploymentAgentSecretReplacement, DeploymentAgentSecretUpdate,
 };
@@ -62,6 +64,7 @@ use golem_service_base::repo::Blob;
 use golem_service_base::repo::RepoError;
 use heck::ToKebabCase;
 use sqlx::FromRow;
+use std::collections::BTreeSet;
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -77,6 +80,8 @@ pub enum DeployRepoError {
     ResourceConflict { name: String },
     #[error("Retry policy for name {name} already exists")]
     RetryPolicyConflict { name: String },
+    #[error("Tool release coordinate exists with different immutable metadata")]
+    ToolReleaseConflict,
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -241,6 +246,8 @@ pub struct DeploymentIdentity {
     pub components: Vec<ComponentRevisionIdentityRecord>,
     pub http_api_deployments: Vec<HttpApiDeploymentRevisionIdentityRecord>,
     pub mcp_deployments: Vec<McpDeploymentRevisionIdentityRecord>,
+    pub registered_tools: Vec<RegisteredTool>,
+    pub agent_tool_bindings: Vec<CompiledToolBinding>,
 }
 
 impl DeploymentIdentity {
@@ -248,10 +255,27 @@ impl DeploymentIdentity {
         self,
         current_revision: Option<CurrentDeploymentRevision>,
     ) -> Result<DeploymentPlan, DeployRepoError> {
+        let diffable = self.to_diffable();
+        let remote_tools = diffable
+            .remote_tools
+            .iter()
+            .map(|(name, tool)| {
+                Ok(
+                    golem_common::model::deployment::DeploymentPlanRemoteToolEntry {
+                        name: ToolName::try_from(name.as_str()).map_err(anyhow::Error::msg)?,
+                        hash: tool.hash()?,
+                    },
+                )
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let published_tools = diffable
+            .published_tools
+            .iter()
+            .map(|name| ToolName::try_from(name.as_str()).map_err(anyhow::Error::msg))
+            .collect::<anyhow::Result<Vec<_>>>()?;
         Ok(DeploymentPlan {
             current_revision,
-            deployment_hash: self
-                .to_diffable()
+            deployment_hash: diffable
                 .hash()
                 .map_err(|err| DeployRepoError::InternalError(anyhow!(err)))?,
             components: self
@@ -269,12 +293,43 @@ impl DeploymentIdentity {
                 .into_iter()
                 .map(|mcd| mcd.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
+            remote_tools,
+            published_tools,
         })
     }
 }
 
 impl DeploymentIdentity {
     pub fn to_diffable(&self) -> diff::Deployment {
+        let local_component_revisions = self
+            .components
+            .iter()
+            .map(|component| {
+                (
+                    golem_common::model::component::ComponentId(component.component_id),
+                    component
+                        .revision_id
+                        .try_into()
+                        .expect("deployment component revision was validated when persisted"),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        let published_tools = self
+            .registered_tools
+            .iter()
+            .filter(|tool| {
+                tool.release_id.is_some()
+                    && matches!(
+                        &tool.source,
+                        ToolSource::Component {
+                            component_id,
+                            component_revision,
+                            ..
+                        } if local_component_revisions.contains(&(*component_id, *component_revision))
+                    )
+            })
+            .filter_map(|tool| tool.definition.name().map(ToOwned::to_owned))
+            .collect();
         diff::Deployment {
             components: self
                 .components
@@ -306,6 +361,12 @@ impl DeploymentIdentity {
                     )
                 })
                 .collect(),
+            remote_tools: diff::remote_tool_deployments(
+                self.registered_tools.clone(),
+                self.agent_tool_bindings.clone(),
+                &local_component_revisions,
+            ),
+            published_tools,
         }
     }
 }
@@ -318,6 +379,24 @@ pub struct DeployedDeploymentIdentity {
 impl TryFrom<DeployedDeploymentIdentity> for DeploymentSummary {
     type Error = DeployRepoError;
     fn try_from(value: DeployedDeploymentIdentity) -> Result<Self, Self::Error> {
+        let diffable = value.identity.to_diffable();
+        let remote_tools = diffable
+            .remote_tools
+            .iter()
+            .map(|(name, tool)| {
+                Ok(
+                    golem_common::model::deployment::DeploymentPlanRemoteToolEntry {
+                        name: ToolName::try_from(name.as_str()).map_err(anyhow::Error::msg)?,
+                        hash: tool.hash()?,
+                    },
+                )
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let published_tools = diffable
+            .published_tools
+            .iter()
+            .map(|name| ToolName::try_from(name.as_str()).map_err(anyhow::Error::msg))
+            .collect::<anyhow::Result<Vec<_>>>()?;
         Ok(Self {
             deployment_revision: value.deployment_revision.revision_id.try_into()?,
             deployment_hash: value.deployment_revision.hash.into(),
@@ -339,6 +418,8 @@ impl TryFrom<DeployedDeploymentIdentity> for DeploymentSummary {
                 .into_iter()
                 .map(|mcd| mcd.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
+            remote_tools,
+            published_tools,
         })
     }
 }
@@ -459,23 +540,55 @@ pub struct DeploymentRegisteredToolRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
     pub tool_name: String,
-    pub component_id: Uuid,
-    pub component_revision_id: i64,
-    pub component_name: String,
+    pub tool_release_id: Option<Uuid>,
+    pub source_kind: i16,
+    pub component_id: Option<Uuid>,
+    pub component_revision_id: Option<i64>,
+    pub component_name: Option<String>,
+    pub host_tool_id: Option<String>,
+    pub implementation_version: Option<String>,
     pub owner_account_id: Uuid,
     pub owner_account_email: String,
     pub tool_definition: Blob<Tool>,
     pub tool_provision_config: Blob<ToolProvisionConfig>,
     pub metadata_version: String,
+    pub metadata_digest: Option<SqlBlake3Hash>,
 }
 
 impl DeploymentRegisteredToolRecord {
     pub fn from_model(environment_id: EnvironmentId, registered_tool: RegisteredTool) -> Self {
-        let ToolSource::Component {
+        let (
+            source_kind,
             component_id,
-            component_revision,
+            component_revision_id,
             component_name,
-        } = registered_tool.source;
+            host_tool_id,
+            implementation_version,
+        ) = match registered_tool.source {
+            ToolSource::Component {
+                component_id,
+                component_revision,
+                component_name,
+            } => (
+                TOOL_RELEASE_SOURCE_COMPONENT,
+                Some(component_id.0),
+                Some(component_revision.into()),
+                Some(component_name.0),
+                None,
+                None,
+            ),
+            ToolSource::Host {
+                host_tool_id,
+                implementation_version,
+            } => (
+                TOOL_RELEASE_SOURCE_HOST,
+                None,
+                None,
+                None,
+                Some(host_tool_id.as_str().to_string()),
+                Some(implementation_version),
+            ),
+        };
         Self {
             environment_id: environment_id.0,
             deployment_revision_id: registered_tool.deployment_revision.into(),
@@ -484,14 +597,19 @@ impl DeploymentRegisteredToolRecord {
                 .name()
                 .expect("registered tool definition has a validated name")
                 .to_string(),
-            component_id: component_id.0,
-            component_revision_id: component_revision.into(),
-            component_name: component_name.0,
+            tool_release_id: registered_tool.release_id.map(|id| id.0),
+            source_kind,
+            component_id,
+            component_revision_id,
+            component_name,
+            host_tool_id,
+            implementation_version,
             owner_account_id: registered_tool.owner_account_id.0,
             owner_account_email: registered_tool.owner_account_email.into_inner(),
             tool_definition: Blob::new(registered_tool.definition),
             tool_provision_config: Blob::new(registered_tool.provision),
             metadata_version: registered_tool.metadata_version,
+            metadata_digest: Some(registered_tool.metadata_digest.into()),
         }
     }
 }
@@ -500,18 +618,58 @@ impl TryFrom<DeploymentRegisteredToolRecord> for RegisteredTool {
     type Error = DeployRepoError;
 
     fn try_from(value: DeploymentRegisteredToolRecord) -> Result<Self, Self::Error> {
+        let source =
+            match value.source_kind {
+                TOOL_RELEASE_SOURCE_COMPONENT => ToolSource::Component {
+                    component_id: value
+                        .component_id
+                        .ok_or_else(|| anyhow!("component tool snapshot is missing component_id"))?
+                        .into(),
+                    component_revision: value
+                        .component_revision_id
+                        .ok_or_else(|| {
+                            anyhow!("component tool snapshot is missing component_revision")
+                        })?
+                        .try_into()?,
+                    component_name: ComponentName(value.component_name.ok_or_else(|| {
+                        anyhow!("component tool snapshot is missing component_name")
+                    })?),
+                },
+                TOOL_RELEASE_SOURCE_HOST => ToolSource::Host {
+                    host_tool_id: value
+                        .host_tool_id
+                        .ok_or_else(|| anyhow!("host tool snapshot is missing host_tool_id"))?
+                        .try_into()
+                        .map_err(|error: String| anyhow!(error))?,
+                    implementation_version: value.implementation_version.ok_or_else(|| {
+                        anyhow!("host tool snapshot is missing implementation_version")
+                    })?,
+                },
+                other => return Err(anyhow!("unknown tool snapshot source kind {other}").into()),
+            };
+        let definition = value.tool_definition.into_value();
+        let metadata_digest = value
+            .metadata_digest
+            .map(Into::into)
+            .map(Ok)
+            .unwrap_or_else(|| {
+                golem_common::model::tool_release::tool_metadata_digest(
+                    &value.metadata_version,
+                    &definition,
+                )
+            })?;
         Ok(Self {
             deployment_revision: value.deployment_revision_id.try_into()?,
-            definition: value.tool_definition.into_value(),
+            release_id: value
+                .tool_release_id
+                .map(golem_common::model::tool_release::ToolReleaseId),
+            definition,
             provision: value.tool_provision_config.into_value(),
-            source: ToolSource::Component {
-                component_id: value.component_id.into(),
-                component_revision: value.component_revision_id.try_into()?,
-                component_name: ComponentName(value.component_name),
-            },
+            source,
             owner_account_id: value.owner_account_id.into(),
             owner_account_email: AccountEmail::new(value.owner_account_email),
             metadata_version: value.metadata_version,
+            metadata_digest,
         })
     }
 }
@@ -578,7 +736,7 @@ impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
                     value.deployment_revision_id
                 )));
             }
-            let binding = record.compiled_binding.into_value();
+            let mut binding = record.compiled_binding.into_value();
             if binding.deployment_revision != deployment_revision
                 || binding.agent_type_name.0 != record.agent_type_name
                 || binding.tool_name.as_str() != record.tool_name
@@ -593,9 +751,14 @@ impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
                     binding.tool_name
                 ))
             })?;
+            if binding.metadata_digest == Hash::empty() {
+                binding.metadata_digest = registered.metadata_digest;
+            }
             if binding.source != registered.source
+                || binding.release_id != registered.release_id
                 || binding.version != registered.definition.version
                 || binding.metadata_version != registered.metadata_version
+                || binding.metadata_digest != registered.metadata_digest
                 || binding.account_id != registered.owner_account_id
                 || binding.account_email != registered.owner_account_email
             {
@@ -694,6 +857,7 @@ pub struct DeploymentRevisionCreationRecord {
     pub registered_agent_types: Vec<DeploymentRegisteredAgentTypeRecord>,
     pub registered_tools: Vec<DeploymentRegisteredToolRecord>,
     pub agent_tool_bindings: Vec<DeploymentAgentToolBindingRecord>,
+    pub tool_releases: Vec<ToolReleaseRecord>,
 
     pub created_agent_secrets: Vec<AgentSecretCreationRecord>,
     pub updated_agent_secrets: Vec<AgentSecretRevisionRecord>,
@@ -719,6 +883,7 @@ impl DeploymentRevisionCreationRecord {
         registered_agent_types: Vec<DeployedRegisteredAgentType>,
         registered_tools: Vec<RegisteredTool>,
         agent_tool_bindings: Vec<CompiledToolBinding>,
+        tool_releases: Vec<ToolReleaseRecord>,
         created_agent_secrets: Vec<DeploymentAgentSecretCreation>,
         updated_agent_secrets: Vec<DeploymentAgentSecretUpdate>,
         replaced_agent_secrets: Vec<DeploymentAgentSecretReplacement>,
@@ -796,6 +961,7 @@ impl DeploymentRevisionCreationRecord {
                     DeploymentAgentToolBindingRecord::from_model(environment_id, binding)
                 })
                 .collect(),
+            tool_releases,
             created_agent_secrets: created_agent_secrets
                 .into_iter()
                 .map(|r| {

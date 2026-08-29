@@ -46,6 +46,16 @@ impl DeploymentPlan {
                 .iter()
                 .map(|mcd| (mcd.domain.0.clone(), mcd.hash.into()))
                 .collect(),
+            remote_tools: self
+                .remote_tools
+                .iter()
+                .map(|tool| (tool.name.to_string(), tool.hash.into()))
+                .collect(),
+            published_tools: self
+                .published_tools
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
         }
     }
 }
@@ -67,6 +77,16 @@ impl DeploymentSummary {
                 .mcp_deployments
                 .iter()
                 .map(|mcd| (mcd.domain.0.clone(), mcd.hash.into()))
+                .collect(),
+            remote_tools: self
+                .remote_tools
+                .iter()
+                .map(|tool| (tool.name.to_string(), tool.hash.into()))
+                .collect(),
+            published_tools: self
+                .published_tools
+                .iter()
+                .map(ToString::to_string)
                 .collect(),
         }
     }

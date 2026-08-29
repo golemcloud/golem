@@ -88,7 +88,8 @@ async fn build_app_with_build_plan(ctx: &BuildContext<'_>) -> anyhow::Result<()>
         .cloned()
         .collect::<BTreeSet<_>>();
     let mut built_components = BTreeSet::<ComponentName>::new();
-    let mut available_guest_bridge_dependencies = BTreeSet::<ComponentDependency>::new();
+    let mut available_guest_bridge_dependencies =
+        available_registry_guest_bridge_dependencies(ctx, &effective_component_names)?;
     let mut generated_guest_target_keys = BTreeSet::<BridgeSdkTargetKey>::new();
 
     build_components_with_dependency_ordering(
@@ -174,6 +175,48 @@ async fn build_app_with_build_plan(ctx: &BuildContext<'_>) -> anyhow::Result<()>
     }
 
     Ok(())
+}
+
+fn available_registry_guest_bridge_dependencies(
+    ctx: &BuildContext<'_>,
+    component_names: &[ComponentName],
+) -> anyhow::Result<BTreeSet<ComponentDependency>> {
+    let mut available = BTreeSet::new();
+    for component_name in component_names {
+        let component = ctx.application().component(component_name);
+        for dependency in &component.properties().dependencies {
+            match dependency {
+                ComponentDependency::Tool {
+                    source: crate::model::app::SubjectSource::Registry { reference },
+                    tool_name,
+                } => {
+                    let grant = ctx.registry_tool_grant(reference).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Registry tool dependency not found in the selected environment"
+                        )
+                    })?;
+                    if let Some(expected_name) = tool_name
+                        && expected_name != &grant.release.name
+                    {
+                        anyhow::bail!(
+                            "Registry tool dependency name '{}' does not match granted release name '{}'",
+                            expected_name,
+                            grant.release.name,
+                        );
+                    }
+                    available.insert(dependency.clone());
+                }
+                ComponentDependency::Agent {
+                    source: crate::model::app::SubjectSource::Registry { .. },
+                    ..
+                } => anyhow::bail!(
+                    "Registry agent dependencies are not supported by the tool release registry"
+                ),
+                _ => {}
+            }
+        }
+    }
+    Ok(available)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -282,7 +325,7 @@ async fn generate_available_dependency_guest_bridges(
         selected_guest_bridge_dependency_sources(ctx, &scope_component_names);
     let built_component_names = dependency_guest_requirements
         .iter()
-        .map(|dependency| dependency.component_name().clone())
+        .filter_map(|dependency| dependency.component_name().cloned())
         .filter(|component_name| built_components.contains(component_name))
         .collect::<BTreeSet<_>>();
     let built_component_names = built_component_names.into_iter().collect::<Vec<_>>();
@@ -393,21 +436,21 @@ fn report_guest_bridge_dependency_ordering_cycle(
             .difference(available_guest_bridge_dependencies)
             .map(|dependency| match dependency {
                 ComponentDependency::Agent {
-                    component_name,
+                    source,
                     agent_type_name,
-                } => {
-                    format!(
-                        "agent {}/{}",
-                        component_name.as_str(),
-                        agent_type_name.as_str()
-                    )
-                }
-                ComponentDependency::Tool {
-                    component_name,
-                    tool_name,
-                } => {
-                    format!("tool {}/{}", component_name.as_str(), tool_name.as_str())
-                }
+                } => format!(
+                    "agent {}/{}",
+                    format_subject_source(source),
+                    agent_type_name.as_str()
+                ),
+                ComponentDependency::Tool { source, tool_name } => format!(
+                    "tool {}/{}",
+                    format_subject_source(source),
+                    tool_name
+                        .as_ref()
+                        .map(ToolName::as_str)
+                        .unwrap_or("<release>")
+                ),
             })
             .collect::<Vec<_>>();
         log_error(format!(
@@ -422,9 +465,16 @@ fn report_guest_bridge_dependency_ordering_cycle(
     anyhow::bail!(NonSuccessfulExit)
 }
 
+fn format_subject_source(source: &crate::model::app::SubjectSource) -> String {
+    match source {
+        crate::model::app::SubjectSource::Local { component_name } => component_name.to_string(),
+        crate::model::app::SubjectSource::Registry { reference } => format!("{reference:?}"),
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct BridgeSdkTargetKey {
-    component_name: ComponentName,
+    source: String,
     target_name: String,
     kind: &'static str,
     target_language: GuestLanguage,
@@ -435,7 +485,8 @@ struct BridgeSdkTargetKey {
 impl BridgeSdkTargetKey {
     fn from_bridge_target(ctx: &BuildContext<'_>, target: &BridgeSdkTarget) -> Self {
         Self {
-            component_name: target.component_name.clone(),
+            source: serde_json::to_string(&target.source)
+                .expect("bridge SDK target sources are serializable"),
             target_name: target.subject.display_name().to_string(),
             kind: target.subject.kind().as_str(),
             target_language: target.target_language,
@@ -472,7 +523,9 @@ fn component_guest_bridge_dependencies_provided_by_metadata(
             .agent_types
             .iter()
             .map(|agent_type| ComponentDependency::Agent {
-                component_name: component_name.clone(),
+                source: crate::model::app::SubjectSource::Local {
+                    component_name: component_name.clone(),
+                },
                 agent_type_name: agent_type.type_name.clone(),
             }),
     );
@@ -480,8 +533,10 @@ fn component_guest_bridge_dependencies_provided_by_metadata(
         tool.name()
             .and_then(|name| ToolName::try_from(name).ok())
             .map(|tool_name| ComponentDependency::Tool {
-                component_name: component_name.clone(),
-                tool_name,
+                source: crate::model::app::SubjectSource::Local {
+                    component_name: component_name.clone(),
+                },
+                tool_name: Some(tool_name),
             })
     }));
     dependencies
@@ -524,7 +579,9 @@ async fn selected_component_names_with_dependencies_for_build(
             .flat_map(|component_name| component_guest_bridge_requirements(ctx, component_name))
             .collect::<Vec<_>>()
         {
-            selected.insert(dependency.component_name().clone());
+            if let Some(component_name) = dependency.component_name() {
+                selected.insert(component_name.clone());
+            }
         }
 
         if selected.len() == selected_count_before {
@@ -621,7 +678,7 @@ fn bridge_output_dir_claims(
 
             if mode == BridgeMode::Guest
                 && let Some(tools) = sdk_targets.tools
-                && manifest_bridge_request_may_match_selected_components(
+                && manifest_tool_bridge_request_may_match_selected_components(
                     ctx,
                     tools,
                     selected_component_names,
@@ -732,7 +789,7 @@ fn add_manifest_tool_bridge_output_dir_claims(
     claims: &mut Vec<OutputDirClaim>,
     language: GuestLanguage,
     mode: BridgeMode,
-    tools: &crate::model::app_raw::LenientTokenList,
+    tools: &crate::model::app_raw::BridgeToolTargets,
     output_dir: Option<&str>,
     selected_component_names: &[ComponentName],
 ) {
@@ -747,7 +804,7 @@ fn add_manifest_tool_bridge_output_dir_claims(
         .cloned()
         .collect::<BTreeSet<_>>();
 
-    for matcher in tools.clone().into_set() {
+    for matcher in tools.local_aliases() {
         let is_component_matcher = component_names
             .iter()
             .any(|component_name| component_name.as_str() == matcher.as_str());
@@ -789,6 +846,19 @@ fn add_manifest_tool_bridge_output_dir_claims(
             });
         }
     }
+}
+
+fn manifest_tool_bridge_request_may_match_selected_components(
+    ctx: &BuildContext<'_>,
+    tools: &crate::model::app_raw::BridgeToolTargets,
+    selected_component_names: &[ComponentName],
+) -> bool {
+    tools.has_sourced()
+        || manifest_matchers_may_match_selected_components(
+            ctx,
+            tools.local_aliases(),
+            selected_component_names,
+        )
 }
 
 /// Which kind of manifest bridge matchers a component-based output-dir claim
@@ -918,7 +988,18 @@ fn manifest_bridge_request_may_match_selected_components(
     agents: &crate::model::app_raw::LenientTokenList,
     selected_component_names: &[ComponentName],
 ) -> bool {
-    let matchers = agents.clone().into_set();
+    manifest_matchers_may_match_selected_components(
+        ctx,
+        agents.clone().into_set(),
+        selected_component_names,
+    )
+}
+
+fn manifest_matchers_may_match_selected_components(
+    ctx: &BuildContext<'_>,
+    matchers: BTreeSet<String>,
+    selected_component_names: &[ComponentName],
+) -> bool {
     if matchers.contains("*") {
         return true;
     }
@@ -1097,7 +1178,7 @@ fn validate_manifest_matchers_resolved(
 
         let mut tool_matchers = sdk_targets
             .tools
-            .map(|tools| tools.clone().into_set())
+            .map(|tools| tools.local_aliases())
             .unwrap_or_default();
         if tool_matchers.remove("*") {
             validate_wildcard_manifest_sources_resolved(
@@ -1262,7 +1343,7 @@ fn has_explicit_manifest_guest_bridge_request(
                     sdk_targets.agents,
                     selected_component_names,
                 ) || sdk_targets.tools.is_some_and(|tools| {
-                    manifest_bridge_request_may_match_selected_components(
+                    manifest_tool_bridge_request_may_match_selected_components(
                         ctx,
                         tools,
                         selected_component_names,
@@ -1282,7 +1363,9 @@ mod tests {
         let base_dir =
             std::env::temp_dir().join(format!("golem-cli-build-plan-{}", std::process::id()));
         let dependency_guest_target = BridgeSdkTarget {
-            component_name: ComponentName::try_from("app:producer").unwrap(),
+            source: crate::model::app::BridgeSdkTargetSource::local(
+                ComponentName::try_from("app:producer").unwrap(),
+            ),
             subject: BridgeSdkTargetSubject::Agent(bar_agent_type()),
             target_language: GuestLanguage::Rust,
             bridge_mode: BridgeMode::Guest,

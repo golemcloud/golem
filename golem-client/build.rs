@@ -216,6 +216,55 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "DeployedRegisteredTool",
                 "golem_common::model::tool::DeployedRegisteredTool",
             ),
+            ("ToolSource", "golem_common::model::tool::ToolSource"),
+            (
+                "ToolRelease",
+                "golem_common::model::tool_release::ToolRelease",
+            ),
+            (
+                "ToolReleaseMetadata",
+                "golem_common::model::tool_release::ToolReleaseMetadata",
+            ),
+            (
+                "ToolReleaseReference",
+                "golem_common::model::tool_release::ToolReleaseReference",
+            ),
+            (
+                "ToolReleaseById",
+                "golem_common::model::tool_release::ToolReleaseById",
+            ),
+            (
+                "ToolReleaseByCoordinates",
+                "golem_common::model::tool_release::ToolReleaseByCoordinates",
+            ),
+            (
+                "ToolReleaseLifecycle",
+                "golem_common::model::tool_release::ToolReleaseLifecycle",
+            ),
+            (
+                "ToolReleaseOrigin",
+                "golem_common::model::tool_release::ToolReleaseOrigin",
+            ),
+            (
+                "SystemToolAvailability",
+                "golem_common::model::tool_release::SystemToolAvailability",
+            ),
+            (
+                "EnvironmentToolGrant",
+                "golem_common::model::environment_tool_grant::EnvironmentToolGrant",
+            ),
+            (
+                "EnvironmentToolGrantCreation",
+                "golem_common::model::environment_tool_grant::EnvironmentToolGrantCreation",
+            ),
+            (
+                "EnvironmentToolGrantLifecycle",
+                "golem_common::model::environment_tool_grant::EnvironmentToolGrantLifecycle",
+            ),
+            (
+                "EnvironmentToolGrantWithDetails",
+                "golem_common::model::environment_tool_grant::EnvironmentToolGrantWithDetails",
+            ),
             // domain_registration
             (
                 "DomainRegistration",

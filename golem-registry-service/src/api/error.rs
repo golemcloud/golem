@@ -25,6 +25,7 @@ use crate::services::deployment::{DeployValidationError, DeploymentError, Deploy
 use crate::services::domain_registration::DomainRegistrationError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
+use crate::services::environment_tool_grant::EnvironmentToolGrantError;
 use crate::services::http_api_deployment::HttpApiDeploymentError;
 use crate::services::mcp_deployment::McpDeploymentError;
 use crate::services::oauth2::OAuth2Error;
@@ -36,6 +37,7 @@ use crate::services::resource_definition::ResourceDefinitionError;
 use crate::services::retry_policy::RetryPolicyError;
 use crate::services::security_scheme::SecuritySchemeError;
 use crate::services::token::TokenError;
+use crate::services::tool_release::ToolReleaseError;
 use golem_common::base_model::api;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
@@ -217,6 +219,29 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
         }
         DeployValidationError::DuplicateToolImplementation { .. } => {
             api::error_code::deployment_validation::DUPLICATE_TOOL_IMPLEMENTATION
+        }
+        DeployValidationError::ToolSourceCollision { .. } => {
+            api::error_code::deployment_validation::TOOL_SOURCE_COLLISION
+        }
+        DeployValidationError::RemoteToolUnavailable { .. } => {
+            api::error_code::deployment_validation::REMOTE_TOOL_UNAVAILABLE
+        }
+        DeployValidationError::RemoteToolNameMismatch { .. }
+        | DeployValidationError::RemoteToolDefinitionNameMismatch { .. }
+        | DeployValidationError::RemoteToolVersionMismatch { .. } => {
+            api::error_code::deployment_validation::REMOTE_TOOL_IDENTITY_MISMATCH
+        }
+        DeployValidationError::RemoteToolUnsupportedMetadataVersion { .. } => {
+            api::error_code::deployment_validation::REMOTE_TOOL_UNSUPPORTED_METADATA_VERSION
+        }
+        DeployValidationError::RemoteToolMetadataDigestMismatch { .. } => {
+            api::error_code::deployment_validation::REMOTE_TOOL_METADATA_DIGEST_MISMATCH
+        }
+        DeployValidationError::InvalidRemoteTool { .. } => {
+            api::error_code::deployment_validation::INVALID_REMOTE_TOOL
+        }
+        DeployValidationError::RemoteToolBindingUnknownAgent { .. } => {
+            api::error_code::deployment_validation::REMOTE_TOOL_BINDING_UNKNOWN_AGENT
         }
         DeployValidationError::ToolBindingUnknownAgent { .. } => {
             api::error_code::deployment_validation::TOOL_BINDING_UNKNOWN_AGENT
@@ -615,6 +640,9 @@ impl From<ComponentError> for ApiError {
             ComponentError::ConcurrentUpdate => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
             }
+            ComponentError::ComponentSourceInUse(_) => {
+                Self::conflict(api::error_code::COMPONENT_IN_USE, error)
+            }
             ComponentError::ParentEnvironmentNotFound(_) => {
                 Self::not_found(api::error_code::ENVIRONMENT_NOT_FOUND, error)
             }
@@ -843,6 +871,68 @@ impl From<EnvironmentPluginGrantError> for ApiError {
 
             EnvironmentPluginGrantError::Unauthorized(inner) => inner.into(),
             EnvironmentPluginGrantError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<ToolReleaseError> for ApiError {
+    fn from(value: ToolReleaseError) -> Self {
+        let error = value.to_safe_string();
+        match value {
+            ToolReleaseError::ToolReleaseNotFound(_)
+            | ToolReleaseError::ReferencedToolReleaseNotFound => {
+                Self::not_found(api::error_code::TOOL_NOT_FOUND, error)
+            }
+            ToolReleaseError::ParentAccountNotFound(_) => {
+                Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
+            }
+            ToolReleaseError::PublicationToolNotFound(_)
+            | ToolReleaseError::DuplicatePublication(_)
+            | ToolReleaseError::PublicationOwnerMismatch(_)
+            | ToolReleaseError::PublicationHostSource(_) => {
+                Self::bad_request(api::error_code::TOOL_NOT_FOUND, error)
+            }
+            ToolReleaseError::ImmutableReleaseConflict => {
+                Self::conflict(api::error_code::TOOL_RELEASE_IMMUTABLE_CONFLICT, error)
+            }
+            ToolReleaseError::ProtectedToolRelease => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
+            ToolReleaseError::Unauthorized(inner) => inner.into(),
+            ToolReleaseError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<EnvironmentToolGrantError> for ApiError {
+    fn from(value: EnvironmentToolGrantError) -> Self {
+        let error = value.to_safe_string();
+        match value {
+            EnvironmentToolGrantError::ParentEnvironmentNotFound(_) => {
+                Self::not_found(api::error_code::ENVIRONMENT_NOT_FOUND, error)
+            }
+            EnvironmentToolGrantError::EnvironmentToolGrantNotFound(_)
+            | EnvironmentToolGrantError::ReferencedToolReleaseNotFound => {
+                Self::not_found(api::error_code::TOOL_NOT_FOUND, error)
+            }
+            EnvironmentToolGrantError::GrantAlreadyExists
+            | EnvironmentToolGrantError::GrantNotDeleted(_) => Self::conflict(
+                api::error_code::ENVIRONMENT_TOOL_GRANT_ALREADY_EXISTS,
+                error,
+            ),
+            EnvironmentToolGrantError::ProtectedToolGrant(_) => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
+            EnvironmentToolGrantError::Unauthorized(inner) => inner.into(),
+            EnvironmentToolGrantError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),

@@ -163,6 +163,8 @@ impl<'de> Deserialize<'de> for ToolDeclarations {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolDeclaration {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<RegistrySource>,
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -195,6 +197,80 @@ impl ToolDeclaration {
             files: self.files.clone(),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalSubject {
+    pub component: String,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RegistrySubject {
+    ById(RegistrySubjectById),
+    ByCoordinates(RegistrySubjectByCoordinates),
+}
+
+impl RegistrySubject {
+    pub fn to_release_reference(
+        &self,
+    ) -> Result<golem_common::model::tool_release::ToolReleaseReference, String> {
+        use golem_common::model::account::AccountEmail;
+        use golem_common::model::tool::ToolName;
+        use golem_common::model::tool_release::{
+            ToolReleaseByCoordinates, ToolReleaseById, ToolReleaseReference,
+        };
+
+        match self {
+            Self::ById(reference) => Ok(ToolReleaseReference::ById(ToolReleaseById {
+                release_id: reference.release_id,
+            })),
+            Self::ByCoordinates(reference) => Ok(ToolReleaseReference::ByCoordinates(
+                ToolReleaseByCoordinates {
+                    account: AccountEmail::new(reference.account.clone()),
+                    name: ToolName::try_from(reference.name.as_str())?,
+                    version: reference.version.clone(),
+                },
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RegistrySubjectById {
+    pub release_id: golem_common::model::tool_release::ToolReleaseId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RegistrySubjectByCoordinates {
+    pub account: String,
+    pub name: String,
+    pub version: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RegistrySource {
+    pub registry: RegistrySubject,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SubjectSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local: Option<LocalSubject>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<RegistrySubject>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SubjectReference {
+    pub source: SubjectSource,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -415,7 +491,8 @@ pub struct ComponentDependencies {
 #[serde(untagged)]
 pub enum ComponentDependencyReference {
     Shortcut(String),
-    Structured(ComponentDependencyReferenceStruct),
+    LocalAlias(ComponentDependencyReferenceStruct),
+    Sourced(SubjectReference),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -846,6 +923,20 @@ pub struct Environment {
     pub tools_merge_mode: Option<MapMergeMode>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub tools: Option<IndexMap<String, ToolBinding>>,
+    #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
+    pub publish_tools: IndexMap<String, PublishTool>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub tool_grants: Vec<RegistrySubjectReference>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublishTool {}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RegistrySubjectReference {
+    pub source: RegistrySource,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1389,8 +1480,8 @@ pub struct BridgeSdkExternalTargets {
 pub struct BridgeSdkInternalTargets {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub agents: LenientTokenList,
-    #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
-    pub tools: LenientTokenList,
+    #[serde(default, skip_serializing_if = "BridgeToolTargets::is_empty")]
+    pub tools: BridgeToolTargets,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_dir: Option<String>,
 }
@@ -1398,8 +1489,69 @@ pub struct BridgeSdkInternalTargets {
 #[derive(Clone, Copy, Debug)]
 pub struct BridgeSdkInternalTargetsRef<'a> {
     pub agents: &'a LenientTokenList,
-    pub tools: Option<&'a LenientTokenList>,
+    pub tools: Option<&'a BridgeToolTargets>,
     pub output_dir: Option<&'a String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum BridgeToolTargets {
+    #[default]
+    None,
+    String(String),
+    List(Vec<BridgeToolTarget>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum BridgeToolTarget {
+    LocalAlias(String),
+    Sourced(SubjectReference),
+}
+
+impl BridgeToolTargets {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::None => true,
+            Self::String(value) => LenientTokenList::parse(value).next().is_none(),
+            Self::List(values) => values.is_empty(),
+        }
+    }
+
+    pub fn local_aliases(&self) -> BTreeSet<String> {
+        match self {
+            Self::None => BTreeSet::new(),
+            Self::String(value) => LenientTokenList::parse(value).collect(),
+            Self::List(values) => values
+                .iter()
+                .filter_map(|value| match value {
+                    BridgeToolTarget::LocalAlias(value) => Some(value.clone()),
+                    BridgeToolTarget::Sourced(_) => None,
+                })
+                .collect(),
+        }
+    }
+
+    pub fn into_set(self) -> BTreeSet<String> {
+        self.local_aliases()
+    }
+
+    pub fn has_sourced(&self) -> bool {
+        self.sourced().next().is_some()
+    }
+
+    pub fn sourced(&self) -> impl Iterator<Item = &SubjectReference> {
+        match self {
+            Self::List(values) => Some(values.as_slice()),
+            Self::None | Self::String(_) => None,
+        }
+        .into_iter()
+        .flatten()
+        .filter_map(|value| match value {
+            BridgeToolTarget::LocalAlias(_) => None,
+            BridgeToolTarget::Sourced(reference) => Some(reference),
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1731,6 +1883,7 @@ mod test {
                     files,
                     presets,
                 )| ToolDeclaration {
+                    source: None,
                     templates,
                     config,
                     env_merge_mode,
@@ -2273,6 +2426,8 @@ mod test {
                         version,
                         tools_merge_mode,
                         tools,
+                        publish_tools: Default::default(),
+                        tool_grants: Default::default(),
                     }
                 },
             )
@@ -2420,7 +2575,15 @@ mod test {
     fn arb_bridge_sdk_internal_targets() -> BoxedStrategy<BridgeSdkInternalTargets> {
         (
             arb_token_list_model(),
-            arb_token_list_model(),
+            arb_token_list_model().prop_map(|values| {
+                BridgeToolTargets::List(
+                    values
+                        .into_vec()
+                        .into_iter()
+                        .map(BridgeToolTarget::LocalAlias)
+                        .collect(),
+                )
+            }),
             arb_opt(arb_ident()),
         )
             .prop_map(|(agents, tools, output_dir)| BridgeSdkInternalTargets {

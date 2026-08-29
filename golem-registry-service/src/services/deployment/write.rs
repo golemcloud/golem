@@ -21,6 +21,9 @@ use crate::services::agent_secret::{AgentSecretError, AgentSecretService};
 use crate::services::component::{ComponentError, ComponentService};
 use crate::services::deployment::deploy_validation_error::format_validation_errors;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
+use crate::services::environment_tool_grant::{
+    EnvironmentToolGrantError, EnvironmentToolGrantService,
+};
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::mcp_deployment::{McpDeploymentError, McpDeploymentService};
 use crate::services::registry_change_notifier::{
@@ -29,8 +32,9 @@ use crate::services::registry_change_notifier::{
 use crate::services::resource_definition::{ResourceDefinitionError, ResourceDefinitionService};
 use crate::services::retry_policy::{RetryPolicyError, RetryPolicyService};
 use crate::services::security_scheme::SecuritySchemeService;
+use crate::services::tool_release::{ToolReleaseError, ToolReleaseService};
 use futures::TryFutureExt;
-use golem_common::model::agent::DeployedRegisteredAgentType;
+use golem_common::model::agent::{DeployedRegisteredAgentType, InitialAgentFileUpload};
 use golem_common::model::card::EnvironmentVerb;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff;
@@ -42,7 +46,9 @@ use golem_common::model::{
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
+use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::repo::RepoError;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -102,7 +108,9 @@ error_forwarding!(
     McpDeploymentError,
     AgentSecretError,
     ResourceDefinitionError,
-    RetryPolicyError
+    RetryPolicyError,
+    EnvironmentToolGrantError,
+    ToolReleaseError
 );
 
 pub struct DeploymentWriteService {
@@ -116,6 +124,9 @@ pub struct DeploymentWriteService {
     security_scheme_service: Arc<SecuritySchemeService>,
     resource_definition_service: Arc<ResourceDefinitionService>,
     retry_policy_service: Arc<RetryPolicyService>,
+    environment_tool_grant_service: Arc<EnvironmentToolGrantService>,
+    tool_release_service: Arc<ToolReleaseService>,
+    initial_agent_files_service: Arc<InitialAgentFilesService>,
 }
 
 impl DeploymentWriteService {
@@ -130,6 +141,9 @@ impl DeploymentWriteService {
         security_scheme_service: Arc<SecuritySchemeService>,
         resource_definition_service: Arc<ResourceDefinitionService>,
         retry_policy_service: Arc<RetryPolicyService>,
+        environment_tool_grant_service: Arc<EnvironmentToolGrantService>,
+        tool_release_service: Arc<ToolReleaseService>,
+        initial_agent_files_service: Arc<InitialAgentFilesService>,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -142,7 +156,36 @@ impl DeploymentWriteService {
             security_scheme_service,
             resource_definition_service,
             retry_policy_service,
+            environment_tool_grant_service,
+            tool_release_service,
+            initial_agent_files_service,
         }
+    }
+
+    pub async fn upload_initial_agent_file(
+        &self,
+        environment_id: EnvironmentId,
+        data: Vec<u8>,
+        auth: &AuthCtx,
+    ) -> Result<InitialAgentFileUpload, DeploymentWriteError> {
+        let environment = self
+            .environment_service
+            .get(environment_id, false, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(environment_id) => {
+                    DeploymentWriteError::ParentEnvironmentNotFound(environment_id)
+                }
+                other => other.into(),
+            })?;
+
+        store_initial_agent_file(
+            self.initial_agent_files_service.as_ref(),
+            &environment,
+            data,
+            auth,
+        )
+        .await
     }
 
     pub async fn create_deployment(
@@ -234,22 +277,27 @@ impl DeploymentWriteService {
         );
 
         let account_id = environment.owner_account_id;
+        let remote_tool_references = data
+            .remote_tools
+            .iter()
+            .map(|deployment| deployment.release.clone())
+            .collect::<Vec<_>>();
+        let resolved_remote_tools = self
+            .environment_tool_grant_service
+            .resolve_active_references_partial(&environment, &remote_tool_references, auth)
+            .await?;
+        let remote_tools = data
+            .remote_tools
+            .iter()
+            .cloned()
+            .zip(resolved_remote_tools)
+            .collect::<Vec<_>>();
         let deployment_context = DeploymentContext::new(
             environment,
             components,
             http_api_deployments,
             mcp_deployments,
         )?;
-
-        {
-            let actual_hash = deployment_context.hash().map_err(anyhow::Error::new)?;
-            if data.expected_deployment_hash != actual_hash {
-                return Err(DeploymentWriteError::DeploymentHashMismatch {
-                    requested_hash: data.expected_deployment_hash,
-                    actual_hash,
-                });
-            }
-        }
 
         let mut errors = Vec::new();
         let mut warnings: Vec<super::DeployValidationWarning> = Vec::new();
@@ -293,8 +341,56 @@ impl DeploymentWriteService {
             &mut errors,
         );
 
-        let compiled_tools =
-            deployment_context.compile_tools(next_deployment_revision, &mut errors, &mut warnings);
+        let mut compiled_tools = deployment_context.compile_tools_with_remote(
+            next_deployment_revision,
+            &remote_tools,
+            &mut errors,
+            &mut warnings,
+        );
+
+        let registered_tools_by_name = compiled_tools
+            .registered_tools
+            .iter()
+            .filter_map(|tool| {
+                tool.definition
+                    .name()
+                    .and_then(|name| golem_common::model::tool::ToolName::try_from(name).ok())
+                    .map(|name| (name, tool.clone()))
+            })
+            .collect();
+        let mut tool_releases = self.tool_release_service.prepare_publications(
+            &deployment_context.environment,
+            &registered_tools_by_name,
+            &data.publish_tools,
+            auth,
+        )?;
+        let publications_need_change = self
+            .tool_release_service
+            .publications_need_change(&mut tool_releases)
+            .await?;
+        let published_release_ids = tool_releases
+            .iter()
+            .map(|release| {
+                (
+                    release.tool_name.as_str(),
+                    golem_common::model::tool_release::ToolReleaseId(release.tool_release_id),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        for tool in &mut compiled_tools.registered_tools {
+            if let Some(release_id) = tool
+                .definition
+                .name()
+                .and_then(|name| published_release_ids.get(name))
+            {
+                tool.release_id = Some(*release_id);
+            }
+        }
+        for binding in &mut compiled_tools.agent_tool_bindings {
+            if let Some(release_id) = published_release_ids.get(binding.tool_name.as_str()) {
+                binding.release_id = Some(*release_id);
+            }
+        }
 
         let (new_agent_secrets, updated_agent_secrets, replaced_agent_secrets) = deployment_context
             .deployment_agent_secret_creations_and_updates(
@@ -321,12 +417,23 @@ impl DeploymentWriteService {
             return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
         }
 
+        let actual_hash = deployment_context
+            .hash_with_tools(&compiled_tools, &data.publish_tools)
+            .map_err(anyhow::Error::new)?;
+        if data.expected_deployment_hash != actual_hash {
+            return Err(DeploymentWriteError::DeploymentHashMismatch {
+                requested_hash: data.expected_deployment_hash,
+                actual_hash,
+            });
+        }
+
         if deployment_hash_unchanged
             && new_agent_secrets.is_empty()
             && updated_agent_secrets.is_empty()
             && replaced_agent_secrets.is_empty()
             && new_resource_definitions.is_empty()
             && new_retry_policies.is_empty()
+            && !publications_need_change
         {
             return Err(DeploymentWriteError::NoOpDeployment);
         }
@@ -351,6 +458,7 @@ impl DeploymentWriteService {
                 .collect(),
             compiled_tools.registered_tools,
             compiled_tools.agent_tool_bindings,
+            tool_releases,
             new_agent_secrets,
             updated_agent_secrets,
             replaced_agent_secrets,
@@ -472,5 +580,142 @@ impl DeploymentWriteService {
             .transpose()?;
 
         Ok(deployment)
+    }
+}
+
+async fn store_initial_agent_file(
+    initial_agent_files_service: &InitialAgentFilesService,
+    environment: &Environment,
+    data: Vec<u8>,
+    auth: &AuthCtx,
+) -> Result<InitialAgentFileUpload, DeploymentWriteError> {
+    authorize_environment_permission(auth, environment, EnvironmentVerb::Deploy)?;
+
+    let size = data.len() as u64;
+    let stream = data
+        .map_item(|item| item.map_err(anyhow::Error::from))
+        .map_error(anyhow::Error::from);
+    let content_hash = initial_agent_files_service
+        .put_if_not_exists(environment.id, stream)
+        .await?;
+
+    Ok(InitialAgentFileUpload { content_hash, size })
+}
+
+#[cfg(test)]
+mod initial_agent_file_tests {
+    use super::*;
+    use futures::TryStreamExt;
+    use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::application::{ApplicationId, ApplicationName};
+    use golem_common::model::card::owner::EnvironmentOwnerPattern;
+    use golem_common::model::card::{
+        ClassPermissionTarget, EffectiveSurface, EnvironmentResourcePattern, GrantSurface,
+        PermissionTarget,
+    };
+    use golem_common::model::environment::{EnvironmentName, EnvironmentRevision};
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+    use test_r::test;
+
+    fn environment(id: EnvironmentId, name: &str) -> Environment {
+        Environment {
+            id,
+            revision: EnvironmentRevision::INITIAL,
+            application_id: ApplicationId::new(),
+            application_name: ApplicationName::try_from("app").unwrap(),
+            name: EnvironmentName::try_from(name).unwrap(),
+            diff_model_version: 0,
+            compatibility_check: false,
+            version_check: false,
+            security_overrides: false,
+            owner_account_id: AccountId::new(),
+            owner_account_email: AccountEmail::new("owner@example.com"),
+            current_deployment: None,
+        }
+    }
+
+    fn auth_for(environment: &Environment, verb: EnvironmentVerb) -> AuthCtx {
+        AuthCtx::agent_with_effective_surface(
+            environment.owner_account_id,
+            environment.owner_account_email.clone(),
+            EffectiveSurface {
+                source_card_ids: Vec::new(),
+                lower: vec![GrantSurface {
+                    positive: vec![PermissionTarget::Environment(ClassPermissionTarget {
+                        verb: Some(verb),
+                        owner: EnvironmentOwnerPattern::Environment {
+                            account: environment.owner_account_email.clone(),
+                            application: environment.application_name.clone(),
+                            environment: environment.name.clone(),
+                        },
+                        resource: EnvironmentResourcePattern::Any,
+                    })],
+                    negative: Vec::new(),
+                }],
+                upper: Vec::new(),
+            },
+        )
+    }
+
+    #[test]
+    async fn upload_requires_deploy_permission_and_stores_by_environment() {
+        let files = InitialAgentFilesService::new(Arc::new(InMemoryBlobStorage::new()));
+        let allowed = environment(EnvironmentId::new(), "allowed");
+        let other = environment(EnvironmentId::new(), "other");
+        let content = b"remote tool bridge".to_vec();
+
+        assert!(
+            store_initial_agent_file(
+                &files,
+                &allowed,
+                content.clone(),
+                &auth_for(&allowed, EnvironmentVerb::View),
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            store_initial_agent_file(
+                &files,
+                &other,
+                content.clone(),
+                &auth_for(&allowed, EnvironmentVerb::Deploy),
+            )
+            .await
+            .is_err()
+        );
+
+        let uploaded = store_initial_agent_file(
+            &files,
+            &allowed,
+            content.clone(),
+            &auth_for(&allowed, EnvironmentVerb::Deploy),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(uploaded.size, content.len() as u64);
+        assert_eq!(
+            uploaded.content_hash,
+            golem_common::model::agent::AgentFileContentHash(diff::Hash::new(blake3::hash(
+                &content
+            )))
+        );
+        assert!(
+            files
+                .exists(allowed.id, uploaded.content_hash)
+                .await
+                .unwrap()
+        );
+        assert!(!files.exists(other.id, uploaded.content_hash).await.unwrap());
+        let stored = files
+            .get(allowed.id, uploaded.content_hash)
+            .await
+            .unwrap()
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(stored.concat(), content);
     }
 }

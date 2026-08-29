@@ -37,6 +37,11 @@ struct LoadedFile {
     source: Url,
 }
 
+pub struct LoadedInitialFile {
+    pub content: Vec<u8>,
+    pub target: CanonicalFilePathWithPermissions,
+}
+
 #[derive(Debug, Clone)]
 pub struct HashedFile {
     pub hash: blake3::Hash,
@@ -224,6 +229,29 @@ async fn expand_local_component_file(
 impl IfsFileManager {
     pub fn new(client: reqwest::Client) -> Self {
         Self { client }
+    }
+
+    pub async fn load_initial_files(
+        &self,
+        component_files: &[InitialComponentFile],
+    ) -> anyhow::Result<Vec<LoadedInitialFile>> {
+        let loader = FileLoader {
+            client: self.client.clone(),
+        };
+        let component_files = expand_component_files(component_files).await?;
+        let mut result = Vec::new();
+        for component_file in &component_files {
+            result.extend(
+                self.process_component_file(&loader, component_file)
+                    .await?
+                    .into_iter()
+                    .map(|loaded| LoadedInitialFile {
+                        content: loaded.content,
+                        target: component_file.target.clone(),
+                    }),
+            );
+        }
+        Ok(result)
     }
 
     pub async fn build_files_archive(

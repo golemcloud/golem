@@ -353,10 +353,12 @@ fn activation_with_policy(
     };
     let binding = CompiledToolBinding {
         deployment_revision,
+        release_id: None,
         agent_type_name,
         tool_name,
         version: "1.0.0".to_string(),
         metadata_version: "0.1.0".to_string(),
+        metadata_digest: Default::default(),
         account_id,
         account_email: AccountEmail::new("test@golem"),
         parameters: NormalizedJsonValue::new(serde_json::json!({})),
