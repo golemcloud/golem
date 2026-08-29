@@ -3,8 +3,8 @@ minimumLimaVersion: 2.0.0
 base:
   - template:_images/ubuntu
 
-cpus: 8
-memory: 12GiB
+cpus: 12
+memory: 24GiB
 disk: 80GiB
 
 containerd:

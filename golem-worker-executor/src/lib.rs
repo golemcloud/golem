@@ -15,13 +15,16 @@
 pub mod bootstrap;
 pub mod config;
 pub mod durable_host;
+pub(crate) mod filesystem_pressure;
 pub mod grpc;
 pub mod identity;
 pub mod metrics;
 pub mod model;
 pub mod preview2;
+pub(crate) mod sandbox_filesystem;
 pub mod services;
 pub mod storage;
+pub(crate) mod wasi_filesystem;
 pub mod wasi_host;
 pub mod worker;
 pub mod workerctx;
@@ -254,6 +257,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     ) -> Arc<dyn ResourceLimits> {
         crate::services::resource_limits::configured(
             &golem_config.resource_limits,
+            golem_config.resource_usage_metering,
             registry_service.clone(),
             shutdown_token.clone(),
         )

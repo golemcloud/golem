@@ -40,8 +40,12 @@ impl ByteTimeAccumulator {
     }
 
     pub(crate) fn accrue(&mut self, now: Instant, bytes: Option<u64>) {
+        self.advance(now, bytes);
+    }
+
+    pub(crate) fn advance(&mut self, now: Instant, bytes: Option<u64>) -> bool {
         if now <= self.last_sample {
-            return;
+            return false;
         }
 
         let elapsed = now.saturating_duration_since(self.last_sample).as_nanos();
@@ -55,6 +59,7 @@ impl ByteTimeAccumulator {
         let units = self.pending_byte_nanoseconds / self.byte_nanoseconds_per_unit;
         self.pending_byte_nanoseconds %= self.byte_nanoseconds_per_unit;
         self.pending_units = self.pending_units.saturating_add(units);
+        true
     }
 
     pub(crate) fn take_units(&mut self) -> i64 {

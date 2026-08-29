@@ -59,6 +59,7 @@ use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::GolemConfig;
 use golem_worker_executor::services::key_value::KeyValueService;
+use golem_worker_executor::services::linear_memory::LinearMemoryTracker;
 use golem_worker_executor::services::oplog::{Oplog, OplogService};
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::quota::QuotaService;
@@ -76,7 +77,7 @@ use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
     CallCountManagement, ExternalOperations, FileSystemReading, FuelManagement,
     InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
-    StatusManagement, UpdateManagement, WorkerCtx,
+    StatusManagement, UpdateManagement, WorkerCtx, WorkerFilesystemContext,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
@@ -113,6 +114,10 @@ impl wasmtime_wasi_http::p3::WasiHttpView for DebugContext {
 
 #[async_trait]
 impl FuelManagement for DebugContext {
+    fn fuel_metering_enabled(&self) -> bool {
+        false
+    }
+
     fn ensure_fuel(&mut self, _current_level: u64) -> Result<(), AgentError> {
         Ok(())
     }
@@ -575,8 +580,8 @@ impl WorkerCtx for DebugContext {
         component_service: Arc<dyn ComponentService>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
-        filesystem_root: std::path::PathBuf,
-        filesystem_runtime: golem_worker_executor::services::agent_filesystem::AgentFilesystemRuntime,
+        filesystem: WorkerFilesystemContext,
+        linear_memory: LinearMemoryTracker,
         worker_config: AgentConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
@@ -621,8 +626,8 @@ impl WorkerCtx for DebugContext {
             component_service,
             account_resource_limits,
             config,
-            filesystem_root,
-            filesystem_runtime,
+            filesystem,
+            linear_memory,
             worker_config,
             execution_status,
             file_loader,

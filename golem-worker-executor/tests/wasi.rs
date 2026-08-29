@@ -34,16 +34,20 @@ use golem_test_framework::dsl::{
 };
 use golem_test_framework::model::IFSEntry;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
-#[cfg(target_os = "linux")]
-use golem_worker_executor_test_utils::start_with_agent_storage_quota_on_managed_xfs;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_with_overrides,
 };
 #[cfg(target_os = "linux")]
 use golem_worker_executor_test_utils::{
-    start_with_agent_storage_and_object_quota_on_managed_xfs,
+    start_with_agent_storage_quota_and_pressure_without_metering_on_managed_xfs,
+    start_with_agent_storage_quota_on_managed_xfs,
+    start_with_agent_storage_quota_without_metering_on_managed_xfs,
+};
+#[cfg(target_os = "linux")]
+use golem_worker_executor_test_utils::{
     start_with_mutable_agent_storage_quota_on_managed_xfs,
+    start_with_mutable_agent_storage_quota_without_metering_on_managed_xfs,
 };
 use http::{HeaderMap, StatusCode};
 use pretty_assertions::assert_eq;
@@ -102,6 +106,19 @@ fn schema_string_list(result: SchemaValue) -> Vec<String> {
         .collect()
 }
 
+fn schema_u64_list(result: SchemaValue) -> Vec<u64> {
+    let SchemaValue::List { elements } = result else {
+        panic!("expected list, got {result:?}")
+    };
+    elements
+        .into_iter()
+        .map(|element| match element {
+            SchemaValue::U64(entry) => entry,
+            other => panic!("expected u64, got {other:?}"),
+        })
+        .collect()
+}
+
 async fn assert_reconstructed_writable_file(
     executor: &TestWorkerExecutor,
     component: &golem_common::base_model::component::ComponentDto,
@@ -137,6 +154,44 @@ fn managed_xfs_test_root() -> PathBuf {
     std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
         .map(PathBuf::from)
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root")
+}
+
+#[cfg(target_os = "linux")]
+fn filesystem_available_bytes(path: &std::path::Path) -> anyhow::Result<u64> {
+    let capacity = rustix::fs::statvfs(path)?;
+    capacity
+        .f_bavail
+        .checked_mul(capacity.f_frsize)
+        .ok_or_else(|| anyhow!("filesystem available capacity exceeds u64"))
+}
+
+#[cfg(target_os = "linux")]
+fn filesystem_fragment_size(path: &std::path::Path) -> anyhow::Result<u64> {
+    let fragment_size = rustix::fs::statvfs(path)?.f_frsize;
+    if fragment_size == 0 {
+        Err(anyhow!("filesystem reported a zero fragment size"))
+    } else {
+        Ok(fragment_size)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn filesystem_tree_allocated_bytes(path: &std::path::Path) -> anyhow::Result<u64> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = std::fs::symlink_metadata(path)?;
+    let mut allocated_bytes = metadata
+        .blocks()
+        .checked_mul(512)
+        .ok_or_else(|| anyhow!("filesystem tree allocation exceeds u64"))?;
+    if metadata.is_dir() {
+        for entry in std::fs::read_dir(path)? {
+            allocated_bytes = allocated_bytes
+                .checked_add(filesystem_tree_allocated_bytes(&entry?.path())?)
+                .ok_or_else(|| anyhow!("filesystem tree allocation exceeds u64"))?;
+        }
+    }
+    Ok(allocated_bytes)
 }
 
 #[test]
@@ -460,28 +515,15 @@ async fn initial_file_p3_parity(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    initial_file_p3_parity_with_backend(last_unique_id, deps, initial_file_system, None).await
+    initial_file_p3_parity_impl(last_unique_id, deps, initial_file_system).await
 }
 
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires the privileged managed XFS test runner"]
+#[timeout("2m")]
 #[tracing::instrument]
-async fn initial_file_p2_p3_parity_on_managed_xfs(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let root = managed_xfs_test_root();
-    initial_file_p3_parity_with_backend(last_unique_id, deps, initial_file_system, Some(root)).await
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the privileged managed XFS test runner"]
-#[tracing::instrument]
-async fn p2_p3_quota_exhaustion_on_managed_xfs(
+async fn p2_p3_quota_classification_on_managed_xfs(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
@@ -491,47 +533,19 @@ async fn p2_p3_quota_exhaustion_on_managed_xfs(
 
     let root = managed_xfs_test_root();
     let context = TestContext::new(last_unique_id);
-    let executor =
-        start_with_agent_storage_quota_on_managed_xfs(deps, &context, 1024 * 1024, root).await?;
+    let executor = start_with_agent_storage_quota_without_metering_on_managed_xfs(
+        deps,
+        &context,
+        1024 * 1024,
+        root,
+    )
+    .await?;
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
         .store()
         .await?;
-    let p2_agent = agent_id!("P3FileSystem", "managed-quota-p2");
-
-    let result = executor
-        .invoke_and_await_agent(&component, &p2_agent, "run_p2_quota_surface", data_value!())
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
-    let SchemaValue::List { elements } = result else {
-        panic!("expected list, got {result:?}")
-    };
-    assert_eq!(
-        elements,
-        vec![
-            SchemaValue::String("p2_wrote_before_limit=true".to_string()),
-            SchemaValue::String("p2_growth_denied=true".to_string()),
-        ]
-    );
-
-    let p3_within_quota_agent = agent_id!("P3FileSystem", "managed-quota-p3-within-limit");
-    let p3_within_quota = executor
-        .invoke_and_await_agent(
-            &component,
-            &p3_within_quota_agent,
-            "run_p3_with_quota",
-            data_value!(),
-        )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
-    assert_eq!(p3_within_quota, SchemaValue::Bool(true));
 
     let p2_exhaustion_agent = agent_id!("P3FileSystem", "managed-quota-p2-exhaustion");
-    let p2_exhaustion_worker = executor
-        .start_agent(&component.id, p2_exhaustion_agent.clone())
-        .await?;
     let p2_exhaustion = schema_string_list(
         executor
             .invoke_and_await_agent(
@@ -575,26 +589,8 @@ async fn p2_p3_quota_exhaustion_on_managed_xfs(
         &persisted_p2_prefix[1..],
         ["prefix-complete=true", "suffix-bytes=0"]
     );
-    executor.simulated_crash(&p2_exhaustion_worker).await?;
-    let reconstructed_p2_prefix = executor
-        .invoke_and_await_agent(
-            &component,
-            &p2_exhaustion_agent,
-            "inspect_p2_exhaustion",
-            data_value!(),
-        )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected reconstructed P2 failure prefix"))?;
-    assert_eq!(
-        schema_string_list(reconstructed_p2_prefix),
-        persisted_p2_prefix
-    );
 
     let p3_exhaustion_agent = agent_id!("P3FileSystem", "managed-quota-p3-exhaustion");
-    let p3_exhaustion_worker = executor
-        .start_agent(&component.id, p3_exhaustion_agent.clone())
-        .await?;
     let p3_exhaustion = executor
         .invoke_and_await_agent(
             &component,
@@ -640,238 +636,109 @@ async fn p2_p3_quota_exhaustion_on_managed_xfs(
         persisted_prefix.get(1).map(String::as_str),
         Some("prefix-complete=true")
     );
-    executor.simulated_crash(&p3_exhaustion_worker).await?;
-    let reconstructed_prefix = executor
-        .invoke_and_await_agent(
-            &component,
-            &p3_exhaustion_agent,
-            "inspect_p3_exhaustion",
-            data_value!(),
-        )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected reconstructed P3 failure prefix"))?;
-    assert_eq!(schema_string_list(reconstructed_prefix), persisted_prefix);
-
-    for (agent, method, expected) in [
-        (
-            agent_id!("P3FileSystem", "managed-quota-p2-matrix"),
-            "run_p2_quota_matrix",
-            vec![
-                "direct=true",
-                "positioned-stream=true",
-                "append=true",
-                "sparse-resize=true",
-                "overwrite=true",
-                "truncate=true",
-                "splice=true",
-                "hard-link=true",
-                "first-unlink=true",
-                "open-unlinked=true",
-                "rename-replace=true",
-                "grew=true",
-                "growth-denied=true",
-            ],
-        ),
-        (
-            agent_id!("P3FileSystem", "managed-quota-p3-matrix"),
-            "run_p3_quota_matrix",
-            vec![
-                "positioned-stream=true",
-                "append=true",
-                "sparse-resize=true",
-                "overwrite=true",
-                "truncate=true",
-                "hard-link=true",
-                "first-unlink=true",
-                "open-unlinked=true",
-                "rename-replace=true",
-                "growth-denied=true",
-            ],
-        ),
-    ] {
-        let result = executor
-            .invoke_and_await_agent(&component, &agent, method, data_value!())
-            .await?
-            .into_return_value()
-            .ok_or_else(|| anyhow!("expected return value from {method}"))?;
-        assert_eq!(schema_string_list(result), expected);
-    }
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
 fn fill_filesystem_leaving(path: &std::path::Path, reserve_bytes: u64) -> anyhow::Result<()> {
-    use std::io::Write;
+    use std::io::{Seek, SeekFrom, Write};
 
     let mut filler = std::fs::File::create(path)?;
-    let block = vec![0x7f; 1024 * 1024];
-    let mut length = 0u64;
+    let coarse_block = vec![0x7f; 1024 * 1024];
+    let fragment_size = filesystem_fragment_size(path)?;
+    let fragment_block = vec![0x7f; usize::try_from(fragment_size)?];
+    let mut committed_length = 0u64;
+    let mut consecutive_interrupts = 0;
+
     loop {
-        match filler.write(&block) {
-            Ok(0) => break,
-            Ok(written) => length += written as u64,
-            Err(error) if error.raw_os_error() == Some(28) => break,
+        match filler.write(&coarse_block) {
+            Ok(0) => return Err(std::io::Error::from(std::io::ErrorKind::WriteZero).into()),
+            Ok(written) => {
+                consecutive_interrupts = 0;
+                let candidate_length = committed_length
+                    .checked_add(written as u64)
+                    .ok_or_else(|| anyhow!("filesystem filler length exceeds u64"))?;
+                match filler.sync_all() {
+                    Ok(()) => committed_length = candidate_length,
+                    Err(error) if error.raw_os_error() == Some(libc::ENOSPC) => {
+                        filler.set_len(committed_length)?;
+                        filler.seek(SeekFrom::Start(committed_length))?;
+                        filler.sync_all()?;
+                        break;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                consecutive_interrupts += 1;
+                if consecutive_interrupts >= 8 {
+                    return Err(error.into());
+                }
+                continue;
+            }
+            Err(error) if error.raw_os_error() == Some(libc::ENOSPC) => break,
             Err(error) => return Err(error.into()),
         }
     }
-    filler.sync_all()?;
-    filler.set_len(length.saturating_sub(reserve_bytes))?;
+
+    filler.seek(SeekFrom::Start(committed_length))?;
+    let fine_start_available = filesystem_available_bytes(path)?;
+    let max_fine_attempts = fine_start_available
+        .checked_div(fragment_size)
+        .and_then(|fragments| fragments.checked_add(2))
+        .ok_or_else(|| anyhow!("filesystem filler refinement bound exceeds u64"))?;
+    for _ in 0..max_fine_attempts {
+        if filesystem_available_bytes(path)? < fragment_size {
+            break;
+        }
+        match filler.write(&fragment_block) {
+            Ok(0) => return Err(std::io::Error::from(std::io::ErrorKind::WriteZero).into()),
+            Ok(written) => {
+                let candidate_length = committed_length
+                    .checked_add(written as u64)
+                    .ok_or_else(|| anyhow!("filesystem filler length exceeds u64"))?;
+                match filler.sync_all() {
+                    Ok(()) => committed_length = candidate_length,
+                    Err(error) if error.raw_os_error() == Some(libc::ENOSPC) => {
+                        filler.set_len(committed_length)?;
+                        filler.seek(SeekFrom::Start(committed_length))?;
+                        filler.sync_all()?;
+                        break;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.raw_os_error() == Some(libc::ENOSPC) => break,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    if reserve_bytes > 0 {
+        let rounded_reserve = reserve_bytes
+            .checked_add(fragment_size - 1)
+            .and_then(|bytes| bytes.checked_div(fragment_size))
+            .and_then(|fragments| fragments.checked_mul(fragment_size))
+            .ok_or_else(|| anyhow!("filesystem filler reserve exceeds u64"))?;
+        filler.set_len(committed_length.saturating_sub(rounded_reserve))?;
+    }
     filler.sync_all()?;
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the privileged managed XFS test runner"]
-#[timeout("2m")]
-#[tracing::instrument]
-async fn p2_p3_mid_effect_enospc_reconstructs_on_unmanaged_filesystem(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+fn create_allocated_file(path: &std::path::Path, length: u64, fill_byte: u8) -> anyhow::Result<()> {
+    use std::io::Write;
 
-    let mount_root = managed_xfs_test_root();
-    let runtime_root = mount_root.join("unmanaged-mid-effect-runtime");
-    let filler_path = mount_root.join("unmanaged-mid-effect-filler");
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.deterministic_root_dir = Some(runtime_root.clone());
-                full_replay_config(config);
-            })),
-            ..TestExecutorOverrides::default()
-        },
-    )
-    .await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, initial_file_system)
-        .store()
-        .await?;
-
-    for (agent_id, exhaust_method, inspect_method) in [
-        (
-            agent_id!("P3FileSystem", "unmanaged-enospc-p2"),
-            "exhaust_p2_quota",
-            "inspect_p2_exhaustion",
-        ),
-        (
-            agent_id!("P3FileSystem", "unmanaged-enospc-p3"),
-            "exhaust_p3_quota",
-            "inspect_p3_exhaustion",
-        ),
-    ] {
-        let worker_id = executor
-            .start_agent(&component.id, agent_id.clone())
-            .await?;
-        fill_filesystem_leaving(&filler_path, 256 * 1024)?;
-        let failure = schema_string_list(
-            executor
-                .invoke_and_await_agent(&component, &agent_id, exhaust_method, data_value!())
-                .await?
-                .into_return_value()
-                .ok_or_else(|| anyhow!("expected {exhaust_method} result"))?,
-        );
-        assert_eq!(
-            failure.get(1).map(String::as_str),
-            Some("prefix-persisted=true")
-        );
-        std::fs::remove_file(&filler_path)?;
-
-        let persisted = schema_string_list(
-            executor
-                .invoke_and_await_agent(&component, &agent_id, inspect_method, data_value!())
-                .await?
-                .into_return_value()
-                .ok_or_else(|| anyhow!("expected {inspect_method} result"))?,
-        );
-        assert_eq!(
-            persisted.get(1).map(String::as_str),
-            Some("prefix-complete=true")
-        );
-        assert!(
-            persisted
-                .first()
-                .and_then(|entry| entry.strip_prefix("size="))
-                .and_then(|size| size.parse::<u64>().ok())
-                .is_some_and(|size| (4096..2 * 1024 * 1024 + 4096).contains(&size)),
-            "{exhaust_method} did not retain only its completed prefix: {persisted:?}"
-        );
-
-        executor.simulated_crash(&worker_id).await?;
-        let reconstructed = executor
-            .invoke_and_await_agent(&component, &agent_id, inspect_method, data_value!())
-            .await?
-            .into_return_value()
-            .ok_or_else(|| anyhow!("expected reconstructed {inspect_method} result"))?;
-        assert_eq!(schema_string_list(reconstructed), persisted);
+    let mut file = std::fs::File::create(path)?;
+    let block = vec![fill_byte; 1024 * 1024];
+    let mut remaining = length;
+    while remaining > 0 {
+        let write_size = usize::try_from(remaining.min(block.len() as u64))?;
+        file.write_all(&block[..write_size])?;
+        remaining -= write_size as u64;
     }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the privileged managed XFS test runner"]
-#[tracing::instrument]
-async fn p2_p3_object_quota_on_managed_xfs(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
-
-    let root = managed_xfs_test_root();
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_agent_storage_and_object_quota_on_managed_xfs(
-        deps,
-        &context,
-        16 * 1024 * 1024,
-        32,
-        root,
-    )
-    .await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, initial_file_system)
-        .store()
-        .await?;
-    let expected = vec![
-        "hard-link-same-inode=true",
-        "object-denied=true",
-        "directory-denied=true",
-        "symlink-denied=true",
-        "denied-while-open=true",
-    ];
-    for (agent, method, completion_method) in [
-        (
-            agent_id!("P3FileSystem", "managed-object-quota-p2"),
-            "run_p2_object_quota",
-            "complete_p2_object_quota_release",
-        ),
-        (
-            agent_id!("P3FileSystem", "managed-object-quota-p3"),
-            "run_p3_object_quota",
-            "complete_p3_object_quota_release",
-        ),
-    ] {
-        let result = executor
-            .invoke_and_await_agent(&component, &agent, method, data_value!())
-            .await?
-            .into_return_value()
-            .ok_or_else(|| anyhow!("expected return value from {method}"))?;
-        assert_eq!(schema_string_list(result), expected);
-        let admitted_after_close = executor
-            .invoke_and_await_agent(&component, &agent, completion_method, data_value!())
-            .await?
-            .into_return_value();
-        assert_eq!(admitted_after_close, Some(SchemaValue::Bool(true)));
-    }
+    file.sync_all()?;
+    assert_eq!(file.metadata()?.len(), length);
     Ok(())
 }
 
@@ -890,7 +757,7 @@ async fn filesystem_downgrade_blocks_guest_until_limit_recovers(
 
     let root = managed_xfs_test_root();
     let context = TestContext::new(last_unique_id);
-    let (executor, quota) = start_with_mutable_agent_storage_quota_on_managed_xfs(
+    let (executor, quota) = start_with_mutable_agent_storage_quota_without_metering_on_managed_xfs(
         deps,
         &context,
         1024 * 1024,
@@ -1013,6 +880,11 @@ async fn filesystem_downgrade_blocks_guest_until_limit_recovers(
         count_agent_invocation_pair_since(&recovered_oplog, before_blocked_invocation),
         (1, 1)
     );
+    assert_eq!(
+        quota.flush_durable_storage_byte_seconds(),
+        0,
+        "managed XFS quota enforcement must not accumulate storage usage when metering is disabled"
+    );
     Ok(())
 }
 
@@ -1120,31 +992,321 @@ async fn managed_xfs_resource_billing_survives_idle_and_replay(
     Ok(())
 }
 
-async fn initial_file_p3_parity_with_backend(
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the privileged managed XFS test runner"]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_write(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+    use std::io::{Seek, SeekFrom, Write};
+
+    const MINIMUM_AVAILABLE_BYTES: u64 = 64 * 1024 * 1024;
+    const TARGET_AVAILABLE_BYTES: u64 = 384 * 1024 * 1024;
+    const PROJECT_QUOTA_BYTES: u64 = 256 * 1024 * 1024;
+    const VICTIM_ALLOCATION_BYTES: u64 = 224 * 1024 * 1024;
+    const PRESSURE_GATE_BYTES: u64 = 224 * 1024 * 1024;
+    const POST_GATE_TARGET_MARGIN_BYTES: u64 = 32 * 1024 * 1024;
+
+    assert_eq!(
+        PROJECT_QUOTA_BYTES - VICTIM_ALLOCATION_BYTES,
+        32 * 1024 * 1024,
+        "the victim allocation must remain safely below its project quota"
+    );
+    assert!(VICTIM_ALLOCATION_BYTES < TARGET_AVAILABLE_BYTES);
+    assert_eq!(
+        VICTIM_ALLOCATION_BYTES + PRESSURE_GATE_BYTES - TARGET_AVAILABLE_BYTES,
+        64 * 1024 * 1024,
+        "victim and gate reclamation must retain margin above the recovery target"
+    );
+
+    let root = managed_xfs_test_root();
+    let allocation_unit = filesystem_fragment_size(&root)?;
+    let retry_contents = "r".repeat(usize::try_from(allocation_unit)?);
+    let context = TestContext::new(last_unique_id);
+    let default_pressure =
+        golem_worker_executor::services::golem_config::FilesystemPressureConfig::default();
+    let pressure = golem_worker_executor::services::golem_config::FilesystemPressureConfig::new(
+        MINIMUM_AVAILABLE_BYTES,
+        TARGET_AVAILABLE_BYTES,
+        default_pressure.minimum_available_filesystem_objects(),
+        default_pressure.target_available_filesystem_objects(),
+        200,
+        Duration::from_millis(25),
+    )
+    .unwrap();
+    let executor = start_with_agent_storage_quota_and_pressure_without_metering_on_managed_xfs(
+        deps,
+        &context,
+        PROJECT_QUOTA_BYTES,
+        root.clone(),
+        pressure,
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let victim = agent_id!("FileSystem", "physical-pressure-victim");
+    let victim_worker = executor.start_agent(&component.id, victim.clone()).await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &victim,
+            "write_file_direct",
+            data_value!("victim-marker", "loaded-idle"),
+        )
+        .await?;
+    executor
+        .wait_for_status(&victim_worker, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+    let victim_path = root
+        .join(context.default_environment_id.to_string())
+        .join(component.id.to_string())
+        .join(victim_worker.agent_name_encoded());
+    assert!(
+        victim_path.is_dir(),
+        "managed victim did not use the XFS root"
+    );
+    create_allocated_file(
+        &victim_path.join("pressure-allocation"),
+        VICTIM_ALLOCATION_BYTES,
+        0x5a,
+    )?;
+
+    let trigger = agent_id!("FileSystem", "physical-pressure-trigger");
+    let trigger_worker = executor.start_agent(&component.id, trigger.clone()).await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &trigger,
+            "write_file_direct",
+            data_value!("pressure-target", "seed"),
+        )
+        .await?;
+    executor
+        .wait_for_status(&trigger_worker, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+    let trigger_path = root
+        .join(context.default_environment_id.to_string())
+        .join(component.id.to_string())
+        .join(trigger_worker.agent_name_encoded());
+    assert!(
+        trigger_path.is_dir(),
+        "managed trigger did not use the XFS root"
+    );
+
+    let observation_gate = root.join(format!("pressure-target-gate-{}", uuid::Uuid::new_v4()));
+    create_allocated_file(&observation_gate, PRESSURE_GATE_BYTES, 0x6b)?;
+    let residual_probe_path = trigger_path.join("pressure-residual-probe");
+    let mut residual_probe = std::fs::File::create(&residual_probe_path)?;
+    assert_eq!(residual_probe.metadata()?.len(), 0);
+    let volume_filler = root.join(format!("pressure-volume-filler-{}", uuid::Uuid::new_v4()));
+    fill_filesystem_leaving(&volume_filler, 0)?;
+    assert_eq!(
+        residual_probe.metadata()?.len(),
+        0,
+        "pressure residual probe changed before its data-allocation proof"
+    );
+    let probe_start_available = filesystem_available_bytes(&root)?;
+    assert!(
+        probe_start_available < MINIMUM_AVAILABLE_BYTES,
+        "global filler did not cross the configured physical-pressure watermark: available={probe_start_available}"
+    );
+    let probe_fragment = vec![0x4d; usize::try_from(allocation_unit)?];
+    let max_probe_attempts = probe_start_available
+        .checked_div(allocation_unit)
+        .and_then(|fragments| fragments.checked_add(8))
+        .ok_or_else(|| anyhow!("pressure residual-probe bound exceeds u64"))?;
+    let mut probe_committed_bytes = 0u64;
+    let mut probe_failure = None;
+    let rollback_probe = |probe: &mut std::fs::File, committed_bytes: u64| -> anyhow::Result<()> {
+        probe.set_len(committed_bytes)?;
+        probe.seek(SeekFrom::Start(committed_bytes))?;
+        match probe.sync_all() {
+            Ok(()) => Ok(()),
+            Err(error) if error.raw_os_error() == Some(libc::ENOSPC) => {
+                probe.sync_all()?;
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
+        }
+    };
+    for _ in 0..max_probe_attempts {
+        residual_probe.seek(SeekFrom::Start(probe_committed_bytes))?;
+        match residual_probe.write_all(&probe_fragment) {
+            Ok(()) => match residual_probe.sync_all() {
+                Ok(()) => {
+                    probe_committed_bytes = probe_committed_bytes
+                        .checked_add(allocation_unit)
+                        .ok_or_else(|| anyhow!("pressure residual-probe length exceeds u64"))?;
+                }
+                Err(error) if error.raw_os_error() == Some(libc::ENOSPC) => {
+                    rollback_probe(&mut residual_probe, probe_committed_bytes)?;
+                    probe_failure = Some(error);
+                    break;
+                }
+                Err(error) => return Err(error.into()),
+            },
+            Err(error) if error.raw_os_error() == Some(libc::ENOSPC) => {
+                rollback_probe(&mut residual_probe, probe_committed_bytes)?;
+                probe_failure = Some(error);
+                break;
+            }
+            Err(error) if error.raw_os_error() == Some(libc::EDQUOT) => {
+                return Err(anyhow!(
+                    "pressure residual probe hit the trigger project quota instead of physical ENOSPC"
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let probe_failure = probe_failure.ok_or_else(|| {
+        anyhow!("pressure residual probe never reached physical ENOSPC within its bounded attempts")
+    })?;
+    assert_eq!(probe_failure.raw_os_error(), Some(libc::ENOSPC));
+    let trigger_project_allocated_bytes = filesystem_tree_allocated_bytes(&trigger_path)?;
+    assert!(
+        trigger_project_allocated_bytes < PROJECT_QUOTA_BYTES / 2,
+        "pressure residual probe approached the trigger project quota: allocated={trigger_project_allocated_bytes}, quota={PROJECT_QUOTA_BYTES}"
+    );
+
+    let before_invocation = filesystem_available_bytes(&root)?;
+    assert!(
+        before_invocation < MINIMUM_AVAILABLE_BYTES,
+        "test setup did not cross the configured physical-pressure watermark"
+    );
+    assert_eq!(
+        std::fs::read(trigger_path.join("pressure-target"))?,
+        b"seed",
+        "pressure target changed before the exhausting invocation"
+    );
+
+    let invocation = executor.invoke_and_await_agent(
+        &component,
+        &trigger,
+        "pwrite_file",
+        data_value!("/pressure-target", allocation_unit, retry_contents.clone()),
+    );
+    let observation_barrier = async {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while victim_path.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow!("pressure victim was not deleted"))?;
+        let before_gate_release = filesystem_available_bytes(&root)?;
+        assert!(
+            before_gate_release > before_invocation,
+            "verified victim deletion did not increase fresh available capacity"
+        );
+        assert!(
+            before_gate_release < TARGET_AVAILABLE_BYTES,
+            "victim deletion unexpectedly reached the configured target before the observation gate was released: available={before_gate_release}"
+        );
+        let minimum_margin_setup = TARGET_AVAILABLE_BYTES
+            .saturating_sub(PRESSURE_GATE_BYTES)
+            .saturating_add(POST_GATE_TARGET_MARGIN_BYTES);
+        assert!(
+            before_gate_release >= minimum_margin_setup,
+            "victim deletion left insufficient gate-release margin: available={before_gate_release}, required={minimum_margin_setup}"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            std::fs::read(trigger_path.join("pressure-target"))?,
+            b"seed",
+            "safe write retried before a fresh observation could reach the configured target"
+        );
+
+        std::fs::remove_file(&observation_gate)?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let available = filesystem_available_bytes(&root)?;
+                if available >= TARGET_AVAILABLE_BYTES {
+                    return Ok::<(u64, u64), anyhow::Error>((before_gate_release, available));
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow!("fresh statvfs observation did not reach the configured target"))?
+    };
+    let (retried, observed_target) = tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::join!(invocation, observation_barrier)
+    })
+    .await
+    .expect("physical-pressure recovery did not finish");
+    let retried = retried?;
+    let (before_gate_release, observed_target) = observed_target?;
+    assert!(observed_target >= TARGET_AVAILABLE_BYTES);
+    assert!(
+        observed_target > before_gate_release,
+        "removing the observation gate did not increase fresh available capacity"
+    );
+    assert!(matches!(
+        retried.into_return_value(),
+        Some(SchemaValue::Result(ResultValuePayload::Ok { .. }))
+    ));
+
+    assert!(
+        !victim_path.exists(),
+        "pressure recovery reported success before verified victim deletion"
+    );
+    assert!(
+        trigger_path.is_dir(),
+        "pressure recovery unloaded the running trigger"
+    );
+    let contents = executor
+        .invoke_and_await_agent(
+            &component,
+            &trigger,
+            "read_file",
+            data_value!("/pressure-target"),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected pressure target contents"))?;
+    let SchemaValue::Result(ResultValuePayload::Ok { value: Some(value) }) = contents else {
+        panic!("expected successful pressure target read, got {contents:?}")
+    };
+    let SchemaValue::String(contents) = *value else {
+        panic!("expected pressure target string contents")
+    };
+    assert_eq!(contents.len() as u64, allocation_unit * 2);
+    assert_eq!(&contents.as_bytes()[..4], b"seed");
+    assert!(
+        contents.as_bytes()[4..allocation_unit as usize]
+            .iter()
+            .all(|byte| *byte == 0)
+    );
+    assert_eq!(
+        &contents.as_bytes()[allocation_unit as usize..],
+        retry_contents.as_bytes()
+    );
+
+    drop(residual_probe);
+    std::fs::remove_file(residual_probe_path)?;
+    std::fs::remove_file(volume_filler)?;
+    executor.delete_worker(&trigger_worker).await?;
+    Ok(())
+}
+
+async fn initial_file_p3_parity_impl(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     initial_file_system: &PrecompiledComponent,
-    managed_xfs_root: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
 
     let context = TestContext::new(last_unique_id);
-    let executor = match managed_xfs_root {
-        Some(root) => {
-            start_with_overrides(
-                deps,
-                &context,
-                TestExecutorOverrides {
-                    configure: Some(Arc::new(move |config| {
-                        config.filesystem_storage.managed_xfs_root_dir = Some(root.clone());
-                    })),
-                    ..TestExecutorOverrides::default()
-                },
-            )
-            .await?
-        }
-        None => start(deps, &context).await?,
-    };
+    let executor = start(deps, &context).await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
@@ -1263,6 +1425,238 @@ async fn initial_file_p3_parity_with_backend(
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "run with integration-tests/scripts/managed-filesystem/run-lima.sh --filesystem-benchmark"]
+#[timeout("30m")]
+async fn filesystem_guest_latency_benchmark(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+    use std::fs;
+
+    fn percentile(sorted: &[u64], percentile: usize) -> u64 {
+        sorted[(sorted.len() - 1) * percentile / 100]
+    }
+
+    let mode = std::env::var("GOLEM_FILESYSTEM_BENCH_MODE").map_err(|_| {
+        anyhow!("GOLEM_FILESYSTEM_BENCH_MODE must be managed, managed-unmetered, or unmanaged")
+    })?;
+    let root = std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow!("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS root"))?;
+    let context = TestContext::new(last_unique_id);
+    let executor = match mode.as_str() {
+        "managed" => {
+            start_with_agent_storage_quota_on_managed_xfs(deps, &context, 128 * 1024 * 1024, root)
+                .await?
+        }
+        "managed-unmetered" => {
+            start_with_agent_storage_quota_without_metering_on_managed_xfs(
+                deps,
+                &context,
+                128 * 1024 * 1024,
+                root,
+            )
+            .await?
+        }
+        "unmanaged" => {
+            let unmanaged_root = root.join("unmanaged-benchmark");
+            fs::create_dir_all(&unmanaged_root)?;
+            start_with_overrides(
+                deps,
+                &context,
+                TestExecutorOverrides {
+                    configure: Some(Arc::new(move |config| {
+                        config.filesystem_storage.deterministic_root_dir =
+                            Some(unmanaged_root.clone());
+                        config.resource_usage_metering = Default::default();
+                        config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
+                        config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
+                    })),
+                    ..TestExecutorOverrides::default()
+                },
+            )
+            .await?
+        }
+        other => return Err(anyhow!("unsupported filesystem benchmark mode: {other}")),
+    };
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+
+    let quick = std::env::var("GOLEM_FILESYSTEM_BENCH_QUICK").is_ok_and(|value| value == "1");
+    let concurrencies: &[usize] = if quick { &[1] } else { &[1, 4, 16, 64] };
+    let payloads: &[u32] = if quick {
+        &[4 * 1024]
+    } else {
+        &[4 * 1024, 64 * 1024, 1024 * 1024]
+    };
+    let max_concurrency = *concurrencies.last().unwrap();
+    let agent_ids = (0..max_concurrency)
+        .map(|index| {
+            agent_id!(
+                "P3FileSystem",
+                format!("filesystem-benchmark-{mode}-{index}")
+            )
+        })
+        .collect::<Vec<_>>();
+    let starts = agent_ids
+        .iter()
+        .map(|agent_id| executor.start_agent(&component.id, agent_id.clone()));
+    for started in futures::future::join_all(starts).await {
+        started?;
+    }
+
+    let operations = [
+        "p2-read",
+        "p2-write",
+        "p2-read-stream",
+        "p2-write-stream",
+        "p3-read-stream",
+        "p3-write-stream",
+    ];
+    for &concurrency in concurrencies {
+        let clock_samples: u32 = if quick { 8 } else { 128 };
+        println!(
+            "FILESYSTEM_BENCHMARK_PHASE {}",
+            serde_json::json!({
+                "state": "start",
+                "mode": mode,
+                "operation": "clock",
+                "payload_bytes": 0,
+                "concurrency": concurrency,
+            })
+        );
+        let clock_calls = agent_ids[..concurrency].iter().map(|agent_id| {
+            executor.invoke_and_await_agent(
+                &component,
+                agent_id,
+                "benchmark_filesystem",
+                data_value!("clock".to_string(), 0u32, clock_samples, 1u32),
+            )
+        });
+        let mut clock_durations = Vec::new();
+        for result in futures::future::join_all(clock_calls).await {
+            let value = result?
+                .into_return_value()
+                .ok_or_else(|| anyhow!("clock benchmark did not return samples"))?;
+            clock_durations.extend(schema_u64_list(value));
+        }
+        clock_durations.sort_unstable();
+        println!(
+            "FILESYSTEM_BENCHMARK_PHASE {}",
+            serde_json::json!({
+                "state": "end",
+                "mode": mode,
+                "operation": "clock",
+                "payload_bytes": 0,
+                "concurrency": concurrency,
+            })
+        );
+        println!(
+            "FILESYSTEM_BENCHMARK {}",
+            serde_json::json!({
+                "mode": mode,
+                "operation": "clock",
+                "payload_bytes": 0,
+                "concurrency": concurrency,
+                "batch_size": 1,
+                "sample_count": clock_durations.len(),
+                "p50_ns": percentile(&clock_durations, 50),
+                "p95_ns": percentile(&clock_durations, 95),
+                "p99_ns": percentile(&clock_durations, 99),
+            })
+        );
+
+        for &payload_size in payloads {
+            let samples: u32 = if quick {
+                8
+            } else if payload_size <= 4 * 1024 {
+                128
+            } else if payload_size <= 64 * 1024 {
+                64
+            } else {
+                16
+            };
+            for operation in operations {
+                let batch_size: u32 = match (operation, payload_size) {
+                    ("p2-read" | "p2-write" | "p2-read-stream" | "p2-write-stream", size)
+                        if size <= 4 * 1024 =>
+                    {
+                        4
+                    }
+                    ("p2-read" | "p2-write" | "p2-read-stream" | "p2-write-stream", size)
+                        if size <= 64 * 1024 =>
+                    {
+                        2
+                    }
+                    _ => 1,
+                };
+                println!(
+                    "FILESYSTEM_BENCHMARK_PHASE {}",
+                    serde_json::json!({
+                        "state": "start",
+                        "mode": mode,
+                        "operation": operation,
+                        "payload_bytes": payload_size,
+                        "concurrency": concurrency,
+                    })
+                );
+                let calls = agent_ids[..concurrency].iter().map(|agent_id| {
+                    executor.invoke_and_await_agent(
+                        &component,
+                        agent_id,
+                        "benchmark_filesystem",
+                        data_value!(operation.to_string(), payload_size, samples, batch_size),
+                    )
+                });
+                let mut durations = Vec::new();
+                for result in futures::future::join_all(calls).await {
+                    let value = result?
+                        .into_return_value()
+                        .ok_or_else(|| anyhow!("filesystem benchmark did not return samples"))?;
+                    durations.extend(schema_u64_list(value));
+                }
+                durations.sort_unstable();
+                println!(
+                    "FILESYSTEM_BENCHMARK_PHASE {}",
+                    serde_json::json!({
+                        "state": "end",
+                        "mode": mode,
+                        "operation": operation,
+                        "payload_bytes": payload_size,
+                        "concurrency": concurrency,
+                    })
+                );
+                let total = durations
+                    .iter()
+                    .fold(0u128, |total, duration| total + u128::from(*duration));
+                println!(
+                    "FILESYSTEM_BENCHMARK {}",
+                    serde_json::json!({
+                        "mode": mode,
+                        "operation": operation,
+                        "payload_bytes": payload_size,
+                        "concurrency": concurrency,
+                        "batch_size": batch_size,
+                        "sample_count": durations.len(),
+                        "mean_ns": total / durations.len() as u128,
+                        "p50_ns": percentile(&durations, 50),
+                        "p95_ns": percentile(&durations, 95),
+                        "p99_ns": percentile(&durations, 99),
+                    })
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
@@ -1272,13 +1666,7 @@ async fn filesystem_mutation_histories_reconstruct_from_full_replay(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    filesystem_mutation_histories_reconstruct_with_backend(
-        last_unique_id,
-        deps,
-        initial_file_system,
-        None,
-    )
-    .await
+    filesystem_mutation_histories_reconstruct_impl(last_unique_id, deps, initial_file_system).await
 }
 
 #[test]
@@ -1328,31 +1716,10 @@ async fn cross_preview_append_coordination_survives_replay(
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the privileged managed XFS test runner"]
-#[timeout("2m")]
-#[tracing::instrument]
-async fn filesystem_mutation_histories_reconstruct_on_managed_xfs(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    filesystem_mutation_histories_reconstruct_with_backend(
-        last_unique_id,
-        deps,
-        initial_file_system,
-        Some(managed_xfs_test_root()),
-    )
-    .await
-}
-
-async fn filesystem_mutation_histories_reconstruct_with_backend(
+async fn filesystem_mutation_histories_reconstruct_impl(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     initial_file_system: &PrecompiledComponent,
-    managed_xfs_root: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
 
@@ -1361,12 +1728,7 @@ async fn filesystem_mutation_histories_reconstruct_with_backend(
         deps,
         &context,
         TestExecutorOverrides {
-            configure: Some(Arc::new(move |config| {
-                if let Some(root) = &managed_xfs_root {
-                    config.filesystem_storage.managed_xfs_root_dir = Some(root.clone());
-                }
-                full_replay_config(config);
-            })),
+            configure: Some(Arc::new(full_replay_config)),
             ..TestExecutorOverrides::default()
         },
     )
@@ -1442,40 +1804,18 @@ async fn filesystem_reconstruction_stops_at_exact_revert_target(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    filesystem_reconstruction_stops_at_exact_revert_target_with_backend(
+    filesystem_reconstruction_stops_at_exact_revert_target_impl(
         last_unique_id,
         deps,
         initial_file_system,
-        None,
     )
     .await
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the privileged managed XFS test runner"]
-#[timeout("2m")]
-#[tracing::instrument]
-async fn filesystem_reconstruction_stops_at_exact_revert_target_on_managed_xfs(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    filesystem_reconstruction_stops_at_exact_revert_target_with_backend(
-        last_unique_id,
-        deps,
-        initial_file_system,
-        Some(managed_xfs_test_root()),
-    )
-    .await
-}
-
-async fn filesystem_reconstruction_stops_at_exact_revert_target_with_backend(
+async fn filesystem_reconstruction_stops_at_exact_revert_target_impl(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     initial_file_system: &PrecompiledComponent,
-    managed_xfs_root: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
 
@@ -1484,12 +1824,7 @@ async fn filesystem_reconstruction_stops_at_exact_revert_target_with_backend(
         deps,
         &context,
         TestExecutorOverrides {
-            configure: Some(Arc::new(move |config| {
-                if let Some(root) = &managed_xfs_root {
-                    config.filesystem_storage.managed_xfs_root_dir = Some(root.clone());
-                }
-                full_replay_config(config);
-            })),
+            configure: Some(Arc::new(full_replay_config)),
             ..TestExecutorOverrides::default()
         },
     )
@@ -1555,40 +1890,18 @@ async fn filesystem_reconstruction_uses_updated_initial_files(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    filesystem_reconstruction_uses_updated_initial_files_with_backend(
+    filesystem_reconstruction_uses_updated_initial_files_impl(
         last_unique_id,
         deps,
         initial_file_system,
-        None,
     )
     .await
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the privileged managed XFS test runner"]
-#[timeout("2m")]
-#[tracing::instrument]
-async fn filesystem_reconstruction_uses_updated_initial_files_on_managed_xfs(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    filesystem_reconstruction_uses_updated_initial_files_with_backend(
-        last_unique_id,
-        deps,
-        initial_file_system,
-        Some(managed_xfs_test_root()),
-    )
-    .await
-}
-
-async fn filesystem_reconstruction_uses_updated_initial_files_with_backend(
+async fn filesystem_reconstruction_uses_updated_initial_files_impl(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     initial_file_system: &PrecompiledComponent,
-    managed_xfs_root: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
 
@@ -1597,12 +1910,7 @@ async fn filesystem_reconstruction_uses_updated_initial_files_with_backend(
         deps,
         &context,
         TestExecutorOverrides {
-            configure: Some(Arc::new(move |config| {
-                if let Some(root) = &managed_xfs_root {
-                    config.filesystem_storage.managed_xfs_root_dir = Some(root.clone());
-                }
-                full_replay_config(config);
-            })),
+            configure: Some(Arc::new(full_replay_config)),
             ..TestExecutorOverrides::default()
         },
     )
@@ -1688,40 +1996,18 @@ async fn filesystem_full_replay_survives_lifecycle_transitions(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    filesystem_full_replay_survives_lifecycle_transitions_with_backend(
+    filesystem_full_replay_survives_lifecycle_transitions_impl(
         last_unique_id,
         deps,
         initial_file_system,
-        None,
     )
     .await
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the privileged managed XFS test runner"]
-#[timeout("2m")]
-#[tracing::instrument]
-async fn filesystem_full_replay_survives_managed_xfs_lifecycle_transitions(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    filesystem_full_replay_survives_lifecycle_transitions_with_backend(
-        last_unique_id,
-        deps,
-        initial_file_system,
-        Some(managed_xfs_test_root()),
-    )
-    .await
-}
-
-async fn filesystem_full_replay_survives_lifecycle_transitions_with_backend(
+async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     initial_file_system: &PrecompiledComponent,
-    managed_xfs_root: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     use golem_api_grpc::proto::golem::shardmanager::ShardId;
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -1732,31 +2018,15 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_with_backend(
     let context = TestContext::new(last_unique_id);
     let first_root = tempfile::tempdir()?;
     let second_root = tempfile::tempdir()?;
-    let managed = managed_xfs_root.is_some();
-    let (first_backend_root, second_backend_root) = match managed_xfs_root {
-        Some(root) => {
-            let first = root.join("lifecycle-first-executor");
-            let second = root.join("lifecycle-second-executor");
-            std::fs::create_dir_all(&first)?;
-            std::fs::create_dir_all(&second)?;
-            (first, second)
-        }
-        None => (
-            first_root.path().to_path_buf(),
-            second_root.path().to_path_buf(),
-        ),
-    };
+    let first_backend_root = first_root.path().to_path_buf();
+    let second_backend_root = second_root.path().to_path_buf();
     let root = first_backend_root;
     let executor = start_with_overrides(
         deps,
         &context,
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                if managed {
-                    config.filesystem_storage.managed_xfs_root_dir = Some(root.clone());
-                } else {
-                    config.filesystem_storage.deterministic_root_dir = Some(root.clone());
-                }
+                config.filesystem_storage.deterministic_root_dir = Some(root.clone());
                 full_replay_config(config);
             })),
             ..TestExecutorOverrides::default()
@@ -1844,11 +2114,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_with_backend(
         &context,
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                if managed {
-                    config.filesystem_storage.managed_xfs_root_dir = Some(root.clone());
-                } else {
-                    config.filesystem_storage.deterministic_root_dir = Some(root.clone());
-                }
+                config.filesystem_storage.deterministic_root_dir = Some(root.clone());
                 full_replay_config(config);
             })),
             ..TestExecutorOverrides::default()

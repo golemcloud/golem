@@ -15,7 +15,6 @@
 use crate::services::byte_time_accumulator::{ByteTimeAccumulator, ByteTimeSettlement};
 use crate::services::resource_limits::AtomicResourceEntry;
 use golem_common::model::agent::AgentMode;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
@@ -24,7 +23,7 @@ pub(crate) const BYTE_NANOSECONDS_PER_GB_SECOND: u128 = (1024_u128 * 1024 * 1024
 #[derive(Clone, Debug)]
 /// Leaf meter for linear-memory byte-time and memory-limit state.
 ///
-/// `AgentResourceBilling` owns permit-window lifecycle transitions and invokes this meter
+/// `ResourceUsageMeter` owns permit-window lifecycle transitions and invokes this meter
 /// under the transition lock shared with filesystem storage accounting.
 pub struct AgentMemoryMeter {
     inner: Arc<Inner>,
@@ -33,8 +32,6 @@ pub struct AgentMemoryMeter {
 struct Inner {
     mode: AgentMode,
     entry: Weak<AtomicResourceEntry>,
-    protected_bytes: AtomicU64,
-    limit_exceeded: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     state: Mutex<State>,
 }
 
@@ -42,7 +39,6 @@ impl std::fmt::Debug for Inner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Inner")
             .field("mode", &self.mode)
-            .field("protected_bytes", &self.protected_bytes)
             .field("state", &self.state)
             .finish_non_exhaustive()
     }
@@ -68,8 +64,6 @@ impl AgentMemoryMeter {
             inner: Arc::new(Inner {
                 mode,
                 entry: Arc::downgrade(&entry),
-                protected_bytes: AtomicU64::new(bytes),
-                limit_exceeded: Mutex::new(None),
                 state: Mutex::new(State {
                     bytes,
                     active,
@@ -80,39 +74,12 @@ impl AgentMemoryMeter {
         }
     }
 
-    pub(crate) fn set_protected_bytes(&self, bytes: u64) {
-        self.inner.protected_bytes.store(bytes, Ordering::Release);
-    }
-
-    pub(crate) fn set_limit_exceeded_callback(&self, callback: Arc<dyn Fn() + Send + Sync>) {
-        *self.inner.limit_exceeded.lock().unwrap() = Some(callback);
-    }
-
-    pub(crate) fn enforce_limit(&self, limit: u64) {
-        if self.protected_bytes_exceed(limit)
-            && let Some(callback) = self.inner.limit_exceeded.lock().unwrap().as_ref()
-        {
-            callback();
-        }
-    }
-
-    pub(crate) fn exceeds_current_limit(&self) -> bool {
-        self.inner
-            .entry
-            .upgrade()
-            .is_some_and(|entry| self.protected_bytes_exceed(entry.max_memory_limit() as u64))
-    }
-
-    fn protected_bytes_exceed(&self, limit: u64) -> bool {
-        self.inner.protected_bytes.load(Ordering::Acquire) > limit
-    }
-
     pub fn is_same_meter(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 
     /// Changes only memory metering. Resource-window lifecycle transitions must use
-    /// `AgentResourceBilling` so filesystem storage changes at the same timestamp.
+    /// `ResourceUsageMeter` so filesystem storage changes at the same timestamp.
     pub fn resume(&self, bytes: u64, now: Instant) -> bool {
         self.inner.transition(now, |state| {
             if state.stopped {
@@ -126,13 +93,13 @@ impl AgentMemoryMeter {
     }
 
     /// Changes only memory metering. Resource-window lifecycle transitions must use
-    /// `AgentResourceBilling` so filesystem storage changes at the same timestamp.
+    /// `ResourceUsageMeter` so filesystem storage changes at the same timestamp.
     pub fn pause(&self, now: Instant) {
         self.inner.transition(now, |state| state.active = false);
     }
 
     /// Changes only memory metering. Resource-window lifecycle transitions must use
-    /// `AgentResourceBilling` so filesystem storage changes at the same timestamp.
+    /// `ResourceUsageMeter` so filesystem storage changes at the same timestamp.
     pub fn stop(&self, now: Instant) {
         let settlement = {
             let mut state = self.inner.state.lock().unwrap();
@@ -154,10 +121,6 @@ impl AgentMemoryMeter {
         self.inner.transition(now, |state| state.bytes = bytes);
     }
 
-    pub(crate) fn sample(&self, now: Instant) {
-        self.inner.transition(now, |_| {});
-    }
-
     pub fn flush(&self, now: Instant) {
         let units = self.take_units(now);
         self.inner.record(units);
@@ -171,17 +134,6 @@ impl AgentMemoryMeter {
 
     pub(crate) fn take_settlement(&self) -> ByteTimeSettlement {
         self.inner.state.lock().unwrap().take_settlement()
-    }
-
-    pub(crate) fn take_abort_settlement(&self) -> Option<ByteTimeSettlement> {
-        let mut state = self.inner.state.lock().unwrap();
-        if state.stopped {
-            None
-        } else {
-            state.active = false;
-            state.stopped = true;
-            Some(state.take_settlement())
-        }
     }
 }
 
@@ -232,7 +184,6 @@ impl Drop for Inner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
     use test_r::test;
 
@@ -320,22 +271,6 @@ mod tests {
 
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 0);
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Ephemeral), 1);
-    }
-
-    #[test]
-    fn lowered_limit_notifies_an_over_limit_meter() {
-        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let meter = AgentMemoryMeter::new(AgentMode::Durable, 10, true, entry, Instant::now());
-        meter.set_protected_bytes(20);
-        let notified = Arc::new(AtomicBool::new(false));
-        let notified_clone = notified.clone();
-        meter.set_limit_exceeded_callback(Arc::new(move || {
-            notified_clone.store(true, Ordering::Release);
-        }));
-
-        meter.enforce_limit(10);
-
-        assert!(notified.load(Ordering::Acquire));
     }
 
     #[test]

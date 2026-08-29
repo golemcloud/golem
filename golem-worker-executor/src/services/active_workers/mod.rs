@@ -28,24 +28,23 @@ use component_charge::{ChargeSource, ComponentChargeGuard, ComponentChargeRegist
 pub use concurrent_agents_scheduler::{ConcurrentAgentPermit, ConcurrentAgentsScheduler};
 pub use concurrent_agents_semaphore::ConcurrentAgentsSemaphore;
 use memory_probe::{MemoryProbe, default_probe};
-use std::future::Future;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use tracing::{Instrument, debug};
 
 use crate::services::HasAll;
-use crate::services::agent_filesystem::{
-    AgentFilesystems, FilesystemCapacity, FilesystemPressureOperation, FilesystemStorageError,
-};
+use crate::services::agent_filesystem::{AgentFilesystems, FilesystemStorageError};
 use crate::services::card_interest::CardInterestIndex;
 use crate::services::golem_config::{
-    AgentStatusFlushConfig, FilesystemPressureConfig, FilesystemStorageConfig, MemoryConfig,
+    AgentStatusFlushConfig, FilesystemStorageConfig, MemoryConfig,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::worker::status_flusher::AgentStatusFlushQueue;
-use crate::worker::{EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, Worker};
+use crate::worker::{
+    EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, UnloadRequest, Worker,
+};
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
@@ -94,8 +93,9 @@ pub struct ActiveWorkers<Ctx: WorkerCtx> {
     /// module charge.
     component_size_coefficient: f64,
     status_flush_queue: Arc<AgentStatusFlushQueue>,
-    filesystem_pressure_recovery: tokio::sync::Mutex<()>,
 }
+
+pub(crate) type ActiveAgents<Ctx> = ActiveWorkers<Ctx>;
 
 /// Identifies a compiled component for module-charge accounting.
 type ComponentChargeKey = (ComponentId, ComponentRevision);
@@ -164,7 +164,6 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 agent_status_flush_config.max_concurrency,
                 shutdown_token,
             ),
-            filesystem_pressure_recovery: tokio::sync::Mutex::new(()),
         };
         active_workers.initialize_metrics();
         Ok(active_workers)
@@ -177,28 +176,6 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
     pub(crate) fn agent_filesystems(&self) -> Arc<AgentFilesystems> {
         Arc::clone(&self.agent_filesystems)
-    }
-
-    pub(crate) async fn recover_filesystem_pressure(
-        &self,
-        operation: FilesystemPressureOperation,
-        deadline: Instant,
-    ) -> bool {
-        let Ok(_recovery) = tokio::time::timeout_at(
-            tokio::time::Instant::from_std(deadline),
-            self.filesystem_pressure_recovery.lock(),
-        )
-        .await
-        else {
-            return false;
-        };
-        recover_filesystem_pressure_from(
-            self,
-            self.agent_filesystems.pressure_policy(),
-            operation,
-            deadline,
-        )
-        .await
     }
 
     /// Acquire (or share) the per-component module charge for a worker of the
@@ -458,210 +435,72 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     }
 }
 
-struct WorkerFilesystemPressureCandidate<Ctx: WorkerCtx> {
-    agent_id: AgentId,
+pub(crate) struct FilesystemPressureVictim<Ctx: WorkerCtx> {
+    stable_agent_id: String,
+    eligible_since: u64,
     worker: Arc<Worker<Ctx>>,
     eligibility: FilesystemPressureEligibility,
 }
 
-#[async_trait]
-trait FilesystemPressureRecoverySource {
-    type Candidate: Send;
-
-    async fn capacity(&self) -> Result<FilesystemCapacity, String>;
-    async fn candidates(&self) -> Vec<Self::Candidate>;
-    fn candidate_name(&self, candidate: &Self::Candidate) -> String;
-    async fn evict(
-        &self,
-        candidate: Self::Candidate,
-        deadline: Instant,
-    ) -> Option<EvictionStopOutcome>;
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> FilesystemPressureRecoverySource for ActiveWorkers<Ctx> {
-    type Candidate = WorkerFilesystemPressureCandidate<Ctx>;
-
-    async fn capacity(&self) -> Result<FilesystemCapacity, String> {
-        self.agent_filesystems
-            .observe_capacity()
-            .await
-            .map_err(|error| error.to_string())
+impl<Ctx: WorkerCtx> FilesystemPressureVictim<Ctx> {
+    pub(crate) fn stable_agent_id(&self) -> &str {
+        &self.stable_agent_id
     }
 
-    async fn candidates(&self) -> Vec<Self::Candidate> {
-        let mut candidates = Vec::new();
-        for (agent_id, worker) in self.workers.iter().await {
-            if worker.eviction_class().await == Some(EvictionClass::LoadedIdle) {
-                let Some(eligibility) = worker.filesystem_pressure_eligibility().await else {
-                    continue;
-                };
-                candidates.push((
-                    Worker::<Ctx>::filesystem_pressure_eligible_since(eligibility),
-                    agent_id.to_string(),
-                    WorkerFilesystemPressureCandidate {
-                        agent_id,
-                        worker,
-                        eligibility,
-                    },
-                ));
-            }
-        }
-        sort_filesystem_pressure_candidates(&mut candidates);
-        candidates
-            .into_iter()
-            .map(|(_, _, candidate)| candidate)
-            .collect()
-    }
-
-    fn candidate_name(&self, candidate: &Self::Candidate) -> String {
-        candidate.agent_id.to_string()
-    }
-
-    async fn evict(
-        &self,
-        candidate: Self::Candidate,
-        deadline: Instant,
-    ) -> Option<EvictionStopOutcome> {
-        let eviction = async move {
-            let outcome = candidate
-                .worker
-                .stop_if_evictable_with_outcome(
-                    EvictionClass::LoadedIdle,
-                    Some(candidate.eligibility),
-                )
-                .await;
-            if outcome == EvictionStopOutcome::Unloaded {
-                crate::metrics::workers::record_worker_eviction("FilesystemPressureLoadedIdle");
-            }
-            outcome
-        };
-        match spawn_before_deadline(deadline, eviction).await {
-            Some(Ok(outcome)) => Some(outcome),
-            Some(Err(error)) => {
-                tracing::warn!(error = %error, "Filesystem pressure eviction task failed");
-                None
-            }
-            None => None,
-        }
+    pub(crate) fn eligible_since(&self) -> u64 {
+        self.eligible_since
     }
 }
 
-fn sort_filesystem_pressure_candidates<T>(candidates: &mut [(u64, String, T)]) {
-    candidates.sort_by(|left, right| (left.0, left.1.as_str()).cmp(&(right.0, right.1.as_str())));
-}
-
-async fn recover_filesystem_pressure_from<S: FilesystemPressureRecoverySource>(
-    source: &S,
-    policy: &FilesystemPressureConfig,
-    operation: FilesystemPressureOperation,
-    deadline: Instant,
-) -> bool {
-    if Instant::now() >= deadline {
-        return false;
-    }
-    let initial = match before_deadline(deadline, source.capacity()).await {
-        Some(Ok(capacity)) => capacity,
-        Some(Err(error)) => {
-            tracing::warn!(
-                error,
-                "Failed to observe filesystem capacity before pressure recovery"
-            );
-            return false;
-        }
-        None => return false,
-    };
-    let Some(mut pressure) = policy.pressure(operation, initial) else {
-        return false;
-    };
-
-    let Some(candidates) = before_deadline(deadline, source.candidates()).await else {
-        return false;
-    };
-    for candidate in candidates {
-        if Instant::now() >= deadline {
-            return false;
-        }
-        let candidate_name = source.candidate_name(&candidate);
-        let before = match before_deadline(deadline, source.capacity()).await {
-            Some(Ok(capacity)) => capacity,
-            Some(Err(error)) => {
-                tracing::warn!(
-                    error,
-                    "Failed to observe filesystem capacity before pressure eviction"
-                );
-                return false;
-            }
-            None => return false,
-        };
-        pressure = pressure.include(policy.pressure(operation, before));
-        if policy.target_reached(pressure, before) {
-            return true;
-        }
-
-        let Some(outcome) = source.evict(candidate, deadline).await else {
-            return false;
-        };
-        match outcome {
-            EvictionStopOutcome::Ineligible => continue,
-            EvictionStopOutcome::CleanupFailed => {
-                tracing::warn!(
-                    agent_id = candidate_name,
-                    "Filesystem pressure victim cleanup failed"
-                );
+pub(crate) async fn eligible_loaded_idle_filesystem_pressure_victims<Ctx: WorkerCtx>(
+    active_agents: &ActiveAgents<Ctx>,
+) -> Vec<FilesystemPressureVictim<Ctx>> {
+    let mut candidates = Vec::new();
+    for (agent_id, worker) in active_agents.workers.iter().await {
+        if is_loaded_idle_filesystem_pressure_candidate(worker.eviction_class().await) {
+            let Some(eligibility) = worker.filesystem_pressure_eligibility().await else {
                 continue;
-            }
-            EvictionStopOutcome::Unloaded => {}
-        }
-
-        if Instant::now() >= deadline {
-            return false;
-        }
-
-        for attempt in 0..policy.reclamation_observation_attempts {
-            let after = match before_deadline(deadline, source.capacity()).await {
-                Some(Ok(capacity)) => capacity,
-                Some(Err(error)) => {
-                    tracing::warn!(
-                        error,
-                        agent_id = candidate_name,
-                        "Failed to observe filesystem capacity after pressure eviction"
-                    );
-                    return false;
-                }
-                None => return false,
             };
-            pressure = pressure.include(policy.pressure(operation, after));
-            if policy.target_reached(pressure, after) {
-                return true;
-            }
-            if attempt + 1 < policy.reclamation_observation_attempts
-                && before_deadline(
-                    deadline,
-                    tokio::time::sleep(policy.reclamation_observation_delay),
-                )
-                .await
-                .is_none()
-            {
-                return false;
-            }
+            candidates.push(FilesystemPressureVictim {
+                stable_agent_id: agent_id.to_string(),
+                eligible_since: Worker::<Ctx>::filesystem_pressure_eligible_since(eligibility),
+                worker,
+                eligibility,
+            });
         }
     }
-
-    false
+    candidates
 }
 
-async fn before_deadline<T>(deadline: Instant, future: impl Future<Output = T>) -> Option<T> {
-    tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), future)
+fn is_loaded_idle_filesystem_pressure_candidate(class: Option<EvictionClass>) -> bool {
+    class == Some(EvictionClass::LoadedIdle)
+}
+
+pub(crate) fn request_loaded_idle_filesystem_unload<Ctx: WorkerCtx>(
+    candidate: FilesystemPressureVictim<Ctx>,
+    unload_request: UnloadRequest,
+) -> tokio::task::JoinHandle<EvictionStopOutcome> {
+    tokio::spawn(async move {
+        stop_loaded_idle_if_eligible(
+            candidate.eligibility,
+            unload_request,
+            move |target_class, eligibility, unload_request| async move {
+                candidate
+                    .worker
+                    .stop_if_evictable_with_outcome(target_class, eligibility, unload_request)
+                    .await
+            },
+        )
         .await
-        .ok()
+    })
 }
 
-async fn spawn_before_deadline<T: Send + 'static>(
-    deadline: Instant,
-    future: impl Future<Output = T> + Send + 'static,
-) -> Option<Result<T, tokio::task::JoinError>> {
-    before_deadline(deadline, tokio::spawn(future)).await
+pub(crate) async fn stop_loaded_idle_if_eligible<T>(
+    eligibility: FilesystemPressureEligibility,
+    unload_request: UnloadRequest,
+    stop: impl AsyncFnOnce(EvictionClass, Option<FilesystemPressureEligibility>, UnloadRequest) -> T,
+) -> T {
+    stop(EvictionClass::LoadedIdle, Some(eligibility), unload_request).await
 }
 
 impl From<EvictionPriority> for crate::worker::EvictionClass {

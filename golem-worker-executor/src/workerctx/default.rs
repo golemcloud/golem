@@ -27,7 +27,6 @@ use crate::preview2::golem::agent::host::{
     ScheduledInvocationReceipt, WasmRpc,
 };
 use crate::services::active_workers::ActiveWorkers;
-use crate::services::agent_filesystem::AgentFilesystemRuntime;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -55,7 +54,7 @@ use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
     CallCountManagement, ExternalOperations, FileSystemReading, FuelManagement,
     InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
-    UpdateManagement, WorkerCtx,
+    UpdateManagement, WorkerCtx, WorkerFilesystemContext,
 };
 use anyhow::Error;
 use async_trait::async_trait;
@@ -236,7 +235,7 @@ impl FuelTracker {
 pub struct Context {
     pub durable_ctx: DurableWorkerCtx<Context>,
     resource_limit_entry: Arc<AtomicResourceEntry>,
-    fuel_tracker: FuelTracker,
+    fuel_tracker: Option<FuelTracker>,
 }
 
 impl Context {
@@ -248,13 +247,7 @@ impl Context {
         Self {
             durable_ctx: golem_ctx,
             resource_limit_entry,
-            fuel_tracker: FuelTracker::new(
-                config.limits.fuel_to_borrow,
-                config
-                    .limits
-                    .fuel_to_borrow
-                    .saturating_mul(config.limits.ephemeral_fuel_overdraft_multiplier),
-            ),
+            fuel_tracker: configured_fuel_tracker(&config),
         }
     }
 
@@ -269,6 +262,18 @@ impl Context {
     pub fn get_max_disk_space(&self) -> u64 {
         self.resource_limit_entry.max_disk_space_limit()
     }
+}
+
+fn configured_fuel_tracker(config: &GolemConfig) -> Option<FuelTracker> {
+    config.resource_usage_metering.compute.then(|| {
+        FuelTracker::new(
+            config.limits.fuel_to_borrow,
+            config
+                .limits
+                .fuel_to_borrow
+                .saturating_mul(config.limits.ephemeral_fuel_overdraft_multiplier),
+        )
+    })
 }
 
 impl DurableWorkerCtxView<Context> for Context {
@@ -295,26 +300,34 @@ impl wasmtime_wasi_http::p3::WasiHttpView for Context {
 
 #[async_trait]
 impl FuelManagement for Context {
+    fn fuel_metering_enabled(&self) -> bool {
+        self.fuel_tracker.is_some()
+    }
+
     fn ensure_fuel(&mut self, current_level: u64) -> Result<(), AgentError> {
-        if !self.fuel_tracker.needs_borrow(current_level) {
+        let agent_mode = self.agent_mode();
+        let Some(fuel_tracker) = &mut self.fuel_tracker else {
+            return Ok(());
+        };
+        if !fuel_tracker.needs_borrow(current_level) {
             return Ok(());
         }
-        let amount_to_borrow = self.fuel_tracker.determine_amount_to_borrow(current_level);
+        let amount_to_borrow = fuel_tracker.determine_amount_to_borrow(current_level);
         let success = self.resource_limit_entry.borrow_fuel(amount_to_borrow);
         if success {
-            self.fuel_tracker.on_account_borrow_success(current_level);
+            fuel_tracker.on_account_borrow_success(current_level);
             debug!(amount = amount_to_borrow, "Borrowed fuel");
             Ok(())
-        } else if self.agent_mode() == AgentMode::Ephemeral {
+        } else if agent_mode == AgentMode::Ephemeral {
             if !self.resource_limit_entry.has_effective_fuel() {
                 return Err(AgentError::EphemeralFuelExhausted(
                     EphemeralFuelExhaustedError {
-                        overdraft_limit: self.fuel_tracker.overdraft_limit(),
+                        overdraft_limit: fuel_tracker.overdraft_limit(),
                     },
                 ));
             }
 
-            self.fuel_tracker
+            fuel_tracker
                 .try_borrow_ephemeral_overdraft(current_level, amount_to_borrow)
                 .inspect(|_| {
                     debug!(
@@ -332,12 +345,15 @@ impl FuelManagement for Context {
     }
 
     fn return_fuel(&mut self, current_level: u64) -> u64 {
-        let unused = self.fuel_tracker.unused_to_return(current_level);
-        if unused > 0 && !self.fuel_tracker.last_borrow_was_ephemeral_overdraft() {
+        let Some(fuel_tracker) = &mut self.fuel_tracker else {
+            return 0;
+        };
+        let unused = fuel_tracker.unused_to_return(current_level);
+        if unused > 0 && !fuel_tracker.last_borrow_was_ephemeral_overdraft() {
             self.resource_limit_entry.return_fuel(unused);
             debug!(amount = unused, "Returned fuel");
         }
-        let consumed_overdraft = self.fuel_tracker.consumed_ephemeral_overdraft(unused);
+        let consumed_overdraft = fuel_tracker.consumed_ephemeral_overdraft(unused);
         if consumed_overdraft > 0 {
             self.resource_limit_entry
                 .record_overdraft_debt(consumed_overdraft);
@@ -346,7 +362,7 @@ impl FuelManagement for Context {
                 "Recorded ephemeral overdraft fuel debt"
             );
         }
-        let consumed = self.fuel_tracker.on_return(current_level);
+        let consumed = fuel_tracker.on_return(current_level);
         debug!(current_level, "Reset fuel mark");
         consumed
     }
@@ -881,8 +897,8 @@ impl WorkerCtx for Context {
         component_service: Arc<dyn ComponentService>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
-        filesystem_root: std::path::PathBuf,
-        filesystem_runtime: AgentFilesystemRuntime,
+        filesystem: WorkerFilesystemContext,
+        linear_memory: crate::services::linear_memory::LinearMemoryTracker,
         worker_config: AgentConfig,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
@@ -920,8 +936,8 @@ impl WorkerCtx for Context {
             component_service,
             account_resource_limits.clone(),
             config.clone(),
-            filesystem_root,
-            filesystem_runtime,
+            filesystem,
+            linear_memory,
             worker_config.clone(),
             execution_status,
             file_loader,
@@ -1020,7 +1036,8 @@ impl WorkerCtx for Context {
 
 #[cfg(test)]
 mod tests {
-    use super::FuelTracker;
+    use super::{FuelTracker, configured_fuel_tracker};
+    use crate::services::golem_config::{GolemConfig, ResourceUsageMeteringConfig};
     use test_r::test;
 
     // -------------------------------------------------------------------------
@@ -1041,6 +1058,21 @@ mod tests {
 
     fn fuel_tracker() -> FuelTracker {
         FuelTracker::new(FUEL_TO_BORROW, FUEL_TO_BORROW * 100)
+    }
+
+    #[test]
+    fn compute_switch_controls_fuel_tracker_construction() {
+        let disabled = GolemConfig::default();
+        assert!(configured_fuel_tracker(&disabled).is_none());
+
+        let enabled = GolemConfig {
+            resource_usage_metering: ResourceUsageMeteringConfig {
+                compute: true,
+                ..ResourceUsageMeteringConfig::default()
+            },
+            ..GolemConfig::default()
+        };
+        assert!(configured_fuel_tracker(&enabled).is_some());
     }
 
     #[test]

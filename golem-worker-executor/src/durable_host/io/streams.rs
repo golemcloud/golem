@@ -1097,7 +1097,6 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 .state
                 .open_filesystem_output_streams
                 .contains_key(&stream_rep)
-                && filesystem_stream_effect_is_active(self, stream_rep)?
             {
                 let readiness = self.table().get_mut(&self_)?.write_ready().await;
                 readiness?;
@@ -1473,16 +1472,4 @@ async fn blocking_write_zeroes_and_flush_chunked(
     }
 
     Ok(())
-}
-
-fn filesystem_stream_effect_is_active<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    stream_rep: u32,
-) -> Result<bool, StreamError> {
-    let stream = Resource::<OutputStream>::new_borrow(stream_rep);
-    let output = ctx.table().get(&stream)?;
-    Ok(output
-        .as_any()
-        .downcast_ref::<crate::services::agent_filesystem::ClassifiedFileOutputStream>()
-        .is_some_and(|stream| stream.is_active()))
 }

@@ -313,7 +313,7 @@ wat = "1.248.0"
 wax = "0.6.0"
 webbrowser = "1.0.4"
 webpki-roots = { version = "0.26.7" }
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Console"] }
 which = "8.0.0"
 wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.59.0" }
 wit-bindgen-rust = "0.58.0"

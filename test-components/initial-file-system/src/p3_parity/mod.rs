@@ -1,5 +1,6 @@
 use golem_rust::{agent_definition, agent_implementation};
 
+mod benchmark;
 mod parity;
 mod quota;
 
@@ -62,6 +63,15 @@ pub trait P3FileSystem {
     async fn run_cross_preview_append(&self) -> bool;
     /// Verifies the cross-preview append file after reconstruction.
     async fn inspect_cross_preview_append(&self) -> bool;
+    /// Measures cached filesystem operations after setup and warmup. Each returned
+    /// value is nanoseconds per operation for one batch.
+    async fn benchmark_filesystem(
+        &self,
+        operation: String,
+        payload_size: u32,
+        samples: u32,
+        batch_size: u32,
+    ) -> Vec<u64>;
 }
 
 struct P3FileSystemImpl {
@@ -168,5 +178,15 @@ impl P3FileSystem for P3FileSystemImpl {
 
     async fn inspect_cross_preview_append(&self) -> bool {
         parity::inspect_cross_preview_append().await
+    }
+
+    async fn benchmark_filesystem(
+        &self,
+        operation: String,
+        payload_size: u32,
+        samples: u32,
+        batch_size: u32,
+    ) -> Vec<u64> {
+        benchmark::run(operation, payload_size, samples, batch_size).await
     }
 }

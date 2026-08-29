@@ -82,11 +82,6 @@ path = "tests/environment_deletion.rs"
 harness = false
 
 [[test]]
-name = "storage-billing"
-path = "tests/storage_billing.rs"
-harness = false
-
-[[test]]
 name = "memory-billing"
 path = "tests/memory_billing.rs"
 harness = false

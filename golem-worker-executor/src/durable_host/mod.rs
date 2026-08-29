@@ -21,7 +21,6 @@ mod clocks;
 mod concurrent;
 mod config;
 pub mod durability;
-mod filesystem;
 pub mod golem;
 pub mod http;
 pub mod io;
@@ -51,7 +50,7 @@ use crate::model::{
     AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
 };
 use crate::services::active_workers::MemoryGrant;
-use crate::services::agent_resource_billing::AgentResourceBilling;
+use crate::services::agent_filesystem::{FilesystemGenerationHandle, update_initial_files};
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -81,6 +80,7 @@ use crate::services::{
     HasActiveWorkers, HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration,
 };
 use crate::services::{HasComponentService, HasOplogService, HasWorkerService};
+use crate::wasi_filesystem::AgentDescriptor;
 use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::invocation::{
@@ -96,19 +96,16 @@ use crate::workerctx::{
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
+pub(crate) use concurrent::{CallHandle, NotCancellable};
 pub use durability::*;
-use futures::TryFutureExt;
-use futures::TryStreamExt;
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
 use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::card::{CardId, StoredCard};
-use golem_common::model::component::{
-    AgentFilePermissions, CanonicalFilePath, ComponentId, ComponentRevision,
-};
+use golem_common::model::component::{CanonicalFilePath, ComponentId, ComponentRevision};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -152,16 +149,13 @@ use tokio::sync::RwLock as TRwLock;
 
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_service_base::model::auth::AuthCtx;
-use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{Instrument, Level, debug, error, info, span, warn};
 use try_match::try_match;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
-use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
 use wasmtime_wasi::{
-    I32Exit, IoCtx, IoData, IoView, ResourceTable, ResourceTableError, WasiCtx, WasiCtxView,
-    WasiView,
+    I32Exit, IoCtx, IoData, IoView, ResourceTable, WasiCtx, WasiCtxView, WasiView,
 };
 use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
 use wasmtime_wasi_http::p2::types::{HostFutureIncomingResponse, OutgoingRequestConfig};
@@ -336,13 +330,12 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub owned_agent_id: OwnedAgentId,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
-    filesystem_root: PathBuf,
-    filesystem_runtime: crate::services::agent_filesystem::AgentFilesystemRuntime,
+    filesystem_generation_handle: FilesystemGenerationHandle,
+    filesystem_preopen: AgentDescriptor,
     execution_status: Arc<RwLock<ExecutionStatus>>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
     linear_memory: LinearMemoryTracker,
-    resource_billing: AgentResourceBilling,
     /// Per-instance cache of resolved typed guest export handles, populated
     /// lazily on first use during invocation dispatch.
     agent_export_funcs: AgentExportFuncs,
@@ -375,15 +368,6 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
     fn durable_memory_grow_failed(&mut self) -> wasmtime::Result<()> {
         self.durable_worker_ctx().unshared_memory_growth_failed();
         Ok(())
-    }
-}
-
-impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
-    fn drop(&mut self) {
-        self.filesystem_runtime.set_usage_observer(None);
-        self.resource_billing.abort();
-        self.resource_limits
-            .unregister_resource_billing(&self.owned_agent_id, &self.resource_billing);
     }
 }
 
@@ -479,10 +463,19 @@ fn validate_unshared_memory_growth(
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    pub(crate) fn filesystem_runtime(
-        &self,
-    ) -> crate::services::agent_filesystem::AgentFilesystemRuntime {
-        self.filesystem_runtime.clone()
+    pub(crate) fn filesystem_generation_handle(&self) -> FilesystemGenerationHandle {
+        self.filesystem_generation_handle.clone()
+    }
+
+    pub(crate) fn activate_resident_generation_handle(
+        &mut self,
+        generation_handle: FilesystemGenerationHandle,
+    ) {
+        self.filesystem_generation_handle = generation_handle;
+    }
+
+    pub(crate) fn filesystem_preopen(&self) -> AgentDescriptor {
+        self.filesystem_preopen.clone()
     }
 
     pub(crate) fn derive_idempotency_key(&mut self, oplog_index: OplogIndex) -> IdempotencyKey {
@@ -529,8 +522,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         component_service: Arc<dyn ComponentService>,
         resource_limits: Arc<AtomicResourceEntry>,
         config: Arc<GolemConfig>,
-        filesystem_root: PathBuf,
-        filesystem_runtime: crate::services::agent_filesystem::AgentFilesystemRuntime,
+        filesystem: crate::workerctx::WorkerFilesystemContext,
+        linear_memory: LinearMemoryTracker,
         worker_config: AgentConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
@@ -546,7 +539,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
     ) -> Result<Self, WorkerExecutorError> {
-        debug!("Created file system root at {:?}", filesystem_root);
+        let crate::workerctx::WorkerFilesystemContext {
+            generation_handle: filesystem_generation_handle,
+            preopen: filesystem_preopen,
+        } = filesystem;
 
         debug!(
             "Worker {} initialized with deleted regions {}",
@@ -610,7 +606,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
-            filesystem_root.clone(),
             stdin.clone(),
             stdout,
             stderr,
@@ -627,31 +622,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let worker = invocation_queue
             .upgrade()
             .expect("worker must remain alive while creating its context");
-        let retained_memory_grant = worker.linear_memory_grant();
-        let canonical_startup_bytes = worker.startup_linear_memory_bytes();
-        let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
-        let agent_mode = execution_status.read().unwrap().agent_mode();
-        let linear_memory = LinearMemoryTracker::new(
-            canonical_startup_bytes,
-            admitted_startup_bytes,
-            agent_mode,
-            true,
-            resource_limits.clone(),
-            retained_memory_grant,
-            Instant::now(),
-        );
-        let resource_billing = AgentResourceBilling::new(
-            agent_mode,
-            linear_memory.clone(),
-            resource_limits.clone(),
-            Instant::now(),
-        );
-        filesystem_runtime.set_usage_observer(Some(Arc::new(resource_billing.clone())));
         let weak_worker = Arc::downgrade(&worker);
-        let memory_meter = linear_memory.meter().clone();
+        let memory_limits = linear_memory.clone();
         linear_memory.set_limit_exceeded_callback(Arc::new(move || {
             if let Some(worker) = weak_worker.upgrade() {
-                worker.request_memory_limit_interrupt(memory_meter.clone());
+                worker.request_memory_limit_interrupt(memory_limits.clone());
             }
         }));
         let state = PrivateDurableWorkerState::new(
@@ -697,30 +672,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if state.is_live() {
             linear_memory.switch_to_live();
         }
-        resource_limits.register_resource_billing(owned_agent_id.clone(), resource_billing.clone());
-
-        filesystem_runtime.set_retry_callback(Some({
-            let worker = Arc::downgrade(&worker);
-            let invocation_deadline_exceeded = state.invocation_deadline_exceeded.clone();
-            let tail_work_deadline_exceeded = state.tail_work_deadline_exceeded.clone();
-            Arc::new(move || {
-                let worker = worker.clone();
-                let invocation_deadline_exceeded = invocation_deadline_exceeded.clone();
-                let tail_work_deadline_exceeded = tail_work_deadline_exceeded.clone();
-                Box::pin(async move {
-                    if invocation_deadline_exceeded.load(Ordering::Acquire)
-                        || tail_work_deadline_exceeded.load(Ordering::Acquire)
-                    {
-                        return false;
-                    }
-                    let Some(worker) = worker.upgrade() else {
-                        return false;
-                    };
-                    worker.filesystem_retry_permitted().await
-                })
-            })
-        }));
-
         Ok(DurableWorkerCtx {
             table: Arc::new(Mutex::new(table)),
             wasi: Arc::new(Mutex::new(wasi)),
@@ -737,22 +688,31 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 oplog: oplog.clone(),
             },
             state,
-            filesystem_root,
-            filesystem_runtime,
+            filesystem_generation_handle,
+            filesystem_preopen: AgentDescriptor::new(filesystem_preopen, PathBuf::new()),
             execution_status,
             resource_limits,
             linear_memory,
-            resource_billing,
             agent_export_funcs: AgentExportFuncs::default(),
             _store_alive_guard: StoreAliveGuard::new(),
         })
     }
 
-    fn table(&mut self) -> &mut ResourceTable {
+    pub(crate) fn table(&mut self) -> &mut ResourceTable {
         Arc::get_mut(&mut self.table)
             .expect("ResourceTable is shared and cannot be borrowed mutably")
             .get_mut()
             .expect("ResourceTable mutex must never fail")
+    }
+
+    pub(crate) fn register_filesystem_input_stream(&mut self, rep: u32) {
+        self.state.open_filesystem_input_streams.insert(rep);
+    }
+
+    pub(crate) fn register_filesystem_output_stream(&mut self, rep: u32) {
+        self.state
+            .open_filesystem_output_streams
+            .insert(rep, FilesystemOutputStreamState);
     }
 
     /// Resets the per-invocation HTTP and RPC call counters to zero.
@@ -788,25 +748,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ))
         } else {
             Ok(())
-        }
-    }
-
-    fn check_if_file_is_readonly(
-        &mut self,
-        fd: &Resource<Descriptor>,
-    ) -> Result<bool, ResourceTableError> {
-        let table = Arc::get_mut(&mut self.table)
-            .expect("ResourceTable is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("ResourceTable mutex must never fail");
-
-        match table.get(fd)? {
-            Descriptor::File(f) => {
-                let read_only = self.filesystem_runtime.is_read_only(&f.path);
-
-                Ok(read_only)
-            }
-            Descriptor::Dir(_) => Ok(false),
         }
     }
 
@@ -1276,12 +1217,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.linear_memory.clone()
     }
 
-    /// Returns an owned handle so callers can release the store lock before awaiting
-    /// resource-window transitions. Cloning only increments the handle's `Arc` count.
-    pub(crate) fn resource_billing(&self) -> AgentResourceBilling {
-        self.resource_billing.clone()
-    }
-
     async fn switch_to_live(&self) {
         self.state.replay_state.switch_to_live().await;
         self.linear_memory.switch_to_live();
@@ -1302,7 +1237,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.active_custom_invocations.clear();
     }
     pub fn increase_memory(&mut self, delta: u64) {
-        let (_, reconciling) = self.linear_memory.grow(delta, Instant::now());
+        let (_, reconciling) = self.linear_memory.grow(delta);
         if self.state.is_live() && !reconciling {
             // This is called from the `memory.grow` async resource limiter, which
             // Wasmtime runs through a blocking libcall on the store's fiber. While
@@ -3206,18 +3141,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             None
         };
 
-        let _filesystem_update = self
-            .filesystem_runtime
-            .update_initial_files(
-                &self.state.file_loader,
-                self.owned_agent_id.environment_id,
-                new_agent_type_provision_configs
-                    .as_ref()
-                    .map(|c| c.files.as_slice())
-                    .unwrap_or_default(),
-            )
-            .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+        // TODO FS - double map_error looks akward
+        update_initial_files(
+            &self.filesystem_generation_handle,
+            Arc::clone(&self.state.file_loader),
+            self.owned_agent_id.environment_id,
+            new_agent_type_provision_configs
+                .as_ref()
+                .map(|c| c.files.clone())
+                .unwrap_or_default(),
+        )
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+        .await
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
 
         if let Some((updated_agent_config, agent_effective_surface, initial_wallet_cards)) =
             updated_agent_state
@@ -4506,7 +4442,7 @@ mod tests {
             Arc::new(Mutex::new(MemoryGrant::inert(60))),
             now,
         );
-        tracker.reconcile(60, now);
+        tracker.reconcile_at(60, now);
 
         let second_memory_growth = tracker.prepare_unshared_growth(0, 60);
 
@@ -5167,104 +5103,74 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
         &self,
         path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
-        let root = &self.filesystem_root;
-        let target = root.join(PathBuf::from(path.to_rel_string()));
+        use crate::services::agent_filesystem as agent_fs;
 
+        let generation_handle = self.filesystem_generation_handle();
+        let relative = PathBuf::from(path.to_rel_string());
+        let target = agent_fs::PathTarget::at_root(&generation_handle, relative.clone())
+            .map_err(|error| filesystem_read_error(path, error))?;
+        let attributes = match agent_fs::attributes(
+            &generation_handle,
+            agent_fs::Target::Path(&target, agent_fs::Follow::Yes),
+        )
+        .map_err(|error| filesystem_read_error(path, error))?
+        .await
         {
-            let exists = tokio::fs::try_exists(&target).await.map_err(|e| {
-                WorkerExecutorError::FileSystemError {
-                    path: path.to_string(),
-                    reason: format!("Failed to check whether file exists: {e}"),
-                }
-            })?;
-            if !exists {
+            Ok(attributes) => attributes,
+            Err(error) if filesystem_error_is_not_found(&error) => {
                 return Ok(GetFileSystemNodeResult::NotFound);
-            };
+            }
+            Err(error) => return Err(filesystem_read_error(path, error)),
+        };
+
+        if attributes.kind == agent_fs::ObjectKind::File {
+            return Ok(GetFileSystemNodeResult::File(component_file_node(
+                &generation_handle,
+                relative,
+                attributes,
+            )?));
+        }
+        if attributes.kind != agent_fs::ObjectKind::Directory {
+            return Ok(GetFileSystemNodeResult::NotFound);
         }
 
-        let metadata = tokio::fs::metadata(&target).await.map_err(|e| {
-            WorkerExecutorError::FileSystemError {
-                path: path.to_string(),
-                reason: format!("Failed to get metadata: {e}"),
-            }
-        })?;
-
-        if metadata.is_file() {
-            let is_readonly_by_host = metadata.permissions().readonly();
-            let is_readonly_by_us = self.filesystem_runtime.is_read_only(&target);
-
-            let permissions = if is_readonly_by_host || is_readonly_by_us {
-                AgentFilePermissions::ReadOnly
-            } else {
-                AgentFilePermissions::ReadWrite
-            };
-
-            let last_modified = metadata.modified().ok().unwrap_or(SystemTime::UNIX_EPOCH);
-            let file_name = target
-                .file_name()
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
-
-            let file_node = ComponentFileSystemNode {
-                name: file_name,
-                last_modified,
-                details: ComponentFileSystemNodeDetails::File {
-                    size: metadata.len(),
-                    permissions,
-                },
-            };
-
-            return Ok(GetFileSystemNodeResult::File(file_node));
-        }
-
-        let mut entries = tokio::fs::read_dir(target).await.map_err(|e| {
-            WorkerExecutorError::FileSystemError {
-                path: path.to_string(),
-                reason: format!("Failed to list directory: {e}"),
-            }
-        })?;
-
-        let mut result = Vec::new();
-        while let Some(entry) = entries.next_entry().await? {
-            let metadata =
-                entry
-                    .metadata()
-                    .await
-                    .map_err(|e| WorkerExecutorError::FileSystemError {
-                        path: path.to_string(),
-                        reason: format!("Failed to get file metadata {e}"),
-                    })?;
-
-            let entry_name = entry.file_name().to_string_lossy().to_string();
-
-            let last_modified = metadata.modified().ok().unwrap_or(SystemTime::UNIX_EPOCH);
-
-            if metadata.is_file() {
-                let is_readonly_by_host = metadata.permissions().readonly();
-                // additionally consider permissions we maintain ourselves
-                let is_readonly_by_us = self.filesystem_runtime.is_read_only(&entry.path());
-
-                let permissions = if is_readonly_by_host || is_readonly_by_us {
-                    AgentFilePermissions::ReadOnly
-                } else {
-                    AgentFilePermissions::ReadWrite
-                };
-
-                result.push(ComponentFileSystemNode {
-                    name: entry_name,
-                    last_modified,
-                    details: ComponentFileSystemNodeDetails::File {
-                        size: metadata.len(),
-                        permissions,
-                    },
-                });
-            } else {
-                result.push(ComponentFileSystemNode {
-                    name: entry_name,
-                    last_modified,
-                    details: ComponentFileSystemNodeDetails::Directory,
-                });
-            };
+        let opened = agent_fs::open(
+            &generation_handle,
+            target,
+            agent_fs::OpenOptions::Existing {
+                expected: agent_fs::ObjectKind::Directory,
+                access: agent_fs::AccessMode::Read,
+                follow: agent_fs::Follow::Yes,
+            },
+        )
+        .map_err(|error| filesystem_read_error(path, error))?
+        .await
+        .map_err(|error| filesystem_read_error(path, error))?;
+        let agent_fs::OpenNode::Directory(directory) = opened.node else {
+            unreachable!("directory open returned a non-directory node")
+        };
+        let entries = agent_fs::list_directory(&generation_handle, &directory)
+            .map_err(|error| filesystem_read_error(path, error))?
+            .await
+            .map_err(|error| filesystem_read_error(path, error))?;
+        let mut result = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let entry_relative = relative.join(&entry.name);
+            let entry_target =
+                agent_fs::PathTarget::at_root(&generation_handle, entry_relative.clone())
+                    .map_err(|error| filesystem_read_error(path, error))?;
+            let attributes = agent_fs::attributes(
+                &generation_handle,
+                agent_fs::Target::Path(&entry_target, agent_fs::Follow::Yes),
+            )
+            .map_err(|error| filesystem_read_error(path, error))?
+            .await
+            .map_err(|error| filesystem_read_error(path, error))?;
+            result.push(component_file_node(
+                &generation_handle,
+                entry_relative,
+                attributes,
+            )?);
         }
         Ok(GetFileSystemNodeResult::Ok(result))
     }
@@ -5273,45 +5179,103 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
         &self,
         path: &CanonicalFilePath,
     ) -> Result<ReadFileResult, WorkerExecutorError> {
-        let root = &self.filesystem_root;
-        let target = root.join(PathBuf::from(path.to_rel_string()));
+        use crate::services::agent_filesystem as agent_fs;
 
+        let generation_handle = self.filesystem_generation_handle();
+        let relative = PathBuf::from(path.to_rel_string());
+        let target = agent_fs::PathTarget::at_root(&generation_handle, relative)
+            .map_err(|error| filesystem_read_error(path, error))?;
+        let attributes = match agent_fs::attributes(
+            &generation_handle,
+            agent_fs::Target::Path(&target, agent_fs::Follow::Yes),
+        )
+        .map_err(|error| filesystem_read_error(path, error))?
+        .await
         {
-            let exists = tokio::fs::try_exists(&target).await.map_err(|e| {
-                WorkerExecutorError::FileSystemError {
-                    path: path.to_string(),
-                    reason: format!("Failed to check whether file exists: {e}"),
-                }
-            })?;
-            if !exists {
+            Ok(attributes) => attributes,
+            Err(error) if filesystem_error_is_not_found(&error) => {
                 return Ok(ReadFileResult::NotFound);
-            };
+            }
+            Err(error) => return Err(filesystem_read_error(path, error)),
+        };
+        if attributes.kind != agent_fs::ObjectKind::File {
+            return Ok(ReadFileResult::NotAFile);
         }
-
-        {
-            let metadata = tokio::fs::metadata(&target).await.map_err(|e| {
-                WorkerExecutorError::FileSystemError {
-                    path: path.to_string(),
-                    reason: format!("Failed to get metadata: {e}"),
-                }
+        let opened = agent_fs::open(
+            &generation_handle,
+            target,
+            agent_fs::OpenOptions::Existing {
+                expected: agent_fs::ObjectKind::File,
+                access: agent_fs::AccessMode::Read,
+                follow: agent_fs::Follow::Yes,
+            },
+        )
+        .map_err(|error| filesystem_read_error(path, error))?
+        .await
+        .map_err(|error| filesystem_read_error(path, error))?;
+        let agent_fs::OpenNode::File(file) = opened.node else {
+            unreachable!("file open returned a non-file node")
+        };
+        let length =
+            usize::try_from(attributes.size).map_err(|_| WorkerExecutorError::FileSystemError {
+                path: path.to_string(),
+                reason: "File is too large to read on this executor".to_string(),
             })?;
-            if !metadata.is_file() {
-                return Ok(ReadFileResult::NotAFile);
-            };
-        }
-
-        let path_clone = path.clone();
-
-        let stream = tokio::fs::File::open(target)
-            .map_ok(|file| FramedRead::new(file, BytesCodec::new()).map_ok(BytesMut::freeze))
-            .try_flatten_stream()
-            .map_err(move |e| WorkerExecutorError::FileSystemError {
-                path: path_clone.to_string(),
-                reason: format!("Failed to open file: {e}"),
-            });
-
+        let bytes = agent_fs::read_file(
+            &generation_handle,
+            &file,
+            agent_fs::ReadRange { offset: 0, length },
+        )
+        .map_err(|error| filesystem_read_error(path, error))?
+        .await
+        .map_err(|error| filesystem_read_error(path, error))?;
+        let stream = futures::stream::once(async move { Ok::<Bytes, WorkerExecutorError>(bytes) });
         Ok(ReadFileResult::Ok(Box::pin(stream)))
     }
+}
+
+fn filesystem_error_is_not_found(error: &crate::services::agent_filesystem::Error) -> bool {
+    matches!(
+        error,
+        crate::services::agent_filesystem::Error::Sandbox(source)
+            if source.io_error().is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    )
+}
+
+fn filesystem_read_error(path: &CanonicalFilePath, error: impl Display) -> WorkerExecutorError {
+    WorkerExecutorError::FileSystemError {
+        path: path.to_string(),
+        reason: error.to_string(),
+    }
+}
+
+fn component_file_node(
+    generation_handle: &FilesystemGenerationHandle,
+    relative: PathBuf,
+    attributes: crate::services::agent_filesystem::Attributes,
+) -> Result<ComponentFileSystemNode, WorkerExecutorError> {
+    use crate::services::agent_filesystem as agent_fs;
+
+    let name = relative
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "/".to_string());
+    let last_modified = attributes.modified.unwrap_or(SystemTime::UNIX_EPOCH);
+    let details = match attributes.kind {
+        agent_fs::ObjectKind::File => ComponentFileSystemNodeDetails::File {
+            size: attributes.size,
+            permissions: agent_fs::path_permissions(generation_handle, &relative)
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
+        },
+        agent_fs::ObjectKind::Directory | agent_fs::ObjectKind::Symlink => {
+            ComponentFileSystemNodeDetails::Directory
+        }
+    };
+    Ok(ComponentFileSystemNode {
+        name,
+        last_modified,
+        details,
+    })
 }
 
 /// Number of oplog entries read per backward-scan window. Sized to match the compressed oplog

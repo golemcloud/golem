@@ -2992,7 +2992,7 @@ struct AccessRevisionUpdateInputs {
     owned_agent_id: golem_common::model::OwnedAgentId,
     agent_id: Option<ParsedAgentId>,
     initial_agent_config: Vec<golem_common::model::worker::TypedAgentConfigEntry>,
-    filesystem_runtime: crate::services::agent_filesystem::AgentFilesystemRuntime,
+    filesystem_generation_handle: crate::services::agent_filesystem::FilesystemGenerationHandle,
     current_revision: ComponentRevision,
 }
 
@@ -3005,7 +3005,6 @@ type AccessRevisionUpdateAgentState = (
 struct AccessRevisionUpdate {
     metadata: Component,
     agent_state: Option<AccessRevisionUpdateAgentState>,
-    filesystem_update: crate::services::agent_filesystem::AgentFilesystemUpdateEffectLease,
 }
 
 async fn finalize_pending_automatic_update_access<T, D, Ctx>(
@@ -3103,7 +3102,7 @@ where
             owned_agent_id: ctx.owned_agent_id.clone(),
             agent_id: ctx.state.agent_id.clone(),
             initial_agent_config: ctx.state.initial_agent_config.clone(),
-            filesystem_runtime: ctx.filesystem_runtime(),
+            filesystem_generation_handle: ctx.filesystem_generation_handle(),
             current_revision: ctx.state.component_metadata.revision,
         }
     });
@@ -3187,23 +3186,22 @@ where
         None
     };
 
-    let filesystem_update = inputs
-        .filesystem_runtime
-        .update_initial_files(
-            &inputs.file_loader,
-            inputs.owned_agent_id.environment_id,
-            provision_config
-                .as_ref()
-                .map(|c| c.files.as_slice())
-                .unwrap_or_default(),
-        )
-        .await
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+    crate::services::agent_filesystem::update_initial_files(
+        &inputs.filesystem_generation_handle,
+        Arc::clone(&inputs.file_loader),
+        inputs.owned_agent_id.environment_id,
+        provision_config
+            .as_ref()
+            .map(|c| c.files.clone())
+            .unwrap_or_default(),
+    )
+    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+    .await
+    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
 
     Ok(AccessRevisionUpdate {
         metadata,
         agent_state,
-        filesystem_update,
     })
 }
 
@@ -3214,7 +3212,6 @@ fn apply_revision_update_access<Ctx: WorkerCtx>(
     let AccessRevisionUpdate {
         metadata,
         agent_state,
-        filesystem_update: _filesystem_update,
     } = update;
     if let Some((agent_config, effective_surface, initial_wallet_cards)) = agent_state {
         ctx.state.agent_config = agent_config;

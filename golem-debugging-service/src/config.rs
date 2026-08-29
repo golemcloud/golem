@@ -88,6 +88,7 @@ impl DebugConfig {
             public_worker_api: self.public_worker_api,
             memory: self.memory,
             filesystem_storage: Default::default(),
+            resource_usage_metering: Default::default(),
             rdbms: self.rdbms,
             resource_limits: self.resource_limits,
             component_cache: self.component_cache,
@@ -170,4 +171,19 @@ impl HasConfigExamples<DebugConfig> for DebugConfig {
 
 pub fn make_debug_config_loader() -> ConfigLoader<DebugConfig> {
     ConfigLoader::new_with_examples(&PathBuf::from("config/debug-worker-executor.toml"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn debugging_executor_does_not_expose_unsupported_metering() {
+        let config = DebugConfig::default().into_golem_config();
+
+        assert!(!config.resource_usage_metering.compute);
+        assert!(!config.resource_usage_metering.memory);
+        assert!(!config.resource_usage_metering.filesystem);
+    }
 }

@@ -12,745 +12,261 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::metrics::workers::record_agent_filesystem_lifecycle;
-use crate::services::file_loader::FileLoader;
+use crate::filesystem_pressure::FilesystemWriteRecovery;
+pub use crate::sandbox_filesystem::FilesystemStorageError;
+pub(crate) use crate::sandbox_filesystem::{FilesystemLimits, FilesystemSpace};
+use crate::sandbox_filesystem::{
+    FilesystemVolume, SandboxFilesystemProvisioning, observe_space_blocking,
+};
 use crate::services::golem_config::{
     FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig, FilesystemStorageConfig,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
-use backend::{AgentFilesystemBackend, FilesystemBackendProvisioner};
-use golem_common::model::component::InitialAgentFile;
-use golem_common::model::{OwnedAgentId, RetryConfig};
-use golem_common::retries::RetryState;
-use std::collections::HashMap;
-use std::fmt::{Display, Formatter};
-use std::path::{Path, PathBuf};
-#[cfg(test)]
-use std::sync::atomic::Ordering;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::{Arc, OnceLock, Weak};
-use std::time::Instant;
-use tokio::sync::{Mutex, OwnedMutexGuard};
-
-mod backend;
-mod failure;
-mod initial_files;
-mod mutation;
-mod postcondition;
-mod quota;
-mod unmanaged;
-
-#[cfg(target_os = "linux")]
-mod xfs;
-
-pub(crate) use failure::FilesystemPressureOperation;
-pub(crate) use mutation::{
-    AdmittedFilesystemWrite, AgentFilesystemMutationError, AgentFilesystemStreamSetupAdmission,
-    AgentFilesystemUpdateEffectLease, AgentFilesystemWriteMode, AgentFilesystemWriter,
-    ClassifiedFileOutputStream, FilesystemStreamMode, NativeMutationGuestError, NativeOpenOptions,
-    NativeOpenResult, RequestedTime, classified_filesystem_stream_error_code,
-    validate_descriptor_times, validate_directory_mutation, validate_open_capabilities,
-    validate_open_flags, validate_resize, validate_two_directory_mutation,
-};
-use quota::FilesystemLimitExceededCallback;
-pub(crate) use quota::{
-    AgentFilesystemStorageLimit, AgentFilesystemUsage, FilesystemCapacity,
-    ResolvedAgentFilesystemLimits,
-};
+use golem_common::model::OwnedAgentId;
+use std::path::Path;
 
 #[cfg(test)]
-use initial_files::InitialFileUpdateTransaction;
-#[cfg(test)]
-use quota::FILESYSTEM_OBJECT_LIMIT_POLICY_VERSION;
-
-#[cfg(test)]
-mod tests;
-
-static LIFECYCLE_LOCKS: OnceLock<std::sync::Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> =
-    OnceLock::new();
-
-#[derive(Debug)]
-pub struct FilesystemStorageError {
-    operation: &'static str,
-    path: PathBuf,
-    source: Option<std::io::Error>,
-    cleanup_failed: bool,
+thread_local! {
+    static BINDING_SPACE_OBSERVATION: std::cell::Cell<Option<FilesystemSpace>> = const {
+        std::cell::Cell::new(None)
+    };
 }
 
-impl FilesystemStorageError {
-    fn io(operation: &'static str, path: &Path, source: std::io::Error) -> Self {
-        Self {
-            operation,
-            path: path.to_path_buf(),
-            source: Some(source),
-            cleanup_failed: false,
+mod lifecycle;
+
+#[cfg(test)]
+pub(crate) use lifecycle::tests::{
+    billing_metered_resident_with_open_node_for_unload_test,
+    metered_resident_with_open_node_for_unload_test, resident_for_unload_test,
+};
+pub(crate) use lifecycle::*;
+
+const BYTES_PER_GIB: u128 = 1024 * 1024 * 1024;
+
+fn observe_space_at_binding(
+    volume: &FilesystemVolume,
+) -> Result<FilesystemSpace, FilesystemStorageError> {
+    #[cfg(test)]
+    if let Some(observation) = BINDING_SPACE_OBSERVATION.get() {
+        return Ok(observation);
+    }
+
+    observe_space_blocking(volume)
+}
+
+impl FilesystemObjectLimitPolicyConfig {
+    fn resolve(&self, allocated_bytes: u64) -> Result<FilesystemLimits, FilesystemStorageError> {
+        if allocated_bytes == 0 {
+            return Err(FilesystemStorageError::verification(
+                "resolve nonzero agent filesystem storage limit",
+                Path::new("<configuration>"),
+            ));
         }
-    }
 
-    fn verification(operation: &'static str, path: &Path) -> Self {
-        Self {
-            operation,
-            path: path.to_path_buf(),
-            source: None,
-            cleanup_failed: false,
-        }
-    }
-
-    pub(crate) fn resource_billing_transition(operation: &'static str) -> Self {
-        Self::verification(operation, Path::new("<resource-meter>"))
-    }
-
-    fn cleanup_io(operation: &'static str, path: &Path, source: std::io::Error) -> Self {
-        Self {
-            operation,
-            path: path.to_path_buf(),
-            source: Some(source),
-            cleanup_failed: true,
-        }
-    }
-
-    fn cleanup_verification(operation: &'static str, path: &Path) -> Self {
-        Self {
-            operation,
-            path: path.to_path_buf(),
-            source: None,
-            cleanup_failed: true,
-        }
-    }
-
-    pub(crate) fn cleanup_failed(&self) -> bool {
-        self.cleanup_failed
-    }
-
-    pub(crate) fn is_storage_exhaustion(&self) -> bool {
-        self.source.as_ref().is_some_and(|source| {
-            matches!(
-                source.kind(),
-                std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded
+        let proportional = (u128::from(allocated_bytes) * u128::from(self.objects_per_gib()))
+            .div_ceil(BYTES_PER_GIB);
+        let proportional = u64::try_from(proportional).map_err(|_| {
+            FilesystemStorageError::verification(
+                "derive agent filesystem object limit",
+                Path::new("<configuration>"),
             )
+        })?;
+
+        Ok(FilesystemLimits {
+            allocated_bytes,
+            filesystem_objects: proportional.clamp(self.minimum_objects(), self.maximum_objects()),
         })
-    }
-
-    fn is_terminal_failure(&self) -> bool {
-        self.source.as_ref().is_some_and(|source| {
-            matches!(
-                source.kind(),
-                std::io::ErrorKind::InvalidData
-                    | std::io::ErrorKind::PermissionDenied
-                    | std::io::ErrorKind::ReadOnlyFilesystem
-            ) || is_terminal_storage_errno(source)
-        })
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn is_terminal_storage_errno(error: &std::io::Error) -> bool {
-    matches!(error.raw_os_error(), Some(errno) if matches!(errno, libc::EIO | libc::ESTALE | libc::ENODEV))
-}
-
-#[cfg(not(target_os = "linux"))]
-fn is_terminal_storage_errno(_error: &std::io::Error) -> bool {
-    false
-}
-
-impl Display for FilesystemStorageError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "failed to {} agent filesystem {}",
-            self.operation,
-            self.path.display()
-        )?;
-        if let Some(source) = &self.source {
-            write!(f, ": {source}")?;
-        }
-        Ok(())
-    }
-}
-
-impl std::error::Error for FilesystemStorageError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.source
-            .as_ref()
-            .map(|source| source as &(dyn std::error::Error + 'static))
     }
 }
 
 #[derive(Clone)]
 pub(crate) struct AgentFilesystems {
-    provisioner: Arc<dyn FilesystemBackendProvisioner>,
+    provisioning: SandboxFilesystemProvisioning,
     pressure: FilesystemPressureConfig,
-}
-
-pub(crate) struct CreateAgentFilesystem {
-    pub agent_id: OwnedAgentId,
-    pub initial_files: Vec<InitialAgentFile>,
-    pub file_loader: Arc<FileLoader>,
-    pub resource_limits: Option<Arc<AtomicResourceEntry>>,
-    pub limit_exceeded: Option<FilesystemLimitExceededCallback>,
+    filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig,
 }
 
 impl AgentFilesystems {
+    /// Binds filesystem provisioning and pressure settings for an executor.
+    ///
+    /// Callers create this service during executor startup, before any agent filesystem exists.
+    /// Returns an error for invalid provisioning settings, failed volume observation, or a
+    /// pressure target larger than the observed managed volume.
     pub(crate) fn new(settings: &FilesystemStorageConfig) -> Result<Self, FilesystemStorageError> {
+        let provisioning = SandboxFilesystemProvisioning::new(
+            settings.deterministic_root_dir.clone(),
+            settings.managed_xfs_root_dir.clone(),
+            settings.cleanup_retry.clone(),
+        )?;
+        let space = observe_space_at_binding(provisioning.volume())?;
+        if let FilesystemSpace::Observed { total_bytes, .. } = space {
+            settings.pressure.validate_capacity(total_bytes)?;
+        }
         Ok(Self {
-            provisioner: backend::configured_provisioner(settings)?,
+            provisioning,
             pressure: settings.pressure.clone(),
+            filesystem_object_limit_policy: settings.filesystem_object_limit_policy.clone(),
         })
     }
 
+    /// Returns the managed filesystem root that the file loader may use for its cache.
+    ///
+    /// Callers use this while wiring shared services, before agent creation. Unmanaged storage
+    /// returns `None`; managed storage returns its root so cached sources stay on the same volume.
     pub(crate) fn initial_file_cache_root(&self) -> Option<&Path> {
-        self.provisioner.initial_file_cache_root()
+        self.provisioning.initial_file_cache_root()
     }
 
-    pub(crate) async fn create_fresh(
+    /// Returns the pressure thresholds used to recover writes on the provisioned volume.
+    ///
+    /// Worker creation uses this policy to build recovery for a new filesystem generation. This
+    /// accessor has no lifecycle requirement and does not observe current capacity.
+    pub(crate) fn pressure_policy(&self) -> &FilesystemPressureConfig {
+        &self.pressure
+    }
+
+    /// Returns the volume shared by provisioned agent filesystems.
+    ///
+    /// Callers use the volume identity for capacity observation and pressure recovery before a
+    /// generation is created. The returned value does not represent an individual agent target.
+    pub(crate) fn volume(&self) -> &FilesystemVolume {
+        self.provisioning.volume()
+    }
+
+    /// Resolves an agent's byte allocation into the limits installed on a new generation.
+    ///
+    /// Allocations at or above the resource service's effectively-unlimited sentinel produce
+    /// `Unlimited`; smaller allocations also derive a bounded object limit. Zero or unrepresentable
+    /// finite allocations return a verification error and must be rejected before creation.
+    pub(crate) fn resolved_limits(
         &self,
-        request: CreateAgentFilesystem,
-    ) -> Result<AgentFilesystem, FilesystemStorageError> {
-        let mut filesystem = self.create_owned_empty(&request.agent_id).await?;
-        filesystem
-            .runtime
-            .set_limit_exceeded_callback(request.limit_exceeded);
-        if let Some(resource_limits) = request.resource_limits {
-            if let Err(error) = resource_limits
-                .register_agent_filesystem(request.agent_id.clone(), filesystem.runtime())
-                .await
-            {
-                return Err(rollback_owned_filesystem(filesystem, error).await);
-            }
-            filesystem.limit_registration = Some(AgentFilesystemLimitRegistration {
-                resource_limits,
-                agent_id: request.agent_id.clone(),
-                runtime: filesystem.runtime(),
-            });
-        }
-        if let Err(error) = filesystem
-            .runtime
-            .replace_initial_files(
-                &request.file_loader,
-                request.agent_id.environment_id,
-                &request.initial_files,
-            )
-            .await
-        {
-            if error.is_storage_exhaustion() {
-                filesystem.runtime.notify_limit_state(true).await;
-            }
-            return Err(rollback_owned_filesystem(filesystem, error).await);
-        }
-        Ok(filesystem)
-    }
-
-    async fn create_owned_empty(
-        &self,
-        agent_id: &OwnedAgentId,
-    ) -> Result<AgentFilesystem, FilesystemStorageError> {
-        let started = Instant::now();
-        let result = self
-            .provisioner
-            .provision_for(agent_id)
-            .await
-            .map(|provisioned| AgentFilesystem::new(provisioned, self.pressure.clone()));
-        record_agent_filesystem_lifecycle("create", result.is_ok(), started.elapsed());
-        result
-    }
-}
-
-pub(crate) struct AgentFilesystem {
-    runtime: AgentFilesystemRuntime,
-    provisioned: Option<backend::ProvisionedAgentFilesystem>,
-    limit_registration: Option<AgentFilesystemLimitRegistration>,
-}
-
-struct AgentFilesystemLimitRegistration {
-    resource_limits: Arc<AtomicResourceEntry>,
-    agent_id: OwnedAgentId,
-    runtime: AgentFilesystemRuntime,
-}
-
-impl Drop for AgentFilesystemLimitRegistration {
-    fn drop(&mut self) {
-        self.resource_limits
-            .unregister_agent_filesystem(&self.agent_id, &self.runtime);
-    }
-}
-
-impl AgentFilesystem {
-    fn new(
-        provisioned: backend::ProvisionedAgentFilesystem,
-        pressure: FilesystemPressureConfig,
-    ) -> Self {
-        let runtime_backend = Arc::clone(provisioned.backend());
-        Self {
-            runtime: AgentFilesystemRuntime::new(runtime_backend, pressure),
-            provisioned: Some(provisioned),
-            limit_registration: None,
-        }
-    }
-
-    pub(crate) fn path(&self) -> &Path {
-        self.runtime.runtime_state.backend.root()
-    }
-
-    pub(crate) fn runtime(&self) -> AgentFilesystemRuntime {
-        self.runtime.clone()
-    }
-
-    pub(crate) fn seal(&self) {
-        self.runtime.seal();
-    }
-
-    pub(crate) async fn close_and_delete(self) -> Result<(), FilesystemStorageError> {
-        let path = self.path().to_path_buf();
-        tokio::spawn(async move { self.delete_after_drain().await })
-            .await
-            .map_err(|error| {
-                FilesystemStorageError::io(
-                    "complete agent filesystem deletion",
-                    &path,
-                    std::io::Error::other(error),
-                )
-            })?
-    }
-
-    async fn delete_after_drain(mut self) -> Result<(), FilesystemStorageError> {
-        let started = Instant::now();
-        self.limit_registration.take();
-        self.seal();
-        self.runtime.drain().await;
-        let result = match self.provisioned.as_mut() {
-            Some(provisioned) => provisioned.delete().await,
-            None => Ok(()),
-        };
-        record_agent_filesystem_lifecycle("delete", result.is_ok(), started.elapsed());
-        result
-    }
-}
-
-impl Drop for AgentFilesystem {
-    fn drop(&mut self) {
-        let Some(provisioned) = self.provisioned.take() else {
-            return;
-        };
-        self.limit_registration.take();
-        self.runtime.seal();
-        if self.runtime.has_active_effects() {
-            let runtime = self.runtime.clone();
-            std::thread::spawn(move || {
-                while runtime.has_active_effects() {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
-                drop(provisioned);
-            });
+        allocated_bytes: u64,
+    ) -> Result<ResolvedStorageLimits, FilesystemStorageError> {
+        if allocated_bytes >= AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE {
+            Ok(ResolvedStorageLimits::Unlimited)
         } else {
-            drop(provisioned);
-        }
-    }
-}
-
-#[derive(Clone)]
-/// Cloneable handle to the synchronization and backend state shared by filesystem
-/// adapters, completion tasks, quota enforcement, and usage sampling.
-pub struct AgentFilesystemRuntime {
-    runtime_state: Arc<AgentFilesystemRuntimeState>,
-}
-
-impl std::fmt::Debug for AgentFilesystemRuntime {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("AgentFilesystemRuntime")
-            .finish_non_exhaustive()
-    }
-}
-
-struct AgentFilesystemRuntimeState {
-    lifecycle: AtomicUsize,
-    usage_sampling: AtomicBool,
-    usage_effect_epoch: std::sync::atomic::AtomicU64,
-    last_effect_completion_millis: std::sync::atomic::AtomicU64,
-    drained: tokio::sync::Notify,
-    admission_resumed: tokio::sync::Notify,
-    append: Arc<Mutex<()>>,
-    namespace: Arc<Mutex<()>>,
-    operations: Arc<tokio::sync::RwLock<()>>,
-    backend: Arc<dyn AgentFilesystemBackend>,
-    initial_files: std::sync::RwLock<HashMap<PathBuf, InitialAgentFile>>,
-    pressure: FilesystemPressureConfig,
-    applied_limits: std::sync::RwLock<Option<ResolvedAgentFilesystemLimits>>,
-    limit_exceeded: std::sync::Mutex<Option<FilesystemLimitExceededCallback>>,
-    #[allow(
-        dead_code,
-        reason = "runtime invalidation is exposed for filesystem host adapters"
-    )]
-    invalidation_notified: AtomicBool,
-    #[allow(
-        dead_code,
-        reason = "runtime invalidation is exposed for filesystem host adapters"
-    )]
-    invalidated: std::sync::Mutex<Option<failure::AgentFilesystemInvalidationCallback>>,
-    retry_permitted: std::sync::Mutex<Option<failure::AgentFilesystemRetryCallback>>,
-    pressure_recovery: std::sync::Mutex<Option<failure::AgentFilesystemPressureRecoveryCallback>>,
-    usage_observer: std::sync::Mutex<
-        Option<Arc<dyn crate::services::agent_resource_billing::FilesystemUsageObserver>>,
-    >,
-    #[cfg(test)]
-    failure_observations:
-        std::sync::RwLock<Option<(Option<AgentFilesystemUsage>, FilesystemCapacity)>>,
-    #[cfg(test)]
-    usage_observation_fails: AtomicBool,
-}
-
-impl AgentFilesystemRuntime {
-    fn new(backend: Arc<dyn AgentFilesystemBackend>, pressure: FilesystemPressureConfig) -> Self {
-        Self {
-            runtime_state: Arc::new(AgentFilesystemRuntimeState {
-                lifecycle: AtomicUsize::new(0),
-                usage_sampling: AtomicBool::new(false),
-                usage_effect_epoch: std::sync::atomic::AtomicU64::new(0),
-                last_effect_completion_millis: std::sync::atomic::AtomicU64::new(0),
-                drained: tokio::sync::Notify::new(),
-                admission_resumed: tokio::sync::Notify::new(),
-                append: Arc::new(Mutex::new(())),
-                namespace: Arc::new(Mutex::new(())),
-                operations: Arc::new(tokio::sync::RwLock::new(())),
-                backend,
-                initial_files: std::sync::RwLock::new(HashMap::new()),
-                pressure,
-                applied_limits: std::sync::RwLock::new(None),
-                limit_exceeded: std::sync::Mutex::new(None),
-                invalidation_notified: AtomicBool::new(false),
-                invalidated: std::sync::Mutex::new(None),
-                retry_permitted: std::sync::Mutex::new(None),
-                pressure_recovery: std::sync::Mutex::new(None),
-                usage_observer: std::sync::Mutex::new(None),
-                #[cfg(test)]
-                failure_observations: std::sync::RwLock::new(None),
-                #[cfg(test)]
-                usage_observation_fails: AtomicBool::new(false),
-            }),
+            self.filesystem_object_limit_policy
+                .resolve(allocated_bytes)
+                .map(ResolvedStorageLimits::Finite)
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_for_test() -> Self {
-        Self::new_for_test_with_observations(
-            None,
-            None,
-            FilesystemCapacity {
-                total_bytes: 1,
-                available_bytes: 1,
-                total_filesystem_objects: 1,
-                available_filesystem_objects: 1,
-            },
+    /// Creates an empty filesystem generation for an agent with the requested limits.
+    ///
+    /// Worker startup calls this before metering is bound or initial files are materialized. The
+    /// returned filesystem is in the `Created` stage; provisioning failures are returned as
+    /// `CreateFailure`, and write-capacity failures may use the supplied pressure recovery later.
+    pub(crate) async fn create_fresh_with_pressure_recovery(
+        &self,
+        agent: OwnedAgentId,
+        limits: ResolvedStorageLimits,
+        pressure_recovery: FilesystemWriteRecovery,
+    ) -> Result<CreatedFilesystem, CreateFailure> {
+        lifecycle::create_fresh_with_pressure_recovery(
+            self.provisioning.clone(),
+            agent,
+            limits,
+            pressure_recovery,
         )
+        .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    struct BindingSpaceObservationGuard(Option<FilesystemSpace>);
+
+    impl Drop for BindingSpaceObservationGuard {
+        fn drop(&mut self) {
+            BINDING_SPACE_OBSERVATION.set(self.0);
+        }
     }
 
-    #[cfg(test)]
-    pub(crate) fn mark_read_only_for_test(&self, path: PathBuf) {
-        self.runtime_state.initial_files.write().unwrap().insert(
-            path,
-            InitialAgentFile {
-                content_hash: golem_common::model::agent::AgentFileContentHash(
-                    golem_common::model::diff::Hash::empty(),
-                ),
-                path: golem_common::model::component::AgentFilePath::from_abs_str("/read-only")
-                    .unwrap(),
-                permissions: golem_common::model::component::AgentFilePermissions::ReadOnly,
-                size: 0,
-            },
+    fn with_binding_space_observation<T>(space: FilesystemSpace, f: impl FnOnce() -> T) -> T {
+        let previous = BINDING_SPACE_OBSERVATION.replace(Some(space));
+        let _guard = BindingSpaceObservationGuard(previous);
+        f()
+    }
+
+    #[test]
+    fn object_limit_policy_resolves_floor_proportional_value_and_ceiling() {
+        let policy = FilesystemObjectLimitPolicyConfig::new(32_768, 100, 50_000).unwrap();
+
+        assert_eq!(policy.resolve(1).unwrap().filesystem_objects, 100);
+        assert_eq!(
+            policy
+                .resolve(u64::try_from(BYTES_PER_GIB).unwrap())
+                .unwrap()
+                .filesystem_objects,
+            32_768
+        );
+        assert_eq!(
+            policy
+                .resolve(u64::try_from(BYTES_PER_GIB * 10).unwrap())
+                .unwrap()
+                .filesystem_objects,
+            50_000
         );
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_for_test_with_observations(
-        usage: Option<AgentFilesystemUsage>,
-        limits: Option<ResolvedAgentFilesystemLimits>,
-        capacity: FilesystemCapacity,
-    ) -> Self {
-        let runtime = Self::new(
-            Arc::new(unmanaged::UnmanagedAgentFilesystem::new(PathBuf::from(
-                "<test>",
-            ))),
-            FilesystemPressureConfig {
-                minimum_available_bytes: 0,
-                target_available_bytes: 0,
-                minimum_available_filesystem_objects: 0,
-                target_available_filesystem_objects: 0,
-                ..FilesystemPressureConfig::default()
-            },
+    #[test]
+    fn object_limit_policy_still_rejects_zero_allocated_bytes() {
+        let error = FilesystemObjectLimitPolicyConfig::default()
+            .resolve(0)
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("resolve nonzero agent filesystem storage limit")
         );
-        *runtime
-            .runtime_state
-            .applied_limits
-            .write()
-            .expect("agent filesystem applied-limit lock poisoned") = limits;
-        *runtime
-            .runtime_state
-            .failure_observations
-            .write()
-            .expect("agent filesystem test observation lock poisoned") = Some((usage, capacity));
-        runtime
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_for_test_with_failed_observations() -> Self {
-        let runtime = Self::new_for_test_with_capacity_observation_failure();
-        runtime
-            .runtime_state
-            .usage_observation_fails
-            .store(true, Ordering::Release);
-        runtime
-    }
+    #[test]
+    fn agent_filesystems_binding_rejects_pressure_target_above_observed_capacity() {
+        let settings = FilesystemStorageConfig::default();
+        let observed_total_bytes = settings.pressure.target_available_bytes() - 1;
 
-    #[cfg(test)]
-    pub(crate) fn new_for_test_with_capacity_observation_failure() -> Self {
-        Self::new(
-            Arc::new(unmanaged::UnmanagedAgentFilesystem::new(PathBuf::from(
-                "<missing-test-filesystem>",
-            ))),
-            FilesystemPressureConfig {
-                minimum_available_bytes: 0,
-                target_available_bytes: 0,
-                minimum_available_filesystem_objects: 0,
-                target_available_filesystem_objects: 0,
-                ..FilesystemPressureConfig::default()
+        let result = with_binding_space_observation(
+            FilesystemSpace::Observed {
+                total_bytes: observed_total_bytes,
+                available_bytes: observed_total_bytes,
+                total_filesystem_objects: u64::MAX,
+                available_filesystem_objects: u64::MAX,
             },
-        )
-    }
-}
+            || AgentFilesystems::new(&settings),
+        );
 
-pub(super) fn create_materialization_parent<'a>(
-    root: &Path,
-    target: &'a Path,
-) -> std::io::Result<&'a Path> {
-    let parent = target.parent().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "initial-file target has no parent",
-        )
-    })?;
-    let relative = parent.strip_prefix(root).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "initial-file target escapes the agent filesystem",
-        )
-    })?;
-    let mut current = root.to_path_buf();
-    for component in relative.components() {
-        let std::path::Component::Normal(component) = component else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "initial-file target contains an invalid path component",
-            ));
-        };
-        current.push(component);
-        match std::fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
-            Ok(_) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "initial-file parent is not a directory",
-                ));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                std::fs::create_dir(&current)?;
-            }
-            Err(error) => return Err(error),
+        let error = result
+            .err()
+            .expect("binding must reject a pressure target above observed capacity");
+        assert!(
+            error
+                .to_string()
+                .contains("fit filesystem pressure byte target within managed capacity")
+        );
+    }
+
+    #[test]
+    fn agent_filesystems_binding_accepts_pressure_target_equal_to_observed_capacity() {
+        let settings = FilesystemStorageConfig::default();
+        let observed_total_bytes = settings.pressure.target_available_bytes();
+
+        let result = with_binding_space_observation(
+            FilesystemSpace::Observed {
+                total_bytes: observed_total_bytes,
+                available_bytes: observed_total_bytes,
+                total_filesystem_objects: u64::MAX,
+                available_filesystem_objects: u64::MAX,
+            },
+            || AgentFilesystems::new(&settings),
+        );
+
+        if let Err(error) = result {
+            panic!("binding rejected a pressure target equal to observed capacity: {error}");
         }
-    }
-    Ok(parent)
-}
-
-pub(super) fn set_initial_file_permissions(
-    file: &std::fs::File,
-    read_only: bool,
-) -> std::io::Result<()> {
-    let mut permissions = file.metadata()?.permissions();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        permissions.set_mode(if read_only { 0o444 } else { 0o644 });
-    }
-    #[cfg(not(unix))]
-    permissions.set_readonly(read_only);
-    file.set_permissions(permissions)
-}
-
-pub(super) async fn acquire_lifecycle_lock(path: &Path) -> OwnedMutexGuard<()> {
-    let lock = {
-        let mut locks = LIFECYCLE_LOCKS
-            .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
-            .lock()
-            .expect("agent filesystem lifecycle lock registry poisoned");
-        locks.retain(|_, lock| lock.strong_count() > 0);
-        match locks.get(path).and_then(Weak::upgrade) {
-            Some(lock) => lock,
-            None => {
-                let lock = Arc::new(Mutex::new(()));
-                locks.insert(path.to_path_buf(), Arc::downgrade(&lock));
-                lock
-            }
-        }
-    };
-    lock.lock_owned().await
-}
-
-pub(super) async fn verify_fresh_directory(path: &Path) -> Result<(), FilesystemStorageError> {
-    let metadata = tokio::fs::symlink_metadata(path)
-        .await
-        .map_err(|error| FilesystemStorageError::io("verify runtime directory", path, error))?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err(FilesystemStorageError::verification(
-            "verify fresh runtime directory",
-            path,
-        ));
-    }
-
-    let mut entries = tokio::fs::read_dir(path).await.map_err(|error| {
-        FilesystemStorageError::io("verify empty runtime directory", path, error)
-    })?;
-    let empty = entries
-        .next_entry()
-        .await
-        .map_err(|error| FilesystemStorageError::io("verify empty runtime directory", path, error))?
-        .is_none();
-    if !empty {
-        return Err(FilesystemStorageError::verification(
-            "verify empty runtime directory",
-            path,
-        ));
-    }
-
-    Ok(())
-}
-
-pub(super) async fn verify_fresh_open_directory(path: &Path) -> Result<(), FilesystemStorageError> {
-    let metadata = tokio::fs::metadata(path)
-        .await
-        .map_err(|error| FilesystemStorageError::io("verify runtime directory", path, error))?;
-    if !metadata.is_dir() {
-        return Err(FilesystemStorageError::verification(
-            "verify fresh runtime directory",
-            path,
-        ));
-    }
-
-    let mut entries = tokio::fs::read_dir(path).await.map_err(|error| {
-        FilesystemStorageError::io("verify empty runtime directory", path, error)
-    })?;
-    if entries
-        .next_entry()
-        .await
-        .map_err(|error| FilesystemStorageError::io("verify empty runtime directory", path, error))?
-        .is_some()
-    {
-        return Err(FilesystemStorageError::verification(
-            "verify empty runtime directory",
-            path,
-        ));
-    }
-    Ok(())
-}
-
-pub(super) async fn rollback_creation(
-    path: &Path,
-    creation_error: FilesystemStorageError,
-    cleanup_retry: &RetryConfig,
-) -> FilesystemStorageError {
-    match remove_and_verify(path, "roll back runtime directory", cleanup_retry).await {
-        Ok(()) => creation_error,
-        Err(cleanup_error) => cleanup_error,
-    }
-}
-
-async fn rollback_owned_filesystem(
-    filesystem: AgentFilesystem,
-    creation_error: FilesystemStorageError,
-) -> FilesystemStorageError {
-    match filesystem.close_and_delete().await {
-        Ok(()) => creation_error,
-        Err(cleanup_error) => cleanup_error,
-    }
-}
-
-pub(super) async fn remove_and_verify(
-    path: &Path,
-    operation: &'static str,
-    cleanup_retry: &RetryConfig,
-) -> Result<(), FilesystemStorageError> {
-    let mut retry = RetryState::new(cleanup_retry);
-    loop {
-        retry.start_attempt();
-        match remove_and_verify_once(path, operation).await {
-            Ok(()) => return Ok(()),
-            Err(error) => {
-                if !retry.failed_attempt().await {
-                    return Err(error);
-                }
-            }
-        }
-    }
-}
-
-async fn remove_and_verify_once(
-    path: &Path,
-    operation: &'static str,
-) -> Result<(), FilesystemStorageError> {
-    match tokio::fs::symlink_metadata(path).await {
-        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-            tokio::fs::remove_dir_all(path)
-                .await
-                .map_err(|error| FilesystemStorageError::cleanup_io(operation, path, error))?;
-        }
-        Ok(_) => {
-            tokio::fs::remove_file(path)
-                .await
-                .map_err(|error| FilesystemStorageError::cleanup_io(operation, path, error))?;
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(FilesystemStorageError::cleanup_io(operation, path, error)),
-    }
-
-    match tokio::fs::symlink_metadata(path).await {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Ok(_) => Err(FilesystemStorageError::cleanup_verification(
-            operation, path,
-        )),
-        Err(error) => Err(FilesystemStorageError::cleanup_io(operation, path, error)),
-    }
-}
-
-pub(super) fn remove_and_verify_blocking(path: &Path) -> Result<(), FilesystemStorageError> {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-            std::fs::remove_dir_all(path).map_err(|error| {
-                FilesystemStorageError::cleanup_io("delete runtime directory", path, error)
-            })?;
-        }
-        Ok(_) => {
-            std::fs::remove_file(path).map_err(|error| {
-                FilesystemStorageError::cleanup_io("delete runtime directory", path, error)
-            })?;
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(FilesystemStorageError::cleanup_io(
-                "delete runtime directory",
-                path,
-                error,
-            ));
-        }
-    }
-
-    match std::fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Ok(_) => Err(FilesystemStorageError::cleanup_verification(
-            "delete runtime directory",
-            path,
-        )),
-        Err(error) => Err(FilesystemStorageError::cleanup_io(
-            "delete runtime directory",
-            path,
-            error,
-        )),
     }
 }

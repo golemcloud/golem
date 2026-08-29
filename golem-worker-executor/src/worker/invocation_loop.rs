@@ -13,23 +13,29 @@
 // limitations under the License.
 
 use crate::model::{ReadFileResult, TrapType};
-use crate::services::agent_filesystem::AgentFilesystem;
-use crate::services::agent_resource_billing::AgentResourceBilling;
+use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
+use crate::services::agent_filesystem::{
+    LimitTransition, ResidentFilesystem, ResidentFilesystemActivity, SealedFilesystem,
+    drain_sealed_filesystem, filesystem_activity, seal, set_limits,
+};
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
-use crate::services::{HasOplog, HasShardService, HasWorker};
+use crate::services::resource_usage_metering::{ResourceUsageMeteringWindow, close_window};
+use crate::services::{HasActiveWorkers, HasOplog, HasShardService, HasWorker};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
     CreateWorkerInstanceError, FinalWorkerState, PendingWorkerInterrupt, QueuedWorkerInvocation,
-    RetryDecision, RunningWorker, Worker, WorkerCommand, WorkerInterruptState, WorkerTrace,
+    RetryDecision, RunningAgent, RunningAgentRuntime, RunningWorker, UnloadReason, UnloadRequest,
+    Worker, WorkerCommand, WorkerInterruptState, WorkerRunningAgent, WorkerTrace,
 };
 use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_lock::Mutex;
 use drop_stream::DropStream;
+use futures::FutureExt;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
@@ -53,9 +59,11 @@ use golem_common::tracing::TraceOrigin;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::ops::DerefMut;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
@@ -99,6 +107,8 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     /// for task cancellation or panic.
     pub(super) permit_state:
         ConcurrentAgentPermitState<crate::services::active_workers::ConcurrentAgentPermit>,
+    pub(super) filesystem_activity: Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
+    pub(super) unload_request: Arc<StdMutex<Option<UnloadRequest>>>,
     pub idle_since_millis: Arc<AtomicU64>,
     /// `ResumeReplay` is not represented in the internal queue, so we track it
     /// explicitly to avoid evicting a worker that is blocked waking up for it.
@@ -117,9 +127,9 @@ impl<Ctx: WorkerCtx> Drop for InvocationLoop<Ctx> {
 /// Outcome of creating the worker instance for one iteration of the invocation loop.
 enum CreateInstanceResult<Ctx: WorkerCtx> {
     Created {
-        instance: Instance,
-        store: Mutex<Store<Ctx>>,
-        filesystem: Box<AgentFilesystem>,
+        agent: Box<WorkerRunningAgent<Ctx>>,
+        window: ResourceUsageMeteringWindow,
+        recovery_decision: Option<RetryDecision>,
     },
     /// Instance creation was interrupted by a recoverable condition, such as fuel or filesystem
     /// quota exhaustion. The worker metadata remains valid and queued work must be preserved.
@@ -128,22 +138,79 @@ enum CreateInstanceResult<Ctx: WorkerCtx> {
     Failed,
 }
 
-async fn settle_reconstructed_filesystem(
-    filesystem: &AgentFilesystem,
-) -> Result<(), WorkerExecutorError> {
-    filesystem
-        .settle_reconstruction()
-        .await
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-    debug!("Agent filesystem reconstruction settled");
-    Ok(())
+struct ResidentAgentOwnership<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesystem> {
+    runtime: Runtime,
+    filesystem: ResidentFilesystem<Adapter>,
+}
+
+struct SealedAgentOwnership<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesystem> {
+    runtime: Runtime,
+    filesystem: SealedFilesystem<Adapter>,
+}
+
+enum FilesystemLimitUpdateOutcome {
+    Resident(ResidentFilesystem),
+    MustUnload {
+        filesystem: SealedFilesystem,
+        failure: Option<WorkerExecutorError>,
+        suspend: bool,
+    },
+}
+
+struct PendingFilesystemLimitUpdate {
+    allocated_bytes: u64,
+    senders: Vec<Sender<Result<(), WorkerExecutorError>>>,
+}
+
+enum ResidentWakeup {
+    Command(WorkerCommand),
+    FilesystemTerminalFailure,
+    CommandChannelClosed,
+}
+
+impl PendingFilesystemLimitUpdate {
+    fn push(&mut self, allocated_bytes: u64, sender: Sender<Result<(), WorkerExecutorError>>) {
+        self.allocated_bytes = allocated_bytes;
+        self.senders.push(sender);
+    }
+
+    fn complete(self, result: Result<(), WorkerExecutorError>) {
+        for sender in self.senders {
+            let _ = sender.send(result.clone());
+        }
+    }
+}
+
+fn coalesce_filesystem_limit_update(
+    allocated_bytes: u64,
+    sender: Sender<Result<(), WorkerExecutorError>>,
+    receiver: &mut UnboundedReceiver<WorkerCommand>,
+    deferred_wakeups: &mut VecDeque<WorkerCommand>,
+) -> PendingFilesystemLimitUpdate {
+    let mut update = PendingFilesystemLimitUpdate {
+        allocated_bytes,
+        senders: vec![sender],
+    };
+    let pending_wakeups = std::mem::take(deferred_wakeups);
+    let mut absorb = |command| match command {
+        WorkerCommand::UpdateFilesystemLimit {
+            allocated_bytes,
+            sender,
+        } => update.push(allocated_bytes, sender),
+        command => deferred_wakeups.push_back(command),
+    };
+    for command in pending_wakeups {
+        absorb(command);
+    }
+    while let Ok(command) = receiver.try_recv() {
+        absorb(command);
+    }
+    update
 }
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
-    async fn pending_interrupt(&self) -> Option<(InterruptKind, RetryDecision)> {
-        take_pending_interrupt(&self.interrupt_signal)
-            .await
-            .map(|interrupt| (interrupt.kind, interrupt.retry_decision()))
+    async fn pending_interrupt(&self) -> Option<PendingWorkerInterrupt> {
+        take_pending_interrupt(&self.interrupt_signal).await
     }
 
     /// Runs the invocation loop of a running worker, responsible for processing incoming
@@ -159,6 +226,27 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     pub async fn run(&mut self) {
         let agent_id = self.owned_agent_id.agent_id.clone();
         let mut deferred_wakeups = VecDeque::new();
+        let worker = Arc::downgrade(&self.parent);
+        let _filesystem_limit_registration = self
+            .parent
+            .resource_entry
+            .clone()
+            .register_agent_filesystem_limit_target(
+                self.owned_agent_id.clone(),
+                move |allocated_bytes| {
+                    let worker = worker.clone();
+                    Box::pin(async move {
+                        match worker.upgrade() {
+                            Some(worker) => {
+                                worker
+                                    .request_agent_filesystem_limit_update(allocated_bytes)
+                                    .await
+                            }
+                            None => Ok(()),
+                        }
+                    })
+                },
+            );
 
         'outer: loop {
             self.release_terminal_interrupt().await;
@@ -170,12 +258,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 break;
             }
             self.acquire_concurrent_agent_permit().await;
-            let (instance, store, filesystem) = match self.create_instance().await {
+            let permit = self
+                .permit_state
+                .take_permit()
+                .expect("startup must hold a concurrent-agent permit");
+            let (mut agent, window, recovery_decision) = match self.create_instance(permit).await {
                 CreateInstanceResult::Created {
-                    instance,
-                    store,
-                    filesystem,
-                } => (instance, store, *filesystem),
+                    agent,
+                    window,
+                    recovery_decision,
+                } => (*agent, window, recovery_decision),
                 CreateInstanceResult::Interrupted(kind) => {
                     self.release_concurrent_agent_permit();
                     let pending_interrupt = take_pending_interrupt(&self.interrupt_signal).await;
@@ -225,46 +317,20 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     break;
                 }
             };
-            let resource_billing = store.lock().await.data().durable_ctx().resource_billing();
-            if let Err(error) = resource_billing.open(&filesystem.runtime()).await {
-                let error = WorkerExecutorError::runtime(format!(
-                    "Failed to open worker resource billing window: {error}"
-                ));
-                self.parent
-                    .complete_startup(self.start_attempt, Err(error.clone()));
-                self.release_concurrent_agent_permit();
-                filesystem.seal();
-                drop(store);
-                let cleanup_result = filesystem.close_and_delete().await;
-                match cleanup_result {
-                    Ok(()) => self.stop_unloaded(Some(error)).await,
-                    Err(cleanup) => {
-                        self.stop_cleanup_failed(WorkerExecutorError::runtime(format!(
-                            "{error}; {cleanup}"
-                        )))
-                        .await;
-                    }
-                }
-                break;
-            }
-
-            let (mut final_decision, recovery_failure) = match self
-                .recover_instance_state(&instance, &store, &filesystem)
-                .await
-            {
-                Ok(decision) => (decision, None),
-                Err(error) => {
-                    self.parent
-                        .complete_startup(self.start_attempt, Err(error.clone()));
-                    (Some(RetryDecision::None), Some(error))
-                }
-            };
+            self.permit_state.install_window(window);
+            *self.filesystem_activity.lock().unwrap() =
+                Some(filesystem_activity(&agent.filesystem));
+            let mut final_decision = recovery_decision;
+            let mut recovery_failure = None;
             let mut final_interrupt = None;
+            let mut final_unload_request = None;
             let mut cleanup_ephemeral_worker = false;
 
             if recovery_failure.is_none()
-                && let Some((kind, decision)) = self.pending_interrupt().await
+                && let Some(interrupt) = self.pending_interrupt().await
             {
+                let kind = interrupt.kind;
+                let decision = interrupt.retry_decision();
                 debug!(
                     %agent_id,
                     ?decision,
@@ -273,6 +339,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
                     final_interrupt = Some(kind);
                 }
+                final_unload_request = Some(interrupt.unload_request);
                 final_decision = Some(decision);
             }
 
@@ -286,67 +353,193 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             }
 
             if final_decision.is_none() {
-                let resource_billing = store.lock().await.data().durable_ctx().resource_billing();
-                let mut inner_loop = InnerInvocationLoop {
-                    receiver: &mut self.receiver,
-                    active: self.active.clone(),
-                    owned_agent_id: self.owned_agent_id.clone(),
-                    parent: self.parent.clone(),
-                    waiting_for_command: self.waiting_for_command.clone(),
-                    interrupt_signal: self.interrupt_signal.clone(),
-                    instance: &instance,
-                    store: &store,
-                    filesystem: &filesystem,
-                    resource_billing,
-                    invocations_since_snapshot: 0,
-                    idle_snapshot_task: None,
-                    permit_state: &mut self.permit_state,
-                    idle_since_millis: self.idle_since_millis.clone(),
-                    resume_replay_pending: self.resume_replay_pending.clone(),
-                    worker_trace: self.worker_trace.clone(),
-                    deferred_wakeups: &mut deferred_wakeups,
-                };
+                'resident: loop {
+                    let mut inner_loop = InnerInvocationLoop {
+                        receiver: &mut self.receiver,
+                        active: self.active.clone(),
+                        owned_agent_id: self.owned_agent_id.clone(),
+                        parent: self.parent.clone(),
+                        waiting_for_command: self.waiting_for_command.clone(),
+                        interrupt_signal: self.interrupt_signal.clone(),
+                        instance: &agent.runtime.instance,
+                        store: &agent.runtime.store,
+                        filesystem: &agent.filesystem,
+                        invocations_since_snapshot: 0,
+                        idle_snapshot_task: None,
+                        permit_state: &mut self.permit_state,
+                        idle_since_millis: self.idle_since_millis.clone(),
+                        resume_replay_pending: self.resume_replay_pending.clone(),
+                        worker_trace: self.worker_trace.clone(),
+                        deferred_wakeups: &mut deferred_wakeups,
+                    };
 
-                let result = inner_loop.run().await;
-                final_decision = result.retry_decision;
-                final_interrupt = result.final_interrupt;
-                if let Some((kind, decision)) = self.pending_interrupt().await {
-                    if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
-                        final_interrupt = Some(kind);
+                    let result = inner_loop.run().await;
+                    if let Some(update) = result.filesystem_limit_update {
+                        let RunningAgent {
+                            runtime,
+                            filesystem,
+                        } = agent;
+                        let RunningAgentRuntime { instance, store } = runtime;
+                        let limit_update = match self
+                            .parent
+                            .active_workers()
+                            .agent_filesystems()
+                            .resolved_limits(update.allocated_bytes)
+                        {
+                            Ok(limits) => match set_limits(filesystem, limits).await {
+                                Ok(LimitTransition::Resident(filesystem)) => {
+                                    FilesystemLimitUpdateOutcome::Resident(filesystem)
+                                }
+                                Ok(LimitTransition::MustUnload(filesystem)) => {
+                                    FilesystemLimitUpdateOutcome::MustUnload {
+                                        filesystem,
+                                        failure: None,
+                                        suspend: true,
+                                    }
+                                }
+                                Err(failure) => FilesystemLimitUpdateOutcome::MustUnload {
+                                    filesystem: failure.filesystem,
+                                    failure: Some(WorkerExecutorError::runtime(
+                                        failure.source.to_string(),
+                                    )),
+                                    suspend: false,
+                                },
+                            },
+                            Err(error) => FilesystemLimitUpdateOutcome::MustUnload {
+                                filesystem: seal(filesystem),
+                                failure: Some(WorkerExecutorError::runtime(error.to_string())),
+                                suspend: false,
+                            },
+                        };
+                        match limit_update {
+                            FilesystemLimitUpdateOutcome::Resident(filesystem) => {
+                                agent = RunningAgent {
+                                    runtime: RunningAgentRuntime { instance, store },
+                                    filesystem,
+                                };
+                                *self.filesystem_activity.lock().unwrap() =
+                                    Some(filesystem_activity(&agent.filesystem));
+                                update.complete(Ok(()));
+                                continue 'resident;
+                            }
+                            FilesystemLimitUpdateOutcome::MustUnload {
+                                filesystem,
+                                failure,
+                                suspend,
+                            } => {
+                                let cleanup_failure = finish_filesystem_limit_unload(
+                                    suspend,
+                                    unload_sealed_agent_ownership(
+                                        SealedAgentOwnership {
+                                            runtime: RunningAgentRuntime { instance, store },
+                                            filesystem,
+                                        },
+                                        UnloadReason::FilesystemLimit,
+                                        resource_usage_close_deadline(),
+                                        &mut self.permit_state,
+                                        &self.filesystem_activity,
+                                    ),
+                                    || async {
+                                        self.parent
+                                            .add_and_commit_oplog(OplogEntry::suspend())
+                                            .await;
+                                    },
+                                )
+                                .await;
+                                let response = match (&failure, &cleanup_failure) {
+                                    (None, None) => Ok(()),
+                                    (Some(failure), None) => Err(failure.clone()),
+                                    (None, Some(cleanup)) => Err(cleanup.clone()),
+                                    (Some(failure), Some(cleanup)) => {
+                                        Err(WorkerExecutorError::runtime(format!(
+                                            "{failure}; {cleanup}"
+                                        )))
+                                    }
+                                };
+                                update.complete(response);
+                                match cleanup_failure {
+                                    Some(cleanup) => {
+                                        let cleanup = failure.map_or(cleanup.clone(), |failure| {
+                                            WorkerExecutorError::runtime(format!(
+                                                "{failure}; {cleanup}"
+                                            ))
+                                        });
+                                        self.stop_cleanup_failed(cleanup).await;
+                                    }
+                                    None => self.stop_unloaded(failure).await,
+                                }
+                                break 'outer;
+                            }
+                        }
                     }
-                    final_decision = Some(decision);
+                    final_decision = result.retry_decision;
+                    final_interrupt = result.final_interrupt;
+                    final_unload_request = result.unload_request;
+                    recovery_failure = result.recovery_failure;
+                    if let Some(interrupt) = self.pending_interrupt().await {
+                        let kind = interrupt.kind;
+                        let decision = interrupt.retry_decision();
+                        if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+                            final_interrupt = Some(kind);
+                        }
+                        final_unload_request = Some(interrupt.unload_request);
+                        final_decision = Some(decision);
+                    }
+                    cleanup_ephemeral_worker = result.cleanup_ephemeral_worker;
+                    break 'resident;
                 }
-                cleanup_ephemeral_worker = result.cleanup_ephemeral_worker;
             }
 
-            let resource_close_error = self
-                .close_resource_window_and_release(&store, &filesystem)
-                .await
-                .err();
-            if let Some(error) = resource_close_error.as_ref() {
-                warn!(error = %error, "Resource-window close failed; reconstructing or unloading the worker");
-            }
-            final_decision =
-                decision_after_resource_close(final_decision, resource_close_error.is_some());
-
-            self.suspend_worker(&store).await;
+            self.suspend_worker(&agent.runtime.store).await;
 
             if let Some(kind) = final_interrupt {
-                self.record_retry_interrupt_failure(&store, kind).await;
+                self.record_retry_interrupt_failure(&agent.runtime.store, kind)
+                    .await;
             }
 
-            let mut runtime = Some((instance, store, filesystem));
+            let unload_request = self
+                .unload_request
+                .lock()
+                .unwrap()
+                .take()
+                .or(final_unload_request)
+                .unwrap_or_else(|| {
+                    let reason = if recovery_failure.is_some() {
+                        UnloadReason::Failure
+                    } else {
+                        match final_decision {
+                            Some(RetryDecision::TryStop(_)) => UnloadReason::Suspend,
+                            Some(RetryDecision::ReacquirePermits) => UnloadReason::OutOfMemory,
+                            Some(RetryDecision::Immediate | RetryDecision::Delayed(_)) => {
+                                UnloadReason::Failure
+                            }
+                            None | Some(RetryDecision::None) => UnloadReason::ExplicitStop,
+                        }
+                    };
+                    UnloadRequest::ordinary(reason)
+                });
+            if let Some(error) = Self::unload_running_agent(
+                agent,
+                unload_request.reason,
+                unload_request.deadline,
+                &mut self.permit_state,
+                &self.filesystem_activity,
+            )
+            .await
+            {
+                self.stop_cleanup_failed(error).await;
+                break;
+            }
 
             match final_decision {
                 None | Some(RetryDecision::None) => {
-                    let cleanup_error = Self::close_runtime(&mut runtime).await;
                     debug!(
                         %agent_id,
                         "Invocation queue loop notifying parent about being stopped"
                     );
                     self.stop_closed(
-                        cleanup_error,
-                        recovery_failure.or(resource_close_error).or_else(|| {
+                        None,
+                        recovery_failure.or_else(|| {
                             cleanup_ephemeral_worker.then(super::inactive_ephemeral_agent_error)
                         }),
                     )
@@ -359,35 +552,25 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
                 Some(RetryDecision::TryStop(ts)) => {
                     if ts < *self.parent.last_resume_request.lock().await {
-                        if let Some(error) = Self::close_runtime(&mut runtime).await {
-                            self.stop_cleanup_failed(error).await;
-                            break;
-                        }
                         debug!(
                             %agent_id,
                             "Suspend request ignored because there was a resume request since it"
                         );
                         continue;
                     } else {
-                        let cleanup_error = Self::close_runtime(&mut runtime).await;
                         debug!(
                             %agent_id,
                             "Invocation queue loop notifying parent about being stopped"
                         );
-                        self.stop_closed(cleanup_error, resource_close_error).await;
+                        self.stop_closed(None, None).await;
                         break;
                     }
                 }
                 Some(RetryDecision::Immediate) => {
-                    if let Some(error) = Self::close_runtime(&mut runtime).await {
-                        self.stop_cleanup_failed(error).await;
-                        break;
-                    }
                     debug!(%agent_id, "Invocation queue loop triggering restart immediately");
                     continue;
                 }
                 Some(RetryDecision::Delayed(delay)) => {
-                    debug_assert!(resource_close_error.is_none());
                     debug!(
                         %agent_id,
                         ?delay,
@@ -398,10 +581,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     loop {
                         tokio::select! {
                             _ = &mut sleep => {
-                                if let Some(error) = Self::close_runtime(&mut runtime).await {
-                                    self.stop_cleanup_failed(error).await;
-                                    break 'outer;
-                                }
                                 debug!(%agent_id, "Invocation queue loop restarting after delay");
                                 continue 'outer;
                             }
@@ -409,44 +588,42 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 let command = match command {
                                     Some(command) => command,
                                     None => {
-                                        let cleanup_error = Self::close_runtime(&mut runtime).await;
                                         debug!(%agent_id, "Invocation queue loop command channel closed during delayed retry");
-                                        self.stop_closed(cleanup_error, None).await;
+                                        self.stop_closed(None, None).await;
                                         break 'outer;
                                     }
                                 };
 
-                                if let Some((kind, decision)) = self.pending_interrupt().await {
+                                if let Some(interrupt) = self.pending_interrupt().await {
+                                    let kind = interrupt.kind;
+                                    let decision = interrupt.retry_decision();
                                     debug!(%agent_id, ?decision, "Invocation queue loop interrupted during delayed retry");
                                     if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
-                                        let store = &runtime.as_ref().expect("runtime must be open").1;
-                                        self.record_retry_interrupt_failure(store, kind).await;
+                                        match kind {
+                                            InterruptKind::Suspend(_) => {
+                                                self.parent.add_and_commit_oplog(OplogEntry::suspend()).await;
+                                            }
+                                            InterruptKind::Interrupt(_) => {
+                                                self.parent.add_and_commit_oplog(OplogEntry::interrupted()).await;
+                                            }
+                                            InterruptKind::Restart | InterruptKind::Jump => {}
+                                        }
                                     }
                                     match decision {
                                         RetryDecision::Immediate => {
-                                            if let Some(error) = Self::close_runtime(&mut runtime).await {
-                                                self.stop_cleanup_failed(error).await;
-                                                break 'outer;
-                                            }
                                             Self::defer_wakeup(&mut deferred_wakeups, command);
                                             continue 'outer;
                                         }
                                         RetryDecision::None => {
-                                            let cleanup_error = Self::close_runtime(&mut runtime).await;
-                                            self.stop_closed(cleanup_error, None).await;
+                                            self.stop_closed(None, None).await;
                                             break 'outer;
                                         }
                                         RetryDecision::TryStop(timestamp) => {
-                                            let cleanup_error = Self::close_runtime(&mut runtime).await;
                                             if timestamp < *self.parent.last_resume_request.lock().await {
-                                                if let Some(error) = cleanup_error {
-                                                    self.stop_cleanup_failed(error).await;
-                                                    break 'outer;
-                                                }
                                                 Self::defer_wakeup(&mut deferred_wakeups, command);
                                                 continue 'outer;
                                             }
-                                            self.stop_closed(cleanup_error, None).await;
+                                            self.stop_closed(None, None).await;
                                             break 'outer;
                                         }
                                         RetryDecision::Delayed(_) | RetryDecision::ReacquirePermits => {
@@ -462,21 +639,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     }
                                     WorkerCommand::WorkAvailable => {
                                         debug!(%agent_id, "Invocation queue loop woke up during delayed retry");
-                                        if let Some(error) = Self::close_runtime(&mut runtime).await {
-                                            self.stop_cleanup_failed(error).await;
-                                            break 'outer;
-                                        }
                                         Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::WorkAvailable);
                                         continue 'outer;
                                     }
                                     WorkerCommand::ResumeReplay => {
                                         debug!(%agent_id, "Invocation queue loop woke up for resume replay during delayed retry");
-                                        if let Some(error) = Self::close_runtime(&mut runtime).await {
-                                            self.stop_cleanup_failed(error).await;
-                                            break 'outer;
-                                        }
                                         Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::ResumeReplay);
                                         continue 'outer;
+                                    }
+                                    WorkerCommand::UpdateFilesystemLimit { sender, .. } => {
+                                        let _ = sender.send(Ok(()));
                                     }
                                 }
                             }
@@ -484,10 +656,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     }
                 }
                 Some(RetryDecision::ReacquirePermits) => {
-                    if let Some(error) = Self::close_runtime(&mut runtime).await {
-                        self.stop_cleanup_failed(error).await;
-                        break;
-                    }
                     let delay = get_delay(self.parent.oom_retry_config(), self.oom_retry_count);
                     debug!(
                         %agent_id,
@@ -514,7 +682,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     async fn release_terminal_interrupt(&self) {
-        self.parent.filesystem_limit_interrupt.lock().await.take();
         self.interrupt_signal.lock().await.release_terminal_claim();
     }
 
@@ -527,38 +694,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .acquire(agent_id)
                 .instrument(agent_phase_span!(self, "acquire_concurrent_agent_permit"))
                 .await;
-            self.permit_state.install(permit);
+            self.permit_state.install_tracked(permit);
         }
     }
 
     fn release_concurrent_agent_permit(&mut self) {
         self.permit_state.release();
-    }
-
-    async fn close_resource_window_and_release(
-        &mut self,
-        store: &Mutex<Store<Ctx>>,
-        filesystem: &AgentFilesystem,
-    ) -> Result<(), WorkerExecutorError> {
-        filesystem.seal();
-        let resource_billing = store.lock().await.data().durable_ctx().resource_billing();
-        if resource_billing.is_active() {
-            self.permit_state
-                .close_then_release(async {
-                    resource_billing
-                        .close(&filesystem.runtime())
-                        .await
-                        .map_err(|error| {
-                            WorkerExecutorError::runtime(format!(
-                                "Failed to close worker resource billing window: {error}"
-                            ))
-                        })
-                })
-                .await
-        } else {
-            self.release_concurrent_agent_permit();
-            Ok(())
-        }
     }
 
     async fn stop_unloaded(&self, startup_failure: Option<WorkerExecutorError>) {
@@ -573,6 +714,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .stop_internal(
                 true,
                 pending_failure,
+                UnloadRequest::ordinary(UnloadReason::ExplicitStop),
                 FinalWorkerState::Unloaded { startup_failure },
             )
             .await;
@@ -586,6 +728,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .stop_internal(
                 true,
                 Some(pending_failure),
+                UnloadRequest::ordinary(UnloadReason::Failure),
                 FinalWorkerState::CleanupFailed(error),
             )
             .await;
@@ -596,23 +739,42 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         cleanup_error: Option<WorkerExecutorError>,
         startup_failure: Option<WorkerExecutorError>,
     ) {
-        match cleanup_error {
-            Some(error) => self.stop_cleanup_failed(error).await,
-            None => self.stop_unloaded(startup_failure).await,
-        }
+        publish_unload_outcome(
+            cleanup_error,
+            startup_failure,
+            |error| async move { self.stop_cleanup_failed(error).await },
+            |startup_failure| async move { self.stop_unloaded(startup_failure).await },
+        )
+        .await;
     }
 
-    async fn close_runtime(
-        runtime: &mut Option<(Instance, Mutex<Store<Ctx>>, AgentFilesystem)>,
-    ) -> Option<WorkerExecutorError> {
-        let (_instance, store, filesystem) = runtime.take()?;
-        let resource_billing = store.lock().await.data().durable_ctx().resource_billing();
-        debug_assert!(!resource_billing.is_active());
-        drop(store);
-        filesystem.close_and_delete().await.err().map(|error| {
-            error!(error = %error, "Failed to delete agent runtime filesystem");
-            WorkerExecutorError::runtime(error.to_string())
-        })
+    fn unload_running_agent<Runtime, Adapter>(
+        agent: RunningAgent<Runtime, Adapter>,
+        reason: UnloadReason,
+        deadline: Instant,
+        permit_state: &mut ConcurrentAgentPermitState<
+            crate::services::active_workers::ConcurrentAgentPermit,
+        >,
+        filesystem_activity: &Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
+    ) -> UnloadObserver
+    where
+        Runtime: Send + 'static,
+        Adapter: SandboxFilesystemAdapter,
+    {
+        let RunningAgent {
+            runtime,
+            filesystem,
+        } = agent;
+        unload_resident_agent_ownership(
+            ResidentAgentOwnership {
+                runtime,
+                filesystem,
+            },
+            reason,
+            deadline,
+            permit_state,
+            filesystem_activity,
+        )
     }
 
     fn archive_ephemeral_oplog(&self) {
@@ -640,6 +802,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .iter()
                 .any(|command| matches!(command, WorkerCommand::ResumeReplay)),
             WorkerCommand::InternalStatusChanged => true,
+            WorkerCommand::UpdateFilesystemLimit { .. } => false,
         };
 
         if !already_deferred {
@@ -648,14 +811,17 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     /// Create the worker instance and publish an event about it
-    async fn create_instance(&self) -> CreateInstanceResult<Ctx> {
+    async fn create_instance(
+        &self,
+        permit: crate::services::active_workers::ConcurrentAgentPermit,
+    ) -> CreateInstanceResult<Ctx> {
         async {
             debug!("Creating the worker instance");
-            match RunningWorker::create_instance(self.parent.clone()).await {
-                Ok((instance, store, filesystem)) => CreateInstanceResult::Created {
-                    instance,
-                    store,
-                    filesystem: Box::new(filesystem),
+            match RunningWorker::create_instance(self.parent.clone(), permit).await {
+                Ok((agent, window, recovery_decision)) => CreateInstanceResult::Created {
+                    agent: Box::new(agent),
+                    window,
+                    recovery_decision,
                 },
                 // Instance creation was interrupted by a recoverable condition. The worker exists
                 // and its metadata and `Create` oplog entry are already persisted, so the caller
@@ -682,58 +848,18 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         }
                     };
                     self.parent
-                        .stop_internal(true, Some(err), final_state)
+                        .stop_internal(
+                            true,
+                            Some(err),
+                            UnloadRequest::ordinary(UnloadReason::Failure),
+                            final_state,
+                        )
                         .await;
                     CreateInstanceResult::Failed
                 }
             }
         }
         .instrument(agent_phase_span!(self, "create_instance"))
-        .await
-    }
-
-    /// Prepares the instance for running by recovering its persisted state
-    ///
-    /// In case of failure to recover the state, it returns the retry decision to be used.
-    async fn recover_instance_state(
-        &self,
-        instance: &Instance,
-        store: &Mutex<Store<Ctx>>,
-        filesystem: &AgentFilesystem,
-    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
-        async {
-            debug!("Preparing the worker instance");
-            let mut store = store.lock().await;
-
-            store.data().set_suspended();
-
-            let span = span!(
-                Level::INFO,
-                "invocation",
-                agent_id = %self.owned_agent_id.agent_id,
-                agent_type = %self.worker_trace.agent_type,
-            );
-            let prepare_result =
-                Ctx::prepare_instance(&self.owned_agent_id.agent_id, instance, &mut *store)
-                    .instrument(span)
-                    .await;
-
-            match prepare_result {
-                Ok(decision) => {
-                    if decision.is_none() {
-                        settle_reconstructed_filesystem(filesystem).await?;
-                    }
-                    debug!("Recovery decision from prepare_instance: {decision:?}");
-                    Ok(decision)
-                }
-                Err(err) => {
-                    warn!("Failed to start the worker: {err}");
-                    store.data().set_suspended();
-                    Err(err)
-                }
-            }
-        }
-        .instrument(agent_phase_span!(self, "recover_instance_state"))
         .await
     }
 
@@ -766,6 +892,196 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 }
 
+async fn publish_unload_outcome<T>(
+    cleanup_error: Option<WorkerExecutorError>,
+    startup_failure: Option<WorkerExecutorError>,
+    cleanup_failed: impl AsyncFnOnce(WorkerExecutorError) -> T,
+    unloaded: impl AsyncFnOnce(Option<WorkerExecutorError>) -> T,
+) -> T {
+    match cleanup_error {
+        Some(error) => cleanup_failed(error).await,
+        None => unloaded(startup_failure).await,
+    }
+}
+
+async fn finish_filesystem_limit_unload(
+    suspend: bool,
+    unload: impl Future<Output = Option<WorkerExecutorError>>,
+    record_suspend: impl AsyncFnOnce(),
+) -> Option<WorkerExecutorError> {
+    let cleanup_failure = unload.await;
+    if suspend && cleanup_failure.is_none() {
+        record_suspend().await;
+    }
+    cleanup_failure
+}
+
+fn unload_resident_agent_ownership<Runtime, Adapter>(
+    ownership: ResidentAgentOwnership<Runtime, Adapter>,
+    reason: UnloadReason,
+    deadline: Instant,
+    permit_state: &mut ConcurrentAgentPermitState<
+        crate::services::active_workers::ConcurrentAgentPermit,
+    >,
+    filesystem_activity: &Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
+) -> UnloadObserver
+where
+    Runtime: Send + 'static,
+    Adapter: SandboxFilesystemAdapter,
+{
+    let ResidentAgentOwnership {
+        runtime,
+        filesystem,
+    } = ownership;
+    unload_sealed_agent_ownership(
+        SealedAgentOwnership {
+            runtime,
+            filesystem: seal(filesystem),
+        },
+        reason,
+        deadline,
+        permit_state,
+        filesystem_activity,
+    )
+}
+
+fn unload_sealed_agent_ownership<Runtime, Adapter>(
+    ownership: SealedAgentOwnership<Runtime, Adapter>,
+    reason: UnloadReason,
+    deadline: Instant,
+    permit_state: &mut ConcurrentAgentPermitState<
+        crate::services::active_workers::ConcurrentAgentPermit,
+    >,
+    filesystem_activity: &Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
+) -> UnloadObserver
+where
+    Runtime: Send + 'static,
+    Adapter: SandboxFilesystemAdapter,
+{
+    let window = permit_state.take_window();
+    let permit = permit_state.take_permit();
+    let permit_held = Arc::clone(&permit_state.held);
+    filesystem_activity.lock().unwrap().take();
+    spawn_module_owned_unload_continuation(move |completion| async move {
+        let SealedAgentOwnership {
+            runtime,
+            filesystem,
+        } = ownership;
+        debug!(?reason, "Unloading resident agent");
+        drop(runtime);
+
+        let deadline_sleep = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline));
+        tokio::pin!(deadline_sleep);
+        let (drained_before_deadline, close_error) = {
+            let drain = drain_sealed_filesystem(&filesystem);
+            tokio::pin!(drain);
+            let drained_before_deadline = tokio::select! {
+                _ = &mut drain => true,
+                _ = &mut deadline_sleep => false,
+            };
+            let close_error = match window {
+                Some(window) => close_window(window, deadline)
+                    .await
+                    .err()
+                    .map(|error| WorkerExecutorError::runtime(error.to_string())),
+                None => {
+                    drop(permit);
+                    None
+                }
+            };
+            permit_held.store(false, Ordering::Release);
+
+            if !drained_before_deadline {
+                completion.complete(Some(combine_unload_errors(
+                    unload_deadline_error(reason),
+                    close_error.clone(),
+                )));
+                drain.await;
+            }
+            (drained_before_deadline, close_error)
+        };
+
+        if !drained_before_deadline {
+            if let Some(error) = delete_unloaded_filesystem(filesystem).await {
+                error!(?reason, error = %error, "Agent cleanup failed after unload deadline");
+            }
+            return;
+        }
+
+        if let Some(error) = close_error {
+            completion.complete(Some(error));
+            if let Some(error) = delete_unloaded_filesystem(filesystem).await {
+                error!(?reason, error = %error, "Agent cleanup failed after lifecycle completion");
+            }
+            return;
+        }
+
+        let deletion = delete_unloaded_filesystem(filesystem);
+        tokio::pin!(deletion);
+        tokio::select! {
+            result = &mut deletion => {
+                completion.complete(result);
+            }
+            _ = &mut deadline_sleep => {
+                completion.complete(Some(unload_deadline_error(reason)));
+                if let Some(error) = deletion.await {
+                    error!(?reason, error = %error, "Agent cleanup failed after unload deadline");
+                }
+            }
+        };
+    })
+}
+
+fn combine_unload_errors(
+    primary: WorkerExecutorError,
+    secondary: Option<WorkerExecutorError>,
+) -> WorkerExecutorError {
+    secondary.map_or(primary.clone(), |secondary| {
+        WorkerExecutorError::runtime(format!("{primary}; {secondary}"))
+    })
+}
+
+fn unload_deadline_error(reason: UnloadReason) -> WorkerExecutorError {
+    WorkerExecutorError::runtime(format!("agent unload deadline reached for {reason:?}"))
+}
+
+async fn delete_unloaded_filesystem<Adapter: SandboxFilesystemAdapter>(
+    filesystem: SealedFilesystem<Adapter>,
+) -> Option<WorkerExecutorError> {
+    crate::services::agent_filesystem::delete(filesystem)
+        .await
+        .err()
+        .map(|error| {
+            error!(error = %error.source, "Failed to delete agent runtime filesystem");
+            WorkerExecutorError::runtime(error.source.to_string())
+        })
+}
+
+async fn catch_invocation_loop_panic<T>(
+    future: impl Future<Output = T>,
+) -> Result<T, WorkerExecutorError> {
+    AssertUnwindSafe(future)
+        .catch_unwind()
+        .await
+        .map_err(|panic| {
+            let message = panic
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("unknown panic");
+            WorkerExecutorError::runtime(format!("invocation loop panicked: {message}"))
+        })
+}
+
+pub(super) async fn run_invocation_loop_task<T>(
+    future: impl Future<Output = T>,
+    on_panic: impl AsyncFnOnce(WorkerExecutorError),
+) {
+    if let Err(error) = catch_invocation_loop_panic(future).await {
+        on_panic(error).await;
+    }
+}
+
 struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     receiver: &'a mut UnboundedReceiver<WorkerCommand>,
     active: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
@@ -775,8 +1091,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     interrupt_signal: Arc<Mutex<WorkerInterruptState>>,
     instance: &'a Instance,
     store: &'a Mutex<Store<Ctx>>,
-    filesystem: &'a AgentFilesystem,
-    resource_billing: AgentResourceBilling,
+    filesystem: &'a ResidentFilesystem,
     invocations_since_snapshot: u64,
     idle_snapshot_task: Option<JoinHandle<()>>,
     /// Mutable reference to the concurrent-agent permit held by the outer
@@ -812,7 +1127,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
         let mut final_decision = None;
         let mut final_interrupt = None;
+        let mut unload_request = None;
         let mut cleanup_ephemeral_worker = false;
+        let mut recovery_failure = None;
+        let mut filesystem_limit_update = None;
 
         // Entering idle: release the concurrent-agent permit so other agents
         // from the same account can start without evicting this one.
@@ -822,12 +1140,42 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             return InnerInvocationLoopResult {
                 retry_decision: Some(RetryDecision::Immediate),
                 final_interrupt: None,
+                unload_request: None,
                 cleanup_ephemeral_worker: false,
+                recovery_failure: None,
+                filesystem_limit_update: None,
             };
         }
         mark_idle(&self.idle_since_millis);
         self.waiting_for_command.store(true, Ordering::Release);
-        while let Some(cmd) = self.next_wakeup_or_initial().await {
+        loop {
+            let cmd = match self.next_wakeup_or_initial().await {
+                ResidentWakeup::Command(cmd) => cmd,
+                ResidentWakeup::FilesystemTerminalFailure => {
+                    debug!(
+                        %agent_id,
+                        "Resident filesystem generation reported a terminal failure"
+                    );
+                    final_decision = Some(RetryDecision::Immediate);
+                    break;
+                }
+                ResidentWakeup::CommandChannelClosed => break,
+            };
+            let cmd = match cmd {
+                WorkerCommand::UpdateFilesystemLimit {
+                    allocated_bytes,
+                    sender,
+                } => {
+                    filesystem_limit_update = Some(coalesce_filesystem_limit_update(
+                        allocated_bytes,
+                        sender,
+                        self.receiver,
+                        self.deferred_wakeups,
+                    ));
+                    break;
+                }
+                command => command,
+            };
             if matches!(cmd, WorkerCommand::InternalStatusChanged)
                 && !self.internal_status_change_requires_permit().await
             {
@@ -851,6 +1199,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                             if interrupt.is_terminal() {
                                 final_interrupt = Some(interrupt.kind);
                             }
+                            unload_request = Some(interrupt.unload_request);
                             break self.interrupt(interrupt).await;
                         }
 
@@ -884,9 +1233,11 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     self.resume_replay_pending.store(false, Ordering::Release);
                     self.resume_replay().await
                 }
+                WorkerCommand::UpdateFilesystemLimit { .. } => unreachable!(),
             };
             match outcome {
-                CommandOutcome::BreakOuterLoop => {
+                CommandOutcome::BreakOuterLoop(error) => {
+                    recovery_failure = error;
                     final_decision = Some(RetryDecision::None);
                     break;
                 }
@@ -920,7 +1271,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         InnerInvocationLoopResult {
             retry_decision: final_decision,
             final_interrupt,
+            unload_request,
             cleanup_ephemeral_worker,
+            recovery_failure,
+            filesystem_limit_update,
         }
     }
 
@@ -940,9 +1294,12 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             )
     }
 
-    async fn next_wakeup_or_initial(&mut self) -> Option<WorkerCommand> {
+    async fn next_wakeup_or_initial(&mut self) -> ResidentWakeup {
+        if filesystem_activity(self.filesystem).has_terminal_failure() {
+            return ResidentWakeup::FilesystemTerminalFailure;
+        }
         match self.deferred_wakeups.pop_front() {
-            Some(command) => Some(command),
+            Some(command) => ResidentWakeup::Command(command),
             None => self.next_wakeup().await,
         }
     }
@@ -980,17 +1337,15 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     async fn release_concurrent_agent_permit(&mut self) -> Result<(), WorkerExecutorError> {
         if self.permit_state.is_some() {
             debug!(agent_id = %self.owned_agent_id.agent_id, "Releasing concurrent-agent permit (entering idle)");
-            let runtime = self.filesystem.runtime();
-            let result = self
-                .permit_state
-                .close_then_release(async {
-                    self.resource_billing
-                        .close(&runtime)
-                        .await
-                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
-                })
-                .await;
-            return result;
+            if let Some(window) = self.permit_state.take_window() {
+                let result = close_window(window, resource_usage_close_deadline())
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()));
+                self.permit_state.mark_released();
+                return result;
+            }
+            self.permit_state.release();
         }
         Ok(())
     }
@@ -1010,41 +1365,58 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             }
             .instrument(span)
             .await;
-            self.resource_billing
-                .open(&self.filesystem.runtime())
-                .await
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-            self.permit_state.install(permit);
+            let permit = self.permit_state.track(permit);
+            match crate::services::agent_filesystem::open_resource_usage_window(
+                self.filesystem,
+                permit,
+            )
+            .await
+            {
+                Ok(window) => self.permit_state.install_window(window),
+                Err(error) => {
+                    self.permit_state.mark_released();
+                    return Err(WorkerExecutorError::runtime(error.to_string()));
+                }
+            }
         }
         Ok(())
     }
 
-    async fn next_wakeup(&mut self) -> Option<WorkerCommand> {
+    async fn next_wakeup(&mut self) -> ResidentWakeup {
         let mut idle_snapshot_task = self.idle_snapshot_task.take();
+        let activity = filesystem_activity(self.filesystem);
 
         let wakeup = if let Some(task) = idle_snapshot_task.as_mut() {
             tokio::select! {
-                cmd = self.receiver.recv() => {
+                wakeup = wait_for_resident_wakeup(self.receiver, &activity) => {
                     task.abort();
-                    cmd
+                    wakeup
                 }
                 result = &mut *task => {
                     if let Err(err) = result {
                         if !err.is_cancelled() {
                             warn!(agent_id = %self.owned_agent_id.agent_id, "Idle snapshot timer failed: {err}");
                         }
-                        return self.receiver.recv().await;
+                        return wait_for_resident_wakeup(self.receiver, &activity).await;
                     }
 
-                    match self.receiver.try_recv() {
-                        Ok(cmd) => Some(cmd),
-                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => Some(WorkerCommand::WorkAvailable),
-                        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => None,
+                    if activity.has_terminal_failure() {
+                        ResidentWakeup::FilesystemTerminalFailure
+                    } else {
+                        match self.receiver.try_recv() {
+                            Ok(cmd) => ResidentWakeup::Command(cmd),
+                            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                                ResidentWakeup::Command(WorkerCommand::WorkAvailable)
+                            }
+                            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                                ResidentWakeup::CommandChannelClosed
+                            }
+                        }
                     }
                 }
             }
         } else {
-            self.receiver.recv().await
+            wait_for_resident_wakeup(self.receiver, &activity).await
         };
 
         self.idle_snapshot_task = None;
@@ -1242,13 +1614,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         async {
             let mut store = self.store.lock().await;
 
-            let resume_replay_result =
-                match Ctx::resume_replay(&mut *store, self.instance, true).await {
-                    Ok(None) => settle_reconstructed_filesystem(self.filesystem)
-                        .await
-                        .map(|()| None),
-                    other => other,
-                };
+            let resume_replay_result = Ctx::resume_replay(&mut *store, self.instance, true).await;
 
             match resume_replay_result {
                 Ok(None) => CommandOutcome::Continue,
@@ -1256,17 +1622,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 Err(err) => {
                     warn!("Failed to resume replay: {err}");
                     store.data().set_suspended();
-
-                    self.parent
-                        .stop_internal(
-                            true,
-                            Some(err.clone()),
-                            FinalWorkerState::Unloaded {
-                                startup_failure: Some(err),
-                            },
-                        )
-                        .await;
-                    CommandOutcome::BreakOuterLoop
+                    CommandOutcome::BreakOuterLoop(Some(err))
                 }
             }
         }
@@ -1297,23 +1653,134 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     }
 }
 
+async fn wait_for_resident_wakeup(
+    receiver: &mut UnboundedReceiver<WorkerCommand>,
+    activity: &ResidentFilesystemActivity,
+) -> ResidentWakeup {
+    tokio::select! {
+        command = receiver.recv() => command.map_or(
+            ResidentWakeup::CommandChannelClosed,
+            ResidentWakeup::Command,
+        ),
+        () = activity.wait_for_terminal_failure() => ResidentWakeup::FilesystemTerminalFailure,
+    }
+}
+
+#[cfg(test)]
+async fn close_usage_before_delete<E, Close, Delete, DeleteFuture>(
+    close: Close,
+    mark_permit_released: impl FnOnce(),
+    delete: Delete,
+) -> (Option<E>, Option<E>)
+where
+    Close: Future<Output = Option<E>>,
+    Delete: FnOnce() -> DeleteFuture,
+    DeleteFuture: Future<Output = Option<E>>,
+{
+    let close_error = close.await;
+    mark_permit_released();
+    let delete_error = delete().await;
+    (close_error, delete_error)
+}
+
+struct UnloadObserver {
+    receiver: tokio::sync::oneshot::Receiver<Option<WorkerExecutorError>>,
+}
+
+#[derive(Clone)]
+struct UnloadCompletion {
+    sender: Arc<StdMutex<Option<tokio::sync::oneshot::Sender<Option<WorkerExecutorError>>>>>,
+}
+
+impl UnloadCompletion {
+    fn complete(&self, result: Option<WorkerExecutorError>) -> bool {
+        let Some(sender) = self.sender.lock().unwrap().take() else {
+            return false;
+        };
+        let _ = sender.send(result);
+        true
+    }
+
+    fn is_pending(&self) -> bool {
+        self.sender.lock().unwrap().is_some()
+    }
+}
+
+impl Future for UnloadObserver {
+    type Output = Option<WorkerExecutorError>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        match std::pin::Pin::new(&mut self.receiver).poll(context) {
+            std::task::Poll::Ready(Ok(result)) => std::task::Poll::Ready(result),
+            std::task::Poll::Ready(Err(_)) => std::task::Poll::Ready(Some(
+                WorkerExecutorError::runtime("module-owned agent unload task stopped unexpectedly"),
+            )),
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    }
+}
+
+#[cfg(test)]
+fn spawn_module_owned_unload(
+    task: impl Future<Output = Option<WorkerExecutorError>> + Send + 'static,
+) -> UnloadObserver {
+    spawn_module_owned_unload_continuation(move |completion| async move {
+        completion.complete(task.await);
+    })
+}
+
+fn spawn_module_owned_unload_continuation<Task, TaskFuture>(task: Task) -> UnloadObserver
+where
+    Task: FnOnce(UnloadCompletion) -> TaskFuture + Send + 'static,
+    TaskFuture: Future<Output = ()> + Send + 'static,
+{
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let completion = UnloadCompletion {
+        sender: Arc::new(StdMutex::new(Some(sender))),
+    };
+    let completion_after_task = completion.clone();
+    tokio::spawn(async move {
+        let result = std::panic::AssertUnwindSafe(async move { task(completion).await })
+            .catch_unwind()
+            .await;
+        if result.is_err() {
+            let error = WorkerExecutorError::runtime("module-owned agent unload task panicked");
+            error!(error = %error, "Module-owned agent unload task panicked");
+            completion_after_task.complete(Some(error));
+        } else if completion_after_task.is_pending() {
+            completion_after_task.complete(Some(WorkerExecutorError::runtime(
+                "module-owned agent unload task stopped without lifecycle completion",
+            )));
+        }
+    });
+    UnloadObserver { receiver }
+}
+
 pub(super) struct ConcurrentAgentPermitState<T> {
     permit: Option<T>,
+    window: Option<ResourceUsageMeteringWindow>,
     held: Arc<AtomicBool>,
 }
 
 impl<T> ConcurrentAgentPermitState<T> {
     pub(super) fn new(permit: Option<T>, held: Arc<AtomicBool>) -> Self {
         held.store(permit.is_some(), Ordering::Release);
-        Self { permit, held }
+        Self {
+            permit,
+            window: None,
+            held,
+        }
     }
 
     fn is_some(&self) -> bool {
-        self.permit.is_some()
+        self.permit.is_some() || self.window.is_some()
     }
 
     fn is_none(&self) -> bool {
-        self.permit.is_none()
+        self.permit.is_none() && self.window.is_none()
     }
 
     fn install(&mut self, permit: T) {
@@ -1322,39 +1789,50 @@ impl<T> ConcurrentAgentPermitState<T> {
         self.held.store(true, Ordering::Release);
     }
 
+    fn take_permit(&mut self) -> Option<T> {
+        self.permit.take()
+    }
+
+    fn install_window(&mut self, window: ResourceUsageMeteringWindow) {
+        debug_assert!(self.permit.is_none());
+        debug_assert!(self.window.is_none());
+        self.window = Some(window);
+        self.held.store(true, Ordering::Release);
+    }
+
+    fn take_window(&mut self) -> Option<ResourceUsageMeteringWindow> {
+        self.window.take()
+    }
+
+    fn mark_released(&self) {
+        self.held.store(false, Ordering::Release);
+    }
+
     fn release(&mut self) {
         if let Some(permit) = self.permit.take() {
             drop(permit);
             self.held.store(false, Ordering::Release);
-        } else {
-            debug_assert!(!self.held.load(Ordering::Acquire));
+        } else if let Some(window) = self.window.take() {
+            drop(window);
         }
-    }
-
-    async fn close_then_release<E>(
-        &mut self,
-        close: impl Future<Output = Result<(), E>>,
-    ) -> Result<(), E> {
-        let result = close.await;
-        self.release();
-        result
     }
 }
 
-fn decision_after_resource_close(
-    decision: Option<RetryDecision>,
-    close_failed: bool,
-) -> Option<RetryDecision> {
-    if close_failed
-        && matches!(
-            decision,
-            Some(RetryDecision::Immediate | RetryDecision::Delayed(_))
-        )
-    {
-        Some(RetryDecision::Immediate)
-    } else {
-        decision
+impl ConcurrentAgentPermitState<crate::services::active_workers::ConcurrentAgentPermit> {
+    fn track(
+        &self,
+        permit: crate::services::active_workers::ConcurrentAgentPermit,
+    ) -> crate::services::active_workers::ConcurrentAgentPermit {
+        permit.track_held(Arc::clone(&self.held))
     }
+
+    fn install_tracked(&mut self, permit: crate::services::active_workers::ConcurrentAgentPermit) {
+        self.install(permit.track_held(Arc::clone(&self.held)));
+    }
+}
+
+fn resource_usage_close_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(30)
 }
 
 fn mark_idle(idle_since_millis: &AtomicU64) {
@@ -2110,7 +2588,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 #[derive(Debug, PartialEq, Eq)]
 enum CommandOutcome {
     /// Break from both the inner and outer loops, there is no way to retry anything
-    BreakOuterLoop,
+    BreakOuterLoop(Option<WorkerExecutorError>),
     /// Break from the inner loop, setting the retry decision for the outer loop
     BreakInnerLoop(RetryDecision),
     /// Break from the inner loop and archive the stopped ephemeral worker's oplog.
@@ -2124,7 +2602,10 @@ enum CommandOutcome {
 struct InnerInvocationLoopResult {
     retry_decision: Option<RetryDecision>,
     final_interrupt: Option<InterruptKind>,
+    unload_request: Option<UnloadRequest>,
     cleanup_ephemeral_worker: bool,
+    recovery_failure: Option<WorkerExecutorError>,
+    filesystem_limit_update: Option<PendingFilesystemLimitUpdate>,
 }
 
 fn successful_agent_invocation_outcome(
@@ -2207,27 +2688,98 @@ fn snapshot_action_at(
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandOutcome, ConcurrentAgentPermitState, PeriodicSnapshotAction,
-        decision_after_resource_close, failed_agent_invocation_outcome,
-        periodic_snapshot_failure_outcome, snapshot_action_at, snapshot_baseline_timestamp,
-        successful_agent_invocation_outcome,
+        CommandOutcome, ConcurrentAgentPermitState, InvocationLoop, PeriodicSnapshotAction,
+        ResidentAgentOwnership, ResidentWakeup, catch_invocation_loop_panic,
+        close_usage_before_delete, coalesce_filesystem_limit_update,
+        failed_agent_invocation_outcome, finish_filesystem_limit_unload,
+        periodic_snapshot_failure_outcome, publish_unload_outcome, run_invocation_loop_task,
+        snapshot_action_at, snapshot_baseline_timestamp, spawn_module_owned_unload,
+        successful_agent_invocation_outcome, unload_resident_agent_ownership,
+        wait_for_resident_wakeup,
     };
-    use crate::worker::RetryDecision;
+    use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
+    use crate::services::active_workers::stop_loaded_idle_if_eligible;
+    use crate::services::agent_filesystem::{
+        AccessError, FilesystemStorageError, Follow, OpenNode, PathTarget, Synchronization, Target,
+        attributes, billing_metered_resident_with_open_node_for_unload_test, delete,
+        filesystem_activity, metered_resident_with_open_node_for_unload_test, release,
+        resident_for_unload_test, seal, synchronize,
+    };
+    use crate::services::resource_usage_metering::close_window;
     use crate::worker::invocation::InvokeResult;
+    use crate::worker::{
+        EvictionClass, FilesystemPressureEligibility, FinalWorkerState, RetryDecision,
+        RunningAgent, StoppingWorker, UnloadReason, WorkerCommand, WorkerInstance,
+        complete_stopping_worker,
+    };
+    use crate::workerctx::default::Context;
     use golem_common::model::AgentInvocationKind;
     use golem_common::model::agent::AgentMode;
     use golem_common::model::oplog::AgentError;
     use golem_common::model::{OplogIndex, Timestamp};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
-    use std::sync::Arc;
+    use std::collections::VecDeque;
+    use std::path::Path;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::time::Duration;
-    use test_r::test;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+    use test_r::{test, timeout};
 
     struct TestPermit {
         held: Arc<AtomicBool>,
         drops: Arc<AtomicUsize>,
         held_while_dropping: Arc<AtomicBool>,
+    }
+
+    struct TestStoreOwner {
+        node: Option<OpenNode>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn loaded_idle_wait_wakes_for_a_terminal_filesystem_failure() {
+        let (filesystem, control, window, generation_handle, node) =
+            metered_resident_with_open_node_for_unload_test().await;
+        let activity = filesystem_activity(&filesystem);
+        let (_commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let waiting =
+            tokio::spawn(async move { wait_for_resident_wakeup(&mut receiver, &activity).await });
+        control.push_synchronize(Err(FilesystemStorageError::io(
+            "detached terminal synchronize",
+            Path::new("<idle-wakeup-test>"),
+            std::io::ErrorKind::Other.into(),
+        )));
+
+        assert!(matches!(
+            synchronize(&generation_handle, &node, Synchronization::Data)
+                .unwrap()
+                .await,
+            Err(crate::services::agent_filesystem::Error::RuntimeInvalidated)
+        ));
+        assert!(matches!(
+            waiting.await.unwrap(),
+            ResidentWakeup::FilesystemTerminalFailure
+        ));
+
+        control.push_observe_allocation(Err(FilesystemStorageError::verification(
+            "observe unsupported allocation during idle wakeup cleanup",
+            Path::new("<idle-wakeup-test>"),
+        )));
+        close_window(window, Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap();
+        control.push_release(Ok(()));
+        release(node).await.unwrap();
+        control.push_delete_and_verify(Ok(()));
+        delete(seal(filesystem)).await.unwrap();
+    }
+
+    impl Drop for TestStoreOwner {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+            drop(self.node.take());
+        }
     }
 
     impl Drop for TestPermit {
@@ -2236,6 +2788,528 @@ mod tests {
                 .store(self.held.load(Ordering::Acquire), Ordering::Release);
             self.drops.fetch_add(1, Ordering::AcqRel);
         }
+    }
+
+    #[test]
+    async fn idle_filesystem_limit_downgrade_upgrade_commands_coalesce_without_lost_work() {
+        let (commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (downgrade_sender, downgrade_result) = futures::channel::oneshot::channel();
+        let (upgrade_sender, upgrade_result) = futures::channel::oneshot::channel();
+        commands.send(WorkerCommand::WorkAvailable).unwrap();
+        commands
+            .send(WorkerCommand::UpdateFilesystemLimit {
+                allocated_bytes: 1024 * 1024,
+                sender: upgrade_sender,
+            })
+            .unwrap();
+        let mut deferred_wakeups = VecDeque::new();
+
+        let update = coalesce_filesystem_limit_update(
+            4096,
+            downgrade_sender,
+            &mut receiver,
+            &mut deferred_wakeups,
+        );
+
+        assert_eq!(update.allocated_bytes, 1024 * 1024);
+        assert_eq!(update.senders.len(), 2);
+        for sender in update.senders {
+            let _ = sender.send(Ok(()));
+        }
+        assert!(downgrade_result.await.unwrap().is_ok());
+        assert!(upgrade_result.await.unwrap().is_ok());
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(deferred_wakeups.len(), 1);
+        assert!(matches!(
+            deferred_wakeups.pop_front(),
+            Some(WorkerCommand::WorkAvailable)
+        ));
+    }
+
+    #[test]
+    async fn idle_over_limit_update_publishes_suspend_only_after_cleanup() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let cleanup_events = Arc::clone(&events);
+        let suspend_events = Arc::clone(&events);
+        let (release_cleanup, cleanup_released) = tokio::sync::oneshot::channel();
+
+        let completion = tokio::spawn(finish_filesystem_limit_unload(
+            true,
+            async move {
+                let _ = cleanup_released.await;
+                cleanup_events.lock().unwrap().push("cleanup");
+                None
+            },
+            move || async move {
+                suspend_events.lock().unwrap().push("suspend");
+            },
+        ));
+        tokio::task::yield_now().await;
+        assert!(events.lock().unwrap().is_empty());
+
+        release_cleanup.send(()).unwrap();
+        assert!(completion.await.unwrap().is_none());
+        assert_eq!(*events.lock().unwrap(), ["cleanup", "suspend"]);
+    }
+
+    fn complete_stopping(final_state: FinalWorkerState) -> WorkerInstance {
+        let (instance, notify) = complete_stopping_worker(
+            StoppingWorker {
+                notify: golem_common::one_shot::OneShotEvent::new(),
+                final_state: FinalWorkerState::Unloaded {
+                    startup_failure: None,
+                },
+            },
+            final_state,
+        );
+        notify.set();
+        instance
+    }
+
+    #[test]
+    async fn dropped_unload_observer_does_not_cancel_module_owned_cleanup() {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_in_task = Arc::clone(&completed);
+
+        let observer = spawn_module_owned_unload(async move {
+            let _ = started_tx.send(());
+            let _ = release_rx.await;
+            completed_in_task.store(true, Ordering::Release);
+            None
+        });
+        started_rx.await.unwrap();
+        drop(observer);
+        release_tx.send(()).unwrap();
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !completed.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    async fn unload_task_panic_is_reported_by_the_observer() {
+        let error = spawn_module_owned_unload(async move {
+            panic!("injected unload panic");
+        })
+        .await
+        .expect("panic must become a cleanup error");
+
+        assert!(error.to_string().contains("unload task panicked"));
+    }
+
+    #[test]
+    async fn unload_observer_completes_only_after_module_owned_cleanup() {
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let observer = spawn_module_owned_unload(async move {
+            let _ = release_rx.await;
+            None
+        });
+        tokio::pin!(observer);
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut observer)
+                .await
+                .is_err()
+        );
+        release_tx.send(()).unwrap();
+        assert!(observer.await.is_none());
+    }
+
+    #[test]
+    async fn resource_window_and_permit_close_before_native_deletion() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let close_events = Arc::clone(&events);
+        let release_events = Arc::clone(&events);
+        let delete_events = Arc::clone(&events);
+
+        let result = close_usage_before_delete(
+            async move {
+                close_events.lock().unwrap().push("window-closed");
+                None::<()>
+            },
+            move || release_events.lock().unwrap().push("permit-released"),
+            move || async move {
+                delete_events.lock().unwrap().push("filesystem-deleted");
+                None::<()>
+            },
+        )
+        .await;
+
+        assert_eq!(result, (None, None));
+        assert_eq!(
+            *events.lock().unwrap(),
+            ["window-closed", "permit-released", "filesystem-deleted"]
+        );
+    }
+
+    #[test]
+    async fn invocation_loop_panic_is_returned_to_owned_cleanup_boundary() {
+        let error = catch_invocation_loop_panic(async {
+            panic!("injected invocation-loop panic");
+        })
+        .await
+        .expect_err("panic must become a lifecycle error");
+
+        assert!(
+            error
+                .to_string()
+                .contains("invocation loop panicked: injected invocation-loop panic")
+        );
+    }
+
+    #[test]
+    async fn invocation_loop_task_handles_panic_before_resident_creation() {
+        let handled = Arc::new(Mutex::new(None));
+        let handled_by_task = Arc::clone(&handled);
+
+        run_invocation_loop_task(
+            async { panic!("injected startup panic") },
+            move |error| async move {
+                *handled_by_task.lock().unwrap() = Some(error);
+            },
+        )
+        .await;
+
+        assert!(
+            handled
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|error| error.to_string().contains("injected startup panic"))
+        );
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn invocation_loop_panic_with_resident_owner_uses_filesystem_drop_cleanup() {
+        let (filesystem, control) = resident_for_unload_test().await;
+        control.push_delete_and_verify(Ok(()));
+        let deletion = control.block("delete_and_verify");
+        let handled = Arc::new(AtomicBool::new(false));
+        let handled_by_task = Arc::clone(&handled);
+
+        run_invocation_loop_task(
+            async move {
+                let _filesystem = filesystem;
+                panic!("injected resident panic");
+            },
+            move |_error| async move {
+                handled_by_task.store(true, Ordering::Release);
+            },
+        )
+        .await;
+
+        deletion.wait_started().await;
+        assert!(handled.load(Ordering::Acquire));
+        deletion.release();
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn concrete_unload_running_agent_publishes_only_after_verified_deletion() {
+        let (filesystem, control, window, generation_handle, node) =
+            metered_resident_with_open_node_for_unload_test().await;
+        control.push_release(Ok(()));
+        let release = control.block("release");
+        control.push_delete_and_verify(Ok(()));
+        let deletion = control.block("delete_and_verify");
+        let held = Arc::new(AtomicBool::new(false));
+        let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
+        permit_state.install_window(window);
+        let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
+        let store_dropped = Arc::new(AtomicBool::new(false));
+
+        let observer = InvocationLoop::<Context>::unload_running_agent(
+            RunningAgent {
+                runtime: TestStoreOwner {
+                    node: Some(node),
+                    dropped: Arc::clone(&store_dropped),
+                },
+                filesystem,
+            },
+            UnloadReason::ExplicitStop,
+            Instant::now() + Duration::from_secs(1),
+            &mut permit_state,
+            &activity,
+        );
+        let publication = tokio::spawn(async move {
+            let cleanup_error = observer.await;
+            publish_unload_outcome(
+                cleanup_error,
+                None,
+                |error| async move { complete_stopping(FinalWorkerState::CleanupFailed(error)) },
+                |startup_failure| async move {
+                    complete_stopping(FinalWorkerState::Unloaded { startup_failure })
+                },
+            )
+            .await
+        });
+
+        let late_target = PathTarget::at_root(&generation_handle, "late-dispatch").unwrap();
+        assert!(matches!(
+            attributes(&generation_handle, Target::Path(&late_target, Follow::Yes)),
+            Err(AccessError::Revoked)
+        ));
+        assert!(activity.lock().unwrap().is_none());
+        release.wait_started().await;
+        assert!(store_dropped.load(Ordering::Acquire));
+        assert!(held.load(Ordering::Acquire));
+        release.release();
+
+        deletion.wait_started().await;
+        assert!(!held.load(Ordering::Acquire));
+        tokio::task::yield_now().await;
+        assert!(!publication.is_finished());
+        deletion.release();
+        let instance = publication.await.unwrap();
+        assert!(matches!(instance, WorkerInstance::Unloaded { .. }));
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn concrete_unload_deletion_failure_publishes_cleanup_failed() {
+        let (filesystem, control, window, _generation_handle, node) =
+            metered_resident_with_open_node_for_unload_test().await;
+        control.push_release(Ok(()));
+        control.push_delete_and_verify(Err(FilesystemStorageError::verification(
+            "injected verified deletion failure",
+            Path::new("<unload-test>"),
+        )));
+        let held = Arc::new(AtomicBool::new(false));
+        let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
+        permit_state.install_window(window);
+        let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
+
+        let cleanup_error = InvocationLoop::<Context>::unload_running_agent(
+            RunningAgent {
+                runtime: TestStoreOwner {
+                    node: Some(node),
+                    dropped: Arc::new(AtomicBool::new(false)),
+                },
+                filesystem,
+            },
+            UnloadReason::ExplicitStop,
+            Instant::now() + Duration::from_secs(1),
+            &mut permit_state,
+            &activity,
+        )
+        .await
+        .expect("verified deletion failure must fail unload");
+        assert!(!held.load(Ordering::Acquire));
+
+        let instance = publish_unload_outcome(
+            Some(cleanup_error),
+            None,
+            |error| async move { complete_stopping(FinalWorkerState::CleanupFailed(error)) },
+            |startup_failure| async move {
+                complete_stopping(FinalWorkerState::Unloaded { startup_failure })
+            },
+        )
+        .await;
+        assert!(matches!(instance, WorkerInstance::CleanupFailed(_)));
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn dropped_production_unload_observer_does_not_cancel_owned_cleanup() {
+        let (filesystem, control, window, _generation_handle, node) =
+            metered_resident_with_open_node_for_unload_test().await;
+        control.push_release(Ok(()));
+        let release = control.block("release");
+        control.push_delete_and_verify(Ok(()));
+        let deletion = control.block("delete_and_verify");
+        let held = Arc::new(AtomicBool::new(false));
+        let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
+        permit_state.install_window(window);
+        let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
+
+        let observer = unload_resident_agent_ownership::<_, ScriptedSandboxFilesystem>(
+            ResidentAgentOwnership {
+                runtime: TestStoreOwner {
+                    node: Some(node),
+                    dropped: Arc::new(AtomicBool::new(false)),
+                },
+                filesystem,
+            },
+            UnloadReason::ExplicitStop,
+            Instant::now() + Duration::from_secs(1),
+            &mut permit_state,
+            &activity,
+        );
+        drop(observer);
+
+        release.wait_started().await;
+        release.release();
+        deletion.wait_started().await;
+        assert!(!held.load(Ordering::Acquire));
+        deletion.release();
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn production_unload_starts_final_observation_after_native_release_drains() {
+        let (filesystem, control, window, _generation_handle, node) =
+            billing_metered_resident_with_open_node_for_unload_test().await;
+        control.push_release(Ok(()));
+        let release = control.block("release");
+        control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
+            allocated_bytes: 100,
+            filesystem_objects: 1,
+        }));
+        let final_observation = control.block("observe_allocation");
+        control.push_delete_and_verify(Ok(()));
+        let held = Arc::new(AtomicBool::new(false));
+        let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
+        permit_state.install_window(window);
+        let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
+
+        let observer = unload_resident_agent_ownership::<_, ScriptedSandboxFilesystem>(
+            ResidentAgentOwnership {
+                runtime: TestStoreOwner {
+                    node: Some(node),
+                    dropped: Arc::new(AtomicBool::new(false)),
+                },
+                filesystem,
+            },
+            UnloadReason::ExplicitStop,
+            Instant::now() + Duration::from_secs(1),
+            &mut permit_state,
+            &activity,
+        );
+
+        release.wait_started().await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), final_observation.wait_started())
+                .await
+                .is_err()
+        );
+        release.release();
+        final_observation.wait_started().await;
+        final_observation.release();
+
+        assert!(observer.await.is_none());
+        assert!(!held.load(Ordering::Acquire));
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn concrete_unload_deadline_publishes_cleanup_failed_and_cleanup_continues() {
+        let (filesystem, control, window, _generation_handle, node) =
+            metered_resident_with_open_node_for_unload_test().await;
+        control.push_release(Ok(()));
+        let release = control.block("release");
+        control.push_delete_and_verify(Ok(()));
+        let deletion = control.block("delete_and_verify");
+        let held = Arc::new(AtomicBool::new(false));
+        let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
+        permit_state.install_window(window);
+        let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
+
+        let observer = InvocationLoop::<Context>::unload_running_agent(
+            RunningAgent {
+                runtime: TestStoreOwner {
+                    node: Some(node),
+                    dropped: Arc::new(AtomicBool::new(false)),
+                },
+                filesystem,
+            },
+            UnloadReason::ExplicitStop,
+            Instant::now() + Duration::from_millis(20),
+            &mut permit_state,
+            &activity,
+        );
+
+        release.wait_started().await;
+        let cleanup_error = tokio::time::timeout(Duration::from_millis(200), observer)
+            .await
+            .expect("deadline must resolve the lifecycle observer")
+            .expect("deadline must report cleanup failure");
+        assert!(cleanup_error.to_string().contains("unload deadline"));
+        assert!(!held.load(Ordering::Acquire));
+
+        let instance = publish_unload_outcome(
+            Some(cleanup_error),
+            None,
+            |error| async move { complete_stopping(FinalWorkerState::CleanupFailed(error)) },
+            |startup_failure| async move {
+                complete_stopping(FinalWorkerState::Unloaded { startup_failure })
+            },
+        )
+        .await;
+        assert!(matches!(instance, WorkerInstance::CleanupFailed(_)));
+        assert!(!matches!(instance, WorkerInstance::Stopping(_)));
+        assert!(
+            !control
+                .calls()
+                .iter()
+                .any(|call| call.starts_with("delete_and_verify("))
+        );
+
+        release.release();
+        deletion.wait_started().await;
+        deletion.release();
+        deletion.wait_completed().await;
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn filesystem_pressure_stop_seam_reaches_concrete_unload_with_exact_deadline() {
+        let (filesystem, control, window, _generation_handle, node) =
+            metered_resident_with_open_node_for_unload_test().await;
+        control.push_release(Ok(()));
+        let release = control.block("release");
+        control.push_delete_and_verify(Ok(()));
+        let deletion = control.block("delete_and_verify");
+        let held = Arc::new(AtomicBool::new(false));
+        let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
+        permit_state.install_window(window);
+        let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let eligibility = FilesystemPressureEligibility {
+            idle_since: 11,
+            last_effect_completion: 7,
+        };
+
+        let pressure_stop = tokio::spawn(stop_loaded_idle_if_eligible(
+            eligibility,
+            crate::worker::UnloadRequest::new(UnloadReason::FilesystemPressure, deadline),
+            move |target_class,
+                  expected_eligibility,
+                  unload_request: crate::worker::UnloadRequest| async move {
+                assert_eq!(target_class, EvictionClass::LoadedIdle);
+                assert_eq!(expected_eligibility, Some(eligibility));
+                assert_eq!(unload_request.reason, UnloadReason::FilesystemPressure);
+                assert_eq!(unload_request.deadline, deadline);
+                InvocationLoop::<Context>::unload_running_agent(
+                    RunningAgent {
+                        runtime: TestStoreOwner {
+                            node: Some(node),
+                            dropped: Arc::new(AtomicBool::new(false)),
+                        },
+                        filesystem,
+                    },
+                    unload_request.reason,
+                    unload_request.deadline,
+                    &mut permit_state,
+                    &activity,
+                )
+                .await
+            },
+        ));
+
+        release.wait_started().await;
+        assert!(held.load(Ordering::Acquire));
+        release.release();
+        deletion.wait_started().await;
+        assert!(!held.load(Ordering::Acquire));
+        deletion.release();
+        assert!(pressure_stop.await.unwrap().is_none());
     }
 
     #[test]
@@ -2267,47 +3341,6 @@ mod tests {
         assert!(held.load(Ordering::Acquire));
         state.release();
         assert_eq!(drops.load(Ordering::Acquire), 2);
-    }
-
-    #[test]
-    fn close_failure_skips_delayed_sleep_and_reconstructs_immediately() {
-        assert_eq!(
-            decision_after_resource_close(
-                Some(RetryDecision::Delayed(Duration::from_secs(30))),
-                true,
-            ),
-            Some(RetryDecision::Immediate)
-        );
-        assert_eq!(
-            decision_after_resource_close(Some(RetryDecision::Immediate), true),
-            Some(RetryDecision::Immediate)
-        );
-        let timestamp = Timestamp::from(1_000);
-        assert_eq!(
-            decision_after_resource_close(Some(RetryDecision::TryStop(timestamp)), true),
-            Some(RetryDecision::TryStop(timestamp))
-        );
-    }
-
-    #[test]
-    async fn close_failure_still_releases_the_permit() {
-        let held = Arc::new(AtomicBool::new(false));
-        let drops = Arc::new(AtomicUsize::new(0));
-        let mut state = ConcurrentAgentPermitState::new(None, held.clone());
-        state.install(TestPermit {
-            held: held.clone(),
-            drops: drops.clone(),
-            held_while_dropping: Arc::new(AtomicBool::new(false)),
-        });
-
-        let result = state
-            .close_then_release(async { Err::<(), _>("authoritative usage failed") })
-            .await;
-
-        assert_eq!(result, Err("authoritative usage failed"));
-        assert!(state.is_none());
-        assert!(!held.load(Ordering::Acquire));
-        assert_eq!(drops.load(Ordering::Acquire), 1);
     }
 
     #[test]

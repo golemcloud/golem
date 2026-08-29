@@ -106,10 +106,11 @@ use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig,
-    EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, HttpClientConfig,
-    IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, IndexedStorageKVStoreSqliteConfig,
-    KeyValueStorageConfig, KeyValueStorageInnerConfig, KeyValueStorageNamespaceRoutedConfig,
-    MemoryConfig, OplogConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig,
+    EnvironmentStateServiceConfig, FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig,
+    GolemConfig, GrpcApiConfig, HttpClientConfig, IndexedStorageConfig,
+    IndexedStorageKVStoreRedisConfig, IndexedStorageKVStoreSqliteConfig, KeyValueStorageConfig,
+    KeyValueStorageInnerConfig, KeyValueStorageNamespaceRoutedConfig, MemoryConfig, OplogConfig,
+    ResourceLimitsConfig, ResourceLimitsDisabledConfig, ResourceUsageMeteringConfig,
     SchedulerStorageConfig, SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
@@ -140,7 +141,7 @@ use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
     CallCountManagement, ExternalOperations, FileSystemReading, FuelManagement,
     InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
-    StatusManagement, UpdateManagement, WorkerCtx,
+    StatusManagement, UpdateManagement, WorkerCtx, WorkerFilesystemContext,
 };
 use golem_worker_executor::{Bootstrap, RunDetails, bootstrap_and_run_worker_executor};
 use prometheus::Registry;
@@ -993,6 +994,7 @@ fn make_base_test_config(deps: &WorkerExecutorTestDependencies) -> GolemConfig {
         // without attempting a gRPC connection to a registry service that does
         // not exist in this test setup.
         resource_limits: ResourceLimitsConfig::Disabled(ResourceLimitsDisabledConfig {}),
+        resource_usage_metering: ResourceUsageMeteringConfig::all_enabled(),
         ..Default::default()
     }
 }
@@ -1251,6 +1253,10 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for TestWorkerCtx {
 
 #[async_trait]
 impl FuelManagement for TestWorkerCtx {
+    fn fuel_metering_enabled(&self) -> bool {
+        false
+    }
+
     fn ensure_fuel(&mut self, _current_level: u64) -> Result<(), AgentError> {
         Ok(())
     }
@@ -1511,8 +1517,8 @@ impl WorkerCtx for TestWorkerCtx {
         component_service: Arc<dyn ComponentService>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
-        filesystem_root: PathBuf,
-        filesystem_runtime: golem_worker_executor::services::agent_filesystem::AgentFilesystemRuntime,
+        filesystem: WorkerFilesystemContext,
+        linear_memory: golem_worker_executor::services::linear_memory::LinearMemoryTracker,
         worker_config: AgentConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
@@ -1567,8 +1573,8 @@ impl WorkerCtx for TestWorkerCtx {
             component_service,
             account_resource_limits,
             config,
-            filesystem_root,
-            filesystem_runtime,
+            filesystem,
+            linear_memory,
             worker_config,
             execution_status,
             file_loader,
@@ -2443,29 +2449,80 @@ pub async fn start_with_agent_storage_quota_on_managed_xfs(
     max_disk_space_bytes: u64,
     managed_xfs_root: PathBuf,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    run_production_context_bootstrap(
+    start_with_agent_storage_quota_and_pressure_on_managed_xfs(
         deps,
         context,
-        Arc::new(FixedFilesystemStorageQuotaResourceLimits {
-            max_disk_space_bytes,
-        }),
-        Some(Arc::new(move |config| {
-            config.filesystem_storage.managed_xfs_root_dir = Some(managed_xfs_root.clone());
-            config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
-            config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
-        })),
-        "Timeout waiting for managed agent-storage-quota server to start",
+        max_disk_space_bytes,
+        managed_xfs_root,
+        FilesystemPressureConfig::default(),
     )
     .await
 }
 
 #[cfg(target_os = "linux")]
-pub async fn start_with_agent_storage_and_object_quota_on_managed_xfs(
+pub async fn start_with_agent_storage_quota_without_metering_on_managed_xfs(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
     max_disk_space_bytes: u64,
-    filesystem_objects: u64,
     managed_xfs_root: PathBuf,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs(
+        deps,
+        context,
+        max_disk_space_bytes,
+        managed_xfs_root,
+        FilesystemPressureConfig::default(),
+        ResourceUsageMeteringConfig::default(),
+    )
+    .await
+}
+
+#[cfg(target_os = "linux")]
+pub async fn start_with_agent_storage_quota_and_pressure_on_managed_xfs(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    max_disk_space_bytes: u64,
+    managed_xfs_root: PathBuf,
+    pressure: FilesystemPressureConfig,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs(
+        deps,
+        context,
+        max_disk_space_bytes,
+        managed_xfs_root,
+        pressure,
+        ResourceUsageMeteringConfig::all_enabled(),
+    )
+    .await
+}
+
+#[cfg(target_os = "linux")]
+pub async fn start_with_agent_storage_quota_and_pressure_without_metering_on_managed_xfs(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    max_disk_space_bytes: u64,
+    managed_xfs_root: PathBuf,
+    pressure: FilesystemPressureConfig,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs(
+        deps,
+        context,
+        max_disk_space_bytes,
+        managed_xfs_root,
+        pressure,
+        ResourceUsageMeteringConfig::default(),
+    )
+    .await
+}
+
+#[cfg(target_os = "linux")]
+async fn start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    max_disk_space_bytes: u64,
+    managed_xfs_root: PathBuf,
+    pressure: FilesystemPressureConfig,
+    metering: ResourceUsageMeteringConfig,
 ) -> anyhow::Result<TestWorkerExecutor> {
     run_production_context_bootstrap(
         deps,
@@ -2475,12 +2532,12 @@ pub async fn start_with_agent_storage_and_object_quota_on_managed_xfs(
         }),
         Some(Arc::new(move |config| {
             config.filesystem_storage.managed_xfs_root_dir = Some(managed_xfs_root.clone());
-            let policy = &mut config.filesystem_storage.filesystem_object_limit_policy;
-            policy.objects_per_gib = 1;
-            policy.minimum_objects = filesystem_objects;
-            policy.maximum_objects = filesystem_objects;
+            config.filesystem_storage.pressure = pressure.clone();
+            config.resource_usage_metering = metering;
+            config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
+            config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
         })),
-        "Timeout waiting for managed agent storage/object quota server to start",
+        "Timeout waiting for managed agent-storage-quota server to start",
     )
     .await
 }
@@ -2491,6 +2548,41 @@ pub async fn start_with_mutable_agent_storage_quota_on_managed_xfs(
     context: &TestContext,
     max_disk_space_bytes: u64,
     managed_xfs_root: PathBuf,
+) -> anyhow::Result<(TestWorkerExecutor, MutableFilesystemStorageQuota)> {
+    start_with_mutable_agent_storage_quota_and_metering_on_managed_xfs(
+        deps,
+        context,
+        max_disk_space_bytes,
+        managed_xfs_root,
+        ResourceUsageMeteringConfig::all_enabled(),
+    )
+    .await
+}
+
+#[cfg(target_os = "linux")]
+pub async fn start_with_mutable_agent_storage_quota_without_metering_on_managed_xfs(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    max_disk_space_bytes: u64,
+    managed_xfs_root: PathBuf,
+) -> anyhow::Result<(TestWorkerExecutor, MutableFilesystemStorageQuota)> {
+    start_with_mutable_agent_storage_quota_and_metering_on_managed_xfs(
+        deps,
+        context,
+        max_disk_space_bytes,
+        managed_xfs_root,
+        ResourceUsageMeteringConfig::default(),
+    )
+    .await
+}
+
+#[cfg(target_os = "linux")]
+async fn start_with_mutable_agent_storage_quota_and_metering_on_managed_xfs(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    max_disk_space_bytes: u64,
+    managed_xfs_root: PathBuf,
+    metering: ResourceUsageMeteringConfig,
 ) -> anyhow::Result<(TestWorkerExecutor, MutableFilesystemStorageQuota)> {
     let entry = Arc::new(AtomicResourceEntry::new(
         u64::MAX,
@@ -2507,10 +2599,9 @@ pub async fn start_with_mutable_agent_storage_quota_on_managed_xfs(
         }),
         Some(Arc::new(move |config| {
             config.filesystem_storage.managed_xfs_root_dir = Some(managed_xfs_root.clone());
-            let policy = &mut config.filesystem_storage.filesystem_object_limit_policy;
-            policy.objects_per_gib = 262_144;
-            policy.minimum_objects = 1;
-            policy.maximum_objects = 1024;
+            config.resource_usage_metering = metering;
+            config.filesystem_storage.filesystem_object_limit_policy =
+                FilesystemObjectLimitPolicyConfig::new(262_144, 1, 1024).unwrap();
         })),
         "Timeout waiting for mutable managed agent-storage-quota server to start",
     )

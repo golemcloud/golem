@@ -18,12 +18,17 @@ test_r::enable!();
 mod tests {
     use golem_client::api::RegistryServiceClient;
     use golem_common::model::AgentStatus;
+    use golem_common::model::account::{AccountRevision, AccountSetPlan};
+    use golem_common::model::account_usage::BYTE_SECONDS_PER_GB_MONTH;
+    use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
     use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
     use golem_common::{agent_id, data_value};
     use golem_test_framework::config::{
         EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
     };
     use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+    use golem_test_framework::model::IFSEntry;
+    use std::path::PathBuf;
     use std::sync::Once;
     use std::time::Duration;
     use test_r::{test, timeout};
@@ -59,6 +64,10 @@ mod tests {
                     "GOLEM__RESOURCE_LIMITS__CONFIG__LIMIT_REFRESH_INTERVAL".to_string(),
                     "1s".to_string(),
                 ),
+                (
+                    "GOLEM__RESOURCE_USAGE_METERING__MEMORY".to_string(),
+                    "true".to_string(),
+                ),
             ])
             .await;
 
@@ -78,20 +87,57 @@ mod tests {
         Ok(usage.usage.memory_gb_seconds)
     }
 
+    async fn durable_byte_seconds(
+        deps: &EnvBasedTestDependencies,
+        user: &golem_test_framework::config::dsl_impl::TestUserContext<EnvBasedTestDependencies>,
+    ) -> anyhow::Result<f64> {
+        let usage = deps
+            .registry_service()
+            .client(&user.token)
+            .await
+            .get_account_storage_usage(&user.account_id.0, None)
+            .await?;
+        Ok(usage.usage.durable_storage_gb_month * BYTE_SECONDS_PER_GB_MONTH)
+    }
+
     #[test]
     #[timeout("2m")]
     async fn permit_ownership_defines_allocated_memory_billing_window() -> anyhow::Result<()> {
         let deps = create_deps().await;
         let user = deps.user().await?;
+        let admin = deps.admin().await;
+        let admin_client = admin.registry_service_client().await;
+        let unlimited_plan = admin_client
+            .get_account_plan(&admin.account_id.0)
+            .await?
+            .plan_id;
+        admin_client
+            .set_account_plan(
+                &user.account_id.0,
+                &AccountSetPlan {
+                    current_revision: AccountRevision::INITIAL,
+                    plan: unlimited_plan,
+                },
+            )
+            .await?;
         let (_, env) = user.app_and_env().await?;
         let component = user
             .component(&env.id, "scalability_large_dynamic_memory_release")
             .name("scalability:large-dynamic-memory")
+            .with_files(
+                "LargeDynamicMemoryAgent",
+                &[IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
+                }],
+            )
             .store()
             .await?;
         let agent = agent_id!("LargeDynamicMemoryAgent", "memory-billing");
-        let worker = user.start_agent(&component.id, agent.clone()).await?;
         let before = memory_gb_seconds(&deps, &user).await?;
+        let durable_before = durable_byte_seconds(&deps, &user).await?;
+        let worker = user.start_agent(&component.id, agent.clone()).await?;
 
         user.invoke_and_await_agent(&component, &agent, "run_with_delay", data_value!(3_000u64))
             .await?;
@@ -136,6 +182,11 @@ mod tests {
         assert_eq!(
             after_idle, after_permit_release,
             "loaded-idle time after permit release must not accrue memory usage"
+        );
+        let durable_after = durable_byte_seconds(&deps, &user).await?;
+        assert_eq!(
+            durable_after, durable_before,
+            "unmanaged read-write initial files must not accrue durable storage while memory billing is active"
         );
 
         user.delete_worker(&worker).await?;

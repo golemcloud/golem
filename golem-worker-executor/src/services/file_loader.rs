@@ -196,7 +196,7 @@ impl FileLoader {
         let temporary = tempfile::NamedTempFile::new_in(self.cache_dir.path())?;
         self.download_file(environment_id, &temporary, key, expected_size)
             .await?;
-        crate::services::agent_filesystem::set_initial_file_permissions(temporary.as_file(), true)?;
+        crate::sandbox_filesystem::set_file_permissions(temporary.as_file(), true)?;
         temporary.as_file().sync_all()?;
         temporary
             .persist_noclobber(path)
