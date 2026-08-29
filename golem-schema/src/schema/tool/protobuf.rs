@@ -28,6 +28,12 @@ fn decode_char(value: u32, field: &str) -> Result<char, String> {
     char::from_u32(value).ok_or_else(|| format!("Invalid Unicode scalar in {field}: {value}"))
 }
 
+fn encode_static_value(value: SchemaValue) -> golem_api_grpc::proto::golem::schema::SchemaValue {
+    value
+        .try_into()
+        .expect("static tool values cannot contain live streams")
+}
+
 impl From<Tool> for proto::Tool {
     fn from(value: Tool) -> Self {
         Self {
@@ -231,7 +237,7 @@ impl From<Positional> for proto::Positional {
             doc: Some(value.doc.into()),
             value_name: value.value_name,
             r#type: Some(value.type_.into()),
-            default: value.default.map(Into::into),
+            default: value.default.map(encode_static_value),
             required: value.required,
             accepts_stdio: value.accepts_stdio,
         }
@@ -297,7 +303,7 @@ impl From<OptionSpec> for proto::OptionSpec {
             doc: Some(value.doc.into()),
             value_name: value.value_name,
             shape: Some(value.shape.into()),
-            default: value.default.map(Into::into),
+            default: value.default.map(encode_static_value),
             required: value.required,
             env_var: value.env_var,
         }
@@ -536,7 +542,7 @@ impl From<ValueIsRef> for proto::ValueIsRef {
     fn from(value: ValueIsRef) -> Self {
         Self {
             name: value.name,
-            value: Some(value.value.into()),
+            value: Some(encode_static_value(value.value)),
         }
     }
 }

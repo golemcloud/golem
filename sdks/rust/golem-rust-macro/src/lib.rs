@@ -87,17 +87,36 @@ pub fn agent_implementation(attr: TokenStream, item: TokenStream) -> TokenStream
 
 #[proc_macro_attribute]
 pub fn tool_definition(attr: TokenStream, item: TokenStream) -> TokenStream {
-    tool::tool_definition_impl(attr, item)
+    tool::tool_definition_impl(attr, item, &get_golem_rust_crate_ident())
 }
 
 #[proc_macro_attribute]
 pub fn tool_implementation(attr: TokenStream, item: TokenStream) -> TokenStream {
-    tool::tool_implementation_impl(attr, item)
+    tool::tool_implementation_impl(attr, item, &get_golem_rust_crate_ident())
+}
+
+#[proc_macro_attribute]
+pub fn tool_middleware(attr: TokenStream, item: TokenStream) -> TokenStream {
+    tool::tool_middleware_impl(attr, item, &get_golem_rust_crate_ident())
+}
+
+#[proc_macro_attribute]
+pub fn universal_tool_middleware(attr: TokenStream, item: TokenStream) -> TokenStream {
+    tool::universal_tool_middleware_impl(attr, item, &get_golem_rust_crate_ident())
 }
 
 #[proc_macro_derive(ToolError, attributes(tool_error, example))]
 pub fn derive_tool_error(input: TokenStream) -> TokenStream {
-    tool::derive_tool_error_impl(input)
+    tool::derive_tool_error_impl(input, &get_golem_rust_crate_ident())
+}
+
+#[doc(hidden)]
+#[proc_macro]
+pub fn __golem_emit_tool_middleware_leaf(input: TokenStream) -> TokenStream {
+    match tool::middleware_surface::emit_tool_middleware_leaf(input.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
 }
 
 // Helper attributes consumed by `#[tool_definition]`. A correct use sits on a

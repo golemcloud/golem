@@ -27,8 +27,8 @@ use crate::schema::agent::{
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::proptest_strategies as strategies;
-use crate::schema::schema_type::SchemaType;
-use crate::schema::schema_value::SchemaValue;
+use crate::schema::schema_type::{PermissionCardSpec, SchemaType};
+use crate::schema::schema_value::{PermissionCardValuePayload, SchemaValue};
 use proptest::prelude::*;
 use strategies::{
     schema_graph_strategy, schema_value_strategy, schema_values_eq, typed_schema_value_strategy,
@@ -57,7 +57,8 @@ proptest! {
     /// quantity / secret / quota-token).
     #[test]
     fn schema_value_proto_round_trip(value in schema_value_strategy()) {
-        let proto: golem_api_grpc::proto::golem::schema::SchemaValue = value.clone().into();
+        let proto: golem_api_grpc::proto::golem::schema::SchemaValue =
+            value.clone().try_into().expect("encode");
         let back: SchemaValue = proto.try_into().expect("decode");
         prop_assert!(
             schema_values_eq(&value, &back),
@@ -68,7 +69,8 @@ proptest! {
     /// The typed pair (graph + value) round-trips through its protobuf mirror.
     #[test]
     fn typed_schema_value_proto_round_trip(typed in typed_schema_value_strategy()) {
-        let proto: golem_api_grpc::proto::golem::schema::TypedSchemaValue = typed.clone().into();
+        let proto: golem_api_grpc::proto::golem::schema::TypedSchemaValue =
+            typed.clone().try_into().expect("encode");
         let back: TypedSchemaValue = proto.try_into().expect("decode");
         prop_assert_eq!(typed.graph(), back.graph());
         prop_assert!(
@@ -187,6 +189,31 @@ fn field_source_round_trips() {
         let back: FieldSource = proto.try_into().expect("decode");
         assert_eq!(source, back);
     }
+}
+
+#[test]
+fn permission_card_type_and_value_proto_round_trip() {
+    let graph = SchemaGraph::anonymous(SchemaType::permission_card(PermissionCardSpec {
+        polymorphic: true,
+    }));
+    let graph_proto: golem_api_grpc::proto::golem::schema::SchemaGraph = graph.clone().into();
+    let graph_back: SchemaGraph = graph_proto.try_into().expect("decode permission-card type");
+    assert_eq!(graph, graph_back);
+
+    let value = SchemaValue::PermissionCard(PermissionCardValuePayload {
+        card_id: Uuid::from_u128(1),
+        parent_ids: vec![Uuid::from_u128(2), Uuid::from_u128(3)],
+        expires_at: Some(chrono::DateTime::from_timestamp(1_700_000_000, 123_456_789).unwrap()),
+        polymorphic: true,
+    });
+    let value_proto: golem_api_grpc::proto::golem::schema::SchemaValue = value
+        .clone()
+        .try_into()
+        .expect("encode permission-card value");
+    let value_back: SchemaValue = value_proto
+        .try_into()
+        .expect("decode permission-card value");
+    assert_eq!(value, value_back);
 }
 
 /// Deterministic numeric-restriction vectors round-trip through the protobuf

@@ -22,8 +22,10 @@ This handles everything: builds `golem-cli`, the TS SDK, then cleans and rebuild
 The build scripts rely on `golem-cli` from the local build:
 
 ```shell
-cargo make build
+cargo build -p golem
 ```
+
+The single-command `cargo make build-test-components` path still performs its configured broad prerequisites. In the manual path, building only `golem` avoids an additional unrelated workspace build.
 
 ### 2. Clean and rebuild the TypeScript SDK (including agent template)
 

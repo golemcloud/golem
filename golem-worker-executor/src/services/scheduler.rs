@@ -1335,6 +1335,7 @@ mod tests {
             input: SchemaValue::Record { fields: vec![] },
             invocation_context: InvocationContextStack::fresh(),
             principal: Principal::anonymous(),
+            scope_card: None,
         }
     }
 
@@ -1345,6 +1346,7 @@ mod tests {
             input: SchemaValue::Record { fields: vec![] },
             invocation_context: InvocationContextStack::fresh(),
             principal: Principal::anonymous(),
+            scope_card: None,
         }
     }
 

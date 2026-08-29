@@ -339,6 +339,8 @@ pub enum AgentError {
     // A read-only agent method attempted to perform a side effect (outgoing HTTP / RPC) that is
     // disallowed by the read-only strictness mode.
     ReadOnlyViolation(ReadOnlyViolationError),
+    // A policy check rejected the invocation before guest execution began.
+    PermissionDenied(String),
 }
 
 impl AgentError {
@@ -361,6 +363,7 @@ impl AgentError {
             Self::EphemeralFuelExhausted(_) => "Ephemeral fuel exhausted",
             Self::EphemeralCannotSuspend(_) => "Ephemeral agent cannot suspend",
             Self::ReadOnlyViolation(_) => "Read-only agent method attempted a side effect",
+            Self::PermissionDenied(message) => message,
         }
     }
 

@@ -69,6 +69,10 @@ pub async fn start_router(
         .at("/v1/agents/create-agent", worker_service_api.clone())
         .at("/v1/agents/invoke-agent", worker_service_api.clone())
         .at(
+            "/v1/agents/invoke-agent-session",
+            worker_service_api.clone(),
+        )
+        .at(
             "/v1/components/:component_id/workers",
             worker_service_api.clone(),
         )
@@ -138,6 +142,10 @@ pub async fn start_router(
         )
         .at(
             "/v1/components/:component_id/workers/:agent_name/update",
+            worker_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/workers/:agent_name/wallet",
             worker_service_api.clone(),
         )
         // Metrics

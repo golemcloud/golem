@@ -2,6 +2,7 @@
 package "golemcloud/golem_sdk/schema"
 
 import {
+  "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/schema_model",
 }
@@ -53,6 +54,15 @@ pub fn FromSchemaError::out_of_range(UInt, UInt, String) -> Self
 pub fn FromSchemaError::shape_mismatch(String, String, String) -> Self
 
 // Types and methods
+pub(all) struct AgentStream[T] {
+  // private fields
+}
+pub fn[T] AgentStream::drop(Self[T]) -> Unit
+pub fn[T] AgentStream::from_reader(@async-core.Stream[@types.SchemaValueTree]) -> Self[T]
+pub async fn[T : FromSchema] AgentStream::read(Self[T]) -> T? raise FromSchemaError
+pub impl[T] FromSchema for AgentStream[T]
+pub impl[T : IntoSchema] IntoSchema for AgentStream[T]
+
 pub(all) struct Duration {
   nanoseconds : Int64
 } derive(Eq, Show)

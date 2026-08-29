@@ -25,6 +25,7 @@ pub mod component_metadata;
 pub mod deployment;
 pub mod diff;
 pub mod domain_registration;
+pub mod entity;
 pub mod environment;
 pub mod environment_plugin_grant;
 pub mod error;
@@ -66,7 +67,7 @@ use crate::base_model::agent::Principal;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::account::{AccountEmail, AccountId};
 use crate::model::agent::{AgentTypeSchemaResolver, ParsedAgentId};
-use crate::model::card::CardId;
+use crate::model::card::{CardId, ScopeCard, StoredCard};
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::types::AgentMetadataForGuests;
 use crate::model::oplog::{AgentResourceId, OplogEntry, RawSnapshotData};
@@ -78,6 +79,7 @@ use desert_rust::{
     SerializationContext,
 };
 use http::Uri;
+use im::OrdMap;
 use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -85,6 +87,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::ops::Add;
+use std::sync::Arc;
 use std::time::Duration;
 use tonic::transport::Endpoint;
 use url::Url;
@@ -276,8 +279,11 @@ impl BinaryDeserializer for Timestamp {
 }
 
 /// Associates an agent-id with its owner project
-#[derive(Clone, Debug, Eq, PartialEq, Hash, BinaryCodec)]
+#[derive(
+    Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, BinaryCodec,
+)]
 #[desert(evolution())]
+#[serde(rename_all = "camelCase")]
 pub struct OwnedAgentId {
     pub environment_id: EnvironmentId,
     pub agent_id: AgentId,
@@ -305,6 +311,10 @@ impl OwnedAgentId {
 
     pub fn agent_name(&self) -> String {
         self.agent_id.agent_id.clone()
+    }
+
+    pub fn owner_id(&self) -> &OwnedAgentId {
+        self
     }
 }
 
@@ -696,6 +706,7 @@ pub struct AgentStatusRecord {
     pub failed_updates: Vec<FailedUpdateRecord>,
     pub successful_updates: Vec<SuccessfulUpdateRecord>,
     pub invocation_results: HashMap<IdempotencyKey, OplogIndex>,
+    pub received_card_transfers: ReceivedCardTransferIndex,
     pub current_idempotency_key: Option<IdempotencyKey>,
     pub component_revision: ComponentRevision,
     pub component_size: u64,
@@ -741,6 +752,7 @@ impl Default for AgentStatusRecord {
             failed_updates: Vec::new(),
             successful_updates: Vec::new(),
             invocation_results: HashMap::new(),
+            received_card_transfers: ReceivedCardTransferIndex::default(),
             current_idempotency_key: None,
             component_revision: ComponentRevision::INITIAL,
             component_size: 0,
@@ -758,6 +770,80 @@ impl Default for AgentStatusRecord {
             last_automatic_snapshot_timestamp: None,
             agent_mode: AgentMode::Durable,
         }
+    }
+}
+
+/// The durable target-side identity associated with a permission-card transfer ID.
+///
+/// This is stored behind an `Arc` in [`ReceivedCardTransferIndex`]. Boxing the common `Received`
+/// payload separately would add an allocation and pointer indirection to every indexed transfer.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub enum ReceivedCardTransferState {
+    Received {
+        source_card_id: Option<CardId>,
+        card: StoredCard,
+    },
+    Conflict,
+}
+
+/// An oplog-derived, sticky index of target-side permission-card receipts.
+///
+/// Receipts remain indexed even when their oplog entries are in skipped or deleted regions, so a
+/// retry cannot redeliver a transfer that the target has already observed. The persistent map
+/// keeps status clones and delta comparisons proportional to the changed paths rather than the
+/// total number of transfers.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReceivedCardTransferIndex(OrdMap<Uuid, Arc<ReceivedCardTransferState>>);
+
+impl ReceivedCardTransferIndex {
+    pub fn get(&self, transfer_id: &Uuid) -> Option<&ReceivedCardTransferState> {
+        self.0.get(transfer_id).map(Arc::as_ref)
+    }
+
+    pub fn insert(&mut self, transfer_id: Uuid, state: ReceivedCardTransferState) {
+        self.0.insert(transfer_id, Arc::new(state));
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&Uuid, &ReceivedCardTransferState)> {
+        self.0
+            .iter()
+            .map(|(transfer_id, state)| (transfer_id, state.as_ref()))
+    }
+
+    pub fn changes_from<'a>(
+        &'a self,
+        previous: &'a Self,
+    ) -> impl Iterator<Item = (Uuid, Option<&'a ReceivedCardTransferState>)> + 'a {
+        use im::ordmap::DiffItem;
+
+        previous.0.diff(&self.0).map(|change| match change {
+            DiffItem::Add(transfer_id, state) => (*transfer_id, Some(state.as_ref())),
+            DiffItem::Update {
+                new: (transfer_id, state),
+                ..
+            } => (*transfer_id, Some(state.as_ref())),
+            DiffItem::Remove(transfer_id, _) => (*transfer_id, None),
+        })
+    }
+}
+
+impl BinarySerializer for ReceivedCardTransferIndex {
+    fn serialize<Output: BinaryOutput>(
+        &self,
+        context: &mut SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        desert_rust::serialize_iterator(&mut self.0.iter(), context)
+    }
+}
+
+impl BinaryDeserializer for ReceivedCardTransferIndex {
+    fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
+        let entries =
+            desert_rust::deserialize_iterator::<(Uuid, Arc<ReceivedCardTransferState>)>(context)
+                .0
+                .collect::<desert_rust::Result<OrdMap<_, _>>>()?;
+        Ok(Self(entries))
     }
 }
 
@@ -819,6 +905,7 @@ pub enum AgentInvocation {
         input: SchemaValue,
         invocation_context: InvocationContextStack,
         principal: Principal,
+        scope_card: Option<ScopeCard>,
     },
     LoadSnapshot {
         idempotency_key: IdempotencyKey,
@@ -852,6 +939,7 @@ pub enum AgentInvocationPayload {
         method_name: String,
         input: SchemaValue,
         principal: Principal,
+        scope_card: Option<ScopeCard>,
     },
     LoadSnapshot {
         snapshot: RawSnapshotData,
@@ -1032,12 +1120,14 @@ impl AgentInvocation {
                 method_name,
                 input,
                 principal,
+                scope_card,
             } => Self::AgentMethod {
                 idempotency_key,
                 method_name,
                 input,
                 invocation_context,
                 principal,
+                scope_card,
             },
             AgentInvocationPayload::LoadSnapshot { snapshot } => Self::LoadSnapshot {
                 idempotency_key,
@@ -1090,12 +1180,14 @@ impl AgentInvocation {
                 input,
                 invocation_context,
                 principal,
+                scope_card,
             } => (
                 idempotency_key,
                 AgentInvocationPayload::AgentMethod {
                     method_name,
                     input,
                     principal,
+                    scope_card,
                 },
                 invocation_context,
             ),

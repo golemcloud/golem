@@ -16,7 +16,7 @@ use crate::Tracing;
 use axum::Router;
 use axum::routing::post;
 use bytes::Bytes;
-use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{AgentStatus, IdempotencyKey};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
@@ -1522,6 +1522,192 @@ async fn outgoing_http_persisted_body_chunk_discarded_before_delivery(
     Ok(())
 }
 
+fn completion_delivered_index(
+    oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+    start_index: OplogIndex,
+) -> Option<OplogIndex> {
+    oplog.iter().find_map(|entry| match &entry.entry {
+        PublicOplogEntry::CompletionDelivered(params) if params.start_index == start_index => {
+            Some(entry.oplog_index)
+        }
+        _ => None,
+    })
+}
+
+fn assert_cancel_signal_precedes_body_delivery(
+    oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+) {
+    let sends = partition_starts(oplog, "http::client::send");
+    assert_eq!(
+        sends.counts(),
+        (0, 2, 0),
+        "the body and cancellation-signal sends must complete: {sends:?}"
+    );
+    let chunks = partition_starts(oplog, "http::types::response::consume-body-chunk");
+    assert_eq!(
+        chunks.counts(),
+        (0, 1, 0),
+        "the cancelled read must retain its completed Data child: {chunks:?}"
+    );
+
+    let signal_delivery = completion_delivered_index(oplog, sends.ended[1])
+        .expect("the cancellation-signal send must be delivered");
+    let chunk_delivery = completion_delivered_index(oplog, chunks.ended[0])
+        .expect("the body chunk must be delivered");
+    assert!(
+        signal_delivery < chunk_delivery,
+        "cancellation must start after signal delivery at {signal_delivery}, before body delivery \
+         at {chunk_delivery}"
+    );
+}
+
+async fn drive_gated_body_delivery_round(
+    gate: &mut golem_worker_executor_test_utils::ConsumeBodyChunkEndGateHandle,
+    reply_gate: &mut golem_worker_executor_test_utils::ConsumeBodyReplyDeferHandle,
+    gated_rx: &mut mpsc::UnboundedReceiver<anyhow::Result<()>>,
+    cancel_signal_release: &tokio::sync::Semaphore,
+) -> anyhow::Result<()> {
+    recv_request_event(gated_rx).await?;
+    timeout(Duration::from_secs(10), gate.appended()).await?;
+    gate.release();
+    timeout(Duration::from_secs(10), reply_gate.deferred()).await?;
+    cancel_signal_release.add_permits(1);
+    Ok(())
+}
+
+/// A replayed P3 body chunk that reaches a synchronously cancelled raw stream
+/// read must still be copied into the guest's destination buffer. The test
+/// queues a persisted live chunk without letting its pending read complete,
+/// then releases a second HTTP response whose Rust guest continuation calls
+/// `cancel-read`. The guest asserts both the transferred count and bytes. An
+/// executor restart replays the same ordering before a side-effect-free method
+/// runs, so the same guest assertions validate replay.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_replayed_cancelled_body_read_preserves_delivered_bytes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    const GATED_CHUNK: &[u8] = b"gated-first-chunk";
+    const EXPECTED_RESULT: &str = "cancel-read(200, 200, 17)=gated-first-chunk";
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let host_http_port = listener.local_addr()?.port();
+    let (gated_tx, mut gated_rx) = mpsc::unbounded_channel();
+    let cancel_signal_release = Arc::new(tokio::sync::Semaphore::new(0));
+
+    let http_server = spawn({
+        let cancel_signal_release = cancel_signal_release.clone();
+        async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let gated_tx = gated_tx.clone();
+                let cancel_signal_release = cancel_signal_release.clone();
+                spawn(
+                    async move {
+                        let result = async {
+                            let request = read_request_headers(&mut stream).await?;
+                            if request.starts_with(b"GET /gated-body ") {
+                                stream
+                                    .write_all(
+                                        b"HTTP/1.1 200 OK\r\ncontent-length: 1048576\r\n\r\n",
+                                    )
+                                    .await?;
+                                stream.write_all(GATED_CHUNK).await?;
+                                stream.flush().await?;
+                                let _ = gated_tx.send(Ok(()));
+                                futures::future::pending::<()>().await;
+                            } else if request.starts_with(b"GET /cancel-signal ") {
+                                let _permit = cancel_signal_release.acquire().await?;
+                                stream
+                                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+                                    .await?;
+                                stream.flush().await?;
+                            } else {
+                                anyhow::bail!(
+                                    "unexpected request: {}",
+                                    String::from_utf8_lossy(&request)
+                                );
+                            }
+                            Ok(())
+                        }
+                        .await;
+                        if let Err(error) = result {
+                            let _ = gated_tx.send(Err(error));
+                        }
+                    }
+                    .in_current_span(),
+                );
+            }
+        }
+        .in_current_span()
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let mut gate = executor.gate_first_consume_body_chunk_end(&worker_id).await;
+    let mut reply_gate = executor.defer_first_consume_body_reply(&worker_id).await;
+
+    let invocation = timeout(
+        Duration::from_secs(30),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_cancel_body_read_with_bytes",
+            data_value!(),
+        ),
+    );
+    let (result, round) = tokio::join!(
+        invocation,
+        drive_gated_body_delivery_round(
+            &mut gate,
+            &mut reply_gate,
+            &mut gated_rx,
+            &cancel_signal_release,
+        )
+    );
+    round?;
+    assert_eq!(result??.into_typed::<String>()?, EXPECTED_RESULT);
+
+    {
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert_cancel_signal_precedes_body_delivery(&oplog);
+    }
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let result = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(&component, &agent_id, "stored_send_error", data_value!()),
+    )
+    .await??;
+    assert_eq!(result.into_typed::<String>()?, "none");
+
+    {
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert_cancel_signal_precedes_body_delivery(&oplog);
+    }
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+    Ok(())
+}
+
 /// Dropping a still-pending P3 response future of an idempotent (GET) send
 /// must abort the underlying HTTP request instead of leaving the socket
 /// parked waiting for response headers, and leave the committed `Start`
@@ -1815,6 +2001,12 @@ async fn outgoing_http_post_cancel_records_cancelled_and_replays(
             (2, 0, 0),
             "the replayed and the fresh cancelled non-idempotent sends must both record \
              Start + Cancelled pairs: {sends:?}"
+        );
+        assert!(
+            oplog
+                .iter()
+                .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+            "replaying a cancelled POST must not require a worker-level retry: {oplog:?}"
         );
     }
 

@@ -19,6 +19,22 @@ fn wasmImportSplit(p0 : Int, p1 : Int64) -> Int = "golem:quota/types@1.5.0" "spl
 fn wasmImportMerge(p0 : Int, p1 : Int) = "golem:quota/types@1.5.0" "merge"
 
 ///|
+extern "wasm" fn mbt_ffi_free(position : Int) =
+  #|(func (param i32) local.get 0 call $moonbit.decref)
+
+///|
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load)
+
+///|
+extern "wasm" fn mbt_ffi_load64(offset : Int) -> Int64 =
+  #|(func (param i32) (result i64) local.get 0 i64.load)
+
+///|
+extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load8_u)
+
+///|
 extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
   #|(func (param i32) (result i32) (local i32)
   #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
@@ -29,19 +45,3 @@ extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
 #owned(str)
 extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
   #|(func (param i32) (result i32) local.get 0)
-
-///|
-extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load)
-
-///|
-extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load8_u)
-
-///|
-extern "wasm" fn mbt_ffi_load64(offset : Int) -> Int64 =
-  #|(func (param i32) (result i64) local.get 0 i64.load)
-
-///|
-extern "wasm" fn mbt_ffi_free(position : Int) =
-  #|(func (param i32) local.get 0 call $moonbit.decref)

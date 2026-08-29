@@ -20,7 +20,7 @@ test_r::enable!();
 #[allow(clippy::disallowed_names)]
 mod tests {
     use golem_rust::agentic::{
-        AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
+        AgentStream, AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
         UnstructuredBinary, UnstructuredText,
     };
     use golem_rust::agentic::{Principal, create_webhook};
@@ -666,6 +666,7 @@ mod tests {
             )
             .await
             .unwrap()
+            .value
             .unwrap();
 
         let SchemaValue::List { elements } = output else {
@@ -708,6 +709,178 @@ mod tests {
             .await;
 
         assert!(result.is_err());
+    }
+
+    #[agent_definition]
+    trait StreamingAgent {
+        fn new() -> Self;
+        async fn combine(
+            &self,
+            prefix: String,
+            first: AgentStream<String>,
+            second: AgentStream<u32>,
+        ) -> String;
+        fn forward(&self, stream: AgentStream<String>) -> AgentStream<String>;
+    }
+
+    struct StreamingAgentImpl;
+
+    #[agent_implementation]
+    impl StreamingAgent for StreamingAgentImpl {
+        fn new() -> Self {
+            Self
+        }
+
+        async fn combine(
+            &self,
+            prefix: String,
+            first: AgentStream<String>,
+            second: AgentStream<u32>,
+        ) -> String {
+            let first = first.into_raw().await.unwrap().take_handle();
+            let second = second.into_raw().await.unwrap().take_handle();
+            format!("{prefix}:{first}:{second}")
+        }
+
+        fn forward(&self, stream: AgentStream<String>) -> AgentStream<String> {
+            stream
+        }
+    }
+
+    #[test]
+    fn agent_stream_schema_retains_element_graph() {
+        #[derive(IntoSchema, FromSchema)]
+        struct Element {
+            value: String,
+        }
+
+        let golem_rust::agentic::StructuredSchema::Default(graph) =
+            <AgentStream<Element> as Schema>::get_type()
+        else {
+            panic!("expected value schema")
+        };
+        assert!(matches!(
+            graph.root,
+            SchemaType::Stream { inner: Some(_), .. }
+        ));
+    }
+
+    #[test]
+    async fn agent_stream_dispatch_rejects_missing_streams() {
+        StreamingAgentImpl::__register_agent_type();
+        let mut agent = StreamingAgentImpl::new();
+        let scalar = SchemaValue::Record {
+            fields: vec![SchemaValue::String("p".to_string())],
+        };
+        assert!(
+            agent
+                .invoke("combine".to_string(), scalar.clone(), Principal::Anonymous)
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    #[cfg(target_arch = "wasm32")]
+    async fn agent_stream_dispatch_preserves_forwarded_stream_identity() {
+        StreamingAgentImpl::__register_agent_type();
+        let mut agent = StreamingAgentImpl::new();
+        let (_writer, stream) = AgentStream::<String>::new();
+        let input_stream = stream.to_value();
+        let invocation = agent
+            .invoke(
+                "forward".to_string(),
+                SchemaValue::Record {
+                    fields: vec![input_stream.clone()],
+                },
+                Principal::Anonymous,
+            )
+            .await
+            .unwrap();
+        assert_eq!(invocation.value, Some(input_stream));
+    }
+
+    type AliasedAgentStream<T> = AgentStream<T>;
+
+    #[agent_definition]
+    trait AliasedStreamingAgent {
+        fn new() -> Self;
+        fn forward(&self, stream: AliasedAgentStream<String>) -> AliasedAgentStream<String>;
+    }
+
+    struct AliasedStreamingAgentImpl;
+
+    #[agent_implementation]
+    impl AliasedStreamingAgent for AliasedStreamingAgentImpl {
+        fn new() -> Self {
+            Self
+        }
+
+        fn forward(&self, stream: AliasedAgentStream<String>) -> AliasedAgentStream<String> {
+            stream
+        }
+    }
+
+    #[test]
+    #[cfg(target_arch = "wasm32")]
+    async fn agent_stream_alias_dispatches_through_recursive_value_tree() {
+        AliasedStreamingAgentImpl::__register_agent_type();
+        let mut agent = AliasedStreamingAgentImpl::new();
+        let (_writer, stream) = AgentStream::<String>::new();
+        let input_stream = stream.to_value();
+        let invocation = agent
+            .invoke(
+                "forward".to_string(),
+                SchemaValue::Record {
+                    fields: vec![input_stream.clone()],
+                },
+                Principal::Anonymous,
+            )
+            .await
+            .expect("a Rust type alias must not change AgentStream ABI dispatch");
+
+        assert_eq!(invocation.value, Some(input_stream));
+    }
+
+    #[agent_definition]
+    trait NativeStreamStateShadowAgent {
+        fn new() -> Self;
+        fn echo(&self, in_streams: String) -> String;
+    }
+
+    struct NativeStreamStateShadowAgentImpl;
+
+    #[agent_implementation]
+    impl NativeStreamStateShadowAgent for NativeStreamStateShadowAgentImpl {
+        fn new() -> Self {
+            Self
+        }
+
+        fn echo(&self, in_streams: String) -> String {
+            in_streams
+        }
+    }
+
+    #[test]
+    async fn method_parameter_named_in_streams_does_not_shadow_abi_state() {
+        NativeStreamStateShadowAgentImpl::__register_agent_type();
+        let mut agent = NativeStreamStateShadowAgentImpl::new();
+
+        let invocation = agent
+            .invoke(
+                "echo".to_string(),
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::String("payload".to_string())],
+                },
+                Principal::Anonymous,
+            )
+            .await
+            .expect("a scalar parameter name must not affect native stream validation");
+
+        assert_eq!(
+            invocation.value,
+            Some(SchemaValue::String("payload".to_string()))
+        );
     }
 
     #[agent_definition]
@@ -1136,7 +1309,7 @@ mod tests {
         }
 
         async fn create_webhook_and_trigger(&self) -> String {
-            let webhook = create_webhook();
+            let webhook = create_webhook().expect("webhook creation should be allowed");
 
             webhook_placeholder(webhook.url());
 

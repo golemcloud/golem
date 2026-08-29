@@ -17,7 +17,7 @@ pub mod default;
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::{DurableWorkerCtxView, SnapshotBoundaryBlocker};
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
-use crate::services::active_workers::ActiveWorkers;
+use crate::services::active_agents::ActiveAgents;
 use crate::services::agent_filesystem::{FilesystemGenerationHandle, OpenNode};
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
@@ -42,6 +42,7 @@ use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, HasOplog, HasWorker, worker_enumeration};
+use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::{RetryDecision, Worker};
 use async_trait::async_trait;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
@@ -49,6 +50,7 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
+use golem_common::model::entity::{EntityInvocationScope, FilesystemCapability, OwnerRuntime};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -65,7 +67,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Weak};
 use uuid::Uuid;
 use wasmtime::component::Instance;
-use wasmtime::{AsContextMut, ResourceLimiterAsync};
+use wasmtime::{ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::p2::WasiHttpCtxView;
 use wasmtime_wasi_http::p3::WasiHttpView;
@@ -84,6 +86,15 @@ impl WorkerFilesystemContext {
     }
 }
 
+/// Test-harness coordination for a P3 HTTP body reply that is ready before a
+/// guest cancels the matching stream read.
+#[doc(hidden)]
+pub trait P3HttpBodyProducerHook: Send + Sync {
+    fn should_defer_ready_reply(&self) -> bool;
+
+    fn ready_reply_deferred(&self);
+}
+
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
 /// well as providing hooks for the general worker executor logic.
@@ -99,6 +110,7 @@ pub trait WorkerCtx:
     + UpdateManagement
     + FileSystemReading
     + InvocationContextManagement
+    + EntityInvocationManagement
     + DurableWorkerCtxView<Self>
     + WasiView
     + WasiHttpView
@@ -126,6 +138,21 @@ pub trait WorkerCtx:
     /// instead of re-executing.
     const ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS: bool = true;
 
+    /// Wraps a worker's oplog before it is shared with the worker internals and its context.
+    fn wrap_oplog(
+        _owned_agent_id: OwnedAgentId,
+        oplog: Arc<dyn Oplog>,
+        _extra_deps: Self::ExtraDeps,
+    ) -> Arc<dyn Oplog> {
+        oplog
+    }
+
+    /// Supplies optional test-harness coordination for P3 HTTP body delivery.
+    #[doc(hidden)]
+    fn p3_http_body_producer_hook(&self) -> Option<Arc<dyn P3HttpBodyProducerHook>> {
+        None
+    }
+
     /// Creates a new worker context
     ///
     /// Arguments:
@@ -137,7 +164,7 @@ pub trait WorkerCtx:
     /// - `key_value_service`: The service for storing key-value pairs
     /// - `blob_store_service`: The service for storing arbitrary blobs
     /// - `event_service`: The service for publishing worker events
-    /// - `active_workers`: The service for managing active workers
+    /// - `active_agents`: The service for managing active agents
     /// - `oplog_service`: The service for reading and writing the oplog
     /// - `scheduler_service`: The scheduler implementation responsible for waking up suspended workers
     /// - `recovery_management`: The service for deciding if a worker should be recovered
@@ -161,7 +188,7 @@ pub trait WorkerCtx:
         rdbms_service: Arc<dyn RdbmsService>,
         quota_service: Arc<dyn QuotaService>,
         event_service: Arc<dyn WorkerEventService>,
-        active_workers: Arc<ActiveWorkers<Self>>,
+        active_agents: Arc<ActiveAgents<Self>>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         invocation_queue: Weak<Worker<Self>>,
@@ -188,6 +215,12 @@ pub trait WorkerCtx:
         websocket_connection_pool: WebSocketConnectionPool,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
+        runtime: OwnerRuntime,
+        owner_execution: Arc<OwnerExecution>,
+        owner_resources: Arc<OwnerRuntimeResources>,
+        filesystem_capability: FilesystemCapability,
+        executable_component: Component,
+        entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError>;
 
     fn as_wasi_view(&mut self) -> impl WasiView;
@@ -247,6 +280,16 @@ pub trait WorkerCtx:
     fn max_disk_space(&self) -> u64;
 }
 
+/// Installs the per-call identity used while a transient entity Store executes.
+pub trait EntityInvocationManagement {
+    fn set_entity_invocation_scope(
+        &mut self,
+        scope: Option<EntityInvocationScope>,
+    ) -> Result<(), WorkerExecutorError>;
+
+    fn entity_invocation_scope(&self) -> Option<&EntityInvocationScope>;
+}
+
 /// The fuel management interface of a worker context is responsible for borrowing and returning
 /// fuel required for executing a worker. The implementation can decide to ignore fuel management
 /// and allow unconstrained execution of the worker, or it can communicate with some external store
@@ -270,6 +313,10 @@ pub trait FuelManagement {
 
     /// Returns the amount of fuel consumed since the last call to return_fuel.
     fn return_fuel(&mut self, current_level: u64) -> u64;
+
+    /// Refunds any unused prepaid fuel before a Store is dropped or handed off without advancing
+    /// the invocation-consumption baseline.
+    fn settle_fuel(&mut self, current_level: u64);
 }
 
 /// Manages per-invocation and monthly account-level HTTP and RPC call counts.
@@ -353,6 +400,9 @@ pub trait InvocationHooks {
         &mut self,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError>;
+
+    /// Clears invocation-scoped runtime state after the guest call returns or traps.
+    async fn on_agent_invocation_finished(&mut self);
 
     /// Called when a worker invocation fails
     async fn on_invocation_failure(
@@ -455,7 +505,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// hasn't reached the end of the replay (which is usually last index in oplog)
     /// resume_replay will ensure to start replay from the last replayed index.
     async fn resume_replay(
-        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        store: &mut Store<Ctx>,
         instance: &Instance,
         refresh_replay_target: bool,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError>;
@@ -473,7 +523,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     async fn prepare_instance(
         agent_id: &AgentId,
         instance: &Instance,
-        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        store: &mut Store<Ctx>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError>;
 
     /// Callback called when the executor's shard assignment has been changed

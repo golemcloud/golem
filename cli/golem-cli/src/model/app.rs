@@ -654,7 +654,7 @@ impl Application {
                             .map(|component| &component.templates),
                     )
                     .flat_map(|templates| templates.clone().into_vec())
-                    .filter_map(GuestLanguage::from_id_string)
+                    .filter_map(GuestLanguage::from_component_template_name)
             })
             .collect()
     }
@@ -2008,12 +2008,12 @@ impl<'a> Component<'a> {
         self.component_name
     }
 
-    // Guesses the language from the applied language templates, which are named after the
-    // language id they provide (see `GuestLanguage::from_id_string`).
+    // Guesses the language from the language-prefixed applied templates.
     pub fn guess_language(&self) -> Option<GuestLanguage> {
-        self.applied_layers()
-            .iter()
-            .find_map(|(id, _)| id.template_name().and_then(GuestLanguage::from_id_string))
+        self.applied_layers().iter().find_map(|(id, _)| {
+            id.template_name()
+                .and_then(GuestLanguage::from_component_template_name)
+        })
     }
 
     pub fn source(&self) -> &Path {

@@ -90,7 +90,13 @@ impl CustomDurabilityImpl {
         )
         .run_infallible(|| {
             let result = {
-                assert!(!get_self_metadata().agent_id.agent_id.is_empty());
+                assert!(
+                    !get_self_metadata()
+                        .expect("self metadata access should be allowed")
+                        .agent_id
+                        .agent_id
+                        .is_empty()
+                );
                 if probe_first {
                     perform_request("probe", payload.clone());
                 }

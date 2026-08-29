@@ -96,8 +96,9 @@ object WitSchemaTypeBody {
 
   final case class UnionType(spec: WitUnionSpec) extends WitSchemaTypeBody
 
-  final case class SecretType(spec: WitSecretSpec)      extends WitSchemaTypeBody
-  final case class QuotaTokenType(spec: QuotaTokenSpec) extends WitSchemaTypeBody
+  final case class SecretType(spec: WitSecretSpec)              extends WitSchemaTypeBody
+  final case class QuotaTokenType(spec: QuotaTokenSpec)         extends WitSchemaTypeBody
+  final case class PermissionCardType(spec: PermissionCardSpec) extends WitSchemaTypeBody
 
   final case class FutureType(element: Option[Int]) extends WitSchemaTypeBody
   final case class StreamType(element: Option[Int]) extends WitSchemaTypeBody
@@ -166,7 +167,11 @@ object WitSchemaValueNode {
    * quota-token-handle(own<quota-token>)`). Carries the opaque affine handle
    * unchanged; the take-once transfer happens at the JS host boundary.
    */
-  final case class QuotaTokenHandle(handle: GuestQuotaTokenHandle) extends WitSchemaValueNode
+  final case class QuotaTokenHandle(handle: GuestQuotaTokenHandle)   extends WitSchemaValueNode
+  final case class StreamValue(handle: GuestSchemaValueStreamHandle) extends WitSchemaValueNode
+
+  /** Flat carrier for an owned `permission-card` resource. */
+  final case class PermissionCardHandle(handle: GuestPermissionCardHandle) extends WitSchemaValueNode
 }
 
 final case class WitTypedSchemaValue(graph: WitSchemaGraph, value: WitSchemaValueTree)

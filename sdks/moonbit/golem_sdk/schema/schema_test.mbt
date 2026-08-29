@@ -8,11 +8,32 @@
 // and asserts the decoded value (and the schema graph) survive unchanged.
 
 ///|
+struct StreamThenInt {
+  stream : AgentStream[Int]
+  value : Int
+}
+
+///|
+impl FromSchema for StreamThenInt with fn from_value(value) {
+  let fields = expect_record(value, "StreamThenInt")
+  let stream : AgentStream[Int] = from_value_as(
+    record_field(fields, 0, "StreamThenInt"),
+  )
+  let decoded : Int = from_value_as(record_field(fields, 1, "StreamThenInt"))
+  { stream, value: decoded }
+}
+
+///|
 /// Full encode -> WIT -> decode round-trip of a value through the schema layer.
 fn[T : IntoSchema + FromSchema] roundtrip(v : T) -> T raise {
   let typed = try_into_typed_schema_value(v)
   let wit = @model.typed_schema_value_to_wit(typed)
-  let back = @model.typed_schema_value_from_wit(wit)
+  let back = @model.typed_schema_value_from_wit(wit, {
+    drop_secret: fn(_) {  },
+    drop_quota_token: fn(_) {  },
+    drop_stream: fn(_) {  },
+    drop_native_stream: fn(_) {  },
+  })
   // The schema graph must survive the WIT round-trip unchanged.
   assert_eq(back.graph, typed.graph)
   T::from_value(back.value)
@@ -108,4 +129,86 @@ test "shape mismatch surfaces a FromSchemaError" {
   assert_eq(expected, "s32")
   assert_eq(actual, "string")
   assert_eq(context, "Int")
+}
+
+///|
+test "AgentStream decoding shares the take-once stream holder" {
+  let source = @model.GuestSchemaValueStreamHandle::from_wrapped(
+    @types.SchemaValueStream::SchemaValueStream(30),
+  )
+  let stream : AgentStream[Int] = from_value_as(
+    @model.SchemaValue::Stream(source),
+  )
+  assert_true(source.is_present())
+  guard to_value_as(stream) is @model.SchemaValue::Stream(destination) else {
+    fail("expected an AgentStream schema value")
+  }
+  assert_true(destination.is_present())
+  let dropped = [0]
+  let drops : @model.SchemaValueResourceDrops = {
+    drop_secret: fn(_) {  },
+    drop_quota_token: fn(_) {  },
+    drop_stream: fn(_) { dropped[0] += 1 },
+    drop_native_stream: fn(_) {  },
+  }
+  @model.SchemaValue::Stream(destination).release_resources(drops)
+  @model.SchemaValue::Stream(source).release_resources(drops)
+  assert_eq(dropped[0], 1)
+}
+
+///|
+test "compound conversion rollback retains ownership in the source tree" {
+  let array_handle = @model.GuestSchemaValueStreamHandle::from_wrapped(
+    @types.SchemaValueStream::SchemaValueStream(31),
+  )
+  let array_source = @model.SchemaValue::List([
+    @model.SchemaValue::Stream(array_handle),
+    @model.SchemaValue::S32(1),
+  ])
+  let array_result : Result[Array[AgentStream[Int]], FromSchemaError] = try? from_value_as(
+    array_source,
+  )
+  guard array_result is Err(_) else {
+    fail("the second array element must reject the conversion")
+  }
+  let tuple_handle = @model.GuestSchemaValueStreamHandle::from_wrapped(
+    @types.SchemaValueStream::SchemaValueStream(32),
+  )
+  let tuple_source = @model.SchemaValue::Tuple([
+    @model.SchemaValue::Stream(tuple_handle),
+    @model.SchemaValue::String("not an int"),
+  ])
+  let tuple_result : Result[(AgentStream[Int], Int), FromSchemaError] = try? from_value_as(
+    tuple_source,
+  )
+  guard tuple_result is Err(_) else {
+    fail("the second tuple element must reject the conversion")
+  }
+  let record_handle = @model.GuestSchemaValueStreamHandle::from_wrapped(
+    @types.SchemaValueStream::SchemaValueStream(33),
+  )
+  let record_source = @model.SchemaValue::Record([
+    @model.SchemaValue::Stream(record_handle),
+    @model.SchemaValue::String("not an int"),
+  ])
+  let record_result : Result[StreamThenInt, FromSchemaError] = try? from_value_as(
+    record_source,
+  )
+  guard record_result is Err(_) else {
+    fail("the second record field must reject the conversion")
+  }
+  let dropped = [0]
+  let drops : @model.SchemaValueResourceDrops = {
+    drop_secret: fn(_) {  },
+    drop_quota_token: fn(_) {  },
+    drop_stream: fn(_) { dropped[0] += 1 },
+    drop_native_stream: fn(_) {  },
+  }
+  array_source.release_resources(drops)
+  tuple_source.release_resources(drops)
+  record_source.release_resources(drops)
+  assert_false(array_handle.is_present())
+  assert_false(tuple_handle.is_present())
+  assert_false(record_handle.is_present())
+  assert_eq(dropped[0], 3)
 }

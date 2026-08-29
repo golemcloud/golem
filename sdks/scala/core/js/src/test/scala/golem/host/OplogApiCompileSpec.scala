@@ -84,6 +84,8 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.Start(p)                        => s"start(${p.functionName})"
     case OplogEntry.End(p)                          => s"end(${p.startIndex})"
     case OplogEntry.Cancelled(p)                    => s"cancelled(${p.startIndex})"
+    case OplogEntry.CompletionDiscarded(p)          => s"completion-discarded(${p.startIndex})"
+    case OplogEntry.CompletionDelivered(p)          => s"completion-delivered(${p.startIndex})"
     case OplogEntry.HostCall(p)                     => s"import(${p.functionName})"
     case OplogEntry.AgentInvocationStarted(p)       => s"export(${p.functionName})"
     case OplogEntry.AgentInvocationFinished(p)      => s"completed(${p.consumedFuel})"
@@ -191,6 +193,8 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       ),
       OplogEntry.End(EndParameters(ts, BigInt(4), Some(sampleTyped), forcedCommit = true)),
       OplogEntry.Cancelled(CancelledParameters(ts, BigInt(5), None)),
+      OplogEntry.CompletionDiscarded(CompletionDiscardedParameters(ts, BigInt(6))),
+      OplogEntry.CompletionDelivered(CompletionDeliveredParameters(ts, BigInt(7))),
       OplogEntry.AgentInvocationStarted(
         AgentInvocationStartedParameters(
           ts,
@@ -220,9 +224,9 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     )
 
   def spec = suite("OplogApiCompileSpec")(
-    test("all 40 OplogEntry variants constructed") {
+    test("all OplogEntry variants constructed") {
       val distinctTags = allEntries.map(describeEntry).map(_.takeWhile(_ != '(')).distinct
-      assertTrue(distinctTags.size >= 40)
+      assertTrue(distinctTags.size >= 42)
     },
     test("exhaustive OplogEntry match compiles") {
       allEntries.foreach(e => Predef.assert(describeEntry(e).nonEmpty))

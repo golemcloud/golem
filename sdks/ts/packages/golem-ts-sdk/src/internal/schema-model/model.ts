@@ -37,13 +37,14 @@ import type {
   QuantityValue,
   SecretSpec,
   QuotaTokenSpec,
+  PermissionCardSpec,
   DiscriminatorRule,
   Datetime,
-  Uuid,
-  EnvironmentId,
 } from 'golem:core/types@2.0.0';
 import { GuestSecretHandle } from './secretHandle';
 import { GuestQuotaTokenHandle } from './quotaTokenHandle';
+import { GuestSchemaValueStreamHandle } from './schemaValueStreamHandle';
+import { GuestPermissionCardHandle } from './permissionCardHandle';
 
 export type {
   TypeId,
@@ -57,10 +58,9 @@ export type {
   QuantityValue,
   SecretSpec,
   QuotaTokenSpec,
+  PermissionCardSpec,
   DiscriminatorRule,
   Datetime,
-  Uuid,
-  EnvironmentId,
 };
 
 // These are part of the schema-model public surface but are only ever re-exported
@@ -72,6 +72,8 @@ export type {
   PathDirection,
   PathKind,
   FieldDiscriminator,
+  Uuid,
+  EnvironmentId,
 } from 'golem:core/types@2.0.0';
 
 // ============================================================
@@ -125,6 +127,7 @@ export type SchemaTypeBody =
   // Capability nodes
   | { tag: 'secret'; spec: Omit<SecretSpec, 'inner'>; inner: SchemaType }
   | { tag: 'quota-token'; spec: QuotaTokenSpec }
+  | { tag: 'permission-card'; spec: PermissionCardSpec }
   // WASI P3 stubs (parseable only; no semantics yet)
   | { tag: 'future'; element?: SchemaType }
   | { tag: 'stream'; element?: SchemaType };
@@ -314,6 +317,11 @@ function schemaTypesMatch(
         left.spec.resourceName ===
         (right as Extract<SchemaTypeBody, { tag: 'quota-token' }>).spec.resourceName
       );
+    case 'permission-card':
+      return (
+        left.spec.polymorphic ===
+        (right as Extract<SchemaTypeBody, { tag: 'permission-card' }>).spec.polymorphic
+      );
     case 'text':
       return optionalStringSetsEqual(
         left.restrictions.languages,
@@ -432,7 +440,10 @@ export type SchemaValue =
   | { tag: 'secret'; handle: GuestSecretHandle }
   // An opaque, affine owned `quota-token` handle. Carried by ownership; never
   // inspectable or forgeable from a guest. See `GuestQuotaTokenHandle`.
-  | { tag: 'quota-token'; handle: GuestQuotaTokenHandle };
+  | { tag: 'quota-token'; handle: GuestQuotaTokenHandle }
+  | { tag: 'stream'; handle: GuestSchemaValueStreamHandle }
+  // An opaque, affine owned `permission-card` handle.
+  | { tag: 'permission-card'; handle: GuestPermissionCardHandle };
 
 export interface SchemaMapEntry {
   key: SchemaValue;
@@ -501,6 +512,9 @@ export const t = {
   secret: (inner: SchemaType, spec: Omit<SecretSpec, 'inner'> = {}): SchemaType =>
     schemaType({ tag: 'secret', spec, inner }),
   quotaToken: (spec: QuotaTokenSpec): SchemaType => schemaType({ tag: 'quota-token', spec }),
+  stream: (element?: SchemaType): SchemaType => schemaType({ tag: 'stream', element }),
+  permissionCard: (spec: PermissionCardSpec): SchemaType =>
+    schemaType({ tag: 'permission-card', spec }),
 };
 
 /** Compact constructors for schema field/case helpers. */
@@ -564,6 +578,11 @@ export const v = {
   union: (unionTag: string, body: SchemaValue): SchemaValue => ({ tag: 'union', unionTag, body }),
   secret: (handle: GuestSecretHandle): SchemaValue => ({ tag: 'secret', handle }),
   quotaToken: (handle: GuestQuotaTokenHandle): SchemaValue => ({ tag: 'quota-token', handle }),
+  stream: (handle: GuestSchemaValueStreamHandle): SchemaValue => ({ tag: 'stream', handle }),
+  permissionCard: (handle: GuestPermissionCardHandle): SchemaValue => ({
+    tag: 'permission-card',
+    handle,
+  }),
 };
 
 /** Clone a schema value without duplicating affine capability handles. */
@@ -639,11 +658,16 @@ export function deepEqual(a: unknown, b: unknown): boolean {
 
   if (a === b) return true;
 
-  // Quota-token handles are affine capabilities, not structural data: equality
-  // is identity only (mirrors the Rust shared-cell `PartialEq`). Without this,
-  // two distinct handles would compare equal (both expose no enumerable state).
+  // Capability handles are affine, not structural data: equality is identity
+  // only. Without this, distinct handles would compare equal because they
+  // expose no enumerable state.
   if (a instanceof GuestSecretHandle || b instanceof GuestSecretHandle) return false;
   if (a instanceof GuestQuotaTokenHandle || b instanceof GuestQuotaTokenHandle) return false;
+  if (a instanceof GuestSchemaValueStreamHandle || b instanceof GuestSchemaValueStreamHandle)
+    return false;
+  if (a instanceof GuestPermissionCardHandle || b instanceof GuestPermissionCardHandle) {
+    return false;
+  }
 
   if (typeof a === 'bigint' || typeof b === 'bigint') return a === b;
 

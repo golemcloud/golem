@@ -17,15 +17,15 @@
 //! A durable host call is identified by the [`OplogIndex`] of its `Start` entry. While live,
 //! the call eagerly appends a `Start` (capturing its request) and later an `End` (its response)
 //! or a `Cancelled`. During replay the [`ConcurrentReplayResolver`] matches each completed
-//! `End`/`Cancelled` back to the awaiting [`CallHandle`] via a [`ReplayableOneshot`], so the two
+//! `End`/`Cancelled` back to the awaiting [`DurableCallSession`] via a [`ReplayableOneshot`], so the two
 //! halves of a call no longer have to be adjacent in the oplog — which is what lets us track
 //! async, parallel host functions.
 //!
-//! Every durable host call runs through this path via [`CallHandle`]. Calls made through the
-//! p3 `Accessor` entry points ([`CallHandle::start_access_with`] and friends) run concurrently;
+//! Every durable host call runs through this path via [`DurableCallSession`]. Calls made through the
+//! p3 `Accessor` entry points ([`DurableCallSession::start_access_with`] and friends) run concurrently;
 //! host methods still taking `&mut self` remain serialized by the store borrow.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -34,10 +34,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_common::model::agent::ParsedAgentId;
-use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::SpanId;
-use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
     OplogPayload, ScopeScanState, host_functions::HostFunctionName,
@@ -47,7 +44,6 @@ use golem_common::model::{RetryProperties, Timestamp};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_service_base::model::component::Component;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 use wasmtime::component::{Accessor, HasData, TerminalConsumption};
@@ -64,19 +60,25 @@ use crate::durable_host::{
     AtomicRegionLease, DurableScopeKind, DurableWorkerCtx, PublicDurableWorkerState,
 };
 use crate::services::HasWorker;
-use crate::services::component::ComponentService;
-use crate::services::file_loader::FileLoader;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, PendingUpload};
-use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use std::fmt::Display;
 
 mod access;
 mod call;
 mod delivery;
+mod demand_stream;
 mod drop_events;
 mod replay;
 
+pub(super) use super::call_coordinator::{
+    DurableCallAdmission, DurableCallBoundary, DurableCallCoordinator,
+    lock_synchronized_card_event_boundary_access, process_pending_replay_events_access,
+};
+pub(crate) use super::call_coordinator::{
+    agent_auth_ctx_at_serialized_access, authorize_live_permissions_at_serialized_access,
+    try_agent_auth_ctx_at_serialized_access,
+};
 use access::*;
 pub use call::*;
 #[cfg(test)]
@@ -84,6 +86,7 @@ use call::{
     BegunCallExecutionScope, CallExecutionScope, ScopedRetryHost, unregistered_atomic_lease,
 };
 pub use delivery::*;
+pub(crate) use demand_stream::*;
 pub use drop_events::*;
 pub use replay::*;
 

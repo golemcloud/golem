@@ -14,7 +14,7 @@
 
 pub mod types;
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 use crate::durable_host::quota::types::{LeaseInterestHandle, QuotaTokenEntry, ReservationEntry};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::quota::types::{FailedReservation, Host, HostReservation};
@@ -33,12 +33,14 @@ use golem_common::model::quota::ReserveResult;
 use golem_common::model::quota::ResourceName;
 use golem_common::model::{ScheduledAction, Timestamp};
 use golem_schema::schema::schema_value::QuotaTokenValuePayload;
-use golem_schema::schema::wit::wire::HostQuotaToken;
+use golem_schema::schema::wit::wire::HostQuotaTokenWithStore;
 use golem_schema::schema::wit::{QuotaTokenHandleRep, QuotaTokenResolver};
 use golem_service_base::error::worker_executor::GolemSpecificWasmTrap;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use tracing::debug;
-use wasmtime::component::Resource;
+use wasmtime::component::{Accessor, Resource};
+
+use crate::durable_host::schema_value_stream::CoreTypesHost;
 
 /// Borrow the [`QuotaTokenEntry`] stored inside a `quota-token` resource handle.
 ///
@@ -124,15 +126,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         // `WriteLocal` (no external side effect): re-executable on an incomplete `Start`, so the
         // live acquire runs from one shared block for both the live and incomplete-replay paths.
-        let mut handle = CallHandle::<host_functions::GolemQuotaTokenNew, NotCancellable>::start(
-            self,
-            HostRequestQuotaTokenRequest {
-                resource_name,
-                expected_use,
-            },
-            DurableFunctionType::WriteLocal,
-        )
-        .await?;
+        let mut handle =
+            DurableCallSession::<host_functions::GolemQuotaTokenNew, NotCancellable>::start(
+                self,
+                HostRequestQuotaTokenRequest {
+                    resource_name,
+                    expected_use,
+                },
+                DurableFunctionType::WriteLocal,
+            )
+            .await?;
 
         let token_entry = 'token: {
             if !handle.is_live() {
@@ -175,7 +178,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         amount: u64,
     ) -> anyhow::Result<Result<Resource<ReservationEntry>, FailedReservation>> {
         let mut handle =
-            CallHandle::<host_functions::GolemQuotaTokenReserve, NotCancellable>::start(
+            DurableCallSession::<host_functions::GolemQuotaTokenReserve, NotCancellable>::start(
                 self,
                 HostRequestQuotaReserveRequest { amount },
                 DurableFunctionType::WriteRemote,
@@ -446,11 +449,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 /// opaque [`QuotaTokenHandleRep`] by golem-schema. The only operation the core
 /// interface declares for it is `drop`, which releases the underlying lease
 /// state back to the executor pool.
-impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
-    async fn drop(&mut self, rep: Resource<QuotaTokenHandleRep>) -> anyhow::Result<()> {
-        DurabilityHost::observe_function_call(self, "golem::core::quota-token", "drop");
-        self.table().delete(rep)?;
-        Ok(())
+impl<T: Send + 'static, Ctx: WorkerCtx> HostQuotaTokenWithStore<T> for CoreTypesHost<Ctx> {
+    async fn drop(
+        accessor: &Accessor<T, Self>,
+        rep: Resource<QuotaTokenHandleRep>,
+    ) -> anyhow::Result<()> {
+        accessor.with(|mut access| {
+            let ctx = access.get();
+            DurabilityHost::observe_function_call(ctx, "golem::core::quota-token", "drop");
+            ctx.table().delete(rep)?;
+            Ok(())
+        })
     }
 }
 
@@ -515,13 +524,15 @@ impl<Ctx: WorkerCtx> HostReservation for DurableWorkerCtx<Ctx> {
     async fn commit(&mut self, self_: Resource<ReservationEntry>, used: u64) -> anyhow::Result<()> {
         let entry = self.table().delete(self_)?;
 
-        let mut handle =
-            CallHandle::<host_functions::GolemQuotaReservationCommit, NotCancellable>::start(
-                self,
-                HostRequestQuotaCommitRequest { used },
-                DurableFunctionType::WriteRemote,
-            )
-            .await?;
+        let mut handle = DurableCallSession::<
+            host_functions::GolemQuotaReservationCommit,
+            NotCancellable,
+        >::start(
+            self,
+            HostRequestQuotaCommitRequest { used },
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
 
         if !handle.is_live() {
             match handle.replay(self).await? {

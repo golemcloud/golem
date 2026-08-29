@@ -17,6 +17,7 @@
 pub mod canonical;
 pub mod conversion;
 pub mod derive;
+pub mod fingerprint;
 pub mod graph;
 pub mod host_managed;
 pub mod metadata;
@@ -25,6 +26,7 @@ pub mod multimodal;
 pub mod protobuf;
 pub mod schema_type;
 pub mod schema_value;
+pub mod stream;
 pub mod tool;
 pub mod unstructured;
 pub mod validation;
@@ -42,6 +44,7 @@ pub use conversion::{
     Quantity, QuantityUnit, SchemaBuilder, merge_agent_graphs, try_into_schema_graph,
     try_into_typed_schema_value,
 };
+pub use fingerprint::{SchemaFingerprintError, SchemaFingerprintV1, schema_fingerprint_v1};
 #[cfg(feature = "derive")]
 pub use golem_schema_derive::{FromSchema, IntoSchema, Schema};
 pub use graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
@@ -49,10 +52,15 @@ pub use host_managed::{HostManagedKind, RedactedSchemaValue, redacted_schema_val
 pub use metadata::{MetadataEnvelope, Role, TypeId};
 pub use schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, PathDirection,
-    PathKind, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec, ResultSpec, SchemaType,
-    SecretSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
+    PathKind, PathSpec, PermissionCardSpec, QuantitySpec, QuantityValue, QuotaTokenSpec,
+    ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
+    VariantCaseType,
 };
 pub use schema_value::{
-    BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
-    SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
+    BinaryValuePayload, DurationValuePayload, PermissionCardValuePayload, QuotaTokenValuePayload,
+    ResultValuePayload, SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload,
+    VariantValuePayload,
 };
+pub use stream::SchemaValueStream;
+#[cfg(all(feature = "host", not(feature = "guest")))]
+pub use stream::SchemaValueStreamHandleRep;

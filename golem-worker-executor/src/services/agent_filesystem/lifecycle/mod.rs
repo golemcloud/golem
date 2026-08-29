@@ -25,7 +25,7 @@ use crate::sandbox_filesystem::{
     SandboxSymlinkTarget, SandboxSynchronization, SandboxTargetIdentity, SandboxTimeChange,
     SandboxTimeChanges, SandboxWriteAttempt, SandboxWritePlacement,
 };
-use crate::services::active_workers::ConcurrentAgentPermit;
+use crate::services::active_agents::ConcurrentAgentPermit;
 use crate::services::file_loader::{FileLoader, InitialFileSource};
 use crate::services::resource_usage_metering::{
     FilesystemUsage, FilesystemUsageReader, FilesystemUsageSource, MeteringOpenError,
@@ -132,6 +132,8 @@ struct FilesystemGeneration<Adapter: SandboxFilesystemAdapter> {
     registry: Arc<GenerationRegistry>,
     limits: Mutex<ResolvedStorageLimits>,
     initial_files: Mutex<HashMap<PathBuf, InitialAgentFile>>,
+    entity_provisioned_files: Mutex<HashMap<PathBuf, InitialAgentFile>>,
+    initial_file_updates: tokio::sync::Mutex<()>,
     pressure_recovery: Option<FilesystemWriteRecovery>,
     namespace: Arc<NamespaceCoordinator>,
 }
@@ -455,6 +457,8 @@ async fn create_fresh_with_recovery<Adapter: SandboxFilesystemAdapter>(
             registry: Arc::new(GenerationRegistry::new()),
             limits: Mutex::new(limits),
             initial_files: Mutex::new(HashMap::new()),
+            entity_provisioned_files: Mutex::new(HashMap::new()),
+            initial_file_updates: tokio::sync::Mutex::new(()),
             pressure_recovery,
             namespace: Arc::new(NamespaceCoordinator::new()),
         })),
@@ -697,13 +701,41 @@ pub(crate) fn path_permissions<Adapter: SandboxFilesystemAdapter>(
     path: &std::path::Path,
 ) -> Result<AgentFilePermissions, AccessError> {
     let generation = admit(generation_handle)?;
-    Ok(generation
+    let initial_permission = generation
         .initial_files
         .lock()
         .unwrap()
         .get(path)
-        .map(|file| file.permissions)
+        .map(|file| file.permissions);
+    Ok(initial_permission
+        .or_else(|| {
+            generation
+                .entity_provisioned_files
+                .lock()
+                .unwrap()
+                .get(path)
+                .map(|file| file.permissions)
+        })
         .unwrap_or(AgentFilePermissions::ReadWrite))
+}
+
+/// Adds activation-provisioned files to an active owner filesystem.
+///
+/// Entity Stores call this inside their owner invocation scope before guest execution. Identical
+/// declarations are idempotent, while a path already owned by another initial-file declaration
+/// must describe the same file. Provisioned declarations remain part of the generation across
+/// component initial-file updates.
+pub(crate) fn provision_initial_files(
+    generation_handle: &FilesystemGenerationHandle,
+    file_loader: Arc<FileLoader>,
+    environment_id: EnvironmentId,
+    files: Vec<InitialAgentFile>,
+) -> Result<FilesystemCall<()>, Error> {
+    let generation = admit(generation_handle).map_err(Error::Access)?;
+    let lease = generation.registry.lease_call().map_err(Error::Access)?;
+    Ok(FilesystemCall::new(lease, async move {
+        complete_initial_file_provisioning(generation, file_loader, environment_id, files).await
+    }))
 }
 
 /// Starts reconciliation of a resident generation's initial files with a new component revision.
@@ -730,6 +762,116 @@ async fn complete_initial_file_update(
     environment_id: EnvironmentId,
     files: Vec<InitialAgentFile>,
 ) -> Result<(), Error> {
+    let _update = generation.initial_file_updates.lock().await;
+    let current_initial = generation.initial_files.lock().unwrap().clone();
+    let provisioned = generation.entity_provisioned_files.lock().unwrap().clone();
+    let current = merge_initial_file_declarations(&current_initial, &provisioned);
+    let desired_initial =
+        initial_file_declarations(files, "materialize unique initial-file update target")?;
+    validate_compatible_initial_file_declarations(&desired_initial, &provisioned)?;
+    let desired = merge_initial_file_declarations(&desired_initial, &provisioned);
+    apply_initial_file_update(
+        Arc::clone(&generation),
+        file_loader,
+        environment_id,
+        current,
+        desired,
+    )
+    .await?;
+    *generation.initial_files.lock().unwrap() = desired_initial;
+    Ok(())
+}
+
+async fn complete_initial_file_provisioning(
+    generation: Arc<FilesystemGeneration<SandboxFilesystem>>,
+    file_loader: Arc<FileLoader>,
+    environment_id: EnvironmentId,
+    files: Vec<InitialAgentFile>,
+) -> Result<(), Error> {
+    let _update = generation.initial_file_updates.lock().await;
+    let initial = generation.initial_files.lock().unwrap().clone();
+    let current_provisioned = generation.entity_provisioned_files.lock().unwrap().clone();
+    let requested =
+        initial_file_declarations(files, "materialize unique entity-provisioned file target")?;
+    let current = merge_initial_file_declarations(&initial, &current_provisioned);
+    validate_compatible_initial_file_declarations(&requested, &current)?;
+
+    let mut desired_provisioned = current_provisioned.clone();
+    desired_provisioned.extend(requested);
+    if desired_provisioned == current_provisioned {
+        return Ok(());
+    }
+    let desired = merge_initial_file_declarations(&initial, &desired_provisioned);
+    apply_initial_file_update(
+        Arc::clone(&generation),
+        file_loader,
+        environment_id,
+        current,
+        desired,
+    )
+    .await?;
+    *generation.entity_provisioned_files.lock().unwrap() = desired_provisioned;
+    Ok(())
+}
+
+fn initial_file_declarations(
+    files: Vec<InitialAgentFile>,
+    duplicate_operation: &'static str,
+) -> Result<HashMap<PathBuf, InitialAgentFile>, Error> {
+    let mut declarations = HashMap::new();
+    for file in files {
+        let relative = PathBuf::from(file.path.to_rel_string());
+        if declarations.insert(relative.clone(), file).is_some() {
+            return Err(Error::Sandbox(FilesystemStorageError::verification(
+                duplicate_operation,
+                &relative,
+            )));
+        }
+    }
+    Ok(declarations)
+}
+
+fn validate_compatible_initial_file_declarations(
+    requested: &HashMap<PathBuf, InitialAgentFile>,
+    existing: &HashMap<PathBuf, InitialAgentFile>,
+) -> Result<(), Error> {
+    for (relative, file) in requested {
+        if existing
+            .get(relative)
+            .is_some_and(|existing| existing != file)
+        {
+            return Err(Error::Sandbox(FilesystemStorageError::verification(
+                "resolve conflicting owner filesystem provision declarations at",
+                relative,
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn merge_initial_file_declarations(
+    initial: &HashMap<PathBuf, InitialAgentFile>,
+    provisioned: &HashMap<PathBuf, InitialAgentFile>,
+) -> HashMap<PathBuf, InitialAgentFile> {
+    let mut merged = initial.clone();
+    for (relative, file) in provisioned {
+        match merged.get(relative) {
+            Some(existing) => debug_assert_eq!(existing, file),
+            None => {
+                merged.insert(relative.clone(), file.clone());
+            }
+        }
+    }
+    merged
+}
+
+async fn apply_initial_file_update(
+    generation: Arc<FilesystemGeneration<SandboxFilesystem>>,
+    file_loader: Arc<FileLoader>,
+    environment_id: EnvironmentId,
+    current: HashMap<PathBuf, InitialAgentFile>,
+    desired: HashMap<PathBuf, InitialAgentFile>,
+) -> Result<(), Error> {
     let sandbox = generation
         .sandbox
         .read()
@@ -737,19 +879,7 @@ async fn complete_initial_file_update(
         .as_ref()
         .cloned()
         .ok_or(Error::RuntimeInvalidated)?;
-    let current = generation.initial_files.lock().unwrap().clone();
     let update_result = async {
-        let mut desired = HashMap::new();
-        for file in files {
-            let relative = PathBuf::from(file.path.to_rel_string());
-            if desired.insert(relative.clone(), file).is_some() {
-                return Err(FilesystemStorageError::verification(
-                    "materialize unique initial-file update target",
-                    &relative,
-                ));
-            }
-        }
-
         for (relative, file) in &desired {
             if current.get(relative).is_some_and(|existing| {
                 existing.permissions == AgentFilePermissions::ReadWrite
@@ -828,7 +958,6 @@ async fn complete_initial_file_update(
         sandbox
             .update_files(current.keys().cloned().collect(), staged, removals)
             .await?;
-        *generation.initial_files.lock().unwrap() = desired;
         Ok(())
     }
     .await;

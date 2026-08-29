@@ -13,12 +13,18 @@ impl ReplayCursor {
 
     /// Begins a cursor-advance transaction by acquiring [`Self::state`]. The returned [`CursorTx`]
     /// is the sole gateway to advance the cursor or mutate the guarded state.
-    pub(super) async fn tx(&self) -> CursorTx<'_> {
-        CursorTx {
+    pub(super) async fn tx(&self) -> Result<CursorTx<'_>, WorkerExecutorError> {
+        let advance_gate = self.advance_gate.clone().lock_owned().await;
+        if let Some(failure) = self.delivery_failure.lock().unwrap().clone() {
+            return Err(WorkerExecutorError::runtime(failure));
+        }
+        Ok(CursorTx {
             cursor: self,
             st: self.state.lock().await,
+            advance_gate: Some(advance_gate),
+            blocked_on_completion_delivery: false,
             notify_progress: false,
-        }
+        })
     }
 
     /// Releases a finished transaction and, if it made progress (advanced the cursor, registered an
@@ -58,7 +64,7 @@ impl ReplayCursor {
         idx: OplogIndex,
         n: u64,
     ) -> Vec<(OplogIndex, OplogEntry)> {
-        self.oplog.read_many(idx, n).await.into_iter().collect()
+        self.oplog.read_exact(idx, n).await.into_iter().collect()
     }
 
     pub(super) fn hash_log_entry(level: LogLevel, context: &str, message: &str) -> (u64, u64) {
@@ -69,10 +75,10 @@ impl ReplayCursor {
         hasher.finish128()
     }
 
-    /// Forward-scans the oplog from `start` up to `replay_target`, skipping entries inside deleted
-    /// regions, running `end_check`/`for_all_intermediate` (and `update_state`) over the rest. This
-    /// is the shared core for replay scans that need to inspect entries without advancing the
-    /// cursor.
+    /// Forward-scans the oplog from `start` up to, but not including, `end`, skipping entries
+    /// inside deleted regions and running `end_check`/`for_all_intermediate` (and `update_state`)
+    /// over the rest. This is the shared core for replay scans that need to inspect entries without
+    /// advancing the cursor.
     ///
     /// It only reads the oplog (via [`Self::read_oplog`]); it never touches [`Self::state`], so it is
     /// safe to call both from inside a held [`CursorTx`] (passing a borrow of the transaction's skip
@@ -83,7 +89,7 @@ impl ReplayCursor {
     pub(super) async fn scan_oplog<State>(
         &self,
         mut start: OplogIndex,
-        replay_target: OplogIndex,
+        end: OplogIndex,
         skipped_regions: &DeletedRegions,
         mut current_next_skip_region: Option<OplogRegion>,
         begin_idx: OplogIndex,
@@ -96,8 +102,9 @@ impl ReplayCursor {
 
         let mut violation = false;
 
-        while start < replay_target {
-            let entries = self.read_oplog(start, CHUNK_SIZE).await;
+        while start < end {
+            let available = end.as_u64() - start.as_u64();
+            let entries = self.read_oplog(start, CHUNK_SIZE.min(available)).await;
             for (idx, entry) in &entries {
                 if current_next_skip_region
                     .as_ref()
@@ -132,7 +139,7 @@ impl ReplayCursor {
                     violation = true;
                 }
             }
-            start = start.range_end(entries.len() as u64).next();
+            start = entries.last().unwrap().0.next();
         }
 
         OplogEntryLookupResult::NotFound {
@@ -150,6 +157,13 @@ impl ReplayCursor {
 pub(super) struct CursorTx<'a> {
     pub(super) cursor: &'a ReplayCursor,
     pub(super) st: MutexGuard<'a, CursorState>,
+    /// Normally released with the transaction. Consuming a `CompletionDelivered` marker transfers
+    /// it to the matching [`ReplayDeliveryBarrier`] so no later transaction can advance first.
+    advance_gate: Option<tokio::sync::OwnedMutexGuard<()>>,
+    /// Set when this transaction's positional read parked at a `CompletionDelivered` marker.
+    /// Optional readers use it to distinguish that global barrier from an ordinary predicate
+    /// mismatch, which may be returned to their caller immediately.
+    pub(super) blocked_on_completion_delivery: bool,
     notify_progress: bool,
 }
 
@@ -200,21 +214,6 @@ impl CursorTx<'_> {
                 .await
                 .into_iter()
                 .collect();
-
-            // Snapshot/cache churn can make a cross-layer batch start after the requested index.
-            if self
-                .st
-                .replay_buffer
-                .front()
-                .is_none_or(|(idx, _)| *idx != read_idx)
-            {
-                self.st.replay_buffer = self
-                    .cursor
-                    .read_oplog(read_idx, 1)
-                    .await
-                    .into_iter()
-                    .collect();
-            }
         }
 
         let oplog_entry = if let Some((idx, oplog_entry)) = self.st.replay_buffer.pop_front()
@@ -264,7 +263,29 @@ impl CursorTx<'_> {
         &mut self,
         condition: impl FnMut(&OplogEntry) -> bool,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
-        self.try_get_oplog_entry_inner(None, condition).await
+        self.try_get_oplog_entry_inner(None, None, condition).await
+    }
+
+    /// Consumes exactly the `CompletionDelivered` marker owned by `start_index`. Ordinary cursor
+    /// readers always park at these markers; only the matching replay delivery token may commit
+    /// one and take ownership of this transaction's global advance gate.
+    pub(super) async fn consume_completion_delivered(
+        &mut self,
+        start_index: OplogIndex,
+        marker_index: OplogIndex,
+    ) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, WorkerExecutorError> {
+        let consumed = self
+            .try_get_oplog_entry_inner(Some((start_index, marker_index)), None, |_| false)
+            .await?;
+        if consumed.is_some() {
+            Ok(Some(
+                self.advance_gate
+                    .take()
+                    .expect("cursor transactions always own the advance gate"),
+            ))
+        } else {
+            Ok(None)
+        }
     }
 
     /// [`Self::try_get_oplog_entry`] with the invocation-boundary tolerance for live-only
@@ -277,15 +298,21 @@ impl CursorTx<'_> {
         abandoned: &mut AbandonedStarts,
         condition: impl FnMut(&OplogEntry) -> bool,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
-        self.try_get_oplog_entry_inner(Some(abandoned), condition)
+        self.try_get_oplog_entry_inner(None, Some(abandoned), condition)
             .await
     }
 
     pub(super) async fn try_get_oplog_entry_inner(
         &mut self,
+        expected_delivery: Option<(OplogIndex, OplogIndex)>,
         mut abandoned: Option<&mut AbandonedStarts>,
         mut condition: impl FnMut(&OplogEntry) -> bool,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
+        self.blocked_on_completion_delivery = false;
+        if self.st.skip_hints_after_delivery {
+            self.skip_forward().await?;
+            self.st.skip_hints_after_delivery = false;
+        }
         loop {
             if self.cursor.is_live() {
                 // No further entries to read: nothing to drain, condition cannot match.
@@ -294,7 +321,54 @@ impl CursorTx<'_> {
 
             let (read_idx, entry) = self.raw_read_next_oplog_entry().await?;
 
-            if self.is_awaited_terminal(&entry) {
+            if let OplogEntry::CompletionDelivered { start_index, .. } = &entry {
+                if expected_delivery == Some((*start_index, read_idx)) {
+                    self.commit_consumed_entry(read_idx, &entry).await?;
+                    return Ok(Some((read_idx, entry)));
+                }
+                if self.is_custom_subtree_descendant(*start_index) {
+                    // A completed custom invocation replays as one logical result, while an
+                    // incomplete one re-executes its whole body. Either way, no replay delivery
+                    // token exists for a physical call in its observational subtree, so its
+                    // marker is replay-inert rather than a guest-delivery boundary.
+                    self.commit_consumed_entry(read_idx, &entry).await?;
+                    self.st.skip_hints_after_delivery = false;
+                    self.skip_forward().await?;
+                    continue;
+                }
+                if self.st.skipped_regions.is_in_deleted_region(*start_index) {
+                    // The call belongs to an abandoned timeline, so no replay delivery token can
+                    // exist for its surviving marker. Consume it like an orphan terminal and keep
+                    // normal hint skipping enabled: there is no guest boundary to hold here.
+                    debug!(
+                        "Skipping orphan CompletionDelivered at {read_idx} whose Start {start_index} lies in a skipped region"
+                    );
+                    self.commit_consumed_entry(read_idx, &entry).await?;
+                    self.st.skip_hints_after_delivery = false;
+                    self.skip_forward().await?;
+                    continue;
+                }
+                if abandoned
+                    .as_deref()
+                    .is_some_and(|abandoned| abandoned.contains(*start_index))
+                {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "AgentInvocationFinished",
+                        format!(
+                            "CompletionDelivered at {read_idx} references unclaimed durable call Start at {start_index} — the recorded guest received this completion but replay reached the invocation boundary without claiming it"
+                        ),
+                    ));
+                }
+
+                // This is a reserved guest-delivery boundary. Leave it at the cursor head for the
+                // matching completion token; even an unconditional positional reader may not
+                // steal it or advance beyond it.
+                self.st.replay_buffer.push_front((read_idx, entry));
+                self.blocked_on_completion_delivery = true;
+                return Ok(None);
+            }
+
+            if self.is_awaited_terminal(read_idx, &entry) {
                 // An `End`/`Cancelled` owned by a concurrently-replaying call: commit it and hand it
                 // back to its awaiter, then keep draining. Never returned to this caller.
                 self.commit_consumed_entry(read_idx, &entry).await?;
@@ -429,9 +503,12 @@ impl CursorTx<'_> {
     /// Whether `entry` is an `End`/`Cancelled` whose `start_index` currently has a registered
     /// resolver awaiter (and is therefore an *awaited terminal* the cursor auto-drains to its owner
     /// rather than handing to a positional reader).
-    pub(super) fn is_awaited_terminal(&self, entry: &OplogEntry) -> bool {
-        terminal_start_index(entry)
-            .is_some_and(|start_index| self.st.concurrent_resolver.is_pending(start_index))
+    pub(super) fn is_awaited_terminal(&self, terminal_idx: OplogIndex, entry: &OplogEntry) -> bool {
+        terminal_start_index(entry).is_some_and(|start_index| {
+            self.st
+                .concurrent_resolver
+                .owns_terminal(start_index, terminal_idx)
+        })
     }
 
     /// Whether `entry` is an `End`/`Cancelled` whose `start_index` lies inside a skipped/deleted
@@ -475,11 +552,17 @@ impl CursorTx<'_> {
         // skipped-region jump for the next read via `get_out_of_skipped_region`, and must precede
         // `skip_forward` (which reads forward from the advanced cursor).
         self.move_replay_idx(read_idx).await;
-        self.skip_forward().await?;
-        self.cursor
-            .position
-            .last_replayed_non_hint_index
-            .set(read_idx);
+        if matches!(entry, OplogEntry::CompletionDelivered { .. }) {
+            self.st.skip_hints_after_delivery = true;
+        } else {
+            self.skip_forward().await?;
+        }
+        if !entry.is_hint() {
+            self.cursor
+                .position
+                .last_replayed_non_hint_index
+                .set(read_idx);
+        }
         // Committed-consume hook: this entry is now permanently consumed (speculative reads never
         // reach here — they return before committing), so it is safe to feed the concurrent replay
         // resolver.
@@ -548,7 +631,7 @@ impl CursorTx<'_> {
         read_idx: OplogIndex,
         entry: &OplogEntry,
     ) -> Option<OplogIndex> {
-        if entry.is_hint() {
+        if entry.is_hint() && !matches!(entry, OplogEntry::CompletionDelivered { .. }) {
             // Advance to the hint entry itself; the caller publishes this (via `move_replay_idx`) so
             // the next read gets `read_idx.next()`.
             Some(read_idx)
@@ -581,14 +664,111 @@ impl CursorTx<'_> {
         // End (via `start_index`) we decode the response and emit `ForkReplayed`
         // if necessary.
         match oplog_entry {
-            OplogEntry::CardInstalled { card, .. } => {
-                self.record_replay_event(ReplayEvent::CardInstalled { card: card.clone() });
+            OplogEntry::AgentInvocationStarted {
+                wallet_pin: Some(wallet_pin),
+                ..
+            } => {
+                self.record_replay_event(ReplayEvent::InvocationWalletPinned {
+                    wallet_pin: wallet_pin.clone(),
+                });
             }
-            OplogEntry::CardRevoked { card_id, .. } => {
-                self.record_replay_event(ReplayEvent::CardRevoked { card_id: *card_id });
+            OplogEntry::CardInstalled {
+                card,
+                wallet_generation,
+                ..
+            } => {
+                self.record_replay_event(ReplayEvent::CardInstalled {
+                    card: card.clone(),
+                    wallet_generation: *wallet_generation,
+                });
             }
-            OplogEntry::CardExpired { card_id, .. } => {
-                self.record_replay_event(ReplayEvent::CardExpired { card_id: *card_id });
+            OplogEntry::CardDerived {
+                card,
+                wallet_generation,
+                ..
+            } => {
+                self.record_replay_event(ReplayEvent::CardDerived {
+                    card: card.clone(),
+                    wallet_generation: *wallet_generation,
+                });
+            }
+            OplogEntry::CardTransferStarted {
+                transfer_id,
+                card_id,
+                source_holder,
+                target_holder,
+                source_wallet_generation,
+                ..
+            } => {
+                self.record_replay_event(ReplayEvent::CardTransferStarted {
+                    transfer_id: *transfer_id,
+                    card_id: *card_id,
+                    source_holder: source_holder.clone(),
+                    target_holder: target_holder.clone(),
+                    source_wallet_generation: *source_wallet_generation,
+                });
+            }
+            OplogEntry::CardTransferred {
+                transfer_id,
+                source_card_id,
+                installed_card_id,
+                target_holder,
+                card,
+                target_wallet_generation,
+                ..
+            } => {
+                self.record_replay_event(ReplayEvent::CardTransferred {
+                    transfer_id: *transfer_id,
+                    source_card_id: *source_card_id,
+                    installed_card_id: *installed_card_id,
+                    target_holder: target_holder.clone(),
+                    card: card.clone(),
+                    target_wallet_generation: *target_wallet_generation,
+                });
+            }
+            OplogEntry::CardTransferConfirmed {
+                transfer_id,
+                source_card_id,
+                installed_card_id,
+                target_holder,
+                ..
+            } => {
+                self.record_replay_event(ReplayEvent::CardTransferConfirmed {
+                    transfer_id: *transfer_id,
+                    source_card_id: *source_card_id,
+                    installed_card_id: *installed_card_id,
+                    target_holder: target_holder.clone(),
+                });
+            }
+            OplogEntry::CardRevokedCascade {
+                revoked_card_ids,
+                local_wallet_generation,
+                ..
+            } => {
+                self.record_replay_event(ReplayEvent::CardRevokedCascade {
+                    card_ids: revoked_card_ids.clone(),
+                    local_wallet_generation: *local_wallet_generation,
+                });
+            }
+            OplogEntry::CardRevoked {
+                card_id,
+                wallet_generation,
+                ..
+            } => {
+                self.record_replay_event(ReplayEvent::CardRevoked {
+                    card_id: *card_id,
+                    wallet_generation: *wallet_generation,
+                });
+            }
+            OplogEntry::CardExpired {
+                card_id,
+                wallet_generation,
+                ..
+            } => {
+                self.record_replay_event(ReplayEvent::CardExpired {
+                    card_id: *card_id,
+                    wallet_generation: *wallet_generation,
+                });
             }
             OplogEntry::Start { function_name, .. }
                 if function_name == &HostFunctionName::GolemApiFork =>
@@ -670,10 +850,11 @@ impl CursorTx<'_> {
     }
 
     pub(super) async fn get_out_of_skipped_region(&mut self) {
+        let initial_snapshot_skip_end = self.st.initial_snapshot_skip_end.take();
         // Loop: after jumping a region, the freshly looked-up next region may start immediately
         // after the jump target (adjacent regions recorded separately), requiring another jump.
         while self.cursor.is_replay() {
-            match &self.st.next_skipped_region {
+            match self.st.next_skipped_region.clone() {
                 Some(region) if region.start == (self.cursor.last_replayed_index().next()) => {
                     let target = region.end.next(); // we want to continue reading _after_ the region
                     debug!(
@@ -686,6 +867,18 @@ impl CursorTx<'_> {
                         .position
                         .last_replayed_index
                         .set(target.previous()); // so we set the last replayed index to the end of the region
+
+                    let events_region = match initial_snapshot_skip_end {
+                        Some(snapshot_end) if region.end <= snapshot_end => None,
+                        Some(snapshot_end) => Some(OplogRegion {
+                            start: region.start.max(snapshot_end.next()),
+                            end: region.end,
+                        }),
+                        None => Some(region),
+                    };
+                    if let Some(events_region) = events_region {
+                        self.record_card_events_in_region(&events_region).await;
+                    }
 
                     // The lookup must start *after* the just-jumped region: `find_next_deleted_region`
                     // matches regions starting at-or-after the given index, so looking up from the
@@ -702,6 +895,107 @@ impl CursorTx<'_> {
         }
     }
 
+    async fn record_card_events_in_region(&mut self, region: &OplogRegion) {
+        let mut next = region.start;
+        while next <= region.end {
+            let remaining = region.end.as_u64() - next.as_u64() + 1;
+            let entries = self
+                .cursor
+                .oplog
+                .read_exact(next, CHUNK_SIZE.min(remaining))
+                .await;
+            let last_read = *entries.last_key_value().unwrap().0;
+            for entry in entries.into_values() {
+                match entry {
+                    OplogEntry::CardInstalled {
+                        card,
+                        wallet_generation,
+                        ..
+                    } => self.record_replay_event(ReplayEvent::CardInstalled {
+                        card,
+                        wallet_generation,
+                    }),
+                    OplogEntry::CardDerived {
+                        card,
+                        wallet_generation,
+                        ..
+                    } => self.record_replay_event(ReplayEvent::CardDerived {
+                        card,
+                        wallet_generation,
+                    }),
+                    OplogEntry::CardTransferStarted {
+                        transfer_id,
+                        card_id,
+                        source_holder,
+                        target_holder,
+                        source_wallet_generation,
+                        ..
+                    } => self.record_replay_event(ReplayEvent::CardTransferStarted {
+                        transfer_id,
+                        card_id,
+                        source_holder,
+                        target_holder,
+                        source_wallet_generation,
+                    }),
+                    OplogEntry::CardTransferred {
+                        transfer_id,
+                        source_card_id,
+                        installed_card_id,
+                        target_holder,
+                        card,
+                        target_wallet_generation,
+                        ..
+                    } => self.record_replay_event(ReplayEvent::CardTransferred {
+                        transfer_id,
+                        source_card_id,
+                        installed_card_id,
+                        target_holder,
+                        card,
+                        target_wallet_generation,
+                    }),
+                    OplogEntry::CardTransferConfirmed {
+                        transfer_id,
+                        source_card_id,
+                        installed_card_id,
+                        target_holder,
+                        ..
+                    } => self.record_replay_event(ReplayEvent::CardTransferConfirmed {
+                        transfer_id,
+                        source_card_id,
+                        installed_card_id,
+                        target_holder,
+                    }),
+                    OplogEntry::CardRevokedCascade {
+                        revoked_card_ids,
+                        local_wallet_generation,
+                        ..
+                    } => self.record_replay_event(ReplayEvent::CardRevokedCascade {
+                        card_ids: revoked_card_ids,
+                        local_wallet_generation,
+                    }),
+                    OplogEntry::CardRevoked {
+                        card_id,
+                        wallet_generation,
+                        ..
+                    } => self.record_replay_event(ReplayEvent::CardRevoked {
+                        card_id,
+                        wallet_generation,
+                    }),
+                    OplogEntry::CardExpired {
+                        card_id,
+                        wallet_generation,
+                        ..
+                    } => self.record_replay_event(ReplayEvent::CardExpired {
+                        card_id,
+                        wallet_generation,
+                    }),
+                    _ => {}
+                }
+            }
+            next = last_read.next();
+        }
+    }
+
     /// Feeds the concurrent replay resolver when an `End`/`Cancelled` entry is *committed*
     /// (permanently consumed). Resolves only calls that are actually being awaited
     /// (`resolve_if_pending`), so the `End`/`Cancelled` of any call not tracked by the resolver —
@@ -715,21 +1009,31 @@ impl CursorTx<'_> {
                 forced_commit,
                 ..
             } => {
-                let resolution = match self.discarded_completion_marker(*start_index) {
-                    Some(marker_idx) => Resolution::CompletedButDiscarded {
+                let marker = self.completion_marker(*start_index);
+                let resolution = match marker {
+                    Some(CompletionMarker::Discarded(marker_idx)) => {
+                        Resolution::CompletedButDiscarded {
+                            end_idx: idx,
+                            marker_idx,
+                            response: response.clone(),
+                        }
+                    }
+                    Some(CompletionMarker::Delivered(marker_idx)) => Resolution::Completed {
                         end_idx: idx,
-                        marker_idx,
                         response: response.clone(),
+                        forced_commit: *forced_commit,
+                        delivery_marker: Some(marker_idx),
                     },
                     None => Resolution::Completed {
                         end_idx: idx,
                         response: response.clone(),
                         forced_commit: *forced_commit,
+                        delivery_marker: None,
                     },
                 };
                 self.st
                     .concurrent_resolver
-                    .resolve_if_pending(*start_index, resolution);
+                    .resolve_if_pending(*start_index, idx, resolution);
             }
             OplogEntry::Cancelled {
                 start_index,
@@ -738,6 +1042,7 @@ impl CursorTx<'_> {
             } => {
                 self.st.concurrent_resolver.resolve_if_pending(
                     *start_index,
+                    idx,
                     Resolution::Cancelled {
                         cancelled_idx: idx,
                         partial: partial.clone(),
@@ -748,10 +1053,10 @@ impl CursorTx<'_> {
         }
     }
 
-    /// Returns the index of the `CompletionDiscarded` marker for the durable call starting at
-    /// `start_index`, if one exists and lies outside any deleted region (a marker inside a
-    /// reverted/jumped-away region belongs to an abandoned timeline, so its `End` — if still
-    /// visible — is delivered normally).
+    /// Returns the guest-delivery marker for the durable call starting at `start_index`, if one
+    /// exists and lies outside any deleted region. A marker in a reverted/jumped-away region
+    /// belongs to an abandoned timeline, so a still-visible `End` uses the legacy immediate
+    /// delivery behavior.
     ///
     /// The `discarded_completions` map is populated only from entries at or before the replay
     /// target (the construction scan is bounded by the initial target and target growth rescans
@@ -761,18 +1066,15 @@ impl CursorTx<'_> {
     /// status of that `End` is not decidable from the visible prefix — and is rejected at
     /// delivery time ([`ReplayState::await_resolution_outcome`]) as well as up front by debug
     /// target validation and cut-point (fork/revert) validation.
-    pub(super) fn discarded_completion_marker(
-        &self,
-        start_index: OplogIndex,
-    ) -> Option<OplogIndex> {
-        let marker_idx = *self
+    pub(super) fn completion_marker(&self, start_index: OplogIndex) -> Option<CompletionMarker> {
+        let marker = *self
             .cursor
-            .discarded_completions
+            .completion_markers
             .lock()
             .unwrap()
             .get(&start_index)?;
-        if !self.st.skipped_regions.is_in_deleted_region(marker_idx) {
-            Some(marker_idx)
+        if !self.st.skipped_regions.is_in_deleted_region(marker.index()) {
+            Some(marker)
         } else {
             None
         }
@@ -784,6 +1086,87 @@ impl CursorTx<'_> {
             .lock()
             .unwrap()
             .push(event);
+    }
+
+    /// Registers a resolver for a claimed `Start`. Successful calls carrying a delivery marker are
+    /// resolved from a non-consuming lookahead to their `End`: this lets the host continuation run
+    /// while the positional cursor remains available for durable operations recorded before the
+    /// completion became guest-visible. The matching terminal remains resolver-owned and is
+    /// auto-drained when those intervening operations advance the cursor to it.
+    async fn register_claimed_start(
+        &mut self,
+        start_idx: OplogIndex,
+    ) -> Result<ReplayCallHandle, WorkerExecutorError> {
+        let prefetched = if let Some(marker) = self.completion_marker(start_idx) {
+            let marker_idx = marker.index();
+            let scan = self
+                .cursor
+                .scan_oplog(
+                    start_idx.next(),
+                    marker_idx,
+                    &self.st.skipped_regions,
+                    self.st
+                        .skipped_regions
+                        .find_next_deleted_region(start_idx.next()),
+                    OplogIndex::NONE,
+                    |entry, _, index: &Option<OplogIndex>| {
+                        terminal_start_index(entry) == Some(start_idx)
+                            && index.is_some_and(|index| index < marker_idx)
+                    },
+                    |_, _, _| true,
+                    None,
+                    |_, index, current: &mut Option<OplogIndex>| *current = Some(index),
+                )
+                .await;
+            match scan {
+                OplogEntryLookupResult::Found { index, entry, .. } => match *entry {
+                    OplogEntry::End {
+                        response,
+                        forced_commit,
+                        ..
+                    } => Some((
+                        index,
+                        match marker {
+                            CompletionMarker::Delivered(marker_idx) => Resolution::Completed {
+                                end_idx: index,
+                                response,
+                                delivery_marker: Some(marker_idx),
+                                forced_commit,
+                            },
+                            CompletionMarker::Discarded(marker_idx) => {
+                                Resolution::CompletedButDiscarded {
+                                    end_idx: index,
+                                    marker_idx,
+                                    response,
+                                }
+                            }
+                        },
+                    )),
+                    OplogEntry::Cancelled { .. } => {
+                        return Err(WorkerExecutorError::runtime(format!(
+                            "corrupt oplog: successful-completion marker at {marker_idx} references cancelled durable call Start at {start_idx}"
+                        )));
+                    }
+                    _ => unreachable!("the prefetch scan accepts only matching terminals"),
+                },
+                OplogEntryLookupResult::NotFound { .. } => {
+                    return Err(WorkerExecutorError::runtime(format!(
+                        "corrupt oplog: successful-completion marker at {marker_idx} references durable call Start at {start_idx} without a matching End before the marker"
+                    )));
+                }
+            }
+        } else {
+            None
+        };
+
+        let receiver = self.st.concurrent_resolver.register(start_idx);
+        if let Some((terminal_idx, resolution)) = prefetched {
+            self.st
+                .concurrent_resolver
+                .resolve_prefetched(start_idx, terminal_idx, resolution);
+        }
+        self.notify_progress = true;
+        Ok(ReplayCallHandle::new(start_idx, receiver))
     }
 
     /// Claims the first not-yet-claimed `Start` entry matching `matches_identity`, registering a
@@ -817,20 +1200,21 @@ impl CursorTx<'_> {
         &mut self,
         matches_identity: impl Fn(&OplogEntry) -> bool,
         expected: impl FnOnce() -> String,
-    ) -> Result<(ReplayCallHandle, Box<OplogEntry>), WorkerExecutorError> {
+    ) -> Result<Option<(ReplayCallHandle, Box<OplogEntry>)>, WorkerExecutorError> {
         // Head fast path: auto-drains awaited terminals and already-claimed `Start`s, then
         // consumes the head iff it matches this claim's identity.
         if let Some((start_idx, entry)) = self.try_get_oplog_entry(&matches_identity).await? {
-            let receiver = self.st.concurrent_resolver.register(start_idx);
-            // A newly-registered awaiter means an `End`/`Cancelled` already sitting at (or arriving
-            // at) the cursor head may now be a drainable awaited terminal: have `finish_tx` wake
-            // suspended awaiters so they re-drive the cursor.
-            self.notify_progress = true;
-            return Ok((ReplayCallHandle::new(start_idx, receiver), Box::new(entry)));
+            let handle = self.register_claimed_start(start_idx).await?;
+            return Ok(Some((handle, Box::new(entry))));
+        }
+        if self.blocked_on_completion_delivery {
+            return Ok(None);
         }
 
         // The head belongs to someone else: scan ahead for the first not-yet-claimed matching
-        // `Start`, skipping deleted regions exactly like the cursor itself would.
+        // `Start`, skipping deleted regions exactly like the cursor itself would. A delivery
+        // marker bounds the scan: a later `Start` must not be claimed before the recorded guest
+        // handoff at that marker.
         let already_claimed = self.st.claimed_starts.clone();
         let replay_target = self.cursor.replay_target();
         let scan_result = self
@@ -845,7 +1229,8 @@ impl CursorTx<'_> {
                     state
                         .map(|idx| idx <= replay_target && !already_claimed.contains(&idx))
                         .unwrap_or(false)
-                        && matches_identity(entry)
+                        && (matches_identity(entry)
+                            || matches!(entry, OplogEntry::CompletionDelivered { .. }))
                 },
                 |_, _, _| true,
                 None,
@@ -857,10 +1242,13 @@ impl CursorTx<'_> {
 
         match scan_result {
             OplogEntryLookupResult::Found { index, entry, .. } => {
+                if matches!(entry.as_ref(), OplogEntry::CompletionDelivered { .. }) {
+                    self.blocked_on_completion_delivery = true;
+                    return Ok(None);
+                }
                 self.st.claimed_starts.insert(index);
-                let receiver = self.st.concurrent_resolver.register(index);
-                self.notify_progress = true;
-                Ok((ReplayCallHandle::new(index, receiver), entry))
+                let handle = self.register_claimed_start(index).await?;
+                Ok(Some((handle, entry)))
             }
             OplogEntryLookupResult::NotFound { .. } => {
                 Err(WorkerExecutorError::unexpected_oplog_entry(
@@ -880,7 +1268,14 @@ impl CursorTx<'_> {
         matches_identity: impl Fn(&OplogEntry) -> bool,
         expected_request: &HostRequest,
         expected: impl FnOnce() -> String,
-    ) -> Result<(ReplayCallHandle, Box<OplogEntry>), WorkerExecutorError> {
+    ) -> Result<Option<(ReplayCallHandle, Box<OplogEntry>)>, WorkerExecutorError> {
+        // Drain any awaited terminals at the head and detect a delivery marker before the
+        // request-payload scan. The false predicate leaves an ordinary candidate untouched.
+        self.try_get_oplog_entry(|_| false).await?;
+        if self.blocked_on_completion_delivery {
+            return Ok(None);
+        }
+
         let already_claimed = self.st.claimed_starts.clone();
         let mut scan_start = self.cursor.last_replayed_index().next();
         let replay_target = self.cursor.replay_target();
@@ -898,7 +1293,8 @@ impl CursorTx<'_> {
                         state
                             .map(|idx| idx <= replay_target && !already_claimed.contains(&idx))
                             .unwrap_or(false)
-                            && matches_identity(entry)
+                            && (matches_identity(entry)
+                                || matches!(entry, OplogEntry::CompletionDelivered { .. }))
                     },
                     |_, _, _| true,
                     None,
@@ -911,6 +1307,10 @@ impl CursorTx<'_> {
             let OplogEntryLookupResult::Found { index, entry, .. } = scan_result else {
                 break;
             };
+            if matches!(entry.as_ref(), OplogEntry::CompletionDelivered { .. }) {
+                self.blocked_on_completion_delivery = true;
+                return Ok(None);
+            }
             let OplogEntry::Start {
                 request: Some(recorded_request),
                 ..
@@ -932,9 +1332,8 @@ impl CursorTx<'_> {
             })?;
             if payload_matches {
                 self.st.claimed_starts.insert(index);
-                let receiver = self.st.concurrent_resolver.register(index);
-                self.notify_progress = true;
-                return Ok((ReplayCallHandle::new(index, receiver), entry));
+                let handle = self.register_claimed_start(index).await?;
+                return Ok(Some((handle, entry)));
             }
 
             scan_start = index.next();
@@ -954,7 +1353,7 @@ impl CursorTx<'_> {
     pub(super) async fn claim_start(
         &mut self,
         claim: &StartClaim,
-    ) -> Result<(ReplayCallHandle, Box<OplogEntry>), WorkerExecutorError> {
+    ) -> Result<Option<(ReplayCallHandle, Box<OplogEntry>)>, WorkerExecutorError> {
         let matches_identity = |entry: &OplogEntry| {
             matches!(entry, OplogEntry::Start {
                 function_name,
@@ -976,7 +1375,7 @@ impl CursorTx<'_> {
                 && *parent_start_index == claim.expected_parent_start_index())
         };
         let expected = || claim.expected_description();
-        let (handle, entry) = match claim.matching_request() {
+        let claimed = match claim.matching_request() {
             Some(expected_request) => {
                 self.claim_start_matching_request(matches_identity, expected_request, expected)
                     .await?
@@ -986,17 +1385,20 @@ impl CursorTx<'_> {
                     .await?
             }
         };
+        let Some((handle, entry)) = claimed else {
+            return Ok(None);
+        };
         // Every `Start` claim registers a resolver awaiter atomically with the consume/claim, so
         // its terminal is always a resolver-routed *awaited terminal* — never an orphan a parked
         // awaiter behind it could sleep on until `switch_to_live`. The only un-drained terminals
         // the cursor may leave at its head are the dedicated-positional-consumer pairs (manual
         // durability, `GolemApiFork`).
         debug_assert!(
-            self.st.concurrent_resolver.is_pending(handle.start_idx()),
+            self.st.concurrent_resolver.has_claim(handle.start_idx()),
             "Start claim at {} must leave a registered awaiter",
             handle.start_idx()
         );
-        Ok((handle, entry))
+        Ok(Some((handle, entry)))
     }
 
     /// Switches the cursor to live mode: records `ReplayFinished` if replay was still in progress,
@@ -1026,6 +1428,7 @@ impl CursorTx<'_> {
     /// Resets the cursor to the start of replay after dropping a manual-update override.
     pub(super) async fn drop_override_and_restart(&mut self) -> Result<(), WorkerExecutorError> {
         self.st.skipped_regions.drop_override();
+        self.st.initial_snapshot_skip_end = None;
         let next = self
             .st
             .skipped_regions
@@ -1055,14 +1458,17 @@ impl ReplayState {
         owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
         skipped_regions: DeletedRegions,
+        initial_snapshot_skip_end: Option<OplogIndex>,
     ) -> Result<Self, WorkerExecutorError> {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
         let last_oplog_index = oplog.current_oplog_index().await;
-        let discarded_completions =
-            Self::scan_discarded_completions(&oplog, OplogIndex::INITIAL, last_oplog_index).await?;
+        let completion_markers =
+            Self::scan_completion_markers(&oplog, OplogIndex::INITIAL, last_oplog_index).await?;
         let cursor = ReplayCursor {
             owned_agent_id,
             oplog,
+            advance_gate: Arc::new(tokio::sync::Mutex::new(())),
+            delivery_failure: std::sync::Mutex::new(None),
             position: PublishedPosition {
                 last_replayed_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
                 last_replayed_non_hint_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
@@ -1072,6 +1478,8 @@ impl ReplayState {
             state: Mutex::new(CursorState {
                 skipped_regions,
                 next_skipped_region,
+                initial_snapshot_skip_end,
+                skip_hints_after_delivery: false,
                 replay_buffer: VecDeque::new(),
                 pending_fork_starts: HashSet::new(),
                 concurrent_resolver: ConcurrentReplayResolver::default(),
@@ -1079,7 +1487,7 @@ impl ReplayState {
                 claimed_custom_invocation_ids: HashSet::new(),
                 custom_subtrees: HashMap::new(),
             }),
-            discarded_completions: std::sync::Mutex::new(discarded_completions),
+            completion_markers: std::sync::Mutex::new(completion_markers),
             log_hashes: std::sync::Mutex::new(HashMap::new()),
             pending_replay_events: std::sync::Mutex::new(Vec::new()),
             progress: Notify::new(),
@@ -1087,7 +1495,7 @@ impl ReplayState {
         {
             // No concurrency during construction: the replay state is not shared yet, so driving the
             // cursor without anyone to notify is sound.
-            let mut tx = cursor.tx().await;
+            let mut tx = cursor.tx().await?;
             tx.move_replay_idx(OplogIndex::INITIAL).await; // By this we handle initial skipped regions applied by manual updates correctly
             tx.skip_forward().await?;
         }
@@ -1096,60 +1504,118 @@ impl ReplayState {
         })
     }
 
-    /// Scans the oplog range `[from, to]` for `CompletionDiscarded` marker entries, building the
-    /// `Start`-index → marker-index map consulted when an `End` is resolved during replay. Used
-    /// with `[INITIAL, initial replay target]` at construction and with exactly the newly visible
-    /// range when the replay target grows ([`ReplayState::set_replay_target`]). Two markers
-    /// referencing the same `Start` within the scanned range is oplog corruption and fails the
-    /// scan.
-    pub(super) async fn scan_discarded_completions(
+    /// Scans `[from, to]` for successful-completion delivery markers. Exactly one of
+    /// `CompletionDelivered` or `CompletionDiscarded` may reference a `Start`; duplicates or a
+    /// conflicting pair are oplog corruption.
+    pub(super) async fn scan_completion_markers(
         oplog: &Arc<dyn Oplog>,
         from: OplogIndex,
         to: OplogIndex,
-    ) -> Result<HashMap<OplogIndex, OplogIndex>, WorkerExecutorError> {
+    ) -> Result<HashMap<OplogIndex, CompletionMarker>, WorkerExecutorError> {
         const CHUNK_SIZE: u64 = 1024;
-        let mut discarded = HashMap::new();
+        let mut markers = HashMap::new();
         let mut next = from;
         while next <= to {
             let available = u64::from(to) - u64::from(next) + 1;
-            let entries = oplog.read_many(next, CHUNK_SIZE.min(available)).await;
-            let Some(last_read) = entries.keys().next_back().copied() else {
-                break;
-            };
+            let entries = oplog.read_exact(next, CHUNK_SIZE.min(available)).await;
+            let last_read = *entries.last_key_value().unwrap().0;
             for (marker_idx, entry) in entries {
                 if marker_idx > to {
                     break;
                 }
-                if let OplogEntry::CompletionDiscarded { start_index, .. } = entry
-                    && discarded.insert(start_index, marker_idx).is_some()
+                let marker = match entry {
+                    OplogEntry::CompletionDelivered { start_index, .. } => {
+                        Some((start_index, CompletionMarker::Delivered(marker_idx)))
+                    }
+                    OplogEntry::CompletionDiscarded { start_index, .. } => {
+                        Some((start_index, CompletionMarker::Discarded(marker_idx)))
+                    }
+                    _ => None,
+                };
+                if let Some((start_index, marker)) = marker
+                    && let Some(previous) = markers.insert(start_index, marker)
                 {
                     return Err(WorkerExecutorError::runtime(format!(
-                        "corrupt oplog: multiple CompletionDiscarded markers reference the durable call Start at {start_index} (second marker at {marker_idx})"
+                        "corrupt oplog: multiple completion-delivery markers reference the durable call Start at {start_index} ({} at {}, {} at {})",
+                        previous.entry_name(),
+                        previous.index(),
+                        marker.entry_name(),
+                        marker.index(),
                     )));
                 }
             }
             next = last_read.next();
         }
-        Ok(discarded)
+        Ok(markers)
     }
 
-    /// Records a live-appended `CompletionDiscarded` marker: the durable call starting at
-    /// `start_index` persisted a successful `End`, but the guest dropped the completion future
-    /// before the response was delivered, and the marker was appended at `marker_index`. If this
-    /// instance later re-enters replay over these entries (e.g. a manual-update restart), the
-    /// recorded `End` must park instead of delivering the response.
-    pub fn record_discarded_completion(&self, start_index: OplogIndex, marker_index: OplogIndex) {
+    /// Records a live-appended successful-completion delivery marker in the same map populated by
+    /// the replay scan.
+    pub(super) fn record_completion_marker(
+        &self,
+        start_index: OplogIndex,
+        marker: CompletionMarker,
+    ) {
         let previous = self
             .cursor
-            .discarded_completions
+            .completion_markers
             .lock()
             .unwrap()
-            .insert(start_index, marker_index);
+            .insert(start_index, marker);
         if let Some(previous) = previous {
             tracing::warn!(
-                "duplicate CompletionDiscarded marker recorded for durable call Start {start_index}: previous at {previous}, new at {marker_index}"
+                "duplicate completion-delivery marker recorded for durable call Start {start_index}: {} at {}, {} at {}",
+                previous.entry_name(),
+                previous.index(),
+                marker.entry_name(),
+                marker.index(),
             );
         }
+    }
+
+    pub fn record_discarded_completion(&self, start_index: OplogIndex, marker_index: OplogIndex) {
+        self.record_completion_marker(start_index, CompletionMarker::Discarded(marker_index));
+    }
+
+    pub fn record_delivered_completion(&self, start_index: OplogIndex, marker_index: OplogIndex) {
+        self.record_completion_marker(start_index, CompletionMarker::Delivered(marker_index));
+    }
+
+    pub(super) fn record_delivery_failure(&self, failure: String) {
+        let mut current = self.cursor.delivery_failure.lock().unwrap();
+        if current.is_none() {
+            tracing::error!("{failure}");
+            *current = Some(failure);
+        }
+    }
+
+    pub(in crate::durable_host) fn fail_completion_delivery(
+        &self,
+        start_index: OplogIndex,
+        marker_index: OplogIndex,
+        reason: impl Into<String>,
+    ) {
+        self.record_delivery_failure(format!(
+            "replay could not reproduce CompletionDelivered at {marker_index} for durable call Start at {start_index}: {}",
+            reason.into()
+        ));
+        self.cursor.progress.notify_waiters();
+    }
+
+    /// Poisons replay because a markerless completed durable call (its recorded run crashed after
+    /// the `End` became durable but before the completion crossed to the guest) hit a delivery
+    /// boundary while it was still tail-gated: its delivery token must first wait for the replay
+    /// tail via `CompletionDelivery::prepare_delivery`.
+    pub(in crate::durable_host) fn fail_tail_delivery(
+        &self,
+        start_index: OplogIndex,
+        reason: impl Into<String>,
+    ) {
+        self.record_delivery_failure(format!(
+            "replay could not withhold the markerless completion of durable call Start at {start_index} until the end of the replay tail: {}",
+            reason.into()
+        ));
+        self.cursor.progress.notify_waiters();
     }
 
     /// Runs `op` inside a cursor transaction: acquires the cursor lock via [`ReplayCursor::tx`],
@@ -1162,9 +1628,12 @@ impl ReplayState {
     /// This wraps only the transaction lifecycle. It is *not* accessor-safe by itself: callers
     /// running inside Wasmtime accessor futures must reach it through
     /// [`Self::run_owned_cursor_op`] so they never queue on the fair cursor mutex directly.
-    pub(super) async fn with_tx<R>(&self, op: impl AsyncFnOnce(&mut CursorTx<'_>) -> R) -> R {
+    pub(super) async fn with_tx<R>(
+        &self,
+        op: impl AsyncFnOnce(&mut CursorTx<'_>) -> Result<R, WorkerExecutorError>,
+    ) -> Result<R, WorkerExecutorError> {
         let cursor = &*self.cursor;
-        let mut tx = cursor.tx().await;
+        let mut tx = cursor.tx().await?;
         let result = op(&mut tx).await;
         cursor.finish_tx(tx);
         result
@@ -1227,10 +1696,28 @@ impl ReplayState {
         }
     }
 
+    /// Waits for every owned cursor operation queued before this call to release the cursor.
+    ///
+    /// An accessor future may be cancelled after spawning an owned operation but before awaiting
+    /// its result. A store-owned cleanup task can use this fence to remain pending until that
+    /// operation finishes, so Wasmtime does not observe an externally-held cursor with no host
+    /// future left to drive.
+    pub(in crate::durable_host) async fn fence_owned_cursor_ops(
+        &self,
+    ) -> Result<(), WorkerExecutorError> {
+        self.run_owned_cursor_op(|state| async move { state.with_tx(async |_| Ok(())).await })
+            .await
+    }
+
     pub async fn switch_to_live(&self) {
         let result = self
             .run_owned_cursor_op(|state| async move {
-                state.with_tx(async |tx| tx.switch_to_live()).await;
+                state
+                    .with_tx(async |tx| {
+                        tx.switch_to_live();
+                        Ok(())
+                    })
+                    .await?;
                 // `CursorTx::switch_to_live` publishes the cursor position directly (not via
                 // `move_replay_idx`), so replay-progress observers are notified here.
                 state
@@ -1258,13 +1745,188 @@ impl ReplayState {
         self.cursor.replay_target()
     }
 
+    /// Reports whether the replay-visible owner oplog contains a terminal for `start_index`.
+    /// Entity reconstruction uses this before starting its fresh Store so the invocation context
+    /// distinguishes reconstruction of a completed body from repair of an incomplete Start. The
+    /// scan is read-only and respects fork/revert deleted regions.
+    pub(crate) async fn has_visible_terminal(&self, start_index: OplogIndex) -> bool {
+        let replay_target = self.replay_target();
+        if start_index >= replay_target {
+            return false;
+        }
+        let skipped_regions = {
+            let state = self.cursor.state.lock().await;
+            state.skipped_regions.clone()
+        };
+        let mut next = start_index.next();
+        while next <= replay_target {
+            let available = u64::from(replay_target) - u64::from(next) + 1;
+            let entries = self
+                .cursor
+                .oplog
+                .read_exact(next, CHUNK_SIZE.min(available))
+                .await;
+            let last_read = *entries.last_key_value().unwrap().0;
+            if entries.into_iter().any(|(index, entry)| {
+                index <= replay_target
+                    && !skipped_regions.is_in_deleted_region(index)
+                    && terminal_start_index(&entry) == Some(start_index)
+            }) {
+                return true;
+            }
+            next = last_read.next();
+        }
+        false
+    }
+
+    /// Waits until the replay cursor is blocked on a record in `root`'s call tree that no still
+    /// running reconstructed entity body or live resolver awaiter can consume. This turns a body
+    /// that returned before replaying its recorded subtree into permanent structural divergence
+    /// instead of leaving the outer terminal awaiter parked forever.
+    pub(crate) async fn await_unconsumed_scope_entry(
+        &self,
+        root: OplogIndex,
+        mut active_entity_bodies: tokio::sync::watch::Receiver<HashSet<OplogIndex>>,
+    ) -> Result<OplogIndex, WorkerExecutorError> {
+        loop {
+            let active_bodies = active_entity_bodies.borrow_and_update().clone();
+            let bodies_changed = active_entity_bodies.changed();
+            tokio::pin!(bodies_changed);
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+
+            if let Some(index) = self.unconsumed_scope_head(root, active_bodies).await? {
+                return Ok(index);
+            }
+
+            tokio::select! {
+                _ = progress.as_mut() => {}
+                changed = &mut bodies_changed => {
+                    if changed.is_err() {
+                        return Err(WorkerExecutorError::runtime(
+                            "owner reconstruction body tracker closed during replay",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    pub(super) async fn unconsumed_scope_head(
+        &self,
+        root: OplogIndex,
+        active_entity_bodies: HashSet<OplogIndex>,
+    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+        self.run_owned_cursor_op(move |state| async move {
+            let cursor = &*state.cursor;
+            let st = cursor.state.lock().await;
+            let head = cursor.last_replayed_index().next();
+            if head > cursor.replay_target() {
+                return Ok(None);
+            }
+
+            let mut projection = OplogScopeProjection::new(root);
+            let mut parents = HashMap::new();
+            let mut previous_index = None;
+            let mut previous_included_start = None;
+            let mut next = root;
+            while next <= head {
+                let available = u64::from(head) - u64::from(next) + 1;
+                let entries = cursor
+                    .oplog
+                    .read_exact(next, CHUNK_SIZE.min(available))
+                    .await;
+                let last_read = *entries.last_key_value().unwrap().0;
+
+                for (index, entry) in entries {
+                    if index > head {
+                        break;
+                    }
+                    if st.skipped_regions.is_in_deleted_region(index) {
+                        previous_index = Some(index);
+                        previous_included_start = None;
+                        continue;
+                    }
+                    let included = projection.includes(index, &entry);
+                    let included_start = if included
+                        && let OplogEntry::Start {
+                            parent_start_index, ..
+                        } = &entry
+                    {
+                        if let Some(parent) = parent_start_index {
+                            parents.insert(index, *parent);
+                        }
+                        Some(index)
+                    } else {
+                        None
+                    };
+
+                    if index == head {
+                        if !included {
+                            return Ok(None);
+                        }
+                        if terminal_start_index(&entry).is_some_and(|start_index| {
+                            st.concurrent_resolver.owns_terminal(start_index, index)
+                        }) || custom_subtree_entry_is_drainable(&st, &entry)
+                        {
+                            return Ok(None);
+                        }
+                        let owner = scope_entry_owner(
+                            index,
+                            &entry,
+                            previous_index,
+                            previous_included_start,
+                        );
+                        if owner.is_some_and(|mut owner| {
+                            while owner != root {
+                                if active_entity_bodies.contains(&owner) {
+                                    return true;
+                                }
+                                let Some(parent) = parents.get(&owner) else {
+                                    break;
+                                };
+                                owner = *parent;
+                            }
+                            false
+                        }) {
+                            return Ok(None);
+                        }
+                        if matches!(entry, OplogEntry::Start { .. })
+                            && st.claimed_starts.contains(&index)
+                        {
+                            return Ok(None);
+                        }
+                        if owner.is_some_and(|owner| {
+                            owner != root && st.concurrent_resolver.is_awaited(owner)
+                        }) {
+                            return Ok(None);
+                        }
+                        if terminal_start_index(&entry) == Some(root)
+                            && st.concurrent_resolver.is_awaited(root)
+                        {
+                            return Ok(None);
+                        }
+                        return Ok(Some(index));
+                    }
+
+                    previous_index = Some(index);
+                    previous_included_start = included_start;
+                }
+                next = last_read.next();
+            }
+            Ok(None)
+        })
+        .await
+    }
+
     /// Sets the replay target. This is a phase-boundary operation (e.g. refreshing the target
     /// before replay resumes); it must not race with concurrent cursor advances.
     ///
-    /// The discarded-completion map is kept in sync with the visible prefix `[.., target]`:
+    /// The completion-marker map is kept in sync with the visible prefix `[.., target]`:
     ///
     /// - Growing the target makes a previously invisible oplog range visible, so the newly
-    ///   visible range `(old_target, new_target]` is scanned for `CompletionDiscarded` markers
+    ///   visible range `(old_target, new_target]` is scanned for completion-delivery markers
     ///   *before* the new target is published — a debug session constructed with a target before
     ///   a marker and later grown past it must park the marked `End` instead of delivering it.
     ///   The merged additions are validated (duplicate markers for the same `Start` are oplog
@@ -1289,34 +1951,38 @@ impl ReplayState {
                 std::cmp::Ordering::Less => {
                     tx.st.replay_buffer.clear();
                     cursor
-                        .discarded_completions
+                        .completion_markers
                         .lock()
                         .unwrap()
-                        .retain(|_, marker_idx| *marker_idx <= new_target);
+                        .retain(|_, marker| marker.index() <= new_target);
                 }
                 std::cmp::Ordering::Greater => {
-                    let additions = Self::scan_discarded_completions(
+                    let additions = Self::scan_completion_markers(
                         &cursor.oplog,
                         old_target.next(),
                         new_target,
                     )
                     .await?;
                     if !additions.is_empty() {
-                        let mut discarded = cursor.discarded_completions.lock().unwrap();
-                        for (start_index, marker_idx) in &additions {
+                        let mut markers = cursor.completion_markers.lock().unwrap();
+                        for (start_index, marker) in &additions {
                             // Rediscovering the exact marker already in the map (recorded live by
-                            // this instance via `record_discarded_completion` before the target
+                            // this instance before the target
                             // grew over it) is idempotent; only a *different* marker for the same
                             // `Start` is oplog corruption.
-                            if let Some(previous) = discarded.get(start_index)
-                                && previous != marker_idx
+                            if let Some(previous) = markers.get(start_index)
+                                && previous != marker
                             {
                                 return Err(WorkerExecutorError::runtime(format!(
-                                    "corrupt oplog: multiple CompletionDiscarded markers reference the durable call Start at {start_index} (previous at {previous}, second marker at {marker_idx})"
+                                    "corrupt oplog: multiple completion-delivery markers reference the durable call Start at {start_index} ({} at {}, {} at {})",
+                                    previous.entry_name(),
+                                    previous.index(),
+                                    marker.entry_name(),
+                                    marker.index(),
                                 )));
                             }
                         }
-                        discarded.extend(additions);
+                        markers.extend(additions);
                     }
                 }
             }
@@ -1354,6 +2020,25 @@ impl ReplayState {
         std::mem::take(&mut *self.cursor.pending_replay_events.lock().unwrap())
     }
 
+    pub async fn pending_card_derivation(
+        &self,
+        card_id: CardId,
+    ) -> Option<(StoredCard, Option<u64>)> {
+        self.cursor
+            .pending_replay_events
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                ReplayEvent::CardDerived {
+                    card,
+                    wallet_generation,
+                } if card.card_id() == card_id => Some((card.clone(), *wallet_generation)),
+                _ => None,
+            })
+    }
+
     /// Whether some task currently holds an open cursor transaction ([`ReplayCursor::tx`]).
     ///
     /// The invocation event loop can exit while a store-spawned durable task is suspended
@@ -1362,7 +2047,7 @@ impl ReplayState {
     /// issued from outside the event loop. The invocation completion path polls the event loop
     /// until this reports `false` before any such read.
     pub fn has_open_cursor_transaction(&self) -> bool {
-        self.cursor.state.try_lock().is_err()
+        self.cursor.state.try_lock().is_err() || self.cursor.advance_gate.try_lock().is_err()
     }
 
     /// Reads the next oplog entry, and skips every hint entry following it.
@@ -1373,11 +2058,23 @@ impl ReplayState {
     /// corrupted GolemApiFork payload) so the worker can fail the agent with a
     /// non-retriable trap rather than panicking the executor.
     pub async fn get_oplog_entry(&self) -> Result<(OplogIndex, OplogEntry), WorkerExecutorError> {
-        // The closure always returns true, so the only `None` case is end-of-replay (a positional
-        // reader expecting an entry that the oplog does not contain).
-        self.with_tx(async |tx| tx.try_get_oplog_entry(|_| true).await)
-            .await?
-            .ok_or_else(|| self.end_of_replay_error())
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            if let Some(entry) = self
+                .with_tx(async |tx| tx.try_get_oplog_entry(|_| true).await)
+                .await?
+            {
+                return Ok(entry);
+            }
+            if self.is_live() {
+                return Err(self.end_of_replay_error());
+            }
+            // An unconditional reader returns `None` during replay only at a reserved
+            // `CompletionDelivered` marker. Wait for its owner to consume and acknowledge it.
+            progress.await;
+        }
     }
 
     /// Reads the next oplog entry, and if it matches the given condition, skips
@@ -1393,8 +2090,22 @@ impl ReplayState {
         &self,
         condition: impl FnMut(&OplogEntry) -> bool,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
-        self.with_tx(async |tx| tx.try_get_oplog_entry(condition).await)
-            .await
+        let mut condition = condition;
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            let (entry, blocked_on_completion_delivery) = self
+                .with_tx(async |tx| {
+                    let entry = tx.try_get_oplog_entry(&mut condition).await?;
+                    Ok((entry, tx.blocked_on_completion_delivery))
+                })
+                .await?;
+            if entry.is_some() || !blocked_on_completion_delivery {
+                return Ok(entry);
+            }
+            progress.await;
+        }
     }
 
     /// [`Self::get_oplog_entry`] variant for callers running inside Wasmtime accessor futures:
@@ -1405,10 +2116,21 @@ impl ReplayState {
         &self,
     ) -> Result<(OplogIndex, OplogEntry), WorkerExecutorError> {
         self.run_owned_cursor_op(|state| async move {
-            state
-                .with_tx(async |tx| tx.try_get_oplog_entry(|_| true).await)
-                .await?
-                .ok_or_else(|| state.end_of_replay_error())
+            loop {
+                let progress = state.cursor.progress.notified();
+                tokio::pin!(progress);
+                progress.as_mut().enable();
+                if let Some(entry) = state
+                    .with_tx(async |tx| tx.try_get_oplog_entry(|_| true).await)
+                    .await?
+                {
+                    return Ok(entry);
+                }
+                if state.is_live() {
+                    return Err(state.end_of_replay_error());
+                }
+                progress.await;
+            }
         })
         .await
     }
@@ -1488,10 +2210,7 @@ impl ReplayState {
         let cursor = &*self.cursor;
         // The snapshot is taken on an owned task (see `run_owned_cursor_op`): this lookup is
         // called from accessor futures (e.g. the replay-side remote-write scope checks), which
-        // must never queue on the cursor mutex directly. On task cancellation (runtime shutdown)
-        // the conservative `NotFound { violates_for_all: true }` answer is returned: callers
-        // treat it as "cannot prove the scope completed cleanly" and fail the operation rather
-        // than fabricating success.
+        // must never queue on the cursor mutex directly.
         let snapshot = self
             .run_owned_cursor_op(|state| async move {
                 let cursor = &*state.cursor;
@@ -1515,7 +2234,7 @@ impl ReplayState {
         cursor
             .scan_oplog(
                 start,
-                cursor.replay_target(),
+                cursor.replay_target().next(),
                 &skipped_regions,
                 next_skipped_region,
                 begin_idx,
@@ -1532,7 +2251,7 @@ impl ReplayState {
     ) -> Result<Option<AgentInvocationStartedEntry>, WorkerExecutorError> {
         loop {
             if self.is_replay() {
-                let (_, oplog_entry) = self.get_oplog_entry().await?;
+                let (oplog_index, oplog_entry) = self.get_oplog_entry().await?;
                 match oplog_entry {
                     OplogEntry::AgentInvocationStarted {
                         idempotency_key,
@@ -1540,6 +2259,7 @@ impl ReplayState {
                         trace_id,
                         trace_states,
                         invocation_context: spans,
+                        wallet_pin,
                         ..
                     } => {
                         let invocation_payload = self
@@ -1557,9 +2277,11 @@ impl ReplayState {
                             InvocationContextStack::from_oplog_data(trace_id, trace_states, spans);
 
                         break Ok(Some(AgentInvocationStartedEntry {
+                            oplog_index,
                             idempotency_key,
                             invocation_payload,
                             invocation_context,
+                            wallet_pin,
                         }));
                     }
                     entry if entry.is_hint() => {}
@@ -1628,12 +2350,154 @@ impl ReplayState {
         &self,
         abandoned: &mut AbandonedStarts,
     ) -> Result<(OplogIndex, OplogEntry), WorkerExecutorError> {
-        self.with_tx(async |tx| {
-            tx.try_get_oplog_entry_at_invocation_boundary(abandoned, |_| true)
-                .await
-        })
-        .await?
-        .ok_or_else(|| self.end_of_replay_error())
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            if let Some(entry) = self
+                .with_tx(async |tx| {
+                    tx.try_get_oplog_entry_at_invocation_boundary(abandoned, |_| true)
+                        .await
+                })
+                .await?
+            {
+                return Ok(entry);
+            }
+            if self.is_live() {
+                return Err(self.end_of_replay_error());
+            }
+            progress.await;
+        }
+    }
+}
+
+fn custom_subtree_entry_is_drainable(state: &CursorState, entry: &OplogEntry) -> bool {
+    let custom_root = |member| {
+        state
+            .custom_subtrees
+            .iter()
+            .find_map(|(root, members)| members.contains(&member).then_some(*root))
+    };
+    match entry {
+        OplogEntry::Start {
+            observational_owner,
+            parent_start_index,
+            ..
+        } => observational_owner
+            .and_then(custom_root)
+            .or_else(|| parent_start_index.and_then(custom_root))
+            .is_some(),
+        entry => terminal_start_index(entry)
+            .and_then(custom_root)
+            .is_some_and(|root| terminal_start_index(entry) != Some(root)),
+    }
+}
+
+fn scope_entry_owner(
+    index: OplogIndex,
+    entry: &OplogEntry,
+    previous_index: Option<OplogIndex>,
+    previous_included_start: Option<OplogIndex>,
+) -> Option<OplogIndex> {
+    match entry {
+        OplogEntry::Start { .. } => Some(index),
+        OplogEntry::End { start_index, .. }
+        | OplogEntry::Cancelled { start_index, .. }
+        | OplogEntry::CompletionDiscarded { start_index, .. }
+        | OplogEntry::CompletionDelivered { start_index, .. } => Some(*start_index),
+        OplogEntry::HostStreamFrame {
+            parent_start_index, ..
+        }
+        | OplogEntry::Log {
+            parent_start_index: Some(parent_start_index),
+            ..
+        }
+        | OplogEntry::StartSpan {
+            parent_start_index: Some(parent_start_index),
+            ..
+        }
+        | OplogEntry::FinishSpan {
+            parent_start_index: Some(parent_start_index),
+            ..
+        }
+        | OplogEntry::SetSpanAttribute {
+            parent_start_index: Some(parent_start_index),
+            ..
+        } => Some(*parent_start_index),
+        OplogEntry::Error { retry_from, .. } => Some(*retry_from),
+        OplogEntry::BeginRemoteTransaction {
+            original_begin_index: Some(begin),
+            ..
+        } => Some(*begin),
+        OplogEntry::BeginRemoteTransaction {
+            original_begin_index: None,
+            ..
+        } => previous_index
+            .zip(previous_included_start)
+            .and_then(|(previous, start)| {
+                (previous == start && previous.next() == index).then_some(start)
+            }),
+        OplogEntry::PreCommitRemoteTransaction { begin_index, .. }
+        | OplogEntry::PreRollbackRemoteTransaction { begin_index, .. }
+        | OplogEntry::CommittedRemoteTransaction { begin_index, .. }
+        | OplogEntry::RolledBackRemoteTransaction { begin_index, .. } => Some(*begin_index),
+        OplogEntry::Create { .. }
+        | OplogEntry::AgentInvocationStarted { .. }
+        | OplogEntry::AgentInvocationFinished { .. }
+        | OplogEntry::Suspend { .. }
+        | OplogEntry::NoOp { .. }
+        | OplogEntry::Jump { .. }
+        | OplogEntry::Interrupted { .. }
+        | OplogEntry::Exited { .. }
+        | OplogEntry::BeginAtomicRegion { .. }
+        | OplogEntry::EndAtomicRegion { .. }
+        | OplogEntry::PendingAgentInvocation { .. }
+        | OplogEntry::PendingUpdate { .. }
+        | OplogEntry::SuccessfulUpdate { .. }
+        | OplogEntry::FailedUpdate { .. }
+        | OplogEntry::GrowMemory { .. }
+        | OplogEntry::CreateResource { .. }
+        | OplogEntry::DropResource { .. }
+        | OplogEntry::Log {
+            parent_start_index: None,
+            ..
+        }
+        | OplogEntry::Restart { .. }
+        | OplogEntry::ActivatePlugin { .. }
+        | OplogEntry::DeactivatePlugin { .. }
+        | OplogEntry::Revert { .. }
+        | OplogEntry::CancelPendingInvocation { .. }
+        | OplogEntry::StartSpan {
+            parent_start_index: None,
+            ..
+        }
+        | OplogEntry::FinishSpan {
+            parent_start_index: None,
+            ..
+        }
+        | OplogEntry::SetSpanAttribute {
+            parent_start_index: None,
+            ..
+        }
+        | OplogEntry::Snapshot { .. }
+        | OplogEntry::OplogProcessorCheckpoint { .. }
+        | OplogEntry::SetRetryPolicy { .. }
+        | OplogEntry::RemoveRetryPolicy { .. }
+        | OplogEntry::CardEventQueued { .. }
+        | OplogEntry::CardInstalled { .. }
+        | OplogEntry::CardInstallFailed { .. }
+        | OplogEntry::CardRevoked { .. }
+        | OplogEntry::CardExpired { .. }
+        | OplogEntry::CardDerived { .. }
+        | OplogEntry::CardTransferStarted { .. }
+        | OplogEntry::CardTransferred { .. }
+        | OplogEntry::CardRevokedCascade { .. }
+        | OplogEntry::CardTransferConfirmed { .. }
+        | OplogEntry::StreamRegistered { .. }
+        | OplogEntry::StreamItems { .. }
+        | OplogEntry::StreamEnd { .. }
+        | OplogEntry::StreamCancel { .. }
+        | OplogEntry::StreamSession { .. } => None,
     }
 }
 
@@ -1644,6 +2508,60 @@ pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
         OplogEntry::End { start_index, .. } | OplogEntry::Cancelled { start_index, .. } => {
             Some(*start_index)
         }
-        _ => None,
+        OplogEntry::Create { .. }
+        | OplogEntry::Start { .. }
+        | OplogEntry::CompletionDiscarded { .. }
+        | OplogEntry::CompletionDelivered { .. }
+        | OplogEntry::AgentInvocationStarted { .. }
+        | OplogEntry::AgentInvocationFinished { .. }
+        | OplogEntry::Suspend { .. }
+        | OplogEntry::Error { .. }
+        | OplogEntry::NoOp { .. }
+        | OplogEntry::Jump { .. }
+        | OplogEntry::Interrupted { .. }
+        | OplogEntry::Exited { .. }
+        | OplogEntry::BeginAtomicRegion { .. }
+        | OplogEntry::EndAtomicRegion { .. }
+        | OplogEntry::PendingAgentInvocation { .. }
+        | OplogEntry::PendingUpdate { .. }
+        | OplogEntry::SuccessfulUpdate { .. }
+        | OplogEntry::FailedUpdate { .. }
+        | OplogEntry::GrowMemory { .. }
+        | OplogEntry::CreateResource { .. }
+        | OplogEntry::DropResource { .. }
+        | OplogEntry::Log { .. }
+        | OplogEntry::Restart { .. }
+        | OplogEntry::ActivatePlugin { .. }
+        | OplogEntry::DeactivatePlugin { .. }
+        | OplogEntry::Revert { .. }
+        | OplogEntry::CancelPendingInvocation { .. }
+        | OplogEntry::StartSpan { .. }
+        | OplogEntry::FinishSpan { .. }
+        | OplogEntry::SetSpanAttribute { .. }
+        | OplogEntry::BeginRemoteTransaction { .. }
+        | OplogEntry::PreCommitRemoteTransaction { .. }
+        | OplogEntry::PreRollbackRemoteTransaction { .. }
+        | OplogEntry::CommittedRemoteTransaction { .. }
+        | OplogEntry::RolledBackRemoteTransaction { .. }
+        | OplogEntry::Snapshot { .. }
+        | OplogEntry::OplogProcessorCheckpoint { .. }
+        | OplogEntry::SetRetryPolicy { .. }
+        | OplogEntry::RemoveRetryPolicy { .. }
+        | OplogEntry::CardEventQueued { .. }
+        | OplogEntry::CardInstalled { .. }
+        | OplogEntry::CardInstallFailed { .. }
+        | OplogEntry::CardRevoked { .. }
+        | OplogEntry::CardExpired { .. }
+        | OplogEntry::CardDerived { .. }
+        | OplogEntry::CardTransferStarted { .. }
+        | OplogEntry::CardTransferred { .. }
+        | OplogEntry::CardRevokedCascade { .. }
+        | OplogEntry::CardTransferConfirmed { .. }
+        | OplogEntry::HostStreamFrame { .. }
+        | OplogEntry::StreamRegistered { .. }
+        | OplogEntry::StreamItems { .. }
+        | OplogEntry::StreamEnd { .. }
+        | OplogEntry::StreamCancel { .. }
+        | OplogEntry::StreamSession { .. } => None,
     }
 }

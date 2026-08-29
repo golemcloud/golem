@@ -182,6 +182,12 @@ describe('schema value decode failures', () => {
       'quota-token-handle': {
         valid: () => ({ tag: 'quota-token-handle', val: {} as never }),
       },
+      'stream-value': {
+        valid: () => ({ tag: 'stream-value', val: {} as never }),
+      },
+      'permission-card-handle': {
+        valid: () => ({ tag: 'permission-card-handle', val: {} as never }),
+      },
     } satisfies Record<NodeTag, Case>;
 
     for (const [tag, testCase] of Object.entries(cases)) {

@@ -30,11 +30,12 @@ pub(super) enum StartClaim {
         /// value; see [`recorded_request_payload_matches`].
         matching_request: Option<HostRequest>,
     },
-    /// A durable-*scope* `Start`: request-less and unowned (e.g. `<scope:batched-write>` /
-    /// `<scope:transaction>`).
+    /// A durable-*scope* `Start`: request-less and optionally owned by an entity invocation.
+    /// Primary scopes remain unowned; entity scope Starts point at the entity invocation Start.
     Scope {
         function_name: HostFunctionName,
         function_type: DurableFunctionType,
+        parent_start_index: Option<OplogIndex>,
     },
     /// Any top-level durable-call `Start`, whatever its function name and durable function type
     /// (the dynamic guest-facing durability read learns the identity from the claimed entry
@@ -104,10 +105,12 @@ impl StartClaim {
     pub(super) fn scope(
         function_name: &HostFunctionName,
         function_type: &DurableFunctionType,
+        parent_start_index: Option<OplogIndex>,
     ) -> Self {
         Self::Scope {
             function_name: function_name.clone(),
             function_type: function_type.clone(),
+            parent_start_index,
         }
     }
 
@@ -155,7 +158,10 @@ impl StartClaim {
             Self::Owned {
                 parent_start_index, ..
             } => Some(*parent_start_index),
-            Self::Scope { .. } | Self::AnyUnownedCall => None,
+            Self::Scope {
+                parent_start_index, ..
+            } => *parent_start_index,
+            Self::AnyUnownedCall => None,
         }
     }
 
@@ -184,9 +190,10 @@ impl StartClaim {
             Self::Scope {
                 function_name,
                 function_type,
+                parent_start_index,
             } => {
                 format!(
-                    "Start {{ {function_name}, {function_type:?}, request: None, parent_start_index: None }}"
+                    "Start {{ {function_name}, {function_type:?}, request: None, parent_start_index: {parent_start_index:?} }}"
                 )
             }
             Self::Unowned {
@@ -234,10 +241,28 @@ impl ReplayState {
         &self,
         claim: StartClaim,
     ) -> Result<(ReplayCallHandle, Box<OplogEntry>), WorkerExecutorError> {
-        self.run_owned_cursor_op(move |state| async move {
-            state.with_tx(async |tx| tx.claim_start(&claim).await).await
-        })
-        .await
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+
+            let owned_claim = claim.clone();
+            let (claimed, blocked_on_completion_delivery) = self
+                .run_owned_cursor_op(move |state| async move {
+                    state
+                        .with_tx(async |tx| {
+                            let claimed = tx.claim_start(&owned_claim).await?;
+                            Ok((claimed, tx.blocked_on_completion_delivery))
+                        })
+                        .await
+                })
+                .await?;
+            if let Some(claimed) = claimed {
+                return Ok(claimed);
+            }
+            debug_assert!(blocked_on_completion_delivery);
+            progress.await;
+        }
     }
 
     /// Claims the next top-level (unowned) durable-call `Start` matching the expected identity
@@ -348,11 +373,13 @@ impl ReplayState {
         &self,
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
+        parent_start_index: Option<OplogIndex>,
     ) -> Result<(OplogIndex, ReplayCallHandle), WorkerExecutorError> {
         let (handle, _) = self
             .claim_start(StartClaim::scope(
                 expected_function_name,
                 expected_function_type,
+                parent_start_index,
             ))
             .await?;
         Ok((handle.start_idx(), handle))
@@ -426,18 +453,23 @@ impl ReplayState {
         expected_invocation_id: uuid::Uuid,
         expected_request: &HostRequest,
     ) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
-        let expected_function_name = expected_function_name.clone();
-        let expected_function_type = expected_function_type.clone();
-        let expected_request = expected_request.clone();
-        let (handle, entry) = self
-            .run_owned_cursor_op(move |state| async move {
-                state
-                    .with_tx(async |tx| {
-                        if tx
-                            .st
-                            .claimed_custom_invocation_ids
-                            .contains(&expected_invocation_id)
-                        {
+        let (handle, entry) = loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+
+            let expected_function_name = expected_function_name.clone();
+            let expected_function_type = expected_function_type.clone();
+            let expected_request = expected_request.clone();
+            let (claimed, blocked_on_completion_delivery) = self
+                .run_owned_cursor_op(move |state| async move {
+                    state
+                        .with_tx(async |tx| {
+                            if tx
+                                .st
+                                .claimed_custom_invocation_ids
+                                .contains(&expected_invocation_id)
+                            {
                             return Err(WorkerExecutorError::unexpected_oplog_entry(
                                 format!(
                                     "unused custom durable invocation id {expected_invocation_id}"
@@ -594,16 +626,24 @@ impl ReplayState {
                                 ));
                             }
                         };
-                        tx.st
-                            .claimed_custom_invocation_ids
-                            .insert(expected_invocation_id);
-                        let root = result.0.start_idx();
-                        tx.register_custom_subtree_root(root);
-                        Ok(result)
+                        if let Some(result) = &result {
+                            tx.st
+                                .claimed_custom_invocation_ids
+                                .insert(expected_invocation_id);
+                            let root = result.0.start_idx();
+                            tx.register_custom_subtree_root(root);
+                        }
+                        Ok((result, tx.blocked_on_completion_delivery))
                     })
                     .await
             })
             .await?;
+            if let Some(claimed) = claimed {
+                break claimed;
+            }
+            debug_assert!(blocked_on_completion_delivery);
+            progress.await;
+        };
         let OplogEntry::Start {
             timestamp,
             function_name,

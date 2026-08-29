@@ -26,6 +26,7 @@ message AgentError {
     EphemeralFuelExhausted ephemeral_fuel_exhausted = 17;
     EphemeralCannotSuspend ephemeral_cannot_suspend = 18;
     ReadOnlyViolation read_only_violation = 19;
+    PermissionDenied permission_denied = 20;
   }
 }
 
@@ -86,4 +87,8 @@ message EphemeralCannotSuspend {
 message ReadOnlyViolation {
   string method = 1;
   string host_function = 2;
+}
+
+message PermissionDenied {
+  string details = 1;
 }

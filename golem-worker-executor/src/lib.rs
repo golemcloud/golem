@@ -51,7 +51,7 @@ use self::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use self::services::worker_fork::DefaultWorkerFork;
 use self::wasi_host::create_linker;
 use crate::grpc::WorkerExecutorImpl;
-use crate::services::active_workers::ActiveWorkers;
+use crate::services::active_agents::ActiveAgents;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::card::{CardService, CardServiceDefault};
@@ -84,7 +84,7 @@ use crate::services::worker_enumeration::{
 };
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use crate::services::{
-    All, HasActiveWorkers, HasAgentTypesService, HasCardService, HasComponentService, HasConfig,
+    All, HasActiveAgents, HasAgentTypesService, HasCardService, HasComponentService, HasConfig,
     HasEnvironmentStateService, HasOplogService, HasWorkerActivator, HasWorkerService, rdbms,
 };
 use crate::storage::indexed::IndexedStorage;
@@ -170,17 +170,17 @@ impl Drop for RunDetails {
 #[async_trait]
 #[allow(clippy::too_many_arguments)]
 pub trait Bootstrap<Ctx: WorkerCtx> {
-    /// Creates the [`ActiveWorkers`] service, including the measured-headroom
+    /// Creates the [`ActiveAgents`] service, including the measured-headroom
     /// admission gate. The default builds the memory probe from the config
     /// (cgroup/process/override). The in-process test harness overrides this to
     /// inject a probe with a pinned limit and usage so the gate is deterministic
     /// and isolated from the shared test process's RSS.
-    fn create_active_workers(
+    fn create_active_agents(
         &self,
         golem_config: &GolemConfig,
         shutdown_token: tokio_util::sync::CancellationToken,
-    ) -> anyhow::Result<Arc<ActiveWorkers<Ctx>>> {
-        Ok(Arc::new(ActiveWorkers::<Ctx>::new(
+    ) -> anyhow::Result<Arc<ActiveAgents<Ctx>>> {
+        Ok(Arc::new(ActiveAgents::<Ctx>::new(
             &golem_config.memory,
             &golem_config.filesystem_storage,
             &golem_config.agent_status_flush,
@@ -312,7 +312,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     async fn create_services(
         &self,
         direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
-        active_workers: Arc<ActiveWorkers<Ctx>>,
+        active_agents: Arc<ActiveAgents<Ctx>>,
         engine: Arc<Engine>,
         linker: Arc<Linker<Ctx>>,
         runtime: Handle,
@@ -351,7 +351,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 worker_proxy.clone(),
                 shard_service.clone(),
             )),
-            active_workers.clone(),
+            active_agents.clone(),
             engine.clone(),
             linker.clone(),
             runtime.clone(),
@@ -392,7 +392,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 shard_service.clone(),
             )),
             direct_invocation_auth_service,
-            active_workers.clone(),
+            active_agents.clone(),
             engine.clone(),
             linker.clone(),
             runtime.clone(),
@@ -429,7 +429,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         let rpc = self.wrap_rpc(rpc);
 
         Ok(All::new(
-            active_workers,
+            active_agents,
             agent_types_service,
             agent_webhooks_service,
             card_service,
@@ -499,10 +499,38 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
-        golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+        crate::durable_host::tool::add_common_to_linker(
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
+        crate::preview2::golem::permissions::types::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
+        crate::preview2::golem::permissions::inspect::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
+        crate::preview2::golem::permissions::derive::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
+        crate::preview2::golem::permissions::revoke::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
+        crate::preview2::golem::permissions::wallet::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
+        crate::preview2::golem::permissions::kernel_introspection::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
+        golem_schema::schema::wit::wire::add_to_linker::<
+            _,
+            durable_host::schema_value_stream::CoreTypesHost<Ctx>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
         Ok(linker)
     }
 }
@@ -802,9 +830,9 @@ pub async fn create_worker_executor_impl<
         }
     };
 
-    let active_workers = bootstrap.create_active_workers(&golem_config, shutdown_token.clone())?;
+    let active_agents = bootstrap.create_active_agents(&golem_config, shutdown_token.clone())?;
 
-    let initial_file_cache_root = active_workers
+    let initial_file_cache_root = active_agents
         .agent_filesystems()
         .initial_file_cache_root()
         .map(|path| path.to_path_buf());
@@ -814,7 +842,7 @@ pub async fn create_worker_executor_impl<
     )?);
 
     let running_worker_enumeration_service = Arc::new(RunningWorkerEnumerationServiceDefault::new(
-        active_workers.clone(),
+        active_agents.clone(),
     ));
 
     let shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager> =
@@ -936,7 +964,7 @@ pub async fn create_worker_executor_impl<
     let all = bootstrap
         .create_services(
             direct_invocation_auth_service,
-            active_workers,
+            active_agents,
             engine,
             linker,
             runtime.clone(),
@@ -975,7 +1003,7 @@ pub async fn create_worker_executor_impl<
     let promise_worker_access = Arc::new(DefaultPromiseWorkerAccess::new(
         all.component_service(),
         all.worker_service(),
-        all.active_workers(),
+        all.active_agents(),
         all.oplog_service(),
         all.config(),
         all.worker_activator(),
@@ -1038,7 +1066,7 @@ pub async fn bootstrap_and_run_worker_executor<
 ) -> anyhow::Result<RunDetails> {
     debug!("Initializing worker executor");
 
-    let memory_snapshot = crate::services::active_workers::memory_probe::default_probe(
+    let memory_snapshot = crate::services::active_agents::memory_probe::default_probe(
         golem_config.memory.system_memory_override,
     )
     .snapshot();
@@ -1069,7 +1097,7 @@ pub async fn bootstrap_and_run_worker_executor<
 
     if start_registry_invalidation_handler {
         let registry_service = registry_service.clone();
-        let active_workers = worker_executor_impl.active_workers();
+        let active_agents = worker_executor_impl.active_agents();
         let card_service = worker_executor_impl.card_service();
         let component_service = worker_executor_impl.component_service();
         let environment_state_service = worker_executor_impl.environment_state_service();
@@ -1078,7 +1106,7 @@ pub async fn bootstrap_and_run_worker_executor<
         join_set.spawn(async move {
             WorkerExecutorRegistryInvalidationHandler::run(
                 registry_service,
-                active_workers,
+                active_agents,
                 card_service,
                 component_service,
                 environment_state_service,

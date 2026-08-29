@@ -224,7 +224,7 @@ macro_rules! host_payload_pairs {
                     concat!($iface, "::", $func) =>
                         ident_mash::mash! {
                             inner_resp = "HostResponse" + $resptype =>
-                            Ok($crate::model::oplog::payload::HostResponse::$resptype(<$crate::model::oplog::payload::$inner_resp as $crate::schema::FromSchema>::from_value(typed_schema_value.value()).map_err(|e| e.to_string())?))
+                            Ok(<$crate::model::oplog::payload::$inner_resp as $crate::schema::FromSchema>::from_value(typed_schema_value.value()).map_err(|e| e.to_string())?.into())
                         }
                 ),*,
                 _ => Ok($crate::model::oplog::payload::HostResponse::Custom(typed_schema_value))

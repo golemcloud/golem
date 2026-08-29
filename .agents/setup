@@ -35,6 +35,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 rustup update stable --no-self-update
 rustup default stable
+rustup component add clippy rustfmt
 rustup target add wasm32-wasip1 wasm32-wasip2
 
 if ! command -v cargo-binstall >/dev/null 2>&1; then
@@ -75,8 +76,13 @@ if [[ ! -f /opt/wasi-sdk/VERSION ]] || ! grep -q '^25\.0$' /opt/wasi-sdk/VERSION
     rm -f "$wasi_archive"
 fi
 
-if ! wasm-rquickjs --version 2>/dev/null | grep -q '0.4.1'; then
-    cargo binstall --force --locked wasm-rquickjs-cli@0.4.1
+wasm_rquickjs_version="$(awk -F'"' '/^[[:space:]]*WASM_RQUICKJS_VERSION: / { print $2; exit }' .github/workflows/benchmark.yaml)"
+if [[ -z "$wasm_rquickjs_version" ]]; then
+    echo "Failed to read WASM_RQUICKJS_VERSION from .github/workflows/benchmark.yaml" >&2
+    exit 1
+fi
+if [[ "$(wasm-rquickjs --version 2>/dev/null || true)" != "wasm-rquickjs-cli $wasm_rquickjs_version" ]]; then
+    cargo binstall --force --locked "wasm-rquickjs-cli@$wasm_rquickjs_version"
 fi
 
 if ! cargo component --version 2>/dev/null | grep -q '0.21.1'; then
@@ -92,7 +98,6 @@ if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile"; then
 export PATH="/opt/node24/bin:$HOME/.cargo/bin:$PATH"
 export WASI_SDK_VERSION=25
 export WASI_SDK_PATH=/opt/wasi-sdk
-export WASM_RQUICKJS_VERSION=0.4.1
 EOF
 fi
 

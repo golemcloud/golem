@@ -9,7 +9,7 @@ Code generation tools for the [Golem SDK for MoonBit](https://mooncakes.io/docs/
 Generates `golem_reexports.mbt` and updates the target package's `moon.pkg` link section with WASM export declarations.
 
 ```sh
-moon run cmd -- reexports <sdk-path> <target-dir>
+moon run cmd -- reexports <sdk-path> <target-dir> --role <role>
 ```
 
 **What it does:**
@@ -19,12 +19,15 @@ moon run cmd -- reexports <sdk-path> <target-dir>
 
 ### `agents`
 
-Generates agent and tool registration, serialization, dispatch, and typed RPC client code from
-source annotations.
+Generates role-appropriate agent, tool, and middleware registration, serialization, dispatch, and
+typed client/wrapper code from source annotations.
 
 ```sh
-moon run cmd -- agents <package-dir>
+moon run cmd -- agents <project-root> --component-dir <component-dir> --role <role>
 ```
+
+`<role>` is `ordinary`, `tool-middleware`, or `combined`. The component directory is the only
+package the command mutates; project-root scanning supplies read-only project context.
 
 **What it generates:**
 
@@ -35,11 +38,13 @@ moon run cmd -- agents <package-dir>
 | `golem_clients.mbt` | RPC client structs (`<AgentName>Client`) with awaited, fire-and-forget (`trigger_*`), and scheduled (`schedule_*`) method variants |
 | `golem_tools.mbt` | Tool descriptors, error schemas, registration, canonical-input decoding, and command dispatch |
 | `golem_tool_clients.mbt` | Typed tool clients (`<ToolName>Client`) and nested clients for subcommand trees |
+| `golem_tool_middlewares.mbt` | Monomorphic/universal adapters, descriptors, typed underlying wrappers, and middleware registration |
 
-It also auto-adds the required imports to the target `moon.pkg` (e.g. `agents`, `schema`,
-`schema_model`, `tool`, `interface/golem/agent/common`, `interface/golem/tool/common`,
-`interface/golem/core/types`, `rpc`, `multimodal`, and `config`). The `reexports` subcommand
-additionally adds the `gen` import.
+Generation is role-sensitive. `ordinary` emits agent/ordinary-tool files, `tool-middleware` emits
+only pure middleware files, and `combined` emits both. It auto-adds only the required imports to
+the target `moon.pkg`; `reexports` additionally selects `gen`, `gen-tool-middleware`, or
+`gen-agent-tool-middleware`. The two commands persist and verify their shared role in
+`.golem-sdk-role` so mismatched generation cannot silently combine worlds.
 
 ## Supported Annotations
 
@@ -51,6 +56,8 @@ additionally adds the `gen` import.
 | `#derive.multimodal` | enum | Generates `@multimodal.MultimodalModality` trait impl |
 | `#derive.prompt_hint("...")` | method | Adds a prompt hint to the method definition |
 | `#derive.tool(...)` | empty struct | Defines a tool and optional wire name/version |
+| `#derive.tool_middleware(...)` | empty struct | Defines monomorphic middleware over same-package presented/expected tool shapes |
+| `#derive.universal_tool_middleware(...)` | async free function | Defines universal middleware over opaque runtime carriers |
 | `#derive.command(...)` | public tool method | Configures command name, aliases, subtree, and behavioral annotations |
 | `#derive.arg(...)` | public tool method | Maps one method parameter to a global, positional, tail, option, flag, or stream |
 | `#derive.constraint(...)` | public tool method | Adds argument-presence or `value-is` constraints |
@@ -167,19 +174,118 @@ client.drop()
 Call `drop()` when the client is no longer needed. Generated files are replaced on every `agents`
 run and must not be edited by hand.
 
+## Defining Tool Middleware
+
+Tool middleware components use the `tool-middleware` role and do not import the ambient
+`golem:tool/host` interface. They can invoke only the runtime-provided next layer.
+
+### Monomorphic policy middleware
+
+Declare a presented tool shape with the existing empty-struct/static-method model, then annotate an
+empty middleware struct. If `expected` is omitted, it defaults to `presented`:
+
+```moonbit nocheck
+#derive.tool("messages")
+struct Messages {}
+
+pub fn Messages::send(message : String) -> String { message }
+
+#derive.tool_middleware("message-policy", presented="Messages")
+struct MessagePolicy {}
+
+pub async fn MessagePolicy::send(
+  underlying : MessagesUnderlying,
+  message : String,
+) -> Result[String, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
+  if message.contains("blocked") {
+    // Short-circuit: the expected tool still exists, but this path calls it zero times.
+    Err(@toolMiddleware.ToolInvokeError::ConstraintViolation("blocked"))
+  } else {
+    underlying.send(message)
+  }
+}
+```
+
+The generated `<ExpectedTool>Underlying` has no public constructor. It wraps the capability minted
+for this invocation and exposes async typed methods projected from the expected shape. Handlers may
+short-circuit with zero calls, forward once, or retry with multiple sequential calls. Overlapping
+calls and use after the handler returns are rejected; this is runtime enforcement, not a MoonBit
+affine type guarantee.
+
+For nested commands, handler and underlying method names flatten the full canonical path with
+`__`, such as `admin__run`. Generation rejects flattened-name collisions.
+
+An adapter names a different expected shape in the same package:
+
+```moonbit nocheck
+#derive.tool_middleware("file-adapter", presented="PublicFiles", expected="Storage")
+struct FileAdapter {}
+
+pub async fn FileAdapter::read(
+  underlying : StorageUnderlying,
+  path : String,
+) -> Result[String, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
+  underlying.fetch("files/" + path)
+}
+```
+
+The middleware handlers cover every command in `PublicFiles`, while `StorageUnderlying` exposes
+the commands in `Storage`. Both tool declarations must be in the middleware's package. Qualified
+or cross-package references produce:
+
+```text
+Tool middleware '<middleware>' references tool '<tool>' outside its package; GOL-34 supports same-package tool shapes only
+```
+
+### Universal middleware
+
+A universal annotation applies to exactly one async free function. The grouped invocation and
+underlying wrappers keep tool metadata, typed input/results, errors, streams, and principal in the
+generated WIT carrier types:
+
+```moonbit nocheck
+#derive.universal_tool_middleware("audit", alias="trace-tools")
+pub async fn audit(
+  invocation : @toolMiddleware.RawToolInvocation,
+  underlying : @toolMiddleware.UnderlyingTool,
+) -> Result[
+  @toolMiddleware.RawInvocationResult,
+  @toolMiddleware.ToolInvokeError[@toolMiddleware.RawTypedSchemaValue],
+] {
+  ignore(invocation.tool_name())
+  ignore(invocation.tool_metadata())
+  ignore(invocation.principal())
+  underlying.invoke_raw(
+    invocation.command_path(),
+    invocation.input(),
+    invocation.stdin(),
+  )
+}
+```
+
+Pass-through forwards those carriers directly; do not decode and rebuild them through
+`schema_model`. Input capabilities and stdin transfer at most once, only final stdout transfers to
+the host, and generated teardown drops abandoned resources. Every middleware is registered by the
+generated `fn init` when the component loads. Registration order does not determine placement or
+chain order; those belong to runtime/application-manifest configuration.
+
 ## Usage with `golem.yaml`
 
 Typically invoked as build steps in a Golem application manifest:
 
 ```yaml
 build:
-  - command: moon run cmd -- reexports ../golem_sdk ../my_app/my_component
+  - command: moon run cmd -- reexports ../golem_sdk ../my_app/my_component --role tool-middleware
     dir: ../golem_sdk_tools
-  - command: moon run cmd -- agents ../my_app/my_component
+  - command: moon run cmd -- agents ../my_app --component-dir my_component --role tool-middleware
     dir: ../golem_sdk_tools
   - command: moon build --target wasm --release
   # ... wasm-tools component embed/new steps
 ```
+
+Embed pure middleware against SDK world `tool-middleware-guest`. Built-in Golem application
+templates expose this pipeline as `moonbit-tool-middleware`; use `moonbit` for ordinary components
+and `moonbit-agent-tool-middleware` for combined components.
 
 ## Requirements
 

@@ -1,5 +1,5 @@
 use super::*;
-use crate::services::active_workers::{ConcurrentAgentsScheduler, MemoryGrant};
+use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentId;

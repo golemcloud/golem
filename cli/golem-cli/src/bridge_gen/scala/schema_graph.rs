@@ -200,6 +200,10 @@ fn emit_schema_type(typ: &SchemaType) -> String {
             "{SCHEMA}.SchemaTypeBody.QuotaTokenType({})",
             quota_token_spec(spec)
         ),
+        PermissionCard { spec, .. } => format!(
+            "{SCHEMA}.SchemaTypeBody.PermissionCardType({SCHEMA}.PermissionCardSpec({}))",
+            spec.polymorphic
+        ),
         Future { inner, .. } => format!(
             "{SCHEMA}.SchemaTypeBody.FutureType({})",
             option_type(inner.as_deref())

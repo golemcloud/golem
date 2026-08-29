@@ -150,6 +150,14 @@ impl TextOutput for PublicOplogEntry {
                 ));
                 logln(format!("{pad}start index:       {}", params.start_index));
             }
+            PublicOplogEntry::CompletionDelivered(params) => {
+                logln(format_message_highlight("COMPLETION DELIVERED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!("{pad}start index:       {}", params.start_index));
+            }
             PublicOplogEntry::AgentInvocationStarted(params) => {
                 log_agent_invocation(
                     AgentInvocationRenderKind::Started,
@@ -157,6 +165,22 @@ impl TextOutput for PublicOplogEntry {
                     &params.timestamp,
                     &params.invocation,
                 );
+                if let Some(wallet_pin) = &params.wallet_pin {
+                    let wallet_id_hash = wallet_pin
+                        .wallet_token
+                        .wallet_id_hash
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>();
+                    logln(format!("{pad}wallet id hash:    {wallet_id_hash}"));
+                    logln(format!(
+                        "{pad}wallet generation: {}",
+                        wallet_pin.wallet_token.generation
+                    ));
+                    if let Some(scope_card_id) = wallet_pin.scope_card_id {
+                        logln(format!("{pad}scope card:        {scope_card_id}"));
+                    }
+                }
             }
             PublicOplogEntry::AgentInvocationFinished(params) => {
                 let variant_label = match &params.result {
@@ -623,6 +647,9 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}card id:           {}",
                     format_id(&params.card_id)
                 ));
+                if let Some(generation) = params.wallet_generation {
+                    logln(format!("{pad}wallet generation: {generation}"));
+                }
             }
             PublicOplogEntry::HostStreamFrame(params) => {
                 logln(format_message_highlight("HOST STREAM FRAME"));
@@ -643,6 +670,61 @@ impl TextOutput for PublicOplogEntry {
                     typed_schema_value_to_string(&params.payload)
                 ));
             }
+            PublicOplogEntry::StreamRegistered(params) => {
+                logln(format_message_highlight("STREAM REGISTERED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}record:            {}",
+                    typed_schema_value_to_string(&params.record)
+                ));
+            }
+            PublicOplogEntry::StreamItems(params) => {
+                logln(format_message_highlight("STREAM ITEMS"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}record:            {}",
+                    typed_schema_value_to_string(&params.record)
+                ));
+            }
+            PublicOplogEntry::StreamEnd(params) => {
+                logln(format_message_highlight("STREAM END"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}record:            {}",
+                    typed_schema_value_to_string(&params.record)
+                ));
+            }
+            PublicOplogEntry::StreamCancel(params) => {
+                logln(format_message_highlight("STREAM CANCEL"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}record:            {}",
+                    typed_schema_value_to_string(&params.record)
+                ));
+            }
+            PublicOplogEntry::StreamSession(params) => {
+                logln(format_message_highlight("STREAM SESSION"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}record:            {}",
+                    typed_schema_value_to_string(&params.record)
+                ));
+            }
             PublicOplogEntry::CardExpired(params) => {
                 logln(format_message_highlight("CARD EXPIRED"));
                 logln(format!(
@@ -653,6 +735,9 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}card id:           {}",
                     format_id(&params.card_id)
                 ));
+                if let Some(generation) = params.wallet_generation {
+                    logln(format!("{pad}wallet generation: {generation}"));
+                }
             }
             PublicOplogEntry::CardEventQueued(params) => {
                 logln(format_message_highlight("CARD EVENT QUEUED"));
@@ -679,6 +764,9 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}card id:           {}",
                     format_id(&params.card_id)
                 ));
+                if let Some(generation) = params.wallet_generation {
+                    logln(format!("{pad}wallet generation: {generation}"));
+                }
             }
             PublicOplogEntry::CardInstallFailed(params) => {
                 logln(format_message_highlight("CARD INSTALL FAILED"));
@@ -697,6 +785,111 @@ impl TextOutput for PublicOplogEntry {
                 logln(format!(
                     "{pad}reason:            {}",
                     format_id(&format!("{:?}", params.reason))
+                ));
+            }
+            PublicOplogEntry::CardDerived(params) => {
+                logln(format_message_highlight("CARD DERIVED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}card id:           {}",
+                    format_id(&params.card_id)
+                ));
+                logln(format!(
+                    "{pad}parent ids:        {}",
+                    format_id(&format!("{:?}", params.parent_ids))
+                ));
+                if let Some(generation) = params.wallet_generation {
+                    logln(format!("{pad}wallet generation: {generation}"));
+                }
+            }
+            PublicOplogEntry::CardTransferStarted(params) => {
+                logln(format_message_highlight("CARD TRANSFER STARTED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}transfer id:       {}",
+                    format_id(&params.transfer_id)
+                ));
+                logln(format!(
+                    "{pad}card id:           {}",
+                    format_id(&params.card_id)
+                ));
+                logln(format!(
+                    "{pad}target holder:     {}",
+                    format_id(&format!("{:?}", params.target_holder))
+                ));
+                if let Some(generation) = params.source_wallet_generation {
+                    logln(format!("{pad}source generation: {generation}"));
+                }
+            }
+            PublicOplogEntry::CardTransferred(params) => {
+                logln(format_message_highlight("CARD TRANSFER ADMITTED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}transfer id:       {}",
+                    format_id(&params.transfer_id)
+                ));
+                if let Some(source_card_id) = params.source_card_id {
+                    logln(format!(
+                        "{pad}source card id:    {}",
+                        format_id(&source_card_id)
+                    ));
+                }
+                logln(format!(
+                    "{pad}installed card id: {}",
+                    format_id(&params.installed_card_id)
+                ));
+                logln(format!(
+                    "{pad}target holder:     {}",
+                    format_id(&format!("{:?}", params.target_holder))
+                ));
+                if let Some(generation) = params.target_wallet_generation {
+                    logln(format!("{pad}target generation: {generation}"));
+                }
+            }
+            PublicOplogEntry::CardRevokedCascade(params) => {
+                logln(format_message_highlight("CARD REVOKED CASCADE"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}revoked card ids:  {}",
+                    format_id(&format!("{:?}", params.revoked_card_ids))
+                ));
+                if let Some(generation) = params.local_wallet_generation {
+                    logln(format!("{pad}local generation:  {generation}"));
+                }
+            }
+            PublicOplogEntry::CardTransferConfirmed(params) => {
+                logln(format_message_highlight("CARD TRANSFER CONFIRMED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}transfer id:       {}",
+                    format_id(&params.transfer_id)
+                ));
+                logln(format!(
+                    "{pad}source card id:    {}",
+                    format_id(&params.source_card_id)
+                ));
+                logln(format!(
+                    "{pad}installed card id: {}",
+                    format_id(&params.installed_card_id)
+                ));
+                logln(format!(
+                    "{pad}target holder:     {}",
+                    format_id(&format!("{:?}", params.target_holder))
                 ));
             }
         }

@@ -126,6 +126,64 @@ fn header_map(key: &str, value: &[u8]) -> HashMap<String, Vec<Vec<u8>>> {
     HashMap::from_iter(vec![(key.to_string(), vec![value.to_vec()])])
 }
 
+#[test]
+async fn public_oplog_zero_start_reads_from_initial_index() {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage,
+            blob_storage,
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
+        agent_id: "public-oplog-zero-start".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id, account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    let timestamp = Timestamp::now_utc();
+    assert_eq!(
+        oplog.add(OplogEntry::NoOp { timestamp }).await,
+        OplogIndex::INITIAL
+    );
+    oplog.commit(CommitLevel::Always).await;
+
+    let chunk = get_public_oplog_chunk(
+        Arc::new(PanicComponentService),
+        oplog_service,
+        &owned_agent_id,
+        AgentMode::Durable,
+        None,
+        ComponentRevision::INITIAL,
+        OplogIndex::NONE,
+        1,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(chunk.first_index_in_chunk, OplogIndex::INITIAL);
+    assert_eq!(chunk.next_oplog_index, OplogIndex::from_u64(2));
+    assert_eq!(chunk.entries.len(), 1);
+    assert!(matches!(chunk.entries[0], PublicOplogEntry::NoOp(_)));
+}
+
 /// Renders P3 host call oplog entries (`P3HttpClientSend`,
 /// `P3HttpClientConsumeBody`/`Chunk`, P3 sockets, keyvalue and blobstore
 /// streams) through the public oplog API (`Start`/`End`/`Cancelled` entries
@@ -372,7 +430,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
         .get_last_index(&owned_agent_id, AgentMode::Durable)
         .await;
     let raw_entries = oplog_service
-        .read(
+        .read_exact(
             &owned_agent_id,
             AgentMode::Durable,
             OplogIndex::INITIAL,

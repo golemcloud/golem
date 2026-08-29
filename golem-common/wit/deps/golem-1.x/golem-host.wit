@@ -3,7 +3,7 @@ package golem:api@1.5.0;
 /// The Golem host API provides low level access to Golem specific features such as promises and control over
 /// the durability and transactional guarantees the executor provides.
 interface host {
-    use golem:core/types@2.0.0.{component-id, card-id, uuid, agent-id, promise-id, oplog-index};
+    use golem:core/types@2.0.0.{component-id, uuid, agent-id, promise-id, oplog-index};
     /// Represents a Golem component's version
     type component-revision = u64;
 
@@ -148,7 +148,7 @@ interface host {
         constructor(component-id: component-id, filter: option<agent-any-filter>, precise: bool);
 
         /// Retrieves the next batch of agent metadata.
-        get-next: func() -> option<list<agent-metadata>>;
+        get-next: func() -> result<option<list<agent-metadata>>, agent-operation-error>;
     }
 
     /// Target parameter for the `revert-agent` operation
@@ -157,6 +157,12 @@ interface host {
         revert-to-oplog-index(oplog-index),
         /// Revert the last N invocations.
         revert-last-invocations(u64)
+    }
+
+    /// Error returned by an operation targeting another agent.
+    variant agent-operation-error {
+        permission-denied,
+        backend-error(string),
     }
 
     /// Details about the fork result
@@ -177,17 +183,6 @@ interface host {
     resource get-promise-result {
       /// Awaits the result of the promise.
       get: async func() -> list<u8>;
-    }
-
-    /// Plain-data handle to a permission card visible to the guest.
-    record card {
-        card-id: card-id,
-    }
-
-    enum card-install-error {
-        revoked,
-        not-found,
-        not-permitted,
     }
 
     /// Create a new promise
@@ -243,30 +238,21 @@ interface host {
     /// to introduce idempotence.
     generate-idempotency-key: func() -> uuid;
 
-    /// Returns one permission card currently installed in this agent's wallet, if any.
-    self-card: func() -> option<card>;
-
-    /// Derives a card handle from an installed card. This minimal test-facing form keeps the card as plain data.
-    derive-card: func(card: card) -> result<card, string>;
-
-    /// Installs a card into this agent's own wallet.
-    install-card: func(card: card) -> result<_, card-install-error>;
-
     /// Initiates an update attempt for the given agent. The function returns immediately once the request has been processed,
     /// not waiting for the agent to get updated.
-    update-agent:  func(agent-id: agent-id, target-revision: component-revision, mode: update-mode);
+    update-agent:  func(agent-id: agent-id, target-revision: component-revision, mode: update-mode) -> result<_, agent-operation-error>;
 
     /// Get the current agent's metadata
-    get-self-metadata: func() -> agent-metadata;
+    get-self-metadata: func() -> result<agent-metadata, agent-operation-error>;
 
     /// Get agent metadata
     get-agent-metadata: func(agent-id: agent-id) -> option<agent-metadata>;
 
     /// Fork an agent to another agent at a given oplog index
-    fork-agent: func(source-agent-id: agent-id, target-agent-id: agent-id, oplog-idx-cut-off: oplog-index);
+    fork-agent: func(source-agent-id: agent-id, target-agent-id: agent-id, oplog-idx-cut-off: oplog-index) -> result<_, agent-operation-error>;
 
     /// Revert an agent to a previous state
-    revert-agent: func(agent-id: agent-id, revert-target: revert-agent-target);
+    revert-agent: func(agent-id: agent-id, revert-target: revert-agent-target) -> result<_, agent-operation-error>;
 
     /// Get the component-id for a given component reference.
     /// Returns none when no component with the specified reference exists.
@@ -291,7 +277,7 @@ interface host {
     /// with a new unique phantom ID. The phantom ID of the forked agent is returned in `fork-result` on
     /// both sides. The newly created agent continues running from the same point, but the return value is
     /// going to be different in this agent and the forked agent.
-    fork: func() -> fork-result;
+    fork: func() -> result<fork-result, agent-operation-error>;
 
     /// Snapshot payload
     record snapshot {

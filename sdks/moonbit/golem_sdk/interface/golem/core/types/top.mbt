@@ -94,6 +94,38 @@ pub fn Secret::drop(self : Secret) -> Unit {
 }
 
 ///|
+/// An affine wrapper around a native Component Model stream of schema
+/// values. The indirection lets a stream occur anywhere in a recursive
+/// `schema-value-tree` while preserving the native stream endpoint.
+pub(all) struct SchemaValueStream(Int) derive(Show, Eq)
+
+///|
+/// Drops a resource handle.
+pub fn SchemaValueStream::drop(self : SchemaValueStream) -> Unit {
+  let SchemaValueStream(resource) = self
+  wasmImportResourceDropSchemaValueStream(resource)
+}
+
+///|
+/// An unforgeable handle to a permission card held by the runtime. The
+/// handle is opaque to guests: components can hold, pass, derive, install,
+/// and revoke cards only through the `golem:permissions` interfaces. When
+/// carried in a `schema-value-tree` (see
+/// `schema-value-node::permission-card-handle`) the handle is transferred
+/// by ownership; the host converts it to/from its internal trusted
+/// card-store representation at the boundary. The wire form is the card-id
+/// (UUID) alone — no grants, parents, or metadata cross the wire as
+/// authority.
+pub(all) struct PermissionCard(Int) derive(Show, Eq)
+
+///|
+/// Drops a resource handle.
+pub fn PermissionCard::drop(self : PermissionCard) -> Unit {
+  let PermissionCard(resource) = self
+  wasmImportResourceDropPermissionCard(resource)
+}
+
+///|
 /// A named type definition inside a `schema-graph`.
 ///
 /// The def itself does not carry metadata; metadata lives on the
@@ -369,6 +401,11 @@ pub(all) struct QuotaTokenSpec {
 } derive(Show, Eq)
 
 ///|
+pub(all) struct PermissionCardSpec {
+  polymorphic : Bool
+} derive(Show, Eq)
+
+///|
 /// The structural body of a `schema-type-node`.
 ///
 /// Closed sum types come in two shapes that differ by how the decoder
@@ -423,6 +460,7 @@ pub(all) enum SchemaTypeBody {
   UnionType(UnionSpec)
   SecretType(SecretSpec)
   QuotaTokenType(QuotaTokenSpec)
+  PermissionCardType(PermissionCardSpec)
   FutureType(Int?)
   StreamType(Int?)
 } derive(Show, Eq)
@@ -534,6 +572,8 @@ pub(all) enum SchemaValueNode {
   UnionValue(UnionValuePayload)
   SecretValue(Secret)
   QuotaTokenHandle(QuotaToken)
+  PermissionCardHandle(PermissionCard)
+  StreamValue(SchemaValueStream)
 } derive(Show, Eq)
 
 ///|
@@ -612,4 +652,78 @@ pub fn uuid_to_string(uuid : Uuid) -> String {
   let ret = result
   mbt_ffi_free(return_area)
   return ret
+}
+
+///|
+/// Wraps any native schema-value reader for placement in a value tree.
+pub async fn SchemaValueStream::wrap(
+  reader : @async-core.Stream[SchemaValueTree],
+) -> SchemaValueStream {
+  let lower_arg = wasmGolemCoreTypes200StaticSchemaValueStreamWrapStream0StreamLower(
+    reader,
+  )
+  let result_ptr = mbt_ffi_malloc(4 * 1)
+  defer mbt_ffi_free(result_ptr)
+
+  let subtask_code = wasmImportStaticSchemaValueStreamWrap(
+    lower_arg, result_ptr,
+  )
+  @async-core.suspend_for_subtask(
+    subtask_code,
+    fn(before_started) {
+      if before_started {
+        let result = wasmGolemCoreTypes200StaticSchemaValueStreamWrapStream0StreamLift(
+          lower_arg,
+        )
+        result.drop_sync()
+      } else {
+        wasmGolemCoreTypes200StaticSchemaValueStreamWrapStream0StreamCommit(
+          lower_arg,
+        )
+      }
+    },
+    fn() {
+      SchemaValueStream::SchemaValueStream(mbt_ffi_load32(result_ptr + 0)).drop()
+    },
+  )
+
+  SchemaValueStream::SchemaValueStream(mbt_ffi_load32(result_ptr + 0))
+}
+
+///|
+/// Consumes a schema-value-stream wrapper and returns its native reader.
+pub async fn SchemaValueStream::unwrap(
+  value : SchemaValueStream,
+) -> @async-core.Stream[SchemaValueTree] {
+  let SchemaValueStream(handle) = value
+
+  let lower_arg = handle
+  let result_ptr = mbt_ffi_malloc(4 * 1)
+  defer mbt_ffi_free(result_ptr)
+
+  let subtask_code = wasmImportStaticSchemaValueStreamUnwrap(
+    lower_arg, result_ptr,
+  )
+  @async-core.suspend_for_subtask(
+    subtask_code,
+    fn(before_started) {
+      if before_started {
+        SchemaValueStream::SchemaValueStream(lower_arg).drop()
+      } else {
+        ()
+      }
+    },
+    fn() {
+      let result = wasmGolemCoreTypes200StaticSchemaValueStreamUnwrapStream0StreamLift(
+        mbt_ffi_load32(result_ptr + 0),
+      )
+      result.drop_sync()
+    },
+  )
+
+  let result = wasmGolemCoreTypes200StaticSchemaValueStreamUnwrapStream0StreamLift(
+    mbt_ffi_load32(result_ptr + 0),
+  )
+
+  result
 }

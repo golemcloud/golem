@@ -4,7 +4,7 @@ use crate::sandbox_filesystem::{
     FilesystemAllocation, ScriptedSandboxFilesystemControl, ScriptedSandboxFilesystemProvisioning,
     ScriptedSandboxPath, ScriptedSandboxPathBase, ScriptedSandboxPathCall,
 };
-use crate::services::active_workers::{ConcurrentAgentsScheduler, MemoryGrant};
+use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
 use crate::services::golem_config::{FilesystemStorageConfig, ResourceUsageMeteringConfig};
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::resource_limits::AtomicResourceEntry;
@@ -4837,6 +4837,53 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
     let reconstructing = finish_replay(reconstructing).await.unwrap();
     let resident = finish_reconstruction(reconstructing).await.unwrap();
     let generation_handle = resident_generation_handle(&resident);
+    let entity_file = InitialAgentFile {
+        content_hash: read_only_hash,
+        path: AgentFilePath::from_abs_str("/entity-provisioned").unwrap(),
+        permissions: AgentFilePermissions::ReadOnly,
+        size: read_only.len() as u64,
+    };
+    provision_initial_files(
+        &generation_handle,
+        Arc::clone(&loader),
+        id.environment_id,
+        vec![entity_file.clone()],
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read(root.join("entity-provisioned")).unwrap(),
+        read_only
+    );
+    provision_initial_files(
+        &generation_handle,
+        Arc::clone(&loader),
+        id.environment_id,
+        vec![entity_file.clone()],
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    let conflict = provision_initial_files(
+        &generation_handle,
+        Arc::clone(&loader),
+        id.environment_id,
+        vec![InitialAgentFile {
+            content_hash: read_write_hash,
+            path: entity_file.path.clone(),
+            permissions: AgentFilePermissions::ReadOnly,
+            size: read_write.len() as u64,
+        }],
+    )
+    .unwrap()
+    .await
+    .unwrap_err();
+    assert!(
+        conflict
+            .to_string()
+            .contains("conflicting owner filesystem provision declarations")
+    );
     let replacement = InitialAgentFile {
         content_hash: read_only_hash,
         path: AgentFilePath::from_abs_str("/replacement-read-only").unwrap(),
@@ -4855,6 +4902,10 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
     assert!(!root.join("read-only").exists());
     assert_eq!(
         std::fs::read(root.join("replacement-read-only")).unwrap(),
+        read_only
+    );
+    assert_eq!(
+        std::fs::read(root.join("entity-provisioned")).unwrap(),
         read_only
     );
     assert_eq!(

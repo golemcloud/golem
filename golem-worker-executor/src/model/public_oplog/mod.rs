@@ -23,21 +23,25 @@ use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
 use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId};
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
+use golem_common::model::entity::EntityInvocationId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
-    CardInstalledParams, CardRevokedParams, CommittedRemoteTransactionParams,
-    CompletionDiscardedParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostStreamFrameParams,
-    InterruptedParams, JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
-    SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+    CancelledParams, CardDerivedParams, CardEventQueuedParams, CardExpiredParams,
+    CardInstallFailedParams, CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams,
+    CardTransferConfirmedParams, CardTransferStartedParams, CardTransferredParams,
+    CommittedRemoteTransactionParams, CompletionDeliveredParams, CompletionDiscardedParams,
+    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
+    EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
+    FinishSpanParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
+    LogParams, NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams,
+    PendingUpdateParams, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams,
+    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
@@ -45,7 +49,7 @@ use golem_common::model::oplog::{
     AgentMethodInvocationParameters, FallibleResultParameters, HostRequest,
     HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation, HostResponse,
     JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters, MultipartPartData,
-    MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogIndex,
+    MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogIndex, OplogScopeProjection,
     PluginInstallationDescription, ProcessOplogEntriesParameters,
     ProcessOplogEntriesResultParameters, PublicAgentInvocation, PublicAgentInvocationResult,
     PublicAttribute, PublicOplogEntry, PublicSnapshotData, PublicTypedAgentConfigEntry,
@@ -57,8 +61,8 @@ use golem_common::model::{
 };
 use golem_common::schema::agent::FieldSource;
 use golem_common::schema::{
-    InputSchema, NamedFieldType, OutputSchema, SchemaGraph, SchemaType, SchemaValue,
-    TypedSchemaValue,
+    InputSchema, IntoTypedSchemaValue, NamedFieldType, OutputSchema, SchemaGraph, SchemaType,
+    SchemaValue, TypedSchemaValue,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
@@ -71,6 +75,19 @@ pub struct PublicOplogChunk {
     pub last_index: OplogIndex,
 }
 
+/// Projects one entity invocation's transitive durable-call tree from its owner's raw oplog.
+/// Entity histories remain owner records; this is a filtered view, not a child oplog or status.
+pub fn project_entity_oplog_entries(
+    invocation_id: &EntityInvocationId,
+    entries: impl IntoIterator<Item = (OplogIndex, OplogEntry)>,
+) -> Vec<(OplogIndex, OplogEntry)> {
+    let mut projection = OplogScopeProjection::new(invocation_id.start_index());
+    entries
+        .into_iter()
+        .filter(|(index, entry)| projection.includes(*index, entry))
+        .collect()
+}
+
 pub async fn get_public_oplog_chunk(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -81,17 +98,22 @@ pub async fn get_public_oplog_chunk(
     initial_oplog_index: OplogIndex,
     count: usize,
 ) -> Result<PublicOplogChunk, String> {
+    let initial_oplog_index = initial_oplog_index.max(OplogIndex::INITIAL);
+    let last_index = oplog_service
+        .get_last_index(owned_agent_id, agent_mode)
+        .await;
+    let available = if initial_oplog_index <= last_index {
+        last_index.as_u64() - initial_oplog_index.as_u64() + 1
+    } else {
+        0
+    };
     let raw_entries = oplog_service
-        .read(
+        .read_exact(
             owned_agent_id,
             agent_mode,
             initial_oplog_index,
-            count as u64,
+            (count as u64).min(available),
         )
-        .await;
-
-    let last_index = oplog_service
-        .get_last_index(owned_agent_id, agent_mode)
         .await;
 
     let mut entries = Vec::new();
@@ -209,11 +231,9 @@ pub async fn find_component_revision_at(
     while current < start && current <= last_oplog_index {
         // NOTE: could be reading in pages for optimization
         let entry = oplog_service
-            .read(owned_agent_id, agent_mode, current, 1)
+            .read_exact(owned_agent_id, agent_mode, current, 1)
             .await
-            .iter()
-            .next()
-            .map(|(_, v)| v.clone());
+            .remove(&current);
 
         if let Some(revision) = entry.and_then(|entry| entry.specifies_component_revision()) {
             initial_component_revision = revision;
@@ -417,6 +437,15 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     start_index,
                 },
             )),
+            OplogEntry::CompletionDelivered {
+                timestamp,
+                start_index,
+            } => Ok(PublicOplogEntry::CompletionDelivered(
+                CompletionDeliveredParams {
+                    timestamp,
+                    start_index,
+                },
+            )),
             OplogEntry::AgentInvocationStarted {
                 timestamp,
                 idempotency_key,
@@ -424,6 +453,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 trace_id,
                 trace_states,
                 invocation_context,
+                wallet_pin,
             } => {
                 let invocation_payload: AgentInvocationPayload = oplog_service
                     .download_payload(owned_agent_id, agent_mode, payload)
@@ -451,6 +481,12 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     AgentInvocationStartedParams {
                         timestamp,
                         invocation: public_invocation,
+                        wallet_pin: wallet_pin.map(|pin| {
+                            golem_common::model::card::PublicInvocationWalletPin {
+                                wallet_token: pin.wallet_token,
+                                scope_card_id: pin.scope_card_id,
+                            }
+                        }),
                     },
                 ))
             }
@@ -655,6 +691,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 level,
                 context,
                 message,
+                ..
             } => Ok(PublicOplogEntry::Log(LogParams {
                 timestamp,
                 level,
@@ -742,6 +779,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 parent: parent_id,
                 linked_context_id,
                 attributes,
+                ..
             } => Ok(PublicOplogEntry::StartSpan(StartSpanParams {
                 timestamp,
                 span_id,
@@ -756,17 +794,18 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     })
                     .collect(),
             })),
-            OplogEntry::FinishSpan { timestamp, span_id } => {
-                Ok(PublicOplogEntry::FinishSpan(FinishSpanParams {
-                    timestamp,
-                    span_id,
-                }))
-            }
+            OplogEntry::FinishSpan {
+                timestamp, span_id, ..
+            } => Ok(PublicOplogEntry::FinishSpan(FinishSpanParams {
+                timestamp,
+                span_id,
+            })),
             OplogEntry::SetSpanAttribute {
                 timestamp,
                 span_id,
                 key,
                 value,
+                ..
             } => Ok(PublicOplogEntry::SetSpanAttribute(SetSpanAttributeParams {
                 timestamp,
                 span_id,
@@ -890,17 +929,22 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 queued_event_index,
                 card_id,
+                wallet_generation,
             } => Ok(PublicOplogEntry::CardRevoked(CardRevokedParams {
                 timestamp,
                 queued_event_index,
                 card_id,
+                wallet_generation,
             })),
-            OplogEntry::CardExpired { timestamp, card_id } => {
-                Ok(PublicOplogEntry::CardExpired(CardExpiredParams {
-                    timestamp,
-                    card_id,
-                }))
-            }
+            OplogEntry::CardExpired {
+                timestamp,
+                card_id,
+                wallet_generation,
+            } => Ok(PublicOplogEntry::CardExpired(CardExpiredParams {
+                timestamp,
+                card_id,
+                wallet_generation,
+            })),
             OplogEntry::HostStreamFrame {
                 timestamp,
                 parent_start_index,
@@ -920,6 +964,61 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         .map_err(|e| e.to_string())?,
                 }))
             }
+            OplogEntry::StreamRegistered { timestamp, record } => {
+                let record = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, record)
+                    .await?;
+                Ok(PublicOplogEntry::StreamRegistered(StreamRegisteredParams {
+                    timestamp,
+                    record: record
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
+                }))
+            }
+            OplogEntry::StreamItems { timestamp, record } => {
+                let record = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, record)
+                    .await?;
+                Ok(PublicOplogEntry::StreamItems(StreamItemsParams {
+                    timestamp,
+                    record: record
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
+                }))
+            }
+            OplogEntry::StreamEnd { timestamp, record } => {
+                let record = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, record)
+                    .await?;
+                Ok(PublicOplogEntry::StreamEnd(StreamEndParams {
+                    timestamp,
+                    record: record
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
+                }))
+            }
+            OplogEntry::StreamCancel { timestamp, record } => {
+                let record = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, record)
+                    .await?;
+                Ok(PublicOplogEntry::StreamCancel(StreamCancelParams {
+                    timestamp,
+                    record: record
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
+                }))
+            }
+            OplogEntry::StreamSession { timestamp, record } => {
+                let record = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, record)
+                    .await?;
+                Ok(PublicOplogEntry::StreamSession(StreamSessionParams {
+                    timestamp,
+                    record: record
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
+                }))
+            }
             OplogEntry::CardEventQueued { timestamp, event } => {
                 Ok(PublicOplogEntry::CardEventQueued(CardEventQueuedParams {
                     timestamp,
@@ -930,10 +1029,12 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 queued_event_index,
                 card,
+                wallet_generation,
             } => Ok(PublicOplogEntry::CardInstalled(CardInstalledParams {
                 timestamp,
                 queued_event_index,
                 card_id: card.card_id(),
+                wallet_generation,
             })),
             OplogEntry::CardInstallFailed {
                 timestamp,
@@ -946,6 +1047,75 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     queued_event_index,
                     card_id,
                     reason,
+                },
+            )),
+            OplogEntry::CardDerived {
+                timestamp,
+                card,
+                wallet_generation,
+            } => Ok(PublicOplogEntry::CardDerived(CardDerivedParams {
+                timestamp,
+                card_id: card.card_id(),
+                parent_ids: card.parent_ids().to_vec(),
+                wallet_generation,
+            })),
+            OplogEntry::CardTransferStarted {
+                timestamp,
+                transfer_id,
+                card_id,
+                target_holder,
+                source_wallet_generation,
+                ..
+            } => Ok(PublicOplogEntry::CardTransferStarted(
+                CardTransferStartedParams {
+                    timestamp,
+                    transfer_id,
+                    card_id,
+                    target_holder,
+                    source_wallet_generation,
+                },
+            )),
+            OplogEntry::CardTransferred {
+                timestamp,
+                transfer_id,
+                source_card_id,
+                installed_card_id,
+                target_holder,
+                target_wallet_generation,
+                ..
+            } => Ok(PublicOplogEntry::CardTransferred(CardTransferredParams {
+                timestamp,
+                transfer_id,
+                source_card_id,
+                installed_card_id,
+                target_holder,
+                target_wallet_generation,
+            })),
+            OplogEntry::CardRevokedCascade {
+                timestamp,
+                revoked_card_ids,
+                local_wallet_generation,
+                ..
+            } => Ok(PublicOplogEntry::CardRevokedCascade(
+                CardRevokedCascadeParams {
+                    timestamp,
+                    revoked_card_ids,
+                    local_wallet_generation,
+                },
+            )),
+            OplogEntry::CardTransferConfirmed {
+                timestamp,
+                transfer_id,
+                source_card_id,
+                installed_card_id,
+                target_holder,
+            } => Ok(PublicOplogEntry::CardTransferConfirmed(
+                CardTransferConfirmedParams {
+                    timestamp,
+                    transfer_id,
+                    source_card_id,
+                    installed_card_id,
+                    target_holder,
                 },
             )),
         }

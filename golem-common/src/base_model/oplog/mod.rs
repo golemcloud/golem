@@ -18,14 +18,19 @@ pub(crate) mod public_types;
 
 use crate::base_model::agent::AgentMode;
 use crate::base_model::component::ComponentRevision;
+#[cfg(feature = "full")]
+use crate::base_model::durable_stream::{
+    StreamCancelRecordV1, StreamEndRecordV1, StreamItemsRecordV1, StreamRegisteredRecordV1,
+    StreamSessionRecordV1,
+};
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::invocation_context::SpanId;
 use crate::base_model::regions::OplogRegion;
 use crate::base_model::{AgentId, IdempotencyKey, OplogIndex, Timestamp, TransactionId};
 use crate::model::account::AccountId;
-use crate::model::card::CardId;
 #[cfg(feature = "full")]
-use crate::model::card::StoredCard;
+use crate::model::card::{CardHolder, InvocationWalletPin, StoredCard};
+use crate::model::card::{CardId, PublicCardHolder, PublicInvocationWalletPin};
 use crate::oplog_entry;
 use crate::schema::TypedSchemaValue;
 pub use public_types::*;
@@ -180,6 +185,7 @@ oplog_entry! {
         }
     },
     /// The agent has been invoked
+    #[desert(evolution(FieldAdded("wallet_pin", None::<InvocationWalletPin>)))]
     AgentInvocationStarted {
         hint: false
         wit_raw_type: "raw-agent-invocation-started-parameters"
@@ -190,9 +196,11 @@ oplog_entry! {
             trace_id: TraceId,
             trace_states: Vec<String>,
             invocation_context: Vec<SpanData>,
+            wallet_pin: Option<InvocationWalletPin>,
         }
         public {
             invocation: PublicAgentInvocation,
+            wallet_pin: Option<PublicInvocationWalletPin>,
         }
     },
     /// The agent has completed an invocation
@@ -422,6 +430,7 @@ oplog_entry! {
         wit_raw_type: "log-parameters"
         wit_public_type: "log-parameters"
         raw {
+            parent_start_index: Option<OplogIndex>,
             level: LogLevel,
             context: String,
             message: String,
@@ -494,6 +503,7 @@ oplog_entry! {
         wit_raw_type: "start-span-parameters"
         wit_public_type: "start-span-parameters"
         raw {
+            parent_start_index: Option<OplogIndex>,
             span_id: SpanId,
             parent: Option<SpanId>,
             linked_context_id: Option<SpanId>,
@@ -512,6 +522,7 @@ oplog_entry! {
         wit_raw_type: "finish-span-parameters"
         wit_public_type: "finish-span-parameters"
         raw {
+            parent_start_index: Option<OplogIndex>,
             span_id: SpanId,
         }
         public {
@@ -524,6 +535,7 @@ oplog_entry! {
         wit_raw_type: "set-span-attribute-parameters"
         wit_public_type: "set-span-attribute-parameters"
         raw {
+            parent_start_index: Option<OplogIndex>,
             span_id: SpanId,
             key: String,
             value: AttributeValue,
@@ -599,6 +611,7 @@ oplog_entry! {
         }
     },
     /// A snapshot of the agent's state
+    #[desert(evolution(FieldAdded("wallet_generation", 0_u64)))]
     Snapshot {
         hint: true
         wit_raw_type: "raw-snapshot-parameters"
@@ -607,6 +620,7 @@ oplog_entry! {
             data: payload::OplogPayload<Vec<u8>>,
             mime_type: String,
             active_cards: Vec<StoredCard>,
+            wallet_generation: u64,
         }
         public {
             data: PublicSnapshotData
@@ -669,6 +683,7 @@ oplog_entry! {
         }
     },
     /// Records successful installation of a permission card into the agent wallet.
+    #[desert(evolution(FieldAdded("wallet_generation", None::<u64>)))]
     CardInstalled {
         hint: true
         wit_raw_type: "raw-card-installed-parameters"
@@ -676,10 +691,12 @@ oplog_entry! {
         raw {
             queued_event_index: Option<OplogIndex>,
             card: StoredCard,
+            wallet_generation: Option<u64>,
         }
         public {
             queued_event_index: Option<OplogIndex>,
             card_id: CardId,
+            wallet_generation: Option<u64>,
         }
     },
     /// Records failed installation of a permission card into the agent wallet.
@@ -699,6 +716,7 @@ oplog_entry! {
         }
     },
     /// Records that a permission card used by the agent has been revoked.
+    #[desert(evolution(FieldAdded("wallet_generation", None::<u64>)))]
     CardRevoked {
         hint: true
         wit_raw_type: "card-revoked-parameters"
@@ -706,22 +724,157 @@ oplog_entry! {
         raw {
             queued_event_index: OplogIndex,
             card_id: CardId,
+            wallet_generation: Option<u64>,
         }
         public {
             queued_event_index: OplogIndex,
             card_id: CardId,
+            wallet_generation: Option<u64>,
         }
     },
     /// Records that a permission card used by the agent has expired.
+    #[desert(evolution(FieldAdded("wallet_generation", None::<u64>)))]
     CardExpired {
         hint: true
         wit_raw_type: "card-expired-parameters"
         wit_public_type: "card-expired-parameters"
         raw {
             card_id: CardId,
+            wallet_generation: Option<u64>,
         }
         public {
             card_id: CardId,
+            wallet_generation: Option<u64>,
+        }
+    },
+    /// Records a permission card derived by the running agent.
+    #[desert(evolution(FieldAdded("wallet_generation", None::<u64>)))]
+    CardDerived {
+        hint: true
+        wit_raw_type: "raw-card-derived-parameters"
+        wit_public_type: "card-derived-parameters"
+        raw {
+            card: StoredCard,
+            wallet_generation: Option<u64>,
+        }
+        public {
+            card_id: CardId,
+            parent_ids: Vec<CardId>,
+            wallet_generation: Option<u64>,
+        }
+    },
+    /// Records a source wallet's durable permission-card transfer intent.
+    ///
+    /// This entry is written only to the source agent's oplog. `source_holder` is absent only for
+    /// legacy entries written before source ownership was captured; the owning oplog identifies
+    /// the source in that case. `source_wallet_generation`, when present, is the source wallet's
+    /// new generation after recording the pending transfer.
+    /// A concrete source card leaves the source wallet at this point, while a polymorphic source
+    /// remains so that the target can receive a monomorphic child. Retry identity and payload are
+    /// pinned by the preceding queued transfer event. No entry may advance another wallet's
+    /// generation.
+    #[desert(evolution(
+        FieldAdded("source_holder", None::<CardHolder>),
+        FieldAdded("source_wallet_generation", None::<u64>)
+    ))]
+    CardTransferStarted {
+        hint: true
+        wit_raw_type: "raw-card-transfer-started-parameters"
+        wit_public_type: "card-transfer-started-parameters"
+        raw {
+            transfer_id: Uuid,
+            card_id: CardId,
+            source_holder: Option<CardHolder>,
+            target_holder: CardHolder,
+            source_wallet_generation: Option<u64>,
+        }
+        public {
+            /// Identifies a transfer intent recorded by its source agent.
+            transfer_id: Uuid,
+            card_id: CardId,
+            target_holder: PublicCardHolder,
+            /// New generation of the source wallet that owns this oplog entry.
+            source_wallet_generation: Option<u64>,
+        }
+    },
+    /// Records a target wallet's durable admission of a transferred permission card.
+    ///
+    /// This entry is written only to the target agent's oplog. `source_card_id` is absent only for
+    /// legacy entries written before source identity was captured. `target_wallet_generation`,
+    /// when present, is the target wallet's new generation after admission. No entry may advance
+    /// another wallet's generation.
+    #[desert(evolution(
+        FieldAdded("source_card_id", None::<CardId>),
+        FieldAdded("target_wallet_generation", None::<u64>)
+    ))]
+    CardTransferred {
+        hint: true
+        wit_raw_type: "raw-card-transferred-parameters"
+        wit_public_type: "card-transferred-parameters"
+        raw {
+            transfer_id: Uuid,
+            source_card_id: Option<CardId>,
+            installed_card_id: CardId,
+            target_holder: CardHolder,
+            card: StoredCard,
+            target_wallet_generation: Option<u64>,
+        }
+        public {
+            /// Identifies a target admission recorded by the target agent.
+            transfer_id: Uuid,
+            /// Source card identity, absent only on legacy entries.
+            source_card_id: Option<CardId>,
+            installed_card_id: CardId,
+            target_holder: PublicCardHolder,
+            /// New generation of the target wallet that owns this oplog entry.
+            target_wallet_generation: Option<u64>,
+        }
+    },
+    /// Records an atomic revocation of a permission-card DAG subtree.
+    ///
+    /// `affected_wallets` describes cascade impact but does not authorize this entry to mutate
+    /// those wallets. `local_wallet_generation`, when present, is the new generation of the wallet
+    /// owning this oplog. Each other affected agent records its own local entry.
+    #[desert(evolution(
+        FieldRemoved("generation_bumps"),
+        FieldAdded("local_wallet_generation", None::<u64>)
+    ))]
+    CardRevokedCascade {
+        hint: true
+        wit_raw_type: "raw-card-revoked-cascade-parameters"
+        wit_public_type: "card-revoked-cascade-parameters"
+        raw {
+            revoked_card_ids: Vec<CardId>,
+            affected_wallets: Vec<CardHolder>,
+            local_wallet_generation: Option<u64>,
+        }
+        public {
+            revoked_card_ids: Vec<CardId>,
+            /// New generation of the wallet that owns this oplog entry.
+            local_wallet_generation: Option<u64>,
+        }
+    },
+    /// Records the source wallet's durable receipt of a target admission.
+    ///
+    /// This terminal entry is written only to the source agent's oplog after the target's durable
+    /// transfer receipt is acknowledged. It closes the matching pending transfer without changing
+    /// target state or any wallet generation.
+    CardTransferConfirmed {
+        hint: true
+        wit_raw_type: "raw-card-transfer-confirmed-parameters"
+        wit_public_type: "card-transfer-confirmed-parameters"
+        raw {
+            transfer_id: Uuid,
+            source_card_id: CardId,
+            installed_card_id: CardId,
+            target_holder: CardHolder,
+        }
+        public {
+            /// Identifies a target-admission receipt recorded by the source agent.
+            transfer_id: Uuid,
+            source_card_id: CardId,
+            installed_card_id: CardId,
+            target_holder: PublicCardHolder,
         }
     },
     /// A durably recorded frame of a host-owned stream (e.g. the outgoing request body of a
@@ -748,6 +901,67 @@ oplog_entry! {
             payload: TypedSchemaValue,
         }
     },
+    /// Registers a durable stream before its handle can be observed.
+    StreamRegistered {
+        hint: true
+        wit_raw_type: "raw-durable-stream-record-parameters"
+        wit_public_type: "durable-stream-record-parameters"
+        raw {
+            record: payload::OplogPayload<StreamRegisteredRecordV1>,
+        }
+        public {
+            record: TypedSchemaValue,
+        }
+    },
+    /// Records one complete stream value or an ordered packed-u8 batch before publication.
+    StreamItems {
+        hint: true
+        wit_raw_type: "raw-durable-stream-record-parameters"
+        wit_public_type: "durable-stream-record-parameters"
+        raw {
+            record: payload::OplogPayload<StreamItemsRecordV1>,
+        }
+        public {
+            record: TypedSchemaValue,
+        }
+    },
+    /// Records a stream's unique successful or error-context terminal.
+    StreamEnd {
+        hint: true
+        wit_raw_type: "raw-durable-stream-record-parameters"
+        wit_public_type: "durable-stream-record-parameters"
+        raw {
+            record: payload::OplogPayload<StreamEndRecordV1>,
+        }
+        public {
+            record: TypedSchemaValue,
+        }
+    },
+    /// Records a stream's unique role-aware cancellation terminal.
+    StreamCancel {
+        hint: true
+        wit_raw_type: "raw-durable-stream-record-parameters"
+        wit_public_type: "durable-stream-record-parameters"
+        raw {
+            record: payload::OplogPayload<StreamCancelRecordV1>,
+        }
+        public {
+            record: TypedSchemaValue,
+        }
+    },
+    /// Records durable Stream Session preparation, attachment, ingress, consumer-journal, result,
+    /// and completion facts.
+    StreamSession {
+        hint: true
+        wit_raw_type: "raw-durable-stream-record-parameters"
+        wit_public_type: "durable-stream-record-parameters"
+        raw {
+            record: payload::OplogPayload<StreamSessionRecordV1>,
+        }
+        public {
+            record: TypedSchemaValue,
+        }
+    },
     /// Marks that the successful completion (`End`) of the durable host call started by the
     /// `Start` at `start_index` was persisted, but its response was never delivered to the
     /// guest: the guest dropped the call's completion future (e.g. as the loser of a `select!`)
@@ -770,4 +984,23 @@ oplog_entry! {
             start_index: OplogIndex,
         }
     },
+    /// Marks the point where the successful completion (`End`) of the durable host call started
+    /// by the `Start` at `start_index` was delivered to the guest. Unlike `End`, this is a guest
+    /// execution boundary: replay may prepare the recorded host result earlier, but must not hand
+    /// it to the guest until this marker, so callbacks run in their recorded order.
+    ///
+    /// The marker is a hint entry and always lies physically after its `End`. Replay indexes it
+    /// before resolving the `End`; only the matching completion may consume it at its physical
+    /// position, and later oplog entries remain blocked until the result crosses to the guest.
+    CompletionDelivered {
+        hint: true
+        wit_raw_type: "raw-completion-delivered-parameters"
+        wit_public_type: "completion-delivered-parameters"
+        raw {
+            start_index: OplogIndex,
+        }
+        public {
+            start_index: OplogIndex,
+        }
+    }
 }

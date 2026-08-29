@@ -234,7 +234,8 @@ pub fn create_context(
     suspend_threshold: Duration,
 ) -> Result<(WasiCtx, IoCtx, ResourceTable), anyhow::Error> {
     let table = ResourceTable::new();
-    let (wasi, io_ctx) = WasiCtxBuilder::new()
+    let mut builder = WasiCtxBuilder::new();
+    let (wasi, io_ctx) = builder
         .args(args)
         .stdin(stdin)
         .stdout(stdout)

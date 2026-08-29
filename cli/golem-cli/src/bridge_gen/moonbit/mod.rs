@@ -406,6 +406,7 @@ impl MoonBitBridgeGenerator {
                   "golemcloud/golem_sdk/interface/wasi/clocks/system-clock" @systemClock,
                   "golemcloud/golem_sdk/rpc",
                   "golemcloud/golem_sdk/schema_model" @model,
+                  "golemcloud/golem_sdk/schema_model_host" @model_host,
                 }}
                 "#},
         };
@@ -1448,7 +1449,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 writer.indent();
                 writer.line("Some(tree) => {");
                 writer.indent();
-                writer.line("let value = @model.schema_value_from_wit(tree) catch {");
+                writer.line("let value = @model_host.schema_value_from_wit(tree) catch {");
                 writer.indent();
                 writer.line(format!(
                     "error => raise @common.AgentError::InvalidType({} + error.to_string())",
@@ -2470,6 +2471,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => {
                 bail!(
@@ -2621,6 +2623,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => {
                 bail!(
@@ -2791,6 +2794,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => bail!(
                 "Cannot emit MoonBit type reference for unsupported schema variant: {resolved:?}"
@@ -2922,6 +2926,12 @@ fn moonbit_string_literal(value: &str) -> String {
     }
     escaped.push('"');
     escaped
+}
+
+fn moonbit_char_option_literal(value: Option<char>) -> String {
+    value
+        .map(|value| format!("Some('\\u{{{:x}}}')", value as u32))
+        .unwrap_or_else(|| "None".to_string())
 }
 
 /// Whether a (ref-resolved) schema type becomes a generated MoonBit definition
@@ -3138,6 +3148,10 @@ fn emit_schema_type(ty: &SchemaType) -> String {
         QuotaToken { spec, .. } => format!(
             "@model.QuotaToken(@types.QuotaTokenSpec::{{ resource_name: {} }})",
             mb_opt_str(spec.resource_name.as_deref())
+        ),
+        PermissionCard { spec, .. } => format!(
+            "@model.PermissionCard(@types.PermissionCardSpec::{{ polymorphic: {} }})",
+            spec.polymorphic
         ),
         Future { inner, .. } => format!("@model.Future({})", mb_opt_type(inner.as_deref())),
         Stream { inner, .. } => format!("@model.Stream({})", mb_opt_type(inner.as_deref())),

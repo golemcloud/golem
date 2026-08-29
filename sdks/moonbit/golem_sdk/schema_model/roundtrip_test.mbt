@@ -8,6 +8,23 @@
 //     uncommitted reservation, structural cycle).
 
 ///|
+fn test_resource_drops() -> SchemaValueResourceDrops {
+  {
+    drop_secret: fn(_) {  },
+    drop_quota_token: fn(_) {  },
+    drop_stream: fn(_) {  },
+    drop_native_stream: fn(_) {  },
+  }
+}
+
+///|
+fn decode_test_value(
+  value : @types.SchemaValueTree,
+) -> SchemaValue raise SchemaModelError {
+  schema_value_from_wit(value, test_resource_drops())
+}
+
+///|
 /// Round-trip a standalone type by wrapping it in a defs-less graph.
 fn rt_type(st : SchemaType) -> SchemaType raise {
   schema_graph_from_wit(schema_graph_to_wit({ defs: [], root: st })).root
@@ -15,7 +32,7 @@ fn rt_type(st : SchemaType) -> SchemaType raise {
 
 ///|
 fn rt_value(v : SchemaValue) -> SchemaValue raise {
-  schema_value_from_wit(schema_value_to_wit(v))
+  decode_test_value(schema_value_to_wit(v))
 }
 
 ///|
@@ -373,7 +390,7 @@ test "decode rejects a structural cycle in type nodes" {
 ///|
 test "decode rejects out-of-range value node index" {
   let bad : @types.SchemaValueTree = { value_nodes: [], root: 3 }
-  let r = try? schema_value_from_wit(bad)
+  let r = try? decode_test_value(bad)
   guard r is Err(DecodeError(msg)) else {
     fail("expected DecodeError, got \{r}")
   }
@@ -453,6 +470,7 @@ test "semantic and capability types round-trip" {
     category: Some("api-key"),
   }
   let quota_s : @types.QuotaTokenSpec = { resource_name: Some("cpu") }
+  let card_s : @types.PermissionCardSpec = { polymorphic: true }
   let branch_a : UnionBranch = {
     tag: "a",
     body: schema_type(S32(None)),
@@ -474,6 +492,7 @@ test "semantic and capability types round-trip" {
       field("quantity", schema_type(Quantity(qty_s))),
       field("secret", schema_type(Secret(secret_s))),
       field("quota", schema_type(QuotaToken(quota_s))),
+      field("card", schema_type(PermissionCard(card_s))),
       field("future_some", schema_type(Future(Some(schema_type(S32(None)))))),
       field("future_none", schema_type(Future(None))),
       field("stream_some", schema_type(Stream(Some(schema_type(String))))),
@@ -525,7 +544,7 @@ test "decode rejects out-of-range value child index" {
     value_nodes: [@types.RecordValue([5])],
     root: 0,
   }
-  let r = try? schema_value_from_wit(bad)
+  let r = try? decode_test_value(bad)
   guard r is Err(DecodeError(msg)) else {
     fail("expected DecodeError, got \{r}")
   }
@@ -538,7 +557,7 @@ test "decode rejects a value structural cycle" {
     value_nodes: [@types.ListValue([0])],
     root: 0,
   }
-  let r = try? schema_value_from_wit(bad)
+  let r = try? decode_test_value(bad)
   guard r is Err(DecodeError(msg)) else {
     fail("expected DecodeError, got \{r}")
   }
@@ -559,7 +578,7 @@ test "datetime nanoseconds must be < 1e9 (encode + decode)" {
     ],
     root: 0,
   }
-  let rd = try? schema_value_from_wit(bad)
+  let rd = try? decode_test_value(bad)
   guard rd is Err(DecodeError(dm)) else {
     fail("expected DecodeError, got \{rd}")
   }
@@ -592,7 +611,7 @@ test "narrow integer values are range-checked on decode" {
   ]
   for node in bad {
     let tree : @types.SchemaValueTree = { value_nodes: [node], root: 0 }
-    let r = try? schema_value_from_wit(tree)
+    let r = try? decode_test_value(tree)
     guard r is Err(DecodeError(_)) else {
       fail("expected DecodeError for out-of-range value, got \{r}")
     }
@@ -617,7 +636,7 @@ test "secret value encodes to a handle node and decodes to a fresh handle" {
   guard wit.value_nodes[wit.root] is @types.SecretValue(_) else {
     fail("expected a secret-value wire node")
   }
-  guard schema_value_from_wit(wit) is Secret(decoded) else {
+  guard decode_test_value(wit) is Secret(decoded) else {
     fail("expected a decoded secret value")
   }
   assert_true(decoded.is_present())
@@ -657,7 +676,7 @@ test "quota-token value encodes to a handle node and decodes to a fresh handle" 
     fail("expected a quota-token-handle wire node")
   }
   // Decoding lifts the owned handle back into a present holder.
-  guard schema_value_from_wit(wit) is QuotaToken(decoded) else {
+  guard decode_test_value(wit) is QuotaToken(decoded) else {
     fail("expected a decoded quota-token value")
   }
   assert_true(decoded.is_present())
@@ -699,6 +718,33 @@ test "encode error after a quota-token does not consume the handle" {
 }
 
 ///|
+test "stream alias preflight does not transfer the earlier stream" {
+  let handle = GuestSchemaValueStreamHandle::from_wrapped(
+    @types.SchemaValueStream::SchemaValueStream(10),
+  )
+  let result = try? schema_value_to_wit(Tuple([Stream(handle), Stream(handle)]))
+  guard result is Err(EncodeError(message)) else {
+    fail("expected aliased stream EncodeError")
+  }
+  assert_true(message.contains("more than once"))
+  assert_true(handle.is_present())
+}
+
+///|
+test "encode rejects two holders wrapping the same stream endpoint" {
+  let raw = @types.SchemaValueStream::SchemaValueStream(13)
+  let first = GuestSchemaValueStreamHandle::from_wrapped(raw)
+  let second = GuestSchemaValueStreamHandle::from_wrapped(raw)
+  let result = try? schema_value_to_wit(Tuple([Stream(first), Stream(second)]))
+  guard result is Err(EncodeError(message)) else {
+    fail("expected duplicate stream endpoint EncodeError")
+  }
+  assert_true(message.contains("more than once"))
+  assert_true(first.is_present())
+  assert_true(second.is_present())
+}
+
+///|
 test "encode rejects two distinct holders wrapping the same raw handle" {
   let raw = @types.QuotaToken::QuotaToken(11)
   let a = GuestQuotaTokenHandle::new(raw)
@@ -723,7 +769,7 @@ test "decode rejects the same raw handle in two different nodes" {
     ],
     root: 2,
   }
-  let r = try? schema_value_from_wit(tree)
+  let r = try? schema_value_from_wit(tree, test_resource_drops())
   guard r is Err(DecodeError(dm)) else {
     fail("expected DecodeError, got \{r}")
   }
@@ -740,7 +786,7 @@ test "decode rejects a handle node referenced from two places" {
     ],
     root: 1,
   }
-  let r = try? schema_value_from_wit(tree)
+  let r = try? schema_value_from_wit(tree, test_resource_drops())
   guard r is Err(DecodeError(dm)) else {
     fail("expected DecodeError, got \{r}")
   }
@@ -757,11 +803,122 @@ test "decode rejects a handle node unreachable from the root" {
     ],
     root: 0,
   }
-  let r = try? schema_value_from_wit(tree)
+  let r = try? schema_value_from_wit(tree, test_resource_drops())
   guard r is Err(DecodeError(dm)) else {
     fail("expected DecodeError, got \{r}")
   }
   assert_true(dm.contains("not referenced from the root"))
+}
+
+///|
+/// Build an opaque permission-card handle around a fake resource index. The
+/// handle is used only by the host-free schema codec tests.
+fn fake_permission_card_handle(index : Int) -> GuestPermissionCardHandle {
+  GuestPermissionCardHandle::new(@types.PermissionCard::PermissionCard(index))
+}
+
+///|
+test "permission-card value encodes to a handle node and decodes to a fresh handle" {
+  let handle = fake_permission_card_handle(20)
+  let wit = schema_value_to_wit(PermissionCard(handle))
+  assert_false(handle.is_present())
+  guard wit.value_nodes[wit.root] is @types.PermissionCardHandle(_) else {
+    fail("expected a permission-card-handle wire node")
+  }
+  guard schema_value_from_wit(wit, test_resource_drops())
+    is PermissionCard(decoded) else {
+    fail("expected a decoded permission-card value")
+  }
+  assert_true(decoded.is_present())
+}
+
+///|
+test "permission-card preflight rejects consumed and duplicate handles without moving them" {
+  let consumed = fake_permission_card_handle(21)
+  let _ = consumed.take()
+  let consumed_result = try? schema_value_to_wit(PermissionCard(consumed))
+  guard consumed_result is Err(EncodeError(consumed_message)) else {
+    fail("expected EncodeError, got \{consumed_result}")
+  }
+  assert_true(consumed_message.contains("permission-card"))
+
+  let duplicate = fake_permission_card_handle(22)
+  let duplicate_result = try? schema_value_to_wit(
+    Tuple([PermissionCard(duplicate), PermissionCard(duplicate)]),
+  )
+  guard duplicate_result is Err(EncodeError(duplicate_message)) else {
+    fail("expected EncodeError, got \{duplicate_result}")
+  }
+  assert_true(duplicate_message.contains("permission-card"))
+  assert_true(duplicate.is_present())
+}
+
+///|
+test "permission-card preflight rejects distinct holders for one raw handle" {
+  let raw = @types.PermissionCard::PermissionCard(23)
+  let a = GuestPermissionCardHandle::new(raw)
+  let b = GuestPermissionCardHandle::new(raw)
+  let result = try? schema_value_to_wit(
+    Tuple([PermissionCard(a), PermissionCard(b)]),
+  )
+  guard result is Err(EncodeError(message)) else {
+    fail("expected EncodeError, got \{result}")
+  }
+  assert_true(message.contains("more than once"))
+  assert_true(a.is_present() && b.is_present())
+}
+
+///|
+test "permission-card decode rejects duplicate raw and repeated handle nodes" {
+  let raw = @types.PermissionCard::PermissionCard(24)
+  let duplicate_raw : @types.SchemaValueTree = {
+    value_nodes: [
+      @types.PermissionCardHandle(raw),
+      @types.PermissionCardHandle(raw),
+      @types.TupleValue([0, 1]),
+    ],
+    root: 2,
+  }
+  let duplicate_raw_result = try? schema_value_from_wit(
+    duplicate_raw,
+    test_resource_drops(),
+  )
+  guard duplicate_raw_result is Err(DecodeError(duplicate_raw_message)) else {
+    fail("expected DecodeError, got \{duplicate_raw_result}")
+  }
+  assert_true(duplicate_raw_message.contains("more than one handle node"))
+
+  let repeated_node : @types.SchemaValueTree = {
+    value_nodes: [
+      @types.PermissionCardHandle(@types.PermissionCard::PermissionCard(25)),
+      @types.TupleValue([0, 0]),
+    ],
+    root: 1,
+  }
+  let repeated_node_result = try? schema_value_from_wit(
+    repeated_node,
+    test_resource_drops(),
+  )
+  guard repeated_node_result is Err(DecodeError(repeated_node_message)) else {
+    fail("expected DecodeError, got \{repeated_node_result}")
+  }
+  assert_true(repeated_node_message.contains("more than once"))
+}
+
+///|
+test "permission-card decode rejects an unreachable handle node" {
+  let tree : @types.SchemaValueTree = {
+    value_nodes: [
+      @types.TupleValue([]),
+      @types.PermissionCardHandle(@types.PermissionCard::PermissionCard(26)),
+    ],
+    root: 0,
+  }
+  let result = try? schema_value_from_wit(tree, test_resource_drops())
+  guard result is Err(DecodeError(message)) else {
+    fail("expected DecodeError, got \{result}")
+  }
+  assert_true(message.contains("not referenced from the root"))
 }
 
 ///|

@@ -21,7 +21,8 @@ use crate::schema::schema_type::{
     UnionBranch, UrlRestrictions, VariantCaseType,
 };
 use crate::schema::schema_value::{
-    QuotaTokenVariantValue, ResultValuePayload, SchemaValue, SecretVariantValue,
+    PermissionCardVariantValue, QuotaTokenVariantValue, ResultValuePayload, SchemaValue,
+    SecretVariantValue,
 };
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -44,12 +45,21 @@ pub enum EncodeError {
     /// value tree through the pure (resolver-less) path. Secrets cross the
     /// WASM boundary only as owned handles.
     SecretNotTransportable,
+    /// A [`SchemaValue::PermissionCard`] snapshot was encountered while encoding
+    /// a value tree through the pure (resolver-less) path. Permission cards
+    /// cross the WASM boundary only as owned handles, which requires the
+    /// host-side [`encode_value_with`] entry point and a
+    /// `PermissionCardResolver`.
+    PermissionCardNotTransportable,
     /// The host `QuotaTokenResolver` failed to materialize an owned handle from
     /// a snapshot.
     QuotaResolver(String),
     /// The host `SecretResolver` failed to materialize an owned handle from a
     /// snapshot.
     SecretResolver(String),
+    /// The host `PermissionCardResolver` failed to materialize an owned handle
+    /// from a snapshot.
+    PermissionCardResolver(String),
     /// (Guest) A quota-token value was encoded after its owned handle had
     /// already been transferred out by an earlier encode. An owned
     /// `quota-token` can only be lowered once.
@@ -57,6 +67,9 @@ pub enum EncodeError {
     /// (Guest) A secret value was encoded after its owned handle had already
     /// been transferred out by an earlier encode.
     SecretAlreadyConsumed,
+    /// (Guest) A permission-card value was encoded after its owned handle had
+    /// already been transferred out by an earlier encode.
+    PermissionCardAlreadyConsumed,
     /// (Guest) The same owned quota-token handle appeared more than once in a
     /// single value tree. An owned `quota-token` cannot be lowered twice; split
     /// the token first if two independent capabilities are required.
@@ -64,6 +77,20 @@ pub enum EncodeError {
     /// (Guest) The same owned secret handle appeared more than once in a single
     /// value tree.
     AliasedSecretHandle,
+    /// A live stream was used at a materializing boundary rather than a
+    /// stream-aware invocation boundary.
+    StreamNotTransportable,
+    /// A stream endpoint was already transferred by an earlier encode.
+    StreamAlreadyConsumed,
+    /// The same affine stream leaf appeared more than once in one value tree.
+    AliasedStream,
+    /// A guest-native reader must first be wrapped asynchronously.
+    StreamRequiresAsyncEncoding,
+    /// The host failed to transfer a native reader into a schema-value-stream resource.
+    StreamResolver(String),
+    /// (Guest) The same owned permission-card handle appeared more than once in
+    /// a single value tree. An owned `permission-card` cannot be lowered twice.
+    AliasedPermissionCardHandle,
 }
 
 impl Display for EncodeError {
@@ -79,11 +106,18 @@ impl Display for EncodeError {
                 f,
                 "secret values can only be encoded through a secret resolver-aware path"
             ),
+            EncodeError::PermissionCardNotTransportable => write!(
+                f,
+                "permission-card values can only be encoded through the host resolver-aware path"
+            ),
             EncodeError::QuotaResolver(msg) => {
                 write!(f, "quota-token handle could not be created: {msg}")
             }
             EncodeError::SecretResolver(msg) => {
                 write!(f, "secret handle could not be created: {msg}")
+            }
+            EncodeError::PermissionCardResolver(msg) => {
+                write!(f, "permission-card handle could not be created: {msg}")
             }
             EncodeError::QuotaTokenAlreadyConsumed => write!(
                 f,
@@ -92,6 +126,10 @@ impl Display for EncodeError {
             EncodeError::SecretAlreadyConsumed => write!(
                 f,
                 "secret handle was already transferred; an owned secret can only be sent once"
+            ),
+            EncodeError::PermissionCardAlreadyConsumed => write!(
+                f,
+                "permission-card handle was already transferred; an owned permission-card can only be sent once"
             ),
             EncodeError::AliasedQuotaTokenHandle => write!(
                 f,
@@ -103,6 +141,30 @@ impl Display for EncodeError {
                     "the same secret handle appeared more than once in one value tree"
                 )
             }
+            EncodeError::StreamNotTransportable => write!(
+                f,
+                "live streams cannot cross this materializing value boundary"
+            ),
+            EncodeError::StreamAlreadyConsumed => {
+                write!(f, "schema value stream was already transferred")
+            }
+            EncodeError::AliasedStream => {
+                write!(
+                    f,
+                    "the same affine stream appeared more than once in one value tree"
+                )
+            }
+            EncodeError::StreamRequiresAsyncEncoding => write!(
+                f,
+                "a native schema value stream requires the asynchronous guest encoder"
+            ),
+            EncodeError::StreamResolver(message) => {
+                write!(f, "schema value stream could not be transferred: {message}")
+            }
+            EncodeError::AliasedPermissionCardHandle => write!(
+                f,
+                "the same permission-card handle appeared more than once in one value tree"
+            ),
         }
     }
 }
@@ -178,6 +240,8 @@ pub fn encode_value(value: &SchemaValue) -> Result<wire::SchemaValueTree, Encode
         value,
         &mut |_snapshot| Err(EncodeError::QuotaTokenNotTransportable),
         &mut |_snapshot| Err(EncodeError::SecretNotTransportable),
+        &mut |_stream| Err(EncodeError::StreamNotTransportable),
+        &mut |_snapshot| Err(EncodeError::PermissionCardNotTransportable),
     )
 }
 
@@ -209,7 +273,36 @@ pub fn encode_value(value: &SchemaValue) -> Result<wire::SchemaValueTree, Encode
             let owned = handle.take().ok_or(EncodeError::SecretAlreadyConsumed)?;
             Ok(wire::SchemaValueNode::SecretValue(owned))
         },
+        &mut |stream| {
+            let wrapped = stream
+                .take_wrapped()
+                .ok_or(EncodeError::StreamRequiresAsyncEncoding)?;
+            Ok(wire::SchemaValueNode::StreamValue(wrapped))
+        },
+        &mut |handle| {
+            let owned = handle
+                .take()
+                .ok_or(EncodeError::PermissionCardAlreadyConsumed)?;
+            Ok(wire::SchemaValueNode::PermissionCardHandle(owned))
+        },
     )
+}
+
+/// Encode a guest value tree containing arbitrary recursive stream leaves.
+/// Native readers are wrapped without reading from them before the normal
+/// failure-atomic affine lowering pass transfers all resources at once.
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub async fn encode_value_async(value: &SchemaValue) -> Result<wire::SchemaValueTree, EncodeError> {
+    preflight_guest_handles(value)?;
+    let mut streams = Vec::new();
+    collect_streams(value, &mut streams);
+    for stream in streams {
+        stream
+            .ensure_wrapped()
+            .await
+            .map_err(|_| EncodeError::StreamAlreadyConsumed)?;
+    }
+    encode_value(value)
 }
 
 /// Walk a value tree and verify that every quota-token handle is still present
@@ -221,6 +314,8 @@ fn preflight_guest_handles(value: &SchemaValue) -> Result<(), EncodeError> {
         value: &SchemaValue,
         seen_quota: &mut std::collections::HashSet<*const ()>,
         seen_secret: &mut std::collections::HashSet<*const ()>,
+        seen_stream: &mut std::collections::HashSet<*const ()>,
+        seen_permission_card: &mut std::collections::HashSet<*const ()>,
     ) -> Result<(), EncodeError> {
         match value {
             SchemaValue::QuotaToken(handle) => {
@@ -241,9 +336,33 @@ fn preflight_guest_handles(value: &SchemaValue) -> Result<(), EncodeError> {
                 }
                 Ok(())
             }
+            SchemaValue::Stream(stream) => {
+                if !stream.is_present() {
+                    return Err(EncodeError::StreamAlreadyConsumed);
+                }
+                if !seen_stream.insert(stream.cell_id()) {
+                    return Err(EncodeError::AliasedStream);
+                }
+                Ok(())
+            }
+            SchemaValue::PermissionCard(handle) => {
+                if !handle.is_present() {
+                    return Err(EncodeError::PermissionCardAlreadyConsumed);
+                }
+                if !seen_permission_card.insert(handle.cell_id()) {
+                    return Err(EncodeError::AliasedPermissionCardHandle);
+                }
+                Ok(())
+            }
             SchemaValue::Record { fields } => {
                 for f in fields {
-                    walk(f, seen_quota, seen_secret)?;
+                    walk(
+                        f,
+                        seen_quota,
+                        seen_secret,
+                        seen_stream,
+                        seen_permission_card,
+                    )?;
                 }
                 Ok(())
             }
@@ -251,26 +370,56 @@ fn preflight_guest_handles(value: &SchemaValue) -> Result<(), EncodeError> {
             | SchemaValue::List { elements }
             | SchemaValue::FixedList { elements } => {
                 for e in elements {
-                    walk(e, seen_quota, seen_secret)?;
+                    walk(
+                        e,
+                        seen_quota,
+                        seen_secret,
+                        seen_stream,
+                        seen_permission_card,
+                    )?;
                 }
                 Ok(())
             }
             SchemaValue::Variant(p) => {
                 if let Some(payload) = &p.payload {
-                    walk(payload, seen_quota, seen_secret)?;
+                    walk(
+                        payload,
+                        seen_quota,
+                        seen_secret,
+                        seen_stream,
+                        seen_permission_card,
+                    )?;
                 }
                 Ok(())
             }
             SchemaValue::Map { entries } => {
                 for (k, v) in entries {
-                    walk(k, seen_quota, seen_secret)?;
-                    walk(v, seen_quota, seen_secret)?;
+                    walk(
+                        k,
+                        seen_quota,
+                        seen_secret,
+                        seen_stream,
+                        seen_permission_card,
+                    )?;
+                    walk(
+                        v,
+                        seen_quota,
+                        seen_secret,
+                        seen_stream,
+                        seen_permission_card,
+                    )?;
                 }
                 Ok(())
             }
             SchemaValue::Option { inner } => {
                 if let Some(inner) = inner {
-                    walk(inner, seen_quota, seen_secret)?;
+                    walk(
+                        inner,
+                        seen_quota,
+                        seen_secret,
+                        seen_stream,
+                        seen_permission_card,
+                    )?;
                 }
                 Ok(())
             }
@@ -279,18 +428,86 @@ fn preflight_guest_handles(value: &SchemaValue) -> Result<(), EncodeError> {
                     ResultValuePayload::Ok { value } | ResultValuePayload::Err { value } => value,
                 };
                 if let Some(inner) = inner {
-                    walk(inner, seen_quota, seen_secret)?;
+                    walk(
+                        inner,
+                        seen_quota,
+                        seen_secret,
+                        seen_stream,
+                        seen_permission_card,
+                    )?;
                 }
                 Ok(())
             }
-            SchemaValue::Union(p) => walk(&p.body, seen_quota, seen_secret),
+            SchemaValue::Union(p) => walk(
+                &p.body,
+                seen_quota,
+                seen_secret,
+                seen_stream,
+                seen_permission_card,
+            ),
             _ => Ok(()),
         }
     }
 
     let mut seen_quota = std::collections::HashSet::new();
     let mut seen_secret = std::collections::HashSet::new();
-    walk(value, &mut seen_quota, &mut seen_secret)
+    let mut seen_stream = std::collections::HashSet::new();
+    let mut seen_permission_card = std::collections::HashSet::new();
+    walk(
+        value,
+        &mut seen_quota,
+        &mut seen_secret,
+        &mut seen_stream,
+        &mut seen_permission_card,
+    )
+}
+
+#[cfg(all(feature = "guest", not(feature = "host")))]
+fn collect_streams<'a>(
+    value: &'a SchemaValue,
+    streams: &mut Vec<&'a crate::schema::SchemaValueStream>,
+) {
+    match value {
+        SchemaValue::Stream(stream) => streams.push(stream),
+        SchemaValue::Record { fields } => {
+            for value in fields {
+                collect_streams(value, streams);
+            }
+        }
+        SchemaValue::Tuple { elements }
+        | SchemaValue::List { elements }
+        | SchemaValue::FixedList { elements } => {
+            for value in elements {
+                collect_streams(value, streams);
+            }
+        }
+        SchemaValue::Variant(payload) => {
+            if let Some(value) = &payload.payload {
+                collect_streams(value, streams);
+            }
+        }
+        SchemaValue::Map { entries } => {
+            for (key, value) in entries {
+                collect_streams(key, streams);
+                collect_streams(value, streams);
+            }
+        }
+        SchemaValue::Option { inner } => {
+            if let Some(value) = inner {
+                collect_streams(value, streams);
+            }
+        }
+        SchemaValue::Result(payload) => {
+            let value = match payload {
+                ResultValuePayload::Ok { value } | ResultValuePayload::Err { value } => value,
+            };
+            if let Some(value) = value {
+                collect_streams(value, streams);
+            }
+        }
+        SchemaValue::Union(payload) => collect_streams(&payload.body, streams),
+        _ => {}
+    }
 }
 
 /// Encode a value tree, turning each [`SchemaValue::QuotaToken`] snapshot into a
@@ -306,7 +523,9 @@ fn preflight_guest_handles(value: &SchemaValue) -> Result<(), EncodeError> {
 /// [`super::QuotaTokenResolver::drop_handle`] so none leak from the resource
 /// table.
 #[cfg(all(feature = "host", not(feature = "guest")))]
-pub fn encode_value_with<R: super::QuotaTokenResolver + super::SecretResolver>(
+pub fn encode_value_with<
+    R: super::QuotaTokenResolver + super::SecretResolver + super::PermissionCardResolver,
+>(
     value: &SchemaValue,
     resolver: &mut R,
 ) -> Result<wire::SchemaValueTree, EncodeError> {
@@ -328,6 +547,14 @@ pub fn encode_value_with<R: super::QuotaTokenResolver + super::SecretResolver>(
                 .map_err(|e| EncodeError::SecretResolver(e.to_string()))?;
             Ok(wire::SchemaValueNode::SecretValue(handle))
         },
+        &mut |_stream| Err(EncodeError::StreamNotTransportable),
+        &mut |snapshot| {
+            let mut resolver = resolver.borrow_mut();
+            let handle = resolver
+                .permission_card_handle_from_snapshot(snapshot)
+                .map_err(|e| EncodeError::PermissionCardResolver(e.to_string()))?;
+            Ok(wire::SchemaValueNode::PermissionCardHandle(handle))
+        },
     );
     match root {
         Ok(root) => Ok(wire::SchemaValueTree {
@@ -342,6 +569,12 @@ pub fn encode_value_with<R: super::QuotaTokenResolver + super::SecretResolver>(
                     wire::SchemaValueNode::SecretValue(handle) => {
                         super::SecretResolver::drop_secret_handle(&mut **resolver, handle)
                     }
+                    wire::SchemaValueNode::PermissionCardHandle(handle) => {
+                        super::PermissionCardResolver::drop_permission_card_handle(
+                            &mut **resolver,
+                            handle,
+                        )
+                    }
                     _ => {}
                 }
             }
@@ -350,13 +583,153 @@ pub fn encode_value_with<R: super::QuotaTokenResolver + super::SecretResolver>(
     }
 }
 
+#[cfg(all(feature = "host", not(feature = "guest")))]
+pub fn encode_value_with_streams<
+    R: super::QuotaTokenResolver
+        + super::SecretResolver
+        + super::SchemaValueStreamResolver
+        + super::PermissionCardResolver,
+>(
+    value: &SchemaValue,
+    resolver: &mut R,
+) -> Result<wire::SchemaValueTree, EncodeError> {
+    preflight_host_streams(value)?;
+    let resolver = std::cell::RefCell::new(resolver);
+    let mut ctx = ValueCtx::default();
+    let root = ctx.encode(
+        value,
+        &mut |snapshot| {
+            let handle = resolver
+                .borrow_mut()
+                .handle_from_snapshot(snapshot)
+                .map_err(|error| EncodeError::QuotaResolver(error.to_string()))?;
+            Ok(wire::SchemaValueNode::QuotaTokenHandle(handle))
+        },
+        &mut |snapshot| {
+            let handle = resolver
+                .borrow_mut()
+                .secret_handle_from_snapshot(snapshot)
+                .map_err(|error| EncodeError::SecretResolver(error.to_string()))?;
+            Ok(wire::SchemaValueNode::SecretValue(handle))
+        },
+        &mut |stream| {
+            let stream = stream
+                .take_for_transfer()
+                .ok_or(EncodeError::StreamAlreadyConsumed)?;
+            let handle = resolver
+                .borrow_mut()
+                .handle_from_stream(stream)
+                .map_err(|error| EncodeError::StreamResolver(error.to_string()))?;
+            Ok(wire::SchemaValueNode::StreamValue(handle))
+        },
+        &mut |snapshot| {
+            let handle = resolver
+                .borrow_mut()
+                .permission_card_handle_from_snapshot(snapshot)
+                .map_err(|error| EncodeError::PermissionCardResolver(error.to_string()))?;
+            Ok(wire::SchemaValueNode::PermissionCardHandle(handle))
+        },
+    );
+    match root {
+        Ok(root) => Ok(wire::SchemaValueTree {
+            value_nodes: ctx.value_nodes,
+            root,
+        }),
+        Err(error) => {
+            let mut resolver = resolver.borrow_mut();
+            for node in ctx.value_nodes {
+                match node {
+                    wire::SchemaValueNode::QuotaTokenHandle(handle) => resolver.drop_handle(handle),
+                    wire::SchemaValueNode::SecretValue(handle) => {
+                        super::SecretResolver::drop_secret_handle(&mut **resolver, handle)
+                    }
+                    wire::SchemaValueNode::StreamValue(handle) => {
+                        resolver.drop_stream_handle(handle)
+                    }
+                    wire::SchemaValueNode::PermissionCardHandle(handle) => {
+                        super::PermissionCardResolver::drop_permission_card_handle(
+                            &mut **resolver,
+                            handle,
+                        )
+                    }
+                    _ => {}
+                }
+            }
+            Err(error)
+        }
+    }
+}
+
+#[cfg(all(feature = "host", not(feature = "guest")))]
+fn preflight_host_streams(value: &SchemaValue) -> Result<(), EncodeError> {
+    fn walk(
+        value: &SchemaValue,
+        seen: &mut std::collections::HashSet<*const ()>,
+    ) -> Result<(), EncodeError> {
+        match value {
+            SchemaValue::Stream(stream) => {
+                if !stream.is_present() {
+                    return Err(EncodeError::StreamAlreadyConsumed);
+                }
+                if !seen.insert(stream.cell_id()) {
+                    return Err(EncodeError::AliasedStream);
+                }
+            }
+            SchemaValue::Record { fields } => {
+                for value in fields {
+                    walk(value, seen)?;
+                }
+            }
+            SchemaValue::Tuple { elements }
+            | SchemaValue::List { elements }
+            | SchemaValue::FixedList { elements } => {
+                for value in elements {
+                    walk(value, seen)?;
+                }
+            }
+            SchemaValue::Variant(payload) => {
+                if let Some(value) = &payload.payload {
+                    walk(value, seen)?;
+                }
+            }
+            SchemaValue::Map { entries } => {
+                for (key, value) in entries {
+                    walk(key, seen)?;
+                    walk(value, seen)?;
+                }
+            }
+            SchemaValue::Option { inner: Some(value) } => walk(value, seen)?,
+            SchemaValue::Option { inner: None } => {}
+            SchemaValue::Result(payload) => {
+                let value = match payload {
+                    ResultValuePayload::Ok { value } | ResultValuePayload::Err { value } => value,
+                };
+                if let Some(value) = value {
+                    walk(value, seen)?;
+                }
+            }
+            SchemaValue::Union(payload) => walk(&payload.body, seen)?,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    walk(value, &mut std::collections::HashSet::new())
+}
+
 fn encode_value_inner(
     value: &SchemaValue,
     quota: &mut dyn FnMut(&QuotaTokenVariantValue) -> Result<wire::SchemaValueNode, EncodeError>,
     secret: &mut dyn FnMut(&SecretVariantValue) -> Result<wire::SchemaValueNode, EncodeError>,
+    stream: &mut dyn FnMut(
+        &crate::schema::SchemaValueStream,
+    ) -> Result<wire::SchemaValueNode, EncodeError>,
+    permission_card: &mut dyn FnMut(
+        &PermissionCardVariantValue,
+    ) -> Result<wire::SchemaValueNode, EncodeError>,
 ) -> Result<wire::SchemaValueTree, EncodeError> {
     let mut ctx = ValueCtx::default();
-    let root = ctx.encode(value, quota, secret)?;
+    let root = ctx.encode(value, quota, secret, stream, permission_card)?;
     Ok(wire::SchemaValueTree {
         value_nodes: ctx.value_nodes,
         root,
@@ -364,6 +737,16 @@ fn encode_value_inner(
 }
 
 pub fn encode_typed(typed: &TypedSchemaValue) -> Result<wire::TypedSchemaValue, EncodeError> {
+    Ok(wire::TypedSchemaValue {
+        graph: encode_graph(typed.graph())?,
+        value: encode_value(typed.value())?,
+    })
+}
+
+/// Encode a typed guest value while explicitly transferring any affine
+/// resources reachable from it into the returned wire representation.
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub fn encode_typed_owned(typed: TypedSchemaValue) -> Result<wire::TypedSchemaValue, EncodeError> {
     Ok(wire::TypedSchemaValue {
         graph: encode_graph(typed.graph())?,
         value: encode_value(typed.value())?,
@@ -553,6 +936,11 @@ impl GraphCtx {
                     resource_name: spec.resource_name.clone(),
                 })
             }
+            SchemaType::PermissionCard { spec, .. } => {
+                wire::SchemaTypeBody::PermissionCardType(wire::PermissionCardSpec {
+                    polymorphic: spec.polymorphic,
+                })
+            }
             SchemaType::Future { inner, .. } => {
                 let inner = match inner {
                     Some(t) => Some(self.encode_type(t)?),
@@ -737,6 +1125,12 @@ impl ValueCtx {
             &QuotaTokenVariantValue,
         ) -> Result<wire::SchemaValueNode, EncodeError>,
         secret: &mut dyn FnMut(&SecretVariantValue) -> Result<wire::SchemaValueNode, EncodeError>,
+        stream: &mut dyn FnMut(
+            &crate::schema::SchemaValueStream,
+        ) -> Result<wire::SchemaValueNode, EncodeError>,
+        permission_card: &mut dyn FnMut(
+            &PermissionCardVariantValue,
+        ) -> Result<wire::SchemaValueNode, EncodeError>,
     ) -> Result<wire::ValueNodeIndex, EncodeError> {
         let node = match value {
             SchemaValue::Bool(b) => wire::SchemaValueNode::BoolValue(*b),
@@ -755,13 +1149,13 @@ impl ValueCtx {
             SchemaValue::Record { fields } => {
                 let mut indices = Vec::with_capacity(fields.len());
                 for v in fields {
-                    indices.push(self.encode(v, quota, secret)?);
+                    indices.push(self.encode(v, quota, secret, stream, permission_card)?);
                 }
                 wire::SchemaValueNode::RecordValue(indices)
             }
             SchemaValue::Variant(p) => {
                 let payload = match &p.payload {
-                    Some(v) => Some(self.encode(v, quota, secret)?),
+                    Some(v) => Some(self.encode(v, quota, secret, stream, permission_card)?),
                     None => None,
                 };
                 wire::SchemaValueNode::VariantValue(wire::VariantValuePayload {
@@ -774,21 +1168,21 @@ impl ValueCtx {
             SchemaValue::Tuple { elements } => {
                 let mut indices = Vec::with_capacity(elements.len());
                 for v in elements {
-                    indices.push(self.encode(v, quota, secret)?);
+                    indices.push(self.encode(v, quota, secret, stream, permission_card)?);
                 }
                 wire::SchemaValueNode::TupleValue(indices)
             }
             SchemaValue::List { elements } => {
                 let mut indices = Vec::with_capacity(elements.len());
                 for v in elements {
-                    indices.push(self.encode(v, quota, secret)?);
+                    indices.push(self.encode(v, quota, secret, stream, permission_card)?);
                 }
                 wire::SchemaValueNode::ListValue(indices)
             }
             SchemaValue::FixedList { elements } => {
                 let mut indices = Vec::with_capacity(elements.len());
                 for v in elements {
-                    indices.push(self.encode(v, quota, secret)?);
+                    indices.push(self.encode(v, quota, secret, stream, permission_card)?);
                 }
                 wire::SchemaValueNode::FixedListValue(indices)
             }
@@ -796,15 +1190,15 @@ impl ValueCtx {
                 let mut encoded = Vec::with_capacity(entries.len());
                 for (k, v) in entries {
                     encoded.push(wire::MapEntry {
-                        key: self.encode(k, quota, secret)?,
-                        value: self.encode(v, quota, secret)?,
+                        key: self.encode(k, quota, secret, stream, permission_card)?,
+                        value: self.encode(v, quota, secret, stream, permission_card)?,
                     });
                 }
                 wire::SchemaValueNode::MapValue(encoded)
             }
             SchemaValue::Option { inner } => {
                 let inner = match inner {
-                    Some(v) => Some(self.encode(v, quota, secret)?),
+                    Some(v) => Some(self.encode(v, quota, secret, stream, permission_card)?),
                     None => None,
                 };
                 wire::SchemaValueNode::OptionValue(inner)
@@ -813,14 +1207,18 @@ impl ValueCtx {
                 let payload = match p {
                     ResultValuePayload::Ok { value } => {
                         let v = match value {
-                            Some(v) => Some(self.encode(v, quota, secret)?),
+                            Some(v) => {
+                                Some(self.encode(v, quota, secret, stream, permission_card)?)
+                            }
                             None => None,
                         };
                         wire::ResultValuePayload::OkValue(v)
                     }
                     ResultValuePayload::Err { value } => {
                         let v = match value {
-                            Some(v) => Some(self.encode(v, quota, secret)?),
+                            Some(v) => {
+                                Some(self.encode(v, quota, secret, stream, permission_card)?)
+                            }
                             None => None,
                         };
                         wire::ResultValuePayload::ErrValue(v)
@@ -861,7 +1259,7 @@ impl ValueCtx {
                 })
             }
             SchemaValue::Union(p) => {
-                let body = self.encode(&p.body, quota, secret)?;
+                let body = self.encode(&p.body, quota, secret, stream, permission_card)?;
                 wire::SchemaValueNode::UnionValue(wire::UnionValuePayload {
                     tag: p.tag.clone(),
                     body,
@@ -869,6 +1267,8 @@ impl ValueCtx {
             }
             SchemaValue::Secret(s) => secret(s)?,
             SchemaValue::QuotaToken(q) => quota(q)?,
+            SchemaValue::Stream(s) => stream(s)?,
+            SchemaValue::PermissionCard(p) => permission_card(p)?,
         };
         Ok(self.push(node))
     }

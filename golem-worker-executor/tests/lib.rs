@@ -37,6 +37,7 @@ pub mod http;
 pub mod ignite_service;
 pub mod in_function_retry;
 pub mod indexed_storage;
+pub mod instance_layer;
 pub mod key_value_storage;
 pub mod keyvalue;
 pub mod namespace_routed_key_value_storage;
@@ -52,6 +53,7 @@ pub mod retry_policies;
 pub mod revert;
 pub mod rpc;
 pub mod scalability;
+pub mod scope_cards;
 pub mod tool_discovery;
 pub mod transactions;
 pub mod wasi;
@@ -89,24 +91,27 @@ tag_suite!(api, group1);
 tag_suite!(retry_lifecycle, group1);
 tag_suite!(blobstore, group1);
 tag_suite!(keyvalue, group1);
-tag_suite!(in_function_retry, group1);
+tag_suite!(in_function_retry, in_function_retry);
 tag_suite!(http, group1);
-tag_suite!(websocket, group1);
 tag_suite!(rdbms, group1);
-tag_suite!(agent, group1);
-tag_suite!(agent_sdk_ts, group1);
 
 tag_suite!(hot_update, group2);
+tag_suite!(instance_layer, group2);
 tag_suite!(transactions, group2);
 tag_suite!(observability, group2);
 tag_suite!(retry_policies, group2);
 
-tag_suite!(durability, group3);
 tag_suite!(rpc, group3);
 tag_suite!(wasi, group3);
-tag_suite!(scalability, group3);
 tag_suite!(revert, group3);
-tag_suite!(readonly, group3);
+
+tag_suite!(websocket, group4);
+tag_suite!(agent, group4);
+tag_suite!(agent_sdk_ts, group4);
+tag_suite!(durability, group4);
+tag_suite!(scope_cards, group4);
+tag_suite!(scalability, group4);
+tag_suite!(readonly, group4);
 
 tag_suite!(ignite_service, ignite_service);
 tag_suite!(rdbms_service, rdbms_service);
@@ -118,6 +123,7 @@ sequential_suite!(key_value_storage);
 sequential_suite!(namespace_routed_key_value_storage);
 sequential_suite!(indexed_storage);
 sequential_suite!(oplog_blob_archive);
+sequential_suite!(resource_limits);
 
 #[derive(Debug)]
 pub struct Tracing;

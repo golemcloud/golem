@@ -1,6 +1,10 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "golemcloud/golem_sdk/interface/golem/core/types"
 
+import {
+  "golemcloud/golem_sdk/async-core",
+}
+
 // Values
 pub fn parse_uuid(String) -> Result[Uuid, String]
 
@@ -128,6 +132,13 @@ pub(all) struct PathSpec {
   allowed_extensions : Array[String]?
 } derive(Eq, Show)
 
+pub(all) struct PermissionCard(Int) derive(Eq, Show)
+pub fn PermissionCard::drop(Self) -> Unit
+
+pub(all) struct PermissionCardSpec {
+  polymorphic : Bool
+} derive(Eq, Show)
+
 pub(all) struct PromiseId {
   agent_id : AgentId
   oplog_idx : UInt64
@@ -211,6 +222,7 @@ pub(all) enum SchemaTypeBody {
   UnionType(UnionSpec)
   SecretType(SecretSpec)
   QuotaTokenType(QuotaTokenSpec)
+  PermissionCardType(PermissionCardSpec)
   FutureType(Int?)
   StreamType(Int?)
 } derive(Eq, Show)
@@ -260,7 +272,14 @@ pub(all) enum SchemaValueNode {
   UnionValue(UnionValuePayload)
   SecretValue(Secret)
   QuotaTokenHandle(QuotaToken)
+  PermissionCardHandle(PermissionCard)
+  StreamValue(SchemaValueStream)
 } derive(Eq, Show)
+
+pub(all) struct SchemaValueStream(Int) derive(Eq, Show)
+pub fn SchemaValueStream::drop(Self) -> Unit
+pub async fn SchemaValueStream::unwrap(Self) -> @async-core.Stream[SchemaValueTree]
+pub async fn SchemaValueStream::wrap(@async-core.Stream[SchemaValueTree]) -> Self
 
 pub(all) struct SchemaValueTree {
   value_nodes : Array[SchemaValueNode]

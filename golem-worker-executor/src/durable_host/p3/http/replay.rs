@@ -14,17 +14,18 @@
 
 use super::serialization::{deserialize_error_code, serialize_error_code, serialize_headers};
 use super::*;
+use crate::durable_host::concurrent::end_durable_function_access_if_open;
 use crate::durable_host::p3::{DurableP3, durable_worker_ctx, wasi_http_view};
 use crate::durable_host::tail_work::TailActivity;
 use crate::services::oplog::Oplog;
 use crate::workerctx::WorkerCtx;
 use anyhow::Context as _;
 use bytes::Bytes;
-use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::payload::types::{
     SerializableP3HttpClientSendResult, SerializableP3HttpRequestBodyFrame,
     SerializableResponseHeaders,
 };
+use golem_common::model::oplog::{DurableFunctionType, OplogIndex};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use http_body_util::BodyExt as _;
 use http_body_util::Empty;
@@ -95,6 +96,7 @@ pub(super) async fn consume_replayed_request<Ctx: WorkerCtx, U: Send + 'static>(
 pub(super) fn spawn_replayed_request_leak_guard<Ctx: WorkerCtx, U: Send + 'static>(
     store: &Accessor<U, DurableP3<Ctx>>,
     request_rep: u32,
+    scope: Option<(DurableFunctionType, OplogIndex)>,
     disarm_rx: oneshot::Receiver<()>,
 ) {
     let activity = store.with(|mut access| {
@@ -104,6 +106,7 @@ pub(super) fn spawn_replayed_request_leak_guard<Ctx: WorkerCtx, U: Send + 'stati
     });
     store.spawn(ReplayedRequestLeakGuard::<Ctx> {
         request_rep,
+        scope,
         disarm_rx,
         activity,
         _phantom: PhantomData,
@@ -133,6 +136,7 @@ pub(super) fn spawn_replayed_request_leak_guard<Ctx: WorkerCtx, U: Send + 'stati
 /// it.
 struct ReplayedRequestLeakGuard<Ctx> {
     request_rep: u32,
+    scope: Option<(DurableFunctionType, OplogIndex)>,
     disarm_rx: oneshot::Receiver<()>,
     activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
@@ -146,6 +150,7 @@ where
     async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
         let Self {
             request_rep,
+            scope,
             disarm_rx,
             activity,
             _phantom,
@@ -156,15 +161,36 @@ where
         // drops it (channel closed) — which strictly precedes the settlement
         // check that consults the tracker.
         let disarmed = disarm_rx.await.is_ok();
-        if !disarmed
-            && let Err(error) =
+        if !disarmed {
+            let replay_state = accessor.with(|mut access| {
+                durable_worker_ctx::<Ctx, U>(access.data_mut())
+                    .state
+                    .replay_state
+                    .clone()
+            });
+            replay_state.fence_owned_cursor_ops().await?;
+            if let Err(error) =
                 consume_replayed_request::<Ctx, U>(accessor, Resource::new_own(request_rep), None)
                     .await
-        {
-            warn!(
-                ?error,
-                "failed to consume a replayed p3 HTTP request dropped by the guest mid-replay"
-            );
+            {
+                warn!(
+                    ?error,
+                    "failed to consume a replayed p3 HTTP request dropped by the guest mid-replay"
+                );
+            }
+            // This cancellation path may be the invocation's final host call.
+            // Close this send's scope directly rather than draining unrelated
+            // drop events, so the scope can advance before the guard exits.
+            if let Some((function_type, begin_index)) = scope {
+                end_durable_function_access_if_open(
+                    accessor,
+                    durable_worker_ctx::<Ctx, U>,
+                    function_type,
+                    begin_index,
+                    false,
+                )
+                .await?;
+            }
         }
         drop(activity);
         Ok(())

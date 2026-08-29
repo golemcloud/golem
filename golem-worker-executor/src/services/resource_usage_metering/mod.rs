@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::sandbox_filesystem::FilesystemStorageError;
-use crate::services::active_workers::ConcurrentAgentPermit;
+use crate::services::active_agents::ConcurrentAgentPermit;
 use crate::services::agent_memory_meter::AgentMemoryMeter;
 use crate::services::byte_time_accumulator::{ByteTimeAccumulator, ByteTimeSettlement};
 use crate::services::golem_config::ResourceUsageMeteringConfig;

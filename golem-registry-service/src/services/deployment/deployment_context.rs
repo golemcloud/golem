@@ -851,6 +851,7 @@ fn compile_tool_binding(
         parameters,
         secret_keys_readable: readable,
         secret_keys_revealable: revealable,
+        filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
         source,
     })
 }

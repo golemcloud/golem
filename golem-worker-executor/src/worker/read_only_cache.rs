@@ -446,6 +446,7 @@ mod tests {
             input: tuple(vec![]),
             invocation_context: InvocationContextStack::fresh(),
             principal: Principal::anonymous(),
+            scope_card: None,
         };
         assert_eq!(
             classify_invocation(None, None, &m),

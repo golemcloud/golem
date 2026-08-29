@@ -12,6 +12,18 @@ declare module 'golem:core/types@2.0.0' {
   }
   export class Secret {
   }
+  export class SchemaValueStream {
+    /**
+     * Wraps any native schema-value reader for placement in a value tree.
+     */
+    static wrap(reader: AsyncIterable<SchemaValueTree>): Promise<SchemaValueStream>;
+    /**
+     * Consumes a schema-value-stream wrapper and returns its native reader.
+     */
+    static unwrap(value: SchemaValueStream): Promise<AsyncIterable<SchemaValueTree>>;
+  }
+  export class PermissionCard {
+  }
   /**
    * ============================================================
    * Carrier indices
@@ -386,6 +398,14 @@ declare module 'golem:core/types@2.0.0' {
      */
     resourceName?: string;
   };
+  export type PermissionCardSpec = {
+    /**
+     * `true` = polymorphic (carries slot variables in owner / resource-id),
+     * `false` = monomorphic. Structural metadata only; authority lives in
+     * the card store, not in the schema spec.
+     */
+    polymorphic: boolean;
+  };
   /**
    * The structural body of a `schema-type-node`.
    * Closed sum types come in two shapes that differ by how the decoder
@@ -541,6 +561,10 @@ declare module 'golem:core/types@2.0.0' {
   {
     tag: 'quota-token-type'
     val: QuotaTokenSpec
+  } |
+  {
+    tag: 'permission-card-type'
+    val: PermissionCardSpec
   } |
   /** --- WASI P3 stubs (parseable only; no semantics yet) --- */
   {
@@ -777,6 +801,14 @@ declare module 'golem:core/types@2.0.0' {
   {
     tag: 'quota-token-handle'
     val: QuotaToken
+  } |
+  {
+    tag: 'permission-card-handle'
+    val: PermissionCard
+  } |
+  {
+    tag: 'stream-value'
+    val: SchemaValueStream
   };
   /**
    * ============================================================

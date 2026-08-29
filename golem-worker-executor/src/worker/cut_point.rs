@@ -101,14 +101,15 @@ where
         }
         let entry = read(idx).await;
         let spanning = match &entry {
-            // `CompletionDiscarded` is a hint, not a second terminal, but it carries the delivery
-            // status of its call's `End`: a cut between the `End` and the marker would leave a
-            // prefix whose recorded guest behavior reflects the discarded completion while replay
-            // (with the marker cut off) would deliver the response, so such a cut is rejected the
-            // same way as one splitting a `Start` from its terminal.
+            // Completion markers are hints, not second terminals, but they carry the delivery
+            // status and timing of their call's `End`. A cut between the `End` and its marker
+            // would leave a completed call that looks markerless, making replay tail-gate a
+            // delivery the recorded run actually consumed at the marker's position, so reject
+            // it the same way as one splitting a `Start` from its terminal.
             OplogEntry::End { start_index, .. }
             | OplogEntry::Cancelled { start_index, .. }
-            | OplogEntry::CompletionDiscarded { start_index, .. } => Some((
+            | OplogEntry::CompletionDiscarded { start_index, .. }
+            | OplogEntry::CompletionDelivered { start_index, .. } => Some((
                 *start_index,
                 SpanningConstruct::DurableCall {
                     start_index: *start_index,
@@ -142,7 +143,59 @@ where
                     reference_index: idx,
                 },
             )),
-            _ => None,
+            // Keep this exhaustive: every new entry that can reference an earlier opening entry
+            // must be considered before it is allowed across a fork/snapshot cut point.
+            OplogEntry::Create { .. }
+            | OplogEntry::Start { .. }
+            | OplogEntry::AgentInvocationStarted { .. }
+            | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::Suspend { .. }
+            | OplogEntry::Error { .. }
+            | OplogEntry::NoOp { .. }
+            | OplogEntry::Jump { .. }
+            | OplogEntry::Interrupted { .. }
+            | OplogEntry::Exited { .. }
+            | OplogEntry::BeginAtomicRegion { .. }
+            | OplogEntry::PendingAgentInvocation { .. }
+            | OplogEntry::PendingUpdate { .. }
+            | OplogEntry::SuccessfulUpdate { .. }
+            | OplogEntry::FailedUpdate { .. }
+            | OplogEntry::GrowMemory { .. }
+            | OplogEntry::CreateResource { .. }
+            | OplogEntry::DropResource { .. }
+            | OplogEntry::Log { .. }
+            | OplogEntry::Restart { .. }
+            | OplogEntry::ActivatePlugin { .. }
+            | OplogEntry::DeactivatePlugin { .. }
+            | OplogEntry::Revert { .. }
+            | OplogEntry::CancelPendingInvocation { .. }
+            | OplogEntry::StartSpan { .. }
+            | OplogEntry::FinishSpan { .. }
+            | OplogEntry::SetSpanAttribute { .. }
+            | OplogEntry::BeginRemoteTransaction {
+                original_begin_index: None,
+                ..
+            }
+            | OplogEntry::Snapshot { .. }
+            | OplogEntry::OplogProcessorCheckpoint { .. }
+            | OplogEntry::SetRetryPolicy { .. }
+            | OplogEntry::RemoveRetryPolicy { .. }
+            | OplogEntry::CardEventQueued { .. }
+            | OplogEntry::CardInstalled { .. }
+            | OplogEntry::CardInstallFailed { .. }
+            | OplogEntry::CardRevoked { .. }
+            | OplogEntry::CardExpired { .. }
+            | OplogEntry::CardDerived { .. }
+            | OplogEntry::CardTransferStarted { .. }
+            | OplogEntry::CardTransferred { .. }
+            | OplogEntry::CardRevokedCascade { .. }
+            | OplogEntry::CardTransferConfirmed { .. }
+            | OplogEntry::HostStreamFrame { .. }
+            | OplogEntry::StreamRegistered { .. }
+            | OplogEntry::StreamItems { .. }
+            | OplogEntry::StreamEnd { .. }
+            | OplogEntry::StreamCancel { .. }
+            | OplogEntry::StreamSession { .. } => None,
         };
 
         if let Some((opening_index, construct)) = spanning
@@ -155,11 +208,46 @@ where
     None
 }
 
+/// Returns the first durable stream entry in an inclusive raw oplog range.
+/// Fork and revert reject such histories until identities, offsets and cross-oplog dependencies
+/// can be rewritten without weakening their incarnation guarantees.
+pub async fn find_stream_history_in_range<Read, ReadFut>(
+    read: Read,
+    start: OplogIndex,
+    end: OplogIndex,
+) -> Option<OplogIndex>
+where
+    Read: Fn(OplogIndex) -> ReadFut,
+    ReadFut: Future<Output = OplogEntry>,
+{
+    for idx in OplogIndexRange::new(start, end) {
+        if matches!(
+            read(idx).await,
+            OplogEntry::StreamRegistered { .. }
+                | OplogEntry::StreamItems { .. }
+                | OplogEntry::StreamEnd { .. }
+                | OplogEntry::StreamCancel { .. }
+                | OplogEntry::StreamSession { .. }
+        ) {
+            return Some(idx);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::TransactionId;
+    use golem_common::model::Timestamp;
+    use golem_common::model::card::{AccountCardHolder, CardHolder, CardId};
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::durable_stream::{
+        DURABLE_STREAM_FORMAT_VERSION, StreamConsumerDeletingRecordV1, StreamSessionRecordV1,
+    };
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::oplog::OplogPayload;
     use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
+    use golem_common::model::{AgentFingerprint, AgentId, TransactionId};
     use std::collections::HashMap;
     use test_r::test;
     use uuid::Uuid;
@@ -195,6 +283,47 @@ mod tests {
             skipped,
         )
         .await
+    }
+
+    async fn scan_stream_history(
+        entries: &HashMap<u64, OplogEntry>,
+        start: u64,
+        end: u64,
+    ) -> Option<OplogIndex> {
+        find_stream_history_in_range(
+            |i: OplogIndex| {
+                let entry = entries
+                    .get(&u64::from(i))
+                    .cloned()
+                    .unwrap_or_else(OplogEntry::no_op);
+                async move { entry }
+            },
+            idx(start),
+            idx(end),
+        )
+        .await
+    }
+
+    fn stream_entry() -> OplogEntry {
+        OplogEntry::stream_session(OplogPayload::Inline(Box::new(
+            StreamSessionRecordV1::ConsumerDeleting(StreamConsumerDeletingRecordV1 {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                consumer_environment_id: EnvironmentId(Uuid::from_u128(1)),
+                consumer: AgentId {
+                    component_id: ComponentId(Uuid::from_u128(2)),
+                    agent_id: "consumer".to_string(),
+                },
+                consumer_fingerprint: AgentFingerprint(Uuid::from_u128(3)),
+                deleting_at_millis: 100,
+            }),
+        )))
+    }
+
+    #[test]
+    async fn stream_history_is_found_in_the_raw_requested_range() {
+        let entries = HashMap::from([(3, stream_entry()), (7, stream_entry())]);
+        assert_eq!(scan_stream_history(&entries, 1, 5).await, Some(idx(3)));
+        assert_eq!(scan_stream_history(&entries, 4, 8).await, Some(idx(7)));
     }
 
     #[test]
@@ -252,6 +381,21 @@ mod tests {
         let entries = HashMap::from([
             (3, OplogEntry::end(idx(2), None, false)),
             (5, OplogEntry::completion_discarded(idx(2))),
+        ]);
+        assert_eq!(
+            scan(&entries, 4, 6, &deleted(vec![])).await,
+            Some(SpanningConstruct::DurableCall {
+                start_index: idx(2),
+                terminal_index: idx(5),
+            })
+        );
+    }
+
+    #[test]
+    async fn completion_delivered_after_cut_referencing_surviving_start_is_rejected() {
+        let entries = HashMap::from([
+            (3, OplogEntry::end(idx(2), None, false)),
+            (5, OplogEntry::completion_delivered(idx(2))),
         ]);
         assert_eq!(
             scan(&entries, 4, 6, &deleted(vec![])).await,
@@ -328,6 +472,41 @@ mod tests {
             OplogEntry::begin_remote_transaction(TransactionId::new(Uuid::nil()), None),
         )]);
         assert_eq!(scan(&entries, 7, 10, &deleted(vec![])).await, None);
+    }
+
+    #[test]
+    async fn card_transfer_confirmation_after_cut_is_accepted() {
+        let transfer_id = Uuid::new_v4();
+        let source_card_id = CardId::new();
+        let installed_card_id = CardId::new();
+        let target_holder = CardHolder::Account(AccountCardHolder {
+            account_id: Uuid::new_v4(),
+        });
+        let entries = HashMap::from([
+            (
+                3,
+                OplogEntry::CardTransferStarted {
+                    timestamp: Timestamp::now_utc(),
+                    transfer_id,
+                    card_id: source_card_id,
+                    source_holder: None,
+                    target_holder: target_holder.clone(),
+                    source_wallet_generation: Some(1),
+                },
+            ),
+            (
+                5,
+                OplogEntry::CardTransferConfirmed {
+                    timestamp: Timestamp::now_utc(),
+                    transfer_id,
+                    source_card_id,
+                    installed_card_id,
+                    target_holder,
+                },
+            ),
+        ]);
+
+        assert_eq!(scan(&entries, 4, 5, &deleted(vec![])).await, None);
     }
 
     #[test]

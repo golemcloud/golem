@@ -79,6 +79,9 @@
       "$ref": "#/definitions/agent.invoke"
     },
     {
+      "$ref": "#/definitions/agent.invoke-session"
+    },
+    {
       "$ref": "#/definitions/agent.list"
     },
     {
@@ -1293,6 +1296,35 @@
             }
           },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "environmentId",
+            "agentId",
+            "invocationKey",
+            "oplogIndex"
+          ],
+          "properties": {
+            "type": {
+              "const": "RuntimeDerived"
+            },
+            "environmentId": {
+              "type": "string"
+            },
+            "agentId": {
+              "$ref": "#/definitions/AgentId"
+            },
+            "invocationKey": {
+              "type": "string"
+            },
+            "oplogIndex": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
         }
       ]
     },
@@ -1555,6 +1587,63 @@
         },
         "resultFormat": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.invoke-session": {
+      "type": "object",
+      "description": "One lifecycle document emitted per accepted, result, stream, or terminal event by `golem agent invoke` in structured formats. Parse stdout as a sequence of documents, not as one array or object.",
+      "x-golem-output-mode": "multi-document",
+      "x-golem-command": "agent invoke",
+      "required": [
+        "$type",
+        "kind",
+        "idempotencyKey"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.invoke-session"
+        },
+        "kind": {
+          "$ref": "#/definitions/AgentInvocationSessionEventKind"
+        },
+        "idempotencyKey": {
+          "type": "string"
+        },
+        "agentId": {
+          "type": "string"
+        },
+        "componentRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "streamId": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "parentStreamId": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "path": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "value": {
+          "$ref": "#/definitions/JsonValue"
         }
       },
       "additionalProperties": false
@@ -4026,6 +4115,34 @@
       "type": "string",
       "format": "uuid"
     },
+    "WalletVersionToken": {
+      "type": "object",
+      "required": ["walletIdHash", "generation"],
+      "properties": {
+        "walletIdHash": {
+          "type": "array",
+          "minItems": 32,
+          "maxItems": 32,
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+        },
+        "generation": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "PublicInvocationWalletPin": {
+      "type": "object",
+      "required": ["walletToken", "scopeCardId"],
+      "properties": {
+        "walletToken": { "$ref": "#/definitions/WalletVersionToken" },
+        "scopeCardId": {
+          "oneOf": [
+            { "$ref": "#/definitions/CardId" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "PolymorphicCardPermissionPattern": {
       "type": "string",
       "description": "Rendered form of a card permission entry"
@@ -4366,7 +4483,17 @@
         { "$ref": "#/definitions/PublicOplogEntrySnapshot" },
         { "$ref": "#/definitions/PublicOplogEntryOplogProcessorCheckpoint" },
         { "$ref": "#/definitions/PublicOplogEntrySetRetryPolicy" },
-        { "$ref": "#/definitions/PublicOplogEntryRemoveRetryPolicy" }
+        { "$ref": "#/definitions/PublicOplogEntryRemoveRetryPolicy" },
+        { "$ref": "#/definitions/PublicOplogEntryCardEventQueued" },
+        { "$ref": "#/definitions/PublicOplogEntryCardInstalled" },
+        { "$ref": "#/definitions/PublicOplogEntryCardInstallFailed" },
+        { "$ref": "#/definitions/PublicOplogEntryCardRevoked" },
+        { "$ref": "#/definitions/PublicOplogEntryCardExpired" },
+        { "$ref": "#/definitions/PublicOplogEntryCardDerived" },
+        { "$ref": "#/definitions/PublicOplogEntryCardTransferStarted" },
+        { "$ref": "#/definitions/PublicOplogEntryCardTransferred" },
+        { "$ref": "#/definitions/PublicOplogEntryCardRevokedCascade" },
+        { "$ref": "#/definitions/PublicOplogEntryCardTransferConfirmed" }
       ]
     },
     "AgentId": {
@@ -4461,11 +4588,17 @@
     },
     "PublicOplogEntryAgentInvocationStarted": {
       "type": "object",
-      "required": ["type", "timestamp", "invocation"],
+      "required": ["type", "timestamp", "invocation", "walletPin"],
       "properties": {
         "type": { "const": "AgentInvocationStarted" },
         "timestamp": { "type": "string" },
-        "invocation": { "$ref": "#/definitions/PublicAgentInvocation" }
+        "invocation": { "$ref": "#/definitions/PublicAgentInvocation" },
+        "walletPin": {
+          "oneOf": [
+            { "$ref": "#/definitions/PublicInvocationWalletPin" },
+            { "type": "null" }
+          ]
+        }
       },
       "additionalProperties": false
     },
@@ -4666,6 +4799,129 @@
       "properties": { "type": { "const": "RemoveRetryPolicy" }, "timestamp": { "type": "string" }, "name": { "type": "string" } },
       "additionalProperties": false
     },
+    "CardHolder": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "accountId"],
+          "properties": { "type": { "const": "Account" }, "accountId": { "type": "string", "format": "uuid" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "applicationId"],
+          "properties": { "type": { "const": "Application" }, "applicationId": { "type": "string", "format": "uuid" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "agentId"],
+          "properties": { "type": { "const": "Agent" }, "agentId": { "$ref": "#/definitions/AgentId" } },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "PublicQueuedCardEvent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "cardId"],
+          "properties": { "type": { "const": "Install" }, "cardId": { "$ref": "#/definitions/CardId" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "cardId"],
+          "properties": { "type": { "const": "Revoke" }, "cardId": { "$ref": "#/definitions/CardId" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "transferId", "cardId", "targetHolder"],
+          "properties": {
+            "type": { "const": "TransferStarted" },
+            "transferId": { "type": "string", "format": "uuid" },
+            "cardId": { "$ref": "#/definitions/CardId" },
+            "targetHolder": { "$ref": "#/definitions/CardHolder" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "transferId", "cardId"],
+          "properties": {
+            "type": { "const": "TransferReceived" },
+            "transferId": { "type": "string", "format": "uuid" },
+            "cardId": { "$ref": "#/definitions/CardId" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "CardInstallFailure": {
+      "type": "string",
+      "enum": ["cardRevoked", "notFound", "recipientMismatch", "notPermitted"]
+    },
+    "PublicOplogEntryCardEventQueued": {
+      "type": "object",
+      "required": ["type", "timestamp", "event"],
+      "properties": { "type": { "const": "CardEventQueued" }, "timestamp": { "type": "string" }, "event": { "$ref": "#/definitions/PublicQueuedCardEvent" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryCardInstalled": {
+      "type": "object",
+      "required": ["type", "timestamp", "queuedEventIndex", "cardId", "walletGeneration"],
+      "properties": { "type": { "const": "CardInstalled" }, "timestamp": { "type": "string" }, "queuedEventIndex": { "type": ["integer", "null"], "minimum": 0 }, "cardId": { "$ref": "#/definitions/CardId" }, "walletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryCardInstallFailed": {
+      "type": "object",
+      "required": ["type", "timestamp", "queuedEventIndex", "cardId", "reason"],
+      "properties": { "type": { "const": "CardInstallFailed" }, "timestamp": { "type": "string" }, "queuedEventIndex": { "type": "integer", "minimum": 0 }, "cardId": { "$ref": "#/definitions/CardId" }, "reason": { "$ref": "#/definitions/CardInstallFailure" } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryCardRevoked": {
+      "type": "object",
+      "required": ["type", "timestamp", "queuedEventIndex", "cardId", "walletGeneration"],
+      "properties": { "type": { "const": "CardRevoked" }, "timestamp": { "type": "string" }, "queuedEventIndex": { "type": "integer", "minimum": 0 }, "cardId": { "$ref": "#/definitions/CardId" }, "walletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryCardExpired": {
+      "type": "object",
+      "required": ["type", "timestamp", "cardId", "walletGeneration"],
+      "properties": { "type": { "const": "CardExpired" }, "timestamp": { "type": "string" }, "cardId": { "$ref": "#/definitions/CardId" }, "walletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryCardDerived": {
+      "type": "object",
+      "required": ["type", "timestamp", "cardId", "parentIds", "walletGeneration"],
+      "properties": { "type": { "const": "CardDerived" }, "timestamp": { "type": "string" }, "cardId": { "$ref": "#/definitions/CardId" }, "parentIds": { "type": "array", "items": { "$ref": "#/definitions/CardId" } }, "walletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryCardTransferStarted": {
+      "type": "object",
+      "required": ["type", "timestamp", "transferId", "cardId", "targetHolder", "sourceWalletGeneration"],
+      "properties": { "type": { "const": "CardTransferStarted" }, "timestamp": { "type": "string" }, "transferId": { "type": "string", "format": "uuid" }, "cardId": { "$ref": "#/definitions/CardId" }, "targetHolder": { "$ref": "#/definitions/CardHolder" }, "sourceWalletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryCardTransferred": {
+      "type": "object",
+      "required": ["type", "timestamp", "transferId", "sourceCardId", "installedCardId", "targetHolder", "targetWalletGeneration"],
+      "properties": { "type": { "const": "CardTransferred" }, "timestamp": { "type": "string" }, "transferId": { "type": "string", "format": "uuid" }, "sourceCardId": { "oneOf": [{ "$ref": "#/definitions/CardId" }, { "type": "null" }] }, "installedCardId": { "$ref": "#/definitions/CardId" }, "targetHolder": { "$ref": "#/definitions/CardHolder" }, "targetWalletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryCardRevokedCascade": {
+      "type": "object",
+      "required": ["type", "timestamp", "revokedCardIds", "localWalletGeneration"],
+      "properties": { "type": { "const": "CardRevokedCascade" }, "timestamp": { "type": "string" }, "revokedCardIds": { "type": "array", "items": { "$ref": "#/definitions/CardId" } }, "localWalletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryCardTransferConfirmed": {
+      "type": "object",
+      "required": ["type", "timestamp", "transferId", "sourceCardId", "installedCardId", "targetHolder"],
+      "properties": { "type": { "const": "CardTransferConfirmed" }, "timestamp": { "type": "string" }, "transferId": { "type": "string", "format": "uuid" }, "sourceCardId": { "$ref": "#/definitions/CardId" }, "installedCardId": { "$ref": "#/definitions/CardId" }, "targetHolder": { "$ref": "#/definitions/CardHolder" } },
+      "additionalProperties": false
+    },
     "PublicDurableFunctionType": {
       "oneOf": [
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "ReadLocal" } }, "additionalProperties": false },
@@ -4779,6 +5035,19 @@
         "invocation-started",
         "invocation-finished",
         "missed-messages"
+      ]
+    },
+    "AgentInvocationSessionEventKind": {
+      "type": "string",
+      "enum": [
+        "accepted",
+        "rejected",
+        "result",
+        "item",
+        "end",
+        "stream-error",
+        "stream-cancel",
+        "finished"
       ]
     },
     "AgentDeletionMeta": {
@@ -6618,6 +6887,20 @@
           "type": "object",
           "required": ["kind", "value"],
           "properties": {
+            "kind": { "const": "permission-card" },
+            "value": {
+              "type": "object",
+              "required": ["spec"],
+              "properties": { "spec": { "$ref": "#/definitions/PermissionCardSpec" }, "metadata": { "$ref": "#/definitions/MetadataEnvelope" } },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": {
             "kind": { "enum": ["future", "stream"] },
             "value": {
               "type": "object",
@@ -6807,6 +7090,12 @@
       "properties": { "resourceName": { "type": "string" } },
       "additionalProperties": false
     },
+    "PermissionCardSpec": {
+      "type": "object",
+      "required": ["polymorphic"],
+      "properties": { "polymorphic": { "type": "boolean" } },
+      "additionalProperties": false
+    },
     "MetadataEnvelope": {
       "type": "object",
       "properties": {
@@ -6986,6 +7275,12 @@
           "required": ["kind", "value"],
           "properties": { "kind": { "const": "quota-token" }, "value": { "$ref": "#/definitions/QuotaTokenValuePayload" } },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": { "kind": { "const": "permission-card" }, "value": { "$ref": "#/definitions/PermissionCardValuePayload" } },
+          "additionalProperties": false
         }
       ]
     },
@@ -7068,6 +7363,17 @@
         "expectedUse": { "type": "integer", "minimum": 0 },
         "lastCredit": { "type": "integer" },
         "lastCreditAt": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "PermissionCardValuePayload": {
+      "type": "object",
+      "required": ["cardId", "polymorphic"],
+      "properties": {
+        "cardId": { "type": "string", "format": "uuid" },
+        "parentIds": { "type": "array", "items": { "type": "string", "format": "uuid" } },
+        "expiresAt": { "type": "string" },
+        "polymorphic": { "type": "boolean" }
       },
       "additionalProperties": false
     },
@@ -7365,6 +7671,10 @@
     {
       "type": "agent.invoke",
       "rustType": "InvokeResultView"
+    },
+    {
+      "type": "agent.invoke-session",
+      "rustType": "AgentInvocationSessionEvent"
     },
     {
       "type": "agent.list",

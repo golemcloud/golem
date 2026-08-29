@@ -16,7 +16,7 @@ use super::serialization::{
     deserialize_error_code, deserialize_headers, serialize_error_code, serialize_headers,
 };
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallHandle, CallReplayOutcome, LeaveIncompleteOnDrop,
+    AccessClaimOptions, CallReplayOutcome, DurableCallSession, LeaveIncompleteOnDrop,
 };
 use crate::durable_host::durability::{DurableCallTrapContext, mark_durable_call_trap_context};
 use crate::durable_host::p3::{
@@ -474,7 +474,7 @@ pub(super) async fn record_frame_entry(
 }
 
 /// Loads one recorded data/trailers frame back from its `HostStreamFrame`
-/// entry. Uses `read_many`, which merges not-yet-committed buffered entries,
+/// entry. The canonical read merges not-yet-committed buffered entries,
 /// so a resend within the same session can replay frames that have not been
 /// committed yet.
 async fn load_recorded_frame(
@@ -482,11 +482,7 @@ async fn load_recorded_frame(
     index: OplogIndex,
 ) -> Result<Frame<Bytes>, ErrorCode> {
     let internal = |message: String| ErrorCode::InternalError(Some(message));
-    let entry = oplog
-        .read_many(index, 1)
-        .await
-        .remove(&index)
-        .ok_or_else(|| internal(format!("recorded request-body frame missing at {index}")))?;
+    let entry = oplog.read(index).await;
     let OplogEntry::HostStreamFrame { payload, .. } = entry else {
         return Err(internal(format!(
             "oplog entry at {index} is not a recorded request-body frame"
@@ -582,10 +578,8 @@ pub(super) async fn scan_recorded_request_body_frames(
     let mut terminal: Option<RecordedRequestBodyTerminal> = None;
     let mut next = parent_start_index.next();
     while next <= scan_end {
-        let entries = oplog.read_many(next, SCAN_CHUNK).await;
-        if entries.is_empty() {
-            break;
-        }
+        let available = scan_end.as_u64() - next.as_u64() + 1;
+        let entries = oplog.read_exact(next, SCAN_CHUNK.min(available)).await;
         for (index, entry) in &entries {
             let OplogEntry::HostStreamFrame {
                 parent_start_index: frame_parent,
@@ -1169,7 +1163,7 @@ where
         // upload outcome (the send itself is the write), so an incomplete
         // `Start` (crash before the upload result was recorded) safely
         // re-executes on replay instead of failing the worker.
-        let mut handle = match CallHandle::<
+        let mut handle = match DurableCallSession::<
             P3HttpClientRequestBodyTransmission,
             LeaveIncompleteOnDrop,
         >::start_access_with_options(
@@ -1179,6 +1173,7 @@ where
             AccessClaimOptions {
                 scope_discriminator: None,
                 request_identity: None,
+                parent_start_index: None,
                 observational_owner,
             },
             async |_| Ok(HostRequestNoInput {}),

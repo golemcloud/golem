@@ -1,7 +1,16 @@
 use crate::api::common::ApiEndpointError;
-use crate::service::auth::AuthService;
-use crate::service::worker::WorkerService;
+use crate::service::auth::{AuthService, AuthServiceError};
+use crate::service::worker::{
+    WorkerService, WorkerServiceError, validate_public_session_schema_value,
+};
 use chrono::{DateTime, Utc};
+use futures::{SinkExt, StreamExt};
+use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
+use golem_api_grpc::proto::golem::worker::{
+    InvocationRejected, InvocationRejectionReason, InvocationRequest, InvocationResponse,
+    PublicInvocationRequest, PublicInvocationStart, input_stream_item, invocation_request,
+    invocation_response, public_invocation_request,
+};
 use golem_common::base_model::api;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
@@ -9,19 +18,31 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, IdempotencyKey};
-use golem_common::recorded_http_api_request;
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
+use golem_common::{SafeDisplay, recorded_http_api_request};
 use golem_service_base::api_tags::ApiTags;
-use golem_service_base::model::auth::GolemSecurityScheme;
+use golem_service_base::clients::registry::RegistryServiceError;
+use golem_service_base::model::auth::{AuthCtx, GolemSecurityScheme};
+use poem::web::websocket::{
+    BoxWebSocketUpgraded, CloseCode, Message, WebSocket, WebSocketConfig, WebSocketStream,
+};
 use poem_openapi::param::Header;
 use poem_openapi::payload::Json;
 use poem_openapi_derive::{Enum, Object, OpenApi};
+use prost::Message as ProstMessage;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::Instrument;
 use uuid::Uuid;
 
 type Result<T> = std::result::Result<T, ApiEndpointError>;
+
+const INVOCATION_SESSION_CHANNEL_CAPACITY: usize = 16;
+const INVOCATION_SESSION_MAX_MESSAGE_SIZE: usize = 32 * 1024 * 1024;
+const INVOCATION_SESSION_STAGING_ADMISSION_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(30);
+const INVOCATION_SESSION_WRITE_PROGRESS_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(30);
 
 pub struct AgentsApi {
     worker_service: Arc<WorkerService>,
@@ -80,6 +101,31 @@ impl AgentsApi {
         record.result(response).map(Json)
     }
 
+    /// Invoke an agent through an attached live streaming session
+    #[oai(
+        path = "/invoke-agent-session",
+        method = "get",
+        operation_id = "invoke_agent_session"
+    )]
+    async fn invoke_agent_session(
+        &self,
+        websocket: WebSocket,
+        token: GolemSecurityScheme,
+    ) -> Result<BoxWebSocketUpgraded> {
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let worker_service = self.worker_service.clone();
+
+        Ok(websocket
+            .config(invocation_session_websocket_config())
+            .on_upgrade(Box::new(move |socket| {
+                Box::pin(proxy_public_invocation_session(
+                    socket,
+                    worker_service,
+                    auth,
+                ))
+            })))
+    }
+
     #[oai(path = "/create-agent", method = "post", operation_id = "create_agent")]
     async fn create_agent(
         &self,
@@ -104,6 +150,687 @@ impl AgentsApi {
 
         record.result(response).map(Json)
     }
+}
+
+fn invocation_session_websocket_config() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_message_size(Some(INVOCATION_SESSION_MAX_MESSAGE_SIZE))
+        .max_frame_size(Some(INVOCATION_SESSION_MAX_MESSAGE_SIZE))
+        .max_write_buffer_size(2 * INVOCATION_SESSION_MAX_MESSAGE_SIZE)
+}
+
+#[derive(Debug)]
+enum PublicSessionMessage {
+    Request(Box<PublicInvocationRequest>),
+    Ping(Vec<u8>),
+    Pong,
+    Close,
+}
+
+enum InitialPublicInvocation {
+    Start(
+        Box<PublicInvocationStart>,
+        Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
+    ),
+    Resume(
+        Box<golem_api_grpc::proto::golem::worker::ResumeAttach>,
+        Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
+    ),
+    Closed,
+    WriterStopped,
+}
+
+#[derive(Debug)]
+struct PublicSessionFrameError {
+    close_code: CloseCode,
+    reason: String,
+}
+
+fn decode_public_session_message(
+    message: Message,
+) -> std::result::Result<PublicSessionMessage, PublicSessionFrameError> {
+    match message {
+        Message::Binary(bytes) => PublicInvocationRequest::decode(bytes.as_slice())
+            .map(Box::new)
+            .map(PublicSessionMessage::Request)
+            .map_err(|error| PublicSessionFrameError {
+                close_code: CloseCode::Protocol,
+                reason: format!("malformed invocation request: {error}"),
+            }),
+        Message::Text(_) => Err(PublicSessionFrameError {
+            close_code: CloseCode::Unsupported,
+            reason: "invocation sessions accept binary protobuf messages only".to_string(),
+        }),
+        Message::Ping(payload) => Ok(PublicSessionMessage::Ping(payload)),
+        Message::Pong(_) => Ok(PublicSessionMessage::Pong),
+        Message::Close(_) => Ok(PublicSessionMessage::Close),
+    }
+}
+
+async fn proxy_public_invocation_session(
+    socket: WebSocketStream,
+    worker_service: Arc<WorkerService>,
+    auth: AuthCtx,
+) {
+    let (websocket_sink, mut websocket_stream) = socket.split();
+    let (websocket_sender, websocket_receiver) =
+        tokio::sync::mpsc::channel(INVOCATION_SESSION_CHANNEL_CAPACITY);
+    let mut writer = tokio::spawn(forward_websocket_messages(
+        websocket_sink,
+        websocket_receiver,
+        INVOCATION_SESSION_WRITE_PROGRESS_TIMEOUT,
+    ));
+    let mut state = InvocationSessionState::default();
+
+    let initial = match receive_public_invocation_start_while_writing(
+        &mut websocket_stream,
+        &websocket_sender,
+        &mut state,
+        &mut writer,
+    )
+    .await
+    {
+        InitialPublicInvocation::Start(start, idempotency_key) => {
+            InitialPublicInvocation::Start(start, idempotency_key)
+        }
+        InitialPublicInvocation::Resume(resume, idempotency_key) => {
+            InitialPublicInvocation::Resume(resume, idempotency_key)
+        }
+        InitialPublicInvocation::Closed => {
+            drop(websocket_sender);
+            let _ = writer.await;
+            return;
+        }
+        InitialPublicInvocation::WriterStopped => return,
+    };
+
+    let (request_sender, request_receiver) =
+        tokio::sync::mpsc::channel(INVOCATION_SESSION_CHANNEL_CAPACITY);
+    let tail = tokio_stream::wrappers::ReceiverStream::new(request_receiver);
+    let (responses, idempotency_key) = match initial {
+        InitialPublicInvocation::Start(start, idempotency_key) => (
+            worker_service
+                .invoke_public_agent_session(*start, Box::pin(tail), auth)
+                .await,
+            idempotency_key,
+        ),
+        InitialPublicInvocation::Resume(resume, idempotency_key) => (
+            worker_service
+                .resume_public_agent_session(*resume, Box::pin(tail), auth)
+                .await,
+            idempotency_key,
+        ),
+        InitialPublicInvocation::Closed | InitialPublicInvocation::WriterStopped => unreachable!(),
+    };
+    let responses = match responses {
+        Ok(responses) => responses,
+        Err(error) => {
+            let response = rejection_response(
+                rejection_reason(&error),
+                error.to_safe_string(),
+                idempotency_key,
+            );
+            if state.validate_response(&response).is_ok()
+                && queue_invocation_response(&websocket_sender, response).await
+            {
+                queue_websocket_close(&websocket_sender, CloseCode::Normal, "session rejected")
+                    .await;
+            }
+            drop(websocket_sender);
+            let _ = writer.await;
+            return;
+        }
+    };
+
+    let state = Arc::new(tokio::sync::Mutex::new(state));
+    let request_guard = request_sender.clone();
+    let requests = tokio::spawn(forward_public_requests(
+        websocket_stream,
+        request_sender,
+        websocket_sender.clone(),
+        state.clone(),
+    ));
+    let responses = tokio::spawn(forward_internal_responses(
+        responses,
+        websocket_sender.clone(),
+        state,
+    ));
+    drop(websocket_sender);
+
+    supervise_public_invocation_session(requests, responses, writer, request_guard).await;
+}
+
+async fn receive_public_invocation_start_while_writing<S>(
+    websocket_stream: &mut S,
+    websocket_sender: &tokio::sync::mpsc::Sender<Message>,
+    state: &mut InvocationSessionState,
+    writer: &mut tokio::task::JoinHandle<()>,
+) -> InitialPublicInvocation
+where
+    S: futures::Stream<Item = std::io::Result<Message>> + Unpin,
+{
+    let receive = receive_public_invocation_start(websocket_stream, websocket_sender, state);
+    tokio::pin!(receive);
+    tokio::select! {
+        result = &mut receive => match result {
+            Some((request, idempotency_key)) => match request {
+                PublicInvocationStartOrResume::Start(start) => {
+                    InitialPublicInvocation::Start(start, idempotency_key)
+                }
+                PublicInvocationStartOrResume::Resume(resume) => {
+                    InitialPublicInvocation::Resume(resume, idempotency_key)
+                }
+            }
+            None => InitialPublicInvocation::Closed,
+        },
+        _ = writer => InitialPublicInvocation::WriterStopped,
+    }
+}
+
+enum PublicInvocationStartOrResume {
+    Start(Box<PublicInvocationStart>),
+    Resume(Box<golem_api_grpc::proto::golem::worker::ResumeAttach>),
+}
+
+async fn receive_public_invocation_start<S>(
+    websocket_stream: &mut S,
+    websocket_sender: &tokio::sync::mpsc::Sender<Message>,
+    state: &mut InvocationSessionState,
+) -> Option<(
+    PublicInvocationStartOrResume,
+    Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
+)>
+where
+    S: futures::Stream<Item = std::io::Result<Message>> + Unpin,
+{
+    let first_request = loop {
+        match websocket_stream.next().await {
+            Some(Ok(message)) => match decode_public_session_message(message) {
+                Ok(PublicSessionMessage::Request(request)) => break *request,
+                Ok(PublicSessionMessage::Ping(payload)) => {
+                    if matches!(
+                        websocket_sender.try_send(Message::pong(payload)),
+                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_))
+                    ) {
+                        return None;
+                    }
+                }
+                Ok(PublicSessionMessage::Pong) => {}
+                Ok(PublicSessionMessage::Close) => return None,
+                Err(error) => {
+                    queue_websocket_close(websocket_sender, error.close_code, error.reason).await;
+                    return None;
+                }
+            },
+            None | Some(Err(_)) => return None,
+        }
+    };
+
+    if let Err(error) = state.validate_public_request(&first_request) {
+        queue_websocket_close(websocket_sender, CloseCode::Protocol, error).await;
+        return None;
+    }
+
+    match first_request.request {
+        Some(public_invocation_request::Request::Start(start)) => {
+            let idempotency_key = start.idempotency_key.clone();
+            Some((
+                PublicInvocationStartOrResume::Start(Box::new(start)),
+                idempotency_key,
+            ))
+        }
+        Some(public_invocation_request::Request::ResumeAttach(resume)) => {
+            let idempotency_key = resume.idempotency_key.clone();
+            Some((
+                PublicInvocationStartOrResume::Resume(Box::new(resume)),
+                idempotency_key,
+            ))
+        }
+        _ => {
+            queue_websocket_close(
+                websocket_sender,
+                CloseCode::Protocol,
+                "the first invocation request must be start or resume-attach",
+            )
+            .await;
+            None
+        }
+    }
+}
+
+async fn forward_websocket_messages<S>(
+    mut websocket_sink: S,
+    mut websocket_receiver: tokio::sync::mpsc::Receiver<Message>,
+    write_progress_timeout: std::time::Duration,
+) where
+    S: futures::Sink<Message> + Unpin,
+{
+    while let Some(message) = websocket_receiver.recv().await {
+        let close = matches!(message, Message::Close(_));
+        if !matches!(
+            tokio::time::timeout(write_progress_timeout, websocket_sink.send(message)).await,
+            Ok(Ok(()))
+        ) {
+            return;
+        }
+        if close {
+            return;
+        }
+    }
+}
+
+async fn supervise_public_invocation_session(
+    requests: tokio::task::JoinHandle<bool>,
+    responses: tokio::task::JoinHandle<()>,
+    writer: tokio::task::JoinHandle<()>,
+    request_guard: tokio::sync::mpsc::Sender<InvocationRequest>,
+) {
+    supervise_public_invocation_session_with_grace_period(
+        requests,
+        responses,
+        writer,
+        request_guard,
+        INVOCATION_SESSION_STAGING_ADMISSION_TIMEOUT,
+    )
+    .await;
+}
+
+async fn supervise_public_invocation_session_with_grace_period(
+    mut requests: tokio::task::JoinHandle<bool>,
+    mut responses: tokio::task::JoinHandle<()>,
+    mut writer: tokio::task::JoinHandle<()>,
+    request_guard: tokio::sync::mpsc::Sender<InvocationRequest>,
+    response_grace_period: std::time::Duration,
+) {
+    enum CompletedPump {
+        Requests(bool),
+        Responses,
+        Writer,
+    }
+    let completed = tokio::select! {
+        result = &mut requests => CompletedPump::Requests(result.unwrap_or(false)),
+        _ = &mut responses => CompletedPump::Responses,
+        _ = &mut writer => CompletedPump::Writer,
+    };
+    match completed {
+        CompletedPump::Requests(forwarded_cancellation) => {
+            finish_internal_session_after_request_pump(
+                forwarded_cancellation,
+                &mut responses,
+                request_guard,
+                response_grace_period,
+            )
+            .await;
+            let _ = writer.await;
+        }
+        CompletedPump::Responses => {
+            drop(request_guard);
+            requests.abort();
+            let _ = requests.await;
+            let _ = writer.await;
+        }
+        CompletedPump::Writer => {
+            let forwarded_cancellation = match tokio::time::timeout(
+                INVOCATION_SESSION_STAGING_ADMISSION_TIMEOUT,
+                &mut requests,
+            )
+            .await
+            {
+                Ok(Ok(forwarded_cancellation)) => forwarded_cancellation,
+                Ok(Err(_)) => false,
+                Err(_) => {
+                    requests.abort();
+                    let _ = requests.await;
+                    false
+                }
+            };
+            finish_internal_session_after_request_pump(
+                forwarded_cancellation,
+                &mut responses,
+                request_guard,
+                response_grace_period,
+            )
+            .await;
+        }
+    }
+}
+
+async fn finish_internal_session_after_request_pump(
+    forwarded_cancellation: bool,
+    responses: &mut tokio::task::JoinHandle<()>,
+    request_guard: tokio::sync::mpsc::Sender<InvocationRequest>,
+    response_grace_period: std::time::Duration,
+) {
+    if !forwarded_cancellation {
+        drop(request_guard);
+        responses.abort();
+        let _ = responses.await;
+        return;
+    }
+    let response_completed = tokio::time::timeout(response_grace_period, &mut *responses)
+        .await
+        .is_ok();
+    drop(request_guard);
+    if !response_completed {
+        responses.abort();
+        let _ = responses.await;
+    }
+}
+
+async fn forward_public_requests<S>(
+    websocket_stream: S,
+    request_sender: tokio::sync::mpsc::Sender<InvocationRequest>,
+    websocket_sender: tokio::sync::mpsc::Sender<Message>,
+    state: Arc<tokio::sync::Mutex<InvocationSessionState>>,
+) -> bool
+where
+    S: futures::Stream<Item = std::io::Result<Message>> + Unpin,
+{
+    forward_public_requests_with_timeout(
+        websocket_stream,
+        request_sender,
+        websocket_sender,
+        state,
+        INVOCATION_SESSION_STAGING_ADMISSION_TIMEOUT,
+    )
+    .await
+}
+
+async fn forward_public_requests_with_timeout<S>(
+    websocket_stream: S,
+    request_sender: tokio::sync::mpsc::Sender<InvocationRequest>,
+    websocket_sender: tokio::sync::mpsc::Sender<Message>,
+    state: Arc<tokio::sync::Mutex<InvocationSessionState>>,
+    staging_admission_timeout: std::time::Duration,
+) -> bool
+where
+    S: futures::Stream<Item = std::io::Result<Message>> + Unpin,
+{
+    let (staging_sender, mut staging_receiver) =
+        tokio::sync::mpsc::channel(INVOCATION_SESSION_CHANNEL_CAPACITY);
+    let forwarded_cancellation = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let read_requests = read_public_requests(
+        websocket_stream,
+        staging_sender,
+        websocket_sender.clone(),
+        state,
+        staging_admission_timeout,
+    );
+    let forwarder_cancellation = forwarded_cancellation.clone();
+    let forward_requests = async move {
+        while let Some(request) = staging_receiver.recv().await {
+            let is_cancellation = matches!(
+                &request.request,
+                Some(invocation_request::Request::StreamCancel(_))
+            );
+            if request_sender.send(request).await.is_err() {
+                try_queue_websocket_close(
+                    &websocket_sender,
+                    CloseCode::Error,
+                    "internal invocation request stream closed",
+                );
+                return;
+            }
+            if is_cancellation {
+                forwarder_cancellation.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
+    };
+    tokio::pin!(read_requests, forward_requests);
+    tokio::select! {
+        _ = &mut read_requests => {
+            let _ = tokio::time::timeout(
+                staging_admission_timeout,
+                &mut forward_requests,
+            )
+            .await;
+        }
+        _ = &mut forward_requests => {}
+    }
+    forwarded_cancellation.load(std::sync::atomic::Ordering::Acquire)
+}
+
+async fn read_public_requests<S>(
+    mut websocket_stream: S,
+    staging_sender: tokio::sync::mpsc::Sender<InvocationRequest>,
+    websocket_sender: tokio::sync::mpsc::Sender<Message>,
+    state: Arc<tokio::sync::Mutex<InvocationSessionState>>,
+    staging_admission_timeout: std::time::Duration,
+) where
+    S: futures::Stream<Item = std::io::Result<Message>> + Unpin,
+{
+    let mut pending_message = None;
+    loop {
+        let message = match pending_message.take() {
+            Some(message) => message,
+            None => match websocket_stream.next().await {
+                Some(message) => message,
+                None => return,
+            },
+        };
+        let message = match message {
+            Ok(message) => message,
+            Err(_) => return,
+        };
+        let request = match decode_public_session_message(message) {
+            Ok(PublicSessionMessage::Request(request)) => *request,
+            Ok(PublicSessionMessage::Ping(payload)) => {
+                if matches!(
+                    websocket_sender.try_send(Message::pong(payload)),
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_))
+                ) {
+                    return;
+                }
+                continue;
+            }
+            Ok(PublicSessionMessage::Pong) => continue,
+            Ok(PublicSessionMessage::Close) => return,
+            Err(error) => {
+                try_queue_websocket_close(&websocket_sender, error.close_code, error.reason);
+                return;
+            }
+        };
+        let validation = {
+            let mut state = state.lock().await;
+            state.validate_received_public_request(&request)
+        };
+        if let Err(error) = validation {
+            try_queue_websocket_close(&websocket_sender, CloseCode::Protocol, error);
+            return;
+        }
+        let request = match trusted_tail_request(request) {
+            Ok(request) => request,
+            Err(error) => {
+                try_queue_websocket_close(&websocket_sender, CloseCode::Protocol, error);
+                return;
+            }
+        };
+        let admission =
+            tokio::time::timeout(staging_admission_timeout, staging_sender.send(request));
+        tokio::pin!(admission);
+        tokio::select! {
+            result = &mut admission => {
+                if !matches!(result, Ok(Ok(()))) {
+                    return;
+                }
+            }
+            next = websocket_stream.next() => {
+                match next {
+                    None | Some(Err(_)) | Some(Ok(Message::Close(_))) => {
+                        let _ = admission.await;
+                        return;
+                    }
+                    Some(message) => {
+                        pending_message = Some(message);
+                    }
+                }
+                if !matches!(admission.await, Ok(Ok(()))) {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+async fn forward_internal_responses<S>(
+    mut responses: S,
+    websocket_sender: tokio::sync::mpsc::Sender<Message>,
+    state: Arc<tokio::sync::Mutex<InvocationSessionState>>,
+) where
+    S: futures::Stream<Item = std::result::Result<InvocationResponse, tonic::Status>> + Unpin,
+{
+    let mut websocket_open = true;
+    while let Some(response) = responses.next().await {
+        let response = match response {
+            Ok(response) => response,
+            Err(_) => break,
+        };
+        let validation = {
+            let mut state = state.lock().await;
+            state
+                .validate_response(&response)
+                .map(|()| state.is_complete())
+        };
+        let complete = match validation {
+            Ok(complete) => complete,
+            Err(error) => {
+                queue_websocket_close(&websocket_sender, CloseCode::Protocol, error).await;
+                return;
+            }
+        };
+        if websocket_open
+            && websocket_sender
+                .send(Message::binary(response.encode_to_vec()))
+                .await
+                .is_err()
+        {
+            websocket_open = false;
+        }
+        if complete {
+            if websocket_open {
+                queue_websocket_close(&websocket_sender, CloseCode::Normal, "session complete")
+                    .await;
+            }
+            return;
+        }
+    }
+
+    if websocket_open {
+        queue_websocket_close(
+            &websocket_sender,
+            CloseCode::Error,
+            "internal invocation response stream ended before session completion",
+        )
+        .await;
+    }
+}
+
+async fn queue_websocket_close(
+    sender: &tokio::sync::mpsc::Sender<Message>,
+    code: CloseCode,
+    reason: impl AsRef<str>,
+) {
+    let reason = bounded_close_reason(reason.as_ref());
+    let _ = sender.send(Message::close_with(code, reason)).await;
+}
+
+fn try_queue_websocket_close(
+    sender: &tokio::sync::mpsc::Sender<Message>,
+    code: CloseCode,
+    reason: impl AsRef<str>,
+) {
+    let reason = bounded_close_reason(reason.as_ref());
+    let _ = sender.try_send(Message::close_with(code, reason));
+}
+
+fn trusted_tail_request(
+    request: PublicInvocationRequest,
+) -> std::result::Result<InvocationRequest, String> {
+    let request = match request.request {
+        Some(public_invocation_request::Request::InputItem(item)) => {
+            if let Some(input_stream_item::Payload::Value(value)) = &item.payload {
+                validate_public_session_schema_value(value)?;
+            }
+            invocation_request::Request::InputItem(item)
+        }
+        Some(public_invocation_request::Request::InputEnd(end)) => {
+            invocation_request::Request::InputEnd(end)
+        }
+        Some(public_invocation_request::Request::StreamCancel(cancel)) => {
+            invocation_request::Request::StreamCancel(cancel)
+        }
+        Some(public_invocation_request::Request::Start(_))
+        | Some(public_invocation_request::Request::ResumeAttach(_)) => {
+            return Err(
+                "invocation start or resume-attach may only appear as the first request"
+                    .to_string(),
+            );
+        }
+        None => return Err("invocation request has no payload".to_string()),
+    };
+    Ok(InvocationRequest {
+        request: Some(request),
+    })
+}
+
+fn rejection_reason(error: &WorkerServiceError) -> InvocationRejectionReason {
+    match error {
+        WorkerServiceError::TypeChecker(_)
+        | WorkerServiceError::RegistryServiceError(RegistryServiceError::BadRequest(_)) => {
+            InvocationRejectionReason::Validation
+        }
+        WorkerServiceError::AuthError(AuthServiceError::Unauthorized(_))
+        | WorkerServiceError::RegistryServiceError(RegistryServiceError::Unauthorized(_))
+        | WorkerServiceError::RegistryServiceError(RegistryServiceError::CouldNotAuthenticate(_)) => {
+            InvocationRejectionReason::Unauthorized
+        }
+        WorkerServiceError::ComponentNotFound(_)
+        | WorkerServiceError::AgentNotFound(_)
+        | WorkerServiceError::RegistryServiceError(RegistryServiceError::NotFound(_)) => {
+            InvocationRejectionReason::NotFound
+        }
+        _ => InvocationRejectionReason::Internal,
+    }
+}
+
+fn rejection_response(
+    reason: InvocationRejectionReason,
+    error: String,
+    idempotency_key: Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
+) -> InvocationResponse {
+    InvocationResponse {
+        response: Some(invocation_response::Response::Rejected(
+            InvocationRejected {
+                reason: reason as i32,
+                error,
+                idempotency_key,
+                agent_id: None,
+                component_revision: None,
+            },
+        )),
+    }
+}
+
+async fn queue_invocation_response(
+    sender: &tokio::sync::mpsc::Sender<Message>,
+    response: InvocationResponse,
+) -> bool {
+    sender
+        .send(Message::binary(response.encode_to_vec()))
+        .await
+        .is_ok()
+}
+
+fn bounded_close_reason(reason: &str) -> String {
+    const MAX_CLOSE_REASON_BYTES: usize = 123;
+    if reason.len() <= MAX_CLOSE_REASON_BYTES {
+        return reason.to_string();
+    }
+    let mut end = MAX_CLOSE_REASON_BYTES;
+    while !reason.is_char_boundary(end) {
+        end -= 1;
+    }
+    reason[..end].to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Enum)]
@@ -169,13 +896,190 @@ pub struct CreateAgentResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentInvocationRequest, CreateAgentRequest};
+    use super::{
+        AgentInvocationRequest, CreateAgentRequest, INVOCATION_SESSION_MAX_MESSAGE_SIZE,
+        InitialPublicInvocation, PublicSessionMessage, bounded_close_reason,
+        decode_public_session_message, forward_internal_responses, forward_public_requests,
+        forward_public_requests_with_timeout, forward_websocket_messages,
+        invocation_session_websocket_config, queue_invocation_response,
+        receive_public_invocation_start, receive_public_invocation_start_while_writing,
+        rejection_reason, supervise_public_invocation_session,
+        supervise_public_invocation_session_with_grace_period, trusted_tail_request,
+    };
+    use crate::service::worker::WorkerServiceError;
+    use futures::StreamExt;
+    use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
+    use golem_api_grpc::proto::golem::common::{EnvironmentId, Uuid};
+    use golem_api_grpc::proto::golem::component::ComponentId;
+    use golem_api_grpc::proto::golem::worker::{
+        AgentId, DurableStreamHandle, DurableStreamMapping, IdempotencyKey, InputStreamEnd,
+        InputStreamItem, InvocationAccepted, InvocationRejectionReason, InvocationRequest,
+        InvocationResponse, InvocationSessionCompletion, InvocationSessionResult, OutputStreamItem,
+        PublicInvocationRequest, PublicInvocationStart, ResumeAttach, StreamCancel,
+        StreamCancelReason, StreamCancelRole, StreamInvocationIdentity, StreamMappingRole,
+        input_stream_item, invocation_request, invocation_response, invocation_session_result,
+        public_invocation_request,
+    };
+    use golem_service_base::clients::registry::RegistryServiceError;
+    use poem::web::websocket::{CloseCode, Message};
     use poem_openapi::types::{ParseFromJSON, ToJSON};
+    use prost::Message as ProstMessage;
     use serde_json::{Value, json};
+    use std::sync::Arc;
     use test_r::test;
 
     fn empty_parameter_record() -> Value {
         json!({ "kind": "record", "value": { "fields": [] } })
+    }
+
+    fn test_uuid(value: u64) -> Uuid {
+        Uuid {
+            high_bits: 0,
+            low_bits: value,
+        }
+    }
+
+    fn test_agent_id(name: &str) -> AgentId {
+        AgentId {
+            component_id: Some(ComponentId {
+                value: Some(test_uuid(10)),
+            }),
+            name: name.to_string(),
+        }
+    }
+
+    fn test_mapping(
+        transport_stream_id: u64,
+        role: StreamMappingRole,
+        idempotency_key: &IdempotencyKey,
+    ) -> DurableStreamMapping {
+        DurableStreamMapping {
+            transport_stream_id,
+            handle: Some(DurableStreamHandle {
+                format_version: 1,
+                stream_id: Some(test_uuid(100 + transport_stream_id)),
+                producer_environment_id: Some(EnvironmentId {
+                    value: Some(test_uuid(20)),
+                }),
+                producer: Some(test_agent_id("agent")),
+                expected_producer_fingerprint: Some(test_uuid(30)),
+                source_invocation: Some(StreamInvocationIdentity {
+                    callee_environment_id: Some(EnvironmentId {
+                        value: Some(test_uuid(20)),
+                    }),
+                    callee: Some(test_agent_id("agent")),
+                    callee_fingerprint: Some(test_uuid(30)),
+                    idempotency_key: Some(idempotency_key.clone()),
+                }),
+                component_revision: Some(1),
+                element_schema_fingerprint: vec![40; 32],
+            }),
+            high_water: None,
+            role: role as i32,
+        }
+    }
+
+    fn test_acceptance(
+        agent_id: AgentId,
+        idempotency_key: IdempotencyKey,
+        input_stream_ids: &[u64],
+    ) -> InvocationAccepted {
+        InvocationAccepted {
+            agent_id: Some(agent_id),
+            idempotency_key: Some(idempotency_key.clone()),
+            component_revision: Some(1),
+            attachment_id: Some(test_uuid(1)),
+            attempt_id: Some(test_uuid(2)),
+            epoch: 1,
+            environment_id: Some(EnvironmentId {
+                value: Some(test_uuid(20)),
+            }),
+            callee_fingerprint: Some(test_uuid(30)),
+            stream_mappings: input_stream_ids
+                .iter()
+                .map(|stream_id| {
+                    test_mapping(*stream_id, StreamMappingRole::Input, &idempotency_key)
+                })
+                .collect(),
+        }
+    }
+
+    fn accepted_public_input_state(stream_id: u64) -> InvocationSessionState {
+        use golem_api_grpc::proto::golem::schema::{
+            SchemaValue, SchemaValueStreamReference, schema_value,
+        };
+
+        let idempotency_key = IdempotencyKey {
+            value: "cancel-before-close".to_string(),
+        };
+        let start = PublicInvocationRequest {
+            request: Some(public_invocation_request::Request::Start(
+                PublicInvocationStart {
+                    application_name: "app".to_string(),
+                    environment_name: "env".to_string(),
+                    agent_type_name: "agent".to_string(),
+                    constructor_parameters: Some(SchemaValue {
+                        value: Some(schema_value::Value::RecordValue(Default::default())),
+                    }),
+                    method_name: "run".to_string(),
+                    method_parameters: Some(SchemaValue {
+                        value: Some(schema_value::Value::StreamReference(
+                            SchemaValueStreamReference { stream_id },
+                        )),
+                    }),
+                    idempotency_key: Some(idempotency_key.clone()),
+                    ..Default::default()
+                },
+            )),
+        };
+        let accepted = InvocationResponse {
+            response: Some(invocation_response::Response::Accepted(test_acceptance(
+                test_agent_id("agent"),
+                idempotency_key,
+                &[stream_id],
+            ))),
+        };
+        let mut state = InvocationSessionState::default();
+        state.validate_public_request(&start).unwrap();
+        state.validate_response(&accepted).unwrap();
+        state
+    }
+
+    fn malformed_input_cancellation(stream_id: u64) -> PublicInvocationRequest {
+        PublicInvocationRequest {
+            request: Some(public_invocation_request::Request::StreamCancel(
+                StreamCancel {
+                    transport_stream_id: stream_id,
+                    producer_sequence: 0,
+                    role: StreamCancelRole::InputProducer as i32,
+                    reason: StreamCancelReason::Protocol as i32,
+                    details: Some("malformed stdin".to_string()),
+                    durable_stream_id: Some(test_uuid(100 + stream_id)),
+                    epoch: 1,
+                    durable_offset: Vec::new(),
+                },
+            )),
+        }
+    }
+
+    fn test_durable_offset() -> Vec<u8> {
+        let mut offset = vec![0; 24];
+        offset[0] = 1;
+        offset
+    }
+
+    fn gated_websocket_sink(
+        permits: tokio::sync::mpsc::Receiver<()>,
+        delivered: Arc<tokio::sync::Mutex<Vec<Message>>>,
+    ) -> impl futures::Sink<Message, Error = ()> {
+        futures::sink::unfold(
+            (permits, delivered),
+            |(mut permits, delivered), message| async move {
+                permits.recv().await.ok_or(())?;
+                delivered.lock().await.push(message);
+                Ok((permits, delivered))
+            },
+        )
     }
 
     #[test]
@@ -231,5 +1135,1104 @@ mod tests {
         });
 
         assert!(CreateAgentRequest::parse_from_json(Some(request_json)).is_err());
+    }
+
+    #[test]
+    fn invocation_session_frame_decoder_accepts_one_binary_protobuf_message() {
+        let request = PublicInvocationRequest {
+            request: Some(public_invocation_request::Request::InputEnd(
+                InputStreamEnd {
+                    transport_stream_id: 7,
+                    sequence: 3,
+                    ..Default::default()
+                },
+            )),
+        };
+
+        let decoded = decode_public_session_message(Message::binary(request.encode_to_vec()))
+            .expect("binary protobuf frame must decode");
+
+        assert!(matches!(
+            decoded,
+            PublicSessionMessage::Request(request) if matches!(*request, PublicInvocationRequest {
+                request: Some(public_invocation_request::Request::InputEnd(
+                    InputStreamEnd {
+                        transport_stream_id: 7,
+                        sequence: 3,
+                        ..
+                    }
+                )),
+            })
+        ));
+    }
+
+    #[test]
+    fn invocation_session_frame_decoder_rejects_text_and_malformed_protobuf() {
+        let text = decode_public_session_message(Message::text("not protobuf"))
+            .expect_err("text frames must be rejected");
+        assert_eq!(text.close_code, CloseCode::Unsupported);
+
+        let malformed = decode_public_session_message(Message::binary([0xff, 0xff]))
+            .expect_err("malformed protobuf must be rejected");
+        assert_eq!(malformed.close_code, CloseCode::Protocol);
+    }
+
+    #[test]
+    fn invocation_session_websocket_config_bounds_frames_messages_and_writes() {
+        let config = invocation_session_websocket_config();
+
+        assert_eq!(
+            config.max_message_size,
+            Some(INVOCATION_SESSION_MAX_MESSAGE_SIZE)
+        );
+        assert_eq!(
+            config.max_frame_size,
+            Some(INVOCATION_SESSION_MAX_MESSAGE_SIZE)
+        );
+        assert_eq!(
+            config.max_write_buffer_size,
+            2 * INVOCATION_SESSION_MAX_MESSAGE_SIZE
+        );
+    }
+
+    #[test]
+    fn public_tail_translation_cannot_construct_a_trusted_start() {
+        let translated = trusted_tail_request(PublicInvocationRequest {
+            request: Some(public_invocation_request::Request::InputEnd(
+                InputStreamEnd {
+                    transport_stream_id: 4,
+                    sequence: 9,
+                    ..Default::default()
+                },
+            )),
+        })
+        .unwrap();
+        assert!(matches!(
+            translated.request,
+            Some(invocation_request::Request::InputEnd(InputStreamEnd {
+                transport_stream_id: 4,
+                sequence: 9,
+                ..
+            }))
+        ));
+
+        let repeated_start = PublicInvocationRequest {
+            request: Some(public_invocation_request::Request::Start(Default::default())),
+        };
+        assert!(trusted_tail_request(repeated_start).is_err());
+    }
+
+    #[test]
+    fn public_tail_translation_rejects_recursive_host_capabilities() {
+        use golem_api_grpc::proto::golem::schema::{
+            RecordValue, SchemaValue, SecretValue, schema_value,
+        };
+
+        let request = PublicInvocationRequest {
+            request: Some(public_invocation_request::Request::InputItem(
+                InputStreamItem {
+                    transport_stream_id: 7,
+                    sequence: 0,
+                    payload: Some(input_stream_item::Payload::Value(SchemaValue {
+                        value: Some(schema_value::Value::RecordValue(RecordValue {
+                            fields: vec![SchemaValue {
+                                value: Some(schema_value::Value::SecretValue(
+                                    SecretValue::default(),
+                                )),
+                            }],
+                        })),
+                    })),
+                    ..Default::default()
+                },
+            )),
+        };
+
+        assert!(
+            trusted_tail_request(request)
+                .unwrap_err()
+                .contains("host-managed capability")
+        );
+    }
+
+    #[test]
+    async fn saturated_websocket_output_does_not_hide_disconnect_after_ping() {
+        let (websocket_client, websocket_stream) =
+            futures::channel::mpsc::unbounded::<std::io::Result<Message>>();
+        let (internal_sender, _internal_receiver) = tokio::sync::mpsc::channel(1);
+        let (websocket_sender, _websocket_receiver) = tokio::sync::mpsc::channel(1);
+        websocket_sender
+            .send(Message::Ping(Vec::new()))
+            .await
+            .unwrap();
+
+        let requests = tokio::spawn(forward_public_requests(
+            websocket_stream,
+            internal_sender,
+            websocket_sender,
+            Arc::new(tokio::sync::Mutex::new(InvocationSessionState::default())),
+        ));
+        websocket_client
+            .unbounded_send(Ok(Message::Ping(Vec::new())))
+            .unwrap();
+        tokio::task::yield_now().await;
+        drop(websocket_client);
+
+        tokio::time::timeout(std::time::Duration::from_millis(100), requests)
+            .await
+            .expect("saturated WebSocket output hid the client disconnect")
+            .unwrap();
+    }
+
+    #[test]
+    async fn websocket_close_drains_an_admitted_input_cancellation() {
+        let stream_id = 7;
+        let (websocket_client, websocket_stream) =
+            futures::channel::mpsc::unbounded::<std::io::Result<Message>>();
+        let (internal_sender, mut internal_receiver) = tokio::sync::mpsc::channel(1);
+        let (websocket_sender, _websocket_receiver) = tokio::sync::mpsc::channel(1);
+        let requests = tokio::spawn(forward_public_requests(
+            websocket_stream,
+            internal_sender,
+            websocket_sender,
+            Arc::new(tokio::sync::Mutex::new(accepted_public_input_state(
+                stream_id,
+            ))),
+        ));
+        websocket_client
+            .unbounded_send(Ok(Message::binary(
+                malformed_input_cancellation(stream_id).encode_to_vec(),
+            )))
+            .unwrap();
+        websocket_client
+            .unbounded_send(Ok(Message::close()))
+            .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), requests)
+            .await
+            .expect("request pump did not close after draining cancellation")
+            .unwrap();
+        let forwarded = internal_receiver
+            .recv()
+            .await
+            .expect("admitted input cancellation was dropped on WebSocket close");
+        assert!(matches!(
+            forwarded.request,
+            Some(invocation_request::Request::StreamCancel(StreamCancel {
+                transport_stream_id: actual_stream_id,
+                role,
+                reason,
+                ..
+            })) if actual_stream_id == stream_id
+                && role == StreamCancelRole::InputProducer as i32
+                && reason == StreamCancelReason::Protocol as i32
+        ));
+        assert!(internal_receiver.recv().await.is_none());
+    }
+
+    #[test]
+    async fn websocket_close_keeps_the_internal_session_alive_until_cancellation_is_consumed() {
+        let stream_id = 7;
+        let (websocket_client, websocket_stream) =
+            futures::channel::mpsc::unbounded::<std::io::Result<Message>>();
+        let (internal_sender, mut internal_receiver) = tokio::sync::mpsc::channel(1);
+        let request_guard = internal_sender.clone();
+        let (websocket_sender, _websocket_receiver) = tokio::sync::mpsc::channel(1);
+        let requests = tokio::spawn(forward_public_requests(
+            websocket_stream,
+            internal_sender,
+            websocket_sender,
+            Arc::new(tokio::sync::Mutex::new(accepted_public_input_state(
+                stream_id,
+            ))),
+        ));
+        websocket_client
+            .unbounded_send(Ok(Message::binary(
+                malformed_input_cancellation(stream_id).encode_to_vec(),
+            )))
+            .unwrap();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            websocket_client
+                .unbounded_send(Ok(Message::close()))
+                .unwrap();
+        });
+
+        let (consumed_sender, consumed_receiver) = tokio::sync::oneshot::channel();
+        let responses = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            let forwarded = internal_receiver
+                .recv()
+                .await
+                .expect("the internal request stream closed before cancellation");
+            assert!(matches!(
+                forwarded.request,
+                Some(invocation_request::Request::StreamCancel(StreamCancel {
+                    transport_stream_id: actual_stream_id,
+                    ..
+                })) if actual_stream_id == stream_id
+            ));
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            assert!(
+                !internal_receiver.is_closed(),
+                "the internal request transport closed before cancellation took effect"
+            );
+            let _ = consumed_sender.send(());
+        });
+        let writer = tokio::spawn(async {});
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            supervise_public_invocation_session(requests, responses, writer, request_guard),
+        )
+        .await
+        .expect("session supervision did not drain the internal request stream");
+        consumed_receiver
+            .await
+            .expect("request completion cancelled internal cancellation delivery");
+    }
+
+    #[test]
+    async fn websocket_close_returns_after_forwarded_cancellation_is_consumed() {
+        let stream_id = 7;
+        let (websocket_client, websocket_stream) =
+            futures::channel::mpsc::unbounded::<std::io::Result<Message>>();
+        let (internal_sender, mut internal_receiver) = tokio::sync::mpsc::channel(1);
+        let request_guard = internal_sender.clone();
+        let (websocket_sender, _websocket_receiver) = tokio::sync::mpsc::channel(1);
+        let requests = tokio::spawn(forward_public_requests(
+            websocket_stream,
+            internal_sender,
+            websocket_sender,
+            Arc::new(tokio::sync::Mutex::new(accepted_public_input_state(
+                stream_id,
+            ))),
+        ));
+        websocket_client
+            .unbounded_send(Ok(Message::binary(
+                malformed_input_cancellation(stream_id).encode_to_vec(),
+            )))
+            .unwrap();
+        websocket_client
+            .unbounded_send(Ok(Message::close()))
+            .unwrap();
+
+        let cancellation_consumed = tokio::spawn(async move {
+            let request = internal_receiver
+                .recv()
+                .await
+                .expect("cancellation was not forwarded");
+            assert!(matches!(
+                request.request,
+                Some(invocation_request::Request::StreamCancel(_))
+            ));
+        });
+        let responses = tokio::spawn(std::future::pending());
+        let writer = tokio::spawn(async {});
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            supervise_public_invocation_session_with_grace_period(
+                requests,
+                responses,
+                writer,
+                request_guard,
+                std::time::Duration::from_millis(25),
+            ),
+        )
+        .await
+        .expect("transport detach waited forever after cancellation was consumed");
+        cancellation_consumed.await.unwrap();
+    }
+
+    #[test]
+    async fn request_completion_without_cancellation_does_not_wait_for_internal_responses() {
+        let (request_sender, _request_receiver) = tokio::sync::mpsc::channel(1);
+        let request_guard = request_sender.clone();
+        let (websocket_sender, _websocket_receiver) = tokio::sync::mpsc::channel(1);
+        let requests = tokio::spawn(forward_public_requests(
+            tokio_stream::empty(),
+            request_sender,
+            websocket_sender,
+            Arc::new(tokio::sync::Mutex::new(InvocationSessionState::default())),
+        ));
+        let responses = tokio::spawn(std::future::pending());
+        let writer = tokio::spawn(async {});
+
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            supervise_public_invocation_session(requests, responses, writer, request_guard),
+        )
+        .await
+        .expect("a plain WebSocket close left the proxy waiting for internal responses");
+    }
+
+    #[test]
+    async fn saturated_input_forwarding_does_not_block_responses_or_tail_cancellation() {
+        use golem_api_grpc::proto::golem::schema::{
+            RecordValue, SchemaValue, SchemaValueStreamReference, schema_value,
+        };
+
+        let idempotency_key = IdempotencyKey {
+            value: "input-backpressure".to_string(),
+        };
+        let stream_id = 7;
+        let start = PublicInvocationRequest {
+            request: Some(public_invocation_request::Request::Start(
+                PublicInvocationStart {
+                    application_name: "app".to_string(),
+                    environment_name: "env".to_string(),
+                    agent_type_name: "agent".to_string(),
+                    constructor_parameters: Some(SchemaValue {
+                        value: Some(schema_value::Value::RecordValue(RecordValue::default())),
+                    }),
+                    method_name: "run".to_string(),
+                    method_parameters: Some(SchemaValue {
+                        value: Some(schema_value::Value::RecordValue(RecordValue {
+                            fields: vec![SchemaValue {
+                                value: Some(schema_value::Value::StreamReference(
+                                    SchemaValueStreamReference { stream_id },
+                                )),
+                            }],
+                        })),
+                    }),
+                    idempotency_key: Some(idempotency_key.clone()),
+                    ..Default::default()
+                },
+            )),
+        };
+        let accepted = InvocationResponse {
+            response: Some(invocation_response::Response::Accepted(test_acceptance(
+                test_agent_id("agent"),
+                idempotency_key,
+                &[stream_id],
+            ))),
+        };
+        let mut state = InvocationSessionState::default();
+        state.validate_public_request(&start).unwrap();
+        state.validate_response(&accepted).unwrap();
+        let state = Arc::new(tokio::sync::Mutex::new(state));
+
+        let (websocket_client, websocket_stream) =
+            futures::channel::mpsc::unbounded::<std::io::Result<Message>>();
+        let (internal_sender, mut internal_receiver) = tokio::sync::mpsc::channel(1);
+        internal_sender
+            .send(InvocationRequest { request: None })
+            .await
+            .unwrap();
+        let (websocket_sender, mut websocket_receiver) = tokio::sync::mpsc::channel(2);
+        let requests = tokio::spawn(forward_public_requests_with_timeout(
+            websocket_stream,
+            internal_sender,
+            websocket_sender.clone(),
+            state.clone(),
+            std::time::Duration::from_millis(25),
+        ));
+        let input = PublicInvocationRequest {
+            request: Some(public_invocation_request::Request::InputItem(
+                InputStreamItem {
+                    transport_stream_id: stream_id,
+                    sequence: 0,
+                    payload: Some(input_stream_item::Payload::Value(
+                        golem_common::schema::SchemaValue::U32(1)
+                            .try_into()
+                            .unwrap(),
+                    )),
+                    durable_stream_id: Some(test_uuid(100 + stream_id)),
+                    epoch: 1,
+                },
+            )),
+        };
+        websocket_client
+            .unbounded_send(Ok(Message::binary(input.encode_to_vec())))
+            .unwrap();
+        tokio::task::yield_now().await;
+
+        let result = InvocationResponse {
+            response: Some(invocation_response::Response::Result(
+                InvocationSessionResult {
+                    result: Some(invocation_session_result::Result::NoResult(
+                        golem_api_grpc::proto::golem::common::Empty {},
+                    )),
+                    component_revision: Some(1),
+                    agent_id: Some(test_agent_id("agent")),
+                    idempotency_key: Some(IdempotencyKey {
+                        value: "input-backpressure".to_string(),
+                    }),
+                    ..Default::default()
+                },
+            )),
+        };
+        let responses = tokio::spawn(forward_internal_responses(
+            tokio_stream::iter([Ok(result.clone())]),
+            websocket_sender,
+            state,
+        ));
+        let forwarded =
+            tokio::time::timeout(std::time::Duration::from_secs(1), websocket_receiver.recv())
+                .await
+                .expect("response forwarding blocked behind saturated input")
+                .expect("response pump closed unexpectedly");
+        let Message::Binary(forwarded) = forwarded else {
+            panic!("response pump did not forward a binary invocation response")
+        };
+        assert_eq!(
+            InvocationResponse::decode(forwarded.as_slice()).unwrap(),
+            result
+        );
+
+        drop(websocket_client);
+        tokio::time::timeout(std::time::Duration::from_secs(1), requests)
+            .await
+            .expect("disconnect did not terminate the saturated request pump")
+            .unwrap();
+        let _ = responses.await;
+        assert!(internal_receiver.recv().await.is_some());
+        assert!(internal_receiver.recv().await.is_none());
+    }
+
+    #[test]
+    async fn valid_input_burst_applies_backpressure_without_closing_the_session() {
+        use golem_api_grpc::proto::golem::schema::{
+            RecordValue, SchemaValue, SchemaValueStreamReference, schema_value,
+        };
+
+        let idempotency_key = IdempotencyKey {
+            value: "lossless-input-backpressure".to_string(),
+        };
+        let stream_id = 7;
+        let start = PublicInvocationRequest {
+            request: Some(public_invocation_request::Request::Start(
+                PublicInvocationStart {
+                    application_name: "app".to_string(),
+                    environment_name: "env".to_string(),
+                    agent_type_name: "agent".to_string(),
+                    constructor_parameters: Some(SchemaValue {
+                        value: Some(schema_value::Value::RecordValue(RecordValue::default())),
+                    }),
+                    method_name: "run".to_string(),
+                    method_parameters: Some(SchemaValue {
+                        value: Some(schema_value::Value::StreamReference(
+                            SchemaValueStreamReference { stream_id },
+                        )),
+                    }),
+                    idempotency_key: Some(idempotency_key.clone()),
+                    ..Default::default()
+                },
+            )),
+        };
+        let accepted = InvocationResponse {
+            response: Some(invocation_response::Response::Accepted(test_acceptance(
+                test_agent_id("agent"),
+                idempotency_key,
+                &[stream_id],
+            ))),
+        };
+        let mut state = InvocationSessionState::default();
+        state.validate_public_request(&start).unwrap();
+        state.validate_response(&accepted).unwrap();
+
+        let (websocket_client, websocket_stream) =
+            futures::channel::mpsc::unbounded::<std::io::Result<Message>>();
+        let (internal_sender, mut internal_receiver) = tokio::sync::mpsc::channel(1);
+        internal_sender
+            .send(InvocationRequest { request: None })
+            .await
+            .unwrap();
+        let (websocket_sender, mut websocket_receiver) = tokio::sync::mpsc::channel(1);
+        let requests = tokio::spawn(forward_public_requests(
+            websocket_stream,
+            internal_sender,
+            websocket_sender,
+            Arc::new(tokio::sync::Mutex::new(state)),
+        ));
+
+        for sequence in 0..18 {
+            let input = PublicInvocationRequest {
+                request: Some(public_invocation_request::Request::InputItem(
+                    InputStreamItem {
+                        transport_stream_id: stream_id,
+                        sequence,
+                        payload: Some(input_stream_item::Payload::Value(SchemaValue {
+                            value: Some(schema_value::Value::U8Value(sequence as u32)),
+                        })),
+                        durable_stream_id: Some(test_uuid(100 + stream_id)),
+                        epoch: 1,
+                    },
+                )),
+            };
+            websocket_client
+                .unbounded_send(Ok(Message::binary(input.encode_to_vec())))
+                .unwrap();
+        }
+
+        let outbound = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            websocket_receiver.recv(),
+        )
+        .await;
+        assert!(
+            outbound.is_err(),
+            "a valid input burst must be backpressured, not close the live session; got {outbound:?}"
+        );
+        assert!(!requests.is_finished());
+
+        assert!(internal_receiver.recv().await.is_some());
+        for expected_sequence in 0..18 {
+            let request = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                internal_receiver.recv(),
+            )
+            .await
+            .expect("lossless input forwarding remained blocked after downstream capacity returned")
+            .expect("internal invocation request stream closed during a valid input burst");
+            assert!(matches!(
+                request.request,
+                Some(invocation_request::Request::InputItem(InputStreamItem {
+                    transport_stream_id: actual_stream_id,
+                    sequence: actual_sequence,
+                    ..
+                })) if actual_stream_id == stream_id && actual_sequence == expected_sequence
+            ));
+        }
+        drop(websocket_client);
+        tokio::time::timeout(std::time::Duration::from_secs(1), requests)
+            .await
+            .expect("disconnect did not terminate the drained request pump")
+            .unwrap();
+        assert!(internal_receiver.recv().await.is_none());
+    }
+
+    #[test]
+    async fn saturated_staging_does_not_hide_websocket_disconnect() {
+        use golem_api_grpc::proto::golem::schema::{
+            RecordValue, SchemaValue, SchemaValueStreamReference, schema_value,
+        };
+
+        let idempotency_key = IdempotencyKey {
+            value: "saturated-staging-disconnect".to_string(),
+        };
+        let stream_id = 7;
+        let start = PublicInvocationRequest {
+            request: Some(public_invocation_request::Request::Start(
+                PublicInvocationStart {
+                    application_name: "app".to_string(),
+                    environment_name: "env".to_string(),
+                    agent_type_name: "agent".to_string(),
+                    constructor_parameters: Some(SchemaValue {
+                        value: Some(schema_value::Value::RecordValue(RecordValue::default())),
+                    }),
+                    method_name: "run".to_string(),
+                    method_parameters: Some(SchemaValue {
+                        value: Some(schema_value::Value::StreamReference(
+                            SchemaValueStreamReference { stream_id },
+                        )),
+                    }),
+                    idempotency_key: Some(idempotency_key.clone()),
+                    ..Default::default()
+                },
+            )),
+        };
+        let accepted = InvocationResponse {
+            response: Some(invocation_response::Response::Accepted(test_acceptance(
+                test_agent_id("agent"),
+                idempotency_key,
+                &[stream_id],
+            ))),
+        };
+        let mut state = InvocationSessionState::default();
+        state.validate_public_request(&start).unwrap();
+        state.validate_response(&accepted).unwrap();
+
+        let (websocket_client, websocket_stream) =
+            futures::channel::mpsc::unbounded::<std::io::Result<Message>>();
+        let (internal_sender, mut internal_receiver) = tokio::sync::mpsc::channel(1);
+        internal_sender
+            .send(InvocationRequest { request: None })
+            .await
+            .unwrap();
+        let (websocket_sender, _websocket_receiver) = tokio::sync::mpsc::channel(1);
+        let requests = tokio::spawn(forward_public_requests_with_timeout(
+            websocket_stream,
+            internal_sender,
+            websocket_sender,
+            Arc::new(tokio::sync::Mutex::new(state)),
+            std::time::Duration::from_millis(50),
+        ));
+
+        for sequence in 0..19 {
+            let input = PublicInvocationRequest {
+                request: Some(public_invocation_request::Request::InputItem(
+                    InputStreamItem {
+                        transport_stream_id: stream_id,
+                        sequence,
+                        payload: Some(input_stream_item::Payload::Value(SchemaValue {
+                            value: Some(schema_value::Value::U8Value(sequence as u32)),
+                        })),
+                        durable_stream_id: Some(test_uuid(100 + stream_id)),
+                        epoch: 1,
+                    },
+                )),
+            };
+            websocket_client
+                .unbounded_send(Ok(Message::binary(input.encode_to_vec())))
+                .unwrap();
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(!requests.is_finished());
+        drop(websocket_client);
+
+        tokio::time::timeout(std::time::Duration::from_millis(200), requests)
+            .await
+            .expect("saturated staging exceeded its bounded disconnect-detection deadline")
+            .unwrap();
+        assert!(internal_receiver.recv().await.is_some());
+        assert!(internal_receiver.recv().await.is_none());
+    }
+
+    #[test]
+    async fn saturated_output_forwarding_does_not_block_output_cancellation() {
+        use golem_api_grpc::proto::golem::schema::{
+            RecordValue, SchemaValue, SchemaValueStreamReference, schema_value,
+        };
+
+        let idempotency_key = IdempotencyKey {
+            value: "output-backpressure".to_string(),
+        };
+        let start = PublicInvocationRequest {
+            request: Some(public_invocation_request::Request::Start(
+                PublicInvocationStart {
+                    application_name: "app".to_string(),
+                    environment_name: "env".to_string(),
+                    agent_type_name: "agent".to_string(),
+                    constructor_parameters: Some(SchemaValue {
+                        value: Some(schema_value::Value::RecordValue(RecordValue::default())),
+                    }),
+                    method_name: "run".to_string(),
+                    method_parameters: Some(SchemaValue {
+                        value: Some(schema_value::Value::RecordValue(RecordValue::default())),
+                    }),
+                    idempotency_key: Some(idempotency_key.clone()),
+                    ..Default::default()
+                },
+            )),
+        };
+        let agent_id = test_agent_id("agent");
+        let accepted = InvocationResponse {
+            response: Some(invocation_response::Response::Accepted(test_acceptance(
+                agent_id.clone(),
+                idempotency_key.clone(),
+                &[],
+            ))),
+        };
+        let mut initial_state = InvocationSessionState::default();
+        initial_state.validate_public_request(&start).unwrap();
+        initial_state.validate_response(&accepted).unwrap();
+
+        let output_stream_id = 2;
+        let result = InvocationResponse {
+            response: Some(invocation_response::Response::Result(
+                InvocationSessionResult {
+                    result: Some(invocation_session_result::Result::MethodResult(
+                        SchemaValue {
+                            value: Some(schema_value::Value::StreamReference(
+                                SchemaValueStreamReference {
+                                    stream_id: output_stream_id,
+                                },
+                            )),
+                        },
+                    )),
+                    component_revision: Some(1),
+                    agent_id: Some(agent_id),
+                    idempotency_key: Some(idempotency_key),
+                    new_stream_mappings: vec![test_mapping(
+                        output_stream_id,
+                        StreamMappingRole::Output,
+                        &IdempotencyKey {
+                            value: "output-backpressure".to_string(),
+                        },
+                    )],
+                    ..Default::default()
+                },
+            )),
+        };
+        initial_state.validate_response(&result).unwrap();
+        let state = Arc::new(tokio::sync::Mutex::new(initial_state));
+
+        let output_item = InvocationResponse {
+            response: Some(invocation_response::Response::OutputItem(
+                OutputStreamItem {
+                    transport_stream_id: output_stream_id,
+                    producer_sequence: 0,
+                    value: Some(SchemaValue {
+                        value: Some(schema_value::Value::U8Value(42)),
+                    }),
+                    durable_stream_id: Some(test_uuid(100 + output_stream_id)),
+                    durable_offset: test_durable_offset(),
+                    epoch: 1,
+                    new_stream_mappings: Vec::new(),
+                },
+            )),
+        };
+
+        let (websocket_sender, mut websocket_receiver) = tokio::sync::mpsc::channel(1);
+        websocket_sender
+            .send(Message::Ping(Vec::new()))
+            .await
+            .unwrap();
+        let responses = tokio::spawn(forward_internal_responses(
+            tokio_stream::iter([Ok(output_item)]),
+            websocket_sender.clone(),
+            state.clone(),
+        ));
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(
+            !responses.is_finished(),
+            "response forwarding did not saturate the bounded WebSocket queue"
+        );
+        assert!(
+            state.try_lock().is_ok(),
+            "response forwarding retained protocol state while blocked by output backpressure"
+        );
+
+        let (websocket_client, websocket_stream) =
+            futures::channel::mpsc::unbounded::<std::io::Result<Message>>();
+        let (internal_sender, mut internal_receiver) = tokio::sync::mpsc::channel(1);
+        let requests = tokio::spawn(forward_public_requests(
+            websocket_stream,
+            internal_sender,
+            websocket_sender,
+            state,
+        ));
+        let cancel = PublicInvocationRequest {
+            request: Some(public_invocation_request::Request::StreamCancel(
+                StreamCancel {
+                    transport_stream_id: output_stream_id,
+                    producer_sequence: 0,
+                    role: StreamCancelRole::OutputConsumer as i32,
+                    reason: StreamCancelReason::Cancelled as i32,
+                    details: Some("stop output".to_string()),
+                    durable_stream_id: Some(test_uuid(100 + output_stream_id)),
+                    epoch: 1,
+                    durable_offset: Vec::new(),
+                },
+            )),
+        };
+        websocket_client
+            .unbounded_send(Ok(Message::binary(cancel.encode_to_vec())))
+            .unwrap();
+
+        let forwarded = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            internal_receiver.recv(),
+        )
+        .await
+        .expect("output cancellation was blocked behind saturated response forwarding")
+        .expect("internal invocation request stream closed unexpectedly");
+        assert!(matches!(
+            forwarded.request,
+            Some(invocation_request::Request::StreamCancel(StreamCancel {
+                transport_stream_id: stream_id,
+                role,
+                ..
+            })) if stream_id == output_stream_id && role == StreamCancelRole::OutputConsumer as i32
+        ));
+
+        drop(websocket_client);
+        drop(websocket_receiver.recv().await);
+        requests.abort();
+        responses.abort();
+    }
+
+    #[test]
+    async fn pre_start_rejection_waits_for_temporarily_backpressured_writer() {
+        let request = PublicInvocationRequest {
+            request: Some(public_invocation_request::Request::ResumeAttach(
+                ResumeAttach {
+                    idempotency_key: Some(IdempotencyKey {
+                        value: "temporary-pre-start-stall".to_string(),
+                    }),
+                    ..Default::default()
+                },
+            )),
+        };
+        let mut websocket_stream =
+            tokio_stream::iter([Ok(Message::binary(request.encode_to_vec()))]);
+        let delivered = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let (permit_sender, permit_receiver) = tokio::sync::mpsc::channel(1);
+        let sink = Box::pin(gated_websocket_sink(permit_receiver, delivered.clone()));
+        let (websocket_sender, websocket_receiver) = tokio::sync::mpsc::channel(2);
+        let writer = tokio::spawn(forward_websocket_messages(
+            sink,
+            websocket_receiver,
+            std::time::Duration::from_secs(5),
+        ));
+
+        assert!(
+            receive_public_invocation_start(
+                &mut websocket_stream,
+                &websocket_sender,
+                &mut InvocationSessionState::default(),
+            )
+            .await
+            .is_none()
+        );
+        drop(websocket_sender);
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        assert!(
+            !writer.is_finished(),
+            "temporary pre-start backpressure truncated the rejection"
+        );
+
+        permit_sender.send(()).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), writer)
+            .await
+            .expect("pre-start writer did not drain after output progress resumed")
+            .unwrap();
+
+        let delivered = delivered.lock().await;
+        assert_eq!(delivered.len(), 1);
+        assert!(matches!(delivered[0], Message::Close(_)));
+    }
+
+    #[test]
+    async fn pre_start_ping_stall_terminates_when_the_writer_stops() {
+        let messages = (0..18)
+            .map(|_| Ok(Message::Ping(Vec::new())))
+            .collect::<Vec<std::io::Result<Message>>>();
+        let mut websocket_stream = tokio_stream::iter(messages).chain(futures::stream::pending());
+        let delivered = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let (permit_sender, permit_receiver) = tokio::sync::mpsc::channel(1);
+        let sink = Box::pin(gated_websocket_sink(permit_receiver, delivered.clone()));
+        let (websocket_sender, websocket_receiver) = tokio::sync::mpsc::channel(1);
+        let mut writer = tokio::spawn(forward_websocket_messages(
+            sink,
+            websocket_receiver,
+            std::time::Duration::from_millis(50),
+        ));
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            receive_public_invocation_start_while_writing(
+                &mut websocket_stream,
+                &websocket_sender,
+                &mut InvocationSessionState::default(),
+                &mut writer,
+            ),
+        )
+        .await
+        .expect("pre-start Ping stall outlived the writer progress deadline");
+        assert!(matches!(result, InitialPublicInvocation::WriterStopped));
+        assert!(delivered.lock().await.is_empty());
+        drop(websocket_sender);
+        drop(permit_sender);
+    }
+
+    #[test]
+    async fn pre_start_rejection_terminates_at_writer_progress_deadline() {
+        let request = PublicInvocationRequest {
+            request: Some(public_invocation_request::Request::ResumeAttach(
+                ResumeAttach {
+                    idempotency_key: Some(IdempotencyKey {
+                        value: "permanent-pre-start-stall".to_string(),
+                    }),
+                    ..Default::default()
+                },
+            )),
+        };
+        let mut websocket_stream =
+            tokio_stream::iter([Ok(Message::binary(request.encode_to_vec()))]);
+        let delivered = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let (permit_sender, permit_receiver) = tokio::sync::mpsc::channel(1);
+        let sink = Box::pin(gated_websocket_sink(permit_receiver, delivered.clone()));
+        let (websocket_sender, websocket_receiver) = tokio::sync::mpsc::channel(2);
+        let writer = tokio::spawn(forward_websocket_messages(
+            sink,
+            websocket_receiver,
+            std::time::Duration::from_millis(50),
+        ));
+
+        assert!(
+            receive_public_invocation_start(
+                &mut websocket_stream,
+                &websocket_sender,
+                &mut InvocationSessionState::default(),
+            )
+            .await
+            .is_none()
+        );
+        drop(websocket_sender);
+        tokio::time::timeout(std::time::Duration::from_millis(500), writer)
+            .await
+            .expect("pre-start writer exceeded its progress deadline")
+            .unwrap();
+        assert!(delivered.lock().await.is_empty());
+        drop(permit_sender);
+    }
+
+    #[test]
+    async fn response_completion_waits_for_temporarily_backpressured_writer() {
+        let delivered = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let (permit_sender, permit_receiver) = tokio::sync::mpsc::channel(3);
+        let sink = Box::pin(gated_websocket_sink(permit_receiver, delivered.clone()));
+        let (websocket_sender, websocket_receiver) = tokio::sync::mpsc::channel(3);
+        let writer = tokio::spawn(forward_websocket_messages(
+            sink,
+            websocket_receiver,
+            std::time::Duration::from_secs(5),
+        ));
+        let requests = tokio::spawn(futures::future::pending());
+        let responses = tokio::spawn(async move {
+            let accepted = InvocationResponse {
+                response: Some(invocation_response::Response::Accepted(Default::default())),
+            };
+            let finished = InvocationResponse {
+                response: Some(invocation_response::Response::Finished(
+                    InvocationSessionCompletion::default(),
+                )),
+            };
+            websocket_sender
+                .send(Message::binary(accepted.encode_to_vec()))
+                .await
+                .unwrap();
+            websocket_sender
+                .send(Message::binary(finished.encode_to_vec()))
+                .await
+                .unwrap();
+            websocket_sender
+                .send(Message::close_with(CloseCode::Normal, "session complete"))
+                .await
+                .unwrap();
+        });
+        let (request_guard, _request_receiver) = tokio::sync::mpsc::channel(1);
+
+        let supervisor = tokio::spawn(supervise_public_invocation_session(
+            requests,
+            responses,
+            writer,
+            request_guard,
+        ));
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        assert!(
+            !supervisor.is_finished(),
+            "temporary output backpressure truncated queued semantic responses"
+        );
+
+        for _ in 0..3 {
+            permit_sender.send(()).await.unwrap();
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(2), supervisor)
+            .await
+            .expect("writer did not drain after output progress resumed")
+            .unwrap();
+
+        let delivered = delivered.lock().await;
+        assert_eq!(delivered.len(), 3);
+        let Message::Binary(accepted) = &delivered[0] else {
+            panic!("accepted response was not delivered first")
+        };
+        assert!(matches!(
+            InvocationResponse::decode(accepted.as_slice())
+                .unwrap()
+                .response,
+            Some(invocation_response::Response::Accepted(_))
+        ));
+        let Message::Binary(finished) = &delivered[1] else {
+            panic!("finished response was not delivered second")
+        };
+        assert!(matches!(
+            InvocationResponse::decode(finished.as_slice())
+                .unwrap()
+                .response,
+            Some(invocation_response::Response::Finished(_))
+        ));
+        assert!(matches!(delivered[2], Message::Close(_)));
+    }
+
+    #[test]
+    async fn permanently_stalled_writer_terminates_at_progress_deadline() {
+        let delivered = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let (permit_sender, permit_receiver) = tokio::sync::mpsc::channel(1);
+        let sink = Box::pin(gated_websocket_sink(permit_receiver, delivered.clone()));
+        let (websocket_sender, websocket_receiver) = tokio::sync::mpsc::channel(2);
+        let writer = tokio::spawn(forward_websocket_messages(
+            sink,
+            websocket_receiver,
+            std::time::Duration::from_millis(50),
+        ));
+        let requests = tokio::spawn(futures::future::pending());
+        let responses = tokio::spawn(async move {
+            websocket_sender
+                .send(Message::binary(
+                    InvocationResponse {
+                        response: Some(invocation_response::Response::Finished(
+                            InvocationSessionCompletion::default(),
+                        )),
+                    }
+                    .encode_to_vec(),
+                ))
+                .await
+                .unwrap();
+            websocket_sender
+                .send(Message::close_with(CloseCode::Normal, "session complete"))
+                .await
+                .unwrap();
+        });
+        let (request_guard, _request_receiver) = tokio::sync::mpsc::channel(1);
+
+        tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            supervise_public_invocation_session(requests, responses, writer, request_guard),
+        )
+        .await
+        .expect("permanently stalled writer exceeded its progress deadline");
+        assert!(delivered.lock().await.is_empty());
+        drop(permit_sender);
+    }
+
+    #[test]
+    async fn invocation_responses_are_forwarded_as_binary_protobuf_messages() {
+        let response = InvocationResponse { response: None };
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+
+        assert!(queue_invocation_response(&sender, response.clone()).await);
+        let message = receiver.recv().await.unwrap();
+        let Message::Binary(bytes) = message else {
+            panic!("invocation response must use a binary WebSocket message")
+        };
+
+        assert_eq!(
+            InvocationResponse::decode(bytes.as_slice()).unwrap(),
+            response
+        );
+    }
+
+    #[test]
+    fn websocket_close_reasons_are_utf8_safe_and_protocol_sized() {
+        let reason = "é".repeat(100);
+        let bounded = bounded_close_reason(&reason);
+
+        assert!(bounded.len() <= 123);
+        assert!(reason.starts_with(&bounded));
+    }
+
+    #[test]
+    fn public_resolution_errors_map_to_protocol_rejections() {
+        assert_eq!(
+            rejection_reason(&WorkerServiceError::TypeChecker("invalid".to_string())),
+            InvocationRejectionReason::Validation
+        );
+        assert_eq!(
+            rejection_reason(&WorkerServiceError::RegistryServiceError(
+                RegistryServiceError::Unauthorized("forbidden".to_string())
+            )),
+            InvocationRejectionReason::Unauthorized
+        );
+        assert_eq!(
+            rejection_reason(&WorkerServiceError::RegistryServiceError(
+                RegistryServiceError::NotFound("missing".to_string())
+            )),
+            InvocationRejectionReason::NotFound
+        );
     }
 }

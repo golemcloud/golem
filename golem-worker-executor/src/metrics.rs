@@ -350,6 +350,36 @@ pub mod workers {
             &["executor_id"]
         )
         .unwrap();
+        static ref OWNER_GROUP_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_owner_group_alive_count",
+            "Owner-routed active agent groups on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        static ref PRIMARY_STORE_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_primary_store_alive_count",
+            "Live primary agent Stores on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        static ref ENTITY_STORE_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_entity_store_alive_count",
+            "Live transient entity Stores on this executor",
+            &["executor_id", "entity_kind"]
+        )
+        .unwrap();
+        static ref ENTITY_INVOCATION_ACTIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_entity_invocation_active_count",
+            "Entity invocation bodies currently active on this executor",
+            &["entity_kind", "execution_mode"]
+        )
+        .unwrap();
+        static ref ENTITY_INVOCATION_TOTAL: CounterVec = register_counter_vec!(
+            "golem_entity_invocation_total",
+            "Entity invocation bodies by terminal outcome",
+            &["entity_kind", "execution_mode", "outcome"]
+        )
+        .unwrap();
         pub static ref WORKER_KV_CACHE_VALUE_SIZE_BYTES: HistogramVec = register_histogram_vec!(
             "worker_kv_cache_value_size_bytes",
             "Bytes of a value written to the Worker-namespace KV cache (worker status blob size)",
@@ -529,6 +559,23 @@ pub mod workers {
             .with_label_values(&[id])
             .set(0.0);
         WORKER_STORE_ALIVE_COUNT.with_label_values(&[id]).set(0.0);
+        OWNER_GROUP_ALIVE_COUNT.with_label_values(&[id]).set(0.0);
+        PRIMARY_STORE_ALIVE_COUNT.with_label_values(&[id]).set(0.0);
+        for entity_kind in ["tool", "tool_middleware"] {
+            ENTITY_STORE_ALIVE_COUNT
+                .with_label_values(&[id, entity_kind])
+                .set(0.0);
+            for execution_mode in ["live", "replaying_completed", "replaying_incomplete"] {
+                ENTITY_INVOCATION_ACTIVE_COUNT
+                    .with_label_values(&[entity_kind, execution_mode])
+                    .set(0.0);
+                for outcome in ["succeeded", "failed", "cancelled"] {
+                    ENTITY_INVOCATION_TOTAL
+                        .with_label_values(&[entity_kind, execution_mode, outcome])
+                        .inc_by(0.0);
+                }
+            }
+        }
         WORKER_MEMORY_GROW_REJECTED_TOTAL
             .with_label_values(&[id])
             .inc_by(0.0);
@@ -561,6 +608,64 @@ pub mod workers {
         WORKER_STORE_ALIVE_COUNT
             .with_label_values(&[crate::metrics::storage::executor_id()])
             .dec();
+    }
+
+    pub fn inc_owner_group_alive() {
+        OWNER_GROUP_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .inc();
+    }
+
+    pub fn dec_owner_group_alive() {
+        OWNER_GROUP_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .dec();
+    }
+
+    pub fn inc_primary_store_alive() {
+        PRIMARY_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .inc();
+    }
+
+    pub fn dec_primary_store_alive() {
+        PRIMARY_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .dec();
+    }
+
+    pub fn inc_entity_store_alive(entity_kind: &'static str) {
+        ENTITY_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id(), entity_kind])
+            .inc();
+    }
+
+    pub fn dec_entity_store_alive(entity_kind: &'static str) {
+        ENTITY_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id(), entity_kind])
+            .dec();
+    }
+
+    pub fn inc_entity_invocation_active(entity_kind: &'static str, execution_mode: &'static str) {
+        ENTITY_INVOCATION_ACTIVE_COUNT
+            .with_label_values(&[entity_kind, execution_mode])
+            .inc();
+    }
+
+    pub fn dec_entity_invocation_active(entity_kind: &'static str, execution_mode: &'static str) {
+        ENTITY_INVOCATION_ACTIVE_COUNT
+            .with_label_values(&[entity_kind, execution_mode])
+            .dec();
+    }
+
+    pub fn record_entity_invocation(
+        entity_kind: &'static str,
+        execution_mode: &'static str,
+        outcome: &'static str,
+    ) {
+        ENTITY_INVOCATION_TOTAL
+            .with_label_values(&[entity_kind, execution_mode, outcome])
+            .inc();
     }
 
     /// Phases a starting worker waits through before it can become resident. Each is
@@ -915,6 +1020,24 @@ pub mod wasm {
             "Number of live custom-durability ownership scopes opened"
         )
         .unwrap();
+        static ref AGENT_PERMISSION_AUTHORIZATION_TOTAL: CounterVec = register_counter_vec!(
+            "agent_permission_authorization_total",
+            "Number of live host-call permission authorization decisions",
+            &["permission_class", "outcome"]
+        )
+        .unwrap();
+        static ref AGENT_PERMISSION_AUTHORITY_SYNC_TOTAL: CounterVec = register_counter_vec!(
+            "agent_permission_authority_sync_total",
+            "Number of host-call authority boundary checks by path",
+            &["path"]
+        )
+        .unwrap();
+        static ref AGENT_PERMISSION_AUTHORITY_SYNC_SECONDS: Histogram = register_histogram!(
+            "agent_permission_authority_sync_seconds",
+            "Time spent refreshing host-call permission authority on the slow path",
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
     }
 
     pub fn record_host_function_call(iface: &str, name: &str) {
@@ -930,6 +1053,25 @@ pub mod wasm {
 
     pub fn record_custom_invocation_scope_open() {
         CUSTOM_INVOCATION_SCOPE_OPEN_TOTAL.inc();
+    }
+
+    pub fn record_agent_permission_authorization(permission_class: &str, allowed: bool) {
+        AGENT_PERMISSION_AUTHORIZATION_TOTAL
+            .with_label_values(&[permission_class, if allowed { "allowed" } else { "denied" }])
+            .inc();
+    }
+
+    pub fn record_agent_permission_authority_fast_path() {
+        AGENT_PERMISSION_AUTHORITY_SYNC_TOTAL
+            .with_label_values(&["fast"])
+            .inc();
+    }
+
+    pub fn record_agent_permission_authority_slow_path(duration: Duration) {
+        AGENT_PERMISSION_AUTHORITY_SYNC_TOTAL
+            .with_label_values(&["slow"])
+            .inc();
+        AGENT_PERMISSION_AUTHORITY_SYNC_SECONDS.observe(duration.as_secs_f64());
     }
 
     pub fn record_resume_worker(duration: Duration) {
@@ -1180,6 +1322,231 @@ pub mod ephemeral {
 
     pub fn record_inactive_invocation_failure() {
         EPHEMERAL_INACTIVE_INVOCATION_FAILURE_TOTAL.inc();
+    }
+}
+
+pub mod durable_stream {
+    use lazy_static::lazy_static;
+    use prometheus::*;
+
+    const EVENT_COUNT_BUCKETS: &[f64] = &[
+        0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1_024.0, 4_096.0, 16_384.0,
+    ];
+    const EPOCH_BUCKETS: &[f64] = &[
+        0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 256.0, 1_024.0, 65_536.0,
+    ];
+    const LEASE_REMAINING_BUCKETS: &[f64] =
+        &[0.0, 1.0, 5.0, 10.0, 20.0, 30.0, 45.0, 60.0, 120.0, 300.0];
+
+    lazy_static! {
+        static ref LIFECYCLE_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_lifecycle_total",
+            "Durable stream registrations and terminal transitions",
+            &["event"]
+        )
+        .unwrap();
+        static ref OPEN_STREAMS: IntGauge = register_int_gauge!(
+            "golem_durable_stream_open",
+            "Open durable streams owned by loaded producers on this executor"
+        )
+        .unwrap();
+        static ref PRODUCER_OPERATION_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_producer_operation_total",
+            "Durable producer operations by bounded operation and commit outcome",
+            &["operation", "outcome"]
+        )
+        .unwrap();
+        static ref CATCH_UP_DISTANCE_EVENTS: Histogram = register_histogram!(
+            "golem_durable_stream_catch_up_distance_events",
+            "Committed events read before a durable reader joins the live tail",
+            EVENT_COUNT_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref LIVE_JOIN_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_live_join_total",
+            "Durable live-tail join attempts by outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref ACTIVE_READERS: IntGauge = register_int_gauge!(
+            "golem_durable_stream_active_readers",
+            "Active durable live-tail readers on this executor"
+        )
+        .unwrap();
+        static ref BACKPRESSURE_TOTAL: IntCounter = register_int_counter!(
+            "golem_durable_stream_backpressure_total",
+            "Durable event fan-outs that waited on a full live-reader queue"
+        )
+        .unwrap();
+        static ref ATTEMPT_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_attempt_total",
+            "Durable Stream Session start, resume, and takeover attempts by outcome",
+            &["operation", "outcome"]
+        )
+        .unwrap();
+        static ref ATTACHMENT_EPOCH: Histogram = register_histogram!(
+            "golem_durable_stream_attachment_epoch",
+            "Accepted durable Stream Session attachment epochs",
+            EPOCH_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref JOURNAL_LAG_EVENTS: Histogram = register_histogram!(
+            "golem_durable_stream_journal_lag_events",
+            "Committed source events not yet recorded in the value-only consumer journal",
+            EVENT_COUNT_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref ATTACHMENT_OPERATION_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_attachment_operation_total",
+            "Cross-oplog attachment operations by bounded operation and outcome",
+            &["operation", "outcome"]
+        )
+        .unwrap();
+        static ref LEASE_REMAINING_SECONDS: Histogram = register_histogram!(
+            "golem_durable_stream_lease_remaining_seconds",
+            "Remaining attachment lease time when inspected or reconciled",
+            LEASE_REMAINING_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref RECONCILIATION_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_reconciliation_total",
+            "Attachment reconciliation candidates by outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref CASCADE_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_cascade_total",
+            "Producer deletion cascade dependents by durable outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref LIMIT_VIOLATION_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_limit_violation_total",
+            "Rejected durable Stream Session operations by frozen limit category",
+            &["limit"]
+        )
+        .unwrap();
+    }
+
+    pub fn record_lifecycle(event: &'static str) {
+        LIFECYCLE_TOTAL.with_label_values(&[event]).inc();
+    }
+
+    pub fn add_open_streams(count: usize) {
+        OPEN_STREAMS.add(count as i64);
+    }
+
+    pub fn remove_open_streams(count: usize) {
+        OPEN_STREAMS.sub(count as i64);
+    }
+
+    pub fn record_producer_operation(operation: &'static str, replayed: bool) {
+        PRODUCER_OPERATION_TOTAL
+            .with_label_values(&[operation, if replayed { "replayed" } else { "committed" }])
+            .inc();
+    }
+
+    pub fn record_catch_up(distance: usize) {
+        CATCH_UP_DISTANCE_EVENTS.observe(distance as f64);
+        LIVE_JOIN_TOTAL.with_label_values(&["joined"]).inc();
+    }
+
+    pub fn record_live_join_rejected() {
+        LIVE_JOIN_TOTAL.with_label_values(&["rejected"]).inc();
+    }
+
+    pub fn reader_attached() {
+        ACTIVE_READERS.inc();
+    }
+
+    pub fn reader_detached() {
+        ACTIVE_READERS.dec();
+    }
+
+    pub fn record_backpressure() {
+        BACKPRESSURE_TOTAL.inc();
+    }
+
+    pub fn record_attempt(operation: &'static str, outcome: &'static str, epoch: Option<u64>) {
+        ATTEMPT_TOTAL.with_label_values(&[operation, outcome]).inc();
+        if let Some(epoch) = epoch {
+            ATTACHMENT_EPOCH.observe(epoch as f64);
+        }
+    }
+
+    pub fn record_journal_lag(events: usize) {
+        JOURNAL_LAG_EVENTS.observe(events as f64);
+    }
+
+    pub fn record_attachment_operation(operation: &'static str, outcome: &'static str) {
+        ATTACHMENT_OPERATION_TOTAL
+            .with_label_values(&[operation, outcome])
+            .inc();
+    }
+
+    pub fn record_lease_remaining(millis: u64) {
+        LEASE_REMAINING_SECONDS.observe(millis as f64 / 1_000.0);
+    }
+
+    pub fn record_reconciliation(outcome: &'static str) {
+        RECONCILIATION_TOTAL.with_label_values(&[outcome]).inc();
+    }
+
+    pub fn record_cascade(outcome: &'static str) {
+        CASCADE_TOTAL.with_label_values(&[outcome]).inc();
+    }
+
+    pub fn record_limit_violation(limit: &'static str) {
+        LIMIT_VIOLATION_TOTAL.with_label_values(&[limit]).inc();
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use test_r::test;
+
+        #[test]
+        fn durable_stream_metric_catalogue_is_registered() {
+            record_lifecycle("registered");
+            add_open_streams(1);
+            remove_open_streams(1);
+            record_producer_operation("write", false);
+            record_catch_up(3);
+            reader_attached();
+            reader_detached();
+            record_backpressure();
+            record_attempt("resume", "accepted", Some(2));
+            record_journal_lag(1);
+            record_attachment_operation("renew", "committed");
+            record_lease_remaining(20_000);
+            record_reconciliation("active");
+            record_cascade("complete");
+            record_limit_violation("item_size");
+
+            let names = prometheus::gather()
+                .into_iter()
+                .map(|family| family.name().to_string())
+                .collect::<std::collections::HashSet<_>>();
+            for expected in [
+                "golem_durable_stream_lifecycle_total",
+                "golem_durable_stream_open",
+                "golem_durable_stream_producer_operation_total",
+                "golem_durable_stream_catch_up_distance_events",
+                "golem_durable_stream_live_join_total",
+                "golem_durable_stream_active_readers",
+                "golem_durable_stream_backpressure_total",
+                "golem_durable_stream_attempt_total",
+                "golem_durable_stream_attachment_epoch",
+                "golem_durable_stream_journal_lag_events",
+                "golem_durable_stream_attachment_operation_total",
+                "golem_durable_stream_lease_remaining_seconds",
+                "golem_durable_stream_reconciliation_total",
+                "golem_durable_stream_cascade_total",
+                "golem_durable_stream_limit_violation_total",
+            ] {
+                assert!(names.contains(expected), "missing metric {expected}");
+            }
+        }
     }
 }
 

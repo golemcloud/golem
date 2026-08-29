@@ -127,9 +127,12 @@ impl AgentStatusFlusher {
         background_enabled: bool,
         worker_service: Arc<dyn WorkerService>,
         queue: Arc<AgentStatusFlushQueue>,
+        persisted_status: Option<AgentStatusRecord>,
         current_status: Arc<ArcSwap<AgentStatusRecord>>,
         detached: Arc<AtomicBool>,
     ) -> Arc<Self> {
+        let base_known = persisted_status.is_some();
+        let last_flushed = persisted_status.unwrap_or_default();
         Arc::new_cyclic(|self_weak| Self {
             queue_id: NEXT_QUEUE_ID.fetch_add(1, Ordering::Relaxed),
             owned_agent_id,
@@ -141,11 +144,8 @@ impl AgentStatusFlusher {
             detached,
             self_weak: self_weak.clone(),
             baseline: Mutex::new(FlushBaseline {
-                last_flushed: AgentStatusRecord::default(),
-                // The cache (if any) holds whatever checkpoint the worker was loaded from, which the
-                // in-memory status has typically been folded past; the first flush must therefore
-                // be a full reconcile write.
-                base_known: false,
+                last_flushed,
+                base_known,
             }),
             dirty: AtomicBool::new(false),
             delete_started: AtomicBool::new(false),
@@ -542,6 +542,7 @@ mod tests {
             background_enabled,
             worker_service,
             queue,
+            None,
             current.clone(),
             detached.clone(),
         );
@@ -607,6 +608,32 @@ mod tests {
         );
         assert!(!flusher.dirty.load(Ordering::Acquire));
         assert_eq!(queue.len(), 0);
+    }
+
+    #[test]
+    async fn first_flush_uses_persisted_baseline_when_known() {
+        let ws = MockWorkerService::arc();
+        let queue = test_queue();
+        let persisted = status(AgentStatus::Idle, 7);
+        let current = Arc::new(ArcSwap::from_pointee(persisted.clone()));
+        let detached = Arc::new(AtomicBool::new(false));
+        let flusher = AgentStatusFlusher::new(
+            agent_id(),
+            false,
+            true,
+            ws.clone(),
+            queue.clone(),
+            Some(persisted),
+            current.clone(),
+            detached,
+        );
+
+        current.store(Arc::new(status(AgentStatus::Running, 8)));
+        flusher.mark_dirty();
+        queue.sweep().await;
+
+        assert_eq!(ws.previous_flags(), vec![true]);
+        assert_eq!(ws.flushed_oplog_idxs(), vec![OplogIndex::from_u64(8)]);
     }
 
     #[test]

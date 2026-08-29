@@ -19,6 +19,7 @@ use crate::repo::model::component::{
     ComponentAuthExtRevisionRecord, ComponentExtRevisionRecord, ComponentRepoError,
     ComponentRevisionIdentityRecord, ComponentRevisionRecord,
 };
+use crate::repo::registry_change::{RequiresNotificationSignal, RequiresSignalExt};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -29,7 +30,7 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo::Blob;
-use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
+use golem_service_base::repo::{PoolLabelledTransaction, RepoError, RepoResult, ResultExt};
 use indoc::indoc;
 use sqlx::{Database, Row};
 use std::fmt::Debug;
@@ -57,7 +58,7 @@ pub trait ComponentRepo: Send + Sync {
         user_account_id: Uuid,
         component_id: Uuid,
         revision_id: i64,
-    ) -> Result<(), ComponentRepoError>;
+    ) -> Result<RequiresNotificationSignal<Vec<CardId>>, ComponentRepoError>;
 
     async fn get_staged_by_id(
         &self,
@@ -194,7 +195,7 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         user_account_id: Uuid,
         component_id: Uuid,
         revision_id: i64,
-    ) -> Result<(), ComponentRepoError> {
+    ) -> Result<RequiresNotificationSignal<Vec<CardId>>, ComponentRepoError> {
         self.repo
             .delete(user_account_id, component_id, revision_id)
             .instrument(Self::span_id(component_id))
@@ -364,6 +365,33 @@ impl<DBP: Pool> DbComponentRepo<DBP> {
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
+impl DbComponentRepo<PostgresPool> {
+    async fn lock_live_environment(
+        tx: &mut PoolLabelledTransaction<PostgresPool>,
+        environment_id: Uuid,
+    ) -> Result<(), ComponentRepoError> {
+        let environment = tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    UPDATE environments
+                    SET environment_id = environment_id
+                    WHERE environment_id = $1
+                        AND deleted_at IS NULL
+                    RETURNING environment_id
+                "#})
+                .bind(environment_id),
+            )
+            .await?;
+
+        if environment.is_none() {
+            return Err(ComponentRepoError::ConcurrentModification);
+        }
+
+        Ok(())
+    }
+}
+
+#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl ComponentRepo for DbComponentRepo<PostgresPool> {
     async fn create(
@@ -399,6 +427,8 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
 
         self.with_tx_err("create", |tx| {
             async move {
+                Self::lock_live_environment(tx, environment_id).await?;
+
                 tx.execute(
                     sqlx::query(indoc! { r#"
                         INSERT INTO components
@@ -441,6 +471,21 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError> {
         self.with_tx_err("update", |tx| {
             async move {
+                let environment_id = tx
+                    .fetch_optional(
+                        sqlx::query(indoc! { r#"
+                            SELECT environment_id
+                            FROM components
+                            WHERE component_id = $1
+                        "#})
+                        .bind(revision.component_id),
+                    )
+                    .await?
+                    .ok_or(ComponentRepoError::ConcurrentModification)?
+                    .try_get::<Uuid, _>("environment_id")
+                    .map_err(RepoError::from)?;
+                Self::lock_live_environment(tx, environment_id).await?;
+
                 for card in cards_to_create {
                     DbCardRepo::<PostgresPool>::create_in_tx(tx, card).await?;
                 }
@@ -482,33 +527,119 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         user_account_id: Uuid,
         component_id: Uuid,
         revision_id: i64,
-    ) -> Result<(), ComponentRepoError> {
-        self.with_tx_err("delete", |tx| {
-            async move {
-                let revision: ComponentRevisionRecord = Self::insert_revision(
-                    tx,
-                    ComponentRevisionRecord::deletion(user_account_id, component_id, revision_id)?,
-                )
-                .await?;
+    ) -> Result<RequiresNotificationSignal<Vec<CardId>>, ComponentRepoError> {
+        let deleted_cards = self
+            .with_tx_err("delete", |tx| {
+                async move {
+                    let active_revisions: Vec<ComponentRevisionRecord> = tx
+                        .fetch_all_as(
+                            sqlx::query_as(indoc! { r#"
+                            SELECT cr.component_id, cr.revision_id, cr.hash,
+                                   cr.created_at, cr.created_by, cr.deleted,
+                                   cr.size, cr.metadata,
+                                   cr.object_store_key, cr.binary_hash
+                            FROM component_revisions cr
+                            WHERE cr.component_id = $1
+                                AND NOT cr.deleted
+                                AND cr.revision_id > COALESCE(
+                                    (
+                                        SELECT MAX(deleted_cr.revision_id)
+                                        FROM component_revisions deleted_cr
+                                        WHERE deleted_cr.component_id = cr.component_id
+                                            AND deleted_cr.deleted
+                                    ),
+                                    -1
+                                )
+                        "#})
+                            .bind(component_id),
+                        )
+                        .await?;
 
-                tx.execute(
-                    sqlx::query(indoc! { r#"
+                    let mut card_roots = Vec::new();
+                    for revision in active_revisions {
+                        let component_revision = revision.revision_id.try_into()?;
+                        for (agent_type, config) in revision
+                            .metadata
+                            .value()
+                            .agent_type_provision_configs()
+                            .iter()
+                        {
+                            let card_id = config.initial_permissions.card_id;
+                            let managed_by = CardManagedByAgentInitial {
+                                component_id: ComponentId(component_id),
+                                component_revision,
+                                agent_type: agent_type.clone(),
+                            };
+                            if !card_roots.contains(&(card_id, managed_by.clone())) {
+                                card_roots.push((card_id, managed_by));
+                            }
+                        }
+                    }
+                    card_roots.sort_unstable_by_key(|(card_id, _)| *card_id);
+
+                    let revision: ComponentRevisionRecord = Self::insert_revision(
+                        tx,
+                        ComponentRevisionRecord::deletion(
+                            user_account_id,
+                            component_id,
+                            revision_id,
+                        )?,
+                    )
+                    .await?;
+
+                    tx.execute(
+                        sqlx::query(indoc! { r#"
                         UPDATE components
                         SET deleted_at = $1, modified_by = $2, current_revision_id = $3
                         WHERE component_id = $4
                     "#})
-                    .bind(&revision.audit.created_at)
-                    .bind(revision.audit.created_by)
-                    .bind(revision.revision_id)
-                    .bind(revision.component_id),
-                )
-                .await?;
+                        .bind(&revision.audit.created_at)
+                        .bind(revision.audit.created_by)
+                        .bind(revision.revision_id)
+                        .bind(revision.component_id),
+                    )
+                    .await?;
 
-                Ok(())
-            }
-            .boxed()
-        })
-        .await
+                    let mut deleted_cards = Vec::new();
+                    let mut root_index = 0;
+                    while root_index < card_roots.len() {
+                        let card_id = card_roots[root_index].0;
+                        let mut next_root_index = root_index + 1;
+                        while next_root_index < card_roots.len()
+                            && card_roots[next_root_index].0 == card_id
+                        {
+                            next_root_index += 1;
+                        }
+
+                        let record =
+                            DbCardRepo::<PostgresPool>::get_for_update_in_tx(tx, card_id).await?;
+                        let managed_by_matches = record
+                            .as_ref()
+                            .and_then(|record| record.managed_by.as_ref())
+                            .is_some_and(|managed_by| {
+                                let CardManagedBy::AgentInitial(actual) = managed_by.value() else {
+                                    return false;
+                                };
+                                card_roots[root_index..next_root_index]
+                                    .iter()
+                                    .any(|(_, expected)| actual == expected)
+                            });
+
+                        if managed_by_matches {
+                            deleted_cards.extend(
+                                DbCardRepo::<PostgresPool>::delete_tree_in_tx(tx, card_id).await?,
+                            );
+                        }
+                        root_index = next_root_index;
+                    }
+
+                    Ok::<_, ComponentRepoError>(deleted_cards)
+                }
+                .boxed()
+            })
+            .await?;
+
+        Ok(deleted_cards.requires_notification_signal())
     }
 
     async fn get_staged_by_id(
@@ -760,6 +891,15 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     WHERE c.component_id = $1
                         AND cr.revision_id = $2
                         AND ($3 OR c.deleted_at IS NULL)
+                        AND ($3 OR cr.revision_id > COALESCE(
+                            (
+                                SELECT MAX(deleted_cr.revision_id)
+                                FROM component_revisions deleted_cr
+                                WHERE deleted_cr.component_id = c.component_id
+                                    AND deleted_cr.deleted
+                            ),
+                            -1
+                        ))
                         AND e.deleted_at IS NULL
                         AND ap.deleted_at IS NULL
                         AND a.deleted_at IS NULL

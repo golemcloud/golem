@@ -1178,7 +1178,7 @@ impl RustBridgeGenerator {
                     let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                     let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                         .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                    self.wasm_rpc.invoke(#name_lit, method_parameters)
+                    self.wasm_rpc.invoke(#name_lit, method_parameters, None)
                         .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
                 }
             });
@@ -1189,7 +1189,7 @@ impl RustBridgeGenerator {
                 let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                 let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                     .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                self.wasm_rpc.invoke(#name_lit, method_parameters)
+                self.wasm_rpc.invoke(#name_lit, method_parameters, None)
                     .map(|_| ())
                     .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
             }
@@ -1215,7 +1215,9 @@ impl RustBridgeGenerator {
                     let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                     let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                         .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                    Ok(self.wasm_rpc.schedule_invocation(#scheduled_time_param, #name_lit, method_parameters).metadata)
+                    self.wasm_rpc.schedule_invocation(#scheduled_time_param, #name_lit, method_parameters, None)
+                        .map(|__receipt| __receipt.metadata)
+                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
                 }
             });
         }
@@ -1225,8 +1227,9 @@ impl RustBridgeGenerator {
                 let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                 let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                     .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                self.wasm_rpc.schedule_invocation(#scheduled_time_param, #name_lit, method_parameters);
-                Ok(())
+                self.wasm_rpc.schedule_invocation(#scheduled_time_param, #name_lit, method_parameters, None)
+                    .map(|_| ())
+                    .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
             }
         })
     }
@@ -1250,7 +1253,8 @@ impl RustBridgeGenerator {
                     let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                     let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                         .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                    Ok(self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #name_lit, method_parameters))
+                    self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #name_lit, method_parameters, None)
+                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
                 }
             });
         }
@@ -1260,7 +1264,9 @@ impl RustBridgeGenerator {
                 let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                 let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                     .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                Ok(self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #name_lit, method_parameters).cancellation_token)
+                self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #name_lit, method_parameters, None)
+                    .map(|__receipt| __receipt.cancellation_token)
+                    .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
             }
         })
     }
@@ -1287,7 +1293,7 @@ impl RustBridgeGenerator {
                         let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                         let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                             .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                        let invocation = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters);
+                        let invocation = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters, None);
                         let metadata = invocation.metadata;
                         let response = golem_rust::agentic::await_invoke_schema_value_result(invocation.future).await
                             .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
@@ -1310,7 +1316,7 @@ impl RustBridgeGenerator {
                         let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                         let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                             .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                        let rpc_result_future = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters).future;
+                        let rpc_result_future = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters, None).future;
                         let response = golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future).await
                             .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
                         match response {
@@ -1330,7 +1336,7 @@ impl RustBridgeGenerator {
                     let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                     let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                         .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                    let invocation = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters);
+                    let invocation = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters, None);
                     let metadata = invocation.metadata;
                     let _response = golem_rust::agentic::await_invoke_schema_value_result(invocation.future).await
                         .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
@@ -1342,7 +1348,7 @@ impl RustBridgeGenerator {
                     let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                     let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                         .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                    let rpc_result_future = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters).future;
+                    let rpc_result_future = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters, None).future;
                     let _response = golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future).await
                         .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
                     Ok(Some(()))
@@ -2382,6 +2388,7 @@ impl RustBridgeGenerator {
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => {
                 bail!("SchemaType variant has no Rust bridge encoding yet; type = {typ:?}")
@@ -2633,6 +2640,7 @@ impl RustBridgeGenerator {
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => {
                 bail!("SchemaType variant has no Rust bridge decoding yet; type = {typ:?}")
@@ -2748,6 +2756,7 @@ impl RustBridgeGenerator {
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => Err(anyhow!(
                 "Cannot emit Rust type reference for unsupported schema variant: {typ:?}"

@@ -16,10 +16,16 @@ declare module 'golem:api/oplog@1.5.0' {
   export function enrichOplogEntries(environmentId: EnvironmentId, agentId: AgentId, entries: [OplogIndex, OplogEntry][], componentRevision: ComponentRevision): PublicOplogEntry[];
   export class GetOplog {
     constructor(agentId: AgentId, start: OplogIndex);
+    /**
+     * @throws OplogReadError
+     */
     getNext(): PublicOplogEntry[] | undefined;
   }
   export class SearchOplog {
     constructor(agentId: AgentId, text: string);
+    /**
+     * @throws OplogReadError
+     */
     getNext(): [OplogIndex, PublicOplogEntry][] | undefined;
   }
   export type Datetime = wasiClocks030SystemClock.Instant;
@@ -220,6 +226,16 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     startIndex: OplogIndex;
   };
+  /**
+   * Parameters of a `completion-delivered` entry: the successful result of the durable host
+   * call started at `start-index` was handed to the agent at this point in the recorded
+   * execution. Replay may prepare the recorded host result earlier, but does not hand it to the
+   * agent until this marker and prevents later oplog entries from advancing until that handoff.
+   */
+  export type CompletionDeliveredParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+  };
   export type LocalSpanData = {
     spanId: SpanId;
     start: Datetime;
@@ -349,6 +365,13 @@ declare module 'golem:api/oplog@1.5.0' {
     parentStartIndex: OplogIndex;
     kind: HostStreamKind;
     payload: TypedSchemaValue;
+  };
+  /**
+   * A public durable-stream producer record rendered as a typed schema value.
+   */
+  export type DurableStreamRecordParameters = {
+    timestamp: Datetime;
+    record: TypedSchemaValue;
   };
   export type EndAtomicRegionParameters = {
     timestamp: Datetime;
@@ -700,6 +723,10 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     startIndex: OplogIndex;
   };
+  export type RawCompletionDeliveredParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+  };
   /**
    * Parameters for a host-stream-frame oplog entry, with the frame payload in raw
    * (possibly externally stored) form.
@@ -709,6 +736,13 @@ declare module 'golem:api/oplog@1.5.0' {
     parentStartIndex: OplogIndex;
     kind: HostStreamKind;
     payload: OplogPayload;
+  };
+  /**
+   * A raw durable-stream producer record, stored inline or in external payload storage.
+   */
+  export type RawDurableStreamRecordParameters = {
+    timestamp: Datetime;
+    record: OplogPayload;
   };
   export type RawAgentInvocationStartedParameters = {
     timestamp: Datetime;
@@ -1060,6 +1094,31 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'host-stream-frame'
     val: RawHostStreamFrameParameters
   } |
+  /** Registers a durable stream before exposing its handle */
+  {
+    tag: 'stream-registered'
+    val: RawDurableStreamRecordParameters
+  } |
+  /** Records committed durable stream values or a packed-u8 batch */
+  {
+    tag: 'stream-items'
+    val: RawDurableStreamRecordParameters
+  } |
+  /** Records a durable stream end terminal */
+  {
+    tag: 'stream-end'
+    val: RawDurableStreamRecordParameters
+  } |
+  /** Records a durable stream cancellation terminal */
+  {
+    tag: 'stream-cancel'
+    val: RawDurableStreamRecordParameters
+  } |
+  /** Records durable Stream Session state and consumer-journal facts */
+  {
+    tag: 'stream-session'
+    val: RawDurableStreamRecordParameters
+  } |
   /**
    * The successful completion of the durable host call started by the matching `start`
    * was persisted, but its response was never delivered to the agent (the agent dropped
@@ -1068,6 +1127,14 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'completion-discarded'
     val: RawCompletionDiscardedParameters
+  } |
+  /**
+   * The successful completion of the durable host call started by the matching `start`
+   * was delivered to the agent at this point in the recorded execution
+   */
+  {
+    tag: 'completion-delivered'
+    val: RawCompletionDeliveredParameters
   };
   export type PublicOplogEntry =
   /** The initial agent oplog entry */
@@ -1319,6 +1386,31 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'host-stream-frame'
     val: HostStreamFrameParameters
   } |
+  /** Registers a durable stream before exposing its handle */
+  {
+    tag: 'stream-registered'
+    val: DurableStreamRecordParameters
+  } |
+  /** Records committed durable stream values or a packed-u8 batch */
+  {
+    tag: 'stream-items'
+    val: DurableStreamRecordParameters
+  } |
+  /** Records a durable stream end terminal */
+  {
+    tag: 'stream-end'
+    val: DurableStreamRecordParameters
+  } |
+  /** Records a durable stream cancellation terminal */
+  {
+    tag: 'stream-cancel'
+    val: DurableStreamRecordParameters
+  } |
+  /** Records durable Stream Session state and consumer-journal facts */
+  {
+    tag: 'stream-session'
+    val: DurableStreamRecordParameters
+  } |
   /**
    * The successful completion of the durable host call started by the matching `start`
    * was persisted, but its response was never delivered to the agent (the agent dropped
@@ -1327,6 +1419,22 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'completion-discarded'
     val: CompletionDiscardedParameters
+  } |
+  /**
+   * The successful completion of the durable host call started by the matching `start`
+   * was delivered to the agent at this point in the recorded execution
+   */
+  {
+    tag: 'completion-delivered'
+    val: CompletionDeliveredParameters
+  };
+  export type OplogReadError =
+  {
+    tag: 'permission-denied'
+  } |
+  {
+    tag: 'internal-error'
+    val: string
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

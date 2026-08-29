@@ -30,7 +30,10 @@ use wasmtime_wasi::p2::bindings::filesystem::types::{
     OutputStream, PathFlags,
 };
 
-use crate::durable_host::{CallHandle, DurabilityHost, DurableWorkerCtx, NotCancellable};
+use crate::durable_host::authorization::targets::CanonicalGuestPath;
+use crate::durable_host::{
+    DurabilityHost, DurableCallSession, DurableWorkerCtx, LiveAuthorizationPermit, NotCancellable,
+};
 use crate::services::agent_filesystem::{
     self as agent_filesystem, AccessMode, AttributeChanges, Attributes as AgentAttributes,
     Error as AgentFilesystemError, File as AgentFile, FilesystemGenerationHandle,
@@ -38,6 +41,7 @@ use crate::services::agent_filesystem::{
     SymlinkTarget, Target as AgentTarget, TimeChange, TimeChanges, WritePlacement, WriteResult,
 };
 use crate::workerctx::WorkerCtx;
+use golem_common::model::card::FilesystemVerb;
 use golem_common::model::oplog::host_functions::{
     FilesystemTypesDescriptorStat, FilesystemTypesDescriptorStatAt,
 };
@@ -50,11 +54,34 @@ use golem_common::model::oplog::{
 
 use crate::wasi_filesystem::{
     AgentDescriptor, AgentOpenRequest, AgentOpenRouteError, advance_write_placement,
-    calculate_metadata_hash_parts, delete_agent_descriptor, get_agent_descriptor,
-    push_agent_descriptor, resize_attribute_changes, route_agent_namespace_edit, route_agent_open,
+    agent_descriptor_guest_path, calculate_metadata_hash_parts, delete_agent_descriptor,
+    filesystem_permission_targets, get_agent_descriptor, push_agent_descriptor,
+    resize_attribute_changes, route_agent_namespace_edit, route_agent_open,
     route_agent_set_attributes, route_agent_synchronize, route_agent_write,
     route_replay_timestamp_restoration, run_agent_filesystem_call, synchronization_level,
 };
+
+fn p2_descriptor_guest_path(
+    descriptor: &AgentDescriptor,
+    relative: &str,
+) -> Result<CanonicalGuestPath, FsError> {
+    agent_descriptor_guest_path(descriptor, relative)
+        .map_err(|_| FsError::from(ErrorCode::NotPermitted))
+}
+
+async fn authorize_paths<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    requests: &[(FilesystemVerb, CanonicalGuestPath)],
+) -> Result<Option<LiveAuthorizationPermit>, FsError> {
+    if !ctx.is_live() {
+        return Ok(None);
+    }
+    let targets = filesystem_permission_targets(ctx, requests);
+    match ctx.authorize_live_permissions(&targets).await {
+        Ok(Ok(permit)) => Ok(Some(permit)),
+        Ok(Err(_)) | Err(_) => Err(ErrorCode::NotPermitted.into()),
+    }
+}
 
 fn p2_agent_storage_error(error: FilesystemStorageError) -> FsError {
     match error.io_error() {
@@ -524,6 +551,7 @@ struct AgentFileOutputStream {
     descriptor: AgentDescriptor,
     placement: WritePlacement,
     state: AgentFileOutputState,
+    _authorization_permit: Option<LiveAuthorizationPermit>,
 }
 
 type PendingAgentFileWrite =
@@ -541,12 +569,14 @@ impl AgentFileOutputStream {
         generation_handle: FilesystemGenerationHandle,
         descriptor: AgentDescriptor,
         placement: WritePlacement,
+        authorization_permit: Option<LiveAuthorizationPermit>,
     ) -> Self {
         Self {
             generation_handle,
             descriptor,
             placement,
             state: AgentFileOutputState::Ready,
+            _authorization_permit: authorization_permit,
         }
     }
 
@@ -688,14 +718,16 @@ pub(in crate::wasi_filesystem) fn p2_visible_descriptor_flags(
 }
 
 impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
-    fn read_via_stream(
+    async fn read_via_stream(
         &mut self,
         self_: Resource<Descriptor>,
         offset: Filesize,
     ) -> Result<Resource<InputStream>, FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "read_via_stream");
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
+        let path = p2_descriptor_guest_path(&descriptor, "")?;
+        let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::Read, path)]).await?;
+        self.observe_function_call("filesystem::types::descriptor", "read_via_stream");
         if descriptor.with_node(|node| !matches!(node, OpenNode::File(_))) {
             return Err(ErrorCode::BadDescriptor.into());
         }
@@ -709,14 +741,16 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         Ok(stream)
     }
 
-    fn write_via_stream(
+    async fn write_via_stream(
         &mut self,
         fd: Resource<Descriptor>,
         offset: Filesize,
     ) -> Result<Resource<OutputStream>, FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "write_via_stream");
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &fd)?;
+        let path = p2_descriptor_guest_path(&descriptor, "")?;
+        let authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
+        self.observe_function_call("filesystem::types::descriptor", "write_via_stream");
         let flags = p2_agent_flags(&generation_handle, &descriptor)?;
         if !flags.contains(DescriptorFlags::WRITE) {
             return Err(ErrorCode::NotPermitted.into());
@@ -725,19 +759,22 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             generation_handle,
             descriptor,
             WritePlacement::At(offset),
+            authorization_permit,
         ));
         let stream = self.table().push(stream)?;
         self.register_filesystem_output_stream(stream.rep());
         Ok(stream)
     }
 
-    fn append_via_stream(
+    async fn append_via_stream(
         &mut self,
         fd: Resource<Descriptor>,
     ) -> Result<Resource<OutputStream>, FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "append_via_stream");
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &fd)?;
+        let path = p2_descriptor_guest_path(&descriptor, "")?;
+        let authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
+        self.observe_function_call("filesystem::types::descriptor", "append_via_stream");
         let flags = p2_agent_flags(&generation_handle, &descriptor)?;
         if !flags.contains(DescriptorFlags::WRITE) {
             return Err(ErrorCode::NotPermitted.into());
@@ -746,6 +783,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             generation_handle,
             descriptor,
             WritePlacement::Append,
+            authorization_permit,
         ));
         let stream = self.table().push(stream)?;
         self.register_filesystem_output_stream(stream.rep());
@@ -768,9 +806,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     }
 
     async fn sync_data(&mut self, self_: Resource<Descriptor>) -> Result<(), FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "sync_data");
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
+        let path = p2_descriptor_guest_path(&descriptor, "")?;
+        let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
+        self.observe_function_call("filesystem::types::descriptor", "sync_data");
         let operation =
             descriptor.with_node(|node| route_synchronize(&generation_handle, node, true))?;
         operation.await
@@ -793,9 +833,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     }
 
     async fn set_size(&mut self, fd: Resource<Descriptor>, size: Filesize) -> Result<(), FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "set_size");
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &fd)?;
+        let path = p2_descriptor_guest_path(&descriptor, "")?;
+        let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
+        self.observe_function_call("filesystem::types::descriptor", "set_size");
         if descriptor.with_node(|node| matches!(node, OpenNode::Directory(_))) {
             return Err(ErrorCode::BadDescriptor.into());
         }
@@ -810,9 +852,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         data_access_timestamp: NewTimestamp,
         data_modification_timestamp: NewTimestamp,
     ) -> Result<(), FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "set_times");
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &fd)?;
+        let path = p2_descriptor_guest_path(&descriptor, "")?;
+        let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
+        self.observe_function_call("filesystem::types::descriptor", "set_times");
         let operation = descriptor.with_node(|node| {
             route_set_times(
                 &generation_handle,
@@ -830,9 +874,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         length: Filesize,
         offset: Filesize,
     ) -> Result<(Vec<u8>, bool), FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "read");
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
+        let path = p2_descriptor_guest_path(&descriptor, "")?;
+        let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::Read, path)]).await?;
+        self.observe_function_call("filesystem::types::descriptor", "read");
         let length = usize::try_from(length).unwrap_or(usize::MAX).min(64 * 1024);
         let call = descriptor.with_node(|node| match node {
             OpenNode::File(file) => agent_filesystem::read_file(
@@ -854,9 +900,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         buffer: Vec<u8>,
         offset: Filesize,
     ) -> Result<Filesize, FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "write");
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &fd)?;
+        let path = p2_descriptor_guest_path(&descriptor, "")?;
+        let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
+        self.observe_function_call("filesystem::types::descriptor", "write");
         let operation = descriptor.with_node(|node| match node {
             OpenNode::File(file) => {
                 route_write(&generation_handle, file, offset, Bytes::from(buffer))
@@ -870,9 +918,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<Descriptor>,
     ) -> Result<Resource<DirectoryEntryStream>, FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "read_directory");
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
+        let path = p2_descriptor_guest_path(&descriptor, "")?;
+        let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::List, path)]).await?;
+        self.observe_function_call("filesystem::types::descriptor", "read_directory");
         let call = descriptor.with_node(|node| match node {
             OpenNode::Directory(directory) => {
                 agent_filesystem::list_directory(&generation_handle, directory)
@@ -902,9 +952,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     }
 
     async fn sync(&mut self, self_: Resource<Descriptor>) -> Result<(), FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "sync");
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
+        let path = p2_descriptor_guest_path(&descriptor, "")?;
+        let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
+        self.observe_function_call("filesystem::types::descriptor", "sync");
         let operation =
             descriptor.with_node(|node| route_synchronize(&generation_handle, node, false))?;
         operation.await
@@ -915,9 +967,12 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self_: Resource<Descriptor>,
         path: String,
     ) -> Result<(), FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "create_directory_at");
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
+        let guest_path = p2_descriptor_guest_path(&descriptor, &path)?;
+        let _authorization_permit =
+            authorize_paths(self, &[(FilesystemVerb::Write, guest_path)]).await?;
+        self.observe_function_call("filesystem::types::descriptor", "create_directory_at");
         let target = p2_agent_path_target(&descriptor, path)?;
         route_create_directory(&generation_handle, target).await
     }
@@ -925,11 +980,14 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     async fn stat(&mut self, self_: Resource<Descriptor>) -> Result<DescriptorStat, FsError> {
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
+        let guest_path = p2_descriptor_guest_path(&descriptor, "")?;
+        let _authorization_permit =
+            authorize_paths(self, &[(FilesystemVerb::Stat, guest_path)]).await?;
         let path = descriptor.path().to_path_buf();
 
         // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
-        // value), so only the file-times are made durable via `CallHandle::run`.
-        let handle = CallHandle::<FilesystemTypesDescriptorStat, NotCancellable>::start(
+        // value), so only the file-times are made durable via `DurableCallSession::run`.
+        let handle = DurableCallSession::<FilesystemTypesDescriptorStat, NotCancellable>::start(
             self,
             HostRequestFileSystemPath {
                 path: path.to_string_lossy().to_string(),
@@ -1007,6 +1065,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<DescriptorStat, FsError> {
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
+        let guest_path = p2_descriptor_guest_path(&descriptor, &path)?;
+        let _authorization_permit =
+            authorize_paths(self, &[(FilesystemVerb::Stat, guest_path)]).await?;
         let full_path = descriptor.path().join(path.clone());
         let target = p2_agent_path_target(&descriptor, path.clone())?;
         let follow = if path_flags.contains(PathFlags::SYMLINK_FOLLOW) {
@@ -1016,8 +1077,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         };
 
         // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
-        // value), so only the file-times are made durable via `CallHandle::run`.
-        let handle = CallHandle::<FilesystemTypesDescriptorStatAt, NotCancellable>::start(
+        // value), so only the file-times are made durable via `DurableCallSession::run`.
+        let handle = DurableCallSession::<FilesystemTypesDescriptorStatAt, NotCancellable>::start(
             self,
             HostRequestFileSystemPath {
                 path: full_path.to_string_lossy().to_string(),
@@ -1092,9 +1153,12 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         data_access_timestamp: NewTimestamp,
         data_modification_timestamp: NewTimestamp,
     ) -> Result<(), FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "set_times_at");
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &fd)?;
+        let guest_path = p2_descriptor_guest_path(&descriptor, &path)?;
+        let _authorization_permit =
+            authorize_paths(self, &[(FilesystemVerb::Write, guest_path)]).await?;
+        self.observe_function_call("filesystem::types::descriptor", "set_times_at");
         let target = p2_agent_path_target(&descriptor, path)?;
         let follow = if path_flags.contains(PathFlags::SYMLINK_FOLLOW) {
             agent_filesystem::Follow::Yes
@@ -1118,10 +1182,20 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         new_descriptor: Resource<Descriptor>,
         new_path: String,
     ) -> Result<(), FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "link_at");
         let generation_handle = self.filesystem_generation_handle();
         let source_descriptor = p2_agent_descriptor(self, &self_)?;
         let destination_descriptor = p2_agent_descriptor(self, &new_descriptor)?;
+        let source_path = p2_descriptor_guest_path(&source_descriptor, &old_path)?;
+        let destination_path = p2_descriptor_guest_path(&destination_descriptor, &new_path)?;
+        let _authorization_permit = authorize_paths(
+            self,
+            &[
+                (FilesystemVerb::Read, source_path),
+                (FilesystemVerb::Write, destination_path),
+            ],
+        )
+        .await?;
+        self.observe_function_call("filesystem::types::descriptor", "link_at");
         let source = p2_agent_path_target(&source_descriptor, old_path)?;
         let destination = p2_agent_path_target(&destination_descriptor, new_path)?;
         route_hard_link(&generation_handle, source, old_path_flags, destination).await
@@ -1135,9 +1209,23 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         open_flags: OpenFlags,
         flags: DescriptorFlags,
     ) -> Result<Resource<Descriptor>, FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "open_at");
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
+        let guest_path = p2_descriptor_guest_path(&descriptor, &path)?;
+        let mut permissions = Vec::new();
+        if flags.contains(DescriptorFlags::READ) {
+            permissions.push((FilesystemVerb::Read, guest_path.clone()));
+        }
+        if flags.contains(DescriptorFlags::WRITE)
+            || open_flags.intersects(OpenFlags::CREATE | OpenFlags::TRUNCATE)
+        {
+            permissions.push((FilesystemVerb::Write, guest_path.clone()));
+        }
+        if open_flags.contains(OpenFlags::DIRECTORY) {
+            permissions.push((FilesystemVerb::List, guest_path));
+        }
+        let _authorization_permit = authorize_paths(self, &permissions).await?;
+        self.observe_function_call("filesystem::types::descriptor", "open_at");
         let descriptor_path = descriptor.path().join(&path);
         let target = p2_agent_path_target(&descriptor, path)?;
         let opened = route_open(&generation_handle, target, path_flags, open_flags, flags).await?;
@@ -1152,9 +1240,12 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self_: Resource<Descriptor>,
         path: String,
     ) -> Result<String, FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "readlink_at");
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
+        let guest_path = p2_descriptor_guest_path(&descriptor, &path)?;
+        let _authorization_permit =
+            authorize_paths(self, &[(FilesystemVerb::Stat, guest_path)]).await?;
+        self.observe_function_call("filesystem::types::descriptor", "readlink_at");
         let target = p2_agent_path_target(&descriptor, path)?;
         route_symlink_target(&generation_handle, target).await
     }
@@ -1164,9 +1255,12 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self_: Resource<Descriptor>,
         path: String,
     ) -> Result<(), FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "remove_directory_at");
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
+        let guest_path = p2_descriptor_guest_path(&descriptor, &path)?;
+        let _authorization_permit =
+            authorize_paths(self, &[(FilesystemVerb::Delete, guest_path)]).await?;
+        self.observe_function_call("filesystem::types::descriptor", "remove_directory_at");
         let target = p2_agent_path_target(&descriptor, path)?;
         route_remove_directory(&generation_handle, target).await
     }
@@ -1178,10 +1272,20 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         new_fd: Resource<Descriptor>,
         new_path: String,
     ) -> Result<(), FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "rename_at");
         let generation_handle = self.filesystem_generation_handle();
         let source_descriptor = p2_agent_descriptor(self, &old_fd)?;
         let destination_descriptor = p2_agent_descriptor(self, &new_fd)?;
+        let source_path = p2_descriptor_guest_path(&source_descriptor, &old_path)?;
+        let destination_path = p2_descriptor_guest_path(&destination_descriptor, &new_path)?;
+        let _authorization_permit = authorize_paths(
+            self,
+            &[
+                (FilesystemVerb::Delete, source_path),
+                (FilesystemVerb::Write, destination_path),
+            ],
+        )
+        .await?;
+        self.observe_function_call("filesystem::types::descriptor", "rename_at");
         let source = p2_agent_path_target(&source_descriptor, old_path)?;
         let destination = p2_agent_path_target(&destination_descriptor, new_path)?;
         route_rename(&generation_handle, source, destination).await
@@ -1193,9 +1297,12 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         old_path: String,
         new_path: String,
     ) -> Result<(), FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "symlink_at");
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &fd)?;
+        let destination_path = p2_descriptor_guest_path(&descriptor, &new_path)?;
+        let _authorization_permit =
+            authorize_paths(self, &[(FilesystemVerb::Write, destination_path)]).await?;
+        self.observe_function_call("filesystem::types::descriptor", "symlink_at");
         let destination = p2_agent_path_target(&descriptor, new_path)?;
         route_create_symlink(&generation_handle, destination, old_path).await
     }
@@ -1205,9 +1312,12 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         fd: Resource<Descriptor>,
         path: String,
     ) -> Result<(), FsError> {
-        self.observe_function_call("filesystem::types::descriptor", "unlink_file_at");
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &fd)?;
+        let guest_path = p2_descriptor_guest_path(&descriptor, &path)?;
+        let _authorization_permit =
+            authorize_paths(self, &[(FilesystemVerb::Delete, guest_path)]).await?;
+        self.observe_function_call("filesystem::types::descriptor", "unlink_file_at");
         let target = p2_agent_path_target(&descriptor, path)?;
         route_unlink(&generation_handle, target, ObjectKind::File).await
     }

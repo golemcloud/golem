@@ -5,7 +5,7 @@ import { WasmRpc } from 'golem:agent/host@2.0.0';
 import { ToolRpc, type RpcError } from 'golem:tool/host@0.1.0';
 import { describe, expect, it, vi } from 'vitest';
 import { bridge } from '../src';
-import { validateSchemaGraph } from '../src/internal/schema-model';
+import { GuestSchemaValueStreamHandle, validateSchemaGraph } from '../src/internal/schema-model';
 
 const graph = (root: bridge.SchemaType): bridge.SchemaGraph => ({ defs: new Map(), root });
 
@@ -382,7 +382,7 @@ describe('public bridge runtime', () => {
     const at = { seconds: 1n, nanoseconds: 0 };
 
     expect(remote.scheduleWithMetadata(at, 'run', bridge.v.tuple([]))).toBe(receipt);
-    expect(rpc.scheduleInvocation).toHaveBeenCalledWith(at, 'run', expect.anything());
+    expect(rpc.scheduleInvocation).toHaveBeenCalledWith(at, 'run', expect.anything(), undefined);
   });
 
   it('returns unit output from an awaited agent invocation', async () => {
@@ -401,6 +401,57 @@ describe('public bridge runtime', () => {
     await expect(remote.invokeAndAwait('ping', bridge.v.tuple([]))).resolves.toBeUndefined();
   });
 
+  it('passes a recursively nested native stream to an awaited agent invocation', async () => {
+    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+    };
+    rpc.asyncInvokeAndAwait.mockReturnValue({
+      metadata: { agentId: 'example', idempotencyKey: 'key' },
+      future: {
+        get: vi.fn().mockResolvedValue(undefined),
+        cancel: vi.fn(),
+      },
+    });
+    const source = (async function* () {})();
+    const params = bridge.v.record([
+      bridge.v.option(
+        bridge.v.list([
+          bridge.v.stream(new GuestSchemaValueStreamHandle({ kind: 'native', value: source })),
+        ]),
+      ),
+    ]);
+
+    await remote.invokeAndAwait('consume', params);
+
+    const tree = rpc.asyncInvokeAndAwait.mock.calls[0][1];
+    const streamNode = tree.valueNodes.find((node: { tag: string }) => node.tag === 'stream-value');
+    expect(streamNode).toMatchObject({ tag: 'stream-value' });
+    expect(streamNode.val).toMatchObject({ reader: source });
+  });
+
+  it.each(['invoke', 'schedule'] as const)(
+    'rejects native streams at the non-awaited %s boundary',
+    (boundary) => {
+      const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
+      const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+        invoke: ReturnType<typeof vi.fn>;
+        scheduleInvocation: ReturnType<typeof vi.fn>;
+      };
+      const source = (async function* () {})();
+      const params = bridge.v.option(
+        bridge.v.stream(new GuestSchemaValueStreamHandle({ kind: 'native', value: source })),
+      );
+
+      expect(() => {
+        if (boundary === 'invoke') remote.invoke('consume', params);
+        else remote.schedule({ seconds: 1n, nanoseconds: 0 }, 'consume', params);
+      }).toThrow('native schema value streams require asynchronous encoding');
+      expect(rpc.invoke).not.toHaveBeenCalled();
+      expect(rpc.scheduleInvocation).not.toHaveBeenCalled();
+    },
+  );
+
   it('cancels an agent future when the caller aborts', async () => {
     const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
     const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
@@ -418,6 +469,7 @@ describe('public bridge runtime', () => {
     });
 
     const invocation = remote.invokeAndAwait('ping', bridge.v.tuple([]), controller.signal);
+    await vi.waitFor(() => expect(get).toHaveBeenCalledOnce());
     controller.abort(new Error('cancelled by caller'));
 
     await expect(invocation).rejects.toThrow('cancelled by caller');

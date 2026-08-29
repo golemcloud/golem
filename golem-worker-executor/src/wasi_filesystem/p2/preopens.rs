@@ -17,10 +17,14 @@ use wasmtime::component::Resource;
 use crate::durable_host::DurableWorkerCtx;
 use crate::wasi_filesystem::push_agent_descriptor;
 use crate::workerctx::WorkerCtx;
+use golem_common::model::entity::FilesystemCapability;
 use wasmtime_wasi::p2::bindings::filesystem::preopens::{Descriptor, Host};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_directories(&mut self) -> wasmtime::Result<Vec<(Resource<Descriptor>, String)>> {
+        if self.filesystem_capability() == FilesystemCapability::Incapable {
+            return Ok(Vec::new());
+        }
         let preopen = self.filesystem_preopen();
         Ok(vec![
             (

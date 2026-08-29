@@ -432,6 +432,72 @@ where
         .boxed()
 }
 
+fn agent_permission() -> BoxedStrategy<PolymorphicPermissionPattern> {
+    let verb_and_resource = prop_oneof![
+        Just((None, AgentResourcePattern::Any)),
+        prop_oneof![
+            Just(AgentResourcePattern::Any),
+            ident()
+                .prop_map(AgentMethodName)
+                .prop_map(AgentResourcePattern::Method),
+        ]
+        .prop_map(|resource| (Some(AgentVerb::Invoke), resource)),
+        prop_oneof![
+            Just(AgentResourcePattern::Empty),
+            Just(AgentResourcePattern::Any),
+            ident()
+                .prop_map(AgentMethodName)
+                .prop_map(AgentResourcePattern::Method),
+        ]
+        .prop_map(|resource| (Some(AgentVerb::View), resource)),
+        prop_oneof![
+            Just(AgentVerb::Delete),
+            Just(AgentVerb::Interrupt),
+            Just(AgentVerb::Resume),
+            Just(AgentVerb::UpdateRevision),
+            Just(AgentVerb::Fork),
+        ]
+        .prop_map(|verb| (Some(verb), AgentResourcePattern::Empty)),
+        prop_oneof![
+            Just(AgentResourcePattern::Any),
+            any::<u16>().prop_map(|index| AgentResourcePattern::OplogIndex(index.into())),
+        ]
+        .prop_map(|resource| (Some(AgentVerb::Revert), resource)),
+        prop_oneof![
+            Just(AgentResourcePattern::Any),
+            ident()
+                .prop_map(AgentInvocationIdentifier)
+                .prop_map(AgentInvocationIdPattern::Identifier)
+                .prop_map(AgentResourcePattern::InvocationId),
+        ]
+        .prop_map(|resource| (Some(AgentVerb::CancelInvocation), resource)),
+        (
+            prop_oneof![
+                Just(AgentVerb::ActivatePlugin),
+                Just(AgentVerb::DeactivatePlugin),
+            ],
+            prop_oneof![
+                Just(AgentResourcePattern::Any),
+                ident()
+                    .prop_map(AgentPluginName)
+                    .prop_map(AgentResourcePattern::PluginName),
+            ],
+        )
+            .prop_map(|(verb, resource)| (Some(verb), resource)),
+    ];
+
+    (agent_owner(), recipient(), verb_and_resource)
+        .prop_map(|(owner, recipient, (verb, resource))| {
+            PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern::<AgentClass> {
+                owner,
+                recipient,
+                verb,
+                resource,
+            })
+        })
+        .boxed()
+}
+
 fn permission_strategy() -> BoxedStrategy<PolymorphicPermissionPattern> {
     prop_oneof![
         class_permission::<FilesystemClass>(
@@ -506,31 +572,7 @@ fn permission_strategy() -> BoxedStrategy<PolymorphicPermissionPattern> {
             ]
             .boxed()
         ),
-        class_permission::<AgentClass>(
-            agent_owner(),
-            option_verb(vec![
-                AgentVerb::Invoke,
-                AgentVerb::View,
-                AgentVerb::Delete,
-                AgentVerb::Interrupt,
-                AgentVerb::Resume,
-                AgentVerb::UpdateRevision,
-                AgentVerb::Fork,
-                AgentVerb::Revert,
-                AgentVerb::CancelInvocation,
-                AgentVerb::ActivatePlugin,
-                AgentVerb::DeactivatePlugin,
-                AgentVerb::Debug
-            ]),
-            prop_oneof![
-                Just(AgentResourcePattern::Any),
-                ident()
-                    .prop_map(AgentMethodName)
-                    .prop_map(AgentResourcePattern::Method),
-                any::<u16>().prop_map(|index| AgentResourcePattern::OplogIndex(index.into()))
-            ]
-            .boxed()
-        ),
+        agent_permission(),
         class_permission::<ToolClass>(
             tool_owner(),
             option_verb(vec![ToolVerb::Invoke]),
@@ -933,6 +975,7 @@ fn golden_grants() -> Vec<&'static str> {
         "secret(acme/shop/prod) @ acme/shop/prod/cart/CartAgent : reveal : api-key",
         "agent(acme/shop/prod/cart/CartAgent(*)) @ acme/shop/prod/cart/CartAgent : invoke : charge",
         "tool(acme/shop/prod/tools/*) @ acme/shop/prod/cart/CartAgent : invoke : *",
+        "tool(acme/shop/prod/cli-tools/grep) @ acme/shop/prod/cart/CartAgent : invoke : search.files --pattern=* --path=src/** -in README.md",
         "kv(acme/shop/prod) @ acme/shop/prod/cart/CartAgent : read : store.user-*",
         "blob(acme/shop/prod) @ acme/shop/prod/cart/CartAgent : read : bucket.path/**",
         "rdbms(acme/shop/prod) @ acme/shop/prod/cart/CartAgent : query : orders.public.orders",

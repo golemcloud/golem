@@ -18,9 +18,13 @@ use crate::metrics::storage::{
     record_storage_objects_written,
 };
 use crate::model::ExecutionStatus;
+use crate::services::oplog::reader::{
+    OplogReadSource, checked_range_end, exact_from_source, fail_stop,
+};
 use crate::services::oplog::{
-    CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService, OrderedOplogStart,
-    PendingUpload, ReservedPayload, cursor_value, next_scan_cursor, scan_modes,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
+    OplogAddReceipt, OplogConstructor, OplogService, OrderedOplogStart, PendingUpload,
+    ReservedPayload, ReservedRawStartBuilder, cursor_value, next_scan_cursor, scan_modes,
 };
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -421,7 +425,21 @@ impl OplogService for PrimaryOplogService {
         }
     }
 
-    async fn read(
+    async fn read_exact(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        if n == 0 {
+            return BTreeMap::new();
+        }
+        let entries = self.read_source(owned_agent_id, agent_mode, idx, n).await;
+        fail_stop(exact_from_source(OplogReadSource::Primary, idx, n, entries))
+    }
+
+    async fn read_source(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
@@ -429,13 +447,16 @@ impl OplogService for PrimaryOplogService {
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
         record_oplog_call("read");
+        let Some(end) = fail_stop(checked_range_end(idx, n)) else {
+            return BTreeMap::new();
+        };
 
         {
             let is = self.indexed_storage.clone();
             let agent_id = owned_agent_id.agent_id();
             let key = Self::oplog_key(&owned_agent_id.agent_id);
             let start: u64 = idx.into();
-            let end: u64 = idx.range_end(n).into();
+            let end: u64 = end.into();
             retry_storage_op(&self.retry_config, "read", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
@@ -682,6 +703,10 @@ enum OplogJob {
         entry: OplogEntry,
         done: tokio::sync::oneshot::Sender<OplogIndex>,
     },
+    AddDurableStreamBatch {
+        make_batch: DurableStreamBatchBuilder,
+        done: tokio::sync::oneshot::Sender<Result<Vec<(OplogIndex, OplogEntry)>, String>>,
+    },
     AddPair {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
@@ -689,7 +714,11 @@ enum OplogJob {
     },
     AddStart {
         serialized_request: Vec<u8>,
-        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        build_start: ReservedRawStartBuilder,
+        done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, String>>,
+    },
+    AddIndexedStart {
+        build_request: IndexedReservedStartBuilder,
         done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, String>>,
     },
     Commit {
@@ -783,6 +812,37 @@ impl PrimaryOplog {
                         }
                         let _ = done.send(idx);
                     }
+                    OplogJob::AddDurableStreamBatch { make_batch, done } => {
+                        record_oplog_call("add_durable_stream_batch");
+                        let first_index = state.last_oplog_idx.next();
+                        let records = make_batch(first_index);
+                        let serialized = records
+                            .into_iter()
+                            .map(|record| record.serialize().map(|bytes| (record, bytes)))
+                            .collect::<Result<Vec<_>, _>>();
+                        let result = serialized.and_then(|serialized| {
+                            let mut prepared = Vec::with_capacity(serialized.len());
+                            for (record, bytes) in serialized {
+                                let ReservedPayload {
+                                    raw,
+                                    pending: _,
+                                    guard,
+                                } = state.reserve_raw_payload(bytes);
+                                prepared.push((record.into_entry(raw)?, guard));
+                            }
+                            let mut result = Vec::with_capacity(prepared.len());
+                            for (entry, guard) in prepared {
+                                let index = state.push(entry.clone());
+                                drop(guard);
+                                result.push((index, entry));
+                            }
+                            Ok(result)
+                        });
+                        if result.is_ok() && state.over_commit_threshold() {
+                            state.commit(CommitLevel::Always).await;
+                        }
+                        let _ = done.send(result);
+                    }
                     OplogJob::AddPair {
                         start,
                         make_second,
@@ -835,6 +895,33 @@ impl PrimaryOplog {
                                 Err(err) => Err(err),
                             }
                         };
+                        if result.is_ok() && state.over_commit_threshold() {
+                            state.commit(CommitLevel::Always).await;
+                        }
+                        let _ = done.send(result);
+                    }
+                    OplogJob::AddIndexedStart {
+                        build_request,
+                        done,
+                    } => {
+                        record_oplog_call("add_start_with_indexed_reserved_raw_payload");
+                        let result = build_request(state.last_oplog_idx.next()).and_then(
+                            |(serialized_request, build_start)| {
+                                let ReservedPayload {
+                                    raw,
+                                    pending,
+                                    guard,
+                                } = state.reserve_raw_payload(serialized_request);
+                                let entry = build_start(raw)?;
+                                let index = state.push(entry.clone());
+                                drop(guard);
+                                Ok(OrderedOplogStart {
+                                    index,
+                                    entry,
+                                    pending_upload: pending,
+                                })
+                            },
+                        );
                         if result.is_ok() && state.over_commit_threshold() {
                             state.commit(CommitLevel::Always).await;
                         }
@@ -974,23 +1061,26 @@ impl OplogReader {
         entries
             .into_iter()
             .next()
+            .map(|(_, entry)| entry)
             .unwrap_or_else(|| {
                 panic!(
                     "Missing oplog entry {oplog_index} for {} in indexed storage",
                     self.key
                 )
             })
-            .1
     }
 
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
-        record_oplog_call("read_many");
+    async fn read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        record_oplog_call("read_exact");
 
-        if n == 0 {
+        let Some(last_idx) = fail_stop(checked_range_end(oplog_index, n)) else {
             return BTreeMap::new();
-        }
+        };
 
-        let last_idx = oplog_index.range_end(n);
         let mut result: BTreeMap<OplogIndex, OplogEntry> = if oplog_index <= self.last_committed_idx
         {
             let is = self.indexed_storage.clone();
@@ -999,7 +1089,7 @@ impl OplogReader {
             let key = self.key.clone();
             let start: u64 = oplog_index.into();
             let end: u64 = min(last_idx, self.last_committed_idx).into();
-            retry_storage_op(&self.retry_config, "read_many", &key, || {
+            retry_storage_op(&self.retry_config, "read_exact", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
@@ -1337,8 +1427,25 @@ impl Debug for PrimaryOplog {
 
 #[async_trait]
 impl Oplog for PrimaryOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
-        self.run_job(|done| OplogJob::Add { entry, done }).await
+    fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
+        let (done, done_rx) = tokio::sync::oneshot::channel();
+        if self.jobs.send(OplogJob::Add { entry, done }).is_err() {
+            panic!("Oplog actor for {} terminated unexpectedly", self.key);
+        }
+        let key = self.key.clone();
+        Box::pin(async move {
+            done_rx.await.unwrap_or_else(|_| {
+                panic!("Oplog actor for {key} dropped an add request without replying")
+            })
+        })
+    }
+
+    async fn add_durable_stream_batch(
+        &self,
+        make_batch: DurableStreamBatchBuilder,
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+        self.run_job(|done| OplogJob::AddDurableStreamBatch { make_batch, done })
+            .await
     }
 
     async fn add_pair(
@@ -1399,14 +1506,33 @@ impl Oplog for PrimaryOplog {
         }
     }
 
+    async fn read_exact(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        let reader = self.run_job(|done| OplogJob::Reader { done }).await;
+        let entries = reader.read_source(oplog_index, n).await;
+        fail_stop(exact_from_source(
+            OplogReadSource::Primary,
+            oplog_index,
+            n,
+            entries,
+        ))
+    }
+
+    async fn read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        let reader = self.run_job(|done| OplogJob::Reader { done }).await;
+        reader.read_source(oplog_index, n).await
+    }
+
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
         reader.read(oplog_index).await
-    }
-
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
-        let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        reader.read_many(oplog_index, n).await
     }
 
     async fn length(&self) -> u64 {
@@ -1456,7 +1582,7 @@ impl Oplog for PrimaryOplog {
     async fn add_start_with_reserved_raw_payload(
         &self,
         serialized_request: Vec<u8>,
-        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        build_start: ReservedRawStartBuilder,
     ) -> Result<OrderedOplogStart, String> {
         // ORDERING (Start determinism): the job is enqueued synchronously here — there is no
         // `.await` between a subtask initiating its durable operation and this send — and the
@@ -1466,6 +1592,17 @@ impl Oplog for PrimaryOplog {
         self.run_job(|done| OplogJob::AddStart {
             serialized_request,
             build_start,
+            done,
+        })
+        .await
+    }
+
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        build_request: IndexedReservedStartBuilder,
+    ) -> Result<OrderedOplogStart, String> {
+        self.run_job(|done| OplogJob::AddIndexedStart {
+            build_request,
             done,
         })
         .await

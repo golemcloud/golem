@@ -20,6 +20,7 @@ import {
   command,
   err,
   ok,
+  s,
   toolDefinition,
   type ToolImplementation,
 } from '../src/index';
@@ -1037,6 +1038,91 @@ describe('tool guest exports', () => {
     expect(result.result).toBeDefined();
     const decoded = typedSchemaValueFromWit(result.result!);
     expect(commandNode.body?.result?.codec.fromValue(decoded.value)).toBe('done!');
+  });
+
+  it('encodes an owned permission-card returned by a tool handler', async () => {
+    const raw = { id: 'opaque-permission-card' } as never;
+    toolDefinition('permission-card-result')
+      .body((body) => body.returns(s.permissionCard({ polymorphic: false })))
+      .implement({
+        'permission-card-result': async () => ok(raw),
+      });
+    const registered = ToolRegistry.get('permission-card-result');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('permission-card-result was not registered');
+    const input = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
+    );
+
+    const result = await tool.invoke('permission-card-result', [], input, undefined, {
+      tag: 'anonymous',
+    });
+
+    expect(result.result).toBeDefined();
+    const decoded = typedSchemaValueFromWit(result.result!);
+    expect(commandNode.body?.result?.codec.fromValue(decoded.value)).toBe(raw);
+  });
+
+  it('delivers an owned permission-card input to a tool handler', async () => {
+    const raw = { id: 'opaque-permission-card-input' } as never;
+    const handler = vi.fn(async ({ card }: { card: typeof raw }) => {
+      expect(card).toBe(raw);
+      return ok(undefined);
+    });
+    toolDefinition('permission-card-input')
+      .body((body) =>
+        body.positional('card', s.permissionCard({ polymorphic: false })).returns(z.void()),
+      )
+      .implement({ 'permission-card-input': handler });
+    const registered = ToolRegistry.get('permission-card-input');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) throw new Error('permission-card-input was not registered');
+    const input = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({ card: raw }),
+    );
+
+    await expect(
+      tool.invoke('permission-card-input', [], input, undefined, { tag: 'anonymous' }),
+    ).resolves.toMatchObject({ result: undefined });
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it('still rejects non-canonical values nested beside a permission card', async () => {
+    const raw = { id: 'opaque-permission-card-with-literal' } as never;
+    const handler = vi.fn(async () => ok(undefined));
+    toolDefinition('permission-card-canonicality')
+      .body((body) =>
+        body
+          .positional(
+            'payload',
+            z.object({
+              card: s.permissionCard({ polymorphic: false }),
+              mode: z.literal('right'),
+            }),
+          )
+          .returns(z.void()),
+      )
+      .implement({ 'permission-card-canonicality': handler });
+    const registered = ToolRegistry.get('permission-card-canonicality');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) {
+      throw new Error('permission-card-canonicality was not registered');
+    }
+    const encoded = registered.extended
+      .canonicalInputModel(commandNode)
+      .encodeTyped({ payload: { card: raw, mode: 'right' } });
+    if (encoded.value.tag !== 'record') throw new Error('expected canonical input record');
+    const carrier = encoded.value.fields[0];
+    const payload = carrier.tag === 'option' ? carrier.value : carrier;
+    if (payload?.tag !== 'record') throw new Error('expected permission-card payload record');
+    payload.fields[1] = v.string('wrong');
+
+    await expect(
+      tool.invoke('permission-card-canonicality', [], typedSchemaValueToWit(encoded), undefined, {
+        tag: 'anonymous',
+      }),
+    ).rejects.toMatchObject({ tag: 'invalid-input' });
+    expect(handler).not.toHaveBeenCalled();
   });
 
   describe('Preview 3 tool streams', () => {

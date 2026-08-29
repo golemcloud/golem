@@ -1,5 +1,5 @@
 use super::*;
-use crate::services::active_workers::{ConcurrentAgentsScheduler, MemoryGrant};
+use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
 use crate::services::golem_config::ResourceUsageMeteringConfig;
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::resource_limits::AtomicResourceEntry;

@@ -493,6 +493,10 @@ function checkSiblingNames(node: ExtendedCommandNode): void {
 
 const IDENTIFIER = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 
+export function validateToolIdentifier(kind: string, value: string): void {
+  checkIdentifier(kind, value);
+}
+
 function checkIdentifier(kind: string, value: string): void {
   if (!IDENTIFIER.test(value)) {
     toolBuildError('invalid-identifier', `invalid ${kind}: "${value}"`);
@@ -732,6 +736,8 @@ function schemaValueMatches(graph: SchemaGraph, type: SchemaType, value: SchemaV
     case 'secret':
     case 'quota-token':
       return value.tag === resolvedBody.tag;
+    case 'permission-card':
+      return value.tag === 'permission-card';
     case 'text': {
       if (value.tag !== 'text') return false;
       if (

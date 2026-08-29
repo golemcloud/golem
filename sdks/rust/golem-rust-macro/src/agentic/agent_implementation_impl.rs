@@ -114,7 +114,6 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
             quote! {
                 let agent_instance_raw = <#self_ty>::#ctor_ident(#(#ctor_param_idents),*).await;
                 let agent_instance = Box::new(agent_instance_raw);
-                let agent_id = golem_rust::get_self_metadata().agent_id;
                 golem_rust::agentic::register_agent_instance(
                     golem_rust::agentic::ResolvedAgent::new(agent_instance)
                 );
@@ -124,7 +123,6 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         Asyncness::Immediate => {
             quote! {
                 let agent_instance = Box::new(<#self_ty>::#ctor_ident(#(#ctor_param_idents),*));
-                let agent_id = golem_rust::get_self_metadata().agent_id;
                 golem_rust::agentic::register_agent_instance(
                     golem_rust::agentic::ResolvedAgent::new(agent_instance)
                 );
@@ -272,33 +270,32 @@ fn build_match_arms(
         let ident = &info.method.sig.ident;
 
         let fn_output_info = FunctionOutputInfo::from_signature(&info.method.sig);
-
         let post_method_param_extraction_logic = match fn_output_info.async_ness {
             Asyncness::Future if !fn_output_info.is_unit => quote! {
                 let result = self.#ident(#(#param_idents),*).await;
-                <_ as golem_rust::agentic::Schema>::to_schema_value(result).map_err(|e| {
+                golem_rust::agentic::Schema::into_agent_invocation_result(result).map_err(|e| {
                     golem_rust::agentic::custom_error(format!(
                         "Failed serializing return value for method {}: {}",
                         #method_name, e
                     ))
-                }).map(Some)
+                })
             },
             Asyncness::Future => quote! {
                 let _ = self.#ident(#(#param_idents),*).await;
-                Ok(None)
+                Ok(golem_rust::agentic::AgentInvocationResult { value: None })
             },
             Asyncness::Immediate if !fn_output_info.is_unit => quote! {
                 let result = self.#ident(#(#param_idents),*);
-                <_ as golem_rust::agentic::Schema>::to_schema_value(result).map_err(|e| {
+                golem_rust::agentic::Schema::into_agent_invocation_result(result).map_err(|e| {
                     golem_rust::agentic::custom_error(format!(
                         "Failed serializing return value for method {}: {}",
                         #method_name, e
                     ))
-                }).map(Some)
+                })
             },
             Asyncness::Immediate => quote! {
                 let _ = self.#ident(#(#param_idents),*);
-                Ok(None)
+                Ok(golem_rust::agentic::AgentInvocationResult { value: None })
             },
         };
 
@@ -328,33 +325,40 @@ fn generate_method_param_extraction(
     sorted_method_index: usize,
     post_method_param_extraction_logic: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
+    let input_param_index = fresh_method_local(params, "__golem_input_param_index");
+    let agent_type_name_raw = fresh_method_local(params, "__golem_agent_type_name_raw");
+    let agent_type_name_local = fresh_method_local(params, "__golem_agent_type_name");
+    let param_schemas = fresh_method_local(params, "__golem_param_schemas");
+    let input_variant = fresh_method_local(params, "__golem_input_variant");
+    let invocation_principal = fresh_method_local(params, "__golem_invocation_principal");
     let input_param_index_init = quote! {
-      let mut input_param_index: usize = 0;
-      let __agent_type_name_raw = #agent_type_name;
-      let __agent_type_name = golem_rust::agentic::AgentTypeName(__agent_type_name_raw.to_string());
-      let __param_schemas = golem_rust::agentic::get_method_parameter_types_by_index(
-          &__agent_type_name,
+      let mut #input_param_index: usize = 0;
+      let #agent_type_name_raw = #agent_type_name;
+      let #agent_type_name_local = golem_rust::agentic::AgentTypeName(#agent_type_name_raw.to_string());
+      let #param_schemas = golem_rust::agentic::get_method_parameter_types_by_index(
+          &#agent_type_name_local,
           #sorted_method_index
       ).ok_or_else(|| {
           golem_rust::agentic::custom_error(format!(
               "Internal Error: Parameter schemas not found for agent: {}, method index: {}",
-              __agent_type_name_raw, #sorted_method_index
+              #agent_type_name_raw, #sorted_method_index
           ))
       })?;
+      let #invocation_principal = &principal;
     };
 
     let extraction: Vec<proc_macro2::TokenStream> = params.iter().enumerate().map(|(original_method_param_idx, (ident, pat_type))| {
         let ident_result = format_ident!("{}_result", ident);
         let ty = &pat_type.ty;
         quote! {
-           let #ident_result = match &mut __input_variant {
+           let #ident_result = match &mut #input_variant {
                __InputVariant::Tuple(values) => {
-                    let enriched_schema = __param_schemas.get(#original_method_param_idx)
+                    let enriched_schema = #param_schemas.get(#original_method_param_idx)
                         .cloned()
                         .ok_or_else(|| {
                             golem_rust::agentic::custom_error(format!(
                                 "Internal Error: Parameter schema not found for agent: {}, method: {}, parameter index: {}",
-                                __agent_type_name_raw, #method_name, #original_method_param_idx
+                                #agent_type_name_raw, #method_name, #original_method_param_idx
                             ))
                         })?;
 
@@ -362,7 +366,7 @@ fn generate_method_param_extraction(
                         golem_rust::agentic::EnrichedParameterSchema::AutoInject(auto_injected_schema) => {
                             match auto_injected_schema {
                                 golem_rust::agentic::AutoInjectedParamType::Principal => {
-                                    golem_rust::agentic::Schema::from_principal(principal.clone()).map_err(|e| {
+                                    golem_rust::agentic::Schema::from_principal((*#invocation_principal).clone()).map_err(|e| {
                                         golem_rust::agentic::invalid_input_error(format!("Failed parsing arg {} for method {}: {}", #original_method_param_idx, #method_name, e))
                                     })
                                 }
@@ -370,8 +374,8 @@ fn generate_method_param_extraction(
                         }
 
                         golem_rust::agentic::EnrichedParameterSchema::Value(schema) => {
-                            let schema_value = if input_param_index < values.len() {
-                                values[input_param_index].take().ok_or_else(|| {
+                            let schema_value = if #input_param_index < values.len() {
+                                values[#input_param_index].take().ok_or_else(|| {
                                     golem_rust::agentic::invalid_input_error(format!("Argument already consumed in method {}", #method_name))
                                 })?
                             } else {
@@ -379,7 +383,7 @@ fn generate_method_param_extraction(
                             };
 
                             // only increment the input_param_index for non auto-injected parameters
-                            input_param_index += 1;
+                            #input_param_index += 1;
 
                             <#ty as golem_rust::agentic::Schema>::from_schema_value(
                                 schema_value,
@@ -403,7 +407,7 @@ fn generate_method_param_extraction(
 
         #input_param_index_init
 
-        let mut __input_variant = match input {
+        let mut #input_variant = match input {
             golem_rust::SchemaValue::Record { fields: values } => {
                 __InputVariant::Tuple(values.into_iter().map(Some).collect())
             },
@@ -413,21 +417,40 @@ fn generate_method_param_extraction(
         };
 
         #(#extraction)*
-        if let __InputVariant::Tuple(values) = &__input_variant {
-            if input_param_index != values.len() {
+        if let __InputVariant::Tuple(values) = &#input_variant {
+            if #input_param_index != values.len() {
                 return Err(golem_rust::agentic::invalid_input_error(format!(
                     "Unexpected extra arguments in method {}: expected {}, got {}",
                     #method_name,
-                    input_param_index,
+                    #input_param_index,
                     values.len()
                 )));
             }
         }
-        drop(__input_variant);
-        drop(__param_schemas);
-        drop(__agent_type_name);
+        drop(#input_variant);
+        drop(#param_schemas);
+        drop(#agent_type_name_local);
 
         #post_method_param_extraction_logic
+    }
+}
+
+fn fresh_method_local(params: &[(syn::Ident, syn::PatType)], preferred: &str) -> syn::Ident {
+    let occupied = params
+        .iter()
+        .map(|(ident, _)| ident.to_string())
+        .collect::<std::collections::HashSet<_>>();
+    if !occupied.contains(preferred) {
+        return format_ident!("{preferred}");
+    }
+
+    let mut suffix = 1usize;
+    loop {
+        let candidate = format!("{preferred}{suffix}");
+        if !occupied.contains(&candidate) {
+            return format_ident!("{candidate}");
+        }
+        suffix += 1;
     }
 }
 
@@ -480,7 +503,7 @@ fn generate_base_agent_impl(
             }
 
             async fn invoke(&mut self, method_name: String, input: golem_rust::SchemaValue, principal: golem_rust::golem_agentic::golem::agent::common::Principal)
-                -> Result<Option<golem_rust::SchemaValue>, golem_rust::golem_agentic::golem::agent::common::AgentError> {
+                -> Result<golem_rust::agentic::AgentInvocationResult, golem_rust::golem_agentic::golem::agent::common::AgentError> {
                 match method_name.as_str() {
                     #(#match_arms,)*
                     _ => Err(golem_rust::agentic::invalid_method_error(method_name)),

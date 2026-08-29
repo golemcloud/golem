@@ -15,6 +15,10 @@
     ".": {
       "import": "./dist/index.mjs",
       "types": "./dist/index.d.mts"
+    },
+    "./middleware": {
+      "import": "./dist/middleware.mjs",
+      "types": "./dist/middleware.d.mts"
     }
   },
   "typesVersions": {
@@ -41,7 +45,7 @@
     "bench:quickjs": "node ./scripts/bench-quickjs.mjs",
     "lint": "eslint . --ext .ts,.tsx,.mjs",
     "lint:fix": "eslint . --ext .ts,.tsx,.mjs --fix",
-    "generate-dts": "wasm-rquickjs generate-dts --wit ../../wit --output types --target wasi-p3",
+    "generate-dts": "node ./scripts/generate-dts.mjs",
     "build": "pnpm run generate-dts && rollup --failAfterWarnings -c",
     "clean": "node ./scripts/clean.mjs",
     "clean-test-data": "node ../../scripts/clean-test-data.mjs",
@@ -49,7 +53,7 @@
     "typecheck": "pnpm run build && tsc --project tsconfig.type-tests.json",
     "dev": "rollup -c -w",
     "generate-agent-template": "node ./scripts/generate-agent-template.mjs",
-    "compile-agent-template": "cargo build --target wasm32-wasip2 --manifest-path=agent-template/Cargo.toml --release --no-default-features --features full-p3,golem",
+    "compile-agent-template": "node ./scripts/compile-agent-templates.mjs",
     "copy-agent-template": "node ./scripts/copy-agent-template.mjs",
     "build-agent-template": "pnpm run generate-agent-template && pnpm run compile-agent-template && pnpm run copy-agent-template"
   },
@@ -57,6 +61,9 @@
   "author": "",
   "license": "SEE LICENSE IN LICENSE",
   "description": "",
+  "dependencies": {
+    "@noble/hashes": "^1.8.0"
+  },
   "devDependencies": {
     "@eslint/js": "^9.33.0",
     "arktype": "^2.1.0",

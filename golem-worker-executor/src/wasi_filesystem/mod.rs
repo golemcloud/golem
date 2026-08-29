@@ -17,6 +17,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::authorization::targets::{
+    CanonicalGuestPath, TargetError, agent_owner, filesystem_target,
+};
 use crate::services::agent_filesystem::{
     self as agent_filesystem, AccessMode, AttributeChanges, Error as AgentFilesystemError,
     File as AgentFile, FileDisposition, FilesystemCall, FilesystemGenerationHandle, Follow,
@@ -25,6 +28,7 @@ use crate::services::agent_filesystem::{
 };
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
+use golem_common::model::card::{FilesystemVerb, PermissionTarget};
 use metrohash::MetroHash128;
 use wasmtime::component::{Resource, ResourceTableError};
 
@@ -78,6 +82,41 @@ impl AgentDescriptor {
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
+}
+
+/// Resolves a descriptor-relative WASI path into the canonical absolute guest path used by
+/// filesystem permission targets. Resolution cannot escape the descriptor's guest path.
+pub(crate) fn agent_descriptor_guest_path(
+    descriptor: &AgentDescriptor,
+    relative: &str,
+) -> Result<CanonicalGuestPath, TargetError> {
+    canonical_guest_path_from_descriptor_path(descriptor.path(), relative)
+}
+
+fn canonical_guest_path_from_descriptor_path(
+    descriptor_path: &Path,
+    relative: &str,
+) -> Result<CanonicalGuestPath, TargetError> {
+    let descriptor_path = descriptor_path
+        .to_str()
+        .ok_or_else(|| TargetError::InvalidPath(descriptor_path.display().to_string()))?;
+    let absolute = match descriptor_path {
+        "" | "." => "/".to_string(),
+        path if path.starts_with('/') => path.to_string(),
+        path => format!("/{path}"),
+    };
+    CanonicalGuestPath::new(&absolute)?.resolve(relative)
+}
+
+pub(crate) fn filesystem_permission_targets<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    requests: &[(FilesystemVerb, CanonicalGuestPath)],
+) -> Vec<PermissionTarget> {
+    let owner = agent_owner(ctx);
+    requests
+        .iter()
+        .map(|(verb, path)| filesystem_target(owner.clone(), *verb, path))
+        .collect()
 }
 
 /// Looks up a borrowed P2/P3 descriptor resource and clones its shared agent descriptor.
@@ -386,4 +425,43 @@ pub(crate) fn calculate_metadata_hash_parts(modified: Option<(u64, u32)>, size: 
     hasher.write_u64(size);
 
     hasher.finish128()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn guest_paths_are_canonicalized_without_host_paths() {
+        assert_eq!(
+            canonical_guest_path_from_descriptor_path(Path::new(""), "data/./items/../file")
+                .unwrap()
+                .as_str(),
+            "/data/file"
+        );
+        assert_eq!(
+            canonical_guest_path_from_descriptor_path(Path::new("."), "tmp/value")
+                .unwrap()
+                .as_str(),
+            "/tmp/value"
+        );
+    }
+
+    #[test]
+    fn guest_path_resolution_cannot_escape_descriptor() {
+        assert!(
+            canonical_guest_path_from_descriptor_path(Path::new(""), "../host-secret").is_err()
+        );
+        assert!(
+            canonical_guest_path_from_descriptor_path(Path::new("data"), "../host-secret").is_err()
+        );
+        assert!(
+            canonical_guest_path_from_descriptor_path(Path::new("data"), "../../host-secret")
+                .is_err()
+        );
+        assert!(
+            canonical_guest_path_from_descriptor_path(Path::new("data"), "/host-secret").is_err()
+        );
+    }
 }

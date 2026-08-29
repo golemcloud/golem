@@ -24,7 +24,10 @@ use futures_util::{SinkExt, StreamExt, TryStreamExt, future, pin_mut};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::ComponentId;
 use golem_common::model::{AgentEvent, AgentId, IdempotencyKey, LogLevel, Timestamp};
-use native_tls::TlsConnector;
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::crypto::WebPkiSupportedAlgorithms;
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::{DigitallySignedStruct, SignatureScheme};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -40,6 +43,59 @@ use tokio_tungstenite::{
 use tracing::{debug, error, info, trace};
 use url::Url;
 use uuid::Uuid;
+
+#[derive(Debug)]
+struct InsecureServerCertVerifier {
+    signature_algorithms: WebPkiSupportedAlgorithms,
+}
+
+impl ServerCertVerifier for InsecureServerCertVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.signature_algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.signature_algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.signature_algorithms.supported_schemes()
+    }
+}
+
+pub(super) fn insecure_connector() -> anyhow::Result<Connector> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let verifier = InsecureServerCertVerifier {
+        signature_algorithms: provider.signature_verification_algorithms,
+    };
+    let tls_config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(verifier))
+        .with_no_client_auth();
+    Ok(Connector::Rustls(Arc::new(tls_config)))
+}
 
 pub struct AgentConnection {
     request: Request,
@@ -184,12 +240,7 @@ impl AgentConnection {
         }
 
         let connector = if allow_insecure {
-            Some(Connector::NativeTls(
-                TlsConnector::builder()
-                    .danger_accept_invalid_certs(true)
-                    .danger_accept_invalid_hostnames(true)
-                    .build()?,
-            ))
+            Some(insecure_connector()?)
         } else {
             None
         };
@@ -208,9 +259,7 @@ impl AgentConnection {
             interval.tick().await;
 
             let ping_result = write
-                .send(Message::Ping(
-                    Bytes::from(cnt.to_ne_bytes().to_vec()).into(),
-                ))
+                .send(Message::Ping(Bytes::from(cnt.to_ne_bytes().to_vec())))
                 .await
                 .context("Failed to send ping");
 
@@ -414,8 +463,7 @@ impl AgentConnection {
                 }
             }
             Message::Binary(data) => {
-                let parsed: serde_json::Result<AgentEvent> =
-                    serde_json::from_slice(data.as_slice());
+                let parsed: serde_json::Result<AgentEvent> = serde_json::from_slice(data.as_ref());
                 match parsed {
                     Ok(parsed) => Some(parsed),
                     Err(err) => {

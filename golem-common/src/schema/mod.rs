@@ -33,7 +33,7 @@ pub use golem_schema::schema::proptest_strategies;
 pub use golem_schema::schema::wit;
 pub use golem_schema::schema::{
     canonical, conversion, derive, graph, host_managed, metadata, multimodal, schema_type,
-    schema_value, unstructured,
+    schema_value, stream, unstructured,
 };
 
 #[cfg(test)]
@@ -60,10 +60,12 @@ pub use host_managed::{
 pub use metadata::{MetadataEnvelope, Role, TypeId};
 pub use schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, PathDirection,
-    PathKind, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec, ResultSpec, SchemaType,
-    SecretSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
+    PathKind, PathSpec, PermissionCardSpec, QuantitySpec, QuantityValue, QuotaTokenSpec,
+    ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
+    VariantCaseType,
 };
 pub use schema_value::{
-    BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
-    SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
+    BinaryValuePayload, DurationValuePayload, PermissionCardValuePayload, QuotaTokenValuePayload,
+    ResultValuePayload, SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload,
+    VariantValuePayload,
 };

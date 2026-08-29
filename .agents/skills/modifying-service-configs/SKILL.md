@@ -42,15 +42,18 @@ cargo make generate-configs
 
 This builds the service binaries and runs them with `--dump-config-default-toml` and `--dump-config-default-env-var` flags, producing reference files that reflect the current `Default` implementation.
 
-### Step 3: Verify
+### Step 3: Verify affected behavior
 
 ```shell
-cargo make build
+cargo check -p <affected-service> --all-targets
+cargo test -p <affected-service> -- <affected-test> --report-time
 ```
 
-### Step 4: Check configs match
+`cargo make generate-configs` already builds the service binaries used to dump every reference config. Do not add a redundant full workspace build unless the config type is part of a broad shared API whose consumers cannot be isolated.
 
-CI runs `cargo make check-configs` which regenerates configs and diffs them against committed files. If this fails, you forgot to run `cargo make generate-configs`.
+### Step 4: Review generated configs
+
+Review the generated TOML and env-var diffs and ensure they match the intended defaults. `cargo make check-configs` repeats generation before diffing; use it locally when validating generator determinism or broad shared-config changes, but do not rerun it routinely immediately after a successful `cargo make generate-configs`. CI runs the drift check on every PR.
 
 ## Adding a New Config Field
 
@@ -75,6 +78,6 @@ Many config structs compose sub-configs (e.g., `GolemConfig` contains `WorkersSe
 2. `Default` implementation updated
 3. `cargo make generate-configs` run
 4. Generated TOML and env-var files committed
-5. `cargo make build` succeeds
-6. `cargo make check-configs` passes (CI validation)
-7. `cargo make fix` run before PR
+5. Affected service behavior checks/builds and relevant tests pass
+6. Generated config diffs reviewed; `cargo make check-configs` run locally only when warranted
+7. Formatting and linting follow the scope-based `pre-pr-checklist`

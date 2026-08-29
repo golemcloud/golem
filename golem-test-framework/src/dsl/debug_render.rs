@@ -99,6 +99,11 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
             let _ = writeln!(result, "{pad}start index:       {}", params.start_index);
         }
+        PublicOplogEntry::CompletionDelivered(params) => {
+            let _ = writeln!(result, "COMPLETION DELIVERED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}start index:       {}", params.start_index);
+        }
         PublicOplogEntry::AgentInvocationStarted(params) => {
             let _ = writeln!(result, "AGENT INVOCATION STARTED");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
@@ -124,6 +129,23 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 PublicAgentInvocation::ManualUpdate(inner) => {
                     let _ = writeln!(result, "{pad}type:              manual update");
                     let _ = writeln!(result, "{pad}target revision:   {}", inner.target_revision,);
+                }
+            }
+            if let Some(wallet_pin) = &params.wallet_pin {
+                let wallet_id_hash = wallet_pin
+                    .wallet_token
+                    .wallet_id_hash
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                let _ = writeln!(result, "{pad}wallet id hash:    {wallet_id_hash}");
+                let _ = writeln!(
+                    result,
+                    "{pad}wallet generation: {}",
+                    wallet_pin.wallet_token.generation
+                );
+                if let Some(scope_card_id) = wallet_pin.scope_card_id {
+                    let _ = writeln!(result, "{pad}scope card:        {scope_card_id}");
                 }
             }
         }
@@ -438,11 +460,17 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 params.queued_event_index
             );
             let _ = writeln!(result, "{pad}card id:           {}", params.card_id);
+            if let Some(generation) = params.wallet_generation {
+                let _ = writeln!(result, "{pad}wallet generation: {generation}");
+            }
         }
         PublicOplogEntry::CardExpired(params) => {
             let _ = writeln!(result, "CARD EXPIRED");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
             let _ = writeln!(result, "{pad}card id:           {}", params.card_id);
+            if let Some(generation) = params.wallet_generation {
+                let _ = writeln!(result, "{pad}wallet generation: {generation}");
+            }
         }
         PublicOplogEntry::CardEventQueued(params) => {
             let _ = writeln!(result, "CARD EVENT QUEUED");
@@ -458,6 +486,9 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 params.queued_event_index
             );
             let _ = writeln!(result, "{pad}card id:           {}", params.card_id);
+            if let Some(generation) = params.wallet_generation {
+                let _ = writeln!(result, "{pad}wallet generation: {generation}");
+            }
         }
         PublicOplogEntry::CardInstallFailed(params) => {
             let _ = writeln!(result, "CARD INSTALL FAILED");
@@ -469,6 +500,66 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             );
             let _ = writeln!(result, "{pad}card id:           {}", params.card_id);
             let _ = writeln!(result, "{pad}reason:            {:?}", params.reason);
+        }
+        PublicOplogEntry::CardDerived(params) => {
+            let _ = writeln!(result, "CARD DERIVED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}card id:           {}", params.card_id);
+            let _ = writeln!(result, "{pad}parent ids:        {:?}", params.parent_ids);
+            if let Some(generation) = params.wallet_generation {
+                let _ = writeln!(result, "{pad}wallet generation: {generation}");
+            }
+        }
+        PublicOplogEntry::CardTransferStarted(params) => {
+            let _ = writeln!(result, "CARD TRANSFER STARTED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}transfer id:       {}", params.transfer_id);
+            let _ = writeln!(result, "{pad}card id:           {}", params.card_id);
+            let _ = writeln!(result, "{pad}target holder:     {:?}", params.target_holder);
+            if let Some(generation) = params.source_wallet_generation {
+                let _ = writeln!(result, "{pad}source generation: {generation}");
+            }
+        }
+        PublicOplogEntry::CardTransferred(params) => {
+            let _ = writeln!(result, "CARD TRANSFER ADMITTED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}transfer id:       {}", params.transfer_id);
+            if let Some(source_card_id) = params.source_card_id {
+                let _ = writeln!(result, "{pad}source card id:    {source_card_id}");
+            }
+            let _ = writeln!(
+                result,
+                "{pad}installed card id: {}",
+                params.installed_card_id
+            );
+            let _ = writeln!(result, "{pad}target holder:     {:?}", params.target_holder);
+            if let Some(generation) = params.target_wallet_generation {
+                let _ = writeln!(result, "{pad}target generation: {generation}");
+            }
+        }
+        PublicOplogEntry::CardRevokedCascade(params) => {
+            let _ = writeln!(result, "CARD REVOKED CASCADE");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}revoked card ids:  {:?}",
+                params.revoked_card_ids
+            );
+            if let Some(generation) = params.local_wallet_generation {
+                let _ = writeln!(result, "{pad}local generation:  {generation}");
+            }
+        }
+        PublicOplogEntry::CardTransferConfirmed(params) => {
+            let _ = writeln!(result, "CARD TRANSFER CONFIRMED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}transfer id:       {}", params.transfer_id);
+            let _ = writeln!(result, "{pad}source card id:    {}", params.source_card_id);
+            let _ = writeln!(
+                result,
+                "{pad}installed card id: {}",
+                params.installed_card_id
+            );
+            let _ = writeln!(result, "{pad}target holder:     {:?}", params.target_holder);
         }
         PublicOplogEntry::HostStreamFrame(params) => {
             let _ = writeln!(result, "HOST STREAM FRAME");
@@ -483,6 +574,51 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 result,
                 "{pad}payload:           {}",
                 typed_schema_value_to_string(&params.payload)
+            );
+        }
+        PublicOplogEntry::StreamRegistered(params) => {
+            let _ = writeln!(result, "STREAM REGISTERED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}record:            {}",
+                typed_schema_value_to_string(&params.record)
+            );
+        }
+        PublicOplogEntry::StreamItems(params) => {
+            let _ = writeln!(result, "STREAM ITEMS");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}record:            {}",
+                typed_schema_value_to_string(&params.record)
+            );
+        }
+        PublicOplogEntry::StreamEnd(params) => {
+            let _ = writeln!(result, "STREAM END");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}record:            {}",
+                typed_schema_value_to_string(&params.record)
+            );
+        }
+        PublicOplogEntry::StreamCancel(params) => {
+            let _ = writeln!(result, "STREAM CANCEL");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}record:            {}",
+                typed_schema_value_to_string(&params.record)
+            );
+        }
+        PublicOplogEntry::StreamSession(params) => {
+            let _ = writeln!(result, "STREAM SESSION");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}record:            {}",
+                typed_schema_value_to_string(&params.record)
             );
         }
     }

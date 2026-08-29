@@ -98,6 +98,28 @@ Worker executors expose the following Prometheus metrics:
 | `replayed_functions_count`          | histogram |                     | Number of functions replayed per forker resumption                              |
 | `oplog_svc_call_total`              | counter   | `api`               | Number of calls to the oplog layer                                              |
 
+#### Durable Stream Sessions
+
+| Metric                                               | Type      | Labels                 | Description                                                        |
+| ---------------------------------------------------- | --------- | ---------------------- | ------------------------------------------------------------------ |
+| `golem_durable_stream_lifecycle_total`               | counter   | `event`                | Registered and terminal durable stream transitions                 |
+| `golem_durable_stream_open`                          | gauge     |                        | Open streams owned by loaded producers                             |
+| `golem_durable_stream_producer_operation_total`      | counter   | `operation`, `outcome` | Producer commits and replay no-ops                                  |
+| `golem_durable_stream_catch_up_distance_events`      | histogram |                        | Committed events read before joining a live tail                   |
+| `golem_durable_stream_live_join_total`               | counter   | `outcome`              | Accepted and rejected live-tail joins                              |
+| `golem_durable_stream_active_readers`                | gauge     |                        | Attached live-tail readers                                         |
+| `golem_durable_stream_backpressure_total`            | counter   |                        | Fan-outs that waited on a full reader queue                        |
+| `golem_durable_stream_attempt_total`                 | counter   | `operation`, `outcome` | Start, resume, and takeover attempts                               |
+| `golem_durable_stream_attachment_epoch`              | histogram |                        | Accepted attachment epochs                                         |
+| `golem_durable_stream_journal_lag_events`            | histogram |                        | Source events not yet recorded in the value-only consumer journal  |
+| `golem_durable_stream_attachment_operation_total`    | counter   | `operation`, `outcome` | Prepare, activate, renew, and finalize attachment operations       |
+| `golem_durable_stream_lease_remaining_seconds`       | histogram |                        | Lease headroom observed during attachment work                     |
+| `golem_durable_stream_reconciliation_total`          | counter   | `outcome`              | Reconciler decisions and failures                                  |
+| `golem_durable_stream_cascade_total`                 | counter   | `outcome`              | Durable producer-deletion cascade outcomes                         |
+| `golem_durable_stream_limit_violation_total`         | counter   | `limit`                | Rejections by bounded protocol-v1 limit category                   |
+
+For configuration, recovery, and deletion diagnostics, see [Operating Durable Stream Sessions](/next/operate/durable_streams).
+
 ### Worker Service
 
 Worker service exposes the following Prometheus metrics:

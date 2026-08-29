@@ -18,13 +18,12 @@ import { describe, expect, it, vi } from 'vitest';
 import * as z3 from 'zod3';
 import { z } from 'zod/v4';
 import {
-  client,
   getExtendedToolDefinition,
-  ToolCallError,
   toolDefinition,
   type ToolClientInvocationResult,
   type ToolClientTransport,
 } from '../src/tool';
+import { client, ToolCallError } from '../src/toolClient';
 import { compileSchema } from '../src/schema/adapter';
 import {
   deepEqual,
@@ -650,6 +649,26 @@ describe('tool runtime client', () => {
           }),
         })),
       })['quota-result']({}),
+    ).resolves.toBe(raw);
+  });
+
+  it('decodes an owned permission-card result exactly once', async () => {
+    const schema = s.permissionCard({ polymorphic: false });
+    const codec = compileSchema(schema);
+    const definition = toolDefinition('permission-card-result').body((body) =>
+      body.returns(schema),
+    );
+    const raw = { [Symbol.dispose]: vi.fn() } as never;
+
+    await expect(
+      client(definition, {
+        transport: new FakeTransport(() => ({
+          result: typedSchemaValueToWit({
+            graph: codec.graph,
+            value: codec.toValue(raw),
+          }),
+        })),
+      })['permission-card-result']({}),
     ).resolves.toBe(raw);
   });
 

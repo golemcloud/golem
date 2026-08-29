@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::metrics::promises::record_promise_created;
-use crate::services::active_workers;
+use crate::services::active_agents;
 use crate::services::component;
 use crate::services::golem_config;
 use crate::services::oplog;
@@ -446,7 +446,7 @@ impl PromiseService for DefaultPromiseService {
 pub struct DefaultPromiseWorkerAccess<Ctx: WorkerCtx> {
     component_service: Arc<dyn component::ComponentService>,
     worker_service: Arc<dyn worker::WorkerService>,
-    active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+    active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
     oplog_service: Arc<dyn oplog::OplogService>,
     config: Arc<golem_config::GolemConfig>,
     worker_activator: Arc<dyn WorkerActivator<Ctx>>,
@@ -456,7 +456,7 @@ impl<Ctx: WorkerCtx> DefaultPromiseWorkerAccess<Ctx> {
     pub fn new(
         component_service: Arc<dyn component::ComponentService>,
         worker_service: Arc<dyn worker::WorkerService>,
-        active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+        active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
         oplog_service: Arc<dyn oplog::OplogService>,
         config: Arc<golem_config::GolemConfig>,
         worker_activator: Arc<dyn WorkerActivator<Ctx>>,
@@ -464,7 +464,7 @@ impl<Ctx: WorkerCtx> DefaultPromiseWorkerAccess<Ctx> {
         Self {
             component_service,
             worker_service,
-            active_workers,
+            active_agents,
             oplog_service,
             config,
             worker_activator,
@@ -525,7 +525,7 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
         };
 
         // Check if worker is active first, otherwise fall back to stored metadata
-        let metadata = if let Some(worker) = self.active_workers.try_get(&owned_agent_id).await {
+        let metadata = if let Some(worker) = self.active_agents.try_get(&owned_agent_id).await {
             worker.get_latest_worker_metadata().await
         } else if let Some(worker::GetWorkerMetadataResult {
             mut initial_worker_metadata,

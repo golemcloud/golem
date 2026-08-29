@@ -11,9 +11,8 @@ source_ref="$(git symbolic-ref -q HEAD || true)"
 artifact_dir="${GOLEM_BENCHMARK_ARTIFACT_DIR:-$root/tmp}"
 results_repository="${BENCHMARK_RESULTS_REPOSITORY:-https://github.com/golemcloud/benchmark-results.git}"
 generated_files=(
-    sdks/ts/packages/golem-ts-typegen/.metadata/generated-types.json
-    sdks/ts/packages/golem-ts-typegen/.metadata/generated-types.ts
     test-components/benchmarks/package-lock.json
+    test-components/benchmarks/Cargo.lock
 )
 
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
@@ -54,13 +53,27 @@ else
     export PATH="/opt/node24/bin:$HOME/.cargo/bin:$PATH"
     export WASI_SDK_VERSION=25
     export WASI_SDK_PATH=/opt/wasi-sdk
-    export WASM_RQUICKJS_VERSION=0.4.1
+    WASM_RQUICKJS_VERSION="$(awk -F'"' '/^[[:space:]]*WASM_RQUICKJS_VERSION: / { print $2; exit }' .github/workflows/benchmark.yaml)"
+    if [[ -z "$WASM_RQUICKJS_VERSION" ]]; then
+        echo "Failed to read WASM_RQUICKJS_VERSION from .github/workflows/benchmark.yaml" >&2
+        exit 1
+    fi
+    export WASM_RQUICKJS_VERSION
+    if [[ "$(wasm-rquickjs --version 2>/dev/null || true)" != "wasm-rquickjs-cli $WASM_RQUICKJS_VERSION" ]]; then
+        cargo binstall --force --locked "wasm-rquickjs-cli@$WASM_RQUICKJS_VERSION"
+    fi
     export GOLEM_BENCHMARK_RESULTS_PATH="$results"
 
-    if [[ "${GOLEM_BENCHMARK_RECLAIM_SPACE:-true}" == "true" ]]; then
-        rm -rf target/debug
-        docker container prune --force
+    cargo clean
+
+    mapfile -t postgres_containers < <(
+        docker ps --all --quiet --filter ancestor=postgres:17.7
+    )
+    if ((${#postgres_containers[@]})); then
+        docker rm --force --volumes "${postgres_containers[@]}"
     fi
+    docker container prune --force
+    docker volume prune --force
 
     # The SDK build currently caches generated output without tracking its source revision.
     cargo make clean-sdk-ts

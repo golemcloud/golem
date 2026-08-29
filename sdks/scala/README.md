@@ -1,7 +1,7 @@
 # ZIO-Golem
 
 [![Scala 3](https://img.shields.io/badge/scala-3.3.x-red.svg)](https://www.scala-lang.org/)
-[![Scala.js](https://img.shields.io/badge/scala.js-1.20.x-blue.svg)](https://www.scala-js.org/)
+[![Scala.js](https://img.shields.io/badge/scala.js-1.22.x-blue.svg)](https://www.scala-js.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **A minimal, type-safe Scala SDK for building Golem agents.**
@@ -14,6 +14,7 @@ automatically derive all the serialization, RPC bindings, and metadata generatio
 - **Trait-based agent definitions** - Define your agent's interface as a Scala trait with annotated methods
 - **Automatic schema derivation** - Derives schemas for component-model serialization
 - **Macro-powered autowiring** - Compile-time generation of RPC handlers, WIT types, and metadata
+- **Tool middleware** - Transparent, adapter, and universal middleware with typed wrapped-tool calls
 - **Transaction helpers** - Both fallible and infallible transaction patterns with automatic rollback
 - **Snapshot integration** - Simple hooks for state persistence across component instances
 
@@ -195,6 +196,7 @@ object Example {
 - **[Snapshot helpers](docs/snapshot.md)** - State persistence helpers
 - **[Transaction helpers](docs/transactions.md)** - Infallible and fallible transaction patterns
 - **[Result helpers](docs/result.md)** - WIT-friendly `Result` type for error handling
+- **[Tool middleware](docs/tool-middleware.md)** - Transparent, adapter, and universal middleware authoring
 - **[Supported versions](docs/supported-versions.md)** - Compatibility matrix
 
 ## Building
@@ -245,7 +247,7 @@ trait MyAgent {
 
 ## Running on Golem
 
-The sbt/Mill plugins are **build adapters**: they generate the Scala.js bundle and write the base guest runtime (`agent_guest.wasm`) to `.generated/`. **`golem-cli` is the driver** for build/deploy/invoke/repl.
+The sbt/Mill plugins are **build adapters**: they generate the Scala.js bundle and write the ordinary, pure-middleware, and combined base guest runtimes to `.generated/`. **`golem-cli` is the driver** for build/deploy/invoke/repl.
 
 ```bash
 cd <your-app-dir>
@@ -256,14 +258,20 @@ golem-cli repl org:component
 
 See `golem/example/` for a standalone example or `golem/test-agents/` for the monorepo setup.
 
-### Base guest runtime (agent_guest.wasm)
+### Base guest runtimes
 
-The `agent_guest.wasm` is an SDK artifact embedded in the sbt/Mill plugins. It is automatically written to `.generated/agent_guest.wasm` when you compile or link Scala.js. User projects do not need to manage this file.
+The SDK embeds three artifacts in both build plugins and writes them to `.generated/` when Scala.js is compiled or linked:
+
+- `agent_guest.wasm` for ordinary agent/tool components;
+- `tool_middleware_guest.wasm` for pure tool-middleware components;
+- `agent_tool_middleware_guest.wasm` for combined agent/tool/middleware components.
+
+Select them through the `scala`, `scala-tool-middleware`, and `scala-agent-tool-middleware` component templates respectively. User projects do not manage these files directly. See [Tool middleware](docs/tool-middleware.md) for role selection and authoring examples.
 
 To regenerate when upgrading Golem/WIT versions:
 
 ```bash
-./golem/scripts/generate-agent-guest-wasm.sh
+./scripts/generate-agent-guest-wasm.sh
 ```
 
 ## Host API surface (Scala.js)

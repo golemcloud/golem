@@ -61,13 +61,13 @@ interface host {
       stdin:        option<stream<u8>>,
     ) -> result<invocation-result, rpc-error>;
 
-    invoke: func(
+    invoke: async func(
       command-path: list<string>,
       input:        typed-schema-value,
       stdin:        option<stream<u8>>,
     ) -> result<_, rpc-error>;
 
-    async-invoke-and-await: func(
+    async-invoke-and-await: async func(
       command-path: list<string>,
       input:        typed-schema-value,
       stdin:        option<stream<u8>>,

@@ -14,7 +14,10 @@
 
 use crate::metrics::oplog::record_oplog_rate_limited;
 use crate::model::ExecutionStatus;
-use crate::services::oplog::{CommitLevel, Oplog, OplogService, OrderedOplogStart};
+use crate::services::oplog::{
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
+    OplogService, OrderedOplogStart, ReservedRawStartBuilder,
+};
 use crate::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
@@ -81,7 +84,7 @@ pub struct RateLimitedOplog {
     inner: Arc<dyn Oplog>,
     resource_entry: Arc<AtomicResourceEntry>,
     /// Current rate + governor, swapped atomically when the rate changes.
-    state: ArcSwap<RateLimiterState>,
+    state: Arc<ArcSwap<RateLimiterState>>,
     account_id: AccountId,
     environment_id: EnvironmentId,
 }
@@ -97,7 +100,7 @@ impl RateLimitedOplog {
         Self {
             inner,
             resource_entry,
-            state: ArcSwap::from(Arc::new(RateLimiterState::new(initial_rate))),
+            state: Arc::new(ArcSwap::from(Arc::new(RateLimiterState::new(initial_rate)))),
             account_id,
             environment_id,
         }
@@ -105,13 +108,15 @@ impl RateLimitedOplog {
 
     /// Waits for the rate limiter to grant a token, logging and recording a
     /// metric when back-pressure is actually applied.
-    async fn apply_back_pressure(&self, limiter: &DefaultDirectRateLimiter, rate: u64) {
+    async fn apply_back_pressure(
+        limiter: &DefaultDirectRateLimiter,
+        rate: u64,
+        account_id: &AccountId,
+        environment_id: &EnvironmentId,
+    ) {
         if limiter.check().is_err() {
             debug!("RateLimitedOplog: back-pressure applied (rate={rate} writes/sec)");
-            record_oplog_rate_limited(
-                &self.account_id.to_string(),
-                &self.environment_id.to_string(),
-            );
+            record_oplog_rate_limited(&account_id.to_string(), &environment_id.to_string());
         }
         limiter.until_ready().await;
     }
@@ -124,23 +129,38 @@ impl RateLimitedOplog {
     /// reordered relative to their initiation order, breaking replay determinism (see
     /// [`Oplog::add_start_with_reserved_raw_payload`]). The per-write throttling rate is unchanged
     /// by ordering it after the append.
-    async fn apply_rate_limit(&self) {
-        let rate = self.resource_entry.oplog_writes_per_second();
+    async fn apply_rate_limit_for(
+        resource_entry: &AtomicResourceEntry,
+        state: &ArcSwap<RateLimiterState>,
+        account_id: &AccountId,
+        environment_id: &EnvironmentId,
+    ) {
+        let rate = resource_entry.oplog_writes_per_second();
         if rate > 0 && rate < AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND {
-            let current = self.state.load();
+            let current = state.load();
             if current.rate != rate {
-                let updated = self.state.rcu(|current| {
+                let updated = state.rcu(|current| {
                     if current.rate == rate {
                         Arc::clone(current)
                     } else {
                         Arc::new(RateLimiterState::new(rate))
                     }
                 });
-                self.apply_back_pressure(&updated.limiter, rate).await;
+                Self::apply_back_pressure(&updated.limiter, rate, account_id, environment_id).await;
             } else {
-                self.apply_back_pressure(&current.limiter, rate).await;
+                Self::apply_back_pressure(&current.limiter, rate, account_id, environment_id).await;
             }
         }
+    }
+
+    async fn apply_rate_limit(&self) {
+        Self::apply_rate_limit_for(
+            &self.resource_entry,
+            &self.state,
+            &self.account_id,
+            &self.environment_id,
+        )
+        .await;
     }
 }
 
@@ -154,11 +174,28 @@ impl Debug for RateLimitedOplog {
 
 #[async_trait]
 impl Oplog for RateLimitedOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
-        // Assign the index first, then throttle: see `apply_rate_limit`.
-        let idx = self.inner.add(entry).await;
+    fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
+        // Reserve the inner oplog position synchronously, then apply back-pressure only while the
+        // returned receipt is awaited. This preserves ordering without bypassing write limiting.
+        let pending = self.inner.enqueue_add(entry);
+        let resource_entry = self.resource_entry.clone();
+        let state = self.state.clone();
+        let account_id = self.account_id;
+        let environment_id = self.environment_id;
+        Box::pin(async move {
+            let idx = pending.await;
+            Self::apply_rate_limit_for(&resource_entry, &state, &account_id, &environment_id).await;
+            idx
+        })
+    }
+
+    async fn add_durable_stream_batch(
+        &self,
+        make_batch: DurableStreamBatchBuilder,
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+        let result = self.inner.add_durable_stream_batch(make_batch).await;
         self.apply_rate_limit().await;
-        idx
+        result
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
@@ -185,8 +222,20 @@ impl Oplog for RateLimitedOplog {
         self.inner.read(oplog_index).await
     }
 
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.inner.read_many(oplog_index, n).await
+    async fn read_exact(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.inner.read_exact(oplog_index, n).await
+    }
+
+    async fn read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.inner.read_source(oplog_index, n).await
     }
 
     async fn length(&self) -> u64 {
@@ -219,7 +268,7 @@ impl Oplog for RateLimitedOplog {
     async fn add_start_with_reserved_raw_payload(
         &self,
         serialized_request: Vec<u8>,
-        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        build_start: ReservedRawStartBuilder,
     ) -> Result<OrderedOplogStart, String> {
         // Order the `Start` first (the inner oplog assigns its index), then throttle. Applying
         // back-pressure before delegating would reorder concurrent calls' `Start` entries relative
@@ -227,6 +276,18 @@ impl Oplog for RateLimitedOplog {
         let ordered = self
             .inner
             .add_start_with_reserved_raw_payload(serialized_request, build_start)
+            .await?;
+        self.apply_rate_limit().await;
+        Ok(ordered)
+    }
+
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        build_request: IndexedReservedStartBuilder,
+    ) -> Result<OrderedOplogStart, String> {
+        let ordered = self
+            .inner
+            .add_start_with_indexed_reserved_raw_payload(build_request)
             .await?;
         self.apply_rate_limit().await;
         Ok(ordered)
@@ -396,14 +457,28 @@ impl OplogService for RateLimitedOplogService {
         self.inner.delete(owned_agent_id, agent_mode).await
     }
 
-    async fn read(
+    async fn read_exact(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.inner.read(owned_agent_id, agent_mode, idx, n).await
+        self.inner
+            .read_exact(owned_agent_id, agent_mode, idx, n)
+            .await
+    }
+
+    async fn read_source(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.inner
+            .read_source(owned_agent_id, agent_mode, idx, n)
+            .await
     }
 
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {

@@ -16,15 +16,19 @@ use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::TypeId;
 use crate::schema::proptest_strategies as strategies;
 use crate::schema::schema_type::SchemaType;
-use crate::schema::schema_value::{QuotaTokenValuePayload, SchemaValue, SecretValuePayload};
+use crate::schema::schema_value::{
+    PermissionCardValuePayload, QuotaTokenValuePayload, SchemaValue, SecretValuePayload,
+};
 use crate::schema::wit::{
-    DecodeError, EncodeError, QuotaTokenHandleRep, QuotaTokenResolver, SecretHandleRep,
-    SecretResolver, decode_graph, decode_typed, decode_typed_rejecting_quota_with, decode_value,
+    DecodeError, EncodeError, PermissionCardHandleRep, PermissionCardResolver, QuotaTokenHandleRep,
+    QuotaTokenResolver, SchemaValueStreamResolver, SecretHandleRep, SecretResolver, decode_graph,
+    decode_typed, decode_typed_rejecting_quota_with, decode_value,
     decode_value_rejecting_quota_with, decode_value_with, encode_graph, encode_typed, encode_value,
-    encode_value_with, wire,
+    encode_value_with, encode_value_with_streams, wire,
 };
 use chrono::{TimeZone, Utc};
 use golem_schema::model::EnvironmentId;
+use golem_schema::schema::{SchemaValueStream, SchemaValueStreamHandleRep};
 use proptest::prelude::*;
 use strategies::{
     schema_graph_strategy, transportable_schema_value_strategy,
@@ -267,6 +271,15 @@ fn sample_secret_snapshot() -> SecretValuePayload {
     }
 }
 
+fn sample_permission_card_snapshot() -> PermissionCardValuePayload {
+    PermissionCardValuePayload {
+        card_id: uuid::Uuid::from_u64_pair(5, 6),
+        parent_ids: vec![uuid::Uuid::from_u64_pair(1, 2)],
+        expires_at: None,
+        polymorphic: false,
+    }
+}
+
 /// A minimal [`QuotaTokenResolver`] backed by a real [`ResourceTable`], storing
 /// the trusted snapshot as the boxed payload of each handle. Mirrors what the
 /// executor does, without any of the live-lease machinery.
@@ -306,6 +319,17 @@ impl TableResolver {
         let handle = self
             .table
             .push(SecretHandleRep::new(sample_secret_snapshot()))
+            .unwrap();
+        self.live += 1;
+        handle
+    }
+
+    fn permission_card_handle(&mut self) -> Resource<PermissionCardHandleRep> {
+        let handle = self
+            .table
+            .push(PermissionCardHandleRep::new(
+                sample_permission_card_snapshot(),
+            ))
             .unwrap();
         self.live += 1;
         handle
@@ -381,6 +405,73 @@ impl SecretResolver for TableResolver {
     }
 }
 
+impl SchemaValueStreamResolver for TableResolver {
+    type Error = anyhow::Error;
+
+    fn handle_from_stream(
+        &mut self,
+        stream: SchemaValueStream,
+    ) -> Result<Resource<SchemaValueStreamHandleRep>, Self::Error> {
+        let handle = self.table.push(SchemaValueStreamHandleRep::new(stream))?;
+        self.live += 1;
+        Ok(handle)
+    }
+
+    fn stream_from_handle(
+        &mut self,
+        handle: Resource<SchemaValueStreamHandleRep>,
+    ) -> Result<SchemaValueStream, Self::Error> {
+        let stream = self.table.delete(handle)?.into_stream();
+        self.live -= 1;
+        Ok(stream)
+    }
+
+    fn drop_stream_handle(&mut self, handle: Resource<SchemaValueStreamHandleRep>) {
+        if self.table.delete(handle).is_ok() {
+            self.live -= 1;
+        }
+    }
+}
+
+impl PermissionCardResolver for TableResolver {
+    type Error = anyhow::Error;
+
+    fn snapshot_permission_card_handle(
+        &mut self,
+        handle: Resource<PermissionCardHandleRep>,
+    ) -> Result<PermissionCardValuePayload, Self::Error> {
+        let rep = self.table.delete(handle)?;
+        self.live -= 1;
+        self.snapshotted += 1;
+        rep.downcast_ref::<PermissionCardValuePayload>()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("handle payload was not a permission-card snapshot"))
+    }
+
+    fn permission_card_handle_from_snapshot(
+        &mut self,
+        snapshot: &PermissionCardValuePayload,
+    ) -> Result<Resource<PermissionCardHandleRep>, Self::Error> {
+        if let Some(limit) = self.fail_create_after
+            && self.created >= limit
+        {
+            return Err(anyhow::anyhow!("resolver refused to create handle"));
+        }
+        let handle = self
+            .table
+            .push(PermissionCardHandleRep::new(snapshot.clone()))?;
+        self.created += 1;
+        self.live += 1;
+        Ok(handle)
+    }
+
+    fn drop_permission_card_handle(&mut self, handle: Resource<PermissionCardHandleRep>) {
+        if self.table.delete(handle).is_ok() {
+            self.live -= 1;
+        }
+    }
+}
+
 #[test]
 fn quota_token_round_trips_through_resolver() {
     let value = SchemaValue::QuotaToken(sample_snapshot());
@@ -399,6 +490,145 @@ fn secret_round_trips_through_resolver() {
     let wire = encode_value_with(&value, &mut resolver).expect("encode_with");
     let back = decode_value_with(wire, &mut resolver).expect("decode_with");
     assert_eq!(value, back);
+    assert_eq!(resolver.live, 0);
+}
+
+#[test]
+fn stream_decodes_through_the_standard_resolver_path() {
+    let stream = SchemaValueStream::from_host_endpoint(42_u32);
+    let mut resolver = TableResolver::new();
+    let handle = resolver.handle_from_stream(stream).unwrap();
+    let tree = wire::SchemaValueTree {
+        value_nodes: vec![wire::SchemaValueNode::StreamValue(handle)],
+        root: 0,
+    };
+
+    let decoded = decode_value_with(tree, &mut resolver).expect("decode stream");
+    let SchemaValue::Stream(decoded) = decoded else {
+        panic!("expected stream value");
+    };
+
+    assert_eq!(decoded.take_host_endpoint::<u32>().unwrap(), 42);
+    assert_eq!(resolver.live, 0);
+}
+
+#[test]
+fn permission_card_round_trips_through_resolver() {
+    let value = SchemaValue::PermissionCard(sample_permission_card_snapshot());
+    let mut resolver = TableResolver::new();
+    let wire = encode_value_with(&value, &mut resolver).expect("encode_with");
+    let back = decode_value_with(wire, &mut resolver).expect("decode_with");
+    assert_eq!(value, back);
+    assert_eq!(resolver.live, 0);
+}
+
+#[test]
+fn stream_and_permission_card_round_trip_together_through_stream_aware_resolver() {
+    let permission_card = sample_permission_card_snapshot();
+    let value = SchemaValue::Record {
+        fields: vec![
+            SchemaValue::PermissionCard(permission_card.clone()),
+            SchemaValue::List {
+                elements: vec![SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                    42_u32,
+                ))],
+            },
+        ],
+    };
+    let mut resolver = TableResolver::new();
+
+    let wire = encode_value_with_streams(&value, &mut resolver).expect("stream-aware encode");
+    let back = decode_value_with(wire, &mut resolver).expect("stream-aware decode");
+    let SchemaValue::Record { fields } = back else {
+        panic!("expected record value");
+    };
+    assert_eq!(fields[0], SchemaValue::PermissionCard(permission_card));
+    let SchemaValue::List { elements } = &fields[1] else {
+        panic!("expected nested stream list");
+    };
+    let SchemaValue::Stream(stream) = &elements[0] else {
+        panic!("expected nested stream value");
+    };
+    assert_eq!(stream.take_host_endpoint::<u32>().unwrap(), 42);
+    assert_eq!(resolver.live, 0);
+}
+
+#[test]
+fn nested_permission_card_round_trips_through_resolver() {
+    let value = SchemaValue::Record {
+        fields: vec![
+            SchemaValue::U32(7),
+            SchemaValue::List {
+                elements: vec![
+                    SchemaValue::PermissionCard(sample_permission_card_snapshot()),
+                    SchemaValue::PermissionCard(PermissionCardValuePayload {
+                        card_id: uuid::Uuid::from_u64_pair(9, 10),
+                        parent_ids: vec![],
+                        expires_at: Some(Utc.timestamp_opt(1_700_000_020, 0).single().unwrap()),
+                        polymorphic: true,
+                    }),
+                ],
+            },
+        ],
+    };
+    let mut resolver = TableResolver::new();
+    let wire = encode_value_with(&value, &mut resolver).expect("encode_with");
+    let back = decode_value_with(wire, &mut resolver).expect("decode_with");
+    assert_eq!(value, back);
+    assert_eq!(resolver.live, 0);
+}
+
+#[test]
+fn pure_encode_rejects_permission_card() {
+    let value = SchemaValue::PermissionCard(sample_permission_card_snapshot());
+    assert!(matches!(
+        encode_value(&value),
+        Err(EncodeError::PermissionCardNotTransportable)
+    ));
+}
+
+#[test]
+fn pure_decode_rejects_permission_card_handle() {
+    let mut resolver = TableResolver::new();
+    let wire = encode_value_with(
+        &SchemaValue::PermissionCard(sample_permission_card_snapshot()),
+        &mut resolver,
+    )
+    .unwrap();
+    let err = decode_value(&wire).expect_err("pure decode must reject handles");
+    assert!(matches!(err, DecodeError::PermissionCardRequiresResolver));
+}
+
+#[test]
+fn reject_decoder_drops_permission_card_handle_and_rejects() {
+    let mut resolver = TableResolver::new();
+    let handle = resolver
+        .permission_card_handle_from_snapshot(&sample_permission_card_snapshot())
+        .unwrap();
+    let tree = wire::SchemaValueTree {
+        value_nodes: vec![wire::SchemaValueNode::PermissionCardHandle(handle)],
+        root: 0,
+    };
+    let err = decode_value_rejecting_quota_with(tree, &mut resolver)
+        .expect_err("permission-card handle must be rejected at a reject-only boundary");
+    assert!(matches!(err, DecodeError::PermissionCardNotPermitted(0)));
+    assert_eq!(resolver.live, 0);
+}
+
+#[test]
+fn encode_cleans_up_permission_card_handles_when_resolver_fails_midway() {
+    let value = SchemaValue::Record {
+        fields: vec![
+            SchemaValue::PermissionCard(sample_permission_card_snapshot()),
+            SchemaValue::PermissionCard(PermissionCardValuePayload {
+                card_id: uuid::Uuid::from_u64_pair(9, 10),
+                ..sample_permission_card_snapshot()
+            }),
+        ],
+    };
+    let mut resolver = TableResolver::failing_after(1);
+    let err = encode_value_with(&value, &mut resolver).expect_err("encode must fail");
+    assert!(matches!(err, EncodeError::PermissionCardResolver(_)));
     assert_eq!(resolver.live, 0);
 }
 
@@ -457,6 +687,22 @@ fn pure_decode_rejects_unreferenced_secret_handle() {
 
     let err = decode_value(&tree).expect_err("pure decode must reject secret transport");
     assert!(matches!(err, DecodeError::SecretRequiresResolver));
+}
+
+#[test]
+fn pure_decode_rejects_unreferenced_permission_card_handle() {
+    let mut resolver = TableResolver::new();
+    let card = resolver.permission_card_handle();
+    let tree = wire::SchemaValueTree {
+        value_nodes: vec![
+            wire::SchemaValueNode::PermissionCardHandle(card),
+            wire::SchemaValueNode::BoolValue(false),
+        ],
+        root: 1,
+    };
+
+    let err = decode_value(&tree).expect_err("pure decode must reject permission-card transport");
+    assert!(matches!(err, DecodeError::PermissionCardRequiresResolver));
 }
 
 #[test]

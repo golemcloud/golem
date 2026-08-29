@@ -147,9 +147,14 @@ async fn append_worker(
 ) {
     let archive = service.open(owned_agent_id, agent_mode).await;
     archive
-        .append(vec![(
+        .append(&[(
             OplogIndex::INITIAL,
-            OplogEntry::log(LogLevel::Debug, "test".to_string(), "test".to_string()),
+            OplogEntry::log(
+                None,
+                LogLevel::Debug,
+                "test".to_string(),
+                "test".to_string(),
+            ),
         )])
         .await;
 }

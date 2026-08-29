@@ -1,0 +1,319 @@
+syntax = "proto3";
+
+package golem.worker;
+
+import "golem/auth/auth_ctx.proto";
+import "golem/common/account_id.proto";
+import "golem/common/empty.proto";
+import "golem/common/environment.proto";
+import "golem/common/uuid.proto";
+import "golem/component/agent.proto";
+import "golem/schema/schema.proto";
+import "golem/worker/agent_config.proto";
+import "golem/worker/idempotency_key.proto";
+import "golem/worker/invocation.proto";
+import "golem/worker/invocation_context.proto";
+import "golem/worker/scope_card.proto";
+import "golem/worker/v1/worker_execution_error.proto";
+import "golem/worker/worker_id.proto";
+import "google/protobuf/timestamp.proto";
+
+message InvocationStart {
+  golem.worker.AgentId agent_id = 1;
+  optional string method_name = 2;
+  golem.schema.SchemaValue input = 3;
+  golem.worker.IdempotencyKey idempotency_key = 4;
+  golem.worker.InvocationContext context = 5;
+  golem.auth.AuthCtx auth_ctx = 6;
+  golem.component.Principal principal = 7;
+  golem.common.EnvironmentId environment_id = 8;
+  repeated golem.worker.AgentConfigEntryDto config = 9;
+  golem.common.AccountId component_owner_account_id = 10;
+  golem.worker.AgentInvocationMode mode = 11;
+  optional google.protobuf.Timestamp schedule_at = 12;
+  InvocationFreshnessDisposition freshness_disposition = 13;
+  golem.common.UUID attempt_id = 14;
+  golem.common.UUID expected_callee_fingerprint = 15;
+  repeated DurableStreamMapping durable_input_mappings = 16;
+  optional golem.worker.EncodedScopeCard scope_card = 17;
+}
+
+message PublicInvocationStart {
+  string application_name = 1;
+  string environment_name = 2;
+  string agent_type_name = 3;
+  golem.schema.SchemaValue constructor_parameters = 4;
+  optional golem.common.UUID phantom_id = 5;
+  repeated golem.worker.AgentConfigEntryDto config = 6;
+  string method_name = 7;
+  golem.schema.SchemaValue method_parameters = 8;
+  golem.worker.IdempotencyKey idempotency_key = 9;
+  golem.common.UUID attempt_id = 10;
+  golem.common.UUID expected_callee_fingerprint = 11;
+}
+
+message ResumeAttach {
+  golem.worker.IdempotencyKey idempotency_key = 1;
+  golem.worker.AgentId agent_id = 2;
+  golem.common.EnvironmentId environment_id = 3;
+  golem.common.UUID attachment_id = 4;
+  golem.common.UUID attempt_id = 5;
+  golem.common.UUID expected_callee_fingerprint = 6;
+  uint64 expected_epoch = 7;
+  ResumeOperation operation = 8;
+  repeated StreamCursor cursors = 9;
+  golem.auth.AuthCtx auth_ctx = 10;
+  golem.component.Principal principal = 11;
+}
+
+enum ResumeOperation {
+  RESUME_OPERATION_UNSPECIFIED = 0;
+  RESUME_OPERATION_RESUME = 1;
+  RESUME_OPERATION_TAKEOVER = 2;
+}
+
+message StreamCursor {
+  golem.common.UUID stream_id = 1;
+  optional bytes last_observed_offset = 2;
+}
+
+message StreamInvocationIdentity {
+  golem.common.EnvironmentId callee_environment_id = 1;
+  golem.worker.AgentId callee = 2;
+  golem.common.UUID callee_fingerprint = 3;
+  golem.worker.IdempotencyKey idempotency_key = 4;
+}
+
+message DurableStreamHandle {
+  uint32 format_version = 1;
+  golem.common.UUID stream_id = 2;
+  golem.common.EnvironmentId producer_environment_id = 3;
+  golem.worker.AgentId producer = 4;
+  golem.common.UUID expected_producer_fingerprint = 5;
+  StreamInvocationIdentity source_invocation = 6;
+  optional uint64 component_revision = 7;
+  bytes element_schema_fingerprint = 8;
+}
+
+message DurableStreamMapping {
+  uint64 transport_stream_id = 1;
+  DurableStreamHandle handle = 2;
+  InputStreamHighWater high_water = 3;
+  StreamMappingRole role = 4;
+}
+
+message InputStreamHighWater {
+  uint64 highest_contiguous_sequence = 1;
+  bytes resulting_offset = 2;
+  bool terminal = 3;
+}
+
+enum StreamMappingRole {
+  STREAM_MAPPING_ROLE_UNSPECIFIED = 0;
+  STREAM_MAPPING_ROLE_INPUT = 1;
+  STREAM_MAPPING_ROLE_OUTPUT = 2;
+}
+
+enum InvocationFreshnessDisposition {
+  INVOCATION_FRESHNESS_DISPOSITION_MAY_EXIST = 0;
+  INVOCATION_FRESHNESS_DISPOSITION_KNOWN_FRESH = 1;
+}
+
+message InputStreamItem {
+  uint64 transport_stream_id = 1;
+  uint64 sequence = 2;
+  oneof payload {
+    golem.schema.SchemaValue value = 3;
+    bytes packed_u8 = 4;
+  }
+  golem.common.UUID durable_stream_id = 5;
+  uint64 epoch = 6;
+}
+
+message InputStreamEnd {
+  uint64 transport_stream_id = 1;
+  uint64 sequence = 2;
+  golem.common.UUID durable_stream_id = 3;
+  uint64 epoch = 4;
+}
+
+message OutputStreamItem {
+  uint64 transport_stream_id = 1;
+  uint64 producer_sequence = 2;
+  golem.schema.SchemaValue value = 3;
+  golem.common.UUID durable_stream_id = 4;
+  bytes durable_offset = 5;
+  uint64 epoch = 6;
+  repeated DurableStreamMapping new_stream_mappings = 7;
+}
+
+message OutputStreamEnd {
+  uint64 transport_stream_id = 1;
+  uint64 producer_sequence = 2;
+  golem.common.UUID durable_stream_id = 3;
+  bytes durable_offset = 4;
+  uint64 epoch = 5;
+}
+
+message OutputStreamError {
+  uint64 transport_stream_id = 1;
+  uint64 producer_sequence = 2;
+  string details = 3;
+  golem.common.UUID durable_stream_id = 4;
+  bytes durable_offset = 5;
+  uint64 epoch = 6;
+}
+
+enum StreamCancelRole {
+  STREAM_CANCEL_ROLE_UNSPECIFIED = 0;
+  STREAM_CANCEL_ROLE_INPUT_PRODUCER = 1;
+  STREAM_CANCEL_ROLE_INPUT_CONSUMER = 2;
+  STREAM_CANCEL_ROLE_OUTPUT_PRODUCER = 3;
+  STREAM_CANCEL_ROLE_OUTPUT_CONSUMER = 4;
+  STREAM_CANCEL_ROLE_SYSTEM = 5;
+}
+
+enum StreamCancelReason {
+  STREAM_CANCEL_REASON_UNSPECIFIED = 0;
+  STREAM_CANCEL_REASON_CANCELLED = 1;
+  STREAM_CANCEL_REASON_TRANSPORT = 2;
+  STREAM_CANCEL_REASON_PROTOCOL = 3;
+  STREAM_CANCEL_REASON_SOURCE_UNAVAILABLE = 4;
+  STREAM_CANCEL_REASON_PRODUCER_DELETING = 5;
+}
+
+message StreamCancel {
+  uint64 transport_stream_id = 1;
+  uint64 producer_sequence = 2;
+  StreamCancelRole role = 3;
+  StreamCancelReason reason = 4;
+  optional string details = 5;
+  golem.common.UUID durable_stream_id = 6;
+  uint64 epoch = 7;
+  bytes durable_offset = 8;
+}
+
+message InputStreamAck {
+  uint64 transport_stream_id = 1;
+  uint64 highest_contiguous_sequence = 2;
+  uint64 logical_item_count = 3;
+  golem.common.UUID durable_stream_id = 4;
+  bytes resulting_offset = 5;
+  uint64 epoch = 6;
+  repeated DurableStreamMapping new_stream_mappings = 7;
+}
+
+message InvocationAccepted {
+  golem.worker.AgentId agent_id = 1;
+  golem.worker.IdempotencyKey idempotency_key = 2;
+  optional uint64 component_revision = 3;
+  golem.common.UUID attachment_id = 4;
+  golem.common.UUID attempt_id = 5;
+  uint64 epoch = 6;
+  repeated DurableStreamMapping stream_mappings = 7;
+  golem.common.EnvironmentId environment_id = 8;
+  golem.common.UUID callee_fingerprint = 9;
+}
+
+message InvocationSessionResult {
+  oneof result {
+    golem.schema.SchemaValue method_result = 1;
+    golem.common.Empty no_result = 2;
+  }
+  optional uint64 component_revision = 3;
+  golem.worker.AgentId agent_id = 4;
+  golem.worker.IdempotencyKey idempotency_key = 5;
+  optional uint64 fuel_consumed = 6;
+  optional golem.worker.InvocationStatus status = 7;
+  optional uint64 oplog_index = 8;
+  optional golem.common.UUID agent_fingerprint = 9;
+  repeated DurableStreamMapping new_stream_mappings = 10;
+}
+
+enum InvocationRejectionReason {
+  reserved 4;
+  reserved "INVOCATION_REJECTION_REASON_RESUME_UNSUPPORTED";
+  INVOCATION_REJECTION_REASON_UNSPECIFIED = 0;
+  INVOCATION_REJECTION_REASON_VALIDATION = 1;
+  INVOCATION_REJECTION_REASON_UNAUTHORIZED = 2;
+  INVOCATION_REJECTION_REASON_NOT_FOUND = 3;
+  INVOCATION_REJECTION_REASON_PROTOCOL = 5;
+  INVOCATION_REJECTION_REASON_INTERNAL = 6;
+  INVOCATION_REJECTION_REASON_IDEMPOTENCY_CONFLICT = 7;
+  INVOCATION_REJECTION_REASON_ATTEMPT_CONFLICT = 8;
+  INVOCATION_REJECTION_REASON_STALE_EPOCH = 9;
+  INVOCATION_REJECTION_REASON_INVALID_EPOCH = 10;
+  INVOCATION_REJECTION_REASON_INVALID_ATTACHMENT_STATE = 11;
+  INVOCATION_REJECTION_REASON_INPUT_CONFLICT = 12;
+  INVOCATION_REJECTION_REASON_INPUT_GAP = 13;
+  INVOCATION_REJECTION_REASON_RESOURCE_EXHAUSTED = 14;
+}
+
+message InvocationRejected {
+  InvocationRejectionReason reason = 1;
+  string error = 2;
+  golem.worker.IdempotencyKey idempotency_key = 3;
+  golem.worker.AgentId agent_id = 4;
+  optional uint64 component_revision = 5;
+}
+
+message AttachmentRevoked {
+  string details = 1;
+}
+
+enum InvocationFailureKind {
+  INVOCATION_FAILURE_KIND_UNSPECIFIED = 0;
+  INVOCATION_FAILURE_KIND_EXECUTION = 1;
+  INVOCATION_FAILURE_KIND_PROTOCOL = 2;
+  INVOCATION_FAILURE_KIND_INTERNAL = 3;
+  INVOCATION_FAILURE_KIND_TRANSPORT = 4;
+}
+
+message InvocationFailure {
+  InvocationFailureKind kind = 1;
+  string code = 2;
+  string message = 3;
+  optional golem.worker.v1.WorkerExecutionError worker_error = 4;
+}
+
+message InvocationSessionCompletion {
+  oneof outcome {
+    golem.common.Empty success = 1;
+    InvocationFailure failure = 2;
+  }
+}
+
+message PublicInvocationRequest {
+  oneof request {
+    PublicInvocationStart start = 1;
+    ResumeAttach resume_attach = 2;
+    InputStreamItem input_item = 3;
+    InputStreamEnd input_end = 4;
+    StreamCancel stream_cancel = 5;
+  }
+}
+
+message InvocationRequest {
+  oneof request {
+    InvocationStart start = 1;
+    ResumeAttach resume_attach = 2;
+    InputStreamItem input_item = 3;
+    InputStreamEnd input_end = 4;
+    StreamCancel stream_cancel = 5;
+  }
+}
+
+message InvocationResponse {
+  oneof response {
+    InvocationAccepted accepted = 1;
+    InvocationRejected rejected = 2;
+    InvocationSessionResult result = 3;
+    OutputStreamItem output_item = 4;
+    OutputStreamEnd output_end = 5;
+    OutputStreamError output_error = 6;
+    InputStreamAck input_ack = 7;
+    StreamCancel stream_cancel = 8;
+    AttachmentRevoked attachment_revoked = 9;
+    InvocationSessionCompletion finished = 10;
+  }
+}

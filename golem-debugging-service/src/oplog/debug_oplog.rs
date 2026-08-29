@@ -16,7 +16,8 @@ use crate::debug_session::{DebugSessionId, DebugSessions};
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
 use golem_worker_executor::services::oplog::{
-    CommitLevel, Oplog, OrderedOplogStart, PendingUpload,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
+    OrderedOplogStart, PendingUpload,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
@@ -82,6 +83,20 @@ impl Oplog for DebugOplog {
         OplogIndex::NONE
     }
 
+    async fn add_durable_stream_batch(
+        &self,
+        make_batch: DurableStreamBatchBuilder,
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+        Ok(make_batch(OplogIndex::NONE)
+            .into_iter()
+            .map(|record| (OplogIndex::NONE, record.into_inline_entry()))
+            .collect())
+    }
+
+    fn enqueue_add(&self, _entry: OplogEntry) -> OplogAddReceipt {
+        Box::pin(async { OplogIndex::NONE })
+    }
+
     // Mirrors `add`: a debugging session never writes to the oplog, so both entries are built (to
     // satisfy the closure contract) and discarded.
     async fn add_pair(
@@ -107,6 +122,15 @@ impl Oplog for DebugOplog {
             entry,
             pending_upload: PendingUpload::already_durable(),
         })
+    }
+
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        build_request: IndexedReservedStartBuilder,
+    ) -> Result<OrderedOplogStart, String> {
+        let (serialized_request, build_start) = build_request(OplogIndex::NONE)?;
+        self.add_start_with_reserved_raw_payload(serialized_request, build_start)
+            .await
     }
 
     async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
@@ -166,25 +190,35 @@ impl Oplog for DebugOplog {
         .await
     }
 
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
-        // The read must be clamped to the debug session's view of the oplog end (the playback
-        // target index, when one is set): replay lookahead scans (for example resolving concurrent
-        // durable-call pairings) read fixed-size chunks that can extend past it, and the
-        // underlying oplog's single-entry `read` panics on a missing index. Clamping to the
-        // target — not the real recorded end — also guarantees that a durable call whose `End`
-        // lies beyond the playback target is seen as incomplete, so debug playback refuses to
-        // resolve it from entries the session is not supposed to observe yet. A target past the
-        // recorded end (playback running into live mode) is still bounded by the real oplog.
+    async fn read_exact(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        // The read must be bounded by the debug session's view of the oplog end (the playback
+        // target index, when one is set). Entries after that target exist in the underlying oplog
+        // but must not be visible to this session, so a request extending past it is not exact. A
+        // target past the recorded end (playback running into live mode) is still bounded by the
+        // real oplog.
         let last_recorded = self
             .current_oplog_index()
             .await
             .min(self.inner.current_oplog_index().await);
         let mut result = BTreeMap::new();
-        if n == 0 || oplog_index > last_recorded {
+        if n == 0 {
             return result;
         }
-        let available = u64::from(last_recorded) - u64::from(oplog_index) + 1;
-        let count = n.min(available);
+        let end = u64::from(oplog_index)
+            .checked_add(n - 1)
+            .map(OplogIndex::from_u64)
+            .unwrap_or_else(|| {
+                panic!("Invalid oplog range starting at {oplog_index} with {n} entries")
+            });
+        if oplog_index > last_recorded || end > last_recorded {
+            panic!(
+                "Missing oplog entry in exact range [{oplog_index}..={end}]; last recorded index is {last_recorded}"
+            );
+        }
 
         // Like `read`, this never moves the debug session's replay position; it only applies the
         // playback overrides on top of the underlying entries.
@@ -196,11 +230,19 @@ impl Oplog for DebugOplog {
             .map(|data| data.playback_overrides.overrides)
             .unwrap_or_default();
 
-        for (idx, entry) in self.inner.read_many(oplog_index, count).await {
+        for (idx, entry) in self.inner.read_exact(oplog_index, n).await {
             let entry = playback_overrides.get(&idx).cloned().unwrap_or(entry);
             result.insert(idx, entry);
         }
         result
+    }
+
+    async fn read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.read_exact(oplog_index, n).await
     }
 
     // The single source of the debug session's replay position: the replay cursor publishes its

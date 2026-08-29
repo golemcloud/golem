@@ -15,7 +15,7 @@
 use crate::sandbox_filesystem::{
     FilesystemSpace, FilesystemStorageError, FilesystemVolume, observe_space,
 };
-use crate::services::active_workers::{
+use crate::services::active_agents::{
     ActiveAgents, FilesystemPressureVictim, eligible_loaded_idle_filesystem_pressure_victims,
     request_loaded_idle_filesystem_unload,
 };

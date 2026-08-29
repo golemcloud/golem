@@ -4,7 +4,7 @@ http_address = "0.0.0.0"
 http_port = 8082
 tracing_file_name_with_port = true
 
-[active_workers]
+[active_agents]
 drop_when_full = 0.25
 ttl = "8h"
 
@@ -104,7 +104,8 @@ event_broadcast_capacity = 1024
 event_history_size = 128
 fuel_to_borrow = 10000
 invocation_result_broadcast_capacity = 100000
-max_active_workers = 1024
+live_stream_event_broadcast_capacity = 32
+max_active_agents = 1024
 max_concurrent_streams = 1024
 max_invocation_context_stack_depth = 1024
 max_oplog_query_pages_size = 100
@@ -292,7 +293,7 @@ without_time = false
 # http_port = 8082
 # tracing_file_name_with_port = true
 #
-# [active_workers]
+# [active_agents]
 # drop_when_full = 0.25
 # ttl = "8h"
 #
@@ -392,7 +393,8 @@ without_time = false
 # event_history_size = 128
 # fuel_to_borrow = 10000
 # invocation_result_broadcast_capacity = 100000
-# max_active_workers = 1024
+# live_stream_event_broadcast_capacity = 32
+# max_active_agents = 1024
 # max_concurrent_streams = 1024
 # max_invocation_context_stack_depth = 1024
 # max_oplog_query_pages_size = 100

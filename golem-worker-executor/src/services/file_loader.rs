@@ -27,7 +27,6 @@ use std::{path::PathBuf, sync::Arc};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tracing::debug;
-
 // Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
 // Make sure to not drop this token until you are done with the file.
 #[derive(Debug, Clone)]
