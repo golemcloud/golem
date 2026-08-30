@@ -1958,6 +1958,9 @@ fn path_metadata(
     path: &Path,
     follow: SandboxFollow,
 ) -> std::io::Result<cap_std::fs::Metadata> {
+    if path.as_os_str().is_empty() {
+        return directory.dir_metadata();
+    }
     match follow {
         SandboxFollow::Yes => directory.metadata(path),
         SandboxFollow::No => directory.symlink_metadata(path),
@@ -4084,6 +4087,27 @@ mod tests {
         <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
             .await
             .unwrap();
+    }
+
+    #[test]
+    async fn empty_root_path_attributes_address_root() {
+        let parent = tempfile::tempdir().unwrap();
+        let provisioning = unmanaged_provisioning(parent.path().to_path_buf());
+        let filesystem = <SandboxFilesystem as SandboxFilesystemAdapter>::create_fresh(
+            provisioning,
+            name(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        for follow in [SandboxFollow::No, SandboxFollow::Yes] {
+            let attributes = filesystem
+                .get_path_attributes(SandboxPath::at_root(""), follow)
+                .await
+                .unwrap();
+            assert_eq!(attributes.kind, SandboxObjectKind::Directory);
+        }
     }
 
     #[cfg(unix)]
