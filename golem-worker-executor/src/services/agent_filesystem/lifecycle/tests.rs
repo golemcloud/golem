@@ -117,10 +117,7 @@ fn allocation(bytes: u64, objects: u64) -> FilesystemAllocation {
 }
 
 fn unsupported_allocation() -> FilesystemStorageError {
-    FilesystemStorageError::verification(
-        "observe allocation without quota authority",
-        Path::new("<scripted>"),
-    )
+    FilesystemStorageError::allocation_unsupported(Path::new("<scripted>"))
 }
 
 fn sandbox_error(operation: &'static str, kind: std::io::ErrorKind) -> FilesystemStorageError {

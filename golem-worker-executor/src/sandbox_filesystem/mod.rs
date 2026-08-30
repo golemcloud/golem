@@ -36,6 +36,12 @@ mod xfs;
 static FILESYSTEM_LEASES: OnceLock<std::sync::Mutex<HashMap<PathBuf, Weak<AsyncMutex<()>>>>> =
     OnceLock::new();
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FilesystemStorageErrorKind {
+    General,
+    AllocationUnsupported,
+}
+
 #[derive(Debug)]
 pub struct FilesystemStorageError {
     operation: &'static str,
@@ -43,6 +49,7 @@ pub struct FilesystemStorageError {
     source: Option<std::io::Error>,
     cleanup_failed: bool,
     task_failed: bool,
+    kind: FilesystemStorageErrorKind,
 }
 
 impl FilesystemStorageError {
@@ -53,6 +60,7 @@ impl FilesystemStorageError {
             source: Some(source),
             cleanup_failed: false,
             task_failed: false,
+            kind: FilesystemStorageErrorKind::General,
         }
     }
 
@@ -63,6 +71,18 @@ impl FilesystemStorageError {
             source: None,
             cleanup_failed: false,
             task_failed: false,
+            kind: FilesystemStorageErrorKind::General,
+        }
+    }
+
+    pub(crate) fn allocation_unsupported(path: &Path) -> Self {
+        Self {
+            operation: "observe allocation without quota authority",
+            path: path.to_path_buf(),
+            source: None,
+            cleanup_failed: false,
+            task_failed: false,
+            kind: FilesystemStorageErrorKind::AllocationUnsupported,
         }
     }
 
@@ -73,6 +93,7 @@ impl FilesystemStorageError {
             source: Some(source),
             cleanup_failed: true,
             task_failed: false,
+            kind: FilesystemStorageErrorKind::General,
         }
     }
 
@@ -83,6 +104,7 @@ impl FilesystemStorageError {
             source: None,
             cleanup_failed: true,
             task_failed: false,
+            kind: FilesystemStorageErrorKind::General,
         }
     }
 
@@ -93,6 +115,7 @@ impl FilesystemStorageError {
             source: Some(std::io::Error::other(source)),
             cleanup_failed: false,
             task_failed: true,
+            kind: FilesystemStorageErrorKind::General,
         }
     }
 
@@ -139,7 +162,7 @@ impl FilesystemStorageError {
     }
 
     pub(crate) fn allocation_is_unsupported(&self) -> bool {
-        self.operation == "observe allocation without quota authority" && self.source.is_none()
+        self.kind == FilesystemStorageErrorKind::AllocationUnsupported
     }
 }
 
@@ -366,10 +389,7 @@ impl SandboxFilesystemAllocationObserver {
 
     async fn observe(&self) -> Result<FilesystemAllocation, FilesystemStorageError> {
         let QuotaAuthority::Project { project_id, .. } = self.quota_authority else {
-            return Err(FilesystemStorageError::verification(
-                "observe allocation without quota authority",
-                &self.root,
-            ));
+            return Err(FilesystemStorageError::allocation_unsupported(&self.root));
         };
         #[cfg(target_os = "linux")]
         {
@@ -1614,6 +1634,20 @@ mod tests {
 
     fn unmanaged_provisioning(root: PathBuf) -> SandboxFilesystemProvisioning {
         SandboxFilesystemProvisioning::new(Some(root), None, RetryConfig::default()).unwrap()
+    }
+
+    #[test]
+    fn unsupported_allocation_classification_is_typed() {
+        let path = Path::new("<test>");
+        let unsupported = FilesystemStorageError::allocation_unsupported(path);
+        let same_message = FilesystemStorageError::verification(
+            "observe allocation without quota authority",
+            path,
+        );
+
+        assert!(unsupported.allocation_is_unsupported());
+        assert!(!same_message.allocation_is_unsupported());
+        assert_eq!(unsupported.to_string(), same_message.to_string());
     }
 
     #[test]

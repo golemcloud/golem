@@ -69,6 +69,7 @@ pub struct LaunchArgs {
     pub ports_file: Option<PathBuf>,
     pub data_dir: PathBuf,
     pub agent_filesystem_root: Option<PathBuf>,
+    pub resource_usage_metering: ResourceUsageMeteringConfig,
 }
 
 impl LaunchArgs {
@@ -398,10 +399,7 @@ fn worker_executor_config(
             ..Default::default()
         },
         resource_limits: ResourceLimitsConfig::default(),
-        resource_usage_metering: ResourceUsageMeteringConfig {
-            memory: true,
-            ..Default::default()
-        },
+        resource_usage_metering: args.resource_usage_metering,
         agent_types_service: AgentTypesServiceConfig::Grpc(
             golem_worker_executor::services::golem_config::AgentTypesServiceGrpcConfig {
                 ..Default::default()

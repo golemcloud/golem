@@ -1663,12 +1663,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
     async fn observe_allocation(&self) -> Result<FilesystemAllocation, FilesystemStorageError> {
         SandboxFilesystem::observe_allocation(self)
             .await?
-            .ok_or_else(|| {
-                FilesystemStorageError::verification(
-                    "observe allocation without quota authority",
-                    self.root(),
-                )
-            })
+            .ok_or_else(|| FilesystemStorageError::allocation_unsupported(self.root()))
     }
 
     fn allocation_reader(&self) -> Self::AllocationReader {
@@ -1872,7 +1867,6 @@ fn native_file_identity(metadata: &cap_std::fs::Metadata) -> std::io::Result<Nat
     ));
 }
 
-// TODO FS - reporting error
 fn native_name_comparison_mode(
     directory: &cap_std::fs::Dir,
     parent: &SandboxDirectoryCoordinationKey,
