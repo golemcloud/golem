@@ -519,14 +519,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
             }
 
-            agent
-                .runtime
-                .store
-                .lock()
-                .await
-                .data()
-                .durable_ctx()
-                .begin_stream_runtime_teardown();
+            let retry_was_live = {
+                let store = agent.runtime.store.lock().await;
+                store.data().durable_ctx().begin_stream_runtime_teardown();
+                store.data().is_live()
+            };
             self.suspend_worker(&agent.runtime.store).await;
 
             if let Some(kind) = final_interrupt {
@@ -644,6 +641,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     let decision = interrupt.retry_decision();
                                     debug!(%agent_id, ?decision, "Invocation queue loop interrupted during delayed retry");
                                     if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+                                        let current_idempotency_key = self
+                                            .parent
+                                            .get_non_detached_last_known_status()
+                                            .await
+                                            .current_idempotency_key;
                                         match kind {
                                             InterruptKind::Suspend(_) => {
                                                 self.parent.add_and_commit_oplog(OplogEntry::suspend()).await;
@@ -652,6 +654,21 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                                 self.parent.add_and_commit_oplog(OplogEntry::interrupted()).await;
                                             }
                                             InterruptKind::Restart | InterruptKind::Jump => {}
+                                        }
+                                        if matches!(kind, InterruptKind::Interrupt(_))
+                                            && let Some(key) = current_idempotency_key
+                                        {
+                                            self.parent
+                                                .store_invocation_failure(
+                                                    &key,
+                                                    &TrapType::Interrupt(kind),
+                                                )
+                                                .await;
+                                            self.parent.event_service().emit_invocation_finished(
+                                                "interrupted during retry",
+                                                &key,
+                                                retry_was_live,
+                                            );
                                         }
                                     }
                                     match decision {
