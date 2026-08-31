@@ -22,7 +22,12 @@ import { schemaValueConforms } from '../internal/tool/validation';
 import { fromCanonicalJson, toCanonicalJson, toCanonicalJsonSchema } from './render';
 
 export type JsonValue =
-  null | boolean | number | string | JsonValue[] | { readonly [key: string]: JsonValue };
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { readonly [key: string]: JsonValue };
 
 export interface SchemaIssue {
   readonly message: string;
