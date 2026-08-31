@@ -187,27 +187,19 @@ fn available_registry_guest_bridge_dependencies(
         for dependency in &component.properties().dependencies {
             match dependency {
                 ComponentDependency::Tool {
-                    source: crate::model::app::SubjectSource::Registry { reference },
+                    source: crate::model::app::SubjectSource::Registry,
                     tool_name,
                 } => {
-                    let grant = ctx.registry_tool_grant(reference).ok_or_else(|| {
+                    ctx.registry_tool_grant_by_name(tool_name).ok_or_else(|| {
                         anyhow::anyhow!(
-                            "Registry tool dependency not found in the selected environment"
+                            "Registry tool dependency '{}' is not granted to the selected environment",
+                            tool_name
                         )
                     })?;
-                    if let Some(expected_name) = tool_name
-                        && expected_name != &grant.release.name
-                    {
-                        anyhow::bail!(
-                            "Registry tool dependency name '{}' does not match granted release name '{}'",
-                            expected_name,
-                            grant.release.name,
-                        );
-                    }
                     available.insert(dependency.clone());
                 }
                 ComponentDependency::Agent {
-                    source: crate::model::app::SubjectSource::Registry { .. },
+                    source: crate::model::app::SubjectSource::Registry,
                     ..
                 } => anyhow::bail!(
                     "Registry agent dependencies are not supported by the tool release registry"
@@ -446,10 +438,7 @@ fn report_guest_bridge_dependency_ordering_cycle(
                 ComponentDependency::Tool { source, tool_name } => format!(
                     "tool {}/{}",
                     format_subject_source(source),
-                    tool_name
-                        .as_ref()
-                        .map(ToolName::as_str)
-                        .unwrap_or("<release>")
+                    tool_name.as_str()
                 ),
             })
             .collect::<Vec<_>>();
@@ -468,7 +457,7 @@ fn report_guest_bridge_dependency_ordering_cycle(
 fn format_subject_source(source: &crate::model::app::SubjectSource) -> String {
     match source {
         crate::model::app::SubjectSource::Local { component_name } => component_name.to_string(),
-        crate::model::app::SubjectSource::Registry { reference } => format!("{reference:?}"),
+        crate::model::app::SubjectSource::Registry => "registry".to_string(),
     }
 }
 
@@ -536,7 +525,7 @@ fn component_guest_bridge_dependencies_provided_by_metadata(
                 source: crate::model::app::SubjectSource::Local {
                     component_name: component_name.clone(),
                 },
-                tool_name: Some(tool_name),
+                tool_name,
             })
     }));
     dependencies
@@ -789,7 +778,7 @@ fn add_manifest_tool_bridge_output_dir_claims(
     claims: &mut Vec<OutputDirClaim>,
     language: GuestLanguage,
     mode: BridgeMode,
-    tools: &crate::model::app_raw::BridgeToolTargets,
+    tools: &crate::model::app_raw::LenientTokenList,
     output_dir: Option<&str>,
     selected_component_names: &[ComponentName],
 ) {
@@ -804,7 +793,7 @@ fn add_manifest_tool_bridge_output_dir_claims(
         .cloned()
         .collect::<BTreeSet<_>>();
 
-    for matcher in tools.local_aliases() {
+    for matcher in tools.clone().into_set() {
         let is_component_matcher = component_names
             .iter()
             .any(|component_name| component_name.as_str() == matcher.as_str());
@@ -850,15 +839,22 @@ fn add_manifest_tool_bridge_output_dir_claims(
 
 fn manifest_tool_bridge_request_may_match_selected_components(
     ctx: &BuildContext<'_>,
-    tools: &crate::model::app_raw::BridgeToolTargets,
+    tools: &crate::model::app_raw::LenientTokenList,
     selected_component_names: &[ComponentName],
 ) -> bool {
-    tools.has_sourced()
-        || manifest_matchers_may_match_selected_components(
-            ctx,
-            tools.local_aliases(),
-            selected_component_names,
-        )
+    let matchers = tools.clone().into_set();
+    let matches_registry = (matchers.contains("*")
+        && ctx
+            .application()
+            .registry_tool_references()
+            .next()
+            .is_some())
+        || ctx
+            .application()
+            .registry_tool_references()
+            .any(|(name, _)| matchers.contains(name.as_str()));
+    matches_registry
+        || manifest_matchers_may_match_selected_components(ctx, matchers, selected_component_names)
 }
 
 /// Which kind of manifest bridge matchers a component-based output-dir claim
@@ -1178,7 +1174,7 @@ fn validate_manifest_matchers_resolved(
 
         let mut tool_matchers = sdk_targets
             .tools
-            .map(|tools| tools.local_aliases())
+            .map(|tools| tools.clone().into_set())
             .unwrap_or_default();
         if tool_matchers.remove("*") {
             validate_wildcard_manifest_sources_resolved(

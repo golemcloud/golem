@@ -924,7 +924,8 @@ impl From<EnvironmentToolGrantError> for ApiError {
                 Self::not_found(api::error_code::TOOL_NOT_FOUND, error)
             }
             EnvironmentToolGrantError::GrantAlreadyExists
-            | EnvironmentToolGrantError::GrantNotDeleted(_) => Self::conflict(
+            | EnvironmentToolGrantError::GrantNotDeleted(_)
+            | EnvironmentToolGrantError::AdministratorManagedToolGrant(_) => Self::conflict(
                 api::error_code::ENVIRONMENT_TOOL_GRANT_ALREADY_EXISTS,
                 error,
             ),

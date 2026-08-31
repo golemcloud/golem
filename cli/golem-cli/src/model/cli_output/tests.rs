@@ -4118,17 +4118,14 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
                 selection,
                 (
                     crate::model::cascade::property::vec::VecMergeMode::Append,
-                    vec![crate::model::app_raw::ComponentDependencyReference::Sourced(
-                        crate::model::app_raw::SubjectReference {
-                            source: crate::model::app_raw::SubjectSource {
-                                local: Some(crate::model::app_raw::LocalSubject {
-                                    component: "app:provider".to_string(),
-                                    name: "GeneratedAgent".to_string(),
-                                }),
-                                registry: None,
+                    vec![
+                        crate::model::app_raw::ComponentDependencyReference::LocalAlias(
+                            crate::model::app_raw::ComponentDependencyReferenceStruct {
+                                component: "app:provider".to_string(),
+                                name: "GeneratedAgent".to_string(),
                             },
-                        },
-                    )],
+                        ),
+                    ],
                 ),
             );
             properties.dependency_tools.apply_layer(
@@ -4136,18 +4133,11 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
                 selection,
                 (
                     crate::model::cascade::property::vec::VecMergeMode::Append,
-                    vec![crate::model::app_raw::ComponentDependencyReference::Sourced(
-                        crate::model::app_raw::SubjectReference {
-                            source: crate::model::app_raw::SubjectSource {
-                                local: None,
-                                registry: Some(crate::model::app_raw::RegistrySubject::ById(
-                                    crate::model::app_raw::RegistrySubjectById {
-                                        release_id: golem_common::model::tool_release::ToolReleaseId::new(),
-                                    },
-                                )),
-                            },
-                        },
-                    )],
+                    vec![
+                        crate::model::app_raw::ComponentDependencyReference::Shortcut(
+                            "search".to_string(),
+                        ),
+                    ],
                 ),
             );
 
@@ -4872,6 +4862,7 @@ fn arb_environment_tool_grant_plan_result() -> OutputDocumentStrategy {
                     Just(crate::model::deploy::EnvironmentToolGrantPlanAction::Create),
                     Just(crate::model::deploy::EnvironmentToolGrantPlanAction::Delete),
                     Just(crate::model::deploy::EnvironmentToolGrantPlanAction::RetainProtected),
+                    Just(crate::model::deploy::EnvironmentToolGrantPlanAction::RetainAdministratorManaged),
                 ],
                 proptest::option::of(arb_uuid()),
                 proptest::option::of(arb_small_string()),
@@ -5034,8 +5025,9 @@ fn arb_environment_tool_grant_view()
         arb_small_string(),
         any::<bool>(),
         any::<bool>(),
+        any::<bool>(),
     )
-        .prop_map(|(id, release_id, tool_name, tool_version, owner, protected, deleted)| {
+        .prop_map(|(id, release_id, tool_name, tool_version, owner, protected, automatic, deleted)| {
             crate::model::environment::EnvironmentToolGrantView {
                 grant_id: golem_common::base_model::environment_tool_grant::EnvironmentToolGrantId(id),
                 release_id: golem_common::base_model::tool_release::ToolReleaseId(release_id),
@@ -5043,6 +5035,7 @@ fn arb_environment_tool_grant_view()
                 tool_version,
                 owner,
                 protected,
+                automatic,
                 lifecycle: if deleted {
                     golem_common::base_model::environment_tool_grant::EnvironmentToolGrantLifecycle::Deleted
                 } else {

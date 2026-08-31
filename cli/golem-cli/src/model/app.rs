@@ -300,7 +300,7 @@ pub enum AppBuildStep {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SubjectSource {
     Local { component_name: ComponentName },
-    Registry { reference: app_raw::RegistrySubject },
+    Registry,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -311,7 +311,7 @@ pub enum ComponentDependency {
     },
     Tool {
         source: SubjectSource,
-        tool_name: Option<ToolName>,
+        tool_name: ToolName,
     },
 }
 
@@ -321,7 +321,7 @@ impl ComponentDependency {
             ComponentDependency::Agent { source, .. }
             | ComponentDependency::Tool { source, .. } => match source {
                 SubjectSource::Local { component_name } => Some(component_name),
-                SubjectSource::Registry { .. } => None,
+                SubjectSource::Registry => None,
             },
         }
     }
@@ -783,31 +783,51 @@ impl Application {
             .map(String::as_str)
     }
 
-    pub fn selected_tool_grants(&self) -> impl Iterator<Item = &app_raw::RegistrySubject> {
-        self.selected_environment()
-            .tool_grants
+    pub fn registry_tool_references(
+        &self,
+    ) -> impl Iterator<Item = (&ToolName, &app_raw::RegistrySubject)> {
+        self.tool_declarations
             .iter()
-            .map(|reference| &reference.source.registry)
+            .filter_map(|(name, declaration)| {
+                declaration
+                    .value
+                    .source
+                    .as_ref()
+                    .map(|source| (name, &source.registry))
+            })
+    }
+
+    pub fn registry_tool_reference(&self, name: &ToolName) -> Option<&app_raw::RegistrySubject> {
+        self.tool_declarations
+            .get(name)
+            .and_then(|declaration| declaration.value.source.as_ref())
+            .map(|source| &source.registry)
     }
 
     pub fn requires_registry_bridge_metadata(&self) -> bool {
+        let registry_names = self
+            .registry_tool_references()
+            .map(|(name, _)| name.as_str())
+            .collect::<BTreeSet<_>>();
         self.bridge_sdks()
             .for_all_used_modes()
             .into_iter()
             .any(|(_, _, targets)| {
-                targets
+                let matchers = targets
                     .tools
-                    .is_some_and(app_raw::BridgeToolTargets::has_sourced)
+                    .map(|tools| tools.clone().into_set())
+                    .unwrap_or_default();
+                (matchers.contains("*") && !registry_names.is_empty())
+                    || matchers
+                        .iter()
+                        .any(|matcher| registry_names.contains(matcher.as_str()))
             })
             || self.components.values().any(|component| {
                 component.value.0.dependencies.iter().any(|dependency| {
                     matches!(
                         dependency,
-                        ComponentDependency::Agent {
-                            source: SubjectSource::Registry { .. },
-                            ..
-                        } | ComponentDependency::Tool {
-                            source: SubjectSource::Registry { .. },
+                        ComponentDependency::Tool {
+                            source: SubjectSource::Registry,
                             ..
                         }
                     )
@@ -3013,36 +3033,41 @@ impl ComponentProperties {
         let agents = agent_dependencies
             .iter()
             .filter_map(|dependency| {
-                parse_component_dependency_reference(validation, "agent", dependency).map(
-                    |(source, name)| ComponentDependency::Agent {
-                        source,
+                parse_local_component_dependency_reference(validation, "agent", dependency).map(
+                    |(component_name, name)| ComponentDependency::Agent {
+                        source: SubjectSource::Local { component_name },
                         agent_type_name: AgentTypeName(name),
                     },
                 )
             })
             .collect::<Vec<_>>();
         let tools = tool_dependencies.iter().filter_map(|dependency| {
-            let (source, name) =
-                parse_component_dependency_reference(validation, "tool", dependency)?;
-            if name.is_empty() && matches!(source, SubjectSource::Registry { .. }) {
-                Some(ComponentDependency::Tool {
-                    source,
-                    tool_name: None,
-                })
-            } else {
-                match ToolName::try_from(name.as_str()) {
-                    Ok(tool_name) => Some(ComponentDependency::Tool {
-                        source,
-                        tool_name: Some(tool_name),
-                    }),
-                    Err(err) => {
-                        validation.add_error(format!(
-                            "Invalid tool dependency name: {}. {}",
-                            name.log_color_error_highlight(),
-                            err
-                        ));
-                        None
+            let (source, name) = match dependency {
+                app_raw::ComponentDependencyReference::Shortcut(shortcut) => {
+                    if shortcut.contains('/') {
+                        let (component_name, name) = parse_local_component_dependency_reference(
+                            validation, "tool", dependency,
+                        )?;
+                        (SubjectSource::Local { component_name }, name)
+                    } else {
+                        (SubjectSource::Registry, shortcut.clone())
                     }
+                }
+                app_raw::ComponentDependencyReference::LocalAlias(_) => {
+                    let (component_name, name) =
+                        parse_local_component_dependency_reference(validation, "tool", dependency)?;
+                    (SubjectSource::Local { component_name }, name)
+                }
+            };
+            match ToolName::try_from(name.as_str()) {
+                Ok(tool_name) => Some(ComponentDependency::Tool { source, tool_name }),
+                Err(err) => {
+                    validation.add_error(format!(
+                        "Invalid tool dependency name: {}. {}",
+                        name.log_color_error_highlight(),
+                        err
+                    ));
+                    None
                 }
             }
         });
@@ -3081,12 +3106,12 @@ impl ComponentProperties {
     }
 }
 
-fn parse_component_dependency_reference(
+fn parse_local_component_dependency_reference(
     validation: &mut ValidationBuilder,
     kind: &str,
     dependency: &app_raw::ComponentDependencyReference,
-) -> Option<(SubjectSource, String)> {
-    let (source, name) = match dependency {
+) -> Option<(ComponentName, String)> {
+    let (component, name) = match dependency {
         app_raw::ComponentDependencyReference::Shortcut(shortcut) => {
             let Some((component, name)) = shortcut.split_once('/') else {
                 validation.add_error(format!(
@@ -3095,64 +3120,14 @@ fn parse_component_dependency_reference(
                 ));
                 return None;
             };
-            let component_name = parse_dependency_component(validation, kind, component, name)?;
-            (SubjectSource::Local { component_name }, name.to_string())
+            (component, name)
         }
         app_raw::ComponentDependencyReference::LocalAlias(structured) => {
-            let component_name = parse_dependency_component(
-                validation,
-                kind,
-                &structured.component,
-                &structured.name,
-            )?;
-            (
-                SubjectSource::Local { component_name },
-                structured.name.clone(),
-            )
-        }
-        app_raw::ComponentDependencyReference::Sourced(reference) => {
-            match (&reference.source.local, &reference.source.registry) {
-                (Some(local), None) => {
-                    let component_name = parse_dependency_component(
-                        validation,
-                        kind,
-                        &local.component,
-                        &local.name,
-                    )?;
-                    (SubjectSource::Local { component_name }, local.name.clone())
-                }
-                (None, Some(reference)) => {
-                    let name = match reference {
-                        app_raw::RegistrySubject::ById(_) => String::new(),
-                        app_raw::RegistrySubject::ByCoordinates(reference) => {
-                            reference.name.clone()
-                        }
-                    };
-                    (
-                        SubjectSource::Registry {
-                            reference: reference.clone(),
-                        },
-                        name,
-                    )
-                }
-                _ => {
-                    validation.add_error(format!(
-                        "Invalid {kind} dependency source. Specify exactly one of source.local or source.registry"
-                    ));
-                    return None;
-                }
-            }
+            (structured.component.as_str(), structured.name.as_str())
         }
     };
-
-    if name.is_empty() && matches!(source, SubjectSource::Local { .. }) {
-        validation.add_error(format!(
-            "Invalid {kind} dependency. Dependency name must not be empty"
-        ));
-        return None;
-    }
-
-    Some((source, name))
+    let component_name = parse_dependency_component(validation, kind, component, name)?;
+    Some((component_name, name.to_string()))
 }
 
 fn parse_dependency_component(
@@ -3337,7 +3312,7 @@ mod app_builder {
         APP_ENV_PRESET_PREFIX, Application, ApplicationPreload, BridgeSdkTargetKind,
         ComponentDependency, ComponentLayer, ComponentLayerApplyContext, ComponentLayerId,
         ComponentLayerProperties, ComponentLayerPropertiesKind, ComponentPresetSelector,
-        ComponentProperties, PartitionedComponentPresets, TEMP_DIR, WithSource,
+        ComponentProperties, PartitionedComponentPresets, SubjectSource, TEMP_DIR, WithSource,
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
@@ -4205,18 +4180,6 @@ mod app_builder {
                                             validation.add_error(error);
                                         }
 
-                                        if let Some(tools) = sdk_targets.tools {
-                                            for reference in tools.sourced() {
-                                                if !matches!(
-                                                    (&reference.source.local, &reference.source.registry),
-                                                    (Some(_), None) | (None, Some(_))
-                                                ) {
-                                                    validation.add_error(
-                                                        "Invalid bridge tool source. Specify exactly one of source.local or source.registry".to_string(),
-                                                    );
-                                                }
-                                            }
-                                        }
                                     },
                                 );
                             }
@@ -4593,6 +4556,33 @@ mod app_builder {
                 }
             }
 
+            for (component_name, component) in &self.components {
+                for dependency in &component.value.0.dependencies {
+                    let ComponentDependency::Tool {
+                        source: SubjectSource::Registry,
+                        tool_name,
+                    } = dependency
+                    else {
+                        continue;
+                    };
+                    match self.tool_declarations.get(tool_name) {
+                        None => validation.add_error(format!(
+                            "Component {} depends on undeclared registry tool {}",
+                            component_name.as_str().log_color_highlight(),
+                            tool_name.as_str().log_color_error_highlight(),
+                        )),
+                        Some(declaration) if declaration.value.source.is_none() => {
+                            validation.add_error(format!(
+                                "Component {} uses name-only dependency {}, but that tool is locally implemented; use component/name to identify its build dependency",
+                                component_name.as_str().log_color_highlight(),
+                                tool_name.as_str().log_color_error_highlight(),
+                            ));
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+
             for (environment_name, environment) in &self.environments {
                 for published_name in environment.publish_tools.keys() {
                     let Ok(tool_name) = ToolName::try_from(published_name.as_str()) else {
@@ -4617,24 +4607,6 @@ mod app_builder {
                             ));
                         }
                         Some(_) => {}
-                    }
-                }
-
-                let mut seen_grants = BTreeSet::new();
-                for reference in &environment.tool_grants {
-                    if !seen_grants.insert(reference.source.registry.clone()) {
-                        validation.add_error(format!(
-                            "Environment {} lists the same tool grant more than once: {:?}",
-                            environment_name.0.log_color_highlight(),
-                            reference.source.registry,
-                        ));
-                    }
-                    if let Err(error) = reference.source.registry.to_release_reference() {
-                        validation.add_error(format!(
-                            "Invalid tool grant in environment {}: {}",
-                            environment_name.0.log_color_error_highlight(),
-                            error,
-                        ));
                     }
                 }
             }
@@ -5995,7 +5967,7 @@ mod test {
                     source: SubjectSource::Local {
                         component_name: parse_component_name("app:provider"),
                     },
-                    tool_name: Some(ToolName::try_from("grep").unwrap()),
+                    tool_name: ToolName::try_from("grep").unwrap(),
                 },
             ]
         );
@@ -6011,15 +5983,6 @@ mod test {
                 server: local
                 publishTools:
                   local-tool: {}
-                toolGrants:
-                  - source:
-                      registry:
-                        releaseId: 00000000-0000-0000-0000-000000000001
-                  - source:
-                      registry:
-                        account: publisher@example.com
-                        name: remote-tool
-                        version: 1.2.3
 
             components:
               app:provider:
@@ -6028,17 +5991,15 @@ mod test {
                 componentWasm: consumer.wasm
                 dependencies:
                   tools:
-                    - source:
-                        registry:
-                          releaseId: 00000000-0000-0000-0000-000000000001
-                    - source:
-                        registry:
-                          account: publisher@example.com
-                          name: remote-tool
-                          version: 1.2.3
+                    - pinned-tool
+                    - remote-tool
 
             tools:
               local-tool: {}
+              pinned-tool:
+                source:
+                  registry:
+                    releaseId: 00000000-0000-0000-0000-000000000001
               remote-tool:
                 source:
                   registry:
@@ -6050,13 +6011,8 @@ mod test {
               rust:
                 internal:
                   tools:
-                    - source:
-                        local:
-                          component: app:provider
-                          name: local-tool
-                    - source:
-                        registry:
-                          releaseId: 00000000-0000-0000-0000-000000000001
+                    - local-tool
+                    - pinned-tool
         "# };
 
         let (app, _) = load_app_for_env(source, "local", &[]);
@@ -6064,7 +6020,7 @@ mod test {
             app.selected_published_tools().collect::<Vec<_>>(),
             ["local-tool"]
         );
-        assert_eq!(app.selected_tool_grants().count(), 2);
+        assert_eq!(app.registry_tool_references().count(), 2);
         assert!(app.requires_registry_bridge_metadata());
 
         let component_name = parse_component_name("app:consumer");
@@ -6073,16 +6029,16 @@ mod test {
         assert!(matches!(
             &dependencies[0],
             ComponentDependency::Tool {
-                source: SubjectSource::Registry { .. },
-                tool_name: None,
-            }
+                source: SubjectSource::Registry,
+                tool_name,
+            } if tool_name.as_str() == "pinned-tool"
         ));
         assert!(matches!(
             &dependencies[1],
             ComponentDependency::Tool {
-                source: SubjectSource::Registry { .. },
-                tool_name: Some(name),
-            } if name.as_str() == "remote-tool"
+                source: SubjectSource::Registry,
+                tool_name,
+            } if tool_name.as_str() == "remote-tool"
         ));
     }
 
@@ -6096,18 +6052,15 @@ mod test {
                 publishTools:
                   remote-tool: {}
                   missing-tool: {}
-                toolGrants:
-                  - source:
-                      registry:
-                        account: publisher@example.com
-                        name: Bad_Name
-                        version: "1"
-                  - source:
-                      registry:
-                        account: publisher@example.com
-                        name: Bad_Name
-                        version: "1"
+            components:
+              app:consumer:
+                componentWasm: consumer.wasm
+                dependencies:
+                  tools:
+                    - missing-registry-tool
+                    - local-tool
             tools:
+              local-tool: {}
               remote-tool:
                 source:
                   registry:
@@ -6120,40 +6073,14 @@ mod test {
             "declaration key must match",
             "cannot publish remote registry tool",
             "publishes undeclared tool",
-            "same tool grant more than once",
-            "Invalid tool grant",
+            "depends on undeclared registry tool",
+            "uses name-only dependency",
         ] {
             assert!(
                 errors.iter().any(|error| error.contains(expected)),
                 "missing {expected:?} in {errors:#?}"
             );
         }
-    }
-
-    #[test]
-    fn bridge_tool_manifest_validation_rejects_invalid_source_unions() {
-        let errors = load_app_errors(indoc! { r#"
-            app: hello-app
-            environments:
-              local:
-                server: local
-            bridge:
-              rust:
-                internal:
-                  tools:
-                    - source: {}
-                    - source:
-                        local:
-                          component: app:provider
-                          name: local-tool
-                        registry:
-                          releaseId: 00000000-0000-0000-0000-000000000001
-        "# });
-
-        assert_eq!(errors.len(), 2, "unexpected errors: {errors:#?}");
-        assert!(errors.iter().all(|error| error.contains(
-            "Invalid bridge tool source. Specify exactly one of source.local or source.registry"
-        )));
     }
 
     #[test]

@@ -384,6 +384,7 @@ pub struct EnvironmentToolGrantView {
     pub tool_version: String,
     pub owner: String,
     pub protected: bool,
+    pub automatic: bool,
     pub lifecycle: EnvironmentToolGrantLifecycle,
 }
 
@@ -396,6 +397,7 @@ impl From<EnvironmentToolGrantWithDetails> for EnvironmentToolGrantView {
             tool_version: value.release.version,
             owner: value.release_owner.email.into_inner(),
             protected: value.grant.protected,
+            automatic: value.grant.automatic,
             lifecycle: value.grant.lifecycle,
         }
     }
@@ -410,6 +412,7 @@ impl EnvironmentToolGrantView {
             self.tool_version.clone(),
             self.owner.clone(),
             self.protected.to_string(),
+            self.automatic.to_string(),
             self.lifecycle.to_string(),
         ]
     }
@@ -456,6 +459,7 @@ impl TextOutput for EnvironmentToolGrantView {
             Column::new("Version"),
             Column::new("Owner"),
             Column::new("Protected"),
+            Column::new("Automatic"),
             Column::new("Lifecycle"),
         ]);
         table.add_row(self.row());
@@ -480,6 +484,7 @@ impl TextOutput for EnvironmentToolGrantListView {
             Column::new("Version"),
             Column::new("Owner"),
             Column::new("Protected"),
+            Column::new("Automatic"),
             Column::new("Lifecycle"),
         ]);
         for grant in &self.grants {

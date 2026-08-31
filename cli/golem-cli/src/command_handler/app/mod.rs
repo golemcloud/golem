@@ -70,7 +70,9 @@ use golem_client::api::{
     AgentSecretsClient, ApplicationClient, ComponentClient, EnvironmentClient,
     EnvironmentToolGrantsClient, ResourcesClient, RetryPoliciesClient,
 };
-use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
+use golem_client::model::{
+    ApplicationCreation, DeploymentCreation, DeploymentRollback, EnvironmentToolGrantReconciliation,
+};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::schema_evolution::validate_schema_evolution;
 use golem_common::model::agent::{AgentConfigSource, AgentTypeName, DeployedRegisteredAgentType};
@@ -187,9 +189,11 @@ fn build_tool_grant_reconciliation_plan(
         }
         let action = if grant.grant.protected {
             EnvironmentToolGrantPlanAction::RetainProtected
-        } else {
+        } else if grant.grant.automatic {
             deletions.push(grant.grant.id);
             EnvironmentToolGrantPlanAction::Delete
+        } else {
+            EnvironmentToolGrantPlanAction::RetainAdministratorManaged
         };
         entries.push(EnvironmentToolGrantPlanEntry {
             action,
@@ -861,7 +865,9 @@ impl AppCommandHandler {
             .plan_tool_grant_reconciliation(&environment)
             .await
             .map_err(DeployError::PrepareError)?;
-        if !tool_grant_plan.view.entries.is_empty() {
+        let stage_requires_new_grants = config.stage && !tool_grant_plan.creations.is_empty();
+        if !tool_grant_plan.view.entries.is_empty() && (!config.stage || stage_requires_new_grants)
+        {
             log_action("Planning", "environment tool grant reconciliation");
             let _indent = self.ctx.log_handler().decorated_indent_primary();
             self.ctx
@@ -869,7 +875,17 @@ impl AppCommandHandler {
                 .log_output(tool_grant_plan.view.clone())
                 .map_err(DeployError::PrepareError)?;
         }
-        if tool_grant_plan.has_changes() {
+        if stage_requires_new_grants {
+            return Err(DeployError::PrepareError(anyhow!(
+                "Cannot stage this deployment because it requires new environment tool grants; run a normal deployment to reconcile grants"
+            )));
+        }
+        if !config.stage {
+            self.validate_tool_grant_reconciliation(&environment, &tool_grant_plan)
+                .await
+                .map_err(DeployError::PrepareError)?;
+        }
+        if !config.stage && tool_grant_plan.has_changes() {
             if config.plan {
                 return Ok(DeploySummary::PlanOk);
             }
@@ -1500,7 +1516,10 @@ impl AppCommandHandler {
             app_ctx
                 .some_or_err()?
                 .application()
-                .selected_tool_grants()
+                .registry_tool_references()
+                .map(|(_, reference)| reference.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
                 .map(|reference| reference.to_release_reference().map_err(anyhow::Error::msg))
                 .collect::<anyhow::Result<Vec<_>>>()?
         };
@@ -1517,6 +1536,34 @@ impl AppCommandHandler {
         Ok(build_tool_grant_reconciliation_plan(&desired, &current))
     }
 
+    async fn validate_tool_grant_reconciliation(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        plan: &ToolGrantReconciliationPlan,
+    ) -> anyhow::Result<()> {
+        if plan.has_changes() {
+            self.ctx
+                .golem_clients()
+                .await?
+                .environment_tool_grants
+                .validate_automatic_environment_tool_grant_reconciliation(
+                    &environment.environment_id.0,
+                    &EnvironmentToolGrantReconciliation {
+                        creations: plan
+                            .creations
+                            .iter()
+                            .cloned()
+                            .map(|release| EnvironmentToolGrantCreation { release })
+                            .collect(),
+                        deletions: plan.deletions.iter().map(|grant_id| grant_id.0).collect(),
+                    },
+                )
+                .await
+                .map_service_error()?;
+        }
+        Ok(())
+    }
+
     async fn apply_tool_grant_reconciliation(
         &self,
         environment: &ResolvedEnvironmentIdentity,
@@ -1526,7 +1573,7 @@ impl AppCommandHandler {
         for release in plan.creations {
             clients
                 .environment_tool_grants
-                .create_environment_tool_grant(
+                .create_automatic_environment_tool_grant(
                     &environment.environment_id.0,
                     &EnvironmentToolGrantCreation { release },
                 )
@@ -1536,7 +1583,7 @@ impl AppCommandHandler {
         for grant_id in plan.deletions {
             clients
                 .environment_tool_grants
-                .delete_environment_tool_grant(&grant_id.0)
+                .delete_automatic_environment_tool_grant(&grant_id.0)
                 .await
                 .map_service_error()?;
         }
@@ -2653,6 +2700,27 @@ impl AppCommandHandler {
                     .environment_handler()
                     .resolve_environment(EnvironmentResolveMode::ManifestOnly)
                     .await?;
+                let mut plan = self.plan_tool_grant_reconciliation(&environment).await?;
+                plan.deletions.clear();
+                plan.view
+                    .entries
+                    .retain(|entry| entry.action == EnvironmentToolGrantPlanAction::Create);
+                self.validate_tool_grant_reconciliation(&environment, &plan)
+                    .await?;
+                if plan.has_changes() {
+                    log_action("Planning", "environment tool grants required by the build");
+                    let _indent = self.ctx.log_handler().decorated_indent_primary();
+                    self.ctx.log_handler().log_output(plan.view.clone())?;
+                    if !self
+                        .ctx
+                        .interactive_handler()
+                        .confirm_tool_grant_plan_apply()?
+                    {
+                        bail!(NonSuccessfulExit);
+                    }
+                    self.apply_tool_grant_reconciliation(&environment, plan)
+                        .await?;
+                }
                 let grants = self
                     .ctx
                     .golem_clients()
@@ -3230,7 +3298,7 @@ mod tests {
 
     #[test]
     fn tool_grant_reconciliation_is_idempotent_for_an_existing_exact_grant() {
-        let current = grant("search", "1.2.0", "publisher@example.com", false);
+        let current = grant("search", "1.2.0", "publisher@example.com", false, true);
         let desired = vec![ToolReleaseReference::ById(ToolReleaseById {
             release_id: current.release.id,
         })];
@@ -3243,9 +3311,12 @@ mod tests {
     }
 
     #[test]
-    fn tool_grant_reconciliation_creates_missing_deletes_ordinary_and_retains_protected() {
-        let ordinary = grant("old-search", "1.0.0", "old@example.com", false);
-        let protected = grant("host-clock", "1.0.0", "system@example.com", true);
+    fn tool_grant_reconciliation_deletes_automatic_and_retains_protected_and_administrator_managed()
+    {
+        let automatic = grant("old-search", "1.0.0", "old@example.com", false, true);
+        let protected = grant("host-clock", "1.0.0", "system@example.com", true, true);
+        let administrator_managed =
+            grant("admin-tool", "1.0.0", "publisher@example.com", false, false);
         let desired = vec![ToolReleaseReference::ByCoordinates(
             ToolReleaseByCoordinates {
                 account: AccountEmail::new("publisher@example.com"),
@@ -3254,15 +3325,26 @@ mod tests {
             },
         )];
 
-        let plan =
-            build_tool_grant_reconciliation_plan(&desired, &[ordinary.clone(), protected.clone()]);
+        let plan = build_tool_grant_reconciliation_plan(
+            &desired,
+            &[
+                automatic.clone(),
+                protected.clone(),
+                administrator_managed.clone(),
+            ],
+        );
 
         assert_eq!(plan.creations, desired);
-        assert_eq!(plan.deletions, vec![ordinary.grant.id]);
-        assert_eq!(plan.view.entries.len(), 3);
+        assert_eq!(plan.deletions, vec![automatic.grant.id]);
+        assert_eq!(plan.view.entries.len(), 4);
         assert!(plan.view.entries.iter().any(|entry| {
             entry.action == crate::model::deploy::EnvironmentToolGrantPlanAction::RetainProtected
                 && entry.grant_id == Some(protected.grant.id)
+        }));
+        assert!(plan.view.entries.iter().any(|entry| {
+            entry.action
+                == crate::model::deploy::EnvironmentToolGrantPlanAction::RetainAdministratorManaged
+                && entry.grant_id == Some(administrator_managed.grant.id)
         }));
     }
 
@@ -3271,6 +3353,7 @@ mod tests {
         version: &str,
         owner_email: &str,
         protected: bool,
+        automatic: bool,
     ) -> EnvironmentToolGrantWithDetails {
         let release_id = ToolReleaseId::new();
         let actor = AccountId::new();
@@ -3296,6 +3379,7 @@ mod tests {
                 environment_id: EnvironmentId::new(),
                 tool_release_id: release_id,
                 protected,
+                automatic,
                 lifecycle: EnvironmentToolGrantLifecycle::Active,
                 created_at: now,
                 created_by: actor,

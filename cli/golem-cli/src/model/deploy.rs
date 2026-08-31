@@ -167,6 +167,7 @@ pub enum EnvironmentToolGrantPlanAction {
     Create,
     Delete,
     RetainProtected,
+    RetainAdministratorManaged,
 }
 
 impl std::fmt::Display for EnvironmentToolGrantPlanAction {
@@ -175,6 +176,7 @@ impl std::fmt::Display for EnvironmentToolGrantPlanAction {
             Self::Create => "create",
             Self::Delete => "delete",
             Self::RetainProtected => "retain protected",
+            Self::RetainAdministratorManaged => "retain administrator-managed",
         })
     }
 }

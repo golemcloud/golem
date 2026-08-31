@@ -654,6 +654,14 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_tool_grant_plan_apply(&self) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            "The above environment tool grants are required to build registry tool bridges. Do you want to create them?",
+            None,
+        )
+    }
+
     pub fn confirm_new_app_in_non_empty_dir(&self, path: &Path) -> anyhow::Result<bool> {
         self.confirm(
             false,

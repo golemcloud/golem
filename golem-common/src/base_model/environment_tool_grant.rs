@@ -33,6 +33,7 @@ declare_structs! {
         pub environment_id: EnvironmentId,
         pub tool_release_id: ToolReleaseId,
         pub protected: bool,
+        pub automatic: bool,
         pub lifecycle: EnvironmentToolGrantLifecycle,
         pub created_at: DateTime<Utc>,
         pub created_by: AccountId,
@@ -48,5 +49,10 @@ declare_structs! {
 
     pub struct EnvironmentToolGrantCreation {
         pub release: ToolReleaseReference,
+    }
+
+    pub struct EnvironmentToolGrantReconciliation {
+        pub creations: Vec<EnvironmentToolGrantCreation>,
+        pub deletions: Vec<EnvironmentToolGrantId>,
     }
 }

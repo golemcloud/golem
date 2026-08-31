@@ -5883,7 +5883,7 @@
     },
     "EnvironmentToolGrantView": {
       "type": "object",
-      "required": ["grantId", "releaseId", "toolName", "toolVersion", "owner", "protected", "lifecycle"],
+      "required": ["grantId", "releaseId", "toolName", "toolVersion", "owner", "protected", "automatic", "lifecycle"],
       "properties": {
         "grantId": { "type": "string", "format": "uuid" },
         "releaseId": { "type": "string", "format": "uuid" },
@@ -5891,6 +5891,7 @@
         "toolVersion": { "type": "string" },
         "owner": { "type": "string" },
         "protected": { "type": "boolean" },
+        "automatic": { "type": "boolean" },
         "lifecycle": { "type": "string", "enum": ["active", "deleted"] }
       },
       "additionalProperties": false
@@ -5964,7 +5965,7 @@
       "type": "object",
       "required": ["action", "releaseId", "account", "name", "version", "grantId"],
       "properties": {
-        "action": { "type": "string", "enum": ["create", "delete", "retainProtected"] },
+        "action": { "type": "string", "enum": ["create", "delete", "retainProtected", "retainAdministratorManaged"] },
         "releaseId": { "type": ["string", "null"], "format": "uuid" },
         "account": { "type": ["string", "null"] },
         "name": { "type": ["string", "null"] },
@@ -5975,9 +5976,10 @@
     },
     "deploy.environment-tool-grants": {
       "type": "object",
-      "description": "May be emitted by `golem deploy` when planning environment tool grant changes. Other deploy output documents may also appear in the same command run.",
+      "description": "May be emitted by `golem deploy` or `golem build` when planning automatic environment tool grant changes. Other output documents may also appear in the same command run.",
       "x-golem-output-mode": "multi-document",
       "x-golem-command": "deploy",
+      "x-golem-commands": ["deploy", "build"],
       "required": ["$type", "entries"],
       "properties": {
         "$type": { "const": "deploy.environment-tool-grants" },

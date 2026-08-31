@@ -18,7 +18,8 @@ use crate::services::environment_tool_grant::EnvironmentToolGrantService;
 use golem_common::model::Page;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_tool_grant::{
-    EnvironmentToolGrantCreation, EnvironmentToolGrantId, EnvironmentToolGrantWithDetails,
+    EnvironmentToolGrantCreation, EnvironmentToolGrantId, EnvironmentToolGrantReconciliation,
+    EnvironmentToolGrantWithDetails,
 };
 use golem_common::model::poem::NoContentResponse;
 use golem_common::recorded_http_api_request;
@@ -75,6 +76,65 @@ impl EnvironmentToolGrantsApi {
                     .create(environment_id.0, creation.0, &auth)
                     .await?,
             ))
+        }
+        .instrument(record.span.clone())
+        .await;
+        record.result(result)
+    }
+
+    /// Create an automatically managed grant required by an application deployment
+    #[oai(
+        path = "/envs/:environment_id/tool-grants/automatic",
+        method = "post",
+        operation_id = "create_automatic_environment_tool_grant",
+        tag = ApiTags::Environment
+    )]
+    async fn create_automatic_environment_tool_grant(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        creation: Json<EnvironmentToolGrantCreation>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<EnvironmentToolGrantWithDetails>> {
+        let record = recorded_http_api_request!(
+            "create_automatic_environment_tool_grant",
+            environment_id = environment_id.0.to_string()
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let result = async {
+            Ok(Json(
+                self.environment_tool_grant_service
+                    .create_automatic(environment_id.0, creation.0, &auth)
+                    .await?,
+            ))
+        }
+        .instrument(record.span.clone())
+        .await;
+        record.result(result)
+    }
+
+    /// Validate an automatically managed grant reconciliation without changing any grants
+    #[oai(
+        path = "/envs/:environment_id/tool-grants/automatic/validate",
+        method = "post",
+        operation_id = "validate_automatic_environment_tool_grant_reconciliation",
+        tag = ApiTags::Environment
+    )]
+    async fn validate_automatic_environment_tool_grant_reconciliation(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        reconciliation: Json<EnvironmentToolGrantReconciliation>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<NoContentResponse> {
+        let record = recorded_http_api_request!(
+            "validate_automatic_environment_tool_grant_reconciliation",
+            environment_id = environment_id.0.to_string()
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let result = async {
+            self.environment_tool_grant_service
+                .validate_reconciliation(environment_id.0, reconciliation.0, &auth)
+                .await?;
+            Ok(NoContentResponse::NoContent)
         }
         .instrument(record.span.clone())
         .await;
@@ -158,6 +218,33 @@ impl EnvironmentToolGrantsApi {
         let result = async {
             self.environment_tool_grant_service
                 .delete(grant_id.0, &auth)
+                .await?;
+            Ok(NoContentResponse::NoContent)
+        }
+        .instrument(record.span.clone())
+        .await;
+        record.result(result)
+    }
+
+    /// Delete an environment tool grant only if it is automatically managed
+    #[oai(
+        path = "/environment-tool-grants/:grant_id/automatic",
+        method = "delete",
+        operation_id = "delete_automatic_environment_tool_grant"
+    )]
+    async fn delete_automatic_environment_tool_grant(
+        &self,
+        grant_id: Path<EnvironmentToolGrantId>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<NoContentResponse> {
+        let record = recorded_http_api_request!(
+            "delete_automatic_environment_tool_grant",
+            grant_id = grant_id.0.to_string()
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let result = async {
+            self.environment_tool_grant_service
+                .delete_automatic(grant_id.0, &auth)
                 .await?;
             Ok(NoContentResponse::NoContent)
         }

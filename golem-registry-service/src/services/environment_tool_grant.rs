@@ -28,7 +28,8 @@ use golem_common::model::card::{
 };
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_tool_grant::{
-    EnvironmentToolGrantCreation, EnvironmentToolGrantId, EnvironmentToolGrantWithDetails,
+    EnvironmentToolGrantCreation, EnvironmentToolGrantId, EnvironmentToolGrantReconciliation,
+    EnvironmentToolGrantWithDetails,
 };
 use golem_common::model::tool::ToolName;
 use golem_common::model::tool_release::{ToolRelease, ToolReleaseId, ToolReleaseReference};
@@ -55,6 +56,8 @@ pub enum EnvironmentToolGrantError {
     GrantAlreadyExists,
     #[error("Protected system tool grant {0} cannot be modified")]
     ProtectedToolGrant(EnvironmentToolGrantId),
+    #[error("Administrator-managed tool grant {0} cannot be deleted automatically")]
+    AdministratorManagedToolGrant(EnvironmentToolGrantId),
     #[error("Environment tool grant {0} is not deleted")]
     GrantNotDeleted(EnvironmentToolGrantId),
     #[error(transparent)]
@@ -105,6 +108,70 @@ impl EnvironmentToolGrantService {
         creation: EnvironmentToolGrantCreation,
         auth: &AuthCtx,
     ) -> Result<EnvironmentToolGrantWithDetails, EnvironmentToolGrantError> {
+        self.create_with_provenance(environment_id, creation, false, auth)
+            .await
+    }
+
+    pub async fn create_automatic(
+        &self,
+        environment_id: EnvironmentId,
+        creation: EnvironmentToolGrantCreation,
+        auth: &AuthCtx,
+    ) -> Result<EnvironmentToolGrantWithDetails, EnvironmentToolGrantError> {
+        self.create_with_provenance(environment_id, creation, true, auth)
+            .await
+    }
+
+    pub async fn validate_reconciliation(
+        &self,
+        environment_id: EnvironmentId,
+        reconciliation: EnvironmentToolGrantReconciliation,
+        auth: &AuthCtx,
+    ) -> Result<(), EnvironmentToolGrantError> {
+        let environment = self.get_environment(environment_id, auth).await?;
+        for creation in reconciliation.creations {
+            let release = self
+                .tool_release_service
+                .resolve_user_grantable_reference(&creation.release)
+                .await
+                .map_err(|err| match err {
+                    ToolReleaseError::ReferencedToolReleaseNotFound
+                    | ToolReleaseError::ToolReleaseNotFound(_) => {
+                        EnvironmentToolGrantError::ReferencedToolReleaseNotFound
+                    }
+                    other => other.into(),
+                })?;
+            let name = ToolName::try_from(release.release.tool_name).map_err(anyhow::Error::msg)?;
+            authorize_environment_tool_grant_permission(
+                auth,
+                &environment,
+                EnvironmentToolGrantVerb::Create,
+                name,
+            )?;
+        }
+        for grant_id in reconciliation.deletions {
+            let (record, grant_environment) = self
+                .authorize(grant_id, false, EnvironmentToolGrantVerb::Delete, auth)
+                .await?;
+            if grant_environment.id != environment_id || !record.automatic {
+                return Err(EnvironmentToolGrantError::EnvironmentToolGrantNotFound(
+                    grant_id,
+                ));
+            }
+            if record.protected {
+                return Err(EnvironmentToolGrantError::ProtectedToolGrant(grant_id));
+            }
+        }
+        Ok(())
+    }
+
+    async fn create_with_provenance(
+        &self,
+        environment_id: EnvironmentId,
+        creation: EnvironmentToolGrantCreation,
+        automatic: bool,
+        auth: &AuthCtx,
+    ) -> Result<EnvironmentToolGrantWithDetails, EnvironmentToolGrantError> {
         let environment = self.get_environment(environment_id, auth).await?;
         let release = self
             .tool_release_service
@@ -134,6 +201,7 @@ impl EnvironmentToolGrantService {
                 environment_id,
                 release_id,
                 false,
+                automatic,
                 auth.actor_account_id(),
             ))
             .await
@@ -146,12 +214,26 @@ impl EnvironmentToolGrantService {
                     .await?
                     .ok_or(EnvironmentToolGrantError::GrantAlreadyExists)?;
                 if existing.grant_deleted_at.is_none() {
-                    existing.try_into().map_err(Into::into)
+                    if existing.protected || existing.automatic == automatic {
+                        existing.try_into().map_err(Into::into)
+                    } else {
+                        self.environment_tool_grant_repo
+                            .set_automatic(
+                                existing.environment_tool_grant_id,
+                                auth.actor_account_id().0,
+                                automatic,
+                            )
+                            .await?
+                            .ok_or(EnvironmentToolGrantError::GrantAlreadyExists)?
+                            .try_into()
+                            .map_err(Into::into)
+                    }
                 } else {
                     self.environment_tool_grant_repo
                         .restore(
                             existing.environment_tool_grant_id,
                             auth.actor_account_id().0,
+                            automatic,
                         )
                         .await?
                         .ok_or(EnvironmentToolGrantError::ReferencedToolReleaseNotFound)?
@@ -207,15 +289,37 @@ impl EnvironmentToolGrantService {
         grant_id: EnvironmentToolGrantId,
         auth: &AuthCtx,
     ) -> Result<(), EnvironmentToolGrantError> {
+        self.delete_with_provenance(grant_id, false, auth).await
+    }
+
+    pub async fn delete_automatic(
+        &self,
+        grant_id: EnvironmentToolGrantId,
+        auth: &AuthCtx,
+    ) -> Result<(), EnvironmentToolGrantError> {
+        self.delete_with_provenance(grant_id, true, auth).await
+    }
+
+    async fn delete_with_provenance(
+        &self,
+        grant_id: EnvironmentToolGrantId,
+        automatic_only: bool,
+        auth: &AuthCtx,
+    ) -> Result<(), EnvironmentToolGrantError> {
         let (record, _) = self
             .authorize(grant_id, false, EnvironmentToolGrantVerb::Delete, auth)
             .await?;
         if record.protected {
             return Err(EnvironmentToolGrantError::ProtectedToolGrant(grant_id));
         }
+        if automatic_only && !record.automatic {
+            return Err(EnvironmentToolGrantError::AdministratorManagedToolGrant(
+                grant_id,
+            ));
+        }
         if !self
             .environment_tool_grant_repo
-            .delete(grant_id.0, auth.actor_account_id().0)
+            .delete(grant_id.0, auth.actor_account_id().0, automatic_only)
             .await?
         {
             return Err(EnvironmentToolGrantError::EnvironmentToolGrantNotFound(
@@ -240,7 +344,7 @@ impl EnvironmentToolGrantService {
             return Err(EnvironmentToolGrantError::GrantNotDeleted(grant_id));
         }
         self.environment_tool_grant_repo
-            .restore(grant_id.0, auth.actor_account_id().0)
+            .restore(grant_id.0, auth.actor_account_id().0, false)
             .await?
             .ok_or(EnvironmentToolGrantError::ReferencedToolReleaseNotFound)?
             .try_into()
@@ -329,6 +433,7 @@ impl EnvironmentToolGrantService {
         let record = EnvironmentToolGrantRecord::creation(
             environment_id,
             release_id,
+            true,
             true,
             AccountId::SYSTEM,
         );

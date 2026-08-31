@@ -129,6 +129,15 @@ impl<'a> BuildContext<'a> {
                 }
             })
     }
+
+    pub fn registry_tool_grant_by_name(
+        &self,
+        name: &golem_common::model::tool::ToolName,
+    ) -> Option<&EnvironmentToolGrantWithDetails> {
+        self.application()
+            .registry_tool_reference(name)
+            .and_then(|reference| self.registry_tool_grant(reference))
+    }
 }
 
 pub struct ToolsWithEnsuredCommonDeps {

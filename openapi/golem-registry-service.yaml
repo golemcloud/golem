@@ -3989,6 +3989,152 @@ paths:
       - Cookie: []
       - Token: []
       operationId: list_environment_tool_grants
+  /v1/envs/{environment_id}/tool-grants/automatic:
+    post:
+      tags:
+      - RegistryService
+      - EnvironmentToolGrants
+      - Environment
+      summary: Create an automatically managed grant required by an application deployment
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/EnvironmentToolGrantCreation'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/EnvironmentToolGrantWithDetails'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: create_automatic_environment_tool_grant
+  /v1/envs/{environment_id}/tool-grants/automatic/validate:
+    post:
+      tags:
+      - RegistryService
+      - EnvironmentToolGrants
+      - Environment
+      summary: Validate an automatically managed grant reconciliation without changing any grants
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/EnvironmentToolGrantReconciliation'
+        required: true
+      responses:
+        '204':
+          description: ''
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: validate_automatic_environment_tool_grant_reconciliation
   /v1/environment-tool-grants/{grant_id}:
     get:
       tags:
@@ -4120,6 +4266,70 @@ paths:
       - Cookie: []
       - Token: []
       operationId: delete_environment_tool_grant
+  /v1/environment-tool-grants/{grant_id}/automatic:
+    delete:
+      tags:
+      - RegistryService
+      - EnvironmentToolGrants
+      summary: Delete an environment tool grant only if it is automatically managed
+      parameters:
+      - name: grant_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '204':
+          description: ''
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: delete_automatic_environment_tool_grant
   /v1/environment-tool-grants/{grant_id}/restore:
     post:
       tags:
@@ -12245,6 +12455,7 @@ components:
       - environmentId
       - toolReleaseId
       - protected
+      - automatic
       - lifecycle
       - createdAt
       - createdBy
@@ -12261,6 +12472,8 @@ components:
           type: string
           format: uuid
         protected:
+          type: boolean
+        automatic:
           type: boolean
         lifecycle:
           $ref: '#/components/schemas/EnvironmentToolGrantLifecycle'
@@ -12289,6 +12502,22 @@ components:
       enum:
       - active
       - deleted
+    EnvironmentToolGrantReconciliation:
+      type: object
+      title: EnvironmentToolGrantReconciliation
+      required:
+      - creations
+      - deletions
+      properties:
+        creations:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvironmentToolGrantCreation'
+        deletions:
+          type: array
+          items:
+            type: string
+            format: uuid
     EnvironmentToolGrantWithDetails:
       type: object
       title: EnvironmentToolGrantWithDetails

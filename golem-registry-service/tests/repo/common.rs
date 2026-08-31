@@ -4680,6 +4680,7 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
         EnvironmentId::new(),
         ToolReleaseId(component_release_id),
         false,
+        false,
         actor,
     );
     assert!(matches!(
@@ -4691,6 +4692,7 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
     let invalid_release_grant = EnvironmentToolGrantRecord::creation(
         EnvironmentId(environment.revision.environment_id),
         ToolReleaseId::new(),
+        false,
         false,
         actor,
     );
@@ -4705,6 +4707,7 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
         EnvironmentId(environment.revision.environment_id),
         ToolReleaseId(component_release_id),
         false,
+        false,
         actor,
     );
     let ordinary_grant_id = ordinary_grant.environment_tool_grant_id;
@@ -4714,7 +4717,7 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
         .unwrap();
     assert!(
         deps.environment_tool_grant_repo
-            .delete(ordinary_grant_id, actor.0)
+            .delete(ordinary_grant_id, actor.0, false)
             .await
             .unwrap()
     );
@@ -4731,20 +4734,38 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
                 EnvironmentId(environment.revision.environment_id),
                 ToolReleaseId(component_release_id),
                 false,
+                false,
                 actor,
             ))
             .await,
         Err(EnvironmentToolGrantRepoError::GrantAlreadyExists)
     ));
-    deps.environment_tool_grant_repo
-        .restore(ordinary_grant_id, actor.0)
+    let restored_grant = deps
+        .environment_tool_grant_repo
+        .restore(ordinary_grant_id, actor.0, true)
         .await
         .unwrap()
         .unwrap();
+    assert!(restored_grant.automatic);
+    let administrator_managed_grant = deps
+        .environment_tool_grant_repo
+        .set_automatic(ordinary_grant_id, actor.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!administrator_managed_grant.automatic);
+    assert!(
+        !deps
+            .environment_tool_grant_repo
+            .delete(ordinary_grant_id, actor.0, true)
+            .await
+            .unwrap()
+    );
 
     let protected_grant = EnvironmentToolGrantRecord::creation(
         EnvironmentId(protected_environment.revision.environment_id),
         ToolReleaseId(host_release_id),
+        true,
         true,
         actor,
     );

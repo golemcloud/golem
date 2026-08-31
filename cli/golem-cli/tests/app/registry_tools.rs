@@ -31,7 +31,7 @@ use golem_common::model::environment::{Environment, EnvironmentCreation, Environ
 use golem_common::model::environment_tool_grant::EnvironmentToolGrantCreation;
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::tool::ToolName;
-use golem_common::model::tool_release::{ToolReleaseByCoordinates, ToolReleaseReference};
+use golem_common::model::tool_release::{ToolReleaseById, ToolReleaseReference};
 use golem_common::schema::SchemaGraph;
 use golem_common::schema::tool::{
     CommandBody, CommandNode, CommandTree, Doc, Globals, Positionals, Tool,
@@ -182,7 +182,7 @@ fn wasm_files_under(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
 
 #[test]
 #[timeout("2m")]
-async fn registry_tool_bridge_requires_an_environment_grant(
+async fn registry_tool_bridge_automatically_reconciles_its_environment_grant(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let mut ctx = TestContext::new();
@@ -266,7 +266,9 @@ tools:
   search:
     source:
       registry:
-        releaseId: {release_id}
+        account: {publisher_account}
+        name: search
+        version: "1.2.0"
 
 environments:
   {environment}:
@@ -281,48 +283,65 @@ bridge:
   rust:
     internal:
       outputDir: generated
-      tools:
-        - source:
-            registry:
-              releaseId: {release_id}
+      tools: [search]
 "#,
             application = yaml_string(&consumer_application.name.0),
             environment = yaml_string(&consumer_environment.name.0),
             server_url = yaml_string(base_url.as_str()),
             token = yaml_string(consumer.token.secret()),
-            release_id = release.id,
+            publisher_account = yaml_string(publisher.account_email.as_str()),
         ),
     )?;
 
-    let ungranted_build = ctx.cli([cmd::BUILD, flag::STEP, "gen-bridge"]).await;
-    assert!(!ungranted_build.success());
+    let staged_deployment = ctx.cli([cmd::DEPLOY, "--stage"]).await;
+    assert!(!staged_deployment.success());
     assert!(
-        ungranted_build
-            .stdout_contains("Registry bridge source not found in the selected environment")
-            || ungranted_build
-                .stderr_contains("Registry bridge source not found in the selected environment")
+        staged_deployment.stdout_contains("requires new environment tool grants")
+            || staged_deployment.stderr_contains("requires new environment tool grants")
     );
     assert!(
-        !ctx.cwd_path_join("generated/search-tool-guest-client")
-            .exists()
+        consumer
+            .client
+            .list_environment_tool_grants(&consumer_environment.id.0)
+            .await?
+            .values
+            .is_empty(),
+        "staging must not create an environment grant"
     );
 
-    let grant = consumer
-        .client
-        .create_environment_tool_grant(
-            &consumer_environment.id.0,
-            &EnvironmentToolGrantCreation {
-                release: ToolReleaseReference::ByCoordinates(ToolReleaseByCoordinates {
-                    account: publisher.account_email.clone(),
-                    name: tool_name,
-                    version: "1.2.0".to_string(),
-                }),
-            },
-        )
-        .await?;
+    let deployment_plan = ctx.cli([cmd::DEPLOY, "--plan"]).await;
+    assert!(deployment_plan.success_or_dump());
+    assert!(
+        deployment_plan.stdout_contains("environment tool grant reconciliation")
+            || deployment_plan.stderr_contains("environment tool grant reconciliation")
+    );
+    assert!(
+        consumer
+            .client
+            .list_environment_tool_grants(&consumer_environment.id.0)
+            .await?
+            .values
+            .is_empty(),
+        "planning must not create the automatic grant"
+    );
 
-    let granted_build = ctx.cli([cmd::BUILD, flag::STEP, "gen-bridge"]).await;
+    let granted_build = ctx
+        .cli([flag::YES, cmd::BUILD, flag::STEP, "gen-bridge"])
+        .await;
     assert!(granted_build.success_or_dump());
+    assert!(
+        granted_build.stdout_contains("environment tool grants required by the build")
+            || granted_build.stderr_contains("environment tool grants required by the build")
+    );
+    let grants = consumer
+        .client
+        .list_environment_tool_grants(&consumer_environment.id.0)
+        .await?
+        .values;
+    assert_eq!(grants.len(), 1);
+    let grant = &grants[0];
+    assert!(grant.grant.automatic);
+    assert_eq!(grant.release.id, release.id);
     assert!(
         ctx.cwd_path_join("generated/search-tool-guest-client/Cargo.toml")
             .is_file()
@@ -360,6 +379,59 @@ bridge:
             "registry bridge cache identity must include {expected}: {marker_input}"
         );
     }
+
+    let administrator_managed = consumer
+        .client
+        .create_environment_tool_grant(
+            &consumer_environment.id.0,
+            &EnvironmentToolGrantCreation {
+                release: ToolReleaseReference::ById(ToolReleaseById {
+                    release_id: release.id,
+                }),
+            },
+        )
+        .await?;
+    assert!(!administrator_managed.grant.automatic);
+    assert!(
+        consumer
+            .client
+            .delete_automatic_environment_tool_grant(&administrator_managed.grant.id.0)
+            .await
+            .is_err(),
+        "automatic reconciliation must not delete an administrator-managed grant"
+    );
+    let automatic_again = consumer
+        .client
+        .create_automatic_environment_tool_grant(
+            &consumer_environment.id.0,
+            &EnvironmentToolGrantCreation {
+                release: ToolReleaseReference::ById(ToolReleaseById {
+                    release_id: release.id,
+                }),
+            },
+        )
+        .await?;
+    assert!(automatic_again.grant.automatic);
+
+    consumer
+        .client
+        .delete_automatic_environment_tool_grant(&automatic_again.grant.id.0)
+        .await?;
+    let administrator_managed = consumer
+        .client
+        .create_environment_tool_grant(
+            &consumer_environment.id.0,
+            &EnvironmentToolGrantCreation {
+                release: ToolReleaseReference::ById(ToolReleaseById {
+                    release_id: release.id,
+                }),
+            },
+        )
+        .await?;
+    assert!(
+        !administrator_managed.grant.automatic,
+        "a grant created through the administrator-managed endpoint must not remain automatic"
+    );
 
     Ok(())
 }

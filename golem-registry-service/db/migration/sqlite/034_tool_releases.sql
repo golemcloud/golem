@@ -97,6 +97,7 @@ CREATE TABLE environment_tool_grants
     environment_id            UUID      NOT NULL,
     tool_release_id            UUID      NOT NULL,
     protected                  BOOLEAN   NOT NULL,
+    automatic                  BOOLEAN   NOT NULL,
     lifecycle                  SMALLINT  NOT NULL,
     created_at                 TIMESTAMP NOT NULL,
     created_by                 UUID      NOT NULL,

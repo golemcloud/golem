@@ -396,7 +396,7 @@ async fn collect_manifest_targets_for_components_and_mode(
             target_language,
             sdk_targets
                 .tools
-                .map(|tools| tools.local_aliases())
+                .map(|tools| tools.clone().into_set())
                 .unwrap_or_default(),
             &application_component_names,
             ignore_unmatched_matchers,
@@ -404,17 +404,6 @@ async fn collect_manifest_targets_for_components_and_mode(
             &mut targets,
         )
         .await?;
-
-        if let Some(tool_targets) = sdk_targets.tools {
-            collect_sourced_tool_manifest_targets_for_entry(
-                ctx,
-                bridge_mode,
-                target_language,
-                tool_targets.sourced(),
-                &mut targets,
-            )
-            .await?;
-        }
     }
 
     if include_dependency_targets
@@ -524,71 +513,38 @@ async fn collect_agent_manifest_targets_for_entry(
     Ok(())
 }
 
-async fn collect_sourced_tool_manifest_targets_for_entry<'a>(
+fn collect_registry_tool_manifest_targets_for_entry(
     ctx: &BuildContext<'_>,
     bridge_mode: BridgeMode,
     target_language: GuestLanguage,
-    references: impl Iterator<Item = &'a crate::model::app_raw::SubjectReference>,
+    matchers: &mut BTreeSet<String>,
+    is_matching_all: bool,
     targets: &mut Vec<BridgeSdkTarget>,
 ) -> anyhow::Result<()> {
-    for reference in references {
-        let (source, tool) = match (&reference.source.local, &reference.source.registry) {
-            (Some(local), None) => {
-                let component_name = ComponentName::try_from(local.component.as_str())
-                    .map_err(anyhow::Error::msg)?;
-                if !ctx.application().contains_component(&component_name) {
-                    bail!(
-                        "Local bridge source component '{}' not found",
-                        local.component
-                    );
-                }
-                let tool = extract_and_store_component_metadata(ctx, &component_name)
-                    .await?
-                    .tools
-                    .into_iter()
-                    .find(|tool| tool.name() == Some(local.name.as_str()))
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Tool '{}' not found in local bridge source component '{}'",
-                            local.name,
-                            local.component,
-                        )
-                    })?;
-                (BridgeSdkTargetSource::local(component_name), tool)
-            }
-            (None, Some(registry)) => {
-                let grant = ctx.registry_tool_grant(registry).ok_or_else(|| {
-                    anyhow::anyhow!("Registry bridge source not found in the selected environment")
-                })?;
-                (
-                    BridgeSdkTargetSource::Registry {
-                        release_id: grant.release.id,
-                        version: grant.release.version.clone(),
-                        metadata_version: grant.release.metadata_version.clone(),
-                        metadata_digest: grant.release.metadata_digest,
-                        source_digest: grant.release.source_digest,
-                    },
-                    grant.release.definition.clone(),
-                )
-            }
-            _ => bail!("Bridge tool source must specify exactly one of local or registry"),
-        };
-
-        let name = tool
-            .name()
-            .ok_or_else(|| anyhow::anyhow!("Bridge tool definition has no root name"))?
-            .to_string();
-        if let Some(error) = BridgeSdkTargetKind::Tool.support_error(bridge_mode, target_language) {
-            bail!(error);
+    for (name, _) in ctx.application().registry_tool_references() {
+        if !is_matching_all && !matchers.remove(name.as_str()) {
+            continue;
         }
+        let grant = ctx.registry_tool_grant_by_name(name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Registry tool '{}' is not granted to the selected environment",
+                name
+            )
+        })?;
         targets.push(BridgeSdkTarget {
-            source,
-            subject: BridgeSdkTargetSubject::Tool(tool),
+            source: BridgeSdkTargetSource::Registry {
+                release_id: grant.release.id,
+                version: grant.release.version.clone(),
+                metadata_version: grant.release.metadata_version.clone(),
+                metadata_digest: grant.release.metadata_digest,
+                source_digest: grant.release.source_digest,
+            },
+            subject: BridgeSdkTargetSubject::Tool(grant.release.definition.clone()),
             target_language,
             bridge_mode,
             output_dir: ctx
                 .application()
-                .tool_bridge_sdk_dir(&name, target_language),
+                .tool_bridge_sdk_dir(name.as_str(), target_language),
         });
     }
     Ok(())
@@ -618,6 +574,14 @@ async fn collect_tool_manifest_targets_for_entry(
     }
 
     let is_matching_all = matchers.remove("*");
+    collect_registry_tool_manifest_targets_for_entry(
+        ctx,
+        bridge_mode,
+        target_language,
+        &mut matchers,
+        is_matching_all,
+        targets,
+    )?;
 
     for component_name in source_component_names {
         if skip_missing_sources
@@ -644,6 +608,12 @@ async fn collect_tool_manifest_targets_for_entry(
         let mut tools = extract_and_store_component_metadata(ctx, component_name)
             .await?
             .tools;
+
+        tools.retain(|tool| {
+            tool.name()
+                .and_then(|name| ToolName::try_from(name).ok())
+                .is_none_or(|name| ctx.application().registry_tool_reference(&name).is_none())
+        });
 
         if !is_matching_all && !is_matching_component {
             tools.retain(|tool| tool.name().is_some_and(|name| matchers.contains(name)));
@@ -746,7 +716,7 @@ async fn collect_dependency_guest_bridge_targets(
                 source: crate::model::app::SubjectSource::Local {
                     component_name: component_name.clone(),
                 },
-                tool_name: Some(tool_dependency_name),
+                tool_name: tool_dependency_name,
             };
             let target_languages = dependency_guest_bridge_target_languages(
                 ctx,
@@ -783,7 +753,7 @@ async fn collect_dependency_guest_bridge_targets(
             matches!(
                 dependency,
                 ComponentDependency::Tool {
-                    source: crate::model::app::SubjectSource::Registry { .. },
+                    source: crate::model::app::SubjectSource::Registry,
                     ..
                 }
             )
@@ -792,24 +762,18 @@ async fn collect_dependency_guest_bridge_targets(
 
     for dependency in registry_dependencies {
         let ComponentDependency::Tool {
-            source: crate::model::app::SubjectSource::Registry { reference },
+            source: crate::model::app::SubjectSource::Registry,
             tool_name,
         } = &dependency
         else {
             unreachable!()
         };
-        let grant = ctx.registry_tool_grant(reference).ok_or_else(|| {
-            anyhow::anyhow!("Registry tool dependency not found in the selected environment")
+        let grant = ctx.registry_tool_grant_by_name(tool_name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Registry tool dependency '{}' is not granted to the selected environment",
+                tool_name
+            )
         })?;
-        if let Some(expected_name) = tool_name
-            && expected_name != &grant.release.name
-        {
-            bail!(
-                "Registry tool dependency name '{}' does not match granted release name '{}'",
-                expected_name,
-                grant.release.name,
-            );
-        }
         for target_language in dependency_guest_bridge_target_languages(
             ctx,
             &dependency,
@@ -828,7 +792,7 @@ async fn collect_dependency_guest_bridge_targets(
                 bridge_mode: BridgeMode::Guest,
                 output_dir: ctx
                     .application()
-                    .dependency_tool_bridge_sdk_dir(grant.release.name.as_str(), target_language),
+                    .dependency_tool_bridge_sdk_dir(tool_name.as_str(), target_language),
             });
         }
     }
@@ -1271,7 +1235,7 @@ mod tests {
         };
         let tool_dependency = ComponentDependency::Tool {
             source: crate::model::app::SubjectSource::Local { component_name },
-            tool_name: Some(ToolName::try_from("tool").unwrap()),
+            tool_name: ToolName::try_from("tool").unwrap(),
         };
 
         for language in GuestLanguage::iter() {

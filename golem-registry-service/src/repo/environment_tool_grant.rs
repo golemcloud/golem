@@ -76,12 +76,21 @@ pub trait EnvironmentToolGrantRepo: Send + Sync {
         &self,
         grant_id: Uuid,
         actor: Uuid,
+        automatic_only: bool,
     ) -> Result<bool, EnvironmentToolGrantRepoError>;
+
+    async fn set_automatic(
+        &self,
+        grant_id: Uuid,
+        actor: Uuid,
+        automatic: bool,
+    ) -> Result<Option<EnvironmentToolGrantWithDetailsRecord>, EnvironmentToolGrantRepoError>;
 
     async fn restore(
         &self,
         grant_id: Uuid,
         actor: Uuid,
+        automatic: bool,
     ) -> Result<Option<EnvironmentToolGrantWithDetailsRecord>, EnvironmentToolGrantRepoError>;
 }
 
@@ -163,9 +172,22 @@ impl<Repo: EnvironmentToolGrantRepo> EnvironmentToolGrantRepo
         &self,
         grant_id: Uuid,
         actor: Uuid,
+        automatic_only: bool,
     ) -> Result<bool, EnvironmentToolGrantRepoError> {
         self.repo
-            .delete(grant_id, actor)
+            .delete(grant_id, actor, automatic_only)
+            .instrument(info_span!("environment tool grant repository", grant_id = %grant_id))
+            .await
+    }
+
+    async fn set_automatic(
+        &self,
+        grant_id: Uuid,
+        actor: Uuid,
+        automatic: bool,
+    ) -> Result<Option<EnvironmentToolGrantWithDetailsRecord>, EnvironmentToolGrantRepoError> {
+        self.repo
+            .set_automatic(grant_id, actor, automatic)
             .instrument(info_span!("environment tool grant repository", grant_id = %grant_id))
             .await
     }
@@ -174,9 +196,10 @@ impl<Repo: EnvironmentToolGrantRepo> EnvironmentToolGrantRepo
         &self,
         grant_id: Uuid,
         actor: Uuid,
+        automatic: bool,
     ) -> Result<Option<EnvironmentToolGrantWithDetailsRecord>, EnvironmentToolGrantRepoError> {
         self.repo
-            .restore(grant_id, actor)
+            .restore(grant_id, actor, automatic)
             .instrument(info_span!("environment tool grant repository", grant_id = %grant_id))
             .await
     }
@@ -211,7 +234,7 @@ impl<DBP: Pool> DbEnvironmentToolGrantRepo<DBP> {
 
 const GRANT_DETAILS_SELECT: &str = r#"
     SELECT
-        etg.environment_tool_grant_id, etg.environment_id, etg.protected,
+        etg.environment_tool_grant_id, etg.environment_id, etg.protected, etg.automatic,
         etg.lifecycle AS grant_lifecycle,
         etg.created_at AS grant_created_at, etg.created_by AS grant_created_by,
         etg.state_changed_at AS grant_state_changed_at,
@@ -260,15 +283,16 @@ impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
                         sqlx::query(indoc! { r#"
                             INSERT INTO environment_tool_grants (
                                 environment_tool_grant_id, environment_id, tool_release_id,
-                                protected, lifecycle, created_at, created_by,
+                                protected, automatic, lifecycle, created_at, created_by,
                                 state_changed_at, state_changed_by, deleted_at, deleted_by
                             )
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, NULL)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, NULL)
                         "#})
                         .bind(record.environment_tool_grant_id)
                         .bind(record.environment_id)
                         .bind(record.tool_release_id)
                         .bind(record.protected)
+                        .bind(record.automatic)
                         .bind(record.lifecycle)
                         .bind(record.created_at)
                         .bind(record.created_by)
@@ -367,6 +391,7 @@ impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
         &self,
         grant_id: Uuid,
         actor: Uuid,
+        automatic_only: bool,
     ) -> Result<bool, EnvironmentToolGrantRepoError> {
         let result = self
             .with_rw("delete")
@@ -378,22 +403,64 @@ impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
                     WHERE environment_tool_grant_id = $1
                         AND lifecycle = $5
                         AND NOT protected
+                        AND (NOT $6 OR automatic)
                     RETURNING environment_tool_grant_id
                 "#})
                 .bind(grant_id)
                 .bind(ENVIRONMENT_TOOL_GRANT_LIFECYCLE_DELETED)
                 .bind(SqlDateTime::now())
                 .bind(actor)
-                .bind(ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE),
+                .bind(ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE)
+                .bind(automatic_only),
             )
             .await?;
         Ok(result.is_some())
+    }
+
+    async fn set_automatic(
+        &self,
+        grant_id: Uuid,
+        actor: Uuid,
+        automatic: bool,
+    ) -> Result<Option<EnvironmentToolGrantWithDetailsRecord>, EnvironmentToolGrantRepoError> {
+        self.db_pool
+            .with_tx_err(METRICS_SVC_NAME, "set_automatic", |tx| {
+                async move {
+                    let updated = tx
+                        .execute(
+                            sqlx::query(indoc! { r#"
+                                UPDATE environment_tool_grants
+                                SET automatic = $2, state_changed_at = $3, state_changed_by = $4
+                                WHERE environment_tool_grant_id = $1
+                                    AND lifecycle = $5
+                                    AND NOT protected
+                            "#})
+                            .bind(grant_id)
+                            .bind(automatic)
+                            .bind(SqlDateTime::now())
+                            .bind(actor)
+                            .bind(ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE),
+                        )
+                        .await?;
+                    if updated.rows_affected() != 1 {
+                        return Ok(None);
+                    }
+                    let query =
+                        format!("{GRANT_DETAILS_SELECT} WHERE etg.environment_tool_grant_id = $1");
+                    Ok(tx
+                        .fetch_optional_as(sqlx::query_as(&query).bind(grant_id))
+                        .await?)
+                }
+                .boxed()
+            })
+            .await
     }
 
     async fn restore(
         &self,
         grant_id: Uuid,
         actor: Uuid,
+        automatic: bool,
     ) -> Result<Option<EnvironmentToolGrantWithDetailsRecord>, EnvironmentToolGrantRepoError> {
         self.db_pool
             .with_tx_err(METRICS_SVC_NAME, "restore", |tx| {
@@ -420,15 +487,16 @@ impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
                             sqlx::query(indoc! { r#"
                                 UPDATE environment_tool_grants
                                 SET lifecycle = $2, state_changed_at = $3, state_changed_by = $4,
-                                    deleted_at = NULL, deleted_by = NULL
+                                    automatic = $5, deleted_at = NULL, deleted_by = NULL
                                 WHERE environment_tool_grant_id = $1
-                                    AND lifecycle = $5
+                                    AND lifecycle = $6
                                     AND NOT protected
                             "#})
                             .bind(grant_id)
                             .bind(ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE)
                             .bind(SqlDateTime::now())
                             .bind(actor)
+                            .bind(automatic)
                             .bind(ENVIRONMENT_TOOL_GRANT_LIFECYCLE_DELETED),
                         )
                         .await?;

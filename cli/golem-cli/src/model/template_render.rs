@@ -119,9 +119,6 @@ impl<C: Serialize> TemplateRender<C> for app_raw::ComponentDependencyReference {
             app_raw::ComponentDependencyReference::LocalAlias(structured) => Ok(
                 app_raw::ComponentDependencyReference::LocalAlias(structured.render(env, ctx)?),
             ),
-            app_raw::ComponentDependencyReference::Sourced(reference) => Ok(
-                app_raw::ComponentDependencyReference::Sourced(reference.render(env, ctx)?),
-            ),
         }
     }
 }
@@ -129,32 +126,6 @@ impl<C: Serialize> TemplateRender<C> for app_raw::ComponentDependencyReference {
 impl<C: Serialize> TemplateRender<C> for app_raw::ComponentDependencyReferenceStruct {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(app_raw::ComponentDependencyReferenceStruct {
-            component: self.component.render(env, ctx)?,
-            name: self.name.render(env, ctx)?,
-        })
-    }
-}
-
-impl<C: Serialize> TemplateRender<C> for app_raw::SubjectReference {
-    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
-        Ok(app_raw::SubjectReference {
-            source: self.source.render(env, ctx)?,
-        })
-    }
-}
-
-impl<C: Serialize> TemplateRender<C> for app_raw::SubjectSource {
-    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
-        Ok(app_raw::SubjectSource {
-            local: self.local.render(env, ctx)?,
-            registry: self.registry.render(env, ctx)?,
-        })
-    }
-}
-
-impl<C: Serialize> TemplateRender<C> for app_raw::LocalSubject {
-    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
-        Ok(app_raw::LocalSubject {
             component: self.component.render(env, ctx)?,
             name: self.name.render(env, ctx)?,
         })

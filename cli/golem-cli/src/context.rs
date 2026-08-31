@@ -1039,7 +1039,6 @@ mod test {
                 tools_merge_mode: None,
                 tools: None,
                 publish_tools: Default::default(),
-                tool_grants: Default::default(),
             },
         }
     }

@@ -179,7 +179,7 @@ environments:
       search: {}
 ```
 
-A release is not globally visible. A consumer admits an exact release to one environment with `toolGrants`, selects that release with `tools.<name>.source.registry`, and owns the provision configuration and bindings used by its deployment:
+A release is not globally visible. A consumer selects an exact release once with `tools.<name>.source.registry` and owns the provision configuration and bindings used by its deployment. Referencing the release is explicit consent for Golem to create the environment grant required by the deployment:
 
 ```yaml
 tools:
@@ -197,12 +197,6 @@ tools:
 environments:
   production:
     server: cloud
-    toolGrants:
-      - source:
-          registry:
-            account: publisher@example.com
-            name: search
-            version: "1.2.0"
     tools:
       search:
         secretKeysReadable:
@@ -214,9 +208,9 @@ agents:
       search: {}
 ```
 
-Registry subjects can use `releaseId` instead of the `account`, `name`, and `version` coordinate. Both forms resolve an exact immutable release. `toolGrants` is the desired set of ordinary grants for the environment: setup creates missing grants and removes omitted ones without changing protected system grants.
+Registry subjects can use `releaseId` instead of the `account`, `name`, and `version` coordinate. Both forms resolve an exact immutable release. Deployment planning shows the automatic grant changes implied by registry-backed tool declarations. Deployment creates missing grants before reading registry metadata or building bridge clients, and removes obsolete automatically managed grants. Protected system grants and grants created separately by an administrator are retained. The deploy actor must have permission to make the planned grant changes.
 
-Remote release upgrades are explicit. Publishing a newer release does not move an existing consumer deployment. Granting and selecting the new release creates a new deployment snapshot. Removing a grant or de-publishing a release prevents new deployments from selecting it, but existing deployment snapshots and historical replay continue to use their pinned source. De-publication also removes ordinary active grants; restoring the release does not restore those grants.
+Remote release upgrades are explicit. Publishing a newer release does not move an existing consumer deployment. Selecting the new release creates a new deployment snapshot and reconciles its grant. Removing the registry-backed declaration or de-publishing a release prevents new deployments from selecting it, but existing deployment snapshots and historical replay continue to use their pinned source. De-publication also removes ordinary active grants; restoring the release does not restore those grants.
 
 Runtime discovery and admission use the consumer deployment snapshot and the caller's environment policy. GOL-28 stops at the admitted component dispatch boundary; actual component-sidecar invocation is not implemented by this work. Executor-native Host tool dispatch is owned separately by GOL-24.
 
@@ -231,21 +225,16 @@ bridge:
       tools: [search]
 ```
 
-Registry-backed bridge generation uses the same exact source reference as deployment and requires an active grant in the selected environment:
+Registry-backed bridge generation refers to the logical name. The exact source is resolved from the canonical declaration under `tools`:
 
 ```yaml
 bridge:
   rust:
     internal:
-      tools:
-        - source:
-            registry:
-              account: publisher@example.com
-              name: search
-              version: "1.2.0"
+      tools: [search]
 ```
 
-The generator reads only the release's safe tool definition and metadata digest. It does not require the publisher's WASM or permission to inspect the publisher component. Release identity and metadata digest are included in generation cache markers, so changing the selected release invalidates generated output. An ungranted registry subject is reported as not found.
+The generator reads only the release's safe tool definition and metadata digest. It does not require the publisher's WASM or permission to inspect the publisher component. Release identity and metadata digest are included in generation cache markers, so changing the selected release invalidates generated output. A missing grant is planned and created before metadata access; planning fails clearly when the deploy actor lacks permission to reconcile the grant.
 
 <Fields>
   ## Field reference
@@ -587,12 +576,6 @@ The generator reads only the release's safe tool definition and metadata digest.
     path: "environments.<environment-name>.publishTools",
   }}>
     ***Optional map of local tool names*** to publish as immutable grantable releases when this environment is deployed. Each value is an empty object. Publication pins the exact source and metadata of the deployed local tool.
-  </Field>
-
-  <Field meta={{
-    path: "environments.<environment-name>.toolGrants",
-  }}>
-    ***Optional desired list of ordinary tool grants*** for this environment. Each entry selects an exact registry release by `releaseId` or by `account`, `name`, and `version` under `source.registry`. Omitted ordinary grants are removed; protected system grants are unaffected.
   </Field>
 
   <Field meta={{
@@ -1603,13 +1586,13 @@ The generator reads only the release's safe tool definition and metadata digest.
   <Field meta={{
     path: "tools",
   }}>
-    ***Optional map of tool declarations*** indexed by the tool's lower-kebab-case root name. A declaration either matches a locally discovered implementation or selects an exact granted release with `source.registry`. Provision fields such as `config`, `env`, `plugins`, and `files` belong to the consuming deployment.
+    ***Optional map of canonical tool declarations*** indexed by the tool's lower-kebab-case logical name. A declaration either matches a locally discovered implementation or selects an exact registry release with `source.registry`. Source coordinates are specified only here; agents, component dependencies, bridge generation, and other consumers refer to the logical name. Provision fields such as `config`, `env`, `plugins`, and `files` belong to the consuming deployment.
   </Field>
 
   <Field meta={{
     path: "tools.<tool-name>.source.registry",
   }}>
-    ***Optional exact registry release source***. Specify either `releaseId` or all of `account`, `name`, and `version`. The selected environment must have an active grant for the release. Omit `source` for a locally implemented tool.
+    ***Optional exact registry release source***. Specify either `releaseId` or all of `account`, `name`, and `version`. Referencing the release authorizes Golem to reconcile its automatically managed environment grant; planned changes remain visible during deployment. Omit `source` for a locally implemented tool.
   </Field>
 
   <Field meta={{
@@ -1664,7 +1647,7 @@ The generator reads only the release's safe tool definition and metadata digest.
   <Field meta={{
     path: "bridge.<language>.internal.tools",
   }}>
-    ***Optional local tool aliases or exact sourced tool references*** for generated guest bridge clients. A sourced reference uses either `source.local` with `component` and `name`, or `source.registry` with an exact release ID or coordinate. Registry sources require an active grant in the selected environment.
+    ***Optional logical tool names, local component matchers, or `"*"`*** for generated guest bridge clients. Registry release coordinates are resolved from the corresponding declaration under `tools` and cannot be repeated here.
   </Field>
 
   <Field meta={{

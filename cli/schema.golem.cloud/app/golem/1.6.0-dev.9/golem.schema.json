@@ -44,7 +44,7 @@
     },
     "tools": {
       "type": "object",
-      "description": "Tool declarations by tool name. Bindings remain independent of the implementation source.",
+      "description": "Canonical tool declarations by logical tool name. Registry source coordinates are specified only here; all consumers refer to the logical name.",
       "propertyNames": {
         "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
       },
@@ -189,7 +189,7 @@
           }
         },
         "tools": {
-          "description": "Tool guest bridge dependencies. Each entry identifies both provider component and tool name, either as 'component/name' or as { component, name }.",
+          "description": "Tool guest bridge dependencies. A registry tool is referenced by its logical name from tools; a local tool identifies both provider component and tool name as 'component/name' or { component, name }.",
           "type": "array",
           "items": {
             "$ref": "#/definitions/componentDependencyReference"
@@ -775,7 +775,7 @@
       }
     },
     "toolDeclaration": {
-      "description": "Source and consumer-owned provision properties for a tool. Omit source for a local implementation or select an exact granted registry release.",
+      "description": "Canonical source and consumer-owned provision properties for a tool. Omit source for a local implementation or select an exact registry release. Deploy automatically reconciles the required environment grant.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -1135,13 +1135,6 @@
           "additionalProperties": {
             "type": "object",
             "maxProperties": 0
-          }
-        },
-        "toolGrants": {
-          "type": "array",
-          "description": "Desired ordinary grants for this environment. Omitted grants are removed; protected system grants are unaffected.",
-          "items": {
-            "$ref": "#/definitions/registrySubjectReference"
           }
         }
       }
@@ -1716,25 +1709,8 @@
           "type": "string"
         },
         "tools": {
-          "description": "Local tool/component matchers or exact registry tool references. Local string aliases and comma-separated strings remain supported.",
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "$ref": "#/definitions/subjectReference"
-                  }
-                ]
-              }
-            }
-          ]
+          "description": "Logical tool names, local component matchers, or \"*\". Registry sources are resolved from the canonical declarations under tools.",
+          "$ref": "#/definitions/lenientTokenList"
         }
       }
     },
@@ -2568,61 +2544,14 @@
         }
       }
     },
-    "subjectSource": {
-      "oneOf": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "local"
-          ],
-          "properties": {
-            "local": {
-              "$ref": "#/definitions/localSubject"
-            }
-          }
-        },
-        {
-          "$ref": "#/definitions/registrySource"
-        }
-      ]
-    },
-    "subjectReference": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "source"
-      ],
-      "properties": {
-        "source": {
-          "$ref": "#/definitions/subjectSource"
-        }
-      }
-    },
-    "registrySubjectReference": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "source"
-      ],
-      "properties": {
-        "source": {
-          "$ref": "#/definitions/registrySource"
-        }
-      }
-    },
     "componentDependencyReference": {
-      "description": "A guest bridge dependency reference. Existing 'component/name' and {component, name} local aliases are preserved; canonical references use source.local or source.registry.",
+      "description": "A guest bridge dependency reference. Registry tools use their logical tool name; local agents and tools use 'component/name' or {component, name}.",
       "oneOf": [
         {
-          "type": "string",
-          "pattern": "^.+/.+$"
+          "type": "string"
         },
         {
           "$ref": "#/definitions/localSubject"
-        },
-        {
-          "$ref": "#/definitions/subjectReference"
         }
       ]
     }
