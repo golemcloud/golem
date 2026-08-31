@@ -69,7 +69,10 @@ pub trait SchedulerWorkerAccess {
         owned_agent_id: &OwnedAgentId,
     ) -> Option<AgentFingerprint>;
 
-    async fn activate_worker(&self, owned_agent_id: &OwnedAgentId);
+    async fn activate_worker(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError>;
     async fn open_oplog(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -92,8 +95,11 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         self.deref().active_worker_fingerprint(owned_agent_id).await
     }
 
-    async fn activate_worker(&self, owned_agent_id: &OwnedAgentId) {
-        self.deref().activate_worker(owned_agent_id).await;
+    async fn activate_worker(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError> {
+        self.deref().activate_worker(owned_agent_id).await
     }
 
     async fn open_oplog(
@@ -466,10 +472,23 @@ impl SchedulerServiceDefault {
                                 agent_id = %owned_agent_id.agent_id
                             );
 
-                            self.worker_access
+                            // The promise is completed either way, but a worker that was not woken
+                            // stays suspended on it. Fail the action so it is claimed again rather
+                            // than acknowledging a wakeup that did not happen; completing an
+                            // already-completed promise on the retry is a no-op.
+                            if let Err(error) = self
+                                .worker_access
                                 .activate_worker(&owned_agent_id)
                                 .instrument(span)
-                                .await;
+                                .await
+                            {
+                                error!(
+                                    agent_id = owned_agent_id.to_string(),
+                                    promise_id = promise_id.to_string(),
+                                    "Failed to activate worker after completing its promise: {error}"
+                                );
+                                return false;
+                            }
                         }
 
                         record_scheduled_promise_completed();
@@ -630,7 +649,16 @@ impl SchedulerServiceDefault {
                 agent_created_by: _,
                 owned_agent_id,
             } => {
-                self.worker_access.activate_worker(&owned_agent_id).await;
+                // Acknowledging a resume that did not happen deletes the only thing left that
+                // would have woken the agent, leaving it suspended indefinitely. Fail the action
+                // instead, so the lease expires and it is claimed again.
+                if let Err(error) = self.worker_access.activate_worker(&owned_agent_id).await {
+                    error!(
+                        agent_id = owned_agent_id.to_string(),
+                        "Failed to resume worker: {error}"
+                    );
+                    return false;
+                }
                 true
             }
         }
@@ -739,7 +767,12 @@ mod tests {
             None
         }
 
-        async fn activate_worker(&self, _owned_agent_id: &OwnedAgentId) {}
+        async fn activate_worker(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
 
         async fn open_oplog(
             &self,
@@ -771,7 +804,12 @@ mod tests {
             Some(self.fingerprint)
         }
 
-        async fn activate_worker(&self, _owned_agent_id: &OwnedAgentId) {}
+        async fn activate_worker(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
 
         async fn open_oplog(
             &self,
@@ -790,6 +828,43 @@ mod tests {
         }
     }
 
+    struct FailingActivationWorkerAccess {
+        attempts: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl SchedulerWorkerAccess for FailingActivationWorkerAccess {
+        async fn active_worker_fingerprint(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Option<AgentFingerprint> {
+            None
+        }
+
+        async fn activate_worker(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<(), WorkerExecutorError> {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            Err(WorkerExecutorError::runtime("injected activation failure"))
+        }
+
+        async fn open_oplog(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            unimplemented!()
+        }
+
+        async fn enqueue_invocation(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _invocation: AgentInvocation,
+        ) -> Result<(), WorkerExecutorError> {
+            unimplemented!()
+        }
+    }
+
     struct DelayedActiveWorkerAccessMock {
         fingerprint: AgentFingerprint,
         in_flight: Arc<AtomicUsize>,
@@ -805,7 +880,12 @@ mod tests {
             Some(self.fingerprint)
         }
 
-        async fn activate_worker(&self, _owned_agent_id: &OwnedAgentId) {}
+        async fn activate_worker(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
 
         async fn open_oplog(
             &self,
@@ -1007,11 +1087,36 @@ mod tests {
         scheduler_storage: Arc<dyn SchedulerStorage + Send + Sync>,
         promise_service: Arc<PromiseServiceMock>,
     ) -> Arc<SchedulerServiceDefault> {
+        create_scheduler_with(
+            scheduler_storage,
+            promise_service,
+            create_worker_access_mock(),
+        )
+        .await
+    }
+
+    async fn create_scheduler_with_worker_access(
+        scheduler_storage: Arc<dyn SchedulerStorage + Send + Sync>,
+        worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
+    ) -> Arc<SchedulerServiceDefault> {
+        create_scheduler_with(
+            scheduler_storage,
+            create_promise_service_mock(),
+            worker_access,
+        )
+        .await
+    }
+
+    async fn create_scheduler_with(
+        scheduler_storage: Arc<dyn SchedulerStorage + Send + Sync>,
+        promise_service: Arc<PromiseServiceMock>,
+        worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
+    ) -> Arc<SchedulerServiceDefault> {
         SchedulerServiceDefault::new(
             scheduler_storage,
             create_shard_service_mock(),
             promise_service,
-            create_worker_access_mock(),
+            worker_access,
             create_oplog_service_mock().await,
             create_worker_service_mock(),
             Duration::from_secs(1000),
@@ -1022,6 +1127,27 @@ mod tests {
             64,
             CancellationToken::new(),
         )
+    }
+
+    /// Claims everything due at `now`, which for an action left unacknowledged by a previous tick
+    /// means its lease has expired and it is offered again.
+    async fn claim_all(
+        storage: &Arc<InMemorySchedulerStorage>,
+        now: &str,
+    ) -> Vec<ClaimedScheduledAction> {
+        let assignment = ShardAssignment {
+            number_of_shards: 1,
+            shard_ids: HashSet::from_iter([ShardId::new(0)]),
+        };
+        storage
+            .claim_due(
+                DateTime::from_str(now).unwrap(),
+                &assignment,
+                10,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap()
     }
 
     fn promise(agent_id: AgentId, idx: u64) -> PromiseId {
@@ -1162,7 +1288,12 @@ mod tests {
             Some(self.fingerprint)
         }
 
-        async fn activate_worker(&self, _owned_agent_id: &OwnedAgentId) {}
+        async fn activate_worker(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
 
         async fn open_oplog(
             &self,
@@ -1369,6 +1500,92 @@ mod tests {
             .unwrap();
 
         assert_eq!(enqueue_count.load(Ordering::SeqCst), 1);
+    }
+
+    /// Nothing else wakes an agent whose resume was already acknowledged, so an activation that
+    /// failed must leave the action in place to be claimed again.
+    #[test]
+    async fn failed_resume_is_not_acknowledged() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+            Arc::new(FailingActivationWorkerAccess {
+                attempts: attempts.clone(),
+            });
+        let svc = create_scheduler_with_worker_access(storage.clone(), worker_access).await;
+
+        let schedule_id = svc
+            .schedule(
+                DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+                ScheduledAction::Resume {
+                    agent_created_by: AccountId::new(),
+                    owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("inst1")),
+                },
+            )
+            .await;
+
+        svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+            .await
+            .unwrap();
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+
+        let claimed = claim_all(&storage, "2023-07-17T10:16:00Z").await;
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].schedule_id, schedule_id);
+    }
+
+    /// The counterpart: a resume that did activate its worker is acknowledged and gone.
+    #[test]
+    async fn successful_resume_is_acknowledged() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let svc =
+            create_scheduler_with_worker_access(storage.clone(), create_worker_access_mock()).await;
+
+        svc.schedule(
+            DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+            ScheduledAction::Resume {
+                agent_created_by: AccountId::new(),
+                owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("inst1")),
+            },
+        )
+        .await;
+
+        svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+            .await
+            .unwrap();
+
+        assert!(claim_all(&storage, "2023-07-17T10:16:00Z").await.is_empty());
+    }
+
+    /// Completing the promise is only half of the action: an agent that was not woken is still
+    /// suspended on it, so a failed activation keeps the action claimable. The retry re-completes
+    /// the (already completed) promise, which is a no-op.
+    #[test]
+    async fn failed_activation_after_promise_completion_is_not_acknowledged() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
+            Arc::new(FailingActivationWorkerAccess {
+                attempts: attempts.clone(),
+            });
+        let promise_service = create_promise_service_mock();
+        let svc =
+            create_scheduler_with(storage.clone(), promise_service.clone(), worker_access).await;
+
+        let promise_id = promise(agent("inst1"), 101);
+        svc.schedule(
+            DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+            complete_promise_action(promise_id.clone()),
+        )
+        .await;
+
+        svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+            .await
+            .unwrap();
+
+        assert!(promise_service.all_completed().await.contains(&promise_id));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(claim_all(&storage, "2023-07-17T10:16:00Z").await.len(), 1);
     }
 
     #[test]
