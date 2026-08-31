@@ -94,6 +94,19 @@ function remoteClientTypeChecks(): void {
   void ephemeralMetadata;
   void ephemeralReceipt;
 
+  const exactEphemeralContract = defineAgentClient({
+    name: 'ExactEphemeralClientTypeChecks',
+    mode: 'ephemeral',
+    id: { name: z.string() },
+    methods: { ping: method({ input: {}, returns: z.string() }) },
+  });
+  const exactEphemeralClient = exactEphemeralContract.client.newPhantom({ name: 'counter' });
+  void exactEphemeralClient.ping().then(({ metadata, value }) => ({
+    agentId: metadata.agentId,
+    idempotencyKey: metadata.idempotencyKey,
+    value,
+  }));
+
   const sharedContract = defineAgentClient({
     methods: { ping: method({ input: {}, returns: z.string() }) },
   });
@@ -617,6 +630,28 @@ describe('RPC client', () => {
     expect(contract).not.toHaveProperty('mode');
   });
 
+  it('binds a method-only contract to a durable phantom identity without discovery', () => {
+    const contract = defineAgentClient({
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const phantomId = new Uuid(1n, 2n);
+    const target = AgentId.from({
+      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
+      agentId: 'DurablePhantom(one)[00000000-0000-0001-0000-000000000002]',
+    });
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'DurablePhantom',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.string('one')])),
+      },
+      phantomId,
+    ]);
+
+    expect(target.client(contract).ping).toBeTypeOf('function');
+    expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![2]).toBe(phantomId);
+  });
+
   it('rejects lifecycle fields on partial JavaScript binding contracts', () => {
     expect(() =>
       defineAgentClient({
@@ -813,7 +848,7 @@ describe('RPC client', () => {
   });
 
   it('uses one logical client for ephemeral invocations and returns final identity metadata', async () => {
-    const ephemeralDef = defineAgent({
+    const ephemeralDef = defineAgentClient({
       name: 'EphemeralClientTestAgent',
       mode: 'ephemeral',
       id: { name: z.string() },
@@ -821,7 +856,7 @@ describe('RPC client', () => {
     });
     const makeAgentIdCalls = vi.mocked(makeAgentId).mock.calls.length;
     const client = ephemeralDef.client.newPhantom({ name: 'counter' });
-    const rpc = latestRpc();
+    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
     const metadata = { agentId: 'final-agent-id', idempotencyKey: 'key' };
     const future = {
       subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
@@ -836,7 +871,7 @@ describe('RPC client', () => {
     await expect(client.ping()).resolves.toEqual({ metadata, value: undefined });
     expect(client.ping.trigger()).toBe(metadata);
     expect(client.ping.schedule({ seconds: 1n, nanoseconds: 0 })).toBe(receipt);
-    expect(vi.mocked(WasmRpc).mock.calls.at(-1)![2]).toBeUndefined();
+    expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![2]).toBeUndefined();
     expect(vi.mocked(makeAgentId).mock.calls).toHaveLength(makeAgentIdCalls);
   });
 

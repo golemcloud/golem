@@ -31,3 +31,23 @@ const contract = defineAgentClient({
 });
 id.client(contract).ping({ message: 'hello' });
 id.dynamicClient().method('ping').invokeValue(v.record([]));
+
+const ephemeralContract = defineAgentClient({
+  name: 'EphemeralExampleAgent',
+  mode: 'ephemeral',
+  id: { name: z.string() },
+  methods: { ping: method({ input: {}, returns: z.string() }) },
+});
+ephemeralContract.client
+  .newPhantom({ name: 'example' })
+  .ping()
+  .then(({ metadata, value }) => {
+    metadata.agentId satisfies string;
+    metadata.idempotencyKey satisfies string;
+    value satisfies string;
+  });
+
+// @ts-expect-error lifecycle mode requires a complete exact name + id definition
+defineAgentClient({ mode: 'ephemeral', methods: contract.methods });
+// @ts-expect-error name-only binding contracts are lifecycle-free
+defineAgentClient({ name: 'NamedContract', mode: 'durable', methods: contract.methods });

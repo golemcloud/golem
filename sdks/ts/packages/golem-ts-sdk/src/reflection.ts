@@ -138,7 +138,6 @@ export class AgentType {
         [],
         this.mode,
       ),
-      agentId,
     );
   }
 }
@@ -181,15 +180,14 @@ export class ReflectedAgentClientFactory {
     return {
       agentId,
       phantomId,
-      client: this.create(input, phantomId, agentId),
+      client: this.create(input, phantomId),
     };
   }
 
-  private create(input: SchemaValue, phantomId?: Uuid, agentId?: AgentId): ReflectedAgentClient {
+  private create(input: SchemaValue, phantomId?: Uuid): ReflectedAgentClient {
     return new ReflectedAgentClient(
       this.agentType,
       resolveRemoteAgentFallibly(this.agentType.name, input, phantomId, [], this.agentType.mode),
-      agentId ?? this.agentType.agentIdValue(input, phantomId),
     );
   }
 
@@ -201,15 +199,10 @@ export class ReflectedAgentClientFactory {
 }
 
 export class ReflectedAgentClient {
-  readonly agentId: AgentId;
-
   constructor(
     private readonly agentType: AgentType,
     private readonly remote: RemoteAgentHandle,
-    agentId: AgentId,
-  ) {
-    this.agentId = agentId;
-  }
+  ) {}
 
   method(name: string): ReflectedAgentMethod {
     const method = this.agentType.method(name);

@@ -1,12 +1,15 @@
 import { z } from 'zod';
 import {
+    AgentId,
     defineAgent,
+    defineAgentClient,
+    isRemoteCallError,
     method,
     s,
     createPromise,
     awaitPromise,
 } from '@golemcloud/golem-ts-sdk';
-import type { PromiseId } from 'golem:api/host@1.5.0';
+import { getSelfMetadata, type PromiseId } from 'golem:api/host@1.5.0';
 import * as process from 'node:process';
 
 const EnvVar = z.object({ key: z.string(), value: z.string() });
@@ -52,6 +55,39 @@ export const ChildAgentImpl = ChildAgent.implement({
     },
 });
 
+const EphemeralReuseReport = z.object({
+    value: z.string(),
+    agentId: z.string(),
+    idempotencyKey: z.string(),
+    category: z.string(),
+    errorTag: z.string(),
+    details: z.string(),
+});
+
+export const EphemeralSingleUseAgent = defineAgent({
+    name: 'EphemeralSingleUseAgent',
+    mode: 'ephemeral',
+    id: { value: z.string() },
+    methods: {
+        capture: method({ input: {}, returns: z.string() }),
+    },
+});
+
+export const EphemeralSingleUseAgentImpl = EphemeralSingleUseAgent.implement({
+    init: ({ id }) => ({ value: id.value }),
+    methods: {
+        capture() {
+            return this.value;
+        },
+    },
+});
+
+const EphemeralReuseContract = defineAgentClient({
+    methods: {
+        capture: method({ input: {}, returns: z.string() }),
+    },
+});
+
 export const TestAgent = defineAgent({
     name: 'TestAgent',
     id: { id: z.string() },
@@ -62,6 +98,7 @@ export const TestAgent = defineAgent({
             returns: z.object({ parent: z.array(EnvVar), child: z.array(EnvVar) }),
         }),
         longRpcCall: method({ input: { durationInMillis: z.number() }, returns: z.void() }),
+        ephemeralReuseTest: method({ input: {}, returns: EphemeralReuseReport }),
     },
 });
 
@@ -90,6 +127,36 @@ export const TestAgentImpl = TestAgent.implement({
         },
         async longRpcCall({ durationInMillis }) {
             await ChildAgent.client.get({ id: 1000 }).longRpcCall({ durationInMillis });
+        },
+        async ephemeralReuseTest() {
+            const first = await EphemeralSingleUseAgent.client
+                .newPhantom({ value: 'captured' })
+                .capture();
+            const finalAgentId = AgentId.from({
+                componentId: getSelfMetadata().agentId.componentId,
+                agentId: first.metadata.agentId,
+            });
+
+            try {
+                await finalAgentId.client(EphemeralReuseContract).capture();
+                throw new Error('ephemeral agent identity was unexpectedly reusable');
+            } catch (error) {
+                if (!isRemoteCallError(error)) throw error;
+                if (error.cause.tag !== 'remote-agent-error') {
+                    throw new Error(`expected remote-agent-error, got ${error.cause.tag}`);
+                }
+                if (error.cause.error.tag === 'custom-error') {
+                    throw new Error('expected a structured invalid-input error');
+                }
+                return {
+                    value: first.value,
+                    agentId: first.metadata.agentId,
+                    idempotencyKey: first.metadata.idempotencyKey,
+                    category: error.cause.tag,
+                    errorTag: error.cause.error.tag,
+                    details: error.cause.error.details,
+                };
+            }
         },
     },
 });

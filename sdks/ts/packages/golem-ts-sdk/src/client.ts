@@ -200,10 +200,16 @@ export function defineAgentClient<
   Id extends IdRecord,
   Methods extends MethodsRecord,
   Config extends ConfigSpec = {},
-  Mode extends 'durable' | 'ephemeral' = 'durable',
 >(
-  spec: AgentClientSpec<Id, Methods, Config, Mode>,
-): AgentClientDefinition<Id, Methods, Config, Mode>;
+  spec: AgentClientSpec<Id, Methods, Config, 'ephemeral'>,
+): AgentClientDefinition<Id, Methods, Config, 'ephemeral'>;
+export function defineAgentClient<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+>(
+  spec: AgentClientSpec<Id, Methods, Config, 'durable'>,
+): AgentClientDefinition<Id, Methods, Config, 'durable'>;
 export function defineAgentClient<Methods extends MethodsRecord>(
   spec: AgentClientBindingSpec<Methods>,
 ): AgentClientBindingDefinition<Methods>;

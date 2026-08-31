@@ -2880,6 +2880,65 @@ async fn ts_abort_after_complete_is_noop(
     Ok(())
 }
 
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn ts_ephemeral_final_identity_cannot_be_reused(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+    let agent_id = agent_id!("TestAgent", "ts_ephemeral_final_identity_cannot_be_reused");
+
+    let report = executor
+        .invoke_and_await_agent(&component, &agent_id, "ephemeralReuseTest", data_value!())
+        .await?
+        .into_return_value()
+        .expect("expected an ephemeral reuse report");
+    let SchemaValue::Record { fields } = report else {
+        panic!("expected an ephemeral reuse report record");
+    };
+    let [
+        value,
+        final_agent_id,
+        idempotency_key,
+        category,
+        error_tag,
+        details,
+    ] = fields.as_slice()
+    else {
+        panic!("expected six fields in the ephemeral reuse report");
+    };
+
+    assert_eq!(value, &SchemaValue::String("captured".to_string()));
+    assert!(
+        matches!(final_agent_id, SchemaValue::String(value) if !value.is_empty()),
+        "final ephemeral agent ID must be non-empty"
+    );
+    assert!(
+        matches!(idempotency_key, SchemaValue::String(value) if !value.is_empty()),
+        "ephemeral invocation idempotency key must be non-empty"
+    );
+    assert_eq!(
+        category,
+        &SchemaValue::String("remote-agent-error".to_string())
+    );
+    assert_eq!(error_tag, &SchemaValue::String("invalid-input".to_string()));
+    assert!(
+        matches!(details, SchemaValue::String(value) if value.contains("An ephemeral agent cannot accept another invocation or be resumed")),
+        "unexpected ephemeral reuse details: {details:?}"
+    );
+
+    Ok(())
+}
+
 fn extract_oplog_idx_from_promise_id(promise_id_value: &SchemaValue) -> OplogIndex {
     let SchemaValue::Record { fields } = promise_id_value else {
         panic!("Expected a record for PromiseId");

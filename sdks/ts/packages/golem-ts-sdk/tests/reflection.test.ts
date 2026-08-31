@@ -193,7 +193,7 @@ describe('agent reflection', () => {
 
     const client = agentId.client(reflected);
 
-    expect(client.agentId).toBe(agentId);
+    expect(client).not.toHaveProperty('agentId');
     expect(client.method('echo').definition.name).toBe('echo');
   });
 
@@ -238,19 +238,31 @@ describe('agent reflection', () => {
     }
   });
 
-  it('supports known and new phantom clients for ephemeral reflected types', () => {
+  it('returns invocation metadata without synthetic identity for ephemeral reflected clients', async () => {
     vi.mocked(hostGetAgentType).mockReturnValueOnce(registeredType('ephemeral'));
     const reflected = getAgentType('ReflectedEcho')!;
     const phantomId = new Uuid(1n, 2n);
     const known = reflected.client.getPhantom({ id: 'one' }, phantomId);
     const fresh = reflected.client.newPhantom({ id: 'two' });
+    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
+    rpc.asyncInvokeAndAwait.mockReturnValue({
+      metadata: { agentId: 'ReflectedEcho(two)[final]', idempotencyKey: 'key' },
+      future: {
+        get: vi.fn().mockResolvedValue(schemaValueToWit(v.string('hello'))),
+        cancel: vi.fn(),
+      },
+    });
 
     expect(reflected.agentId({ id: 'one' }, phantomId)).toMatchObject({
       agentId: 'MockAgent()',
       componentId: reflected.implementedBy,
     });
-    expect(known.agentId).toEqual(reflected.agentId({ id: 'one' }, phantomId));
-    expect(fresh).toBeInstanceOf(Object);
-    expect('client' in fresh).toBe(false);
+    expect(known).not.toHaveProperty('agentId');
+    if ('client' in fresh) throw new Error('ephemeral newPhantom returned a durable wrapper');
+    expect(fresh).not.toHaveProperty('agentId');
+    await expect(fresh.method('echo').invoke({ message: 'hello' })).resolves.toEqual({
+      metadata: { agentId: 'ReflectedEcho(two)[final]', idempotencyKey: 'key' },
+      value: 'hello',
+    });
   });
 });
