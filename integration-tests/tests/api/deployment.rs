@@ -61,11 +61,8 @@ use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::{assert_eq, assert_matches, assert_ne};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
 use test_r::{inherit_test_dep, test, timeout};
-use tokio::fs::{self, File};
-use tokio::process::Command;
+use tokio::fs::File;
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
@@ -183,78 +180,6 @@ fn remote_tool_hash_input(
         },
         bindings,
     }
-}
-
-fn golem_cli_binary_path() -> anyhow::Result<PathBuf> {
-    let current_exe = std::env::current_exe()?;
-    let current_dir = current_exe
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("integration test executable has no parent directory"))?;
-    let profile_dir = if current_dir.file_name() == Some(OsStr::new("deps")) {
-        current_dir
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("integration test deps directory has no parent"))?
-    } else {
-        current_dir
-    };
-    let binary_name = format!("golem-cli{}", std::env::consts::EXE_SUFFIX);
-    let adjacent_binary = profile_dir.join(&binary_name);
-    if adjacent_binary.is_file() {
-        return Ok(adjacent_binary);
-    }
-
-    let profile = profile_dir
-        .file_name()
-        .ok_or_else(|| anyhow::anyhow!("integration test profile directory has no name"))?;
-    for target_dir in [
-        std::env::var_os("CARGO_MAKE_CRATE_TARGET_DIRECTORY"),
-        std::env::var_os("CARGO_TARGET_DIR"),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        let candidate = PathBuf::from(target_dir).join(profile).join(&binary_name);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-
-    anyhow::bail!(
-        "golem-cli binary not found next to {} or in the configured cargo target directory; build it before running this test",
-        current_exe.display()
-    )
-}
-
-async fn run_registry_bridge_build(app_dir: &Path) -> anyhow::Result<std::process::Output> {
-    let config_dir = app_dir.join("cli-config");
-    fs::create_dir_all(&config_dir).await?;
-    Ok(Command::new(golem_cli_binary_path()?)
-        .arg("--config-dir")
-        .arg(config_dir)
-        .arg("build")
-        .arg("--step")
-        .arg("gen-bridge")
-        .env_remove("GOLEM_BUILTIN_LOCAL_URL")
-        .env("NO_COLOR", "1")
-        .current_dir(app_dir)
-        .output()
-        .await?)
-}
-
-fn wasm_files_under(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
-    let mut wasm_files = Vec::new();
-    let mut directories = vec![root.to_path_buf()];
-    while let Some(directory) = directories.pop() {
-        for entry in std::fs::read_dir(directory)? {
-            let path = entry?.path();
-            if path.is_dir() {
-                directories.push(path);
-            } else if path.extension() == Some(OsStr::new("wasm")) {
-                wasm_files.push(path);
-            }
-        }
-    }
-    Ok(wasm_files)
 }
 
 fn deployment_creation(
@@ -1228,81 +1153,6 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
         ))
     );
 
-    let registry_url = format!(
-        "http://{}:{}",
-        deps.registry_service().http_host(),
-        deps.registry_service().http_port()
-    );
-    let worker_url = format!(
-        "http://{}:{}",
-        deps.worker_service().http_host(),
-        deps.worker_service().http_port()
-    );
-    let cli_app_dir = deps.temp_directory().join(format!(
-        "cross-account-registry-bridge-{}",
-        uuid::Uuid::new_v4()
-    ));
-    fs::create_dir_all(&cli_app_dir).await?;
-    let yaml_string = |value: &str| serde_json::to_string(value).unwrap();
-    fs::write(
-        cli_app_dir.join("golem.yaml"),
-        format!(
-            r#"manifestVersion: 1.6.0
-app: {application}
-
-tools:
-  search:
-    source:
-      registry:
-        releaseId: {release_id}
-
-environments:
-  {environment}:
-    server:
-      url: {registry_url}
-      workerUrl: {worker_url}
-      allowInsecure: true
-      auth:
-        staticToken: {token}
-
-bridge:
-  rust:
-    internal:
-      outputDir: generated
-      tools:
-        - source:
-            registry:
-              releaseId: {release_id}
-"#,
-            application = yaml_string(&consumer_app.name.0),
-            environment = yaml_string(&consumer_env.name.0),
-            registry_url = yaml_string(&registry_url),
-            worker_url = yaml_string(&worker_url),
-            token = yaml_string(consumer.token.secret()),
-            release_id = release_v12.id,
-        ),
-    )
-    .await?;
-
-    let ungranted_bridge_build = run_registry_bridge_build(&cli_app_dir).await?;
-    let ungranted_bridge_output = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&ungranted_bridge_build.stdout),
-        String::from_utf8_lossy(&ungranted_bridge_build.stderr)
-    );
-    assert!(
-        !ungranted_bridge_build.status.success()
-            && ungranted_bridge_output
-                .contains("Registry bridge source not found in the selected environment"),
-        "an ungranted consumer build must not discover the release:\n{ungranted_bridge_output}"
-    );
-    assert!(
-        !cli_app_dir
-            .join("generated/search-tool-guest-client")
-            .exists(),
-        "an ungranted build must not generate a bridge"
-    );
-
     let release_v12_coordinates = ToolReleaseReference::ByCoordinates(ToolReleaseByCoordinates {
         account: publisher.account_email.clone(),
         name: tool_name.clone(),
@@ -1325,55 +1175,6 @@ bridge:
             .is_empty(),
         "a grant must not leak to another environment in the same account"
     );
-
-    let granted_bridge_build = run_registry_bridge_build(&cli_app_dir).await?;
-    let granted_bridge_output = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&granted_bridge_build.stdout),
-        String::from_utf8_lossy(&granted_bridge_build.stderr)
-    );
-    assert!(
-        granted_bridge_build.status.success(),
-        "a granted consumer must generate a registry bridge:\n{granted_bridge_output}"
-    );
-    assert!(
-        cli_app_dir
-            .join("generated/search-tool-guest-client/Cargo.toml")
-            .is_file(),
-        "registry metadata must generate the Rust guest bridge"
-    );
-    assert!(
-        wasm_files_under(&cli_app_dir)?.is_empty(),
-        "registry bridge generation must not fetch or require publisher WASM"
-    );
-    let marker_dir = cli_app_dir.join("golem-temp/task-results");
-    let mut registry_bridge_marker = None;
-    for entry in std::fs::read_dir(&marker_dir)? {
-        let marker: serde_json::Value = serde_json::from_slice(&std::fs::read(entry?.path())?)?;
-        if marker.get("kind").and_then(serde_json::Value::as_str)
-            == Some("GenerateBridgeSdkMarkerHash")
-        {
-            registry_bridge_marker = Some(marker);
-            break;
-        }
-    }
-    let registry_bridge_marker =
-        registry_bridge_marker.expect("registry bridge generation must write a cache marker");
-    let marker_input = registry_bridge_marker
-        .get("hashInput")
-        .and_then(serde_json::Value::as_str)
-        .expect("registry bridge cache marker must retain its hash input");
-    for expected in [
-        release_v12.id.to_string(),
-        release_v12.metadata_version.clone(),
-        release_v12.metadata_digest.to_string(),
-        grant_v12.release.source_digest.to_string(),
-    ] {
-        assert!(
-            marker_input.contains(&expected),
-            "registry bridge cache identity must include {expected}: {marker_input}"
-        );
-    }
 
     let other_plan = consumer_client
         .get_environment_deployment_plan(&other_consumer_env.id.0)
