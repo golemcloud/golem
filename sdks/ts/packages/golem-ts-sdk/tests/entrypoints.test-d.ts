@@ -32,6 +32,20 @@ const contract = defineAgentClient({
 id.client(contract).ping({ message: 'hello' });
 id.dynamicClient().method('ping').invokeValue(v.record([]));
 
+const exactContract = defineAgentClient({
+  name: 'ExampleAgent',
+  id: { name: z.string() },
+  methods: { ping: method({ input: { message: z.string() }, returns: z.string() }) },
+});
+const schemaLibraryId = exactContract.agentId({ name: 'example' });
+const schemaValueId = AgentId.create({
+  componentId: schemaLibraryId.componentId,
+  typeName: exactContract.name,
+  constructorValue: v.record([v.string('example')]),
+});
+schemaLibraryId.client(exactContract).ping({ message: 'schema library' });
+schemaValueId.client(exactContract).ping({ message: 'schema value' });
+
 const ephemeralContract = defineAgentClient({
   name: 'EphemeralExampleAgent',
   mode: 'ephemeral',
