@@ -52,7 +52,7 @@ interface host {
       not-found(string),
       /// Internal error on the remote side
       remote-internal-error(string),
-      /// The remote agent operation was rejected with an agent-domain error
+      /// The remote endpoint returned an agent-domain error
       remote-agent-error(agent-error)
     }
 

@@ -3,6 +3,9 @@ import {
     AgentId,
     defineAgent,
     defineAgentClient,
+    getAgentTypeByAgentId,
+    getAllAgentTypes,
+    getReflectedAgentType,
     isRemoteCallError,
     method,
     s,
@@ -64,6 +67,23 @@ const EphemeralReuseReport = z.object({
     details: z.string(),
 });
 
+const ReflectionDiscoveryReport = z.object({
+    listed: z.boolean(),
+    typeName: z.string(),
+    methodName: z.string(),
+    firstValue: z.number(),
+    secondValue: z.number(),
+    missingName: z.boolean(),
+    missingAgentId: z.boolean(),
+});
+
+const ReflectedEphemeralReport = z.object({
+    value: z.string(),
+    agentId: z.string(),
+    idempotencyKey: z.string(),
+    proxyHasAgentId: z.boolean(),
+});
+
 export const EphemeralSingleUseAgent = defineAgent({
     name: 'EphemeralSingleUseAgent',
     mode: 'ephemeral',
@@ -99,6 +119,8 @@ export const TestAgent = defineAgent({
         }),
         longRpcCall: method({ input: { durationInMillis: z.number() }, returns: z.void() }),
         ephemeralReuseTest: method({ input: {}, returns: EphemeralReuseReport }),
+        reflectionDiscoveryTest: method({ input: {}, returns: ReflectionDiscoveryReport }),
+        reflectedEphemeralTest: method({ input: {}, returns: ReflectedEphemeralReport }),
     },
 });
 
@@ -157,6 +179,64 @@ export const TestAgentImpl = TestAgent.implement({
                     details: error.cause.error.details,
                 };
             }
+        },
+        async reflectionDiscoveryTest() {
+            const targetName = `reflection-${this.id}`;
+            const allTypes = getAllAgentTypes();
+            const reflected = getReflectedAgentType('SimpleChildAgent');
+            if (!reflected) throw new Error('SimpleChildAgent was not discovered');
+
+            const method = reflected.method('value');
+            if (!method) throw new Error('SimpleChildAgent.value was not discovered');
+
+            const missingAgentId = reflected.agentId({ name: `${targetName}-missing` });
+            const missingAgentIdResult = getAgentTypeByAgentId(missingAgentId) === undefined;
+
+            const first = await reflected.client.get({ name: targetName }).method('value').invoke({});
+            if (typeof first.value !== 'number') {
+                throw new Error('expected reflected SimpleChildAgent.value to return a number');
+            }
+
+            const concreteAgentId = reflected.agentId({ name: targetName });
+            const byAgentId = getAgentTypeByAgentId(concreteAgentId);
+            if (!byAgentId) throw new Error('existing SimpleChildAgent type was not resolved');
+
+            const second = await concreteAgentId.client(byAgentId).method('value').invoke({});
+            if (typeof second.value !== 'number') {
+                throw new Error('expected rebound SimpleChildAgent.value to return a number');
+            }
+
+            return {
+                listed: allTypes.some((agentType) => agentType.name === reflected.name),
+                typeName: reflected.name,
+                methodName: method.name,
+                firstValue: first.value,
+                secondValue: second.value,
+                missingName: getReflectedAgentType('MissingReflectionAgent') === undefined,
+                missingAgentId: missingAgentIdResult,
+            };
+        },
+        async reflectedEphemeralTest() {
+            const reflected = getReflectedAgentType('EphemeralSingleUseAgent');
+            if (!reflected || reflected.mode !== 'ephemeral') {
+                throw new Error('EphemeralSingleUseAgent was not discovered as ephemeral');
+            }
+
+            const fresh = reflected.client.newPhantom({ value: 'reflected' });
+            const proxyHasAgentId = 'agentId' in fresh;
+            if ('client' in fresh) throw new Error('ephemeral reflection returned a durable wrapper');
+
+            const invocation = await fresh.method('capture').invoke({});
+            if (typeof invocation.value !== 'string') {
+                throw new Error('expected reflected ephemeral capture to return a string');
+            }
+
+            return {
+                value: invocation.value,
+                agentId: invocation.metadata.agentId,
+                idempotencyKey: invocation.metadata.idempotencyKey,
+                proxyHasAgentId,
+            };
         },
     },
 });
