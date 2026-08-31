@@ -70,9 +70,9 @@ object ToolInvokerSpec extends ZIOSpecDefault {
   }
 
   private final case class FakeStdin(content: String) extends ToolInputStream {
-    def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
+    override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
       Future.successful(Right(None))
-    def cancel(): Future[Unit] = Future.successful(())
+    override def cancel(): Future[Unit] = Future.successful(())
   }
 
   @toolDefinition(version = "0.1.0")
