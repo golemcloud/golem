@@ -7,7 +7,10 @@ description: "Migrating a TypeScript Golem agent from the removed decorator/base
 
 The decorator/base surface of `@golemcloud/golem-ts-sdk` (`@agent()` classes extending `BaseAgent`, `@golemcloud/golem-ts-typegen`) has been **removed**. The schema-driven API — `defineAgent({...}).implement({...})` — is now the TypeScript authoring surface. This skill maps every old construct to its current replacement.
 
-Verify each API name against the SDK source in `sdks/ts/packages/golem-ts-sdk/src/` and `src/host/` as you go; public APIs are exported from `src/index.ts`.
+Verify each API name against `sdks/ts/packages/golem-ts-sdk/src/` and
+`sdks/ts/packages/golem-ts-sdk/src/host/` as you go; public APIs are exported from `src/index.ts`.
+Migrate directly to the current API. Do not add decorator facades, compatibility wrappers, aliases,
+or adapters that preserve the removed surface.
 
 ## Mental model shift
 
@@ -21,7 +24,9 @@ Verify each API name against the SDK source in `sdks/ts/packages/golem-ts-sdk/sr
 | `getPrincipal()` | `this.getPrincipal()` |
 | injected `Principal` constructor/method param | a bare `s.principal()` parameter (auto-injected with the per-call caller principal) |
 
-There are **no classes, no decorators, and no code generation**. Handlers are plain functions whose `this` is the state.
+There are **no agent classes or decorators, and no decorator type-generation step during
+authoring**. Handlers are plain functions whose `this` is the state. The SDK build still generates
+and packages runtime/WIT artifacts as part of its normal toolchain.
 
 ## Imports
 
@@ -173,23 +178,33 @@ Def.implement({
   init: () => ({ /* ... */ }),
   methods: { /* ... */ },
   snapshot: {
-    save: () => new Uint8Array(/* serialize this */),
-    load: (bytes) => { /* restore this from bytes */ },
+    save() { return new Uint8Array(/* serialize this */); },
+    load(bytes) { /* restore this from bytes */ },
   },
 });
 ```
 
-## Feature parity — restored capabilities + the remaining deltas
+Use method syntax for custom snapshot callbacks when they access state; arrow functions do not bind
+the implementation's state as `this`.
 
-The current API covers the decorator features it once lacked. Use the forms below; only two genuine deltas remain.
+## Current Replacements and Known Deltas
 
-**Restored to base parity (use these — they are NOT gaps):**
+Use the current forms below and verify them against the SDK source rather than reconstructing the
+removed decorator surface.
+
+**Current forms:**
 - **`readOnly` cache policies.** `@readonly({ cache: 'no-cache' | 'until-write' | { ttl } })` → `method({ readOnly: { cache: 'no-cache' | 'until-write' | { ttlNanos: <bigint> }, usesPrincipal?: boolean } })`. Bare `readOnly: true` uses the `until-write` policy (the base default); principal-dependent caching → `usesPrincipal: true`.
-- **Config-on-RPC (`getWithConfig`).** `Agent.getWithConfig(id, overrides)` → `clientFor(Def)(id, phantomId?, overrides)` — the non-secret override leaves are encoded and applied to the remote agent at call time (secret overrides are rejected; secrets stay host-provisioned).
-- **Cancelable / abortable RPC.** The client method has `.abortable(signal, input)` (cancels the remote invocation when the `AbortSignal` fires) and `.scheduleCancelable(at, input)` → a `CancellationToken` (`.cancel()`), alongside `.trigger(input)` / `.schedule(at, input)`.
+- **Config-on-RPC (`getWithConfig`).** `Agent.getWithConfig(id, overrides)` →
+  `clientFor(Def)(id, undefined, overrides)`. For a fresh phantom agent, use
+  `clientFor(Def).newPhantom(id, overrides)`. Non-secret override leaves are encoded and applied at
+  call time; secret overrides are rejected because secrets remain host-provisioned.
+- **Cancelable / abortable RPC.** Pass `{ signal }` to an awaited client method, for example
+  `await client.run(input, { signal })`. `client.run.schedule(at, input)` returns a
+  `CancellationToken` whose `.cancel()` cancels the scheduled invocation. Fire-and-forget remains
+  `client.run.trigger(input)`. There are no `.abortable` or `.scheduleCancelable` client methods.
 - **`Principal` as data + auto-injected input.** `s.principal()` carries a `Principal` as a method return / nested value, and a bare `s.principal()` method (or constructor) parameter is auto-injected with the per-call caller principal — it consumes no wire field and is not bound from HTTP/RPC callers (the replacement for the decorator's injected `Principal` parameter). `this.getPrincipal()` still reads the init-time principal.
 
-**Remaining deltas (verify against `src/` before assuming an option exists):**
+**Known remaining deltas (verify against `src/` before assuming this list is exhaustive):**
 - **Custom snapshot is a bare `Uint8Array`.** No `{ data, mimeType }` return, no `application/json` vs `multipart/mixed` selection, and no automatic SQLite multipart part. `save` returns bytes, `load` takes bytes.
 - **No mount-level header→id binding.** The mount only binds path `{var}` names to id fields; there is no header-to-id mapping on the mount (an endpoint-level `{ headers }` binding on a method DOES work).
 
@@ -205,4 +220,15 @@ If a decorator feature you need has no current equivalent, stop and flag it rath
 6. Convert `Config`/`Secret` constructor params to a `config` record (`s.secret(...)` for secrets).
 7. Convert `save/loadSnapshot` overrides to `snapshotting` (or `.implement({ snapshot })`).
 8. Ensure every agent module is imported from `src/main.ts`.
-9. `golem build --yes` to verify.
+9. Remove the old decorator/base/typegen dependencies and all compatibility wrappers.
+10. Build the local SDK bundle and agent template, then point the application build at those local
+    packages before verifying:
+
+```shell
+cd /path/to/golem/sdks/ts
+npx pnpm install
+npx pnpm run build
+npx pnpm run build-agent-template
+cd /path/to/migrated-application
+GOLEM_TS_PACKAGES_PATH=/path/to/golem/sdks/ts/packages golem build --yes
+```

@@ -109,6 +109,12 @@ two minimal concurrent-runtime fixtures are intentional checked-in exceptions. U
 `modifying-test-components` skill for targeted rebuilds, or `rebuild-all-test-components` when a
 full rebuild is needed.
 
+Rebuilding a test component with the latest locally built Golem binary may migrate files in that
+component's source directory, including manifests and embedded skills. Treat migration edits
+produced by the rebuild as intentional outputs: review them, keep them, and include them in the
+changeset even when they are unrelated to the original reason for rebuilding. Do not revert or omit
+them merely to minimize the diff; test components are expected to evolve with current Golem.
+
 **Do not run `cargo make test`** — it runs broad root-workspace unit, worker-executor, service, and
 CLI integration suites and takes a very long time. Start with the smallest test that exercises the
 changed behavior, then broaden when the impact cannot be isolated:
@@ -149,7 +155,7 @@ Load these skills for guided workflows on complex tasks:
 | `modifying-test-components` | Building or modifying test WASM components, or rebuilding after SDK changes |
 | `modifying-wit-interfaces` | Adding or modifying WIT interfaces and synchronizing across sub-projects |
 | `modifying-cli-manifest-schema` | Adding or changing application manifest JSON schema versions and aligning CLI schema references |
-| `modifying-cli-output-schema` | Adding or changing structured `golem-cli` output, `CliOutput` types, or the command output JSON schema |
+| `modifying-cli-output-schema` | Adding or changing structured `golem-cli` output, `StructuredOutput` types, or the command output JSON schema |
 | `modifying-service-configs` | Changing service configuration structs, defaults, or adding new config fields |
 | `sdk-development` | Working on the Rust, TypeScript, or MoonBit SDKs in `sdks/` |
 | `golem-scala-development` | Compile, publish, and test the Golem Scala SDK in `sdks/scala/` |

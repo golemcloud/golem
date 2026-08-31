@@ -12,7 +12,8 @@ The SDKs in `sdks/` are **not part of the main build flow** (`cargo make build` 
 ### Crates
 
 - `golem-rust` — Runtime API wrappers (transactions, durability, agentic framework, value conversions)
-- `golem-rust-macro` — Procedural macros (`#[derive(IntoValue)]`, `#[agent_definition]`, etc.)
+- `golem-rust-macro` — Procedural macros (`#[derive(IntoSchema)]`, `#[derive(FromSchema)]`,
+  `#[agent_definition]`, etc.)
 
 ### Building
 
@@ -24,7 +25,9 @@ cargo build -p golem-rust-macro
 
 ### Testing
 
-Tests use `test-r`. Each test file must have `test_r::enable!();` at the top.
+Tests use `test-r`. Library entry points call `#[cfg(test)] test_r::enable!();`. Integration-test
+entry points call `test_r::enable!();` at the top, and `test_r::test` must be in lexical scope for
+each `#[test]`.
 
 ```shell
 cargo test -p golem-rust
@@ -34,11 +37,13 @@ cargo test -p golem-rust --features export_golem_agentic  # Agent tests
 ### Testing with the main platform
 
 ```shell
-# From repository root
-cargo make worker-executor-tests
+# From the repository root, after building the test components needed by <affected-test>:
+cargo test -p golem-worker-executor --test integration -- <affected-test> --report-time
 ```
 
-Run only worker executor tests that exercise the changed SDK behavior. Use the full suite for broad runtime, durability, value-conversion, or agent framework changes whose consumers cannot be isolated.
+Use the `modifying-test-components` skill to build the selected test's WASM prerequisite. Run a
+worker-executor group or `cargo make worker-executor-tests` only for broad runtime, durability,
+value-conversion, or agent framework changes whose consumers cannot be isolated.
 
 ### Testing with golem-cli
 
@@ -62,8 +67,10 @@ cargo clippy -p <affected-sdk-crate> --all-targets -- -Dwarnings
 
 - Node.js
 - pnpm (managed via `packageManager` field)
-- `wasm-rquickjs-cli`: `cargo install wasm-rquickjs-cli --version <VERSION>` (check `WASM_RQUICKJS_VERSION` in `.github/workflows/ci.yaml`)
-- `cargo-component` v0.21.1 (exact version required for agent template builds)
+- `wasm32-wasip2`: `rustup target add wasm32-wasip2` (the Preview 3 wrapper still builds through
+  this Rust target)
+- `wasm-rquickjs-cli`: `cargo install --locked wasm-rquickjs-cli@<VERSION>` (check
+  `WASM_RQUICKJS_VERSION` in `.github/workflows/ci.yaml`)
 
 ### Packages
 
@@ -80,9 +87,12 @@ npx pnpm run build
 ### Testing
 
 ```shell
-npx pnpm --filter <affected-package> run test
+npx pnpm --filter <affected-package-with-a-test-script> run test
 npx pnpm run test  # All packages, for cross-package changes
 ```
+
+Check the affected package's `package.json` before running a package test; for example,
+`@golemcloud/golem-ts-bridge` currently has no `test` script.
 
 ### Agent template WASM
 
@@ -96,7 +106,6 @@ The agent template WASM embeds the existing `packages/golem-ts-sdk/dist/index.mj
 The filenames above are intentionally described by dependency graph rather than a fixed list: runtime modules can be added or reorganized.
 
 ```shell
-cargo install cargo-component --version 0.21.1
 npx pnpm --filter @golemcloud/golem-ts-sdk run build
 npx pnpm run build-agent-template
 ```
@@ -146,7 +155,9 @@ moon build --target wasm          # Build
 
 ```shell
 cd sdks/moonbit/golem_sdk
-moon test <affected-package-or-file>
+./scripts/run-sdk-tests.sh
+# For a narrower package/file check that does not need the JS runner:
+moon test --target wasm <affected-package-or-file>
 cd sdks/moonbit/golem_sdk_tools
 moon test <affected-package-or-file>
 ```
@@ -156,14 +167,15 @@ moon test <affected-package-or-file>
 ```shell
 cd sdks/moonbit/golem_sdk
 moon run script bindgen  # Enforces the pinned Golem wit-bindgen and required post-processing
+moon info
 moon fmt
 ```
 
 ### Code style
 
 ```shell
-moon fmt
 moon info    # Regenerate .mbti files when public interfaces changed
+moon fmt
 ```
 
 ## Downstream Rebuild Requirements
@@ -173,7 +185,7 @@ SDK changes can require rebuilding test components. This is the most common sour
 ### Rust SDK change → test components
 
 1. Build `golem-rust` / `golem-rust-macro`
-2. Find Rust test components depending on the SDK: check `test-components/*/Cargo.toml` for `golem-rust` references
+2. Find Rust test components depending on the SDK: check `test-components/**/Cargo.toml` for `golem-rust` references
 3. Rebuild each affected component following its `AGENTS.md`
 
 ### TS runtime/WIT change → test components
@@ -185,9 +197,19 @@ SDK changes can require rebuilding test components. This is the most common sour
 
 Type-only, test-only, documentation, bridge, or REPL changes that cannot affect `golem-ts-sdk/dist/index.mjs` or WIT do not require an agent-template rebuild.
 
+## Test Process Ownership
+
+SDK unit tests and worker-executor tests must not invoke external tools or Golem binaries. Put tests
+that execute `golem`, `golem-cli`, `cargo`, `rustc`, `npm`, `npx`, `tsc`, `moon`, or another process
+in the CLI integration test suite. Build SDKs, generated code, templates, and test components as
+prerequisites before running unit or worker-executor tests. Non-CLI integration tests use
+`golem-test-framework` for process-backed dependencies and do not spawn additional processes
+directly.
+
 ## WIT Dependencies
 
-Both SDKs have WIT files synced from the root `wit/` directory. **Never manually edit** `wit/deps/` in either SDK.
+The Rust, TypeScript, and MoonBit SDKs covered by this skill have WIT files synced from the root
+`wit/` directory. **Never manually edit** their `wit/deps/` copies.
 
 ```shell
 # From repository root
