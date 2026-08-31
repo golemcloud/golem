@@ -18,6 +18,8 @@ package golem.tool
 
 import golem.Principal
 import golem.schema.{FromSchema, IntoSchema, SchemaEncodeError, SchemaValue, TypedSchemaValue}
+import golem.schema.wire.SchemaWire
+import golem.tool.wire.WitToolError
 
 import scala.concurrent.{ExecutionContext, Future}
 
@@ -26,14 +28,47 @@ import scala.concurrent.{ExecutionContext, Future}
  * tool invokers. The platform layer converts it to the wire representation at
  * the guest-export boundary.
  */
-sealed trait ToolInvokeError extends Product with Serializable
+sealed trait ToolInvokeError[+E] extends Product with Serializable {
+  def mapTool[E2](f: E => E2): ToolInvokeError[E2] =
+    this match {
+      case ToolInvokeError.Tool(error)                => ToolInvokeError.Tool(f(error))
+      case error: ToolInvokeError.InvalidToolName     => error
+      case error: ToolInvokeError.InvalidCommandPath  => error
+      case error: ToolInvokeError.InvalidInput        => error
+      case error: ToolInvokeError.ConstraintViolation => error
+      case error: ToolInvokeError.InvalidResult       => error
+    }
+}
+
 object ToolInvokeError {
-  final case class InvalidToolName(name: String)          extends ToolInvokeError
-  final case class InvalidCommandPath(path: List[String]) extends ToolInvokeError
-  final case class InvalidInput(message: String)          extends ToolInvokeError
-  final case class ConstraintViolation(message: String)   extends ToolInvokeError
-  final case class InvalidResult(message: String)         extends ToolInvokeError
-  final case class Custom(payload: TypedSchemaValue)      extends ToolInvokeError
+  final case class InvalidToolName(name: String)          extends ToolInvokeError[Nothing]
+  final case class InvalidCommandPath(path: List[String]) extends ToolInvokeError[Nothing]
+  final case class InvalidInput(message: String)          extends ToolInvokeError[Nothing]
+  final case class ConstraintViolation(message: String)   extends ToolInvokeError[Nothing]
+  final case class InvalidResult(message: String)         extends ToolInvokeError[Nothing]
+  final case class Tool[E](error: E)                      extends ToolInvokeError[E]
+
+  def toWire(error: ToolInvokeError[TypedSchemaValue]): WitToolError =
+    error match {
+      case InvalidToolName(name)        => WitToolError.InvalidToolName(name)
+      case InvalidCommandPath(path)     => WitToolError.InvalidCommandPath(path)
+      case InvalidInput(message)        => WitToolError.InvalidInput(message)
+      case ConstraintViolation(message) => WitToolError.ConstraintViolation(message)
+      case InvalidResult(message)       => WitToolError.InvalidResult(message)
+      case Tool(payload)                =>
+        WitToolError.CustomError(SchemaWire.typedSchemaValueToWit(payload))
+    }
+
+  def fromWire(error: WitToolError): ToolInvokeError[TypedSchemaValue] =
+    error match {
+      case WitToolError.InvalidToolName(name)    => InvalidToolName(name)
+      case WitToolError.InvalidCommandPath(path) => InvalidCommandPath(path)
+      case WitToolError.InvalidInput(message)    => InvalidInput(message)
+      case WitToolError.ConstraintViolation(m)   => ConstraintViolation(m)
+      case WitToolError.InvalidResult(message)   => InvalidResult(message)
+      case WitToolError.CustomError(payload)     =>
+        Tool(SchemaWire.typedSchemaValueFromWit(payload))
+    }
 }
 
 /**
@@ -41,7 +76,8 @@ object ToolInvokeError {
  * optional stdout stream handle.
  */
 final case class ToolInvokeResult(
-  result: Option[TypedSchemaValue]
+  result: Option[TypedSchemaValue],
+  stdout: Option[ToolOutputStream] = None
 )
 
 /** A registered tool's platform-neutral invocation entry point. */
@@ -51,7 +87,7 @@ trait ToolInvokeHandler {
     input: TypedSchemaValue,
     stdin: Option[ToolInputStream],
     principal: Principal
-  ): Future[Either[ToolInvokeError, ToolInvokeResult]]
+  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]]
 }
 
 /**
@@ -81,7 +117,7 @@ final class ToolInvocationContext(
 final case class ToolMethodBinding(
   methodName: String,
   commandPath: List[String],
-  run: ToolInvocationContext => Future[Either[ToolInvokeError, ToolInvokeResult]]
+  run: ToolInvocationContext => Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]]
 )
 
 /**
@@ -148,7 +184,7 @@ object ToolInvokerRuntime {
         input: TypedSchemaValue,
         stdin: Option[ToolInputStream],
         principal: Principal
-      ): Future[Either[ToolInvokeError, ToolInvokeResult]] =
+      ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
         ToolInvokerRuntime.invoke(tool, handle, env, commandPath, input, stdin, principal)
     }
 
@@ -160,7 +196,7 @@ object ToolInvokerRuntime {
     input: TypedSchemaValue,
     stdin: Option[ToolInputStream],
     principal: Principal
-  ): Future[Either[ToolInvokeError, ToolInvokeResult]] =
+  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
     tool.commandIndexByPath(commandPath) match {
       case None               => failed(ToolInvokeError.InvalidCommandPath(commandPath))
       case Some(commandIndex) =>
@@ -198,7 +234,7 @@ object ToolInvokerRuntime {
     input: TypedSchemaValue,
     stdin: Option[ToolInputStream],
     principal: Principal
-  ): Future[Either[ToolInvokeError, ToolInvokeResult]] = {
+  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] = {
     val subPath = commandPath.drop(forward.pathPrefix.length)
     env.invokerFor(forward.childToolName) match {
       case None          => failed(ToolInvokeError.InvalidToolName(forward.childToolName))
@@ -260,7 +296,7 @@ object ToolInvokerRuntime {
   def decodeArgs(
     ctx: ToolInvocationContext,
     decoders: List[ToolParamDecoder]
-  ): Either[ToolInvokeError, (Vector[Any], Option[ToolOutputStream])] = {
+  ): Either[ToolInvokeError[Nothing], (Vector[Any], Option[ToolOutputStream])] = {
     val args   = Vector.newBuilder[Any]
     var stdout = Option.empty[ToolOutputStream]
     val it     = decoders.iterator
@@ -320,25 +356,27 @@ object ToolInvokerRuntime {
     value: A,
     intoSchema: IntoSchema[A],
     stdout: Option[ToolOutputStream]
-  ): Either[ToolInvokeError, ToolInvokeResult] =
-    try Right(ToolInvokeResult(Some(intoSchema.toTyped(value))))
+  ): Either[ToolInvokeError[Nothing], ToolInvokeResult] =
+    try Right(ToolInvokeResult(Some(intoSchema.toTyped(value)), stdout))
     catch {
       case e: SchemaEncodeError => Left(ToolInvokeError.InvalidResult(e.message))
     }
 
-  def encodeUnit(stdout: Option[ToolOutputStream]): Either[ToolInvokeError, ToolInvokeResult] =
-    Right(ToolInvokeResult(None))
+  def encodeUnit(stdout: Option[ToolOutputStream]): Either[ToolInvokeError[Nothing], ToolInvokeResult] =
+    Right(ToolInvokeResult(None, stdout))
 
   /**
    * Encodes a declared tool error value (the `Left` of an `Either[E, T]`
    * result) into the custom-error payload carrier.
    */
-  def customError[E](error: E, schema: ToolErrorSchema[E]): ToolInvokeError =
+  def customError[E](error: E, schema: ToolErrorSchema[E]): ToolInvokeError[TypedSchemaValue] =
     schema.toErrorPayloadValue(error) match {
-      case Right(payload) => ToolInvokeError.Custom(payload)
+      case Right(payload) => ToolInvokeError.Tool(payload)
       case Left(message)  => ToolInvokeError.InvalidResult(message)
     }
 
-  private def failed[T](error: ToolInvokeError): Future[Either[ToolInvokeError, T]] =
+  private def failed[T](
+    error: ToolInvokeError[TypedSchemaValue]
+  ): Future[Either[ToolInvokeError[TypedSchemaValue], T]] =
     Future.successful(Left(error))
 }

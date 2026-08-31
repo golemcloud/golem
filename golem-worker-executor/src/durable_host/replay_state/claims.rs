@@ -561,6 +561,138 @@ impl ReplayState {
         Ok((handle.start_idx(), handle))
     }
 
+    /// Claims an exact synthetic scope `Start`. If no such entry was committed, atomically proves
+    /// that the remaining replay suffix has no competing claim, matching discriminator, delivery
+    /// boundary, or concurrent side effect before switching replay to live mode.
+    pub(crate) async fn claim_scope_start_or_recover_missing(
+        &self,
+        expected_function_name: &HostFunctionName,
+        expected_function_type: &DurableFunctionType,
+        parent_start_index: Option<OplogIndex>,
+    ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
+        self.claim_scope_start_with_missing_recovery(
+            expected_function_name,
+            expected_function_type,
+            parent_start_index,
+            true,
+        )
+        .await
+    }
+
+    /// Claims an exact synthetic scope `Start`, reporting absence without switching replay to live.
+    pub(crate) async fn claim_scope_start_if_present(
+        &self,
+        expected_function_name: &HostFunctionName,
+        expected_function_type: &DurableFunctionType,
+        parent_start_index: Option<OplogIndex>,
+    ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
+        self.claim_scope_start_with_missing_recovery(
+            expected_function_name,
+            expected_function_type,
+            parent_start_index,
+            false,
+        )
+        .await
+    }
+
+    /// Claims an exact synthetic scope `Start` without polling `readiness` when the scope exists.
+    /// If it is missing, waits for the caller's recovery precondition and then atomically repeats
+    /// the exact claim and missing-scope safety checks before switching replay to live.
+    pub(crate) async fn claim_scope_start_or_recover_missing_when_ready(
+        &self,
+        expected_function_name: &HostFunctionName,
+        expected_function_type: &DurableFunctionType,
+        parent_start_index: Option<OplogIndex>,
+        readiness: impl Future<Output = Result<(), WorkerExecutorError>>,
+    ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
+        match self
+            .claim_scope_start_if_present(
+                expected_function_name,
+                expected_function_type,
+                parent_start_index,
+            )
+            .await?
+        {
+            claimed @ ScopeStartClaimOutcome::Claimed { .. } => Ok(claimed),
+            ScopeStartClaimOutcome::Missing => {
+                readiness.await?;
+                self.claim_scope_start_or_recover_missing(
+                    expected_function_name,
+                    expected_function_type,
+                    parent_start_index,
+                )
+                .await
+            }
+            ScopeStartClaimOutcome::MissingSwitchedToLive => {
+                unreachable!("presence-only scope claim never switches replay to live")
+            }
+        }
+    }
+
+    async fn claim_scope_start_with_missing_recovery(
+        &self,
+        expected_function_name: &HostFunctionName,
+        expected_function_type: &DurableFunctionType,
+        parent_start_index: Option<OplogIndex>,
+        recover_missing: bool,
+    ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
+        let claim = StartClaim::scope(
+            expected_function_name,
+            expected_function_type,
+            parent_start_index,
+        );
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+
+            let owned_claim = claim.clone();
+            let (outcome, blocked_on_completion_delivery) = self
+                .run_owned_cursor_op(move |state| async move {
+                    let result = state
+                        .with_tx(async |tx| {
+                            let outcome = tx
+                                .claim_scope_start_with_missing_recovery(
+                                    &owned_claim,
+                                    recover_missing,
+                                )
+                                .await?;
+                            Ok((outcome, tx.blocked_on_completion_delivery))
+                        })
+                        .await?;
+                    if recover_missing && matches!(&result.0, StartClaimAttempt::Missing) {
+                        state
+                            .cursor
+                            .oplog
+                            .on_replay_progress(state.cursor.replay_target())
+                            .await;
+                    }
+                    Ok(result)
+                })
+                .await?;
+
+            match outcome {
+                StartClaimAttempt::Claimed(handle, _) => {
+                    return Ok(ScopeStartClaimOutcome::Claimed {
+                        begin_index: handle.start_idx(),
+                        handle,
+                    });
+                }
+                StartClaimAttempt::Missing => {
+                    return Ok(if recover_missing {
+                        ScopeStartClaimOutcome::MissingSwitchedToLive
+                    } else {
+                        ScopeStartClaimOutcome::Missing
+                    });
+                }
+                StartClaimAttempt::Blocked => {
+                    debug_assert!(blocked_on_completion_delivery);
+                    progress.await;
+                }
+            }
+        }
+    }
+
     /// Claims the next top-level (unowned) durable-call `Start` whose identity **and recorded
     /// request payload** match. Payload matching is what disambiguates concurrent durable calls
     /// that share the same function name and durable function type but were issued with different
@@ -780,19 +912,30 @@ impl ReplayState {
                                     ));
                                 }
 
-                                tx.claim_start_matching(
+                                match tx
+                                    .claim_start_matching(
                                     |entry| matches!(entry, OplogEntry::Start {
                                         invocation_id: Some(invocation_id),
                                         observational_owner: None,
                                         ..
                                     } if *invocation_id == expected_invocation_id),
-                                    || {
-                                        format!(
-                                            "custom durable Start {{ invocation_id: {expected_invocation_id} }}"
-                                        )
-                                    },
                                 )
-                                .await?
+                                    .await?
+                                {
+                                    StartClaimAttempt::Claimed(handle, entry) => {
+                                        Some((handle, entry))
+                                    }
+                                    StartClaimAttempt::Blocked => None,
+                                    StartClaimAttempt::Missing => {
+                                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                                            format!(
+                                                "custom durable Start {{ invocation_id: {expected_invocation_id} }}"
+                                            ),
+                                            "no matching Start between the replay cursor and the replay target"
+                                                .to_string(),
+                                        ));
+                                    }
+                                }
                             }
                             OplogEntryLookupResult::NotFound { .. } => {
                                 return Err(WorkerExecutorError::unexpected_oplog_entry(

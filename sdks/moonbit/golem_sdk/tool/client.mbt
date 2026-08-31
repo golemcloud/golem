@@ -1,7 +1,4 @@
 ///|
-pub(all) enum NoToolError {}
-
-///|
 pub(all) enum RpcError {
   Protocol(String)
   Denied(String)
@@ -15,12 +12,6 @@ pub(all) enum RpcError {
 pub(all) enum ToolError[E] {
   Rpc(RpcError)
   Tool(E)
-}
-
-///|
-pub(all) struct InvocationResult {
-  result : @model.TypedSchemaValue?
-  stdout : @async-core.Stream[Byte]?
 }
 
 ///|
@@ -519,11 +510,7 @@ fn[T : @schema.FromSchema, E] decode_expected_value(
 fn[E : @schema.FromSchema] decode_custom_tool_error(
   value : @model.TypedSchemaValue,
 ) -> Result[E, String] {
-  try @schema.from_value_as(value.value) catch {
-    e => Err("failed to decode remote tool error: \{e}")
-  } noraise {
-    decoded => Ok(decoded)
-  }
+  @toolCore.decode_custom_error(value)
 }
 
 ///|

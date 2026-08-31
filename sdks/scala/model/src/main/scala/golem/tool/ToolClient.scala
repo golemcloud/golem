@@ -56,13 +56,13 @@ object ToolError {
  */
 sealed trait ToolRpcFailure extends Product with Serializable
 object ToolRpcFailure {
-  final case class ProtocolError(message: String)          extends ToolRpcFailure
-  final case class Denied(message: String)                 extends ToolRpcFailure
-  final case class NotFound(message: String)               extends ToolRpcFailure
-  final case class RemoteInternalError(message: String)    extends ToolRpcFailure
-  final case class RemoteToolError(error: ToolInvokeError) extends ToolRpcFailure
-  case object Cancelled                                    extends ToolRpcFailure
-  final case class ResourceExhausted(message: String)      extends ToolRpcFailure
+  final case class ProtocolError(message: String)                            extends ToolRpcFailure
+  final case class Denied(message: String)                                   extends ToolRpcFailure
+  final case class NotFound(message: String)                                 extends ToolRpcFailure
+  final case class RemoteInternalError(message: String)                      extends ToolRpcFailure
+  final case class RemoteToolError(error: ToolInvokeError[TypedSchemaValue]) extends ToolRpcFailure
+  case object Cancelled                                                      extends ToolRpcFailure
+  final case class ResourceExhausted(message: String)                        extends ToolRpcFailure
 }
 
 /**
@@ -181,11 +181,11 @@ object ToolClientRuntime {
     }
 
   private[tool] def mapRemoteToolError[E](
-    error: ToolInvokeError,
+    error: ToolInvokeError[TypedSchemaValue],
     decodeError: TypedSchemaValue => Either[String, E]
   ): ToolError[E] =
     error match {
-      case ToolInvokeError.Custom(payload) =>
+      case ToolInvokeError.Tool(payload) =>
         decodeError(payload) match {
           case Right(decoded) => ToolError.Tool(decoded)
           case Left(message)  => ToolError.Rpc(RpcError.Protocol(message))
@@ -199,14 +199,14 @@ object ToolClientRuntime {
   )(implicit from: FromSchema[E]): Either[String, E] =
     from.fromValue(value.value).left.map(e => s"failed to decode remote tool error: ${e.message}")
 
-  private def remoteToolErrorLabel(error: ToolInvokeError): String =
+  private def remoteToolErrorLabel(error: ToolInvokeError[TypedSchemaValue]): String =
     error match {
       case ToolInvokeError.InvalidToolName(name)        => s"invalid tool name `$name`"
       case ToolInvokeError.InvalidCommandPath(path)     => s"invalid command path `${path.mkString(" ")}`"
       case ToolInvokeError.InvalidInput(message)        => s"invalid input: $message"
       case ToolInvokeError.ConstraintViolation(message) => s"constraint violation: $message"
       case ToolInvokeError.InvalidResult(message)       => s"invalid result: $message"
-      case ToolInvokeError.Custom(_)                    => "custom error"
+      case ToolInvokeError.Tool(_)                      => "custom error"
     }
 
   // -------------------------------------------------------------------------
@@ -439,6 +439,24 @@ object ToolClientRuntime {
     for {
       decoded <- requireValue(result, from)
     } yield decoded
+
+  def decodeStdoutResult(result: ToolInvokeResult): Either[ToolError[Nothing], ToolOutputStream] =
+    for {
+      stdout <- requireStdout(result)
+      _      <- requireNoValue(result)
+    } yield stdout
+
+  def decodeValueStdoutResult[T](
+    result: ToolInvokeResult,
+    from: FromSchema[T]
+  ): Either[ToolError[Nothing], (T, ToolOutputStream)] =
+    for {
+      stdout  <- requireStdout(result)
+      decoded <- requireValue(result, from)
+    } yield (decoded, stdout)
+
+  private def requireStdout(result: ToolInvokeResult): Either[ToolError[Nothing], ToolOutputStream] =
+    result.stdout.toRight(protocolError("tool result did not contain declared stdout stream"))
 
   private def requireValue[T](
     result: ToolInvokeResult,

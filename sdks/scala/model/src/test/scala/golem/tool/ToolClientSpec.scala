@@ -43,13 +43,13 @@ object ToolClientSpec extends ZIOSpecDefault {
 
   private final class ChunkStream(initial: List[Either[ByteStreamFailure, Option[Array[Byte]]]])
       extends ToolInputStream {
-    private var remaining                                              = initial
-    def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] = {
+    private var remaining                                                       = initial
+    override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] = {
       val next = remaining.head
       remaining = remaining.tail
       Future.successful(next)
     }
-    def cancel(): Future[Unit] = Future.successful(())
+    override def cancel(): Future[Unit] = Future.successful(())
   }
 
   private def stringPayload(text: String): TypedSchemaValue =
@@ -66,7 +66,7 @@ object ToolClientSpec extends ZIOSpecDefault {
         ToolRpcStarted(
           None,
           Future.successful(
-            Left(ToolRpcFailure.RemoteToolError(ToolInvokeError.Custom(stringPayload("bad flag"))))
+            Left(ToolRpcFailure.RemoteToolError(ToolInvokeError.Tool(stringPayload("bad flag"))))
           ),
           () => ()
         )
@@ -102,7 +102,7 @@ object ToolClientSpec extends ZIOSpecDefault {
   def spec: Spec[Any, Any] = suite("ToolClientSpec")(
     test("custom_tool_error_payload_decodes_to_declared_error_variant") {
       val decoded = ToolClientRuntime.mapRemoteToolError(
-        ToolInvokeError.Custom(stringPayload("bad flag")),
+        ToolInvokeError.Tool(stringPayload("bad flag")),
         decodeCliError
       )
       assertTrue(decoded == ToolError.Tool(Usage("bad flag")))
@@ -131,8 +131,8 @@ object ToolClientSpec extends ZIOSpecDefault {
     test("started invocation collect waits for stdout after an observer failure") {
       val eof    = Promise[Either[ByteStreamFailure, Option[Array[Byte]]]]()
       val stream = new ToolInputStream {
-        def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] = eof.future
-        def cancel(): Future[Unit]                                         = Future.successful(())
+        override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] = eof.future
+        override def cancel(): Future[Unit]                                         = Future.successful(())
       }
       val failure    = new RuntimeException("observer failed")
       val invocation = ToolInvocation[Nothing, Unit](stream, Future.failed(failure), () => ())

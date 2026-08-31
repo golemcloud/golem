@@ -1,0 +1,7 @@
+import {
+  "golemcloud/golem_sdk/tool" @tool,
+}
+
+options(
+  "is-main": true,
+)

@@ -126,7 +126,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
 
   private def stdoutInvoker(
     tool: ExtendedToolType,
-    outcome: Either[ToolInvokeError, ToolInvokeResult]
+    outcome: Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]
   ): ToolRegistry.ToolInvoker = {
     val handle = ToolImplementationHandle(
       _ => Right(tool),
@@ -276,7 +276,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
       var finishes = 0
       val invoked  = stdoutInvoker(
         tool,
-        Left(ToolInvokeError.Custom(TypedSchemaValue(strGraph, SchemaValue.StringValue("boom"))))
+        Left(ToolInvokeError.Tool(TypedSchemaValue(strGraph, SchemaValue.StringValue("boom"))))
       )(
         Nil,
         emptyInput(tool),

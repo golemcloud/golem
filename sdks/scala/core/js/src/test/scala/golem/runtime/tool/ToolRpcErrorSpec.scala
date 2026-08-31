@@ -60,7 +60,7 @@ object ToolRpcErrorSpec extends ZIOSpecDefault {
       )
       val decoded = ToolHostApi.decodeRpcFailure(variant("remote-tool-error", jsError))
       decoded match {
-        case ToolRpcFailure.RemoteToolError(ToolInvokeError.Custom(roundTripped)) =>
+        case ToolRpcFailure.RemoteToolError(ToolInvokeError.Tool(roundTripped)) =>
           assertTrue(roundTripped == original)
         case other =>
           assertNever(s"expected remote tool custom error, got: $other")

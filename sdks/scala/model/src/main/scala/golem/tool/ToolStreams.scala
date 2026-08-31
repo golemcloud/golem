@@ -27,10 +27,12 @@ import scala.concurrent.{ExecutionContext, Future}
 trait ToolInputStream {
 
   /** Reads the next chunk. `Right(None)` is clean EOF. */
-  def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]]
+  def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
+    Future.failed(new UnsupportedOperationException("tool input stream is not readable"))
 
   /** Stops further consumption and releases any blocked read. */
-  def cancel(): Future[Unit]
+  def cancel(): Future[Unit]               = close()
+  private[golem] def close(): Future[Unit] = Future.successful(())
 }
 
 /**
@@ -40,9 +42,13 @@ trait ToolInputStream {
  * the structured result.
  */
 trait ToolOutputStream {
-  def write(bytes: Array[Byte]): Future[Either[StreamWriteError, Unit]]
-  def finish(): Future[Either[StreamWriteError, Unit]]
-  def fail(reason: ByteStreamFailure): Future[Either[StreamWriteError, Unit]]
+  def write(bytes: Array[Byte]): Future[Either[StreamWriteError, Unit]] =
+    Future.failed(new UnsupportedOperationException("tool output stream is not writable"))
+  def finish(): Future[Either[StreamWriteError, Unit]] =
+    Future.failed(new UnsupportedOperationException("tool output stream is not finishable"))
+  def fail(reason: ByteStreamFailure): Future[Either[StreamWriteError, Unit]] =
+    Future.failed(new UnsupportedOperationException("tool output stream is not failable"))
+  private[golem] def close(): Future[Unit] = Future.successful(())
 }
 
 sealed trait ByteStreamFailure extends Product with Serializable

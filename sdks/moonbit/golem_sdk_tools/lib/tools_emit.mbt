@@ -1276,18 +1276,32 @@ fn emit_body(
 }
 
 ///|
-fn descriptor_name(tool : ToolInfo) -> String {
-  "__golem_tool_def_" + tool.source_name
+fn descriptor_symbol_prefix(namespace : String) -> String {
+  if namespace.is_empty() {
+    "__golem_tool_"
+  } else {
+    "__golem_" + namespace + "_tool_"
+  }
 }
 
 ///|
-fn raw_descriptor_name(tool : ToolInfo) -> String {
-  "__golem_tool_def_raw_" + tool.source_name
+fn descriptor_name(tool : ToolInfo, namespace : String) -> String {
+  descriptor_symbol_prefix(namespace) + "def_" + tool.source_name
 }
 
 ///|
-fn prepared_descriptor_name(tool : ToolInfo) -> String {
-  "__golem_tool_def_prepare_" + tool.source_name
+fn raw_descriptor_name(tool : ToolInfo, namespace : String) -> String {
+  descriptor_symbol_prefix(namespace) + "def_raw_" + tool.source_name
+}
+
+///|
+fn prepared_descriptor_name(tool : ToolInfo, namespace : String) -> String {
+  descriptor_symbol_prefix(namespace) + "def_prepare_" + tool.source_name
+}
+
+///|
+fn descriptor_helper_name(namespace : String, suffix : String) -> String {
+  descriptor_symbol_prefix(namespace) + suffix
 }
 
 ///|
@@ -1561,79 +1575,86 @@ fn emit_globals(args : Array[ProjectedToolArg]) -> String {
 }
 
 ///|
-fn emit_descriptor_plumbing(buf : StringBuilder) -> Unit {
-  buf.write_string(
-    (
-      #|///|
-      #|fn[T] __golem_tool_concat_array(left : Array[T], right : Array[T]) -> Array[T] {
-      #|  let result = left.copy()
-      #|  for value in right {
-      #|    result.push(value)
-      #|  }
-      #|  result
-      #|}
-      #|
-      #|///|
-      #|fn __golem_tool_concat_globals(
-      #|  left : @tool.GlobalsDef,
-      #|  right : @tool.GlobalsDef,
-      #|) -> @tool.GlobalsDef {
-      #|  {
-      #|    options: __golem_tool_concat_array(left.options, right.options),
-      #|    flags: __golem_tool_concat_array(left.flags, right.flags),
-      #|  }
-      #|}
-      #|
-      #|///|
-      #|fn __golem_tool_rebase_node(
-      #|  node : @tool.CommandNodeDef,
-      #|  offset : Int,
-      #|) -> @tool.CommandNodeDef {
-      #|  {
-      #|    name: node.name,
-      #|    aliases: node.aliases,
-      #|    doc: node.doc,
-      #|    globals: node.globals,
-      #|    subcommands: node.subcommands.map(index => index + offset),
-      #|    body: node.body,
-      #|  }
-      #|}
-      #|
-      #|///|
-      #|fn __golem_tool_extract_prepared(def : @tool.ToolDef) -> @tool.ToolDef {
-      #|  {
-      #|    version: def.version,
-      #|    commands: def.commands[1:].map(node => {
-      #|      __golem_tool_rebase_node(node, -1)
-      #|    }),
-      #|  }
-      #|}
-      #|
-      #|///|
-      #|fn __golem_tool_append_prepared(
-      #|  def : @tool.ToolDef,
-      #|  child : @tool.ToolDef,
-      #|) -> @tool.ToolDef {
-      #|  let offset = def.commands.length()
-      #|  let commands = def.commands.copy()
-      #|  let root = commands[0]
-      #|  commands[0] = {
-      #|    name: root.name,
-      #|    aliases: root.aliases,
-      #|    doc: root.doc,
-      #|    globals: root.globals,
-      #|    subcommands: __golem_tool_concat_array(root.subcommands, [offset]),
-      #|    body: root.body,
-      #|  }
-      #|  for node in child.commands {
-      #|    commands.push(__golem_tool_rebase_node(node, offset))
-      #|  }
-      #|  { version: def.version, commands }
-      #|}
-      #|
-      #|
-    ),
-  )
+fn emit_descriptor_plumbing(buf : StringBuilder, namespace : String) -> Unit {
+  let source =
+    #|///|
+    #|fn[T] __golem_tool_concat_array(left : Array[T], right : Array[T]) -> Array[T] {
+    #|  let result = left.copy()
+    #|  for value in right {
+    #|    result.push(value)
+    #|  }
+    #|  result
+    #|}
+    #|
+    #|///|
+    #|fn __golem_tool_concat_globals(
+    #|  left : @tool.GlobalsDef,
+    #|  right : @tool.GlobalsDef,
+    #|) -> @tool.GlobalsDef {
+    #|  {
+    #|    options: __golem_tool_concat_array(left.options, right.options),
+    #|    flags: __golem_tool_concat_array(left.flags, right.flags),
+    #|  }
+    #|}
+    #|
+    #|///|
+    #|fn __golem_tool_rebase_node(
+    #|  node : @tool.CommandNodeDef,
+    #|  offset : Int,
+    #|) -> @tool.CommandNodeDef {
+    #|  {
+    #|    name: node.name,
+    #|    aliases: node.aliases,
+    #|    doc: node.doc,
+    #|    globals: node.globals,
+    #|    subcommands: node.subcommands.map(index => index + offset),
+    #|    body: node.body,
+    #|  }
+    #|}
+    #|
+    #|///|
+    #|fn __golem_tool_extract_prepared(def : @tool.ToolDef) -> @tool.ToolDef {
+    #|  {
+    #|    version: def.version,
+    #|    commands: def.commands[1:].map(node => {
+    #|      __golem_tool_rebase_node(node, -1)
+    #|    }),
+    #|  }
+    #|}
+    #|
+    #|///|
+    #|fn __golem_tool_append_prepared(
+    #|  def : @tool.ToolDef,
+    #|  child : @tool.ToolDef,
+    #|) -> @tool.ToolDef {
+    #|  let offset = def.commands.length()
+    #|  let commands = def.commands.copy()
+    #|  let root = commands[0]
+    #|  commands[0] = {
+    #|    name: root.name,
+    #|    aliases: root.aliases,
+    #|    doc: root.doc,
+    #|    globals: root.globals,
+    #|    subcommands: __golem_tool_concat_array(root.subcommands, [offset]),
+    #|    body: root.body,
+    #|  }
+    #|  for node in child.commands {
+    #|    commands.push(__golem_tool_rebase_node(node, offset))
+    #|  }
+    #|  { version: def.version, commands }
+    #|}
+    #|
+    #|
+  if namespace.is_empty() {
+    buf.write_string(source)
+  } else {
+    buf.write_string(
+      source.replace_all(
+        old="__golem_tool_",
+        new=descriptor_symbol_prefix(namespace),
+      ),
+    )
+  }
 }
 
 ///|
@@ -1641,6 +1662,8 @@ fn emit_descriptor(
   buf : StringBuilder,
   tool : ToolInfo,
   tools : Array[ToolInfo],
+  namespace : String,
+  include_invoker : Bool,
 ) -> Unit raise ToolEmitError {
   let plans : Array[Array[ProjectedToolArg]] = []
   for command in tool.commands {
@@ -1648,7 +1671,7 @@ fn emit_descriptor(
   }
   buf.write_string(
     "///|\nfn " +
-    raw_descriptor_name(tool) +
+    raw_descriptor_name(tool, namespace) +
     "() -> @tool.ToolDef {\n  try {\n    let def : @tool.ToolDef = { version: \"" +
     escape_string_lit(tool.version.unwrap_or("0.0.0")) +
     "\", commands: [\n",
@@ -1713,18 +1736,22 @@ fn emit_descriptor(
   let has_subtrees = tool.commands.any(command => command.subtree is Some(_))
   buf.write_string(
     "  ] }\n    def\n  } catch { error => abort(\"invalid generated raw tool definition: \" + repr(error)) }\n}\n\n///|\nfn " +
-    prepared_descriptor_name(tool) +
+    prepared_descriptor_name(tool, namespace) +
     "(strict_ancestors : @tool.GlobalsDef, parent_globals : @tool.GlobalsDef, override_name : String?, override_doc : @toolCommon.Doc?, override_aliases : Array[String]?) -> @tool.ToolDef {\n  try {\n    let carrier : @tool.ToolDef = { version: \"" +
     escape_string_lit(tool.version.unwrap_or("0.0.0")) +
-    "\", commands: [{ name: \"__golem_ancestry\", aliases: [], doc: { summary: \"\", description: \"\", examples: [] }, globals: strict_ancestors, subcommands: [], body: None }] }\n    let prepared = __golem_tool_extract_prepared(carrier.graft_subtree(" +
-    raw_descriptor_name(tool) +
+    "\", commands: [{ name: \"__golem_ancestry\", aliases: [], doc: { summary: \"\", description: \"\", examples: [] }, globals: strict_ancestors, subcommands: [], body: None }] }\n    let prepared = " +
+    descriptor_helper_name(namespace, "extract_prepared") +
+    "(carrier.graft_subtree(" +
+    raw_descriptor_name(tool, namespace) +
     "(), \"" +
     escape_string_lit(tool.name) +
     "\", parent_globals, override_name, override_doc, override_aliases))\n",
   )
   if has_subtrees {
     buf.write_string(
-      "    let descendant_ancestors = __golem_tool_concat_globals(strict_ancestors, prepared.commands[0].globals)\n",
+      "    let descendant_ancestors = " +
+      descriptor_helper_name(namespace, "concat_globals") +
+      "(strict_ancestors, prepared.commands[0].globals)\n",
     )
   }
   buf.write_string("    let def = prepared\n")
@@ -1748,7 +1775,7 @@ fn emit_descriptor(
       }
       buf.write_string(
         "    let child = " +
-        prepared_descriptor_name(child) +
+        prepared_descriptor_name(child, namespace) +
         "(descendant_ancestors, " +
         emit_globals(plans[i]) +
         ", " +
@@ -1757,18 +1784,22 @@ fn emit_descriptor(
         override_doc +
         ", " +
         override_aliases +
-        ")\n    let def = __golem_tool_append_prepared(def, child)\n",
+        ")\n    let def = " +
+        descriptor_helper_name(namespace, "append_prepared") +
+        "(def, child)\n",
       )
     }
   }
   buf.write_string(
     "    def\n  } catch { error => abort(\"invalid generated prepared tool definition: \" + repr(error)) }\n}\n\n///|\nfn " +
-    descriptor_name(tool) +
+    descriptor_name(tool, namespace) +
     "() -> @tool.ToolDef {\n  try {\n    " +
-    prepared_descriptor_name(tool) +
+    prepared_descriptor_name(tool, namespace) +
     "({ options: [], flags: [] }, { options: [], flags: [] }, None, None, None).normalize_inherited_globals()\n  } catch { error => abort(\"invalid generated tool definition: \" + repr(error)) }\n}\n\n",
   )
-  emit_invoker(buf, tool, tools, plans, leaves)
+  if include_invoker {
+    emit_invoker(buf, tool, tools, plans, leaves, namespace)
+  }
 }
 
 ///|
@@ -1898,6 +1929,7 @@ fn emit_invoker(
   tools : Array[ToolInfo],
   plans : Array[Array[ProjectedToolArg]],
   leaves : Array[Int],
+  namespace : String,
 ) -> Unit raise ToolEmitError {
   let name = "__golem_tool_invoke_" + tool.source_name
   let context = "tool " + tool.name + " invocation"
@@ -1905,7 +1937,7 @@ fn emit_invoker(
     "///|\nasync fn " +
     name +
     "(__golem_command_path : Array[String], __golem_input : @types.TypedSchemaValue, __golem_stdin : @asyncCore.Stream[Byte]?, __golem_stdout : @asyncCore.Sink[Byte]?, __golem_principal : @tool.Principal) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {\n  let __golem_def = " +
-    descriptor_name(tool) +
+    descriptor_name(tool, namespace) +
     "()\n  let __golem_index = match __golem_def.command_index_by_path(__golem_command_path) {\n    Some(__golem_index) => __golem_index\n    None => return @tool.reject_wire_invocation(__golem_input, __golem_stdin, @toolCommon.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n  let __golem_decoded = @tool.decode_canonical_input(__golem_def, __golem_index, __golem_input, \"" +
     escape_string_lit(context) +
     "\") catch { __golem_error => return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error) }\n",
@@ -2110,19 +2142,8 @@ fn subtree_tool_sources(
 pub fn generate_tool_registration(
   tools : Array[ToolInfo],
 ) -> @list.List[@syntax.Impl] raise ToolEmitError {
-  validate_subtree_cycles(tools)
-  validate_inherited_surfaces(tools)
-  for tool in tools {
-    validate_sibling_commands(tools, tool)
-  }
   let buf = StringBuilder::new()
-  emit_tool_error_schemas(buf, tools)
-  if tools.length() > 0 {
-    emit_descriptor_plumbing(buf)
-  }
-  for tool in tools {
-    emit_descriptor(buf, tool, tools)
-  }
+  emit_tool_descriptor_support(buf, tools, "", true, true)
   if tools.length() > 0 {
     let subtree_sources = subtree_tool_sources(tools)
     buf.write_string("///|\nfn init {\n  try {\n")
@@ -2133,7 +2154,7 @@ pub fn generate_tool_registration(
         } else {
           "    @tool.register_tool_def_invoker("
         }) +
-        descriptor_name(tool) +
+        descriptor_name(tool, "") +
         "(), __golem_tool_invoke_" +
         tool.source_name +
         ")\n",
@@ -2144,6 +2165,30 @@ pub fn generate_tool_registration(
     )
   }
   parse_generated_impls(buf.to_string(), "tool registration")
+}
+
+///|
+fn emit_tool_descriptor_support(
+  buf : StringBuilder,
+  tools : Array[ToolInfo],
+  namespace : String,
+  include_invokers : Bool,
+  include_error_schemas : Bool,
+) -> Unit raise ToolEmitError {
+  validate_subtree_cycles(tools)
+  validate_inherited_surfaces(tools)
+  for tool in tools {
+    validate_sibling_commands(tools, tool)
+  }
+  if include_error_schemas {
+    emit_tool_error_schemas(buf, tools)
+  }
+  if tools.length() > 0 {
+    emit_descriptor_plumbing(buf, namespace)
+  }
+  for tool in tools {
+    emit_descriptor(buf, tool, tools, namespace, include_invokers)
+  }
 }
 
 ///|
@@ -2317,7 +2362,7 @@ fn emit_tool_client_method(
   )
   buf.write_string(
     "  let __golem_def = " +
-    descriptor_name(root) +
+    descriptor_name(root, "") +
     "()\n  let __golem_index = match __golem_def.command_index_by_path(" +
     emit_strings(path) +
     ") {\n    Some(__golem_index) => __golem_index\n    None => return Err(@tool.tool_protocol_error(\"generated command path is missing from descriptor\"))\n  }\n  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch { __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error))) }\n  let __golem_values = " +

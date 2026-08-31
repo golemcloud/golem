@@ -13,6 +13,7 @@ import {
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model",
   "golemcloud/golem_sdk/tool",
+  "golemcloud/golem_sdk/tool-core",
   "moonbitlang/core/json",
 }
 
@@ -117,7 +118,7 @@ pub fn CanonicalBigBoundClient::drop(Self) -> Unit
 pub fn CanonicalBigBoundClient::new() -> Self
 
 type CanonicalCommitError
-pub impl @tool.ToolErrorSchema for CanonicalCommitError
+pub impl @tool-core.ToolErrorSchema for CanonicalCommitError
 
 pub(all) struct CanonicalCommitResult {
   hash : String
@@ -191,7 +192,7 @@ pub impl @schema.FromSchema for CanonicalGrepColorMode
 pub impl @schema.IntoSchema for CanonicalGrepColorMode
 
 type CanonicalGrepError
-pub impl @tool.ToolErrorSchema for CanonicalGrepError
+pub impl @tool-core.ToolErrorSchema for CanonicalGrepError
 
 pub(all) struct CanonicalGrepHit {
   file : @schema.Path
@@ -211,7 +212,7 @@ pub impl @schema.FromSchema for CanonicalLogEntry
 pub impl @schema.IntoSchema for CanonicalLogEntry
 
 type CanonicalLogError
-pub impl @tool.ToolErrorSchema for CanonicalLogError
+pub impl @tool-core.ToolErrorSchema for CanonicalLogError
 
 type CanonicalRemote
 pub fn CanonicalRemote::add(UInt, String, @schema.Url, Array[String], String?, Bool, Bool) -> Result[Unit, CanonicalRemoteError]
@@ -219,10 +220,10 @@ pub fn CanonicalRemote::remove(String) -> Result[Unit, CanonicalRemoteError]
 pub fn CanonicalRemote::set_url(String, @schema.Url, @schema.Url?, Bool, Bool, Bool) -> Result[Unit, CanonicalSetUrlError]
 
 type CanonicalRemoteError
-pub impl @tool.ToolErrorSchema for CanonicalRemoteError
+pub impl @tool-core.ToolErrorSchema for CanonicalRemoteError
 
 type CanonicalSetUrlError
-pub impl @tool.ToolErrorSchema for CanonicalSetUrlError
+pub impl @tool-core.ToolErrorSchema for CanonicalSetUrlError
 
 type CanonicalStash
 pub fn CanonicalStash::apply(String?, UInt?) -> Result[Unit, CanonicalStashError]
@@ -230,7 +231,7 @@ pub fn CanonicalStash::pop(String?, UInt?) -> Result[Unit, CanonicalStashError]
 pub fn CanonicalStash::stash(UInt, String, Bool) -> Result[Unit, CanonicalStashError]
 
 type CanonicalStashError
-pub impl @tool.ToolErrorSchema for CanonicalStashError
+pub impl @tool-core.ToolErrorSchema for CanonicalStashError
 
 type ConfiguredAgent
 pub fn ConfiguredAgent::get_request_count(Self) -> UInt64
@@ -334,7 +335,7 @@ pub(all) struct MoonbitStreamingClient {
 }
 pub fn MoonbitStreamingClient::drop(Self) -> Unit
 pub fn MoonbitStreamingClient::new() -> Self
-pub fn MoonbitStreamingClient::stream(Self, String, @async-core.Stream[Byte]) -> Result[@tool.TypedToolInvocation[UInt64, @tool.NoToolError], @tool.ToolError[@tool.NoToolError]]
+pub fn MoonbitStreamingClient::stream(Self, String, @async-core.Stream[Byte]) -> Result[@tool.TypedToolInvocation[UInt64, @tool-core.NoToolError], @tool.ToolError[@tool-core.NoToolError]]
 
 pub(all) enum Priority {
   Low

@@ -1190,7 +1190,7 @@ impl CursorTx<'_> {
         Ok(ReplayCallHandle::new(start_idx, receiver))
     }
 
-    /// Claims the first not-yet-claimed `Start` entry matching `matches_identity`, registering a
+    /// Looks for the first not-yet-claimed `Start` entry matching `matches_identity`, registering a
     /// resolver receiver keyed by the `Start`'s index and returning the registered handle together
     /// with the claimed entry. Shared core of every concurrent-replay `Start` claim.
     ///
@@ -1215,21 +1215,20 @@ impl CursorTx<'_> {
     /// `End`/`Cancelled` is reached only after the cursor has consumed the claimed `Start`, so
     /// terminal routing is unaffected. Matching `Start`s that share the same identity are claimed
     /// in oplog order, preserving the deterministic per-task/per-parent chain order. A replay
-    /// divergence (no matching `Start` recorded at all) surfaces as a `NotFound` claim error
-    /// instead of an immediate head mismatch.
+    /// divergence (no matching `Start` recorded at all) is reported to the caller instead of as an
+    /// immediate head mismatch.
     pub(super) async fn claim_start_matching(
         &mut self,
         matches_identity: impl Fn(&OplogEntry) -> bool,
-        expected: impl FnOnce() -> String,
-    ) -> Result<Option<(ReplayCallHandle, Box<OplogEntry>)>, WorkerExecutorError> {
+    ) -> Result<StartClaimAttempt, WorkerExecutorError> {
         // Head fast path: auto-drains awaited terminals and already-claimed `Start`s, then
         // consumes the head iff it matches this claim's identity.
         if let Some((start_idx, entry)) = self.try_get_oplog_entry(&matches_identity).await? {
             let handle = self.register_claimed_start(start_idx).await?;
-            return Ok(Some((handle, Box::new(entry))));
+            return Ok(StartClaimAttempt::Claimed(handle, Box::new(entry)));
         }
         if self.blocked_on_completion_delivery {
-            return Ok(None);
+            return Ok(StartClaimAttempt::Blocked);
         }
 
         // The head belongs to someone else: scan ahead for the first not-yet-claimed matching
@@ -1265,18 +1264,13 @@ impl CursorTx<'_> {
             OplogEntryLookupResult::Found { index, entry, .. } => {
                 if matches!(entry.as_ref(), OplogEntry::CompletionDelivered { .. }) {
                     self.blocked_on_completion_delivery = true;
-                    return Ok(None);
+                    return Ok(StartClaimAttempt::Blocked);
                 }
                 self.st.claimed_starts.insert(index);
                 let handle = self.register_claimed_start(index).await?;
-                Ok(Some((handle, entry)))
+                Ok(StartClaimAttempt::Claimed(handle, entry))
             }
-            OplogEntryLookupResult::NotFound { .. } => {
-                Err(WorkerExecutorError::unexpected_oplog_entry(
-                    expected(),
-                    "no matching Start between the replay cursor and the replay target".to_string(),
-                ))
-            }
+            OplogEntryLookupResult::NotFound { .. } => Ok(StartClaimAttempt::Missing),
         }
     }
 
@@ -1449,10 +1443,17 @@ impl CursorTx<'_> {
                 self.claim_start_matching_request(matches_identity, expected_request, expected)
                     .await?
             }
-            None => {
-                self.claim_start_matching(matches_identity, expected)
-                    .await?
-            }
+            None => match self.claim_start_matching(matches_identity).await? {
+                StartClaimAttempt::Claimed(handle, entry) => Some((handle, entry)),
+                StartClaimAttempt::Blocked => None,
+                StartClaimAttempt::Missing => {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        expected(),
+                        "no matching Start between the replay cursor and the replay target"
+                            .to_string(),
+                    ));
+                }
+            },
         };
         let Some((handle, entry)) = claimed else {
             return Ok(None);
@@ -1476,6 +1477,122 @@ impl CursorTx<'_> {
             handle.start_idx()
         );
         Ok(Some((handle, entry)))
+    }
+
+    /// Claims an exact scope `Start`. When `recover_missing` is set, a missing scope switches to
+    /// live mode only after proving that doing so cannot abandon another concurrent operation.
+    pub(super) async fn claim_scope_start_with_missing_recovery(
+        &mut self,
+        claim: &StartClaim,
+        recover_missing: bool,
+    ) -> Result<StartClaimAttempt, WorkerExecutorError> {
+        debug_assert!(!claim.carries_request());
+        let outcome = self
+            .claim_start_matching(|entry| {
+                matches!(entry, OplogEntry::Start {
+                    function_name,
+                    invocation_id,
+                    observational_owner,
+                    request,
+                    durable_function_type,
+                    parent_start_index,
+                    ..
+                } if claim
+                    .expected_function_name()
+                    .is_some_and(|expected| function_name == expected)
+                    && claim
+                        .expected_function_type()
+                        .is_some_and(|expected| durable_function_type == expected)
+                    && invocation_id.is_none()
+                    && observational_owner.is_none()
+                    && request.is_none()
+                    && *parent_start_index == claim.expected_parent_start_index())
+            })
+            .await?;
+        if !matches!(outcome, StartClaimAttempt::Missing) {
+            return Ok(outcome);
+        }
+        if !recover_missing {
+            return Ok(StartClaimAttempt::Missing);
+        }
+
+        if self.st.concurrent_resolver.has_any_claims()
+            || !self.st.claimed_starts.is_empty()
+            || !self.st.claimed_custom_invocation_ids.is_empty()
+            || !self.st.custom_subtrees.is_empty()
+        {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                claim.expected_description(),
+                "the scope Start is missing while another concurrent replay claim is active"
+                    .to_string(),
+            ));
+        }
+
+        let expected_name = claim
+            .expected_function_name()
+            .expect("a recoverable scope claim always has an exact function name");
+        let replay_target = self.cursor.replay_target();
+        let name_collision = self
+            .cursor
+            .scan_oplog(
+                OplogIndex::INITIAL,
+                replay_target.next(),
+                &self.st.skipped_regions,
+                self.st
+                    .skipped_regions
+                    .find_next_deleted_region(OplogIndex::INITIAL),
+                OplogIndex::NONE,
+                |entry, _, _| {
+                    matches!(entry, OplogEntry::Start { function_name, .. }
+                        if function_name == expected_name)
+                },
+                |_, _, _| true,
+                (),
+                |_, _, _| {},
+            )
+            .await;
+        if matches!(name_collision, OplogEntryLookupResult::Found { .. }) {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                claim.expected_description(),
+                "a scope Start with the same discriminator exists but cannot be claimed"
+                    .to_string(),
+            ));
+        }
+
+        let suffix_start = self.cursor.last_replayed_index().next();
+        let unsafe_suffix = self
+            .cursor
+            .scan_oplog(
+                suffix_start,
+                replay_target.next(),
+                &self.st.skipped_regions,
+                self.st
+                    .skipped_regions
+                    .find_next_deleted_region(suffix_start),
+                OplogIndex::NONE,
+                |entry, begin_idx, state| {
+                    matches!(entry, OplogEntry::CompletionDelivered { .. })
+                        || !entry.no_concurrent_side_effect(begin_idx, state)
+                },
+                |_, _, _| true,
+                ScopeScanState {
+                    root: OplogIndex::NONE,
+                    descendants: HashSet::new(),
+                    current_is_descendant_scope: false,
+                },
+                |entry, idx, state| entry.track_scope_membership(idx, state),
+            )
+            .await;
+        if matches!(unsafe_suffix, OplogEntryLookupResult::Found { .. }) {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                claim.expected_description(),
+                "the scope Start is missing before an unsafe concurrent side effect or delivery boundary"
+                    .to_string(),
+            ));
+        }
+
+        self.switch_to_live();
+        Ok(StartClaimAttempt::Missing)
     }
 
     /// Switches the cursor to live mode: records `ReplayFinished` if replay was still in progress,

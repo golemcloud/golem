@@ -57,6 +57,7 @@ use crate::durable_host::durability::{
 };
 use crate::durable_host::replay_state::{
     OplogEntryLookupResult, ReplayState, ReplayToLiveOutcome, ReplayToLiveRole,
+    ScopeStartClaimOutcome,
 };
 use crate::durable_host::{
     AtomicRegionLease, DurableScopeKind, DurableWorkerCtx, PublicDurableWorkerState,

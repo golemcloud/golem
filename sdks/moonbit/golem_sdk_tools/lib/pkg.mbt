@@ -174,7 +174,7 @@ pub fn ensure_pkg_import(
   content : String,
   import_path : String,
   import_alias : String,
-) -> String {
+) -> String raise ComponentRoleError {
   let lines : Array[String] = content
     .split("\n")
     .map(fn(sv) { sv.to_string() })
@@ -204,12 +204,26 @@ pub fn ensure_pkg_import(
         if entry.effective_alias == import_alias {
           return content
         }
-        let suffix = lines[i].unsafe_substring(
-          start=entry.code_end,
-          end=lines[i].length(),
+        component_role_fail(
+          "moon.pkg package '" +
+          import_path +
+          "' is already imported as '" +
+          entry.effective_alias +
+          "'; generated source requires alias '" +
+          import_alias +
+          "'",
         )
-        lines[i] = entry.indent + "\"\{import_path}\" \{import_alias}," + suffix
-        return lines.join("\n")
+        abort("")
+      }
+      if entry.effective_alias == import_alias {
+        component_role_fail(
+          "moon.pkg import alias " +
+          import_alias +
+          " is already used by unrelated package '" +
+          entry.path +
+          "'",
+        )
+        abort("")
       }
     }
   }
@@ -235,6 +249,310 @@ pub fn ensure_pkg_import(
     result.push(lines[i])
   }
   result.join("\n")
+}
+
+///|
+fn is_generated_role_package(path : String) -> Bool {
+  path == "golemcloud/golem_sdk/gen" ||
+  path == "golemcloud/golem_sdk/gen-tool-middleware" ||
+  path == "golemcloud/golem_sdk/gen-agent-tool-middleware"
+}
+
+///|
+fn rewrite_pkg_import_entry(
+  lines : Array[String],
+  index : Int,
+  entry : PkgImportEntry,
+  path : String,
+  import_alias : String,
+) -> Unit {
+  let suffix = lines[index].unsafe_substring(
+    start=entry.code_end,
+    end=lines[index].length(),
+  )
+  lines[index] = entry.indent + "\"\{path}\" \{import_alias}," + suffix
+}
+
+///|
+/// Selects exactly one role-specific generated package under the stable @gen
+/// alias. A previous role import is replaced, while unrelated ownership of the
+/// alias is rejected.
+pub fn ensure_role_gen_import(
+  content : String,
+  import_path : String,
+) -> String raise ComponentRoleError {
+  if not(is_generated_role_package(import_path)) {
+    component_role_fail(
+      "Unsupported generated role package '" + import_path + "'",
+    )
+  }
+  let lines : Array[String] = content
+    .split("\n")
+    .map(fn(sv) { sv.to_string() })
+    .collect()
+  guard find_regular_import_block(lines) is Some((import_start, import_end)) else {
+    return ensure_pkg_import(content, import_path, "@gen")
+  }
+  let mut gen_alias_index = -1
+  let mut gen_alias_entry : PkgImportEntry? = None
+  let mut selected_index = -1
+  let mut selected_entry : PkgImportEntry? = None
+  for i in (import_start + 1)..<import_end {
+    if parse_pkg_import_entry(lines[i]) is Some(entry) {
+      if entry.path == import_path {
+        if selected_index >= 0 {
+          component_role_fail(
+            "Generated role package '" +
+            import_path +
+            "' is imported more than once",
+          )
+        }
+        selected_index = i
+        selected_entry = Some(entry)
+      }
+      if entry.effective_alias == "@gen" {
+        if gen_alias_index >= 0 {
+          component_role_fail(
+            "moon.pkg import alias @gen is used more than once",
+          )
+        }
+        if not(is_generated_role_package(entry.path)) {
+          component_role_fail(
+            "moon.pkg import alias @gen is already used by unrelated package '" +
+            entry.path +
+            "'",
+          )
+        }
+        gen_alias_index = i
+        gen_alias_entry = Some(entry)
+      }
+    }
+  }
+  if selected_index >= 0 && selected_entry is Some(entry) {
+    rewrite_pkg_import_entry(lines, selected_index, entry, import_path, "@gen")
+    if gen_alias_index >= 0 && gen_alias_index != selected_index {
+      let result : Array[String] = []
+      for i, line in lines {
+        if i != gen_alias_index {
+          result.push(line)
+        }
+      }
+      return result.join("\n")
+    }
+    return lines.join("\n")
+  }
+  if gen_alias_index >= 0 && gen_alias_entry is Some(entry) {
+    rewrite_pkg_import_entry(lines, gen_alias_index, entry, import_path, "@gen")
+    return lines.join("\n")
+  }
+  ensure_pkg_import(content, import_path, "@gen")
+}
+
+///|
+fn is_role_tool_package(path : String) -> Bool {
+  path == "golemcloud/golem_sdk/tool" ||
+  path == "golemcloud/golem_sdk/tool-core"
+}
+
+///|
+/// Selects the host-neutral or ambient tool package under the stable @tool
+/// alias without rewriting user-owned imports.
+pub fn ensure_role_tool_import(
+  content : String,
+  import_path : String,
+) -> String raise ComponentRoleError {
+  if !is_role_tool_package(import_path) {
+    component_role_fail("Unsupported role tool package '" + import_path + "'")
+  }
+  let lines : Array[String] = content
+    .split("\n")
+    .map(fn(sv) { sv.to_string() })
+    .collect()
+  if find_regular_import_block(lines) is Some((import_start, import_end)) {
+    for i in (import_start + 1)..<import_end {
+      if parse_pkg_import_entry(lines[i]) is Some(entry) &&
+        is_role_tool_package(entry.path) &&
+        entry.path != import_path {
+        component_role_fail(
+          "moon.pkg role tool package '" +
+          entry.path +
+          "' conflicts with required package '" +
+          import_path +
+          "'",
+        )
+        abort("")
+      }
+    }
+  }
+  ensure_pkg_import(content, import_path, "@tool")
+}
+
+///|
+let generated_import_marker = "// Generated by golem_sdk_tools"
+
+///|
+fn is_generated_import_entry(line : String) -> Bool {
+  line.trim().has_suffix(generated_import_marker) &&
+  parse_pkg_import_entry(line) is Some(_)
+}
+
+///|
+fn remove_owned_generated_imports(content : String) -> String {
+  let lines : Array[String] = content
+    .split("\n")
+    .map(fn(sv) { sv.to_string() })
+    .collect()
+  guard find_regular_import_block(lines) is Some((import_start, import_end)) else {
+    return content
+  }
+  let result : Array[String] = []
+  for i, line in lines {
+    if i > import_start && i < import_end && is_generated_import_entry(line) {
+      continue
+    }
+    result.push(line)
+  }
+  result.join("\n")
+}
+
+///|
+fn validate_user_import_for_requirement(
+  content : String,
+  import_path : String,
+  import_alias : String,
+) -> Bool raise ComponentRoleError {
+  let lines : Array[String] = content
+    .split("\n")
+    .map(fn(sv) { sv.to_string() })
+    .collect()
+  guard find_regular_import_block(lines) is Some((import_start, import_end)) else {
+    return false
+  }
+  let mut matching_path_count = 0
+  for i in (import_start + 1)..<import_end {
+    if parse_pkg_import_entry(lines[i]) is Some(entry) {
+      if entry.path == import_path {
+        matching_path_count += 1
+        if entry.effective_alias != import_alias {
+          component_role_fail(
+            "moon.pkg package '" +
+            import_path +
+            "' is already imported as '" +
+            entry.effective_alias +
+            "'; generated source requires alias '" +
+            import_alias +
+            "'",
+          )
+          abort("")
+        }
+      }
+      if entry.path != import_path && entry.effective_alias == import_alias {
+        component_role_fail(
+          "moon.pkg import alias " +
+          import_alias +
+          " is already used by unrelated package '" +
+          entry.path +
+          "'",
+        )
+        abort("")
+      }
+    }
+  }
+  if matching_path_count > 1 {
+    component_role_fail(
+      "moon.pkg package '" + import_path + "' is imported more than once",
+    )
+    abort("")
+  }
+  matching_path_count == 1
+}
+
+///|
+pub fn reconcile_pure_role_pkg_imports(
+  content : String,
+) -> String raise ComponentRoleError {
+  let lines : Array[String] = content
+    .split("\n")
+    .map(fn(sv) { sv.to_string() })
+    .collect()
+  guard find_regular_import_block(lines) is Some((import_start, import_end)) else {
+    return content
+  }
+  let result : Array[String] = []
+  let mut changed = false
+  for i, line in lines {
+    if i > import_start &&
+      i < import_end &&
+      parse_pkg_import_entry(line) is Some(entry) &&
+      entry.path == "golemcloud/golem_sdk/tool" {
+      if is_generated_import_entry(line) {
+        changed = true
+        continue
+      } else {
+        component_role_fail(
+          "Pure tool-middleware moon.pkg must not import ambient package 'golemcloud/golem_sdk/tool'",
+        )
+        return content
+      }
+    }
+    result.push(line)
+  }
+  if changed {
+    result.join("\n")
+  } else {
+    content
+  }
+}
+
+///|
+fn mark_generated_import(content : String, path : String) -> String {
+  let lines : Array[String] = content
+    .split("\n")
+    .map(fn(sv) { sv.to_string() })
+    .collect()
+  guard find_regular_import_block(lines) is Some((import_start, import_end)) else {
+    return content
+  }
+  for i in (import_start + 1)..<import_end {
+    if parse_pkg_import_entry(lines[i]) is Some(entry) && entry.path == path {
+      if !is_generated_import_entry(lines[i]) {
+        lines[i] = lines[i] + " " + generated_import_marker
+      }
+      return lines.join("\n")
+    }
+  }
+  content
+}
+
+///|
+/// Reconciles imports owned by generated source. Existing user-owned imports
+/// are reused but never marked for later removal. Imports inserted by this
+/// function are tagged and removed once no generated file requires them.
+pub fn reconcile_generated_pkg_imports(
+  content : String,
+  required : Array[(String, String)],
+  forbid_ambient_tool? : Bool = false,
+) -> String raise ComponentRoleError {
+  let mut result = remove_owned_generated_imports(content)
+  if forbid_ambient_tool {
+    result = reconcile_pure_role_pkg_imports(result)
+  }
+  let added : Map[String, Unit] = {}
+  for item in required {
+    let (path, import_alias) = item
+    if added.contains(path) {
+      continue
+    }
+    added[path] = ()
+    let reused = validate_user_import_for_requirement(
+      result, path, import_alias,
+    )
+    if !reused {
+      result = ensure_pkg_import(result, path, import_alias)
+      result = mark_generated_import(result, path)
+    }
+  }
+  result
 }
 
 ///|

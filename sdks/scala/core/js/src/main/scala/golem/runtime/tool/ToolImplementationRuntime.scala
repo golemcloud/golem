@@ -17,6 +17,7 @@
 package golem.runtime.tool
 
 import golem.FutureInterop
+import golem.host.js.tool.{JsByteStreamIterator, JsWasiInputStream, JsWasiOutputStream}
 import golem.runtime.tool.host.ToolHostApi
 import golem.schema.wire.SchemaWire
 import golem.tool._
@@ -28,8 +29,8 @@ import scala.scalajs.js.JSConverters._
 
 /** The stdin handle of a JS-guest tool invocation. */
 final class JsToolInputStream(val underlying: ToolHostApi.RawByteStream) extends ToolInputStream {
-  private val iterator                                               = underlying.asyncIterator()
-  def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
+  private val iterator                                                        = underlying.asyncIterator()
+  override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
     FutureInterop
       .fromPromise(iterator.next())
       .map { next =>
@@ -43,19 +44,22 @@ final class JsToolInputStream(val underlying: ToolHostApi.RawByteStream) extends
         }
       }(ToolInvokerRuntime.executionContext)
 
-  def cancel(): Future[Unit] =
+  override def cancel(): Future[Unit] =
     FutureInterop.fromPromise(iterator.returnIterator()).map(_ => ())(ToolInvokerRuntime.executionContext)
+
+  override private[golem] def close(): Future[Unit] =
+    cancel().recover { case _ => () }(ToolInvokerRuntime.executionContext)
 }
 
 /** The stdout handle of a JS-guest tool invocation. */
 final class JsToolOutputStream(val underlying: ToolHostApi.RawToolStdoutWriter) extends ToolOutputStream {
   private var terminal: Option[Future[Either[StreamWriteError, Unit]]] = None
 
-  def write(bytes: Array[Byte]): Future[Either[StreamWriteError, Unit]] =
+  override def write(bytes: Array[Byte]): Future[Either[StreamWriteError, Unit]] =
     call(underlying.write(js.typedarray.Uint8Array.from(bytes.map(_.toShort).toJSArray)))
-  def finish(): Future[Either[StreamWriteError, Unit]] =
+  override def finish(): Future[Either[StreamWriteError, Unit]] =
     selectTerminal(underlying.finish())
-  def fail(reason: ByteStreamFailure): Future[Either[StreamWriteError, Unit]] =
+  override def fail(reason: ByteStreamFailure): Future[Either[StreamWriteError, Unit]] =
     selectTerminal(underlying.fail(encodeFailure(reason)))
 
   private[tool] def finishInvocation(): Future[Unit] =
@@ -103,6 +107,8 @@ final class JsToolOutputStream(val underlying: ToolHostApi.RawToolStdoutWriter) 
     case ByteStreamFailure.ResourceExhausted => js.Dynamic.literal(tag = "resource-exhausted")
     case ByteStreamFailure.Failed(message)   => js.Dynamic.literal(tag = "failed", `val` = message)
   }
+
+  override private[golem] def close(): Future[Unit] = finishInvocation()
 }
 object JsToolOutputStream {
   def decodeFailure(value: js.Dynamic): ByteStreamFailure = value.tag.asInstanceOf[String] match {
@@ -110,6 +116,51 @@ object JsToolOutputStream {
     case "abandoned"          => ByteStreamFailure.Abandoned
     case "resource-exhausted" => ByteStreamFailure.ResourceExhausted
     case "failed"             => ByteStreamFailure.Failed(value.`val`.asInstanceOf[String])
+  }
+}
+
+/** Adapts the middleware ABI's legacy `stream<u8>` stdin. */
+final class JsMiddlewareInputStream(val underlying: JsWasiInputStream) extends ToolInputStream {
+  private val lifecycle = new JsMiddlewareStreamLifecycle(() => underlying.asyncIterator())
+
+  override private[golem] def close(): Future[Unit] = lifecycle.close()
+}
+
+/** Adapts the middleware ABI's legacy result-carried stdout stream. */
+final class JsMiddlewareOutputStream(val underlying: JsWasiOutputStream) extends ToolOutputStream {
+  private val lifecycle = new JsMiddlewareStreamLifecycle(() => underlying.asyncIterator())
+
+  override private[golem] def close(): Future[Unit] = lifecycle.close()
+}
+
+private final class JsMiddlewareStreamLifecycle(iterator: () => JsByteStreamIterator) {
+  private implicit val ec: scala.concurrent.ExecutionContext =
+    scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+
+  private var closed: Option[Future[Unit]] = None
+
+  def close(): Future[Unit] = synchronized {
+    closed.getOrElse {
+      val result =
+        try {
+          val rawIterator = iterator()
+          val returnFn    = rawIterator.asInstanceOf[js.Dynamic].selectDynamic("return")
+          if (js.typeOf(returnFn) == "function")
+            FutureInterop
+              .fromPromise(
+                returnFn
+                  .applyDynamic("call")(rawIterator)
+                  .asInstanceOf[js.Promise[js.Any]]
+              )
+              .map(_ => ())
+              .recover { case _ => () }
+          else Future.successful(())
+        } catch {
+          case _: Throwable => Future.successful(())
+        }
+      closed = Some(result)
+      result
+    }
   }
 }
 
@@ -177,27 +228,11 @@ private[golem] object ToolImplementationRuntime {
       }
     }
 
-  private[tool] def errorToWire(error: ToolInvokeError): WitToolError =
-    error match {
-      case ToolInvokeError.InvalidToolName(name)    => WitToolError.InvalidToolName(name)
-      case ToolInvokeError.InvalidCommandPath(path) => WitToolError.InvalidCommandPath(path)
-      case ToolInvokeError.InvalidInput(message)    => WitToolError.InvalidInput(message)
-      case ToolInvokeError.ConstraintViolation(m)   => WitToolError.ConstraintViolation(m)
-      case ToolInvokeError.InvalidResult(message)   => WitToolError.InvalidResult(message)
-      case ToolInvokeError.Custom(payload)          =>
-        WitToolError.CustomError(SchemaWire.typedSchemaValueToWit(payload))
-    }
+  private[tool] def errorToWire(error: ToolInvokeError[golem.schema.TypedSchemaValue]): WitToolError =
+    ToolInvokeError.toWire(error)
 
-  private[tool] def errorFromWire(error: WitToolError): ToolInvokeError =
-    error match {
-      case WitToolError.InvalidToolName(name)    => ToolInvokeError.InvalidToolName(name)
-      case WitToolError.InvalidCommandPath(path) => ToolInvokeError.InvalidCommandPath(path)
-      case WitToolError.InvalidInput(message)    => ToolInvokeError.InvalidInput(message)
-      case WitToolError.ConstraintViolation(m)   => ToolInvokeError.ConstraintViolation(m)
-      case WitToolError.InvalidResult(message)   => ToolInvokeError.InvalidResult(message)
-      case WitToolError.CustomError(payload)     =>
-        ToolInvokeError.Custom(SchemaWire.typedSchemaValueFromWit(payload))
-    }
+  private[tool] def errorFromWire(error: WitToolError): ToolInvokeError[golem.schema.TypedSchemaValue] =
+    ToolInvokeError.fromWire(error)
 
   /**
    * The JS-guest tool invocation environment: sibling tool lookup goes through
@@ -214,7 +249,7 @@ private[golem] object ToolImplementationRuntime {
             input: golem.schema.TypedSchemaValue,
             stdin: Option[ToolInputStream],
             principal: golem.Principal
-          ): Future[Either[ToolInvokeError, ToolInvokeResult]] =
+          ): Future[Either[ToolInvokeError[golem.schema.TypedSchemaValue], ToolInvokeResult]] =
             val rawStdin = stdin match {
               case Some(stream: JsToolInputStream) => Right(Some(stream.underlying))
               case None                            => Right(None)
@@ -233,7 +268,8 @@ private[golem] object ToolImplementationRuntime {
                   case Right(result) =>
                     Right(
                       ToolInvokeResult(
-                        result.result.map(SchemaWire.typedSchemaValueFromWit)
+                        result.result.map(SchemaWire.typedSchemaValueFromWit),
+                        None
                       )
                     )
                   case Left(error) => Left(errorFromWire(error))

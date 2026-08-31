@@ -1,0 +1,56 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk_example1/golem_tool_middleware_examples"
+
+import {
+  "golemcloud/golem_sdk/tool-core",
+  "golemcloud/golem_sdk/tool-middleware",
+}
+
+// Values
+pub async fn audit(@tool-middleware.RawToolInvocation, @tool-middleware.UnderlyingTool) -> Result[@tool-middleware.RawInvocationResult, @tool-middleware.ToolInvokeError[@tool-middleware.RawTypedSchemaValue]]
+
+pub fn cabi_realloc(Int, Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncInvokeToolMiddleware(Int, Int, Int) -> Int
+
+pub fn wasmExportDiscoverToolMiddlewares() -> Int
+
+pub fn wasmExportDiscoverToolMiddlewaresPostReturn(Int) -> Unit
+
+pub fn wasmExportGetToolMiddleware(Int, Int) -> Int
+
+pub fn wasmExportGetToolMiddlewarePostReturn(Int) -> Unit
+
+pub fn wasmExportInvokeToolMiddleware(Int) -> Int
+
+// Errors
+
+// Types and methods
+type FileAdapter
+pub async fn FileAdapter::read(StorageUnderlying, String) -> Result[String, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+
+type MessagePolicy
+pub async fn MessagePolicy::send(MessagesUnderlying, String) -> Result[String, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+
+type Messages
+pub fn Messages::send(String) -> String
+
+pub struct MessagesUnderlying {
+  // private fields
+}
+pub async fn MessagesUnderlying::send(Self, String) -> Result[String, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+
+type PublicFiles
+pub fn PublicFiles::read(String) -> String
+
+type Storage
+pub fn Storage::fetch(String) -> String
+
+pub struct StorageUnderlying {
+  // private fields
+}
+pub async fn StorageUnderlying::fetch(Self, String) -> Result[String, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+
+// Type aliases
+
+// Traits

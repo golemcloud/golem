@@ -222,6 +222,7 @@ where
         tool_invocation_identity: None,
         parent_start_index: None,
         observational_owner: None,
+        ..Default::default()
     };
     let mut handle = DurableCallSession::<P3HttpClientSend, P>::start_access_with_options(
         store,
@@ -295,7 +296,8 @@ where
                     }),
                     SerializableP3HttpClientSendResult::HttpError(_) => None,
                 };
-                consume_replayed_request::<Ctx, U>(store, req, recorded_request_body).await?;
+                let replayed_request_body_drain =
+                    consume_replayed_request::<Ctx, U>(store, req, recorded_request_body).await?;
                 let recorded_status = match &response.result {
                     SerializableP3HttpClientSendResult::SuccessWithRecordedRequestBody {
                         headers,
@@ -344,6 +346,7 @@ where
                                     recorded_status,
                                     recorded_request_body: send_start_index,
                                     durable_body: None,
+                                    replayed_request_body_drain,
                                 }),
                                 body_is_placeholder: true,
                                 observational_owner,
@@ -413,7 +416,7 @@ where
     }
 
     if authorization_denied {
-        consume_replayed_request::<Ctx, U>(store, req, None).await?;
+        let _ = consume_replayed_request::<Ctx, U>(store, req, None).await?;
         let error_code = ErrorCode::HttpRequestDenied;
         let result =
             SerializableP3HttpClientSendResult::HttpError(serialize_error_code(&error_code));
@@ -827,6 +830,7 @@ where
                         recorded_status: response_status,
                         recorded_request_body: send_start_index,
                         durable_body: Some(physical.body.clone()),
+                        replayed_request_body_drain: None,
                     }),
                     body_is_placeholder: false,
                     observational_owner,

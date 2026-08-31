@@ -30,8 +30,32 @@ import scala.scalajs.js.annotation.JSName
 // `undefined` (`js.UndefOr`) for absent options, camelCase record fields, and
 // the trailing-underscore `default_` field names emitted by wasm-rquickjs for
 // the reserved word `default`. Schema positions reuse the
-// `golem:core/types@2.0.0` facades from [[golem.host.js.schema]].
+// `golem:core/types@2.0.0` facades from [[golem.host.js.schema]]. The middleware
+// ABI still carries Preview 3 `stream<u8>` values as JavaScript async iterables.
 // ---------------------------------------------------------------------------
+
+@js.native
+sealed trait JsByteStreamIteratorResult extends js.Object {
+  def done: Boolean = js.native
+  def value: Int    = js.native
+}
+
+@js.native
+sealed trait JsByteStreamIterator extends js.Object {
+  def next(): js.Promise[JsByteStreamIteratorResult] = js.native
+}
+
+@js.native
+sealed trait JsWasiInputStream extends js.Object {
+  @JSName(js.Symbol.asyncIterator)
+  def asyncIterator(): JsByteStreamIterator = js.native
+}
+
+@js.native
+sealed trait JsWasiOutputStream extends js.Object {
+  @JSName(js.Symbol.asyncIterator)
+  def asyncIterator(): JsByteStreamIterator = js.native
+}
 
 // === Documentation ===
 
@@ -574,11 +598,69 @@ object JsToolError {
 @js.native
 sealed trait JsInvocationResult extends js.Object {
   def result: js.UndefOr[JsTypedSchemaValue] = js.native
+  def stdout: js.UndefOr[JsWasiOutputStream] = js.native
 }
 object JsInvocationResult {
-  def apply(result: js.UndefOr[JsTypedSchemaValue]): JsInvocationResult = {
+  def apply(
+    result: js.UndefOr[JsTypedSchemaValue],
+    stdout: js.UndefOr[JsWasiOutputStream] = js.undefined
+  ): JsInvocationResult = {
     val o = js.Dynamic.literal()
     result.foreach(v => o.updateDynamic("result")(v))
+    stdout.foreach(v => o.updateDynamic("stdout")(v))
     o.asInstanceOf[JsInvocationResult]
   }
+}
+
+@js.native
+sealed trait JsMonomorphicToolMiddlewareScope extends js.Object {
+  def presented: JsTool            = js.native
+  def expected: js.UndefOr[JsTool] = js.native
+}
+object JsMonomorphicToolMiddlewareScope {
+  def apply(presented: JsTool, expected: js.UndefOr[JsTool]): JsMonomorphicToolMiddlewareScope = {
+    val o = js.Dynamic.literal("presented" -> presented)
+    expected.foreach(v => o.updateDynamic("expected")(v))
+    o.asInstanceOf[JsMonomorphicToolMiddlewareScope]
+  }
+}
+
+@js.native
+sealed trait JsToolMiddlewareScope extends js.Object {
+  def tag: String = js.native
+}
+object JsToolMiddlewareScope {
+  def monomorphic(value: JsMonomorphicToolMiddlewareScope): JsToolMiddlewareScope =
+    JsShape.tagged[JsToolMiddlewareScope]("monomorphic", value)
+
+  val universal: JsToolMiddlewareScope =
+    js.Dynamic.literal("tag" -> "universal").asInstanceOf[JsToolMiddlewareScope]
+}
+
+@js.native
+sealed trait JsToolMiddleware extends js.Object {
+  def name: String                 = js.native
+  def aliases: js.Array[String]    = js.native
+  def doc: JsDoc                   = js.native
+  def scope: JsToolMiddlewareScope = js.native
+}
+object JsToolMiddleware {
+  def apply(
+    name: String,
+    aliases: js.Array[String],
+    doc: JsDoc,
+    scope: JsToolMiddlewareScope
+  ): JsToolMiddleware =
+    js.Dynamic
+      .literal("name" -> name, "aliases" -> aliases, "doc" -> doc, "scope" -> scope)
+      .asInstanceOf[JsToolMiddleware]
+}
+
+@js.native
+trait JsUnderlyingTool extends js.Object {
+  def invoke(
+    commandPath: js.Array[String],
+    input: JsTypedSchemaValue,
+    stdin: js.UndefOr[JsWasiInputStream]
+  ): js.Promise[JsInvocationResult] = js.native
 }

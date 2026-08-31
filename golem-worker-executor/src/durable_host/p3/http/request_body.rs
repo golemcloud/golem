@@ -545,6 +545,14 @@ pub(super) enum RecordedRequestBodyTerminal {
     Error(SerializableHttpErrorCode),
 }
 
+/// Facts observed while fully draining the deterministically reproduced guest request body.
+/// Recovery compares them with the healed recording before physically re-issuing the request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ReplayedRequestBodyRecordingProof {
+    pub(super) final_length: u64,
+    pub(super) trailers_present: bool,
+}
+
 impl RecordedRequestBodyScan {
     pub(super) fn trailers_recorded(&self) -> bool {
         self.trailers_index.is_some()
@@ -1177,6 +1185,7 @@ where
                 tool_invocation_identity: None,
                 parent_start_index: None,
                 observational_owner,
+                ..Default::default()
             },
             async |_| Ok(HostRequestNoInput {}),
         )

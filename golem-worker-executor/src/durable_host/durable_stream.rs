@@ -5351,10 +5351,11 @@ pub(crate) mod tests {
         StreamAttachmentControl, StreamAttachmentStateV1, StreamSegmentSource, registration_record,
     };
     use crate::services::oplog::{
-        CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OrderedOplogStart,
-        PendingUpload,
+        CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OplogReadSource,
+        OrderedOplogStart, PendingUpload, checked_range_end, exact_from_source, fail_stop,
     };
     use async_trait::async_trait;
+    use futures::FutureExt;
     use golem_common::base_model::component::{ComponentId, ComponentRevision};
     use golem_common::base_model::durable_stream::{
         AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, InputStreamHighWaterV1,
@@ -5511,13 +5512,20 @@ pub(crate) mod tests {
             n: u64,
         ) -> BTreeMap<OplogIndex, OplogEntry> {
             let state = self.state.lock().unwrap();
-            state
-                .entries
-                .range(oplog_index..)
-                .take(n as usize)
-                .filter(|(index, _)| **index <= state.committed)
-                .map(|(index, entry)| (*index, entry.clone()))
-                .collect()
+            let end = fail_stop(checked_range_end(oplog_index, n));
+            let entries = end.map_or_else(BTreeMap::new, |end| {
+                state
+                    .entries
+                    .range(oplog_index..=end)
+                    .map(|(index, entry)| (*index, entry.clone()))
+                    .collect()
+            });
+            fail_stop(exact_from_source(
+                OplogReadSource::Other("durable stream test oplog"),
+                oplog_index,
+                n,
+                entries,
+            ))
         }
 
         async fn length(&self) -> u64 {
@@ -5578,6 +5586,49 @@ pub(crate) mod tests {
             let second = self.add(make_second(first)).await;
             (first, second)
         }
+    }
+
+    #[test]
+    async fn test_oplog_read_exact_includes_uncommitted_entries() {
+        let oplog = TestOplog::default();
+        let entry = OplogEntry::interrupted();
+        let index = oplog.add(entry.clone()).await;
+
+        let entries = oplog.read_exact(index, 1).await;
+
+        assert_eq!(entries.get(&index), Some(&entry));
+    }
+
+    #[test]
+    async fn test_oplog_read_exact_rejects_incomplete_range() {
+        let oplog = TestOplog::default();
+        let index = oplog.add(OplogEntry::interrupted()).await;
+
+        let result = std::panic::AssertUnwindSafe(oplog.read_exact(index, 2))
+            .catch_unwind()
+            .await;
+
+        assert!(
+            result.is_err(),
+            "read_exact accepted a range whose second entry is missing"
+        );
+    }
+
+    #[test]
+    async fn test_oplog_read_exact_accepts_single_entry_at_max_index() {
+        let oplog = TestOplog::default();
+        let index = OplogIndex::from_u64(u64::MAX);
+        let entry = OplogEntry::interrupted();
+        oplog
+            .state
+            .lock()
+            .unwrap()
+            .entries
+            .insert(index, entry.clone());
+
+        let entries = oplog.read_exact(index, 1).await;
+
+        assert_eq!(entries.get(&index), Some(&entry));
     }
 
     pub(crate) struct TestIdentity {
