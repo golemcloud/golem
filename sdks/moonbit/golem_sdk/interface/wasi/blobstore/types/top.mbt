@@ -3,22 +3,22 @@
 /// information about a container
 pub(all) struct ContainerMetadata {
       name : String; created_at : UInt64
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// information about an object
 pub(all) struct ObjectMetadata {
       name : String; container : String; created_at : UInt64; size : UInt64
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// identifier for an object that includes its container name
 pub(all) struct ObjectId {
       container : String; object : String
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// A data blob value. The value can be of any type that can be represented
 /// in a byte array.
 /// Soon: switch to `resource value { ... }`
-pub(all) struct OutgoingValue(Int) derive(Show, Eq)
+pub(all) struct OutgoingValue(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn OutgoingValue::drop(self : OutgoingValue) -> Unit {
@@ -34,7 +34,7 @@ pub fn OutgoingValue::drop(self : OutgoingValue) -> Unit {
 /// 2. `incoming-value-consume-async` consumes the value asynchronously and returns the
 ///    value as a `stream<u8>`.
 /// Soon: switch to `resource incoming-value { ... }`
-pub(all) struct IncomingValue(Int) derive(Show, Eq)
+pub(all) struct IncomingValue(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn IncomingValue::drop(self : IncomingValue) -> Unit {
@@ -137,4 +137,3 @@ pub fn IncomingValue::size(self : IncomingValue) -> UInt64 {
       return ret
 
 }
-

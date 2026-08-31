@@ -48,9 +48,9 @@ pub async fn load(
                   }
                 None => Err("Failed to construct agent instance")
               }
-            Err(e) => Err("Failed to construct agent: \{e}")
+            Err(e) => Err("Failed to construct agent: \{Repr(e)}")
           }
-        Err(e) => Err("Failed to parse agent ID: \{e}")
+        Err(e) => Err("Failed to parse agent ID: \{Repr(e)}")
       }
     }
   }
@@ -83,7 +83,7 @@ fn parse_snapshot_envelope(
   if snapshot.mime_type == "application/json" {
     let chars : Array[Char] = []
     for i in 0..<snapshot.payload.length() {
-      chars.push(Char::from_int(snapshot.payload[i].to_int()))
+      chars.push(Int::unsafe_to_char(snapshot.payload[i].to_int()))
     }
     let json_str = String::from_array(chars)
     let json = @json.parse(json_str) catch {
@@ -140,7 +140,7 @@ fn parse_snapshot_envelope(
         }
         let principal_chars : Array[Char] = []
         for i in 0..<principal_len {
-          principal_chars.push(Char::from_int(data[5 + i].to_int()))
+          principal_chars.push(Int::unsafe_to_char(data[5 + i].to_int()))
         }
         let principal_str = String::from_array(principal_chars)
         let principal_json = @json.parse(principal_str) catch {

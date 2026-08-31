@@ -15,7 +15,7 @@
 /// of the error. In the future, this will be extended to provide more information
 /// about the error.
 /// Soon: switch to `resource error { ... }`
-pub(all) suberror Error_(Int) derive(Show, Eq)
+pub(all) suberror Error_ { Error_(Int) } derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn Error_::drop(self : Error_) -> Unit {
@@ -35,4 +35,3 @@ pub fn Error_::trace(self : Error_) -> String {
       return ret
 
 }
-

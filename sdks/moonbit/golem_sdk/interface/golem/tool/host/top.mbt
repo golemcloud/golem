@@ -10,7 +10,7 @@
 /// component-id) for host-implemented privileged tools (§4.6).
 pub(all) struct RegisteredTool {
       definition : @common.Tool; implemented_by : @types.ComponentId
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) suberror RpcError {
       ProtocolError(String)
@@ -18,9 +18,9 @@ pub(all) suberror RpcError {
       NotFound(String)
       RemoteInternalError(String)
       RemoteToolError(@common.ToolError)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
-pub(all) struct ToolRpc(Int) derive(Show, Eq)
+pub(all) struct ToolRpc(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn ToolRpc::drop(self : ToolRpc) -> Unit {
@@ -28,7 +28,7 @@ pub fn ToolRpc::drop(self : ToolRpc) -> Unit {
       wasmImportResourceDropToolRpc(resource)
 }
 ///|
-pub(all) struct FutureInvokeResult(Int) derive(Show, Eq)
+pub(all) struct FutureInvokeResult(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn FutureInvokeResult::drop(self : FutureInvokeResult) -> Unit {
@@ -37996,4 +37996,3 @@ pub fn FutureInvokeResult::cancel(self : FutureInvokeResult) -> Unit {
       wasmImportMethodFutureInvokeResultCancel(handle);
 
 }
-

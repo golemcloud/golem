@@ -3,12 +3,12 @@
 /// Represents a Golem environment
 pub(all) struct EnvironmentId {
       uuid : @types.Uuid
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Describes how to update an agent to a different component version
 pub(all) enum UpdateMode {
       AUTOMATIC; SNAPSHOT_BASED
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 pub fn UpdateMode::ordinal(self : UpdateMode) -> Int {
       match self {
@@ -17,6 +17,7 @@ pub fn UpdateMode::ordinal(self : UpdateMode) -> Int {
       }
 }
 
+///|
 pub fn UpdateMode::from(self : Int) -> UpdateMode {
       match self {
             0 => AUTOMATIC
@@ -28,7 +29,7 @@ pub fn UpdateMode::from(self : Int) -> UpdateMode {
 /// Operators used in filtering enumerated agents
 pub(all) enum FilterComparator {
       EQUAL; NOT_EQUAL; GREATER_EQUAL; GREATER; LESS_EQUAL; LESS
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 pub fn FilterComparator::ordinal(self : FilterComparator) -> Int {
       match self {
@@ -41,6 +42,7 @@ pub fn FilterComparator::ordinal(self : FilterComparator) -> Int {
       }
 }
 
+///|
 pub fn FilterComparator::from(self : Int) -> FilterComparator {
       match self {
             0 => EQUAL
@@ -56,7 +58,7 @@ pub fn FilterComparator::from(self : Int) -> FilterComparator {
 /// Operators used on strings in filtering enumerated agents
 pub(all) enum StringFilterComparator {
       EQUAL; NOT_EQUAL; LIKE; NOT_LIKE; STARTS_WITH
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 pub fn StringFilterComparator::ordinal(self : StringFilterComparator) -> Int {
       match self {
@@ -68,6 +70,7 @@ pub fn StringFilterComparator::ordinal(self : StringFilterComparator) -> Int {
       }
 }
 
+///|
 pub fn StringFilterComparator::from(self : Int) -> StringFilterComparator {
       match self {
             0 => EQUAL
@@ -82,7 +85,7 @@ pub fn StringFilterComparator::from(self : Int) -> StringFilterComparator {
 /// The current status of an agent
 pub(all) enum AgentStatus {
       RUNNING; IDLE; SUSPENDED; INTERRUPTED; RETRYING; FAILED; EXITED
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 pub fn AgentStatus::ordinal(self : AgentStatus) -> Int {
       match self {
@@ -96,6 +99,7 @@ pub fn AgentStatus::ordinal(self : AgentStatus) -> Int {
       }
 }
 
+///|
 pub fn AgentStatus::from(self : Int) -> AgentStatus {
       match self {
             0 => RUNNING
@@ -112,32 +116,32 @@ pub fn AgentStatus::from(self : Int) -> AgentStatus {
 /// Describes a filter condition on agent IDs when enumerating agents
 pub(all) struct AgentNameFilter {
       comparator : StringFilterComparator; value : String
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Describes a filter condition on the agent status when enumerating agents
 pub(all) struct AgentStatusFilter {
       comparator : FilterComparator; value : AgentStatus
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Describes a filter condition on the component version when enumerating agents
 pub(all) struct AgentVersionFilter {
       comparator : FilterComparator; value : UInt64
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Describes a filter condition on the agent's creation time when enumerating agents
 pub(all) struct AgentCreatedAtFilter {
       comparator : FilterComparator; value : UInt64
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Describes a filter condition on the agent's environment variables when enumerating agents
 pub(all) struct AgentEnvFilter {
       name : String; comparator : StringFilterComparator; value : String
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Describes a filter condition on the agent's configuration variables when enumerating agents
 pub(all) struct AgentConfigVarsFilter {
       name : String; comparator : StringFilterComparator; value : String
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Describes one filter condition for enumerating agents
 pub(all) enum AgentPropertyFilter {
@@ -147,25 +151,25 @@ pub(all) enum AgentPropertyFilter {
       CreatedAt(AgentCreatedAtFilter)
       Env(AgentEnvFilter)
       Config(AgentConfigVarsFilter)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Combines multiple filter conditions with an `AND` relationship for enumerating agents
 pub(all) struct AgentAllFilter {
       filters : Array[AgentPropertyFilter]
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Combines multiple groups of filter conditions with an `OR` relationship for enumerating agents
 pub(all) struct AgentAnyFilter {
       filters : Array[AgentAllFilter]
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Metadata about an agent
 pub(all) struct AgentMetadata {
       agent_id : @types.AgentId; args : Array[String]; env : Array[(String, String)]; config : Array[(String, String)]; status : AgentStatus; component_revision : UInt64; retry_count : UInt64; environment_id : EnvironmentId
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Creates an agent enumeration
-pub(all) struct GetAgents(Int) derive(Show, Eq)
+pub(all) struct GetAgents(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn GetAgents::drop(self : GetAgents) -> Unit {
@@ -177,18 +181,18 @@ pub fn GetAgents::drop(self : GetAgents) -> Unit {
 pub(all) enum RevertAgentTarget {
       RevertToOplogIndex(UInt64)
       RevertLastInvocations(UInt64)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Error returned by an operation targeting another agent.
 pub(all) suberror AgentOperationError {
       PermissionDenied
       BackendError(String)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Details about the fork result
 pub(all) struct ForkDetails {
       forked_phantom_id : @types.Uuid
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Indicates which agent the code is running on after `fork`.
 /// The parameter contains details about the fork result, such as the phantom-ID of the newly
@@ -196,9 +200,9 @@ pub(all) struct ForkDetails {
 pub(all) enum ForkResult {
       Original(ForkDetails)
       Forked(ForkDetails)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
-pub(all) struct GetPromiseResult(Int) derive(Show, Eq)
+pub(all) struct GetPromiseResult(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn GetPromiseResult::drop(self : GetPromiseResult) -> Unit {
@@ -209,7 +213,7 @@ pub fn GetPromiseResult::drop(self : GetPromiseResult) -> Unit {
 /// Snapshot payload
 pub(all) struct Snapshot {
       payload : FixedArray[Byte]; mime_type : String
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Creates an agent enumeration request. It is going to enumerate all agents of all the agent types
 /// defined in `component-id`, filtered by the conditions given by `filter`. If `precise` is true,
@@ -976,4 +980,3 @@ pub fn fork() -> Result[ForkResult, AgentOperationError] {
       return ret
 
 }
-

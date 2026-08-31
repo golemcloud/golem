@@ -20,4 +20,3 @@ pub fn get_directories() -> Array[(@types.Descriptor, String)] {
       return ret
 
 }
-

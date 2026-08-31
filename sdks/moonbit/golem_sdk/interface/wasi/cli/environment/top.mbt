@@ -73,4 +73,3 @@ pub fn get_initial_cwd() -> String? {
       return ret
 
 }
-

@@ -6,7 +6,7 @@
 /// observational entries belonging to the invocation. Finishing consumes the resource and
 /// persists the response. Dropping it without finishing leaves the invocation incomplete so
 /// normal recovery re-executes it.
-pub(all) struct LiveCustomDurableInvocation(Int) derive(Show, Eq)
+pub(all) struct LiveCustomDurableInvocation(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn LiveCustomDurableInvocation::drop(self : LiveCustomDurableInvocation) -> Unit {
@@ -18,7 +18,7 @@ pub fn LiveCustomDurableInvocation::drop(self : LiveCustomDurableInvocation) -> 
 /// (and expect) the latest version.
 pub(all) enum OplogEntryVersion {
       V1; V2
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 pub fn OplogEntryVersion::ordinal(self : OplogEntryVersion) -> Int {
       match self {
@@ -27,6 +27,7 @@ pub fn OplogEntryVersion::ordinal(self : OplogEntryVersion) -> Int {
       }
 }
 
+///|
 pub fn OplogEntryVersion::from(self : Int) -> OplogEntryVersion {
       match self {
             0 => V1
@@ -39,13 +40,13 @@ pub fn OplogEntryVersion::from(self : Int) -> OplogEntryVersion {
 /// contains a value and its schema graph together, making the user-defined payload observable by external tools.
 pub(all) struct PersistedDurableFunctionInvocation {
       timestamp : @system-clock.Instant; function_name : String; response : @types.TypedSchemaValue; function_type : @oplog.WrappedFunctionType; entry_version : OplogEntryVersion
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// The result of opening a custom durable invocation.
 pub(all) enum CustomDurableInvocation {
       Live(LiveCustomDurableInvocation)
       Replayed(PersistedDurableFunctionInvocation)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Completes the invocation with its schema-carrying response.
 pub fn LiveCustomDurableInvocation::finish(this : LiveCustomDurableInvocation, response : @types.TypedSchemaValue, forced_commit : Bool) -> Unit {
@@ -7346,4 +7347,3 @@ pub fn begin_custom_durable_invocation(function_name : String, request : @types.
       return ret
 
 }
-

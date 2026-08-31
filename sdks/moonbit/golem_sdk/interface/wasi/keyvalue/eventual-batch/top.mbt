@@ -216,4 +216,3 @@ pub fn delete_many(bucket : @types.Bucket, keys : Array[String]) -> Result[Unit,
       return ret
 
 }
-

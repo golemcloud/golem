@@ -6,6 +6,7 @@
 /// `input` is a value tree whose root encodes the constructor's parameter
 /// list (one record field per declared `named-field`, in declaration order).
 /// The guest interprets it against its own constructor `input-schema`.
+#warnings("-declaration_unimplemented")
 declare pub async fn initialize(agent_type : String, input : @types.SchemaValueTree, principal : @common.Principal, background_group : @async-core.TaskGroup[Unit]) -> Result[Unit, @common.AgentError]
 ///|
 /// Invokes an agent. If create was not called before, it fails.
@@ -14,11 +15,13 @@ declare pub async fn initialize(agent_type : String, input : @types.SchemaValueT
 /// Streams are represented recursively by `stream-value` nodes. The result
 /// is `none` when the method's `output-schema` is `unit`, and `some(value)`
 /// for a `single` output.
+#warnings("-declaration_unimplemented")
 declare pub async fn invoke(method_name : String, input : @types.SchemaValueTree, principal : @common.Principal, background_group : @async-core.TaskGroup[Unit]) -> Result[@types.SchemaValueTree?, @common.AgentError]
 ///|
 /// Gets the agent type. If create was not called before, it fails
+#warnings("-declaration_unimplemented")
 declare pub fn get_definition() -> @common.AgentType
 ///|
 /// Gets the agent types defined by this component
+#warnings("-declaration_unimplemented")
 declare pub fn discover_agent_types() -> Result[Array[@common.AgentType], @common.AgentError]
-

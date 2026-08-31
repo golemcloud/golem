@@ -183,4 +183,3 @@ pub fn move_object(src : @types.ObjectId, dest : @types.ObjectId) -> Result[Unit
       return ret
 
 }
-

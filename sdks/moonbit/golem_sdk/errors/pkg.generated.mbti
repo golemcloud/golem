@@ -28,4 +28,3 @@ pub fn invalid_type_error(String) -> @common.AgentError
 // Type aliases
 
 // Traits
-

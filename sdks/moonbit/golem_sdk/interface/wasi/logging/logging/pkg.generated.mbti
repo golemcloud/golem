@@ -1,6 +1,10 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "golemcloud/golem_sdk/interface/wasi/logging/logging"
 
+import {
+  "moonbitlang/core/debug",
+}
+
 // Values
 pub fn log(Level, String, String) -> Unit
 
@@ -14,7 +18,7 @@ pub(all) enum Level {
   WARN
   ERROR
   CRITICAL
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn Level::from(Int) -> Self
 pub fn Level::ordinal(Self) -> Int
 

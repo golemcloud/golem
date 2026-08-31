@@ -7,4 +7,3 @@ pub fn get_stdout() -> @streams.OutputStream {
       return ret
 
 }
-

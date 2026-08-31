@@ -69,7 +69,7 @@ pub fn refine_text(
   let root = refinement_root(graph, "text")
   let current : @types.TextRestrictions = match root.body {
     @model.SchemaTypeBody::String =>
-      { languages: None, min_length: None, max_length: None, regex: None }
+      { languages: None, min_length: None, max_length: None, regex: None, }
     @model.SchemaTypeBody::Text(restrictions) => restrictions
     other => raise RefinementTypeMismatch("text", schema_kind_name(other))
   }
@@ -147,7 +147,7 @@ fn numeric_bound(
 ) -> @types.NumericBound raise ToolBuildError {
   match body {
     S8(_) | S16(_) | S32(_) | S64(_) => {
-      let value : Int64 = @strconv.from_str(token) catch {
+      let value : Int64 = @string.FromStr::from_str(token[:]) catch {
         _ =>
           raise InvalidNumericBound("invalid signed numeric bound '\{token}'")
       }
@@ -163,7 +163,7 @@ fn numeric_bound(
       @types.NumericBound::Signed(value)
     }
     U8(_) | U16(_) | U32(_) | U64(_) => {
-      let value : UInt64 = @strconv.from_str(token) catch {
+      let value : UInt64 = @string.FromStr::from_str(token[:]) catch {
         _ =>
           raise InvalidNumericBound("invalid unsigned numeric bound '\{token}'")
       }
@@ -179,7 +179,7 @@ fn numeric_bound(
       @types.NumericBound::Unsigned(value)
     }
     F32(_) | F64(_) => {
-      let value : Double = @strconv.from_str(token) catch {
+      let value : Double = @string.FromStr::from_str(token[:]) catch {
         _ =>
           raise InvalidNumericBound("invalid floating-point bound '\{token}'")
       }
@@ -265,5 +265,5 @@ pub fn refine_numeric(
     F64(_) => @model.SchemaTypeBody::F64(restrictions)
     _ => abort("numeric kind checked above")
   }
-  { defs: graph.defs, root: { body, metadata: root.metadata } }
+  { defs: graph.defs, root: { body, metadata: root.metadata, }, }
 }

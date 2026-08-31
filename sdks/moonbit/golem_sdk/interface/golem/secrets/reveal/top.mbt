@@ -2568,4 +2568,3 @@ pub fn reveal(s : @types.Secret, expected : @types.SchemaGraph) -> Result[@types
       return ret
 
 }
-

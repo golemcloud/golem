@@ -138,4 +138,3 @@ pub fn exists(bucket : @types.Bucket, key : String) -> Result[Bool, @wasi-keyval
       return ret
 
 }
-

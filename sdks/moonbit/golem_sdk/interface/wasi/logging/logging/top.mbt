@@ -3,7 +3,7 @@
 /// A log level, describing a kind of message.
 pub(all) enum Level {
       TRACE; DEBUG; INFO; WARN; ERROR; CRITICAL
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 pub fn Level::ordinal(self : Level) -> Int {
       match self {
@@ -16,6 +16,7 @@ pub fn Level::ordinal(self : Level) -> Int {
       }
 }
 
+///|
 pub fn Level::from(self : Int) -> Level {
       match self {
             0 => TRACE
@@ -44,4 +45,3 @@ pub fn log(level : Level, context : String, message : String) -> Unit {
       mbt_ffi_free(ptr0)
 
 }
-
