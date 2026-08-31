@@ -40,11 +40,9 @@ impl RepoError {
 
     pub fn is_transient(&self) -> bool {
         match self {
-            RepoError::InternalError(err) => match err.downcast_ref::<sqlx::Error>() {
-                Some(sqlx::Error::PoolTimedOut | sqlx::Error::Io(_)) => true,
-                Some(sqlx::Error::Database(db_err)) => is_transient_database_error(db_err.as_ref()),
-                _ => false,
-            },
+            RepoError::InternalError(err) => err
+                .downcast_ref::<sqlx::Error>()
+                .is_some_and(is_transient_sqlx_error),
             RepoError::UniqueViolation(_) => false,
         }
     }
@@ -61,6 +59,19 @@ impl RepoError {
                 .is_some_and(|sqlx_err| matches!(sqlx_err, sqlx::Error::PoolTimedOut)),
             RepoError::UniqueViolation(_) => false,
         }
+    }
+}
+
+/// Whether a failed query is worth retrying.
+///
+/// Exposed separately from [`RepoError::is_transient`] so that a caller holding a `sqlx::Error`
+/// that never became a `RepoError` - a pool or migration failure during storage initialization -
+/// classifies it the same way.
+pub fn is_transient_sqlx_error(error: &sqlx::Error) -> bool {
+    match error {
+        sqlx::Error::PoolTimedOut | sqlx::Error::Io(_) => true,
+        sqlx::Error::Database(db_err) => is_transient_database_error(db_err.as_ref()),
+        _ => false,
     }
 }
 

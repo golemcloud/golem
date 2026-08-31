@@ -27,7 +27,7 @@ use golem_common::SafeDisplay;
 use golem_common::model::AgentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::serialization::{deserialize, serialize};
-use golem_service_base::repo::RepoError;
+use golem_service_base::repo::{RepoError, is_transient_sqlx_error};
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 
@@ -54,6 +54,31 @@ pub enum KeyValueStorageError {
 impl KeyValueStorageError {
     pub fn other(message: impl Display) -> Self {
         Self::Other(message.to_string())
+    }
+
+    /// Classifies a failure to *initialize* a backend - opening its connection pool, or running its
+    /// migrations - which a lazily-created backend does on the path of the operation that first
+    /// needs it.
+    ///
+    /// A transient cause is [`Self::NotAttempted`] rather than [`Self::Transient`]: initialization
+    /// runs before the operation, so whatever the caller was about to do, none of it was applied,
+    /// and even a non-idempotent operation is safe to retry. Anything else stays [`Self::Other`],
+    /// so a misconfigured or corrupt database fails immediately instead of spending the whole retry
+    /// budget on an outcome that cannot change.
+    pub fn initialization_failed(context: &str, error: anyhow::Error) -> Self {
+        // The whole chain, not just the outermost error: a migration failure arrives wrapped in a
+        // `sqlx::migrate::MigrateError` whose source is the sqlx error worth classifying on.
+        let transient = error
+            .chain()
+            .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
+            .any(is_transient_sqlx_error);
+
+        let message = format!("{context}: {error:#}");
+        if transient {
+            Self::NotAttempted(message)
+        } else {
+            Self::Other(message)
+        }
     }
 
     /// Whether retrying the failed operation is safe. `idempotent` describes the operation, not the
@@ -841,6 +866,77 @@ mod tests {
 
         let error = KeyValueStorageError::from(RepoError::from(sqlx::Error::RowNotFound));
         assert!(matches!(error, KeyValueStorageError::Other(_)), "{error:?}");
+    }
+
+    /// Initialization runs before the operation that needed the backend, so a transient cause is
+    /// `NotAttempted`: nothing was applied, whatever the caller was about to do.
+    #[test]
+    fn transient_initialization_failure_is_not_attempted() {
+        let error = KeyValueStorageError::initialization_failed(
+            "pool initialization failed",
+            anyhow::Error::from(sqlx::Error::PoolTimedOut),
+        );
+        assert!(
+            matches!(error, KeyValueStorageError::NotAttempted(_)),
+            "{error:?}"
+        );
+        assert!(error.to_string().contains("pool initialization failed"));
+    }
+
+    /// The classification looks through the whole chain, because a migration failure reaches us
+    /// wrapped: `sqlx::migrate::MigrateError` is what `downcast_ref` would see, and it is not what
+    /// carries the retryability.
+    #[test]
+    fn transient_cause_is_found_through_a_wrapping_error() {
+        let wrapped = anyhow::Error::from(WrappingError(sqlx::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "connection reset",
+        ))));
+        assert!(
+            wrapped.downcast_ref::<sqlx::Error>().is_none(),
+            "the wrapper, not the sqlx error, is the outermost error"
+        );
+
+        let error = KeyValueStorageError::initialization_failed("migration failed", wrapped);
+        assert!(
+            matches!(error, KeyValueStorageError::NotAttempted(_)),
+            "{error:?}"
+        );
+    }
+
+    /// A database that cannot be opened or migrated at all fails immediately. Retrying it would
+    /// spend the whole budget on an outcome that cannot change.
+    #[test]
+    fn permanent_initialization_failure_is_not_retried() {
+        let error = KeyValueStorageError::initialization_failed(
+            "migration failed",
+            anyhow::anyhow!("no such file or directory"),
+        );
+        assert!(matches!(error, KeyValueStorageError::Other(_)), "{error:?}");
+        assert!(!error.is_retryable(true));
+
+        let error = KeyValueStorageError::initialization_failed(
+            "migration failed",
+            anyhow::Error::from(sqlx::Error::RowNotFound),
+        );
+        assert!(matches!(error, KeyValueStorageError::Other(_)), "{error:?}");
+    }
+
+    /// Stands in for `sqlx::migrate::MigrateError`: an error whose retryability is only visible in
+    /// its source.
+    #[derive(Debug)]
+    struct WrappingError(sqlx::Error);
+
+    impl std::fmt::Display for WrappingError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "while executing migrations")
+        }
+    }
+
+    impl std::error::Error for WrappingError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
     }
 
     #[test]

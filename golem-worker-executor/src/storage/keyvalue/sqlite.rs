@@ -34,11 +34,18 @@ pub struct SqliteKeyValueStorage {
 }
 
 impl SqliteKeyValueStorage {
-    pub async fn configured(config: &DbSqliteConfig) -> Result<Self, String> {
+    /// Fails with a [`KeyValueStorageError`] rather than a string so that a lazily-created database
+    /// (see [`MultiSqliteKeyValueStorage`](super::multi_sqlite::MultiSqliteKeyValueStorage)) is
+    /// initialized under the same retry policy as the operations it serves; a string reaches the
+    /// decorator as `Other` and is never retried.
+    pub async fn configured(config: &DbSqliteConfig) -> Result<Self, KeyValueStorageError> {
         Self::migrate(config).await?;
 
         let pool = SqlitePool::configured(config).await.map_err(|err| {
-            format!("Sqlite key-value storage pool initialization failed: {err:?}")
+            KeyValueStorageError::initialization_failed(
+                "Sqlite key-value storage pool initialization failed",
+                err,
+            )
         })?;
 
         Ok(Self { pool })
@@ -46,11 +53,16 @@ impl SqliteKeyValueStorage {
 
     /// Apply the key-value storage migrations on the given sqlite config without
     /// creating a pool.
-    pub async fn migrate(config: &DbSqliteConfig) -> Result<(), String> {
+    pub async fn migrate(config: &DbSqliteConfig) -> Result<(), KeyValueStorageError> {
         let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
         golem_service_base::db::sqlite::migrate(config, migrations.sqlite_migrations())
             .await
-            .map_err(|err| format!("Sqlite key-value storage migration failed: {err:?}"))
+            .map_err(|err| {
+                KeyValueStorageError::initialization_failed(
+                    "Sqlite key-value storage migration failed",
+                    err,
+                )
+            })
     }
 
     pub fn new(pool: SqlitePool) -> Self {

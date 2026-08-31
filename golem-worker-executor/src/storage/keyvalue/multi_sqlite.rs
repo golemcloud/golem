@@ -29,7 +29,10 @@ use tokio::sync::Mutex;
 /// KeyValueStorage implementation that uses multiple separate SQLite databases depending
 /// on the namespace.
 pub struct MultiSqliteKeyValueStorage {
-    cache: Cache<String, (), SqliteKeyValueStorage, String>,
+    // The cache's error type is the storage error itself, so a transient failure to open or
+    // migrate a database is classified like any other - and retried by the decorator above -
+    // instead of collapsing into `KeyValueStorageError::Other`.
+    cache: Cache<String, (), SqliteKeyValueStorage, KeyValueStorageError>,
     hash_cache: Arc<Mutex<HashCache>>,
     root_dir: PathBuf,
     max_connections: u32,
@@ -71,7 +74,7 @@ impl MultiSqliteKeyValueStorage {
         max_connections: u32,
         foreign_keys: bool,
         database: String,
-    ) -> Result<SqliteKeyValueStorage, String> {
+    ) -> Result<SqliteKeyValueStorage, KeyValueStorageError> {
         let config = DbSqliteConfig {
             database,
             max_connections,
@@ -83,7 +86,7 @@ impl MultiSqliteKeyValueStorage {
     async fn storage_by_namespace(
         &self,
         namespace: &KeyValueStorageNamespace,
-    ) -> Result<SqliteKeyValueStorage, String> {
+    ) -> Result<SqliteKeyValueStorage, KeyValueStorageError> {
         let db = self.namespace_to_db(namespace).await;
         let max_connections = self.max_connections;
         let foreign_keys = self.foreign_keys;
@@ -388,5 +391,40 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
             .await?
             .query_sorted_set(svc_name, api_name, entity_name, namespace, key, min, max)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    test_r::enable!();
+
+    /// The database is opened on the path of the first operation that needs it, so the failure to
+    /// open it must reach the caller classified - not flattened into an unretryable `Other` by a
+    /// trip through `String`. A path that cannot be opened at all stays `Other`, which is what a
+    /// caller should see immediately rather than after the whole retry budget.
+    #[test]
+    async fn lazy_initialization_failure_keeps_its_classification() {
+        let tempdir = tempfile::tempdir().unwrap();
+        // A directory where the database file belongs: SQLite cannot open it, and no retry would
+        // change that.
+        std::fs::create_dir(tempdir.path().join("kv-schedule.db")).unwrap();
+        let storage = MultiSqliteKeyValueStorage::new(tempdir.path(), 1, false);
+
+        let error = storage
+            .get(
+                "test",
+                "get",
+                "key-value",
+                KeyValueStorageNamespace::Schedule,
+                "key",
+            )
+            .await
+            .expect_err("a database that cannot be opened must fail the operation");
+
+        assert!(matches!(error, KeyValueStorageError::Other(_)), "{error:?}");
+        assert!(!error.is_retryable(true));
     }
 }
