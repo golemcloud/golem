@@ -16,7 +16,7 @@ pub impl @schema.IntoSchema for RunError with fn register_in(b) {
             "Broken",
             payload=@schema.register_in_with(
               b,
-              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+              (@schema.TypeTag::{ } : @schema.TypeTag[String]),
             ),
           ),
         ]),

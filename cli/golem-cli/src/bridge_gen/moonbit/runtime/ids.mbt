@@ -34,7 +34,7 @@ let rng : @random.Rand = @random.Rand::chacha8(seed=int64_to_bytes(@async.now())
 
 ///|
 fn int64_to_bytes(v : Int64) -> Bytes {
-  let buf = @buffer.new()
+  let buf = Buffer()
   for round in 0..<4 {
     let mut x = v ^ (round.to_int64() << 32)
     for _ in 0..<8 {
@@ -66,7 +66,7 @@ pub fn random_uuid() -> String {
   // Set version (4) and variant (RFC 4122) bits.
   bytes[6] = (bytes[6] & 0x0F) | 0x40
   bytes[8] = (bytes[8] & 0x3F) | 0x80
-  let sb = StringBuilder::new()
+  let sb = StringBuilder()
   for i in 0..<16 {
     if i == 4 || i == 6 || i == 8 || i == 10 {
       sb.write_string("-")

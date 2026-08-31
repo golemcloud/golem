@@ -195,4 +195,3 @@ pub using @tool-core {type ValueIsRefDef}
 pub using @tool-core {trait ToolErrorSchema}
 
 // Traits
-

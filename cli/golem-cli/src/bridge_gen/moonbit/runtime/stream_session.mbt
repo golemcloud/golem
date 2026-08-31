@@ -47,7 +47,7 @@ pub(all) struct PendingInput {
 ///|
 pub(all) struct InputRegistration {
   id : String
-  next : async () -> SchemaValue? raise
+  next : async () -> SchemaValue?
   try_next : () -> SchemaValue?? raise
   cancel : async () -> Unit
   wire_kind : String
@@ -68,7 +68,7 @@ pub struct StreamEncodeContext {
 
 ///|
 pub fn StreamEncodeContext::new() -> StreamEncodeContext {
-  { inputs: [] }
+  { inputs: [], }
 }
 
 ///|
@@ -83,10 +83,11 @@ priv struct OutputBatch {
 }
 
 ///|
+#warnings("-unused_field")
 priv struct LiveStreamSession {
   mut socket : @websocket.Conn
   url : String
-  headers : Map[String, String]
+  headers : @http.Headers
   mut session_token : String?
   mut attempt_id : String
   idempotency_key : String
@@ -121,7 +122,7 @@ priv struct LiveStreamSession {
 ///|
 async fn connect_socket(
   url : String,
-  headers : Map[String, String],
+  headers : @http.Headers,
 ) -> @websocket.Conn {
   @websocket.connect(
     url,
@@ -133,7 +134,7 @@ async fn connect_socket(
 ///|
 async fn connect_start_exact_retry(
   url : String,
-  headers : Map[String, String],
+  headers : @http.Headers,
   frozen_start : String,
 ) -> (@websocket.Conn, Map[String, Json]) {
   for ;; {
@@ -151,10 +152,7 @@ async fn connect_start_exact_retry(
 }
 
 ///|
-async fn send_session_text(
-  session : LiveStreamSession,
-  text : String,
-) -> Unit {
+async fn send_session_text(session : LiveStreamSession, text : String) -> Unit {
   session.socket_write.acquire()
   defer session.socket_write.release()
   session.socket.send_text(text)
@@ -203,7 +201,8 @@ async fn resume_session(session : LiveStreamSession) -> Unit {
           }
           raise BridgeError(expect_string(get_field(response, "message")))
         }
-        _ => raise BridgeError("invalid-attachment-state: invalid resume response")
+        _ =>
+          raise BridgeError("invalid-attachment-state: invalid resume response")
       }
     } catch {
       @websocket.ConnectionClosed(_, _) => @async.sleep(50)
@@ -222,11 +221,7 @@ async fn resume_session(session : LiveStreamSession) -> Unit {
   }
   let accepted = accepted.unwrap()
   let socket = socket.unwrap()
-  validate_acceptance_identity(
-    accepted,
-    attempt_id,
-    session.idempotency_key,
-  )
+  validate_acceptance_identity(accepted, attempt_id, session.idempotency_key)
   session.socket_write.acquire()
   session.socket = socket
   session.socket_write.release()
@@ -250,12 +245,16 @@ async fn resume_session(session : LiveStreamSession) -> Unit {
   install_mappings(session, accepted)
   for input in session.inputs {
     if input.stream_token is Some(_) && input.channel is None {
-      raise BridgeError("invalid-attachment-state: resume omitted an input mapping")
+      raise BridgeError(
+        "invalid-attachment-state: resume omitted an input mapping",
+      )
     }
   }
   session.output_queues.each((token, _) => {
     if !session.output_channels.contains(token) {
-      raise BridgeError("invalid-attachment-state: resume omitted an output mapping")
+      raise BridgeError(
+        "invalid-attachment-state: resume omitted an output mapping",
+      )
     }
   })
   session.session_token = Some(
@@ -271,7 +270,7 @@ async fn resume_session(session : LiveStreamSession) -> Unit {
 }
 
 ///|
-let stream_sessions : Map[String, LiveStreamSession] = {}
+let stream_sessions : Map[String, LiveStreamSession] = Map([])
 
 ///|
 fn fresh_id() -> String {
@@ -282,7 +281,7 @@ fn fresh_id() -> String {
 pub fn[T] register_input_stream(
   context : StreamEncodeContext,
   stream : AgentStream[T],
-  encode : async (T) -> SchemaValue raise,
+  encode : async (T) -> SchemaValue,
   codec : PublicValueCodec,
   wire_kind? : String = "json",
 ) -> SchemaValue raise {
@@ -294,7 +293,7 @@ pub fn[T] register_input_stream(
       None => None
     }
   }
-  let mut try_next : () -> SchemaValue?? raise = fn() raise { None }
+  let mut try_next : () -> SchemaValue?? raise = fn() { None }
   let mut cancel = async fn() { stream.cancel_input() }
   if wire_kind == "u8" {
     let prefetched : @aqueue.Queue[SchemaValue?] = @aqueue.Queue(
@@ -304,7 +303,7 @@ pub fn[T] register_input_stream(
       for ;; {
         let value = try stream.next_input() catch {
           error => {
-            prefetched.close(error=error)
+            prefetched.close(error~)
             return
           }
         } noraise {
@@ -314,7 +313,7 @@ pub fn[T] register_input_stream(
           Some(value) => {
             let encoded = try encode(value) catch {
               error => {
-                prefetched.close(error=error)
+                prefetched.close(error~)
                 return
               }
             } noraise {
@@ -555,10 +554,8 @@ fn decode_binary_envelope(frame : Bytes) -> (Json, Bytes) raise {
   if metadata_length > frame.length() - 4 {
     raise BridgeError("malformed-message: metadata length exceeds message")
   }
-  let metadata = parse_strict_json(
-    @utf8.decode(frame[4:4 + metadata_length]),
-  )
-  (metadata, frame[4 + metadata_length:].to_bytes())
+  let metadata = parse_strict_json(@utf8.decode(frame[4:4 + metadata_length]))
+  (metadata, frame[4 + metadata_length:].to_owned())
 }
 
 ///|
@@ -609,7 +606,9 @@ fn trim_pending_u8(pending : PendingInput, high_water : UInt64) -> Int raise {
     raise BridgeError("invalid-sequence: partial ACK for non-packed input")
   }
   if high_water <= pending.start || high_water >= pending.start + pending.count {
-    raise BridgeError("invalid-sequence: partial packed ACK is outside pending data")
+    raise BridgeError(
+      "invalid-sequence: partial packed ACK is outside pending data",
+    )
   }
   let dropped = (high_water - pending.start).to_int()
   pending.start = high_water
@@ -637,7 +636,9 @@ fn apply_input_high_water(
       match pending.payload {
         PendingEnd => {
           if high_water != pending.start {
-            raise BridgeError("invalid-sequence: terminal ACK advanced sequence")
+            raise BridgeError(
+              "invalid-sequence: terminal ACK advanced sequence",
+            )
           }
           if terminal {
             input.pending = None
@@ -646,7 +647,9 @@ fn apply_input_high_water(
         }
         _ => {
           if terminal {
-            raise BridgeError("invalid-sequence: ACK reports an unsent terminal")
+            raise BridgeError(
+              "invalid-sequence: ACK reports an unsent terminal",
+            )
           }
           let acknowledged = high_water - pending.start
           if acknowledged == pending.count {
@@ -662,7 +665,9 @@ fn apply_input_high_water(
     None => {
       validate_ack_window(input.sequence, input.sequence, 0UL, high_water)
       if terminal != input.terminal {
-        raise BridgeError("invalid-sequence: ACK terminal conflicts with local state")
+        raise BridgeError(
+          "invalid-sequence: ACK terminal conflicts with local state",
+        )
       }
     }
   }
@@ -678,16 +683,14 @@ fn install_mappings(
   if mappings.length() > 4096 {
     raise BridgeError("resource-exhausted: too many stream mappings")
   }
-  let channels : Map[UInt, Bool] = {}
-  let tokens : Map[String, Bool] = {}
-  let provisionals : Map[String, Bool] = {}
+  let channels : Map[UInt, Bool] = Map([])
+  let tokens : Map[String, Bool] = Map([])
+  let provisionals : Map[String, Bool] = Map([])
   for mapping_json in mappings {
     let mapping = expect_object(mapping_json)
-    validate_object_fields(
-      mapping,
-      ["channel", "direction", "streamToken"],
-      ["inputHighWater", "provisionalRef"],
-    )
+    validate_object_fields(mapping, ["channel", "direction", "streamToken"], [
+      "inputHighWater", "provisionalRef",
+    ])
     let channel = @string.parse_uint(
       number_literal(get_field(mapping, "channel")),
     )
@@ -751,7 +754,9 @@ fn install_mappings(
       "output" => {
         if field_opt(mapping, "provisionalRef") is Some(_) ||
           field_opt(mapping, "inputHighWater") is Some(_) {
-          raise BridgeError("malformed-message: output mapping has input fields")
+          raise BridgeError(
+            "malformed-message: output mapping has input fields",
+          )
         }
         if session.input_tokens.contains(token) {
           raise BridgeError("stream-conflict: input token rebound as output")
@@ -882,8 +887,8 @@ async fn prepare_input(
         raise BridgeError("stream-conflict: input did not match the u8 lane")
     }
     while !input.source_ended &&
-      !input.source_failed &&
-      bytes.length() < MAX_PACKED_U8_BYTES {
+          !input.source_failed &&
+          bytes.length() < MAX_PACKED_U8_BYTES {
       let prefetched = try (input.try_next)() catch {
         _ => {
           input.source_failed = true
@@ -932,7 +937,9 @@ async fn prepare_input(
           ("binary", BinaryValue(payload, mime)) => {
             ignore(input.codec.encode(BinaryValue(payload, mime)))
             if payload.length() > MAX_LOGICAL_VALUE_BYTES {
-              raise BridgeError("resource-exhausted: binary input exceeds 16 MiB")
+              raise BridgeError(
+                "resource-exhausted: binary input exceeds 16 MiB",
+              )
             }
             pending = Some({
               start: input.sequence,
@@ -942,14 +949,18 @@ async fn prepare_input(
             })
           }
           _ =>
-            raise BridgeError("stream-conflict: input did not match its direct lane")
+            raise BridgeError(
+              "stream-conflict: input did not match its direct lane",
+            )
         }
     }
   }
   match pending {
     Some(pending) => {
       if pending.bytes > MAX_INPUT_REPLAY_BYTES {
-        raise BridgeError("resource-exhausted: unacknowledged input exceeds 16 MiB")
+        raise BridgeError(
+          "resource-exhausted: unacknowledged input exceeds 16 MiB",
+        )
       }
       if session.input_replay_bytes + pending.bytes > MAX_INPUT_REPLAY_BYTES {
         raise BridgeError("resource-exhausted: input replay budget exceeded")
@@ -987,7 +998,9 @@ async fn acknowledge_input(
   session : LiveStreamSession,
   message : Map[String, Json],
 ) -> Unit {
-  let channel = @string.parse_uint(number_literal(get_field(message, "channel")))
+  let channel = @string.parse_uint(
+    number_literal(get_field(message, "channel")),
+  )
   guard find_input_by_channel(session.inputs, channel) is Some(input) else {
     raise BridgeError("invalid-channel: ACK references unknown input")
   }
@@ -1020,8 +1033,10 @@ fn validate_ack_window(
 async fn queue_output(
   session : LiveStreamSession,
   message : Map[String, Json],
-) -> Unit raise {
-  let channel = @string.parse_uint(number_literal(get_field(message, "channel")))
+) -> Unit {
+  let channel = @string.parse_uint(
+    number_literal(get_field(message, "channel")),
+  )
   let mut token : String? = None
   session.output_channels.each((candidate, mapped) => {
     if mapped == channel {
@@ -1085,8 +1100,8 @@ async fn charge_output(
     raise BridgeError("resource-exhausted: one output exceeds queue byte limit")
   }
   while session.queue_bytes.get(token).unwrap_or(0) + bytes >
-    MAX_QUEUED_OUTPUT_BYTES ||
-    session.total_queue_bytes + bytes > MAX_QUEUED_OUTPUT_BYTES * 2 {
+        MAX_QUEUED_OUTPUT_BYTES ||
+        session.total_queue_bytes + bytes > MAX_QUEUED_OUTPUT_BYTES * 2 {
     session.output_space.wait()
   }
   let stream_bytes = session.queue_bytes.get(token).unwrap_or(0) + bytes
@@ -1100,9 +1115,7 @@ fn release_output(
   token : String,
   bytes : Int,
 ) -> Unit {
-  session.queue_bytes[token] = session.queue_bytes
-    .get(token)
-    .unwrap_or(0) -
+  session.queue_bytes[token] = session.queue_bytes.get(token).unwrap_or(0) -
     bytes
   session.total_queue_bytes -= bytes
   session.output_space.broadcast()
@@ -1112,7 +1125,7 @@ fn release_output(
 async fn queue_binary_output(
   session : LiveStreamSession,
   frame : Bytes,
-) -> Unit raise {
+) -> Unit {
   let (metadata_json, payload) = decode_binary_envelope(frame)
   let metadata = expect_object(metadata_json)
   guard number_literal(get_field(metadata, "version")) == "1" else {
@@ -1297,7 +1310,9 @@ async fn queue_output_end(
   session : LiveStreamSession,
   message : Map[String, Json],
 ) -> Unit {
-  let channel = @string.parse_uint(number_literal(get_field(message, "channel")))
+  let channel = @string.parse_uint(
+    number_literal(get_field(message, "channel")),
+  )
   let token = output_token_for_channel(session, channel)
   let sequence = parse_canonical_u64(get_field(message, "sequence"))
   if session.output_terminals.get(token).unwrap_or(false) {
@@ -1319,7 +1334,9 @@ async fn queue_output_end(
     }
     "cancelled" => {
       validate_object_fields(outcome, ["kind", "reason"], [])
-      Some("Output stream cancelled: \{expect_string(get_field(outcome, "reason"))}")
+      Some(
+        "Output stream cancelled: \{expect_string(get_field(outcome, "reason"))}",
+      )
     }
     _ => raise BridgeError("malformed-message: invalid output terminal outcome")
   }
@@ -1379,10 +1396,10 @@ fn drain_output_queue(
 ///|
 async fn fail_session(session : LiveStreamSession, error : Error) -> Unit {
   session.finished = true
-  session.result_queue.close(error=error, clear=true)
+  session.result_queue.close(error~, clear=true)
   session.output_queues.each((token, queue) => {
     drain_output_queue(session, token, queue)
-    queue.close(error=error, clear=true)
+    queue.close(error~, clear=true)
     stream_sessions.remove(token)
   })
   for input in session.inputs {
@@ -1460,9 +1477,13 @@ async fn dispatch_server_message(
     "outputStreamEnd" => queue_output_end(session, message)
     "inputStreamAck" => acknowledge_input(session, message)
     "streamCancel" => {
-      let channel = @string.parse_uint(number_literal(get_field(message, "channel")))
+      let channel = @string.parse_uint(
+        number_literal(get_field(message, "channel")),
+      )
       guard find_input_by_channel(session.inputs, channel) is Some(input) else {
-        raise BridgeError("invalid-channel: cancellation references unknown input")
+        raise BridgeError(
+          "invalid-channel: cancellation references unknown input",
+        )
       }
       match input.pending {
         Some(pending) => {
@@ -1484,7 +1505,9 @@ async fn dispatch_server_message(
     "invocationRejected" => {
       match field_opt(message, "attemptId") {
         Some(value) if expect_string(value) != session.attempt_id =>
-          raise BridgeError("attempt-conflict: rejection attempt does not match")
+          raise BridgeError(
+            "attempt-conflict: rejection attempt does not match",
+          )
         _ => ()
       }
       raise BridgeError(expect_string(get_field(message, "message")))
@@ -1510,7 +1533,9 @@ async fn dispatch_server_message(
       }
       session.output_terminals.each((_, terminal) => {
         if !terminal {
-          raise BridgeError("protocol-error: invocation finished before output terminal")
+          raise BridgeError(
+            "protocol-error: invocation finished before output terminal",
+          )
         }
       })
       for input in session.inputs {
@@ -1531,7 +1556,8 @@ async fn dispatch_server_message(
       session.socket.close()
       return true
     }
-    _ => raise BridgeError("protocol-error: message is illegal after acceptance")
+    _ =>
+      raise BridgeError("protocol-error: message is illegal after acceptance")
   }
   false
 }
@@ -1564,7 +1590,9 @@ async fn receive_actor(
       @websocket.Text => {
         let bytes = raw.read_all().binary()
         if bytes.length() > MAX_MESSAGE_BYTES {
-          raise BridgeError("resource-exhausted: WebSocket message exceeds 32 MiB")
+          raise BridgeError(
+            "resource-exhausted: WebSocket message exceeds 32 MiB",
+          )
         }
         let message = expect_object(parse_strict_json(@utf8.decode(bytes)))
         guard number_literal(get_field(message, "version")) == "1" else {
@@ -1620,7 +1648,7 @@ pub async fn invoke_streaming_agent(
     .replace(old="http://", new="ws://")
     .replace(old="https://", new="wss://") +
     "/v1/agents/invoke-agent-session"
-  let headers : Map[String, String] = {
+  let headers : @http.Headers = {
     "Authorization": "Bearer " + server.token(),
     "Sec-WebSocket-Protocol": STREAM_SUBPROTOCOL,
   }
@@ -1640,10 +1668,17 @@ pub async fn invoke_streaming_agent(
   }
   let frozen_start = protocol_message("invocationStart", [
     ("attemptId", Json::string(attempt_id)),
-    ("config", Json::array(resolved.config.map(entry => obj([
-      ("path", Json::array(entry.path.map(Json::string))),
-      ("value", entry.codec.encode(entry.value)),
-    ])))),
+    (
+      "config",
+      Json::array(
+        resolved.config.map(entry => {
+          obj([
+            ("path", Json::array(entry.path.map(Json::string))),
+            ("value", entry.codec.encode(entry.value)),
+          ])
+        }),
+      ),
+    ),
     ("idempotencyKey", Json::string(idempotency_key)),
     ("methodParameters", input_codec.encode(method_parameters)),
     ("selector", obj(selector)),
@@ -1653,7 +1688,9 @@ pub async fn invoke_streaming_agent(
     "invocationRejected" => {
       match field_opt(accepted, "attemptId") {
         Some(value) if expect_string(value) != attempt_id =>
-          raise BridgeError("attempt-conflict: rejection attempt does not match")
+          raise BridgeError(
+            "attempt-conflict: rejection attempt does not match",
+          )
         _ => ()
       }
       raise BridgeError(expect_string(get_field(accepted, "message")))

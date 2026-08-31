@@ -58,7 +58,7 @@ test "monomorphic authoring projects direct parameters, streams, principal, and 
   let middlewares = @lib.parse_tool_middlewares([("middleware.mbt", source)])
   guard middlewares is [middleware] else { fail("expected one middleware") }
   assert_eq(middleware.name, "policy")
-  inspect(middleware.aliases, content="[safe, audited]")
+  debug_inspect(middleware.aliases, content="[\"safe\", \"audited\"]")
   assert_eq(middleware.description, "Enforces the complete presented surface.")
   let scope = monomorphic_scope(middleware)
   assert_eq(scope.presented.source_name, "Presented")
@@ -111,10 +111,13 @@ test "adapter authoring separates presented handlers from expected underlying me
     #|pub async fn Adapter::read(underlying : StorageUnderlying, path : String) -> Result[String, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] { ... }
   let middlewares = @lib.parse_tool_middlewares([("adapter.mbt", source)])
   let scope = monomorphic_scope(middlewares[0])
-  inspect(scope.handlers.map(handler => handler.handler_name), content="[read]")
-  inspect(
+  debug_inspect(
+    scope.handlers.map(handler => handler.handler_name),
+    content="[\"read\"]",
+  )
+  debug_inspect(
     scope.underlying_methods.map(handler => handler.handler_name),
-    content="[fetch]",
+    content="[\"fetch\"]",
   )
 }
 
@@ -139,10 +142,10 @@ test "nested command paths flatten source segments and share inherited identitie
     @lib.parse_tool_middlewares([("nested.mbt", source)])[0],
   )
   let root = middleware_handler(scope.handlers, "admin")
-  inspect(root.command_path, content="[admin]")
+  debug_inspect(root.command_path, content="[\"admin\"]")
   debug_inspect(root.params, content="[(\"verbose\", Simple(\"Bool\"))]")
   let leaf = middleware_handler(scope.handlers, "admin__run")
-  inspect(leaf.command_path, content="[admin, run]")
+  debug_inspect(leaf.command_path, content="[\"admin\", \"run\"]")
   debug_inspect(
     leaf.params,
     content=(
@@ -235,7 +238,7 @@ test "universal authoring locks one grouped raw async signature" {
     fail("expected one universal middleware")
   }
   assert_eq(middleware.name, "audit")
-  inspect(middleware.aliases, content="[trace]")
+  debug_inspect(middleware.aliases, content="[\"trace\"]")
   assert_eq(
     middleware.description,
     "Audits an invocation without reinterpreting its carriers.",
@@ -296,13 +299,35 @@ test "checked-in authoring sources parse to the locked middleware contract" {
     .find_first(middleware => middleware.name == "policy")
     .unwrap()
   let policy_scope = monomorphic_scope(policy)
-  inspect(
+  debug_inspect(
     policy_scope.handlers.map(handler => handler.handler_name),
-    content="[unit, value, retry, stdout, abandon_stdout, value_stdout, io, admin__run]",
+    content=(
+      #|[
+      #|  "unit",
+      #|  "value",
+      #|  "retry",
+      #|  "stdout",
+      #|  "abandon_stdout",
+      #|  "value_stdout",
+      #|  "io",
+      #|  "admin__run",
+      #|]
+    ),
   )
-  inspect(
+  debug_inspect(
     policy_scope.underlying_methods.map(handler => handler.handler_name),
-    content="[unit, value, retry, stdout, abandon_stdout, value_stdout, io, admin__run]",
+    content=(
+      #|[
+      #|  "unit",
+      #|  "value",
+      #|  "retry",
+      #|  "stdout",
+      #|  "abandon_stdout",
+      #|  "value_stdout",
+      #|  "io",
+      #|  "admin__run",
+      #|]
+    ),
   )
   debug_inspect(
     middleware_handler(policy_scope.handlers, "io").params,
@@ -323,9 +348,9 @@ test "checked-in authoring sources parse to the locked middleware contract" {
     .unwrap()
   let adapter_scope = monomorphic_scope(adapter)
   assert_eq(adapter_scope.handlers.length(), 8)
-  inspect(
+  debug_inspect(
     adapter_scope.underlying_methods.map(handler => handler.handler_name),
-    content="[fetch]",
+    content="[\"fetch\"]",
   )
   let audit = middlewares
     .iter()

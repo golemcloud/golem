@@ -397,6 +397,7 @@ impl MoonBitBridgeGenerator {
         let client_dir = self.target_path.join("client");
         fs::create_dir_all(&client_dir)?;
 
+        let content = self.generate_client_source()?;
         let moon_pkg = match self.mode {
             MoonBitBridgeMode::ExternalRest => formatdoc! {r#"
                 import {{
@@ -405,22 +406,42 @@ impl MoonBitBridgeGenerator {
                 "#,
                 module = self.module_name(),
             },
-            MoonBitBridgeMode::GuestWasmRpc => formatdoc! {r#"
-                import {{
-                  "golemcloud/golem_sdk/agents",
-                  "golemcloud/golem_sdk/interface/golem/agent/common" @common,
-                  "golemcloud/golem_sdk/interface/golem/agent/host" @agentHost,
-                  "golemcloud/golem_sdk/interface/golem/core/types" @types,
-                  "golemcloud/golem_sdk/interface/wasi/clocks/system-clock" @systemClock,
-                  "golemcloud/golem_sdk/rpc",
-                  "golemcloud/golem_sdk/schema_model" @model,
-                  "golemcloud/golem_sdk/schema_model_host" @model_host,
-                }}
-                "#},
+            MoonBitBridgeMode::GuestWasmRpc => {
+                let imports = [
+                    ("@agents.", "\"golemcloud/golem_sdk/agents\""),
+                    (
+                        "@common.",
+                        "\"golemcloud/golem_sdk/interface/golem/agent/common\" @common",
+                    ),
+                    (
+                        "@agentHost.",
+                        "\"golemcloud/golem_sdk/interface/golem/agent/host\" @agentHost",
+                    ),
+                    (
+                        "@types.",
+                        "\"golemcloud/golem_sdk/interface/golem/core/types\" @types",
+                    ),
+                    (
+                        "@systemClock.",
+                        "\"golemcloud/golem_sdk/interface/wasi/clocks/system-clock\" @systemClock",
+                    ),
+                    ("@rpc.", "\"golemcloud/golem_sdk/rpc\""),
+                    ("@model.", "\"golemcloud/golem_sdk/schema_model\" @model"),
+                    (
+                        "@model_host.",
+                        "\"golemcloud/golem_sdk/schema_model_host\" @model_host",
+                    ),
+                ]
+                .into_iter()
+                .filter_map(|(usage, import)| content.contains(usage).then_some(import))
+                .map(|import| format!("  {import},"))
+                .collect::<Vec<_>>()
+                .join("\n");
+                format!("import {{\n{imports}\n}}\n\nsupported_targets = \"+wasm\"\n")
+            }
         };
         fs::write_str(client_dir.join("moon.pkg"), moon_pkg)?;
 
-        let content = self.generate_client_source()?;
         fs::write_str(client_dir.join("client.mbt"), content)?;
         Ok(())
     }
@@ -662,6 +683,9 @@ impl MoonBitBridgeGenerator {
             writer.blank();
 
             // encode
+            if self.mode == MoonBitBridgeMode::GuestWasmRpc {
+                writer.line("#warnings(\"-unused_error_type\")");
+            }
             writer.line(format!(
                 "pub fn encode_{}(values : Array[{}]) -> @runtime.SchemaValue{} {{",
                 mm.name,
@@ -729,7 +753,7 @@ impl MoonBitBridgeGenerator {
     }
 
     fn write_guest_codec_support(&self, writer: &mut MoonBitWriter) {
-        let source = r#"pub suberror CodecError(String) derive(Debug, Eq)
+        let source = r#"pub(all) suberror CodecError { CodecError(String) } derive(Debug, Eq)
 
 pub(all) enum UnstructuredText {
   Inline(String, String?)
@@ -742,7 +766,7 @@ pub(all) enum UnstructuredBinary {
 } derive(Debug, Eq)
 
 fn[T] codec_mismatch(expected : String, value : @model.SchemaValue) -> T raise {
-  raise CodecError("Expected " + expected + ", got " + value.to_string())
+  raise CodecError("Expected " + expected + ", got " + repr(value))
 }
 
 fn guest_as_bool(v : @model.SchemaValue) -> Bool raise { match v { Bool(x) => x; o => codec_mismatch("bool", o) } }
@@ -751,7 +775,7 @@ fn guest_as_s16(v : @model.SchemaValue) -> Int raise { match v { S16(x) => { if 
 fn guest_as_s32(v : @model.SchemaValue) -> Int raise { match v { S32(x) => x; o => codec_mismatch("s32", o) } }
 fn guest_as_s64(v : @model.SchemaValue) -> Int64 raise { match v { S64(x) => x; o => codec_mismatch("s64", o) } }
 fn guest_as_u8(v : @model.SchemaValue) -> Byte raise { match v { U8(x) => x; o => codec_mismatch("u8", o) } }
-fn guest_as_u16(v : @model.SchemaValue) -> Int raise { match v { U16(x) => { if x > 65535 { raise CodecError("u16 value out of range: " + x.to_string()) }; x.to_int() }; o => codec_mismatch("u16", o) } }
+fn guest_as_u16(v : @model.SchemaValue) -> Int raise { match v { U16(x) => { if x > 65535 { raise CodecError("u16 value out of range: " + x.to_string()) }; x.reinterpret_as_int() }; o => codec_mismatch("u16", o) } }
 fn guest_as_u32(v : @model.SchemaValue) -> UInt raise { match v { U32(x) => x; o => codec_mismatch("u32", o) } }
 fn guest_as_u64(v : @model.SchemaValue) -> UInt64 raise { match v { U64(x) => x; o => codec_mismatch("u64", o) } }
 fn guest_as_f32(v : @model.SchemaValue) -> Float raise { match v { F32(x) => x; o => codec_mismatch("f32", o) } }
@@ -782,6 +806,9 @@ fn guest_encode_unstructured_binary(value : UnstructuredBinary, allowed : Array[
 fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[String]) -> UnstructuredBinary raise { match value { Variant(0, Some(Binary(bytes, mime_type))) => { guest_allowed(mime_type, allowed, "MIME type"); Inline(bytes, mime_type) }; Variant(1, Some(Url(url))) => Url(url); o => codec_mismatch("unstructured-binary variant", o) } }
 "#;
         for line in source.lines() {
+            if line.starts_with("fn ") {
+                writer.line("#warnings(\"-unused_value\")");
+            }
             writer.line(line);
         }
         writer.blank();
@@ -793,6 +820,9 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         name: &str,
         resolved: &SchemaType,
     ) -> anyhow::Result<()> {
+        if self.mode == MoonBitBridgeMode::GuestWasmRpc {
+            writer.line("#warnings(\"-unused_error_type\")");
+        }
         let context = if self.mode == MoonBitBridgeMode::ExternalRest
             && contains_stream_in_graph(self.type_naming.graph(), resolved)
         {
@@ -1289,6 +1319,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         phantom_id: Option<&str>,
         configs: Option<(&[AgentConfigDeclarationSchema], &[String])>,
     ) -> anyhow::Result<()> {
+        writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
             "pub fn {client}::{name}({param_decls}) -> {client} raise @common.AgentError {{"
         ));
@@ -1347,7 +1378,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 emit_schema_graph_literal(&graph)
             ));
             writer.indent();
-            writer.line("error => raise @common.AgentError::InvalidInput(\"failed encoding agent config: \" + error.to_string())");
+            writer.line("error => raise @common.AgentError::InvalidInput(\"failed encoding agent config: \" + repr(error))");
             writer.dedent();
             writer.line("}");
             let path = config
@@ -1440,6 +1471,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             ret_ty.clone()
         };
 
+        writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
             "pub async fn {client}::{base}(self : {self_decls}) -> {await_ret_ty} {{"
         ));
@@ -1472,7 +1504,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 writer.line("let value = @model_host.schema_value_from_wit(tree) catch {");
                 writer.indent();
                 writer.line(format!(
-                    "error => raise @common.AgentError::InvalidType({} + error.to_string())",
+                    "error => raise @common.AgentError::InvalidType({} + repr(error))",
                     moonbit_string_literal(&format!("{context}: "))
                 ));
                 writer.dedent();
@@ -1511,6 +1543,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         } else {
             "Unit"
         };
+        writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
             "pub fn {client}::trigger_{base}(self : {self_decls}) -> {trigger_ret_ty} raise @common.AgentError {{"
         ));
@@ -1532,6 +1565,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         } else {
             "Unit"
         };
+        writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
             "pub fn {client}::schedule_{base}(self : {schedule_self_decls}) -> {schedule_ret_ty} raise @common.AgentError {{"
         ));
@@ -1555,6 +1589,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         } else {
             "@agentHost.CancellationToken"
         };
+        writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
             "pub fn {client}::schedule_cancelable_{base}(self : {schedule_self_decls}) -> {schedule_cancelable_ret_ty} raise @common.AgentError {{"
         ));
@@ -1638,6 +1673,9 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         } else {
             "Creates a local logical proxy; each invocation receives a fresh final identity."
         });
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            writer.line("#warnings(\"-unused_async\")");
+        }
         writer.line(format!(
             "pub async fn {agent}::new_phantom({param_decls}) -> {agent} raise {{"
         ));
@@ -1759,6 +1797,9 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         // get_phantom_with_config so config overrides are applied.
         let decls = append_param(&config_decls, param_decls);
         writer.doc("Creates a new agent instance with a fresh random phantom id, overriding the given configuration values.");
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            writer.line("#warnings(\"-unused_async\")");
+        }
         writer.line(format!(
             "pub async fn {agent}::new_phantom_with_config({decls}) -> {agent} raise {{"
         ));
@@ -1998,7 +2039,12 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             }
             None => {
                 writer.line(format!(
-                    "let result = {}({}self.resolved, {method_name_lit}, parameters{})",
+                    "let {} = {}({}self.resolved, {method_name_lit}, parameters{})",
+                    if self.agent_type.mode == AgentMode::Ephemeral {
+                        "result"
+                    } else {
+                        "_"
+                    },
                     if uses_streams {
                         "@runtime.invoke_streaming_agent"
                     } else {
@@ -2040,12 +2086,17 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         ));
         writer.indent();
         self.write_param_record(writer, &method.input_schema)?;
-        writer.line(format!(
-            "let result = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, None)",
-            moonbit_string_literal(MODE_SCHEDULE)
-        ));
         if self.agent_type.mode == AgentMode::Ephemeral {
+            writer.line(format!(
+                "let result = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, None)",
+                moonbit_string_literal(MODE_SCHEDULE)
+            ));
             writer.line("@runtime.InvocationReceipt::{ agent_id: result.agent_id, idempotency_key: result.idempotency_key, component_revision: result.component_revision }");
+        } else {
+            writer.line(format!(
+                "let _ = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, None)",
+                moonbit_string_literal(MODE_SCHEDULE)
+            ));
         }
         writer.dedent();
         writer.line("}");
@@ -2064,12 +2115,17 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         ));
         writer.indent();
         self.write_param_record(writer, &method.input_schema)?;
-        writer.line(format!(
-            "let result = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, Some(when))",
-            moonbit_string_literal(MODE_SCHEDULE)
-        ));
         if self.agent_type.mode == AgentMode::Ephemeral {
+            writer.line(format!(
+                "let result = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, Some(when))",
+                moonbit_string_literal(MODE_SCHEDULE)
+            ));
             writer.line("@runtime.InvocationReceipt::{ agent_id: result.agent_id, idempotency_key: result.idempotency_key, component_revision: result.component_revision }");
+        } else {
+            writer.line(format!(
+                "let _ = @runtime.invoke_agent(self.resolved, {method_name_lit}, parameters, {}, Some(when))",
+                moonbit_string_literal(MODE_SCHEDULE)
+            ));
         }
         writer.dedent();
         writer.line("}");
@@ -2573,7 +2629,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 };
                 let element_codec = self.public_codec(inner)?;
                 format!(
-                    "@runtime.register_input_stream(stream_context, {val}, async fn({e}) {{ {encoded} }}, {element_codec}, wire_kind={wire_kind:?})"
+                    "@runtime.register_input_stream(stream_context, {val}, ({e}) => {encoded}, {element_codec}, wire_kind={wire_kind:?})"
                 )
             }
             SchemaType::Text { .. } | SchemaType::Binary { .. } => bail!(
@@ -2681,7 +2737,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 let key_dec = self.decode_expr(&format!("{entry}.key"), key, next)?;
                 let val_dec = self.decode_expr(&format!("{entry}.value"), value, next)?;
                 format!(
-                    "{{\n  let {m} : Map[{k_ty}, {v_ty}] = {{}}\n  for {entry} in @runtime.as_map({val}) {{\n    let {k} = {key_dec}\n    let {v} = {val_dec}\n    {m}[{k}] = {v}\n  }}\n  {m}\n}}"
+                    "{{\n  let {m} : Map[{k_ty}, {v_ty}] = Map([])\n  for {entry} in @runtime.as_map({val}) {{\n    let {k} = {key_dec}\n    let {v} = {val_dec}\n    {m}[{k}] = {v}\n  }}\n  {m}\n}}"
                 )
             }
             SchemaType::Tuple { elements, .. } => self.decode_tuple(val, elements, depth)?,
@@ -2745,7 +2801,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 };
                 let element_codec = self.public_codec(inner)?;
                 format!(
-                    "@runtime.open_output_stream({val}, async fn({e}) {{ {decoded} }}, {element_codec}, wire_kind={wire_kind:?})"
+                    "@runtime.open_output_stream({val}, ({e}) => {decoded}, {element_codec}, wire_kind={wire_kind:?})"
                 )
             }
             SchemaType::Text { .. } | SchemaType::Binary { .. } => bail!(
@@ -3683,6 +3739,6 @@ mod tests {
         assert!(!client.contains("trigger_exchange"));
         assert!(!client.contains("schedule_exchange"));
         let manifest = std::fs::read_to_string(target.join("moon.mod.json")).unwrap();
-        assert!(manifest.contains("\"moonbitlang/async\": \"0.20.2\""));
+        assert!(manifest.contains("\"moonbitlang/async\": \"0.21.2\""));
     }
 }

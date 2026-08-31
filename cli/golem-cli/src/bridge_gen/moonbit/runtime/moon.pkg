@@ -8,7 +8,6 @@ import {
   "__GOLEM_MODULE__/runtime/ws_adapter" @websocket,
   "moonbitlang/core/string" @string,
   "moonbitlang/core/bigint" @bigint,
-  "moonbitlang/core/buffer" @buffer,
   "moonbitlang/core/encoding/utf8" @utf8,
   "moonbitlang/core/json" @json,
   "moonbitlang/core/random" @random,

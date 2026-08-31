@@ -11,7 +11,7 @@ test "successful handshake requires the actual selected subprotocol header" {
     content="true",
   )
   inspect(
-    selected_subprotocol_is_valid({}, "golem.agent-invocation.v1"),
+    selected_subprotocol_is_valid(Map([]), "golem.agent-invocation.v1"),
     content="false",
   )
   inspect(

@@ -80,7 +80,7 @@ pub fn OwnershipContext::own_raw_typed_schema_value(
       ownership: Available,
     },
   }
-  let owned : RawTypedSchemaValue = { context: self, state }
+  let owned : RawTypedSchemaValue = { context: self, state, }
   self.register_cleanup(() => owned.drop_if_available())
   owned
 }
@@ -163,7 +163,7 @@ fn RawTypedSchemaValue::decode_model_for_local(
   self.state.val.value = None
   self.state.val.ownership = TransferredLocal
   let decoded = @model_host.typed_schema_value_from_wit(value) catch {
-    error => return Err("failed to decode middleware input: \{error}")
+    error => return Err("failed to decode middleware input: \{Repr(error)}")
   }
   context.register_cleanup(fn() {
     @model.drop_owned_capabilities(decoded.value)
@@ -238,7 +238,7 @@ fn OwnershipContext::own_raw_invocation_result(
       ownership: Available,
     },
   }
-  let owned : RawInvocationResult = { context: self, state }
+  let owned : RawInvocationResult = { context: self, state, }
   self.register_cleanup(() => owned.drop_if_available())
   owned
 }
@@ -290,7 +290,7 @@ pub fn RawInvocationResult::take_for_final(
   self.state.val.result = None
   self.state.val.stdout = None
   self.state.val.ownership = TransferredFinal
-  Ok({ result, stdout })
+  Ok({ result, stdout, })
 }
 
 ///|
@@ -383,7 +383,7 @@ pub fn RawToolInvocation::principal(
 pub fn RawToolInvocation::empty_result(
   self : RawToolInvocation,
 ) -> RawInvocationResult {
-  self.context.own_raw_invocation_result({ result: None, stdout: None })
+  self.context.own_raw_invocation_result({ result: None, stdout: None, })
 }
 
 ///|
@@ -436,7 +436,7 @@ fn[T : @schema.IntoSchema] encode_middleware_result_value(
 pub fn[E] RawToolInvocation::typed_result_empty(
   self : RawToolInvocation,
 ) -> Result[RawInvocationResult, ToolInvokeError[E]] {
-  Ok(self.context.own_raw_invocation_result({ result: None, stdout: None }))
+  Ok(self.context.own_raw_invocation_result({ result: None, stdout: None, }))
 }
 
 ///|

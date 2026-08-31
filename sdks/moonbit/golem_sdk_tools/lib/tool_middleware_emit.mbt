@@ -87,7 +87,7 @@ fn middleware_descriptor_tools(
   middlewares : Array[ToolMiddlewareInfo],
   tools : Array[ToolInfo],
 ) -> Array[ToolInfo] raise ToolMiddlewareEmitError {
-  let selected : Map[String, Unit] = {}
+  let selected : Map[String, Unit] = Map([])
   for middleware in middlewares {
     match middleware.scope {
       Monomorphic(monomorphic) => {
@@ -410,7 +410,7 @@ pub fn generate_tool_middleware_registration(
       "component role '" + role.name() + "' does not export tool middleware",
     )
   }
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   let descriptor_tools = middleware_descriptor_tools(middlewares, tools)
   emit_tool_descriptor_support(
     buf,
@@ -423,7 +423,7 @@ pub fn generate_tool_middleware_registration(
   }
   if middlewares.any(middleware => middleware.scope is Monomorphic(_)) {
     emit_middleware_protocol_helpers(buf)
-    let emitted_wrappers : Map[String, Unit] = {}
+    let emitted_wrappers : Map[String, Unit] = Map([])
     for middleware in middlewares {
       if middleware.scope is Monomorphic(monomorphic) &&
         !emitted_wrappers.contains(monomorphic.expected.source_name) {

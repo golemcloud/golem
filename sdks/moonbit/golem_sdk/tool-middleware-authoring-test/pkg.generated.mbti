@@ -88,4 +88,3 @@ pub async fn StorageUnderlying::fetch(Self, String) -> Result[String, @tool-midd
 // Type aliases
 
 // Traits
-

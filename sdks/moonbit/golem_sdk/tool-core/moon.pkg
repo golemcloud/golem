@@ -6,13 +6,8 @@ import {
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model" @model,
   "golemcloud/golem_sdk/schema_model_host" @model_host,
-  "moonbitlang/core/strconv",
+  "moonbitlang/core/string",
 }
-
-import {
-  "golemcloud/golem_sdk/schema",
-  "golemcloud/golem_sdk/schema_model" @model,
-} for "test"
 
 warnings = "-44"
 

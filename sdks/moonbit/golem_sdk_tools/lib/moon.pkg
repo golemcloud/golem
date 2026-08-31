@@ -4,10 +4,10 @@ import {
   "moonbitlang/parser",
   "moonbitlang/parser/attribute",
   "moonbitlang/parser/syntax",
-  "moonbitlang/parser/basic",
+  "moonbitlang/lexer/basic",
   "moonbitlang/x/fs",
 }
 
 import {
-  "moonbitlang/formatter",
+  "moonbitlang/parser/fmt" @formatter,
 } for "test"

@@ -18,10 +18,12 @@ fn StrictJsonScanner::skip_whitespace(self : StrictJsonScanner) -> Unit {
 }
 
 ///|
-fn StrictJsonScanner::take(self : StrictJsonScanner, expected : UInt16) -> Unit raise {
+fn StrictJsonScanner::take(
+  self : StrictJsonScanner,
+  expected : UInt16,
+) -> Unit raise {
   self.skip_whitespace()
-  guard self.index < self.source.length() &&
-    self.source[self.index] == expected else {
+  guard self.index < self.source.length() && self.source[self.index] == expected else {
     raise BridgeError("malformed-message: invalid JSON structure")
   }
   self.index += 1
@@ -41,7 +43,7 @@ fn StrictJsonScanner::scan_string(self : StrictJsonScanner) -> String raise {
     } else if char == '\\' {
       escaped = true
     } else if char == '"' {
-      let literal = self.source[start:self.index].to_string()
+      let literal = self.source[start:self.index].to_owned()
       return expect_string(@json.parse(literal))
     }
   }
@@ -83,7 +85,7 @@ fn StrictJsonScanner::scan_value(
         self.index += 1
         return
       }
-      let members : Map[String, Bool] = {}
+      let members : Map[String, Bool] = Map([])
       let mut count = 0
       for ;; {
         let name = self.scan_string()
@@ -93,7 +95,9 @@ fn StrictJsonScanner::scan_value(
         members[name] = true
         count += 1
         if count > 100000 {
-          raise BridgeError("resource-exhausted: JSON object exceeds 100000 members")
+          raise BridgeError(
+            "resource-exhausted: JSON object exceeds 100000 members",
+          )
         }
         self.take(':')
         self.scan_value(depth + 1)
@@ -120,7 +124,9 @@ fn StrictJsonScanner::scan_value(
         self.scan_value(depth + 1)
         count += 1
         if count > 100000 {
-          raise BridgeError("resource-exhausted: JSON array exceeds 100000 elements")
+          raise BridgeError(
+            "resource-exhausted: JSON array exceeds 100000 elements",
+          )
         }
         self.skip_whitespace()
         guard self.index < self.source.length() else {
@@ -140,7 +146,7 @@ fn StrictJsonScanner::scan_value(
 
 ///|
 fn parse_strict_json(source : String) -> Json raise {
-  let scanner = { source, index: 0 }
+  let scanner = { source, index: 0, }
   scanner.scan_value(0)
   scanner.skip_whitespace()
   if scanner.index != source.length() {

@@ -37,7 +37,7 @@ let base64_chars : ReadOnlyArray[Char] = [
 ///|
 /// Base64 encoding
 fn base64_encode(data : Bytes) -> String {
-  let result = StringBuilder::new()
+  let result = StringBuilder()
   for i = 0; i < data.length(); i = i + 3 {
     let b1 = data[i].to_int()
     let b2 = if i + 1 < data.length() { data[i + 1].to_int() } else { 0 }
@@ -77,7 +77,7 @@ const MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 ///|
 /// Generate WebSocket accept key from client key using SHA-1 and base64
-#warnings("-unused_error_type")
+#warnings("-unused_error_type-alert_internal")
 fn generate_accept_key(client_key : String) -> String raise {
   // WebSocket magic string as defined in RFC 6455
   let combined = client_key + MAGIC

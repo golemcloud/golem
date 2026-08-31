@@ -25,7 +25,7 @@ fn[T : IntoSchema + FromSchema] rt(v : T) -> T raise {
     drop_native_stream: fn(_) {  },
   })
   assert_eq(back.graph, typed.graph)
-  T::from_value(back.value)
+  FromSchema::from_value(back.value)
 }
 
 // ============================================================
@@ -36,7 +36,7 @@ fn[T : IntoSchema + FromSchema] rt(v : T) -> T raise {
 struct Point {
   x : Int
   y : Int
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 pub impl IntoSchema for Point with fn type_id() {
@@ -50,8 +50,8 @@ pub impl IntoSchema for Point with fn register_in(b) {
     () => {
       @model.schema_type(
         Record([
-          @model.field("x", register_in_with(b, (TypeTag::{  } : TypeTag[Int]))),
-          @model.field("y", register_in_with(b, (TypeTag::{  } : TypeTag[Int]))),
+          @model.field("x", register_in_with(b, (TypeTag::{ } : TypeTag[Int]))),
+          @model.field("y", register_in_with(b, (TypeTag::{ } : TypeTag[Int]))),
         ]),
       )
     },
@@ -69,12 +69,12 @@ pub impl FromSchema for Point with fn from_value(v) {
   let fields = expect_record(v, "Point")
   let x : Int = from_value_as(record_field(fields, 0, "Point"))
   let y : Int = from_value_as(record_field(fields, 1, "Point"))
-  { x, y }
+  { x, y, }
 }
 
 ///|
 test "record round-trip + named def" {
-  let p = { x: 3, y: -4 }
+  let p = { x: 3, y: -4, }
   assert_eq(rt(p), p)
   let tag : TypeTag[Point] = type_tag()
   let g = into_schema_graph(tag)
@@ -92,7 +92,7 @@ enum Color {
   Red
   Green
   Blue
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 pub impl IntoSchema for Color with fn type_id() {
@@ -139,9 +139,11 @@ test "simple enum round-trip" {
 ///|
 test "enum out-of-range decode raises OutOfRange" {
   let v : @model.SchemaValue = Enum(9)
-  let r : Result[Color, FromSchemaError] = try? from_value_as(v)
+  let r : Result[Color, FromSchemaError] = try from_value_as(v) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(OutOfRange(index~, len~, context~)) else {
-    fail("expected OutOfRange, got \{r}")
+    fail("expected OutOfRange, got \{repr(r)}")
   }
   assert_eq(index, 9)
   assert_eq(len, 3)
@@ -157,7 +159,7 @@ enum Shape {
   Empty
   Circle(Double)
   Rect(Int, String)
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 pub impl IntoSchema for Shape with fn type_id() {
@@ -174,14 +176,11 @@ pub impl IntoSchema for Shape with fn register_in(b) {
           @model.variant_case("Empty"),
           @model.variant_case(
             "Circle",
-            payload=register_in_with(b, (TypeTag::{  } : TypeTag[Double])),
+            payload=register_in_with(b, (TypeTag::{ } : TypeTag[Double])),
           ),
           @model.variant_case(
             "Rect",
-            payload=register_in_with(
-              b,
-              (TypeTag::{  } : TypeTag[(Int, String)]),
-            ),
+            payload=register_in_with(b, (TypeTag::{ } : TypeTag[(Int, String)])),
           ),
         ]),
       )
@@ -229,8 +228,10 @@ test "variant round-trip" {
 ///|
 test "unit variant case rejects an unexpected payload" {
   let v : @model.SchemaValue = Variant(0, Some(String("oops")))
-  let r : Result[Shape, FromSchemaError] = try? from_value_as(v)
-  guard r is Err(Custom(msg)) else { fail("expected Custom, got \{r}") }
+  let r : Result[Shape, FromSchemaError] = try from_value_as(v) |> Ok catch {
+    e => Err(e)
+  }
+  guard r is Err(Custom(msg)) else { fail("expected Custom, got \{repr(r)}") }
   assert_true(msg.contains("expected no payload"))
 }
 
@@ -241,7 +242,7 @@ test "unit variant case rejects an unexpected payload" {
 ///|
 struct Boxed[T] {
   inner : T
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 pub impl[T : IntoSchema] IntoSchema for Boxed[T] with fn type_id() {
@@ -257,7 +258,7 @@ pub impl[T : IntoSchema] IntoSchema for Boxed[T] with fn register_in(b) {
         Record([
           @model.field(
             "inner",
-            register_in_with(b, (TypeTag::{  } : TypeTag[T])),
+            register_in_with(b, (TypeTag::{ } : TypeTag[T])),
           ),
         ]),
       )
@@ -280,9 +281,9 @@ pub impl[T : FromSchema] FromSchema for Boxed[T] with fn from_value(v) {
 
 ///|
 test "generic nominal record round-trip + per-instantiation def id" {
-  let bi : Boxed[Int] = { inner: 42 }
+  let bi : Boxed[Int] = { inner: 42, }
   assert_eq(rt(bi), bi)
-  let bs : Boxed[String] = { inner: "hi" }
+  let bs : Boxed[String] = { inner: "hi", }
   assert_eq(rt(bs), bs)
   // Each instantiation gets its own definition keyed by the resolved args.
   let ti : TypeTag[Boxed[Int]] = type_tag()
@@ -302,7 +303,7 @@ test "generic nominal record round-trip + per-instantiation def id" {
 struct Tree {
   value : Int
   children : Array[Tree]
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 pub impl IntoSchema for Tree with fn type_id() {
@@ -318,11 +319,11 @@ pub impl IntoSchema for Tree with fn register_in(b) {
         Record([
           @model.field(
             "value",
-            register_in_with(b, (TypeTag::{  } : TypeTag[Int])),
+            register_in_with(b, (TypeTag::{ } : TypeTag[Int])),
           ),
           @model.field(
             "children",
-            register_in_with(b, (TypeTag::{  } : TypeTag[Array[Tree]])),
+            register_in_with(b, (TypeTag::{ } : TypeTag[Array[Tree]])),
           ),
         ]),
       )
@@ -341,7 +342,7 @@ pub impl FromSchema for Tree with fn from_value(v) {
   let fields = expect_record(v, "Tree")
   let value : Int = from_value_as(record_field(fields, 0, "Tree"))
   let children : Array[Tree] = from_value_as(record_field(fields, 1, "Tree"))
-  { value, children }
+  { value, children, }
 }
 
 ///|
@@ -349,8 +350,8 @@ test "recursive record round-trip + single def via reserve/commit" {
   let t = {
     value: 1,
     children: [
-      { value: 2, children: [] },
-      { value: 3, children: [{ value: 4, children: [] }] },
+      { value: 2, children: [], },
+      { value: 3, children: [{ value: 4, children: [], }], },
     ],
   }
   assert_eq(rt(t), t)
@@ -368,7 +369,8 @@ test "recursive record round-trip + single def via reserve/commit" {
 ///|
 /// A type whose `register_in` deliberately produces a malformed graph (an empty
 /// enum) so we can assert `into_schema_graph` validates and raises.
-struct BadEnum {} derive(Eq, Show)
+#warnings("-struct_never_constructed")
+struct BadEnum {} derive(Eq, Debug)
 
 ///|
 pub impl IntoSchema for BadEnum with fn type_id() {

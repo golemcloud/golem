@@ -20,7 +20,7 @@ pub struct AgentStream[T] {
 ///|
 pub fn[T] AgentStream::from_next(
   next : async () -> T?,
-  on_cancel? : async (String) -> Unit = async fn(_) { () },
+  on_cancel? : async (String) -> Unit = fn(_) { () },
 ) -> AgentStream[T] {
   {
     next_impl: next,
@@ -44,7 +44,9 @@ fn[T] AgentStream::acquire(self : AgentStream[T]) -> Unit raise {
 ///|
 pub async fn[T] AgentStream::next(self : AgentStream[T]) -> T? {
   if self.input_owned {
-    raise BridgeError("stream-already-consumed: AgentStream ownership moved into an invocation")
+    raise BridgeError(
+      "stream-already-consumed: AgentStream ownership moved into an invocation",
+    )
   }
   if !self.acquired {
     self.acquired = true
@@ -69,13 +71,11 @@ async fn[T] AgentStream::pull_next(self : AgentStream[T]) -> T? {
     raise BridgeError("AgentStream already has an outstanding next call")
   }
   self.busy = true
-  let value = (self.next_impl)() catch {
-    error => {
-      self.busy = false
-      self.terminal = true
-      raise error
-    }
+  errdefer {
+    self.busy = false
+    self.terminal = true
   }
+  let value = (self.next_impl)()
   self.busy = false
   if value is None {
     self.terminal = true
@@ -86,7 +86,9 @@ async fn[T] AgentStream::pull_next(self : AgentStream[T]) -> T? {
 ///|
 pub async fn[T] AgentStream::cancel(self : AgentStream[T]) -> Unit {
   if self.input_owned {
-    raise BridgeError("stream-already-consumed: AgentStream ownership moved into an invocation")
+    raise BridgeError(
+      "stream-already-consumed: AgentStream ownership moved into an invocation",
+    )
   }
   self.cancel_with_reason("cancelled")
 }
@@ -113,7 +115,9 @@ async fn[T] AgentStream::cancel_with_reason(
 ///|
 pub async fn[T] AgentStream::drop(self : AgentStream[T]) -> Unit {
   if self.input_owned {
-    raise BridgeError("stream-already-consumed: AgentStream ownership moved into an invocation")
+    raise BridgeError(
+      "stream-already-consumed: AgentStream ownership moved into an invocation",
+    )
   }
   self.cancel_with_reason("consumer-drop")
 }
