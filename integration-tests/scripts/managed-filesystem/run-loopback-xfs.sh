@@ -369,13 +369,12 @@ loop_device=$(losetup --find --show "${image}")
 mkfs.xfs -f -m reflink=1 -n ftype=1 "${loop_device}"
 mkdir -p "${mount_point}"
 mount -t xfs -o prjquota "${loop_device}" "${mount_point}"
-mkdir -p "${mount_point}/agents"
-chmod 0777 "${mount_point}/agents"
+chmod 0777 "${mount_point}"
 if [[ -n ${SUDO_UID:-} && -n ${SUDO_GID:-} ]]; then
-  chown "${SUDO_UID}:${SUDO_GID}" "${mount_point}/agents"
+  chown "${SUDO_UID}:${SUDO_GID}" "${mount_point}"
 fi
 
-export GOLEM_MANAGED_XFS_TEST_ROOT=${mount_point}/agents
+export GOLEM_MANAGED_XFS_TEST_ROOT=${mount_point}
 cd "${repo_root}"
 
 build_test_binaries() {
