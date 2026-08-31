@@ -90,11 +90,17 @@ integration-test entry point using test-r must call `test_r::enable!()`, and `te
 in lexical scope wherever `#[test]` is used; otherwise those tests will not be registered with
 test-r. Separate workspaces may use their own test harnesses.
 
-Unit tests must never invoke external tools or compilers as subprocesses (for example `cargo`,
-`rustc`, `npm`, `npx`, `tsc`, `bun`, `sbt`, `scala-cli`, or `moon`). Put tests that need those
-tools in the appropriate integration test suite, such as `cli-integration-tests` for CLI and SDK
-generation checks. The unit-test CI job runs prebuilt test binaries and is intentionally kept fast;
-subprocess compilation in unit tests bypasses that design and can make the job time out.
+Tests that directly execute external processes belong in the CLI integration test suite. This
+includes Golem binaries such as `golem` and `golem-cli`, as well as tools and compilers such as
+`cargo`, `rustc`, `npm`, `npx`, `tsc`, `bun`, `sbt`, `scala-cli`, and `moon`.
+
+- Unit tests and worker-executor tests must never spawn external processes.
+- Non-CLI integration tests must use `golem-test-framework` for all process-backed dependencies and
+  must not spawn additional processes directly.
+- CLI integration tests may spawn the external processes required by the behavior they exercise.
+
+The unit-test CI job runs prebuilt test binaries and is intentionally kept fast; subprocess
+execution in unit tests bypasses that design and can make the job time out.
 
 Worker executor tests, integration tests, and CLI integration tests may depend on built test
 components from `test-components/`. Generated `.wasm` artifacts are generally not checked into the
