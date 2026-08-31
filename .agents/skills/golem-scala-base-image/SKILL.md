@@ -1,105 +1,76 @@
 ---
 name: golem-scala-base-image
-description: "Explains the Golem Scala SDK WIT folder structure and how to regenerate the agent_guest.wasm base image. Use when working with WIT definitions, upgrading Golem versions, or regenerating the guest runtime WASM."
+description: "Explains the Golem Scala SDK WIT worlds and regenerates its three QuickJS guest runtime WASMs. Use when WIT dependencies, guest roles, wasm-rquickjs, or embedded Scala runtime artifacts change."
 ---
 
-# Golem Scala Base Image (agent_guest.wasm)
+# Golem Scala Guest Runtimes
 
-The base image `agent_guest.wasm` is a QuickJS-based WASM component that serves as the guest runtime for Scala.js agents on Golem. It must be regenerated whenever WIT definitions change.
+Use the checked-in script and WIT as the source of truth. Do not reproduce the wrapper-generation steps manually.
 
-## WIT Folder Structure
+## Current contract
 
-```
-sdks/scala/wit/
-├── main.wit      # Hand-maintained world definition (golem:agent-guest)
-├── dts/          # Generated TypeScript d.ts (source of truth for JS exports)
-└── deps/         # Synced from root wit/deps/ by `cargo make wit` (committed; do not hand-edit)
-    ├── golem-core-v2/
-    ├── golem-agent/
-    ├── golem-1.x/
-    ├── golem-rdbms/
-    ├── golem-durability/
-    ├── blobstore/
-    ├── cli/
-    ├── clocks/
-    ├── config/
-    ├── ...
-    └── sockets/
-```
+`sdks/scala/wit/main.wit` defines three Preview 3 worlds:
 
-- **`main.wit`** defines the `golem:agent-guest` world — the set of imports/exports the agent component uses. This file is checked in and maintained manually.
-- **`deps/`** is synced from the repo root's `wit/deps/` by running `cargo make wit` from the repository root. The contents are committed (same approach as the Rust and TypeScript SDKs).
+| World | Embedded artifact | Role |
+|---|---|---|
+| `golem:agent-guest/agent-guest` | `agent_guest.wasm` | ordinary agent and tool guest |
+| `golem:agent-guest/tool-middleware-guest` | `tool_middleware_guest.wasm` | pure tool middleware |
+| `golem:agent-guest/agent-tool-middleware-guest` | `agent_tool_middleware_guest.wasm` | combined agent/tool/middleware guest |
 
-## When to Regenerate
+The ordinary world currently includes `golem:agent/agent-guest@2.0.0`, exports `golem:tool/guest@0.1.0`, and uses the v2 `schema-graph`, `schema-value-tree`, and `typed-schema-value` model through the synced `golem-core-v2` dependency. Read `wit/main.wit` rather than maintaining a second exhaustive import list here; notably, the host surface still includes versioned Golem APIs such as `golem:api@1.5.0` and `golem:durability@1.6.0`.
 
-The base image **must be regenerated** whenever:
-
-1. **`wit/main.wit` changes** — adding/removing imports or exports
-2. **WIT dependencies update** — run `cargo make wit` from the repo root first, then regenerate
-3. **`wasm-rquickjs` updates** — a new version of the wrapper generator may produce different output
-
-The generated `agent_guest.wasm` is checked in at two locations (embedded in the sbt and mill plugins):
-- `sdks/scala/sbt/src/main/resources/golem/wasm/agent_guest.wasm`
-- `sdks/scala/mill/resources/golem/wasm/agent_guest.wasm`
-
-## Prerequisites
-
-### 1. Rust toolchain
+`wit/deps/` is a generated mirror of the root WIT dependencies. Never hand-edit it. Sync it from the repository root:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-rustup target add wasm32-wasip1
+cargo make wit
 ```
 
-### 2. cargo-component
+## Generated and tracked files
 
-```bash
-cargo install cargo-component
+The script installs all three WASMs into both plugin resource directories:
+
+```text
+sdks/scala/sbt/src/main/resources/golem/wasm/
+sdks/scala/mill/resources/golem/wasm/
 ```
 
-### 3. wasm-rquickjs (pinned to 0.1.0)
+The WASMs are build artifacts and are intentionally ignored by Git. The ordinary role's generated declarations in `sdks/scala/wit/dts/` are tracked and are checked for drift in CI. The role-specific intermediate declarations and wrapper crates under `sdks/scala/.generated/` are untracked.
 
-The script enforces a specific version of `wasm-rquickjs` and will refuse to run if the installed version does not match. The required version is defined by `REQUIRED_WASM_RQUICKJS_VERSION` in `generate-agent-guest-wasm.sh`.
+## Prerequisites and regeneration
+
+The current pipeline uses:
+
+- Rust stable with `wasm32-wasip2`
+- Preview 3 (`wasm-rquickjs --target wasi-p3`)
+- `wasm-rquickjs-cli` **0.4.2**, matching the root CI/workflow setting
+- ordinary `cargo build --target wasm32-wasip2 --release` on generated wrapper crates; it does not use `cargo-component`
 
 ```bash
-cargo install wasm-rquickjs-cli@0.1.0
-```
+rustup target add wasm32-wasip2
+cargo install --locked wasm-rquickjs-cli@0.4.2
 
-## How to Regenerate
-
-First sync WIT dependencies, then run the generate script:
-
-```bash
-# From the repository root
+# Repository root
 cargo make wit
 
-# Then from sdks/scala/
+# SDK root
 cd sdks/scala
 ./scripts/generate-agent-guest-wasm.sh
 ```
 
-The script performs these steps:
+The generator stages each world, generates d.ts and a wrapper crate with the `user=@slot` injection point, applies the repository's required Preview 3 `wit-bindgen` override, builds it, and copies the output to both plugins. Scala.js bundles SDK and user code into the injected module; there is no separately embedded SDK JavaScript module.
 
-1. Stages a clean WIT package in `.generated/agent-wit-root/` (copies `main.wit` + `deps/`)
-2. Generates TypeScript d.ts definitions via `wasm-rquickjs generate-dts`
-3. Runs `wasm-rquickjs generate-wrapper-crate` to produce a Rust crate from the WIT
-4. Builds with `cargo component build --release` targeting `wasm32-wasip1`
-5. Installs the resulting `agent_guest.wasm` into both plugin resource directories
-6. Copies d.ts files to `sdks/scala/wit/dts/`
+## Verification
 
-## Updating WIT Dependencies
-
-WIT dependencies are managed the same way as the Rust and TypeScript SDKs — via `cargo make wit` from the repository root:
+Generation runs the ordinary export-contract check. Also verify the role matrix when role worlds or packaging changes:
 
 ```bash
-# From the repository root
-cargo make wit
+cd sdks/scala
+./scripts/test-agent-guest-export-contract.sh
+./scripts/test-agent-guest-role-contracts.sh
+git diff -- wit/dts
+git status --short -- wit/dts sbt/src/main/resources/golem/wasm mill/resources/golem/wasm
 ```
 
-This copies all WIT packages from `wit/deps/` into `sdks/scala/wit/deps/`. The results are committed to the repository.
+The role-contract script requires `wasm-tools` and confirms that sbt and Mill package identical bytes. CI's generated-file action validates tracked d.ts drift and rejects accidentally tracked WASMs.
 
-## How It Fits Together
-
-At build time, the sbt/mill `GolemPlugin` extracts the embedded `agent_guest.wasm` from plugin resources and writes it to the user project's `.generated/agent_guest.wasm`. Then `golem-cli` uses this base runtime to compose the final component: it injects the user's Scala.js bundle into the QuickJS runtime and wraps it as a proper Golem agent component.
-
-The Scala SDK does **not** parse WIT to generate Scala bindings. Instead, Scala macros + ZIO Schema produce `AgentMetadata` at compile time, and `WitTypeBuilder` maps schema types to WIT-compatible JS representations at runtime. The WIT definitions only flow through the WASM guest runtime.
+Regenerate after changing `wit/main.wit`, synced WIT dependencies, the role matrix, the wrapper script, or the pinned `wasm-rquickjs` toolchain.
