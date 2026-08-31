@@ -23,7 +23,8 @@ explicitly revised, **do not perform backward-compatibility work**.
 
 - **Rust**: Latest stable toolchain via rustup, with `wasm32-wasip2` target
 - **cargo-make**: Latest version (`cargo install --force cargo-make`)
-- **cargo-test-r**: Latest version (`cargo install --force --locked cargo-test-r`)
+- **cargo-test-r**: Match the version CI installs, pinned in
+  `.github/actions/restore-binaries/action.yml` (`cargo install --force --locked cargo-test-r@<VERSION>`)
 - **redis-server**: Required by worker-executor, service-integration, and CLI integration tests that
   use spawned test dependencies; not required by every unit test
 - **docker**: Required by tests that use containerized dependencies
@@ -157,12 +158,24 @@ Load these skills for guided workflows on complex tasks:
 | `modifying-cli-manifest-schema` | Adding or changing application manifest JSON schema versions and aligning CLI schema references |
 | `modifying-cli-output-schema` | Adding or changing structured `golem-cli` output, `StructuredOutput` types, or the command output JSON schema |
 | `modifying-service-configs` | Changing service configuration structs, defaults, or adding new config fields |
+| `db-migration-scripts` | Writing PostgreSQL and SQLite migration scripts under a `db/migration/` root |
+| `logging` | Adding or reviewing `tracing` statements and following the structured logging conventions |
+| `modifying-builtin-plugins` | Changing built-in plugin source, committed WASM, descriptors, versions, or provisioning |
+| `creating-new-builtin-plugins` | Adding a new built-in WASM plugin embedded in and provisioned by the registry service |
 | `sdk-development` | Working on the Rust, TypeScript, or MoonBit SDKs in `sdks/` |
+| `migrate-ts-decorator-sdk` | Porting a TypeScript agent from the removed decorator/`BaseAgent` API to `defineAgent` |
 | `golem-scala-development` | Compile, publish, and test the Golem Scala SDK in `sdks/scala/` |
 | `golem-scala-integration-tests` | Running and debugging Scala SDK integration tests |
 | `golem-scala-base-image` | WIT folder structure and regenerating `agent_guest.wasm` for the Scala SDK |
 | `golem-scala-code-generation` | Writing Scala code generators for the Scala SDK |
+| `moonbit-agent-guide` | Writing, refactoring, and testing MoonBit projects, and using `moon` tooling |
+| `moonbit-refactoring` | Refactoring MoonBit code to be idiomatic without regressing test coverage |
+| `moonbit-c-binding` | Writing MoonBit bindings to C libraries with native FFI |
+| `moonbit-code-transform` | Source-to-source MoonBit transformations with `moonbitlang/parser` and `formatter` |
+| `moonbit-proof` | Writing proof-carrying MoonBit code with Why3-backed specifications |
 | `investigating-executor-performance` | Investigating worker-executor performance with OTLP tracing and Jaeger |
+| `investigating-benchmark-performance` | Profiling Golem benchmarks with OTLP tracing and Jaeger |
+| `analysing-ci-failures` | Diagnosing a GitHub Actions failure from a run or job URL and reproducing it locally |
 | `golem-skill-harness` | Developing, testing, and running Golem skill tests with the skill test harness |
 | `managing-docs-versions` | Cutting a new docs version, backporting fixes to older releases, and managing versioned content under `docs/src/content/` |
 | `pre-pr-checklist` | Final checks before submitting a pull request |
