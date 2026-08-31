@@ -106,7 +106,7 @@ fn normalize_numeric_restrictions(
 /// indices: per-graph node indices are only valid within a single encoding.
 pub struct GraphEncoder {
   type_nodes : Array[@types.SchemaTypeNode]
-  def_index_by_id : Map[TypeId, Int]
+  def_index_by_id : Map[String, Int]
   wit_defs : Array[@types.SchemaTypeDef]
 }
 
@@ -118,7 +118,7 @@ pub struct GraphEncoder {
 pub fn GraphEncoder::new(
   defs : Array[SchemaTypeDef],
 ) -> GraphEncoder raise SchemaModelError {
-  let def_index_by_id : Map[TypeId, Int] = Map::new()
+  let def_index_by_id : Map[String, Int] = Map([])
   for i, def in defs {
     if def_index_by_id.contains(def.id) {
       raise EncodeError("duplicate def id '\{def.id}' in schema graph")
@@ -329,7 +329,7 @@ pub struct GraphDecoder {
 pub fn GraphDecoder::new(
   wit : @types.SchemaGraph,
 ) -> GraphDecoder raise SchemaModelError {
-  let seen : Map[TypeId, Unit] = Map::new()
+  let seen : Map[String, Unit] = Map([])
   for d in wit.defs {
     if seen.contains(d.id) {
       raise DecodeError("duplicate def id '\{d.id}' in schema graph")
@@ -368,7 +368,7 @@ pub fn GraphDecoder::decode_type_at(
 fn GraphDecoder::def_id(
   self : GraphDecoder,
   di : Int,
-) -> TypeId raise SchemaModelError {
+) -> String raise SchemaModelError {
   if di < 0 || di >= self.wit_defs.length() {
     raise DecodeError(
       "def index out of range: \{di} (defs: \{self.wit_defs.length()})",
@@ -768,19 +768,19 @@ fn preflight_walk(
 ) -> Unit raise SchemaModelError {
   match value {
     S8(i) =>
-      if not(s8_in_range(i)) {
+      if !s8_in_range(i) {
         raise EncodeError("s8 value out of range: \{i}")
       }
     S16(i) =>
-      if not(s16_in_range(i)) {
+      if !s16_in_range(i) {
         raise EncodeError("s16 value out of range: \{i}")
       }
     U16(u) =>
-      if not(u16_in_range(u)) {
+      if !u16_in_range(u) {
         raise EncodeError("u16 value out of range: \{u}")
       }
     Datetime(dt) =>
-      if not(datetime_valid(dt)) {
+      if !datetime_valid(dt) {
         raise EncodeError(
           "invalid datetime value: nanoseconds must be < 1_000_000_000, got \{dt.nanoseconds}",
         )
@@ -1252,7 +1252,7 @@ fn ValueDecoder::from_node(
     @types.UnionValue(up) => Union(up.tag, self.from_idx(up.body))
     @types.SecretValue(raw) => {
       // Lift the owned `secret` resource into an opaque take-once holder.
-      guard not(self.lifted_secrets[idx]) else {
+      guard !self.lifted_secrets[idx] else {
         raise DecodeError(
           "secret handle node referenced more than once at index \{idx}; an owned secret can only be lifted once",
         )
@@ -1274,7 +1274,7 @@ fn ValueDecoder::from_node(
       // references the same handle node twice cannot wrap one owned resource in
       // two holders (the underlying `@types.QuotaToken` is a copyable value
       // wrapper, so affine ownership is enforced here, not by the language).
-      guard not(self.lifted_quota_tokens[idx]) else {
+      guard !self.lifted_quota_tokens[idx] else {
         raise DecodeError(
           "quota-token handle node referenced more than once at index \{idx}; an owned quota-token can only be lifted once",
         )
@@ -1312,7 +1312,7 @@ fn ValueDecoder::from_node(
     @types.PermissionCardHandle(raw) => {
       // The generated resource wrapper is copyable, so enforce affine
       // ownership when lifting it into the recursive schema value.
-      guard not(self.lifted_permission_cards[idx]) else {
+      guard !self.lifted_permission_cards[idx] else {
         raise DecodeError(
           "permission-card handle node referenced more than once at index \{idx}; an owned permission-card can only be lifted once",
         )
@@ -1346,11 +1346,9 @@ pub fn schema_value_from_wit(
   drops : SchemaValueResourceDrops,
 ) -> SchemaValue raise SchemaModelError {
   let preflight = ValuePreflight::new(wit.value_nodes)
-  preflight.visit_idx(wit.root) catch {
-    error => {
-      drop_unique_resources(wit.value_nodes, drops)
-      raise error
-    }
+  let _ : Unit = {
+    errdefer drop_unique_resources(wit.value_nodes, drops)
+    preflight.visit_idx(wit.root)
   }
   match preflight.first_unreferenced_handle() {
     Some(idx) => {
@@ -1399,11 +1397,9 @@ pub fn typed_schema_value_from_wit(
   wit : @types.TypedSchemaValue,
   drops : SchemaValueResourceDrops,
 ) -> TypedSchemaValue raise SchemaModelError {
-  let graph = schema_graph_from_wit(wit.graph) catch {
-    error => {
-      drop_unique_resources(wit.value.value_nodes, drops)
-      raise error
-    }
+  let graph = {
+    errdefer drop_unique_resources(wit.value.value_nodes, drops)
+    schema_graph_from_wit(wit.graph)
   }
   { graph, value: schema_value_from_wit(wit.value, drops), }
 }

@@ -9,7 +9,9 @@ fn decode_with_drop_counts(
     drop_stream: fn(_) { counts[2] += 1 },
     drop_native_stream: fn(_) {  },
   }
-  let result = try? schema_value_from_wit(tree, drops)
+  let result = try schema_value_from_wit(tree, drops) |> Ok catch {
+    e => Err(e)
+  }
   (result, counts)
 }
 
@@ -26,7 +28,7 @@ test "malformed duplicate raw handle is dropped exactly once" {
   }
   let (result, drops) = decode_with_drop_counts(tree)
   guard result is Err(DecodeError(message)) else {
-    fail("expected DecodeError, got \{result}")
+    fail("expected DecodeError, got \{repr(result)}")
   }
   assert_true(message.contains("more than one handle node"))
   assert_eq(drops, [0, 1, 0])
@@ -43,7 +45,7 @@ test "multiply referenced handle is dropped when preflight rejects the tree" {
   }
   let (result, drops) = decode_with_drop_counts(tree)
   guard result is Err(DecodeError(message)) else {
-    fail("expected DecodeError, got \{result}")
+    fail("expected DecodeError, got \{repr(result)}")
   }
   assert_true(message.contains("more than once"))
   assert_eq(drops, [0, 1, 0])
@@ -60,7 +62,7 @@ test "unreachable handle is dropped when the whole tree is rejected" {
   }
   let (result, drops) = decode_with_drop_counts(tree)
   guard result is Err(DecodeError(message)) else {
-    fail("expected DecodeError, got \{result}")
+    fail("expected DecodeError, got \{repr(result)}")
   }
   assert_true(message.contains("not referenced from the root"))
   assert_eq(drops, [0, 1, 0])
@@ -78,7 +80,7 @@ test "preflight drops a stream when a later node is malformed" {
   }
   let (result, drops) = decode_with_drop_counts(tree)
   guard result is Err(DecodeError(_)) else {
-    fail("expected DecodeError, got \{result}")
+    fail("expected DecodeError, got \{repr(result)}")
   }
   assert_eq(drops, [0, 0, 1])
 }
@@ -101,7 +103,7 @@ test "malformed tree drops each distinct owned resource exactly once" {
   }
   let (result, drops) = decode_with_drop_counts(tree)
   guard result is Err(DecodeError(_)) else {
-    fail("expected DecodeError, got \{result}")
+    fail("expected DecodeError, got \{repr(result)}")
   }
   assert_eq(drops, [1, 1, 1])
 }
@@ -119,7 +121,7 @@ test "successful decode transfers resources without dropping them" {
   }
   let (result, drops) = decode_with_drop_counts(tree)
   guard result is Ok(Tuple([Secret(_), QuotaToken(_), Stream(_)])) else {
-    fail("expected successful capability tuple decode, got \{result}")
+    fail("expected successful capability tuple decode, got \{repr(result)}")
   }
   assert_eq(drops, [0, 0, 0])
 }
@@ -166,9 +168,11 @@ test "typed decode drops value resources when its graph is malformed" {
       root: 0,
     },
   }
-  let result = try? typed_schema_value_from_wit(typed, drops)
+  let result = try typed_schema_value_from_wit(typed, drops) |> Ok catch {
+    e => Err(e)
+  }
   guard result is Err(DecodeError(_)) else {
-    fail("expected DecodeError, got \{result}")
+    fail("expected DecodeError, got \{repr(result)}")
   }
   assert_eq(counts, [0, 0, 1])
 }

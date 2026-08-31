@@ -15,4 +15,4 @@ pub suberror SchemaModelError {
   MergeConflict(String)
   /// A `SchemaBuilder` reservation was never committed before `finish`.
   BuilderError(String)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)

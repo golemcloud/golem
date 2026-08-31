@@ -48,7 +48,7 @@ pub(all) suberror ErrorCode {
   TextFileBusy
   CrossDevice
   Other(String?)
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 // Types and methods
 pub(all) enum Advice {
@@ -58,11 +58,11 @@ pub(all) enum Advice {
   WILL_NEED
   DONT_NEED
   NO_REUSE
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 pub fn Advice::from(Int) -> Self
 pub fn Advice::ordinal(Self) -> Int
 
-pub(all) struct Descriptor(Int) derive(Eq, Show, @debug.Debug)
+pub(all) struct Descriptor(Int) derive(Eq, @debug.Debug)
 pub async fn Descriptor::advise(Self, UInt64, UInt64, Advice) -> Result[Unit, ErrorCode]
 pub fn Descriptor::append_via_stream(Self, @async-core.Stream[Byte]) -> @async-core.Future[Result[Unit, ErrorCode]]
 pub async fn Descriptor::create_directory_at(Self, String) -> Result[Unit, ErrorCode]
@@ -90,7 +90,7 @@ pub async fn Descriptor::sync_data(Self) -> Result[Unit, ErrorCode]
 pub async fn Descriptor::unlink_file_at(Self, String) -> Result[Unit, ErrorCode]
 pub fn Descriptor::write_via_stream(Self, @async-core.Stream[Byte], UInt64) -> @async-core.Future[Result[Unit, ErrorCode]]
 
-pub(all) struct DescriptorFlags(Byte) derive(Eq, Show, @debug.Debug)
+pub(all) struct DescriptorFlags(Byte) derive(Eq, @debug.Debug)
 pub fn DescriptorFlags::default() -> Self
 pub fn DescriptorFlags::is_set(Self, DescriptorFlagsFlag) -> Bool
 pub fn DescriptorFlags::set(Self, DescriptorFlagsFlag) -> Self
@@ -112,7 +112,7 @@ pub(all) struct DescriptorStat {
   data_access_timestamp : @system-clock.Instant?
   data_modification_timestamp : @system-clock.Instant?
   status_change_timestamp : @system-clock.Instant?
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum DescriptorType {
   BlockDevice
@@ -123,25 +123,25 @@ pub(all) enum DescriptorType {
   RegularFile
   Socket
   Other(String?)
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct DirectoryEntry {
   type_ : DescriptorType
   name : String
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct MetadataHashValue {
   lower : UInt64
   upper : UInt64
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum NewTimestamp {
   NoChange
   Now
   Timestamp(@system-clock.Instant)
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct OpenFlags(Byte) derive(Eq, Show, @debug.Debug)
+pub(all) struct OpenFlags(Byte) derive(Eq, @debug.Debug)
 pub fn OpenFlags::default() -> Self
 pub fn OpenFlags::is_set(Self, OpenFlagsFlag) -> Bool
 pub fn OpenFlags::set(Self, OpenFlagsFlag) -> Self
@@ -154,7 +154,7 @@ pub(all) enum OpenFlagsFlag {
   TRUNCATE
 }
 
-pub(all) struct PathFlags(Byte) derive(Eq, Show, @debug.Debug)
+pub(all) struct PathFlags(Byte) derive(Eq, @debug.Debug)
 pub fn PathFlags::default() -> Self
 pub fn PathFlags::is_set(Self, PathFlagsFlag) -> Bool
 pub fn PathFlags::set(Self, PathFlagsFlag) -> Self

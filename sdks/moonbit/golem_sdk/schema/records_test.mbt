@@ -25,7 +25,7 @@ fn[T : IntoSchema + FromSchema] rt(v : T) -> T raise {
     drop_native_stream: fn(_) {  },
   })
   assert_eq(back.graph, typed.graph)
-  T::from_value(back.value)
+  FromSchema::from_value(back.value)
 }
 
 // ============================================================
@@ -139,7 +139,9 @@ test "simple enum round-trip" {
 ///|
 test "enum out-of-range decode raises OutOfRange" {
   let v : @model.SchemaValue = Enum(9)
-  let r : Result[Color, FromSchemaError] = try? from_value_as(v)
+  let r : Result[Color, FromSchemaError] = try from_value_as(v) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(OutOfRange(index~, len~, context~)) else {
     fail("expected OutOfRange, got \{repr(r)}")
   }
@@ -226,7 +228,9 @@ test "variant round-trip" {
 ///|
 test "unit variant case rejects an unexpected payload" {
   let v : @model.SchemaValue = Variant(0, Some(String("oops")))
-  let r : Result[Shape, FromSchemaError] = try? from_value_as(v)
+  let r : Result[Shape, FromSchemaError] = try from_value_as(v) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(Custom(msg)) else { fail("expected Custom, got \{repr(r)}") }
   assert_true(msg.contains("expected no payload"))
 }
@@ -365,6 +369,7 @@ test "recursive record round-trip + single def via reserve/commit" {
 ///|
 /// A type whose `register_in` deliberately produces a malformed graph (an empty
 /// enum) so we can assert `into_schema_graph` validates and raises.
+#warnings("-struct_never_constructed")
 struct BadEnum {} derive(Eq, Debug)
 
 ///|

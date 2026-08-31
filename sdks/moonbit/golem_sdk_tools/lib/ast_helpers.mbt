@@ -1,23 +1,23 @@
 ///|
 /// Sentinel position used for generated AST nodes that have no source location.
-let dummy_pos : @basic.Position = { fname: "", lnum: 0, bol: 0, cnum: 0 }
+let dummy_pos : @basic.Position = { fname: "", lnum: 0, bol: 0, cnum: 0, }
 
 ///|
 /// Sentinel location used for generated AST nodes that have no source location.
-let dummy_loc : @basic.Location = { start: dummy_pos, end: dummy_pos }
+let dummy_loc : @basic.Location = { start: dummy_pos, end: dummy_pos, }
 
 // --- Primitives ---
 
 ///|
 /// Creates a `Binder` (variable name binding) with a dummy location.
 fn make_binder(name : String) -> @syntax.Binder {
-  @syntax.Binder::{ name, loc: dummy_loc }
+  @syntax.Binder::{ name, loc: dummy_loc, }
 }
 
 ///|
 /// Converts an `Array` to a `@list.List`.
 fn[T] to_list(arr : Array[T]) -> @list.List[T] {
-  @list.List::from_array(arr)
+  @list.List(arr)
 }
 
 // --- Types ---
@@ -41,7 +41,7 @@ fn make_type(name : String) -> @syntax.Type {
 /// Creates an identifier expression.
 fn make_ident_expr(name : String) -> @syntax.Expr {
   @syntax.Expr::Ident(
-    id=@syntax.Var::{ name: @syntax.LongIdent::Ident(name~), loc: dummy_loc },
+    id=@syntax.Var::{ name: @syntax.LongIdent::Ident(name~), loc: dummy_loc, },
     loc=dummy_loc,
   )
 }
@@ -50,7 +50,7 @@ fn make_ident_expr(name : String) -> @syntax.Expr {
 /// Creates a package-qualified identifier expression (`@pkg.name`).
 fn make_qualified_expr(pkg : String, id : String) -> @syntax.Expr {
   @syntax.Expr::Ident(
-    id=@syntax.Var::{ name: @syntax.LongIdent::Dot(pkg~, id~), loc: dummy_loc },
+    id=@syntax.Var::{ name: @syntax.LongIdent::Dot(pkg~, id~), loc: dummy_loc, },
     loc=dummy_loc,
   )
 }
@@ -60,7 +60,7 @@ fn make_qualified_expr(pkg : String, id : String) -> @syntax.Expr {
 ///|
 /// Wraps an expression as a positional function argument.
 fn make_positional_arg(expr : @syntax.Expr) -> @syntax.Argument {
-  @syntax.Argument::{ value: expr, kind: @syntax.ArgumentKind::Positional }
+  @syntax.Argument::{ value: expr, kind: @syntax.ArgumentKind::Positional, }
 }
 
 ///|

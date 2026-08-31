@@ -12,18 +12,19 @@ pub(all) enum DescriptorType {
       RegularFile
       Socket
       Other(String?)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Descriptor flags.
 ///
 /// Note: This was called `fdflags` in earlier versions of WASI.
-pub(all) struct DescriptorFlags(Byte) derive(Debug, Show, Eq)
+pub(all) struct DescriptorFlags(Byte) derive(Debug, Eq)
 pub fn DescriptorFlags::default() -> DescriptorFlags {
       b'\x00'
 }
 pub(all) enum DescriptorFlagsFlag {
       READ; WRITE; FILE_INTEGRITY_SYNC; DATA_INTEGRITY_SYNC; REQUESTED_WRITE_SYNC; MUTATE_DIRECTORY
 }
+///|
 fn DescriptorFlagsFlag::value(self : DescriptorFlagsFlag) -> Byte {
       match self {
             READ => ((1U << 0).to_byte())
@@ -34,53 +35,61 @@ fn DescriptorFlagsFlag::value(self : DescriptorFlagsFlag) -> Byte {
             MUTATE_DIRECTORY => ((1U << 5).to_byte())
       }
 }
+///|
 pub fn DescriptorFlags::set(self : Self, other: DescriptorFlagsFlag) -> DescriptorFlags {
       let DescriptorFlags(flag) = self
       flag.lor(other.value())
 }
+///|
 pub fn DescriptorFlags::unset(self : Self, other: DescriptorFlagsFlag) -> DescriptorFlags {
       let DescriptorFlags(flag) = self
       flag.land(other.value().lnot())
 }
+///|
 pub fn DescriptorFlags::is_set(self : Self, other: DescriptorFlagsFlag) -> Bool {
       let DescriptorFlags(flag) = self
       (flag.land(other.value()) == other.value())
 }
 ///|
 /// Flags determining the method of how paths are resolved.
-pub(all) struct PathFlags(Byte) derive(Debug, Show, Eq)
+pub(all) struct PathFlags(Byte) derive(Debug, Eq)
 pub fn PathFlags::default() -> PathFlags {
       b'\x00'
 }
 pub(all) enum PathFlagsFlag {
       SYMLINK_FOLLOW
 }
+///|
 fn PathFlagsFlag::value(self : PathFlagsFlag) -> Byte {
       match self {
             SYMLINK_FOLLOW => ((1U << 0).to_byte())
       }
 }
+///|
 pub fn PathFlags::set(self : Self, other: PathFlagsFlag) -> PathFlags {
       let PathFlags(flag) = self
       flag.lor(other.value())
 }
+///|
 pub fn PathFlags::unset(self : Self, other: PathFlagsFlag) -> PathFlags {
       let PathFlags(flag) = self
       flag.land(other.value().lnot())
 }
+///|
 pub fn PathFlags::is_set(self : Self, other: PathFlagsFlag) -> Bool {
       let PathFlags(flag) = self
       (flag.land(other.value()) == other.value())
 }
 ///|
 /// Open flags used by `open-at`.
-pub(all) struct OpenFlags(Byte) derive(Debug, Show, Eq)
+pub(all) struct OpenFlags(Byte) derive(Debug, Eq)
 pub fn OpenFlags::default() -> OpenFlags {
       b'\x00'
 }
 pub(all) enum OpenFlagsFlag {
       CREATE; DIRECTORY; EXCLUSIVE; TRUNCATE
 }
+///|
 fn OpenFlagsFlag::value(self : OpenFlagsFlag) -> Byte {
       match self {
             CREATE => ((1U << 0).to_byte())
@@ -89,14 +98,17 @@ fn OpenFlagsFlag::value(self : OpenFlagsFlag) -> Byte {
             TRUNCATE => ((1U << 3).to_byte())
       }
 }
+///|
 pub fn OpenFlags::set(self : Self, other: OpenFlagsFlag) -> OpenFlags {
       let OpenFlags(flag) = self
       flag.lor(other.value())
 }
+///|
 pub fn OpenFlags::unset(self : Self, other: OpenFlagsFlag) -> OpenFlags {
       let OpenFlags(flag) = self
       flag.land(other.value().lnot())
 }
+///|
 pub fn OpenFlags::is_set(self : Self, other: OpenFlagsFlag) -> Bool {
       let OpenFlags(flag) = self
       (flag.land(other.value()) == other.value())
@@ -107,19 +119,19 @@ pub fn OpenFlags::is_set(self : Self, other: OpenFlagsFlag) -> Bool {
 /// Note: This was called `filestat` in earlier versions of WASI.
 pub(all) struct DescriptorStat {
       type_ : DescriptorType; link_count : UInt64; size : UInt64; data_access_timestamp : @system-clock.Instant?; data_modification_timestamp : @system-clock.Instant?; status_change_timestamp : @system-clock.Instant?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// When setting a timestamp, this gives the value to set it to.
 pub(all) enum NewTimestamp {
       NoChange
       Now
       Timestamp(@system-clock.Instant)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// A directory entry.
 pub(all) struct DirectoryEntry {
       type_ : DescriptorType; name : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Error codes returned by functions, similar to `errno` in POSIX.
 /// Not all of these error codes are returned by the functions provided by this
@@ -163,12 +175,12 @@ pub(all) suberror ErrorCode {
       TextFileBusy
       CrossDevice
       Other(String?)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// File or memory access pattern advisory information.
 pub(all) enum Advice {
       NORMAL; SEQUENTIAL; RANDOM; WILL_NEED; DONT_NEED; NO_REUSE
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 pub fn Advice::ordinal(self : Advice) -> Int {
       match self {
@@ -181,6 +193,7 @@ pub fn Advice::ordinal(self : Advice) -> Int {
       }
 }
 
+///|
 pub fn Advice::from(self : Int) -> Advice {
       match self {
             0 => NORMAL
@@ -197,12 +210,12 @@ pub fn Advice::from(self : Int) -> Advice {
 /// 128-bit integer type.
 pub(all) struct MetadataHashValue {
       lower : UInt64; upper : UInt64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// A descriptor is a reference to a filesystem object, which may be a file,
 /// directory, named pipe, special file, or other object on which filesystem
 /// calls may be made.
-pub(all) struct Descriptor(Int) derive(Debug, Show, Eq)
+pub(all) struct Descriptor(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn Descriptor::drop(self : Descriptor) -> Unit {

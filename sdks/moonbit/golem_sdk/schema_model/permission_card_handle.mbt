@@ -64,14 +64,3 @@ impl Debug for GuestPermissionCardHandle with fn to_repr(self) {
     },
   )
 }
-
-///|
-impl Show for GuestPermissionCardHandle with fn output(self, logger) {
-  logger.write_string(
-    if self.is_present() {
-      "GuestPermissionCardHandle(present)"
-    } else {
-      "GuestPermissionCardHandle(consumed)"
-    },
-  )
-}

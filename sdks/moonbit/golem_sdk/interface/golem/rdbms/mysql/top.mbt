@@ -6,7 +6,7 @@ pub(all) suberror Error_ {
       QueryExecutionFailure(String)
       QueryResponseFailure(String)
       Other(String)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) enum DbColumnType {
       Boolean
@@ -44,11 +44,11 @@ pub(all) enum DbColumnType {
       Set
       Bit
       Json
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct DbColumn {
       ordinal : UInt64; name : String; db_type : DbColumnType; db_type_name : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Value descriptor for a single database value
 pub(all) enum DbValue {
@@ -88,19 +88,19 @@ pub(all) enum DbValue {
       Bit(Array[Bool])
       Json(String)
       Null
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// A single row of values
 pub(all) struct DbRow {
       values : Array[DbValue]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct DbResult {
       columns : Array[DbColumn]; rows : Array[DbRow]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// A potentially very large and lazy stream of rows:
-pub(all) struct DbResultStream(Int) derive(Debug, Show, Eq)
+pub(all) struct DbResultStream(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn DbResultStream::drop(self : DbResultStream) -> Unit {
@@ -108,7 +108,7 @@ pub fn DbResultStream::drop(self : DbResultStream) -> Unit {
       wasmImportResourceDropDbResultStream(resource)
 }
 ///|
-pub(all) struct DbConnection(Int) derive(Debug, Show, Eq)
+pub(all) struct DbConnection(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn DbConnection::drop(self : DbConnection) -> Unit {
@@ -116,7 +116,7 @@ pub fn DbConnection::drop(self : DbConnection) -> Unit {
       wasmImportResourceDropDbConnection(resource)
 }
 ///|
-pub(all) struct DbTransaction(Int) derive(Debug, Show, Eq)
+pub(all) struct DbTransaction(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn DbTransaction::drop(self : DbTransaction) -> Unit {

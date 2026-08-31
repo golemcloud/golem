@@ -2,7 +2,7 @@
 ///|
 pub(all) struct CloseInfo {
       code : UInt; reason : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) suberror Error_ {
       ConnectionFailure(String)
@@ -11,16 +11,16 @@ pub(all) suberror Error_ {
       ProtocolError(String)
       Closed(CloseInfo?)
       Other(String)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// A WebSocket message — text or binary
 pub(all) enum Message {
       Text(String)
       Binary(FixedArray[Byte])
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// A WebSocket connection resource
-pub(all) struct WebsocketConnection(Int) derive(Debug, Show, Eq)
+pub(all) struct WebsocketConnection(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn WebsocketConnection::drop(self : WebsocketConnection) -> Unit {

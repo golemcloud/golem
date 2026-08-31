@@ -65,14 +65,3 @@ impl Debug for GuestSecretHandle with fn to_repr(self) {
     },
   )
 }
-
-///|
-impl Show for GuestSecretHandle with fn output(self, logger) {
-  logger.write_string(
-    if self.is_present() {
-      "GuestSecretHandle(present)"
-    } else {
-      "GuestSecretHandle(consumed)"
-    },
-  )
-}

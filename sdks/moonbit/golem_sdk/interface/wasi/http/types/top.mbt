@@ -12,29 +12,29 @@ pub(all) enum Method {
       Trace
       Patch
       Other(String)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// This type corresponds to HTTP standard Related Schemes.
 pub(all) enum Scheme {
       Http
       Https
       Other(String)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Defines the case payload type for `DNS-error` above:
 pub(all) struct DnsErrorPayload {
       rcode : String?; info_code : UInt?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Defines the case payload type for `TLS-alert-received` above:
 pub(all) struct TlsAlertReceivedPayload {
       alert_id : Byte?; alert_message : String?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Defines the case payload type for `HTTP-response-{header,trailer}-size` above:
 pub(all) struct FieldSizePayload {
       field_name : String?; field_size : UInt?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// These cases are inspired by the IANA HTTP Proxy Error Types:
 ///   <https://www.iana.org/assignments/http-proxy-status/http-proxy-status.xhtml#table-http-proxy-error-types>
@@ -78,7 +78,7 @@ pub(all) suberror ErrorCode {
       LoopDetected
       ConfigurationError
       InternalError(String?)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// This type enumerates the different kinds of errors that may occur when
 /// setting or appending to a `fields` resource.
@@ -88,7 +88,7 @@ pub(all) suberror HeaderError {
       Immutable
       SizeExceeded
       Other(String?)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// This type enumerates the different kinds of errors that may occur when
 /// setting fields of a `request-options` resource.
@@ -96,7 +96,7 @@ pub(all) suberror RequestOptionsError {
       NotSupported
       Immutable
       Other(String?)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// This following block defines the `fields` resource which corresponds to
 /// HTTP standard Fields. Fields are a common representation used for both
@@ -117,7 +117,7 @@ pub(all) suberror RequestOptionsError {
 /// Implementations may impose limits on individual field values and on total
 /// aggregate field section size. Operations that would exceed these limits
 /// fail with `header-error.size-exceeded`
-pub(all) struct Fields(Int) derive(Debug, Show, Eq)
+pub(all) struct Fields(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn Fields::drop(self : Fields) -> Unit {
@@ -126,7 +126,7 @@ pub fn Fields::drop(self : Fields) -> Unit {
 }
 ///|
 /// Represents an HTTP Request.
-pub(all) struct Request(Int) derive(Debug, Show, Eq)
+pub(all) struct Request(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn Request::drop(self : Request) -> Unit {
@@ -140,7 +140,7 @@ pub fn Request::drop(self : Request) -> Unit {
 ///
 /// These timeouts are separate from any the user may use to bound an
 /// asynchronous call.
-pub(all) struct RequestOptions(Int) derive(Debug, Show, Eq)
+pub(all) struct RequestOptions(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn RequestOptions::drop(self : RequestOptions) -> Unit {
@@ -149,7 +149,7 @@ pub fn RequestOptions::drop(self : RequestOptions) -> Unit {
 }
 ///|
 /// Represents an HTTP Response.
-pub(all) struct Response(Int) derive(Debug, Show, Eq)
+pub(all) struct Response(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn Response::drop(self : Response) -> Unit {

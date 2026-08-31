@@ -10,7 +10,7 @@
 pub(all) suberror WebhookError {
       PermissionDenied
       InternalError(String)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Possible failures of an RPC call
 pub(all) suberror RpcError {
@@ -19,26 +19,26 @@ pub(all) suberror RpcError {
       NotFound(String)
       RemoteInternalError(String)
       RemoteAgentError(@common.AgentError)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Final identity allocated for one remote invocation. For an ephemeral
 /// target, `agent-id` contains the generated one-shot phantom ID.
 pub(all) struct InvocationMetadata {
       agent_id : String; idempotency_key : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Result of an awaited invocation together with its final identity.
 pub(all) struct InvocationResultWithMetadata {
       metadata : InvocationMetadata; result : @types.SchemaValueTree?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Receipt returned when an invocation has been scheduled.
 pub(all) struct ScheduledInvocationReceipt {
       metadata : InvocationMetadata
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// An RPC client for invoking remote agents
-pub(all) struct WasmRpc(Int) derive(Debug, Show, Eq)
+pub(all) struct WasmRpc(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn WasmRpc::drop(self : WasmRpc) -> Unit {
@@ -47,7 +47,7 @@ pub fn WasmRpc::drop(self : WasmRpc) -> Unit {
 }
 ///|
 /// Represents an asynchronous invocation result
-pub(all) struct FutureInvokeResult(Int) derive(Debug, Show, Eq)
+pub(all) struct FutureInvokeResult(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn FutureInvokeResult::drop(self : FutureInvokeResult) -> Unit {
@@ -58,10 +58,10 @@ pub fn FutureInvokeResult::drop(self : FutureInvokeResult) -> Unit {
 /// Asynchronous invocation handle together with its final identity.
 pub(all) struct AsyncInvocationWithMetadata {
       metadata : InvocationMetadata; future : FutureInvokeResult
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Cancellation token for scheduled invocations
-pub(all) struct CancellationToken(Int) derive(Debug, Show, Eq)
+pub(all) struct CancellationToken(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn CancellationToken::drop(self : CancellationToken) -> Unit {
@@ -72,7 +72,7 @@ pub fn CancellationToken::drop(self : CancellationToken) -> Unit {
 /// Receipt for a scheduled invocation that can still be cancelled.
 pub(all) struct CancelableScheduledInvocationReceipt {
       metadata : InvocationMetadata; cancellation_token : CancellationToken
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Get the current value of the config key.
 ///
@@ -89,7 +89,7 @@ pub(all) struct CancelableScheduledInvocationReceipt {
 /// Getting a shared key will get the current value of the key in the environment.
 pub(all) suberror ConfigValueError {
       PermissionDenied
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Gets all the registered agent types
 pub fn get_all_agent_types() -> Array[@common.RegisteredAgentType] {

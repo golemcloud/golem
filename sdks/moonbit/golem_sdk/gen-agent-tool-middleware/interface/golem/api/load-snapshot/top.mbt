@@ -2,4 +2,5 @@
 ///|
 /// Tries to load a user-defined snapshot, setting up the agent's state based on it.
 /// The function can return with a failure to indicate that the update is not possible.
+#warnings("-declaration_unimplemented")
 declare pub async fn load(snapshot : @host.Snapshot, background_group : @async-core.TaskGroup[Unit]) -> Result[Unit, String]

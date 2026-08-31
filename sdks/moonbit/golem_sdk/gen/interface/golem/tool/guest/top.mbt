@@ -2,9 +2,11 @@
 ///|
 /// Enumerate the tools this component exposes. The returned metadata
 /// is complete (full command tree and schema graph).
+#warnings("-declaration_unimplemented")
 declare pub fn discover_tools() -> Result[Array[@common.Tool], @common.ToolError]
 ///|
 /// Look up a single tool by name.
+#warnings("-declaration_unimplemented")
 declare pub fn get_tool(name : String) -> Result[@common.Tool, @common.ToolError]
 ///|
 /// Invoke a command of a tool.
@@ -27,4 +29,5 @@ declare pub fn get_tool(name : String) -> Result[@common.Tool, @common.ToolError
 /// `principal` carries the caller's authenticated identity for
 /// authorization and audit, identical in semantics to the parameter
 /// of the same name in `golem:agent/guest.invoke`.
+#warnings("-declaration_unimplemented")
 declare pub async fn invoke(tool_name : String, command_path : Array[String], input : @types.TypedSchemaValue, stdin : @async-core.Stream[Byte]?, principal : @common0.Principal, background_group : @async-core.TaskGroup[Unit]) -> Result[@common.InvocationResult, @common.ToolError]

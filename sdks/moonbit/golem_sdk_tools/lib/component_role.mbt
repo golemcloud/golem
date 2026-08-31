@@ -210,8 +210,7 @@ fn impl_has_middleware_annotation(impl_ : @syntax.Impl) -> Bool {
       type_desc_has_middleware_annotation(decl.components)
     TopFuncDef(fun_decl~, ..) =>
       attrs_have_middleware_annotation(fun_decl.attrs)
-    TopImpl(attrs~, body~, ..) =>
-      attrs_have_middleware_annotation(attrs)
+    TopImpl(attrs~, ..) => attrs_have_middleware_annotation(attrs)
     TopImplRelation(attrs~, ..) => attrs_have_middleware_annotation(attrs)
     TopLetDef(attrs~, ..) => attrs_have_middleware_annotation(attrs)
     TopTest(attrs~, ..) => attrs_have_middleware_annotation(attrs)

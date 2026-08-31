@@ -2,7 +2,7 @@
 ///|
 /// Awaitable result of `get`. The inner `option` returns `none` when the
 /// requested key wasn't present.
-pub(all) struct FutureGetResult(Int) derive(Debug, Show, Eq)
+pub(all) struct FutureGetResult(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn FutureGetResult::drop(self : FutureGetResult) -> Unit {
@@ -11,7 +11,7 @@ pub fn FutureGetResult::drop(self : FutureGetResult) -> Unit {
 }
 ///|
 /// Awaitable result of `exists`.
-pub(all) struct FutureExistsResult(Int) derive(Debug, Show, Eq)
+pub(all) struct FutureExistsResult(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn FutureExistsResult::drop(self : FutureExistsResult) -> Unit {
@@ -20,7 +20,7 @@ pub fn FutureExistsResult::drop(self : FutureExistsResult) -> Unit {
 }
 ///|
 /// Awaitable result of `set` and `delete`.
-pub(all) struct FutureResult(Int) derive(Debug, Show, Eq)
+pub(all) struct FutureResult(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn FutureResult::drop(self : FutureResult) -> Unit {
@@ -29,7 +29,7 @@ pub fn FutureResult::drop(self : FutureResult) -> Unit {
 }
 ///|
 /// Awaitable result of `get-or-set`.
-pub(all) struct FutureGetOrSetResult(Int) derive(Debug, Show, Eq)
+pub(all) struct FutureGetOrSetResult(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn FutureGetOrSetResult::drop(self : FutureGetOrSetResult) -> Unit {
@@ -44,7 +44,7 @@ pub fn FutureGetOrSetResult::drop(self : FutureGetOrSetResult) -> Unit {
 /// indicate an error that prevents calling `fill`. An implementation MAY
 /// have a timeout that drops a vacancy that hasn't been filled in order
 /// to unblock other waiting `get-or-set` callers.
-pub(all) struct Vacancy(Int) derive(Debug, Show, Eq)
+pub(all) struct Vacancy(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn Vacancy::drop(self : Vacancy) -> Unit {
@@ -65,7 +65,7 @@ pub fn Vacancy::drop(self : Vacancy) -> Unit {
 pub(all) enum GetOrSetEntry {
       Occupied(@types.IncomingValue)
       Vacant(Vacancy)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// The `get` operation returns the value passed by a previous `set` for the
 /// same key within the given TTL or none if there is no such value.

@@ -16,7 +16,7 @@ pub fn now() -> Instant
 pub(all) struct Instant {
   seconds : Int64
   nanoseconds : UInt
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 // Type aliases
 

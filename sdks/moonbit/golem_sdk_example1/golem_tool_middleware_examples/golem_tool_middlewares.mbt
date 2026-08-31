@@ -2,9 +2,10 @@
 
 ///|
 ///
-fn[T] __golem_middleware_tool_concat_array(left : Array[T], right : Array[T]) -> Array[
-  T,
-] {
+fn[T] __golem_middleware_tool_concat_array(
+  left : Array[T],
+  right : Array[T],
+) -> Array[T] {
   let result = left.copy()
   for value in right {
     result.push(value)
@@ -42,12 +43,14 @@ fn __golem_middleware_tool_rebase_node(
 
 ///|
 ///
-fn __golem_middleware_tool_extract_prepared(def : @tool.ToolDef) -> @tool.ToolDef {
+fn __golem_middleware_tool_extract_prepared(
+  def : @tool.ToolDef,
+) -> @tool.ToolDef {
   {
     version: def.version,
-    commands: def.commands[1:].map(
-      node => __golem_middleware_tool_rebase_node(node, -1)
-    ),
+    commands: def.commands[1:].map(node => {
+      __golem_middleware_tool_rebase_node(node, -1)
+    }),
   }
 }
 
@@ -60,27 +63,25 @@ fn __golem_middleware_tool_append_prepared(
   let offset = def.commands.length()
   let commands = def.commands.copy()
   let root = commands[0]
-  commands[0] =  {
+  commands[0] = {
     name: root.name,
     aliases: root.aliases,
     doc: root.doc,
     globals: root.globals,
-    subcommands: __golem_middleware_tool_concat_array(
-      root.subcommands, [offset]
-    ),
+    subcommands: __golem_middleware_tool_concat_array(root.subcommands, [offset]),
     body: root.body,
   }
   for node in child.commands {
     commands.push(__golem_middleware_tool_rebase_node(node, offset))
   }
-  { version: def.version, commands }
+  { version: def.version, commands, }
 }
 
 ///|
 ///
 fn __golem_middleware_tool_def_raw_Messages() -> @tool.ToolDef {
   try {
-    let def :@tool.ToolDef = {
+    let def : @tool.ToolDef = {
       version: "0.0.0",
       commands: [
         {
@@ -91,70 +92,64 @@ fn __golem_middleware_tool_def_raw_Messages() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [] },
+          globals: { options: [], flags: [], },
           subcommands: [1],
           body: None,
         },
         {
           name: "send",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
-          globals: { options: [], flags: [] },
+          doc: { summary: "", description: "", examples: [], },
+          globals: { options: [], flags: [], },
           subcommands: [],
-          body: Some(
-            {
-              positionals: {
-                fixed: [
-                  {
-                    name: "message",
-                    doc: { summary: "", description: "", examples: [] },
-                    value_name: None,
-                    type_: @schema.into_schema_graph(
-                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-                    ),
-                    default: None,
-                    required: true,
-                    accepts_stdio: false,
-                  },
-                ],
-                tail: None,
-              },
-              options: [],
-              flags: [],
-              constraints: [],
-              stdin: None,
-              stdout: None,
-              result: Some(
+          body: Some({
+            positionals: {
+              fixed: [
                 {
+                  name: "message",
+                  doc: { summary: "", description: "", examples: [], },
+                  value_name: None,
                   type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
-                  doc: { summary: "", description: "", examples: [] },
-                  formatters: [
-                    {
-                      name: "default",
-                      doc: { summary: "", description: "", examples: [] },
-                    },
-                  ],
-                  default_formatter: "default",
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
                 },
-              ),
-              errors: [],
-              annotations: Some(
-                {
-                  read_only: false,
-                  destructive: true,
-                  idempotent: false,
-                  open_world: true,
-                },
-              ),
+              ],
+              tail: None,
             },
-          ),
+            options: [],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: Some({
+              type_: @schema.into_schema_graph(
+                (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+              ),
+              doc: { summary: "", description: "", examples: [], },
+              formatters: [
+                {
+                  name: "default",
+                  doc: { summary: "", description: "", examples: [], },
+                },
+              ],
+              default_formatter: "default",
+            }),
+            errors: [],
+            annotations: Some({
+              read_only: false,
+              destructive: true,
+              idempotent: false,
+              open_world: true,
+            }),
+          }),
         },
       ],
     }
     def
-  } catch{
+  } catch {
     error => abort("invalid generated raw tool definition: " + repr(error))
   }
 }
@@ -169,13 +164,13 @@ fn __golem_middleware_tool_def_prepare_Messages(
   override_aliases : Array[String]?,
 ) -> @tool.ToolDef {
   try {
-    let carrier :@tool.ToolDef = {
+    let carrier : @tool.ToolDef = {
       version: "0.0.0",
       commands: [
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
+          doc: { summary: "", description: "", examples: [], },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -194,7 +189,7 @@ fn __golem_middleware_tool_def_prepare_Messages(
     )
     let def = prepared
     def
-  } catch{
+  } catch {
     error => abort("invalid generated prepared tool definition: " + repr(error))
   }
 }
@@ -202,15 +197,13 @@ fn __golem_middleware_tool_def_prepare_Messages(
 ///|
 ///
 fn __golem_middleware_tool_def_Messages() -> @tool.ToolDef {
-  try {
-    __golem_middleware_tool_def_prepare_Messages(
-      { options: [], flags: [] },
-      { options: [], flags: [] },
-      None,
-      None,
-      None,
-    ).normalize_inherited_globals()
-  } catch{
+  __golem_middleware_tool_def_prepare_Messages(
+    { options: [], flags: [], },
+    { options: [], flags: [], },
+    None,
+    None,
+    None,
+  ).normalize_inherited_globals() catch {
     error => abort("invalid generated tool definition: " + repr(error))
   }
 }
@@ -219,7 +212,7 @@ fn __golem_middleware_tool_def_Messages() -> @tool.ToolDef {
 ///
 fn __golem_middleware_tool_def_raw_PublicFiles() -> @tool.ToolDef {
   try {
-    let def :@tool.ToolDef = {
+    let def : @tool.ToolDef = {
       version: "0.0.0",
       commands: [
         {
@@ -230,70 +223,64 @@ fn __golem_middleware_tool_def_raw_PublicFiles() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [] },
+          globals: { options: [], flags: [], },
           subcommands: [1],
           body: None,
         },
         {
           name: "read",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
-          globals: { options: [], flags: [] },
+          doc: { summary: "", description: "", examples: [], },
+          globals: { options: [], flags: [], },
           subcommands: [],
-          body: Some(
-            {
-              positionals: {
-                fixed: [
-                  {
-                    name: "path",
-                    doc: { summary: "", description: "", examples: [] },
-                    value_name: None,
-                    type_: @schema.into_schema_graph(
-                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-                    ),
-                    default: None,
-                    required: true,
-                    accepts_stdio: false,
-                  },
-                ],
-                tail: None,
-              },
-              options: [],
-              flags: [],
-              constraints: [],
-              stdin: None,
-              stdout: None,
-              result: Some(
+          body: Some({
+            positionals: {
+              fixed: [
                 {
+                  name: "path",
+                  doc: { summary: "", description: "", examples: [], },
+                  value_name: None,
                   type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
-                  doc: { summary: "", description: "", examples: [] },
-                  formatters: [
-                    {
-                      name: "default",
-                      doc: { summary: "", description: "", examples: [] },
-                    },
-                  ],
-                  default_formatter: "default",
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
                 },
-              ),
-              errors: [],
-              annotations: Some(
-                {
-                  read_only: false,
-                  destructive: true,
-                  idempotent: false,
-                  open_world: true,
-                },
-              ),
+              ],
+              tail: None,
             },
-          ),
+            options: [],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: Some({
+              type_: @schema.into_schema_graph(
+                (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+              ),
+              doc: { summary: "", description: "", examples: [], },
+              formatters: [
+                {
+                  name: "default",
+                  doc: { summary: "", description: "", examples: [], },
+                },
+              ],
+              default_formatter: "default",
+            }),
+            errors: [],
+            annotations: Some({
+              read_only: false,
+              destructive: true,
+              idempotent: false,
+              open_world: true,
+            }),
+          }),
         },
       ],
     }
     def
-  } catch{
+  } catch {
     error => abort("invalid generated raw tool definition: " + repr(error))
   }
 }
@@ -308,13 +295,13 @@ fn __golem_middleware_tool_def_prepare_PublicFiles(
   override_aliases : Array[String]?,
 ) -> @tool.ToolDef {
   try {
-    let carrier :@tool.ToolDef = {
+    let carrier : @tool.ToolDef = {
       version: "0.0.0",
       commands: [
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
+          doc: { summary: "", description: "", examples: [], },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -333,7 +320,7 @@ fn __golem_middleware_tool_def_prepare_PublicFiles(
     )
     let def = prepared
     def
-  } catch{
+  } catch {
     error => abort("invalid generated prepared tool definition: " + repr(error))
   }
 }
@@ -341,15 +328,13 @@ fn __golem_middleware_tool_def_prepare_PublicFiles(
 ///|
 ///
 fn __golem_middleware_tool_def_PublicFiles() -> @tool.ToolDef {
-  try {
-    __golem_middleware_tool_def_prepare_PublicFiles(
-      { options: [], flags: [] },
-      { options: [], flags: [] },
-      None,
-      None,
-      None,
-    ).normalize_inherited_globals()
-  } catch{
+  __golem_middleware_tool_def_prepare_PublicFiles(
+    { options: [], flags: [], },
+    { options: [], flags: [], },
+    None,
+    None,
+    None,
+  ).normalize_inherited_globals() catch {
     error => abort("invalid generated tool definition: " + repr(error))
   }
 }
@@ -358,7 +343,7 @@ fn __golem_middleware_tool_def_PublicFiles() -> @tool.ToolDef {
 ///
 fn __golem_middleware_tool_def_raw_Storage() -> @tool.ToolDef {
   try {
-    let def :@tool.ToolDef = {
+    let def : @tool.ToolDef = {
       version: "0.0.0",
       commands: [
         {
@@ -369,70 +354,64 @@ fn __golem_middleware_tool_def_raw_Storage() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [] },
+          globals: { options: [], flags: [], },
           subcommands: [1],
           body: None,
         },
         {
           name: "fetch",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
-          globals: { options: [], flags: [] },
+          doc: { summary: "", description: "", examples: [], },
+          globals: { options: [], flags: [], },
           subcommands: [],
-          body: Some(
-            {
-              positionals: {
-                fixed: [
-                  {
-                    name: "key",
-                    doc: { summary: "", description: "", examples: [] },
-                    value_name: None,
-                    type_: @schema.into_schema_graph(
-                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-                    ),
-                    default: None,
-                    required: true,
-                    accepts_stdio: false,
-                  },
-                ],
-                tail: None,
-              },
-              options: [],
-              flags: [],
-              constraints: [],
-              stdin: None,
-              stdout: None,
-              result: Some(
+          body: Some({
+            positionals: {
+              fixed: [
                 {
+                  name: "key",
+                  doc: { summary: "", description: "", examples: [], },
+                  value_name: None,
                   type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
-                  doc: { summary: "", description: "", examples: [] },
-                  formatters: [
-                    {
-                      name: "default",
-                      doc: { summary: "", description: "", examples: [] },
-                    },
-                  ],
-                  default_formatter: "default",
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
                 },
-              ),
-              errors: [],
-              annotations: Some(
-                {
-                  read_only: false,
-                  destructive: true,
-                  idempotent: false,
-                  open_world: true,
-                },
-              ),
+              ],
+              tail: None,
             },
-          ),
+            options: [],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: Some({
+              type_: @schema.into_schema_graph(
+                (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+              ),
+              doc: { summary: "", description: "", examples: [], },
+              formatters: [
+                {
+                  name: "default",
+                  doc: { summary: "", description: "", examples: [], },
+                },
+              ],
+              default_formatter: "default",
+            }),
+            errors: [],
+            annotations: Some({
+              read_only: false,
+              destructive: true,
+              idempotent: false,
+              open_world: true,
+            }),
+          }),
         },
       ],
     }
     def
-  } catch{
+  } catch {
     error => abort("invalid generated raw tool definition: " + repr(error))
   }
 }
@@ -447,13 +426,13 @@ fn __golem_middleware_tool_def_prepare_Storage(
   override_aliases : Array[String]?,
 ) -> @tool.ToolDef {
   try {
-    let carrier :@tool.ToolDef = {
+    let carrier : @tool.ToolDef = {
       version: "0.0.0",
       commands: [
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
+          doc: { summary: "", description: "", examples: [], },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -472,7 +451,7 @@ fn __golem_middleware_tool_def_prepare_Storage(
     )
     let def = prepared
     def
-  } catch{
+  } catch {
     error => abort("invalid generated prepared tool definition: " + repr(error))
   }
 }
@@ -480,29 +459,25 @@ fn __golem_middleware_tool_def_prepare_Storage(
 ///|
 ///
 fn __golem_middleware_tool_def_Storage() -> @tool.ToolDef {
-  try {
-    __golem_middleware_tool_def_prepare_Storage(
-      { options: [], flags: [] },
-      { options: [], flags: [] },
-      None,
-      None,
-      None,
-    ).normalize_inherited_globals()
-  } catch{
+  __golem_middleware_tool_def_prepare_Storage(
+    { options: [], flags: [], },
+    { options: [], flags: [], },
+    None,
+    None,
+    None,
+  ).normalize_inherited_globals() catch {
     error => abort("invalid generated tool definition: " + repr(error))
   }
 }
 
 ///|
 ///
-fn[T :  @schema.IntoSchema + @schema.FromSchema, E] __golem_middleware_decode_canonical_field(
+fn[T : @schema.IntoSchema + @schema.FromSchema, E] __golem_middleware_decode_canonical_field(
   fields : Array[@tool.CanonicalInputValue],
   name : String,
   context : String,
 ) -> Result[T, @toolMiddleware.ToolInvokeError[E]] {
-  try {
-    @tool.decode_canonical_field(fields, name, context)
-  } catch{
+  try @tool.decode_canonical_field(fields, name, context) catch {
     @toolCommon.ToolError::InvalidToolName(name) =>
       Err(@toolMiddleware.ToolInvokeError::InvalidToolName(name))
     @toolCommon.ToolError::InvalidCommandPath(path) =>
@@ -540,48 +515,38 @@ pub async fn MessagesUnderlying::send(
 ) -> Result[String, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
   let __golem_command_path = ["send"]
   let __golem_def = __golem_middleware_tool_def_Messages()
-  let __golem_index =
-    match __golem_def.command_index_by_path(__golem_command_path) {
-      Some(__golem_index) => __golem_index
-      None => {
-        return Err(
-          @toolMiddleware.ToolInvokeError::InvalidCommandPath(
-            __golem_command_path,
-          ),
-        )
-      }
-    }
-  let __golem_model = try {
-    __golem_def.canonical_input_model(__golem_index)
-  } catch{
-    __golem_error => {
+  let __golem_index = match
+    __golem_def.command_index_by_path(__golem_command_path) {
+    Some(__golem_index) => __golem_index
+    None =>
+      return Err(
+        @toolMiddleware.ToolInvokeError::InvalidCommandPath(
+          __golem_command_path,
+        ),
+      )
+  }
+  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
+    __golem_error =>
       return Err(
         @toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error)),
       )
-    }
   }
-  let __golem_values :Array[(String, @model.SchemaValue)] = []
+  let __golem_values : Array[(String, @model.SchemaValue)] = []
   __golem_values.push(("message", @schema.to_value_as(message)))
-  let __golem_input = try {
-    @tool.build_canonical_input(__golem_model, __golem_values)
-  } catch{
-    __golem_error => {
+  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
+    __golem_error =>
       return Err(
         @toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error)),
       )
-    }
   }
-  let __golem_result = {
-    match self
-      .underlying
-      .invoke_with(
-        __golem_command_path, __golem_input, None, fn(_) {
-          Err("underlying returned a custom error for an infallible command")
-        },
-      ) {
-      Ok(__golem_result) => __golem_result
-      Err(__golem_error) => return Err(__golem_error)
-    }
+  let __golem_result = match
+    self.underlying.invoke_with(__golem_command_path, __golem_input, None, fn(
+      _,
+    ) {
+      Err("underlying returned a custom error for an infallible command")
+    }) {
+    Ok(__golem_result) => __golem_result
+    Err(__golem_error) => return Err(__golem_error)
   }
   @toolMiddleware.decode_result_value(__golem_result)
 }
@@ -594,54 +559,44 @@ pub struct StorageUnderlying {
 
 ///|
 ///
-pub async fn StorageUnderlying::fetch(self : StorageUnderlying, key : String) -> Result[
-  String,
-  @toolMiddleware.ToolInvokeError[@tool.NoToolError],
-] {
+pub async fn StorageUnderlying::fetch(
+  self : StorageUnderlying,
+  key : String,
+) -> Result[String, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
   let __golem_command_path = ["fetch"]
   let __golem_def = __golem_middleware_tool_def_Storage()
-  let __golem_index =
-    match __golem_def.command_index_by_path(__golem_command_path) {
-      Some(__golem_index) => __golem_index
-      None => {
-        return Err(
-          @toolMiddleware.ToolInvokeError::InvalidCommandPath(
-            __golem_command_path,
-          ),
-        )
-      }
-    }
-  let __golem_model = try {
-    __golem_def.canonical_input_model(__golem_index)
-  } catch{
-    __golem_error => {
+  let __golem_index = match
+    __golem_def.command_index_by_path(__golem_command_path) {
+    Some(__golem_index) => __golem_index
+    None =>
+      return Err(
+        @toolMiddleware.ToolInvokeError::InvalidCommandPath(
+          __golem_command_path,
+        ),
+      )
+  }
+  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
+    __golem_error =>
       return Err(
         @toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error)),
       )
-    }
   }
-  let __golem_values :Array[(String, @model.SchemaValue)] = []
+  let __golem_values : Array[(String, @model.SchemaValue)] = []
   __golem_values.push(("key", @schema.to_value_as(key)))
-  let __golem_input = try {
-    @tool.build_canonical_input(__golem_model, __golem_values)
-  } catch{
-    __golem_error => {
+  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
+    __golem_error =>
       return Err(
         @toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error)),
       )
-    }
   }
-  let __golem_result = {
-    match self
-      .underlying
-      .invoke_with(
-        __golem_command_path, __golem_input, None, fn(_) {
-          Err("underlying returned a custom error for an infallible command")
-        },
-      ) {
-      Ok(__golem_result) => __golem_result
-      Err(__golem_error) => return Err(__golem_error)
-    }
+  let __golem_result = match
+    self.underlying.invoke_with(__golem_command_path, __golem_input, None, fn(
+      _,
+    ) {
+      Err("underlying returned a custom error for an infallible command")
+    }) {
+    Ok(__golem_result) => __golem_result
+    Err(__golem_error) => return Err(__golem_error)
   }
   @toolMiddleware.decode_result_value(__golem_result)
 }
@@ -669,26 +624,22 @@ async fn __golem_monomorphic_tool_middleware_invoke_MessagePolicy(
 ] {
   let __golem_command_path = __golem_invocation.command_path()
   let __golem_def = __golem_middleware_tool_def_Messages()
-  let __golem_index =
-    match __golem_def.command_index_by_path(__golem_command_path) {
-      Some(__golem_index) => __golem_index
-      None => {
-        return Err(
-          @toolMiddleware.ToolInvokeError::InvalidCommandPath(
-            __golem_command_path,
-          ),
-        )
-      }
-    }
-  let __golem_decoded = {
-    match __golem_invocation.decode_input(
-      __golem_def,
-      __golem_index,
-      "tool middleware message-policy invocation",
+  let __golem_index = match
+    __golem_def.command_index_by_path(__golem_command_path) {
+    Some(__golem_index) => __golem_index
+    None =>
+      return Err(
+        @toolMiddleware.ToolInvokeError::InvalidCommandPath(
+          __golem_command_path,
+        ),
+      )
+  }
+  let __golem_decoded = match
+    __golem_invocation.decode_input(
+      __golem_def, __golem_index, "tool middleware message-policy invocation",
     ) {
-      Ok(__golem_decoded) => __golem_decoded
-      Err(__golem_error) => return Err(__golem_error)
-    }
+    Ok(__golem_decoded) => __golem_decoded
+    Err(__golem_error) => return Err(__golem_error)
   }
   if __golem_def.command_index_by_path(["send"]) == Some(__golem_index) {
     if __golem_invocation.stdin() is Some(_) {
@@ -698,31 +649,25 @@ async fn __golem_monomorphic_tool_middleware_invoke_MessagePolicy(
         ),
       )
     }
-    let message :String = {
-      match __golem_middleware_decode_canonical_field(
-        __golem_decoded,
-        "message",
-        "tool middleware message-policy command send",
+    let message : String = match
+      __golem_middleware_decode_canonical_field(
+        __golem_decoded, "message", "tool middleware message-policy command send",
       ) {
-        Ok(__golem_value) => __golem_value
-        Err(__golem_error) => return Err(__golem_error)
-      }
+      Ok(__golem_value) => __golem_value
+      Err(__golem_error) => return Err(__golem_error)
     }
-    let __golem_expected =
-      MessagesUnderlying::{ underlying: __golem_underlying }
+    let __golem_expected = MessagesUnderlying::{
+      underlying: __golem_underlying,
+    }
     match MessagePolicy::send(__golem_expected, message) {
-      Ok(__golem_result) => {
+      Ok(__golem_result) =>
         return __golem_invocation.typed_result_value(__golem_result)
-      }
-      Err(__golem_error) => {
+      Err(__golem_error) =>
         return Err(
-          __golem_invocation.encode_handler_error(
-            __golem_error, fn(_) {
-              Err("infallible middleware handler returned a custom tool error")
-            },
-          ),
+          __golem_invocation.encode_handler_error(__golem_error, fn(_) {
+            Err("infallible middleware handler returned a custom tool error")
+          }),
         )
-      }
     }
   }
   Err(@toolMiddleware.ToolInvokeError::InvalidCommandPath(__golem_command_path))
@@ -739,26 +684,22 @@ async fn __golem_monomorphic_tool_middleware_invoke_FileAdapter(
 ] {
   let __golem_command_path = __golem_invocation.command_path()
   let __golem_def = __golem_middleware_tool_def_PublicFiles()
-  let __golem_index =
-    match __golem_def.command_index_by_path(__golem_command_path) {
-      Some(__golem_index) => __golem_index
-      None => {
-        return Err(
-          @toolMiddleware.ToolInvokeError::InvalidCommandPath(
-            __golem_command_path,
-          ),
-        )
-      }
-    }
-  let __golem_decoded = {
-    match __golem_invocation.decode_input(
-      __golem_def,
-      __golem_index,
-      "tool middleware file-adapter invocation",
+  let __golem_index = match
+    __golem_def.command_index_by_path(__golem_command_path) {
+    Some(__golem_index) => __golem_index
+    None =>
+      return Err(
+        @toolMiddleware.ToolInvokeError::InvalidCommandPath(
+          __golem_command_path,
+        ),
+      )
+  }
+  let __golem_decoded = match
+    __golem_invocation.decode_input(
+      __golem_def, __golem_index, "tool middleware file-adapter invocation",
     ) {
-      Ok(__golem_decoded) => __golem_decoded
-      Err(__golem_error) => return Err(__golem_error)
-    }
+    Ok(__golem_decoded) => __golem_decoded
+    Err(__golem_error) => return Err(__golem_error)
   }
   if __golem_def.command_index_by_path(["read"]) == Some(__golem_index) {
     if __golem_invocation.stdin() is Some(_) {
@@ -768,30 +709,25 @@ async fn __golem_monomorphic_tool_middleware_invoke_FileAdapter(
         ),
       )
     }
-    let path :String = {
-      match __golem_middleware_decode_canonical_field(
-        __golem_decoded,
-        "path",
-        "tool middleware file-adapter command read",
+    let path : String = match
+      __golem_middleware_decode_canonical_field(
+        __golem_decoded, "path", "tool middleware file-adapter command read",
       ) {
-        Ok(__golem_value) => __golem_value
-        Err(__golem_error) => return Err(__golem_error)
-      }
+      Ok(__golem_value) => __golem_value
+      Err(__golem_error) => return Err(__golem_error)
     }
-    let __golem_expected = StorageUnderlying::{ underlying: __golem_underlying }
+    let __golem_expected = StorageUnderlying::{
+      underlying: __golem_underlying,
+    }
     match FileAdapter::read(__golem_expected, path) {
-      Ok(__golem_result) => {
+      Ok(__golem_result) =>
         return __golem_invocation.typed_result_value(__golem_result)
-      }
-      Err(__golem_error) => {
+      Err(__golem_error) =>
         return Err(
-          __golem_invocation.encode_handler_error(
-            __golem_error, fn(_) {
-              Err("infallible middleware handler returned a custom tool error")
-            },
-          ),
+          __golem_invocation.encode_handler_error(__golem_error, fn(_) {
+            Err("infallible middleware handler returned a custom tool error")
+          }),
         )
-      }
     }
   }
   Err(@toolMiddleware.ToolInvokeError::InvalidCommandPath(__golem_command_path))
@@ -822,12 +758,10 @@ fn __golem_register_tool_middlewares() -> Unit raise {
         description: "",
         examples: [],
       },
-      scope: @toolMiddleware.ToolMiddlewareScope::Monomorphic(
-        {
-          presented: __golem_middleware_tool_def_Messages().to_tool(),
-          expected: __golem_middleware_tool_def_Messages().to_tool(),
-        },
-      ),
+      scope: @toolMiddleware.ToolMiddlewareScope::Monomorphic({
+        presented: __golem_middleware_tool_def_Messages().to_tool(),
+        expected: __golem_middleware_tool_def_Messages().to_tool(),
+      }),
     },
     __golem_monomorphic_tool_middleware_invoke_MessagePolicy,
   )
@@ -840,12 +774,10 @@ fn __golem_register_tool_middlewares() -> Unit raise {
         description: "",
         examples: [],
       },
-      scope: @toolMiddleware.ToolMiddlewareScope::Monomorphic(
-        {
-          presented: __golem_middleware_tool_def_PublicFiles().to_tool(),
-          expected: __golem_middleware_tool_def_Storage().to_tool(),
-        },
-      ),
+      scope: @toolMiddleware.ToolMiddlewareScope::Monomorphic({
+        presented: __golem_middleware_tool_def_PublicFiles().to_tool(),
+        expected: __golem_middleware_tool_def_Storage().to_tool(),
+      }),
     },
     __golem_monomorphic_tool_middleware_invoke_FileAdapter,
   )
@@ -854,9 +786,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
 ///|
 ///
 fn init {
-  try {
-    __golem_register_tool_middlewares()
-  } catch{
+  __golem_register_tool_middlewares() catch {
     error =>
       abort("failed to register generated tool middleware: " + repr(error))
   }

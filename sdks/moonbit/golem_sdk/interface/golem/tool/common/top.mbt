@@ -7,12 +7,12 @@
 /// `idempotent: false`), per MCP guidance.
 pub(all) struct CommandAnnotations {
       read_only : Bool; destructive : Bool; idempotent : Bool; open_world : Bool
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Resolution policy for a repeated key in a `repeatable-map` option.
 pub(all) enum DuplicateKeyPolicy {
       REJECT; LAST_WINS
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 pub fn DuplicateKeyPolicy::ordinal(self : DuplicateKeyPolicy) -> Int {
       match self {
@@ -21,6 +21,7 @@ pub fn DuplicateKeyPolicy::ordinal(self : DuplicateKeyPolicy) -> Int {
       }
 }
 
+///|
 pub fn DuplicateKeyPolicy::from(self : Int) -> DuplicateKeyPolicy {
       match self {
             0 => REJECT
@@ -33,49 +34,49 @@ pub(all) enum Repetition {
       Repeated
       Delimited(Char)
       Either(Char)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RepeatableListShape {
       repetition : Repetition; item_type : Int
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RepeatableMapShape {
       repetition : Repetition; map_type : Int; duplicate_key_policy : DuplicateKeyPolicy
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) enum OptionShape {
       Scalar(Int)
       OptionalScalar(Int)
       RepeatableList(RepeatableListShape)
       RepeatableMap(RepeatableMapShape)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct BoolFlagShape {
       default : Bool; negatable : Bool
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) enum FlagShape {
       BoolFlag(BoolFlagShape)
       CountFlag(UInt?)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct ValueIsRef {
       name : String; value : @types.SchemaValueTree
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Constraints
 pub(all) enum Ref {
       Present(String)
       ValueIs(ValueIsRef)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RefGroup {
       refs : Array[Ref]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) enum Quantifier {
       ALL; ANY
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 pub fn Quantifier::ordinal(self : Quantifier) -> Int {
       match self {
@@ -84,6 +85,7 @@ pub fn Quantifier::ordinal(self : Quantifier) -> Int {
       }
 }
 
+///|
 pub fn Quantifier::from(self : Int) -> Quantifier {
       match self {
             0 => ALL
@@ -94,11 +96,11 @@ pub fn Quantifier::from(self : Int) -> Quantifier {
 ///|
 pub(all) struct ImpliesC {
       lhs_quant : Quantifier; lhs : Array[Ref]; rhs_quant : Quantifier; rhs : Array[Ref]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct ForbidsC {
       lhs_quant : Quantifier; lhs : Array[Ref]; rhs : Array[Ref]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) enum Constraint {
       RequiresAll(Array[Ref])
@@ -107,11 +109,11 @@ pub(all) enum Constraint {
       MutexGroups(Array[RefGroup])
       Implies(ImpliesC)
       Forbids(ForbidsC)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) suberror ErrorKind {
       USAGE_ERROR; RUNTIME_ERROR
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 pub fn ErrorKind::ordinal(self : ErrorKind) -> Int {
       match self {
@@ -120,6 +122,7 @@ pub fn ErrorKind::ordinal(self : ErrorKind) -> Int {
       }
 }
 
+///|
 pub fn ErrorKind::from(self : Int) -> ErrorKind {
       match self {
             0 => USAGE_ERROR
@@ -130,59 +133,59 @@ pub fn ErrorKind::from(self : Int) -> ErrorKind {
 ///|
 pub(all) struct Example {
       title : String; body : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Documentation, examples
 pub(all) struct Doc {
       summary : String; description : String; examples : Array[Example]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct Positional {
       name : String; doc : Doc; value_name : String?; type_ : Int; default : @types.SchemaValueTree?; required : Bool; accepts_stdio : Bool
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct TailPositional {
       name : String; doc : Doc; value_name : String?; item_type : Int; min : UInt; max : UInt?; separator : String?; verbatim : Bool; accepts_stdio : Bool
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Positionals (variadic only at the tail, structurally)
 pub(all) struct Positionals {
       fixed : Array[Positional]; tail : TailPositional?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Options and flags
 pub(all) struct OptionSpec {
       long : String; short : Char?; aliases : Array[String]; doc : Doc; value_name : String?; shape : OptionShape; default : @types.SchemaValueTree?; required : Bool; env_var : String?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct FlagSpec {
       long : String; short : Char?; aliases : Array[String]; doc : Doc; shape : FlagShape; env_var : String?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct Globals {
       options : Array[OptionSpec]; flags : Array[FlagSpec]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Streams, structured results, errors
 pub(all) struct StreamSpec {
       doc : Doc; mime : Array[String]; required : Bool
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct Formatter {
       name : String; doc : Doc
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct ResultSpec {
       type_ : Int; doc : Doc; formatters : Array[Formatter]; default_formatter : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct ErrorCase {
       name : String; doc : Doc; kind : ErrorKind; exit_code : Byte; payload : Int?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct CommandBody {
       positionals : Positionals; options : Array[OptionSpec]; flags : Array[FlagSpec]; constraints : Array[Constraint]; stdin : StreamSpec?; stdout : StreamSpec?; result : ResultSpec?; errors : Array[ErrorCase]; annotations : CommandAnnotations?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// A command may dispatch to subcommands, run its own body, or both.
 /// Globals declared here apply to this command's own body and to
@@ -190,29 +193,29 @@ pub(all) struct CommandBody {
 /// and downward").
 pub(all) struct CommandNode {
       name : String; aliases : Array[String]; doc : Doc; globals : Globals; subcommands : Array[Int]; body : CommandBody?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct CommandTree {
       nodes : Array[CommandNode]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Top level
 pub(all) struct Tool {
       version : String; commands : CommandTree; schema : @types.SchemaGraph
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct MonomorphicScope {
       presented : Tool; expected : Tool?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) enum ToolMiddlewareScope {
       Monomorphic(MonomorphicScope)
       Universal
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct ToolMiddleware {
       name : String; aliases : Array[String]; doc : Doc; scope : ToolMiddlewareScope
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Invocation contract — shared between guest and host
 pub(all) suberror ToolError {
@@ -222,7 +225,7 @@ pub(all) suberror ToolError {
       ConstraintViolation(String)
       InvalidResult(String)
       CustomError(@types.TypedSchemaValue)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct InvocationResult {
       result : @types.TypedSchemaValue?; stdout : @async-core.Stream[Byte]?
@@ -230,7 +233,7 @@ pub(all) struct InvocationResult {
 ///|
 /// Invocation-scoped access to exactly the next inner layer in a tool
 /// middleware chain. The runtime creates this resource; guests cannot.
-pub(all) struct UnderlyingTool(Int) derive(Debug, Show, Eq)
+pub(all) struct UnderlyingTool(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn UnderlyingTool::drop(self : UnderlyingTool) -> Unit {

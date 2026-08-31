@@ -127,14 +127,3 @@ impl Debug for GuestSchemaValueStreamHandle with fn to_repr(self) {
     },
   )
 }
-
-///|
-impl Show for GuestSchemaValueStreamHandle with fn output(self, logger) {
-  logger.write_string(
-    if self.is_present() {
-      "GuestSchemaValueStreamHandle(present)"
-    } else {
-      "GuestSchemaValueStreamHandle(consumed)"
-    },
-  )
-}

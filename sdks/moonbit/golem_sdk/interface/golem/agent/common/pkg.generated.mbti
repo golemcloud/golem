@@ -15,19 +15,19 @@ pub(all) suberror AgentError {
   InvalidType(String)
   InvalidAgentId(String)
   CustomError(@types.TypedSchemaValue)
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 // Types and methods
 pub(all) struct AgentConfigDeclaration {
   source : AgentConfigSource
   path : Array[String]
   value_type : Int
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum AgentConfigSource {
   LOCAL
   SECRET
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 pub fn AgentConfigSource::from(Int) -> Self
 pub fn AgentConfigSource::ordinal(Self) -> Int
 
@@ -36,7 +36,7 @@ pub(all) struct AgentConstructor {
   description : String
   prompt_hint : String?
   input_schema : InputSchema
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct AgentDependency {
   type_name : String
@@ -44,7 +44,7 @@ pub(all) struct AgentDependency {
   schema : @types.SchemaGraph
   constructor_ : AgentConstructor
   methods : Array[AgentMethod]
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct AgentMethod {
   name : String
@@ -54,18 +54,18 @@ pub(all) struct AgentMethod {
   input_schema : InputSchema
   output_schema : OutputSchema
   read_only : ReadOnlyConfig?
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum AgentMode {
   DURABLE
   EPHEMERAL
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 pub fn AgentMode::from(Int) -> Self
 pub fn AgentMode::ordinal(Self) -> Int
 
 pub(all) struct AgentPrincipal {
   agent_id : @types.AgentId
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct AgentType {
   type_name : String
@@ -79,15 +79,15 @@ pub(all) struct AgentType {
   http_mount : HttpMountDetails?
   snapshotting : Snapshotting
   config : Array[AgentConfigDeclaration]
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct AuthDetails {
   required : Bool
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum AutoInjectedKind {
   PRINCIPAL
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 pub fn AutoInjectedKind::from(Int) -> Self
 pub fn AutoInjectedKind::ordinal(Self) -> Int
 
@@ -95,25 +95,25 @@ pub(all) enum CachePolicy {
   NoCache
   UntilWrite
   Ttl(UInt64)
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct CorsOptions {
   allowed_patterns : Array[String]
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum FieldSource {
   UserSupplied
   AutoInjected(AutoInjectedKind)
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct GolemUserPrincipal {
   account_id : @types.AccountId
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct HeaderVariable {
   header_name : String
   variable_name : String
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct HttpEndpointDetails {
   http_method : HttpMethod
@@ -122,7 +122,7 @@ pub(all) struct HttpEndpointDetails {
   query_vars : Array[QueryVariable]
   auth_details : AuthDetails?
   cors_options : CorsOptions
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum HttpMethod {
   Get
@@ -135,7 +135,7 @@ pub(all) enum HttpMethod {
   Trace
   Patch
   Custom(String)
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct HttpMountDetails {
   path_prefix : Array[PathSegment]
@@ -143,18 +143,18 @@ pub(all) struct HttpMountDetails {
   phantom_agent : Bool
   cors_options : CorsOptions
   webhook_suffix : Array[PathSegment]
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum InputSchema {
   Parameters(Array[NamedField])
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct NamedField {
   name : String
   source : FieldSource
   schema : Int
   metadata : @types.MetadataEnvelope
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct OidcPrincipal {
   sub : String
@@ -167,68 +167,68 @@ pub(all) struct OidcPrincipal {
   picture : String?
   preferred_username : String?
   claims : String
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum OutputSchema {
   Unit
   Single(Int)
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum PathSegment {
   Literal(String)
   SystemVariable(SystemVariable)
   PathVariable(PathVariable)
   RemainingPathVariable(PathVariable)
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct PathVariable {
   variable_name : String
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum Principal {
   Oidc(OidcPrincipal)
   Agent(AgentPrincipal)
   GolemUser(GolemUserPrincipal)
   Anonymous
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct QueryVariable {
   query_param_name : String
   variable_name : String
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct ReadOnlyConfig {
   cache_policy : CachePolicy
   uses_principal : Bool
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct RegisteredAgentType {
   agent_type : AgentType
   implemented_by : @types.ComponentId
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum Snapshotting {
   Disabled
   Enabled(SnapshottingConfig)
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum SnapshottingConfig {
   Default
   Periodic(UInt64)
   EveryNInvocation(UInt)
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum SystemVariable {
   AGENT_TYPE
   AGENT_VERSION
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 pub fn SystemVariable::from(Int) -> Self
 pub fn SystemVariable::ordinal(Self) -> Int
 
 pub(all) struct TypedAgentConfigValue {
   path : Array[String]
   value : @types.TypedSchemaValue
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 // Type aliases
 

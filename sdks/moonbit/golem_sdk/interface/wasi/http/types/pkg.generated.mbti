@@ -49,7 +49,7 @@ pub(all) suberror ErrorCode {
   LoopDetected
   ConfigurationError
   InternalError(String?)
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) suberror HeaderError {
   InvalidSyntax
@@ -57,26 +57,26 @@ pub(all) suberror HeaderError {
   Immutable
   SizeExceeded
   Other(String?)
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) suberror RequestOptionsError {
   NotSupported
   Immutable
   Other(String?)
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 // Types and methods
 pub(all) struct DnsErrorPayload {
   rcode : String?
   info_code : UInt?
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct FieldSizePayload {
   field_name : String?
   field_size : UInt?
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct Fields(Int) derive(Eq, Show, @debug.Debug)
+pub(all) struct Fields(Int) derive(Eq, @debug.Debug)
 pub fn Fields::append(Self, String, FixedArray[Byte]) -> Result[Unit, HeaderError]
 pub fn Fields::clone(Self) -> Self
 pub fn Fields::copy_all(Self) -> Array[(String, FixedArray[Byte])]
@@ -100,9 +100,9 @@ pub(all) enum Method {
   Trace
   Patch
   Other(String)
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct Request(Int) derive(Eq, Show, @debug.Debug)
+pub(all) struct Request(Int) derive(Eq, @debug.Debug)
 pub fn Request::consume_body(Self, @async-core.Future[Result[Unit, ErrorCode]]) -> (@async-core.Stream[Byte], @async-core.Future[Result[Fields?, ErrorCode]])
 pub fn Request::drop(Self) -> Unit
 pub fn Request::get_authority(Self) -> String?
@@ -117,7 +117,7 @@ pub fn Request::set_method(Self, Method) -> Result[Unit, Unit]
 pub fn Request::set_path_with_query(Self, String?) -> Result[Unit, Unit]
 pub fn Request::set_scheme(Self, Scheme?) -> Result[Unit, Unit]
 
-pub(all) struct RequestOptions(Int) derive(Eq, Show, @debug.Debug)
+pub(all) struct RequestOptions(Int) derive(Eq, @debug.Debug)
 pub fn RequestOptions::clone(Self) -> Self
 pub fn RequestOptions::drop(Self) -> Unit
 pub fn RequestOptions::get_between_bytes_timeout(Self) -> UInt64?
@@ -128,7 +128,7 @@ pub fn RequestOptions::set_between_bytes_timeout(Self, UInt64?) -> Result[Unit, 
 pub fn RequestOptions::set_connect_timeout(Self, UInt64?) -> Result[Unit, RequestOptionsError]
 pub fn RequestOptions::set_first_byte_timeout(Self, UInt64?) -> Result[Unit, RequestOptionsError]
 
-pub(all) struct Response(Int) derive(Eq, Show, @debug.Debug)
+pub(all) struct Response(Int) derive(Eq, @debug.Debug)
 pub fn Response::consume_body(Self, @async-core.Future[Result[Unit, ErrorCode]]) -> (@async-core.Stream[Byte], @async-core.Future[Result[Fields?, ErrorCode]])
 pub fn Response::drop(Self) -> Unit
 pub fn Response::get_headers(Self) -> Fields
@@ -140,12 +140,12 @@ pub(all) enum Scheme {
   Http
   Https
   Other(String)
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct TlsAlertReceivedPayload {
   alert_id : Byte?
   alert_message : String?
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 // Type aliases
 

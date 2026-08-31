@@ -12,7 +12,7 @@ import {
 // Errors
 
 // Types and methods
-pub(all) struct Container(Int) derive(Eq, Show, @debug.Debug)
+pub(all) struct Container(Int) derive(Eq, @debug.Debug)
 pub fn Container::clear(Self) -> Result[Unit, String]
 pub fn Container::delete_object(Self, String) -> Result[Unit, String]
 pub fn Container::delete_objects(Self, Array[String]) -> Result[Unit, String]

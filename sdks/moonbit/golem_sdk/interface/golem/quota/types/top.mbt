@@ -8,12 +8,12 @@
 /// rate-limited resources).
 pub(all) struct FailedReservation {
       estimated_wait_nanos : UInt64?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// A short-lived capability that represents a pending or committed
 /// resource consumption.  Drop without committing is equivalent to
 /// committing zero usage.
-pub(all) struct Reservation(Int) derive(Debug, Show, Eq)
+pub(all) struct Reservation(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn Reservation::drop(self : Reservation) -> Unit {
@@ -37,11 +37,11 @@ pub fn Reservation::commit(this : Reservation, used : UInt64) -> Unit {
 /// - `resource-name` : the resource name (as declared in the manifest).
 /// - `expected-use`  : expected units per reservation; used to derive
 ///                      credit rate and max-credit for fair scheduling.
-pub fn new_token(resource_name : String, expected_use : UInt64) -> @types.QuotaToken {
+pub fn new_token(resource_name : String, expected_use : UInt64) -> @types0.QuotaToken {
 
       let ptr = mbt_ffi_str2ptr(resource_name)
       let result : Int =  wasmImportNewToken(ptr, resource_name.length(), (expected_use).reinterpret_as_int64());
-      let ret = @types.QuotaToken::QuotaToken(result)
+      let ret = @types0.QuotaToken::QuotaToken(result)
       mbt_ffi_free(ptr)
       return ret
 
@@ -52,9 +52,9 @@ pub fn new_token(resource_name : String, expected_use : UInt64) -> @types.QuotaT
 /// Blocks internally until capacity is available or the resource's
 /// enforcement action fires.  Returns a `reservation` handle that
 /// must be committed (or dropped) to release unused capacity.
-pub fn reserve(token : @types.QuotaToken, amount : UInt64) -> Result[Reservation, FailedReservation] {
+pub fn reserve(token : @types0.QuotaToken, amount : UInt64) -> Result[Reservation, FailedReservation] {
 
-      let @types.QuotaToken(handle) = token
+      let @types0.QuotaToken(handle) = token
       let return_area = mbt_ffi_malloc(24)
       wasmImportReserve(handle, (amount).reinterpret_as_int64(), return_area);
 
@@ -90,11 +90,11 @@ pub fn reserve(token : @types.QuotaToken, amount : UInt64) -> Result[Reservation
 /// Credits are divided proportionally between parent and child.
 ///
 /// Traps if `child-expected-use` exceeds the parent's current `expected-use`.
-pub fn split(token : @types.QuotaToken, child_expected_use : UInt64) -> @types.QuotaToken {
+pub fn split(token : @types0.QuotaToken, child_expected_use : UInt64) -> @types0.QuotaToken {
 
-      let @types.QuotaToken(handle) = token
+      let @types0.QuotaToken(handle) = token
       let result : Int =  wasmImportSplit(handle, (child_expected_use).reinterpret_as_int64());
-      let ret = @types.QuotaToken::QuotaToken(result)
+      let ret = @types0.QuotaToken::QuotaToken(result)
       return ret
 
 }
@@ -105,11 +105,11 @@ pub fn split(token : @types.QuotaToken, child_expected_use : UInt64) -> @types.Q
 /// and environment).  `other` is consumed.
 ///
 /// Traps if the tokens refer to different resources.
-pub fn merge(token : @types.QuotaToken, other : @types.QuotaToken) -> Unit {
+pub fn merge(token : @types0.QuotaToken, other : @types0.QuotaToken) -> Unit {
 
-      let @types.QuotaToken(handle) = token
+      let @types0.QuotaToken(handle) = token
 
-      let @types.QuotaToken(handle0) = other
+      let @types0.QuotaToken(handle0) = other
       wasmImportMerge(handle, handle0);
 
 }

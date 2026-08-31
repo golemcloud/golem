@@ -18,7 +18,7 @@ pub(all) enum Level {
   WARN
   ERROR
   CRITICAL
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 pub fn Level::from(Int) -> Self
 pub fn Level::ordinal(Self) -> Int
 

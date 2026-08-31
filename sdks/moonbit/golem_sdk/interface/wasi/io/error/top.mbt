@@ -17,7 +17,7 @@
 ///
 /// The set of functions which can "downcast" an `error` into a more
 /// concrete type is open.
-pub(all) suberror Error_(Int) derive(Debug, Show, Eq)
+pub(all) suberror Error_ { Error_(Int) } derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn Error_::drop(self : Error_) -> Unit {

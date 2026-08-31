@@ -154,7 +154,7 @@ fn parse_middleware_metadata(
     abort("")
   }
   require_middleware_identifier(name, "middleware", owner)
-  let seen : Map[String, Unit] = {}
+  let seen : Map[String, Unit] = Map([])
   for alias_name in aliases {
     require_middleware_identifier(alias_name, "middleware alias", owner)
     if alias_name == name || seen.contains(alias_name) {
@@ -208,11 +208,10 @@ fn reject_middleware_type_desc_annotations(
   desc : @syntax.TypeDesc,
 ) -> Unit raise ToolMiddlewareParseError {
   match desc {
-    Record(fields~) => {
+    Record(fields~) =>
       for field in fields {
         reject_middleware_annotations(field.attrs, false, false)
       }
-    }
     Variant(constrs) | Error(EnumPayload(constrs)) =>
       for constr in constrs {
         reject_middleware_annotations(constr.attrs, false, false)
@@ -230,18 +229,13 @@ fn validate_middleware_annotation_placement(
       reject_middleware_annotations(decl.attrs, true, false)
       reject_middleware_type_desc_annotations(decl.components)
     }
-    TopFuncDef(fun_decl~, ..) => {
+    TopFuncDef(fun_decl~, ..) =>
       reject_middleware_annotations(fun_decl.attrs, false, true)
-    }
-    TopImpl(attrs~, ..) => {
-      reject_middleware_annotations(attrs, false, false)
-    }
+    TopImpl(attrs~, ..) => reject_middleware_annotations(attrs, false, false)
     TopImplRelation(attrs~, ..) =>
       reject_middleware_annotations(attrs, false, false)
     TopLetDef(attrs~, ..) => reject_middleware_annotations(attrs, false, false)
-    TopTest(attrs~, ..) => {
-      reject_middleware_annotations(attrs, false, false)
-    }
+    TopTest(attrs~, ..) => reject_middleware_annotations(attrs, false, false)
     TopTrait(decl) => {
       reject_middleware_annotations(decl.attrs, false, false)
       for trait_method in decl.methods {
@@ -255,8 +249,7 @@ fn validate_middleware_annotation_placement(
         reject_middleware_annotations(constr.attrs, false, false)
       }
     }
-    TopExtend(attrs~, ..) =>
-      reject_middleware_annotations(attrs, false, false)
+    TopExtend(attrs~, ..) => reject_middleware_annotations(attrs, false, false)
     TopExpr(..) | TopImport(..) => ()
   }
 }
@@ -402,7 +395,7 @@ fn append_projected_params(
   include_principal : Bool,
 ) -> Array[ProjectedMiddlewareParam] {
   let result = existing.copy()
-  let inherited_identities : Map[String, Unit] = {}
+  let inherited_identities : Map[String, Unit] = Map([])
   for parameter in result {
     for identity in parameter.identities {
       inherited_identities[identity] = ()
@@ -425,7 +418,7 @@ fn append_projected_params(
           Hidden(OutputStream) | LabelledHidden(OutputStream) =>
             abort("output streams are not middleware handler parameters")
         }
-        result.push({ source_name: pair.0, type_, identities, source })
+        result.push({ source_name: pair.0, type_, identities, source, })
         for identity in identities {
           inherited_identities[identity] = ()
         }
@@ -450,7 +443,7 @@ fn append_projected_root_globals(
     }
   }
   let result = existing.copy()
-  let inherited_identities : Map[String, Unit] = {}
+  let inherited_identities : Map[String, Unit] = Map([])
   for parameter in result {
     for identity in parameter.identities {
       inherited_identities[identity] = ()
@@ -644,7 +637,7 @@ fn parse_positional_handler_params(
   owner : String,
 ) -> Array[(String, ParamType)] raise ToolMiddlewareParseError {
   let params : Array[(String, ParamType)] = []
-  for parameter in decl.decl_params.unwrap_or(@list.List::from_array([])) {
+  for parameter in decl.decl_params.unwrap_or(@list.List([])) {
     match parameter {
       Positional(binder~, ty=Some(type_)) => {
         if binder.name == "self" {
@@ -751,11 +744,11 @@ fn validate_monomorphic_handlers(
   middleware : MonomorphicMiddlewareDecl,
   surfaces : Array[ToolMiddlewareCommandInfo],
 ) -> Unit raise ToolMiddlewareParseError {
-  let expected : Map[String, ToolMiddlewareCommandInfo] = {}
+  let expected : Map[String, ToolMiddlewareCommandInfo] = Map([])
   for surface in surfaces {
     expected[surface.handler_name] = surface
   }
-  let found : Map[String, Unit] = {}
+  let found : Map[String, Unit] = Map([])
   for impl_ in impls {
     guard impl_ is TopFuncDef(fun_decl~, ..) else { continue }
     if qualified_function_owner(fun_decl) == Some(middleware.source_name) {
@@ -865,7 +858,7 @@ fn validate_universal_handler(
 fn validate_middleware_name_collisions(
   middlewares : Array[ToolMiddlewareInfo],
 ) -> Unit raise ToolMiddlewareParseError {
-  let owners : Map[String, String] = {}
+  let owners : Map[String, String] = Map([])
   for middleware in middlewares {
     for name in [middleware.name].concat(middleware.aliases) {
       match owners.get(name) {
@@ -959,7 +952,7 @@ pub fn parse_tool_middlewares(
               )
             Some("tool_middleware") => {
               match decl.components {
-                Record(fields~, ..) if fields.is_empty() => ()
+                Record(fields~) if fields.is_empty() => ()
                 _ =>
                   middleware_fail(
                     "#derive.tool_middleware struct '" +
@@ -1031,7 +1024,7 @@ pub fn parse_tool_middlewares(
                 name,
                 aliases,
                 description: tool_doc(fun_decl.doc),
-                scope: Universal({ handler_name: fun_decl.name.name }),
+                scope: Universal({ handler_name: fun_decl.name.name, }),
               })
             }
             _ => ()
@@ -1061,7 +1054,7 @@ pub fn parse_tool_middlewares(
       name: middleware.name,
       aliases: middleware.aliases,
       description: middleware.description,
-      scope: Monomorphic({ presented, expected, handlers, underlying_methods }),
+      scope: Monomorphic({ presented, expected, handlers, underlying_methods, }),
     })
   }
   validate_middleware_name_collisions(result)

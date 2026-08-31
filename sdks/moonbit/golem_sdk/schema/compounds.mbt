@@ -7,7 +7,7 @@
 ///|
 /// The canonical `TypeId` of the unit type, matching the Rust SDK's `()`
 /// (`core.tuple.Unit`). Used to detect unit ok/err branches of `Result`.
-let unit_type_id : @model.TypeId = "core.tuple.Unit"
+let unit_type_id : String = "core.tuple.Unit"
 
 // ============================================================
 // Unit
@@ -232,9 +232,9 @@ pub impl[K : FromSchema + Hash + Eq, V : FromSchema] FromSchema for Map[K, V] wi
 ) {
   match v {
     Map(entries) => {
-      let m : Map[K, V] = Map::new()
+      let m : Map[K, V] = Map([])
       for e in entries {
-        m[K::from_value(e.key)] = V::from_value(e.value)
+        m[FromSchema::from_value(e.key)] = V::from_value(e.value)
       }
       m
     }

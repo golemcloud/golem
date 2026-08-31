@@ -154,7 +154,7 @@ files. Regenerate with the script, which requires this exact revision of the
 
 ```sh
 cargo install --locked --git https://github.com/golemcloud/wit-bindgen \
-  --rev e759a320fdd1ecad92dc484af59cfc0c5fff38c6 wit-bindgen-cli
+  --rev ca14d9bbd6c6474dfbcdb68806fb4e30f1ee2efb wit-bindgen-cli
 ```
 
 The pin incorporates Bytecode Alliance's draft
@@ -170,7 +170,7 @@ cd golem_sdk
 
 The script (`scripts/regen-bindings.sh`):
 1. Refuses to run unless `wit-bindgen --version` identifies the pinned fork revision.
-2. Runs `wit-bindgen moonbit ./wit --derive-debug --derive-show --derive-eq --derive-error --project-name golemcloud/golem_sdk --ignore-stub` directly against the P3 WIT. Async exports remain async.
+2. Runs `wit-bindgen moonbit ./wit --derive-debug --derive-eq --derive-error --project-name golemcloud/golem_sdk --ignore-stub` directly against the P3 WIT. Async exports remain async.
 3. Fixes an `s8`/`s16` double sign-extension bug (the generated code does a signed
    load *and* subtracts `0x100`/`0x10000`; the spurious subtraction is stripped).
 4. Removes an emitted `moon.pkg.json` only where a sibling hand-maintained `moon.pkg` owns the
@@ -528,7 +528,7 @@ published to mooncakes.io for the release template to work.
 ## Dependencies & Tools
 
 - **wit-bindgen** — Golem's fork pinned at
-  `e759a320fdd1ecad92dc484af59cfc0c5fff38c6`. It combines draft upstream PR #1659's MoonBit
+  `ca14d9bbd6c6474dfbcdb68806fb4e30f1ee2efb`. It combines draft upstream PR #1659's MoonBit
   component-model async support with Golem's outline-lift, named-memory-lowering, and export
   disambiguation changes, and emits deterministic bindings. Bindings are regenerated via
   `scripts/regen-bindings.sh`, which rejects any other generator revision and applies the s8/s16

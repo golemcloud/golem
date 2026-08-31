@@ -12,7 +12,7 @@ pub fn render_help(
     Some(node) => node
     None => return Err(EmptyCommandTree)
   }
-  let out = StringBuilder::new()
+  let out = StringBuilder()
   out.write_string("Usage: " + node.name + "\n\n")
   out.write_string(node.doc.summary + "\n")
   out.write_string(node.doc.description + "\n")

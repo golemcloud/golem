@@ -14,7 +14,7 @@ pub fn get_all() -> Result[Array[(String, String)], Error_]
 pub(all) suberror Error_ {
   Upstream(String)
   Io(String)
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 // Types and methods
 

@@ -86,14 +86,3 @@ impl Debug for GuestQuotaTokenHandle with fn to_repr(self) {
     },
   )
 }
-
-///|
-impl Show for GuestQuotaTokenHandle with fn output(self, logger) {
-  logger.write_string(
-    if self.is_present() {
-      "GuestQuotaTokenHandle(present)"
-    } else {
-      "GuestQuotaTokenHandle(consumed)"
-    },
-  )
-}

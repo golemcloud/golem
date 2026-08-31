@@ -19,18 +19,18 @@ pub fn start_span(String) -> Span
 pub(all) struct Attribute {
   key : String
   value : AttributeValue
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct AttributeChain {
   key : String
   values : Array[AttributeValue]
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum AttributeValue {
   String(String)
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct InvocationContext(Int) derive(Eq, Show, @debug.Debug)
+pub(all) struct InvocationContext(Int) derive(Eq, @debug.Debug)
 pub fn InvocationContext::drop(Self) -> Unit
 pub fn InvocationContext::get_attribute(Self, String, Bool) -> AttributeValue?
 pub fn InvocationContext::get_attribute_chain(Self, String) -> Array[AttributeValue]
@@ -41,7 +41,7 @@ pub fn InvocationContext::span_id(Self) -> String
 pub fn InvocationContext::trace_context_headers(Self) -> Array[(String, String)]
 pub fn InvocationContext::trace_id(Self) -> String
 
-pub(all) struct Span(Int) derive(Eq, Show, @debug.Debug)
+pub(all) struct Span(Int) derive(Eq, @debug.Debug)
 pub fn Span::drop(Self) -> Unit
 pub fn Span::finish(Self) -> Unit
 pub fn Span::set_attribute(Self, String, AttributeValue) -> Unit

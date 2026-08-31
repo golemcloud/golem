@@ -5,7 +5,7 @@
 /// a circular WIT package dependency between golem:api and golem:agent.
 pub(all) enum AgentMode {
       DURABLE; EPHEMERAL
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 pub fn AgentMode::ordinal(self : AgentMode) -> Int {
       match self {
@@ -14,6 +14,7 @@ pub fn AgentMode::ordinal(self : AgentMode) -> Int {
       }
 }
 
+///|
 pub fn AgentMode::from(self : Int) -> AgentMode {
       match self {
             0 => DURABLE
@@ -24,15 +25,15 @@ pub fn AgentMode::from(self : Int) -> AgentMode {
 ///|
 pub(all) struct CountBoxState {
       attempts : UInt; inner : Int
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct AndThenState {
       left : Int; right : Int; on_right : Bool
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct PairState {
       left : Int; right : Int
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) enum StateNode {
       Counter(UInt)
@@ -41,17 +42,17 @@ pub(all) enum StateNode {
       CountBox(CountBoxState)
       AndThen(AndThenState)
       Pair(PairState)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Persistent state of a retry policy across retry attempts.
 /// Root is nodes[0]. Children referenced by state-node-index.
 pub(all) struct RetryPolicyState {
       nodes : Array[StateNode]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct EnvironmentPluginGrantId {
       uuid : @types.Uuid
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) enum WrappedFunctionType {
       ReadLocal
@@ -60,23 +61,23 @@ pub(all) enum WrappedFunctionType {
       WriteRemote
       WriteRemoteBatched(UInt64?)
       WriteRemoteTransaction(UInt64?)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct PluginInstallationDescription {
       environment_plugin_grant_id : EnvironmentPluginGrantId; plugin_priority : Int; plugin_name : String; plugin_version : String; parameters : Array[(String, String)]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawLocalAgentConfigEntry {
       path : Array[String]; value : @types.SchemaValueTree
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct LocalAgentConfigEntry {
       path : Array[String]; value : @types.TypedSchemaValue
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct CreateParameters {
       timestamp : @system-clock.Instant; agent_id : @types.AgentId; agent_mode : AgentMode; component_revision : UInt64; env : Array[(String, String)]; created_by : @types.AccountId; environment_id : @host.EnvironmentId; parent : @types.AgentId?; component_size : UInt64; initial_total_linear_memory_size : UInt64; initial_active_plugins : Array[PluginInstallationDescription]; local_agent_config : Array[LocalAgentConfigEntry]; original_phantom_id : @types.Uuid?; instance_id : @types.Uuid
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Parameters of an enriched durable host-call `start` entry.
 ///
@@ -87,21 +88,21 @@ pub(all) struct CreateParameters {
 /// variants for the payload shapes.
 pub(all) struct StartParameters {
       timestamp : @system-clock.Instant; parent_start_index : UInt64?; function_name : String; invocation_id : @types.Uuid?; observational_owner : UInt64?; request : @types.TypedSchemaValue?; durable_function_type : WrappedFunctionType
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Parameters of an enriched durable host-call `end` entry. Like the
 /// `start` `request`, the recorded `response` payload surfaces as a generic
 /// `typed-schema-value` tree (no per-interface named WIT variants).
 pub(all) struct EndParameters {
       timestamp : @system-clock.Instant; start_index : UInt64; response : @types.TypedSchemaValue?; forced_commit : Bool
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Parameters of an enriched durable host-call `cancelled` entry. Like the
 /// `start` `request`, the optional recorded `partial` result surfaces as a
 /// generic `typed-schema-value` tree (no per-interface named WIT variants).
 pub(all) struct CancelledParameters {
       timestamp : @system-clock.Instant; start_index : UInt64; partial : @types.TypedSchemaValue?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Parameters of a `completion-discarded` entry: the durable host call started at
 /// `start-index` completed successfully (its `end` entry was persisted) but the response
@@ -109,7 +110,7 @@ pub(all) struct CancelledParameters {
 /// future after the `end` was already recorded.
 pub(all) struct CompletionDiscardedParameters {
       timestamp : @system-clock.Instant; start_index : UInt64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Parameters of a `completion-delivered` entry: the successful result of the durable host
 /// call started at `start-index` was handed to the agent at this point in the recorded
@@ -117,74 +118,74 @@ pub(all) struct CompletionDiscardedParameters {
 /// agent until this marker and prevents later oplog entries from advancing until that handoff.
 pub(all) struct CompletionDeliveredParameters {
       timestamp : @system-clock.Instant; start_index : UInt64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct LocalSpanData {
       span_id : String; start : @system-clock.Instant; parent : String?; linked_context : UInt64?; attributes : Array[@context.Attribute]; inherited : Bool
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct ExternalSpanData {
       span_id : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) enum SpanData {
       LocalSpan(LocalSpanData)
       ExternalSpan(ExternalSpanData)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct ErrorParameters {
       timestamp : @system-clock.Instant; error : String; retry_from : UInt64; inside_atomic_region : Bool; retry_policy_state : RetryPolicyState?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct OplogRegion {
       start : UInt64; end : UInt64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct JumpParameters {
       timestamp : @system-clock.Instant; jump : OplogRegion
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Parameters for a set-retry-policy oplog entry.
 pub(all) struct SetRetryPolicyParameters {
       timestamp : @system-clock.Instant; policy : @retry.NamedRetryPolicy
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Parameters for a remove-retry-policy oplog entry.
 pub(all) struct RemoveRetryPolicyParameters {
       timestamp : @system-clock.Instant; name : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct QueuedCardEventInstall {
       card_id : @types.CardId
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct QueuedCardEventRevoke {
       card_id : @types.CardId
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) enum QueuedCardEvent {
       Install(QueuedCardEventInstall)
       Revoke(QueuedCardEventRevoke)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Parameters for a card-event-queued oplog entry.
 pub(all) struct CardEventQueuedParameters {
       timestamp : @system-clock.Instant; event : QueuedCardEvent
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Parameters for a card-installed oplog entry.
 pub(all) struct CardInstalledParameters {
       timestamp : @system-clock.Instant; queued_event_index : UInt64?; card_id : @types.CardId
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Raw parameters for a card-installed oplog entry.
 pub(all) struct RawCardInstalledParameters {
       timestamp : @system-clock.Instant; queued_event_index : UInt64?; card : FixedArray[Byte]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) enum CardInstallFailure {
       CARD_REVOKED; NOT_FOUND; RECIPIENT_MISMATCH; NOT_PERMITTED
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 pub fn CardInstallFailure::ordinal(self : CardInstallFailure) -> Int {
       match self {
@@ -195,6 +196,7 @@ pub fn CardInstallFailure::ordinal(self : CardInstallFailure) -> Int {
       }
 }
 
+///|
 pub fn CardInstallFailure::from(self : Int) -> CardInstallFailure {
       match self {
             0 => CARD_REVOKED
@@ -208,23 +210,23 @@ pub fn CardInstallFailure::from(self : Int) -> CardInstallFailure {
 /// Parameters for a card-install-failed oplog entry.
 pub(all) struct CardInstallFailedParameters {
       timestamp : @system-clock.Instant; queued_event_index : UInt64; card_id : @types.CardId; reason : CardInstallFailure
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Parameters for a card-revoked oplog entry.
 pub(all) struct CardRevokedParameters {
       timestamp : @system-clock.Instant; queued_event_index : UInt64; card_id : @types.CardId
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Parameters for a card-expired oplog entry.
 pub(all) struct CardExpiredParameters {
       timestamp : @system-clock.Instant; card_id : @types.CardId
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Identifies which host-owned stream a host-stream-frame oplog entry belongs to.
 /// The kind determines how the entry's payload is interpreted.
 pub(all) enum HostStreamKind {
       P3_HTTP_REQUEST_BODY
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 pub fn HostStreamKind::ordinal(self : HostStreamKind) -> Int {
       match self {
@@ -232,6 +234,7 @@ pub fn HostStreamKind::ordinal(self : HostStreamKind) -> Int {
       }
 }
 
+///|
 pub fn HostStreamKind::from(self : Int) -> HostStreamKind {
       match self {
             0 => P3_HTTP_REQUEST_BODY
@@ -244,77 +247,77 @@ pub fn HostStreamKind::from(self : Int) -> HostStreamKind {
 /// attached to the durable host call identified by its start entry's index.
 pub(all) struct HostStreamFrameParameters {
       timestamp : @system-clock.Instant; parent_start_index : UInt64; kind : HostStreamKind; payload : @types.TypedSchemaValue
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// A public durable-stream producer record rendered as a typed schema value.
 pub(all) struct DurableStreamRecordParameters {
       timestamp : @system-clock.Instant; record : @types.TypedSchemaValue
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct EndAtomicRegionParameters {
       timestamp : @system-clock.Instant; begin_index : UInt64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct AgentInitializationParameters {
       idempotency_key : String; constructor_parameters : @types.TypedSchemaValue; trace_id : String; trace_states : Array[String]; invocation_context : Array[Array[SpanData]]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct AgentMethodInvocationParameters {
       idempotency_key : String; method_name : String; function_input : @types.TypedSchemaValue; trace_id : String; trace_states : Array[String]; invocation_context : Array[Array[SpanData]]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct ProcessOplogEntriesParameters {
       idempotency_key : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct ManualUpdateParameters {
       target_revision : UInt64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct AgentInvocationOutputParameters {
       output : @types.TypedSchemaValue
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct FallibleResultParameters {
       error : String?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) enum UpdateDescription {
       AutoUpdate
       SnapshotBased(@host.Snapshot)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct PendingUpdateParameters {
       timestamp : @system-clock.Instant; target_revision : UInt64; description : UpdateDescription
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct SuccessfulUpdateParameters {
       timestamp : @system-clock.Instant; target_revision : UInt64; new_component_size : UInt64; new_active_plugins : Array[PluginInstallationDescription]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct FailedUpdateParameters {
       timestamp : @system-clock.Instant; target_revision : UInt64; details : String?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct GrowMemoryParameters {
       timestamp : @system-clock.Instant; delta : UInt64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct FilesystemStorageUsageUpdateParameters {
       timestamp : @system-clock.Instant; delta : Int64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct CreateResourceParameters {
       timestamp : @system-clock.Instant; id : UInt64; name : String; owner : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct DropResourceParameters {
       timestamp : @system-clock.Instant; id : UInt64; name : String; owner : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) enum LogLevel {
       STDOUT; STDERR; TRACE; DEBUG; INFO; WARN; ERROR; CRITICAL
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 pub fn LogLevel::ordinal(self : LogLevel) -> Int {
       match self {
@@ -329,6 +332,7 @@ pub fn LogLevel::ordinal(self : LogLevel) -> Int {
       }
 }
 
+///|
 pub fn LogLevel::from(self : Int) -> LogLevel {
       match self {
             0 => STDOUT
@@ -345,51 +349,51 @@ pub fn LogLevel::from(self : Int) -> LogLevel {
 ///|
 pub(all) struct LogParameters {
       timestamp : @system-clock.Instant; level : LogLevel; context : String; message : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct ActivatePluginParameters {
       timestamp : @system-clock.Instant; plugin : PluginInstallationDescription
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct DeactivatePluginParameters {
       timestamp : @system-clock.Instant; plugin : PluginInstallationDescription
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RevertParameters {
       timestamp : @system-clock.Instant; dropped_region : OplogRegion
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct CancelPendingInvocationParameters {
       timestamp : @system-clock.Instant; idempotency_key : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct StartSpanParameters {
       timestamp : @system-clock.Instant; span_id : String; parent : String?; linked_context_id : String?; attributes : Array[@context.Attribute]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct FinishSpanParameters {
       timestamp : @system-clock.Instant; span_id : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct SetSpanAttributeParameters {
       timestamp : @system-clock.Instant; span_id : String; key : String; value : @context.AttributeValue
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct BeginRemoteTransactionParameters {
       timestamp : @system-clock.Instant; transaction_id : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RemoteTransactionParameters {
       timestamp : @system-clock.Instant; begin_index : UInt64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct SnapshotData {
       data : FixedArray[Byte]; mime_type : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct LoadSnapshotParameters {
       snapshot : SnapshotData
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) enum AgentInvocation {
       AgentInitialization(AgentInitializationParameters)
@@ -398,15 +402,15 @@ pub(all) enum AgentInvocation {
       LoadSnapshot(LoadSnapshotParameters)
       ProcessOplogEntries(ProcessOplogEntriesParameters)
       ManualUpdate(ManualUpdateParameters)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct AgentInvocationStartedParameters {
       timestamp : @system-clock.Instant; invocation : AgentInvocation
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct SaveSnapshotResultParameters {
       snapshot : SnapshotData
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) enum AgentInvocationResult {
       AgentInitialization(AgentInvocationOutputParameters)
@@ -415,57 +419,57 @@ pub(all) enum AgentInvocationResult {
       LoadSnapshot(FallibleResultParameters)
       SaveSnapshot(SaveSnapshotResultParameters)
       ProcessOplogEntries(FallibleResultParameters)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct AgentInvocationFinishedParameters {
       timestamp : @system-clock.Instant; result : AgentInvocationResult; method_name : String?; consumed_fuel : Int64; component_revision : UInt64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct PendingAgentInvocationParameters {
       timestamp : @system-clock.Instant; invocation : AgentInvocation
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct SnapshotParameters {
       timestamp : @system-clock.Instant; data : SnapshotData
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct OplogProcessorCheckpointParameters {
       timestamp : @system-clock.Instant; plugin : PluginInstallationDescription; target_agent_id : @types.AgentId; confirmed_up_to : UInt64; sending_up_to : UInt64; last_batch_start : UInt64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct Timestamp {
       timestamp : @system-clock.Instant
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct OplogExternalPayload {
       payload_id : @types.Uuid; md5_hash : FixedArray[Byte]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Opaque oplog payload, which can either be serialized inline or stored externally
 pub(all) enum OplogPayload {
       Inline(FixedArray[Byte])
       External(OplogExternalPayload)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct AgentTerminatedByQuotaError {
       environment_id : @host.EnvironmentId; resource_name : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct EphemeralSleepTooLong {
       requested_nanos : UInt64; max_nanos : UInt64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct EphemeralFuelExhausted {
       overdraft_limit : UInt64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct EphemeralCannotSuspend {
       reason : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct ReadOnlyViolation {
       method_ : String; host_function : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Describes the error that occurred in the agent
 pub(all) suberror WorkerError {
@@ -488,108 +492,108 @@ pub(all) suberror WorkerError {
       EphemeralFuelExhausted(EphemeralFuelExhausted)
       EphemeralCannotSuspend(EphemeralCannotSuspend)
       ReadOnlyViolation(ReadOnlyViolation)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawCreateParameters {
       timestamp : @system-clock.Instant; agent_id : @types.AgentId; agent_mode : AgentMode; component_revision : UInt64; env : Array[(String, String)]; environment_id : @host.EnvironmentId; created_by : @types.AccountId; parent : @types.AgentId?; component_size : UInt64; initial_total_linear_memory_size : UInt64; initial_active_plugins : Array[EnvironmentPluginGrantId]; local_agent_config : Array[RawLocalAgentConfigEntry]; original_phantom_id : @types.Uuid?; instance_id : @types.Uuid
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawStartParameters {
       timestamp : @system-clock.Instant; parent_start_index : UInt64?; function_name : String; invocation_id : @types.Uuid?; observational_owner : UInt64?; request : OplogPayload?; durable_function_type : WrappedFunctionType
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawEndParameters {
       timestamp : @system-clock.Instant; start_index : UInt64; response : OplogPayload?; forced_commit : Bool
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawCancelledParameters {
       timestamp : @system-clock.Instant; start_index : UInt64; partial : OplogPayload?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawCompletionDiscardedParameters {
       timestamp : @system-clock.Instant; start_index : UInt64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawCompletionDeliveredParameters {
       timestamp : @system-clock.Instant; start_index : UInt64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Parameters for a host-stream-frame oplog entry, with the frame payload in raw
 /// (possibly externally stored) form.
 pub(all) struct RawHostStreamFrameParameters {
       timestamp : @system-clock.Instant; parent_start_index : UInt64; kind : HostStreamKind; payload : OplogPayload
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// A raw durable-stream producer record, stored inline or in external payload storage.
 pub(all) struct RawDurableStreamRecordParameters {
       timestamp : @system-clock.Instant; record : OplogPayload
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawAgentInvocationStartedParameters {
       timestamp : @system-clock.Instant; idempotency_key : String; payload : OplogPayload; trace_id : String; trace_states : Array[String]; invocation_context : Array[SpanData]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawAgentInvocationFinishedParameters {
       timestamp : @system-clock.Instant; result : OplogPayload; method_name : String?; consumed_fuel : Int64; component_revision : UInt64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawErrorParameters {
       timestamp : @system-clock.Instant; error : WorkerError; retry_from : UInt64; inside_atomic_region : Bool; retry_policy_state : RetryPolicyState?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawPendingAgentInvocationParameters {
       timestamp : @system-clock.Instant; idempotency_key : String; payload : OplogPayload; trace_id : String; trace_states : Array[String]; invocation_context : Array[SpanData]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawSnapshotBasedUpdate {
       target_revision : UInt64; payload : OplogPayload; mime_type : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Raw update description used in oplog entries
 pub(all) enum RawUpdateDescription {
       Automatic(UInt64)
       SnapshotBased(RawSnapshotBasedUpdate)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawPendingUpdateParameters {
       timestamp : @system-clock.Instant; description : RawUpdateDescription
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawSuccessfulUpdateParameters {
       timestamp : @system-clock.Instant; target_revision : UInt64; new_component_size : UInt64; new_active_plugins : Array[EnvironmentPluginGrantId]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct ResourceTypeId {
       name : String; owner : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawCreateResourceParameters {
       timestamp : @system-clock.Instant; id : UInt64; resource_type_id : ResourceTypeId
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawDropResourceParameters {
       timestamp : @system-clock.Instant; id : UInt64; resource_type_id : ResourceTypeId
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawActivatePluginParameters {
       timestamp : @system-clock.Instant; plugin_grant_id : EnvironmentPluginGrantId
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawDeactivatePluginParameters {
       timestamp : @system-clock.Instant; plugin_grant_id : EnvironmentPluginGrantId
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawBeginRemoteTransactionParameters {
       timestamp : @system-clock.Instant; transaction_id : String; original_begin_index : UInt64?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawSnapshotParameters {
       timestamp : @system-clock.Instant; data : OplogPayload; mime_type : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct RawOplogProcessorCheckpointParameters {
       timestamp : @system-clock.Instant; plugin_grant_id : EnvironmentPluginGrantId; target_agent_id : @types.AgentId; confirmed_up_to : UInt64; sending_up_to : UInt64; last_batch_start : UInt64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) enum OplogEntry {
       Create(RawCreateParameters)
@@ -645,7 +649,7 @@ pub(all) enum OplogEntry {
       StreamSession(RawDurableStreamRecordParameters)
       CompletionDiscarded(RawCompletionDiscardedParameters)
       CompletionDelivered(RawCompletionDeliveredParameters)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) enum PublicOplogEntry {
       Create(CreateParameters)
@@ -701,14 +705,14 @@ pub(all) enum PublicOplogEntry {
       StreamSession(DurableStreamRecordParameters)
       CompletionDiscarded(CompletionDiscardedParameters)
       CompletionDelivered(CompletionDeliveredParameters)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) suberror OplogReadError {
       PermissionDenied
       InternalError(String)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
-pub(all) struct GetOplog(Int) derive(Debug, Show, Eq)
+pub(all) struct GetOplog(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn GetOplog::drop(self : GetOplog) -> Unit {
@@ -716,7 +720,7 @@ pub fn GetOplog::drop(self : GetOplog) -> Unit {
       wasmImportResourceDropGetOplog(resource)
 }
 ///|
-pub(all) struct SearchOplog(Int) derive(Debug, Show, Eq)
+pub(all) struct SearchOplog(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn SearchOplog::drop(self : SearchOplog) -> Unit {

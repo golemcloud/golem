@@ -35,32 +35,32 @@ extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
 #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
 #| local.tee 1 i32.const 0 call $moonbit.init_array8
 #| local.get 1)
-
+///|
 #doc(hidden)
 pub fn wasmExportAsyncInvokeToolMiddleware(event_raw : Int, waitable : Int, code : Int) -> Int {
       @tool-middleware-guest.wasmExportAsyncInvokeToolMiddleware(event_raw, waitable, code)
 }
-
+///|
 #doc(hidden)
 pub fn wasmExportDiscoverToolMiddlewares() -> Int {
       @tool-middleware-guest.wasmExportDiscoverToolMiddlewares()
 }
-
+///|
 #doc(hidden)
 pub fn wasmExportDiscoverToolMiddlewaresPostReturn(p0 : Int) -> Unit {
       @tool-middleware-guest.wasmExportDiscoverToolMiddlewaresPostReturn(p0)
 }
-
+///|
 #doc(hidden)
 pub fn wasmExportGetToolMiddleware(p0 : Int, p1 : Int) -> Int {
       @tool-middleware-guest.wasmExportGetToolMiddleware(p0, p1)
 }
-
+///|
 #doc(hidden)
 pub fn wasmExportGetToolMiddlewarePostReturn(p0 : Int) -> Unit {
       @tool-middleware-guest.wasmExportGetToolMiddlewarePostReturn(p0)
 }
-
+///|
 #doc(hidden)
 pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int {
       @tool-middleware-guest.wasmExportInvokeToolMiddleware(p0)

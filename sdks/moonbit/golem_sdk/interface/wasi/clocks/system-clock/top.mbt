@@ -18,7 +18,7 @@
 /// [Unix Time]: https://en.wikipedia.org/wiki/Unix_time
 pub(all) struct Instant {
       seconds : Int64; nanoseconds : UInt
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Read the current value of the clock.
 ///

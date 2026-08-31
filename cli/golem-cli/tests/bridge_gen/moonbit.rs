@@ -100,6 +100,7 @@ impl GeneratedPackage {
             .arg("check")
             .arg("--target")
             .arg("native")
+            .arg("--deny-warn")
             .current_dir(self.module_dir())
             .output()
             .expect("failed to run moon; is it installed?");
@@ -162,6 +163,7 @@ fn moon_check_wasm(path: &std::path::Path) {
         .arg("check")
         .arg("--target")
         .arg("wasm")
+        .arg("--deny-warn")
         .output()
         .expect("failed to run moon; is it installed?");
     assert!(
@@ -536,6 +538,25 @@ fn guest_tool_mode_moon_checks_fixed_codec_type_name_collision() {
     moon_check_wasm(dir.path());
 }
 
+// PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
+#[test]
+fn guest_tool_mode_marks_substring_collision_parameter_used() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let mut tool = phase_eight_tool();
+    tool.commands.nodes[0]
+        .body
+        .as_mut()
+        .unwrap()
+        .positionals
+        .fixed[3]
+        .name = "mod".into();
+    let mut generator = MoonBitToolBridgeGenerator::new(tool, target, true).unwrap();
+    generator.generate().unwrap();
+
+    moon_check_wasm(dir.path());
+}
+
 #[test]
 fn guest_mode_reserves_unstructured_support_type_names() {
     let user_type = def(
@@ -558,6 +579,7 @@ fn guest_mode_reserves_unstructured_support_type_names() {
         .arg("check")
         .arg("--target")
         .arg("wasm")
+        .arg("--deny-warn")
         .output()
         .expect("failed to run moon; is it installed?");
     assert!(
@@ -573,7 +595,7 @@ fn guest_mode_emits_standalone_schema_value_codecs_and_moon_checks() {
     let guest = generate_without_check(kitchen_sink_agent(), MoonBitBridgeMode::GuestWasmRpc);
     let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
 
-    assert!(source.contains("pub suberror CodecError"));
+    assert!(source.contains("pub(all) suberror CodecError"));
     assert!(source.contains("-> @model.SchemaValue"));
     assert!(source.contains("@model.SchemaValue::FixedList("));
     assert!(source.contains("@model.SchemaValue::Datetime("));
@@ -588,6 +610,7 @@ fn guest_mode_emits_standalone_schema_value_codecs_and_moon_checks() {
         .arg("check")
         .arg("--target")
         .arg("wasm")
+        .arg("--deny-warn")
         .output()
         .expect("failed to run moon; is it installed?");
     assert!(
@@ -1067,9 +1090,11 @@ fn guest_mode_unstructured_text_encoder_rejects_disallowed_language() {
     std::fs::write(
         guest.path().join("client/unstructured_wbtest.mbt"),
         r#"test "unstructured text encoder enforces language restrictions" {
-  let result = try? encode_Media({ body: Inline("bonjour", Some("fr")) })
-  guard result is Err(CodecError(_)) else {
-    fail("expected CodecError for a disallowed language")
+  try encode_Media({ body: Inline("bonjour", Some("fr")) }) catch {
+    CodecError(_) => ()
+    _ => fail("expected CodecError for a disallowed language")
+  } noraise {
+    _ => fail("expected CodecError for a disallowed language")
   }
 }
 "#,
@@ -1225,9 +1250,11 @@ fn guest_mode_fixed_list_encoder_rejects_wrong_length() {
     std::fs::write(
         guest.path().join("client/fixed_wbtest.mbt"),
         r#"test "fixed-list length is checked" {
-  let result = try? encode_Fixed({ values: [1U] })
-  guard result is Err(CodecError(_)) else {
-    fail("expected CodecError")
+  try encode_Fixed({ values: [1U] }) catch {
+    CodecError(_) => ()
+    _ => fail("expected CodecError")
+  } noraise {
+    _ => fail("expected CodecError")
   }
 }
 "#,
@@ -1268,9 +1295,11 @@ fn guest_mode_narrow_integer_encoder_rejects_out_of_range_value() {
     std::fs::write(
         guest.path().join("client/narrow_wbtest.mbt"),
         r#"test "s8 range is checked" {
-  let result = try? encode_Narrow({ value: 128 })
-  guard result is Err(CodecError(_)) else {
-    fail("expected CodecError for an out-of-range s8")
+  try encode_Narrow({ value: 128 }) catch {
+    CodecError(_) => ()
+    _ => fail("expected CodecError for an out-of-range s8")
+  } noraise {
+    _ => fail("expected CodecError for an out-of-range s8")
   }
 }
 "#,
@@ -1315,9 +1344,11 @@ fn guest_mode_narrow_integer_decoder_rejects_out_of_range_values() {
     std::fs::write(
         guest.path().join("client/narrow_decode_wbtest.mbt"),
         r#"fn assert_decode_rejected(value : @model.SchemaValue) -> Unit raise {
-  let result = try? decode_Narrow(value)
-  guard result is Err(CodecError(_)) else {
-    fail("expected CodecError for an out-of-range narrow integer")
+  try decode_Narrow(value) catch {
+    CodecError(_) => ()
+    _ => fail("expected CodecError for an out-of-range narrow integer")
+  } noraise {
+    _ => fail("expected CodecError for an out-of-range narrow integer")
   }
 }
 

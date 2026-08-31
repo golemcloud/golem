@@ -36,6 +36,7 @@ pub(open) trait QuantityUnit {
 }
 
 ///|
+#warnings("-unused_type_variable")
 pub struct Quantity[U] {
   mantissa : Int64
   scale : Int

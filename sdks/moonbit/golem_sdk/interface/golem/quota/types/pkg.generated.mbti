@@ -19,9 +19,9 @@ pub fn split(@golemcloud/golem_sdk/interface/golem/core/types.QuotaToken, UInt64
 // Types and methods
 pub(all) struct FailedReservation {
   estimated_wait_nanos : UInt64?
-} derive(Eq, Show, @debug.Debug)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct Reservation(Int) derive(Eq, Show, @debug.Debug)
+pub(all) struct Reservation(Int) derive(Eq, @debug.Debug)
 pub fn Reservation::commit(Self, UInt64) -> Unit
 pub fn Reservation::drop(Self) -> Unit
 

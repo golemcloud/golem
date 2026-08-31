@@ -5,15 +5,15 @@
 /// ============================================================
 pub(all) struct Uuid {
       high_bits : UInt64; low_bits : UInt64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct Datetime {
       seconds : Int64; nanoseconds : UInt
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct EnvironmentId {
       uuid : Uuid
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// ============================================================
 /// Platform identifiers
@@ -24,29 +24,29 @@ pub(all) struct EnvironmentId {
 /// Represents a Golem component
 pub(all) struct ComponentId {
       uuid : Uuid
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Represents a Golem agent
 pub(all) struct AgentId {
       component_id : ComponentId; agent_id : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Represents a Golem account
 pub(all) struct AccountId {
       uuid : Uuid
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Represents a Golem permission card
 pub(all) struct CardId {
       uuid : Uuid
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// A promise ID is a value that can be passed to an external Golem API to
 /// complete that promise from an arbitrary external source, while Golem
 /// agents can await for this completion.
 pub(all) struct PromiseId {
       agent_id : AgentId; oplog_idx : UInt64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// ============================================================
 /// Capability resources
@@ -58,7 +58,7 @@ pub(all) struct PromiseId {
 /// `schema-value-node::quota-token-handle`) the handle is transferred by
 /// ownership; the host converts it to/from its internal trusted
 /// representation at the boundary.
-pub(all) struct QuotaToken(Int) derive(Debug, Show, Eq)
+pub(all) struct QuotaToken(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn QuotaToken::drop(self : QuotaToken) -> Unit {
@@ -69,7 +69,7 @@ pub fn QuotaToken::drop(self : QuotaToken) -> Unit {
 /// An unforgeable handle to sensitive material held by the runtime. The
 /// handle is opaque to guests: components can pass it through schema values
 /// and reveal it only through capability-gated host interfaces.
-pub(all) struct Secret(Int) derive(Debug, Show, Eq)
+pub(all) struct Secret(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn Secret::drop(self : Secret) -> Unit {
@@ -80,7 +80,7 @@ pub fn Secret::drop(self : Secret) -> Unit {
 /// An affine wrapper around a native Component Model stream of schema
 /// values. The indirection lets a stream occur anywhere in a recursive
 /// `schema-value-tree` while preserving the native stream endpoint.
-pub(all) struct SchemaValueStream(Int) derive(Debug, Show, Eq)
+pub(all) struct SchemaValueStream(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn SchemaValueStream::drop(self : SchemaValueStream) -> Unit {
@@ -97,7 +97,7 @@ pub fn SchemaValueStream::drop(self : SchemaValueStream) -> Unit {
 /// card-store representation at the boundary. The wire form is the card-id
 /// (UUID) alone — no grants, parents, or metadata cross the wire as
 /// authority.
-pub(all) struct PermissionCard(Int) derive(Debug, Show, Eq)
+pub(all) struct PermissionCard(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn PermissionCard::drop(self : PermissionCard) -> Unit {
@@ -112,7 +112,7 @@ pub fn PermissionCard::drop(self : PermissionCard) -> Unit {
 /// docs / aliases / examples / deprecation / role on each type.
 pub(all) struct SchemaTypeDef {
       id : String; name : String?; body : Int
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Open registry; unknown roles fall back to structural handling.
 pub(all) enum Role {
@@ -120,7 +120,7 @@ pub(all) enum Role {
       UnstructuredText
       UnstructuredBinary
       Other(String)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Typed metadata envelope. Holds non-validation, non-rendering-critical
 /// information (docs, aliases, examples, deprecation, role). Per-scalar
@@ -128,29 +128,29 @@ pub(all) enum Role {
 /// not here.
 pub(all) struct MetadataEnvelope {
       doc : String?; aliases : Array[String]; examples : Array[String]; deprecated : String?; role : Role?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct NamedFieldType {
       name : String; body : Int; metadata : MetadataEnvelope
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct VariantCaseType {
       name : String; payload : Int?; metadata : MetadataEnvelope
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct FixedListSpec {
       element : Int; length : UInt
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Map key types are restricted to primitives. Enforced at schema
 /// construction time, not by the WIT type itself.
 pub(all) struct MapSpec {
       key : Int; value : Int
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct ResultSpec {
       ok : Int?; err : Int?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// --- Numeric restrictions ---
 /// A numeric bound usable across every numeric representation. Float bounds
@@ -160,7 +160,7 @@ pub(all) enum NumericBound {
       Signed(Int64)
       Unsigned(UInt64)
       FloatBits(UInt64)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Inline numeric refinement. `none` on a numeric type means unconstrained
 /// (the common case). The empty restriction set is never encoded as `some`:
@@ -168,21 +168,21 @@ pub(all) enum NumericBound {
 /// `none`. `unit` is schema/help metadata only.
 pub(all) struct NumericRestrictions {
       min : NumericBound?; max : NumericBound?; unit : String?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// --- Text / Binary restrictions ---
 pub(all) struct TextRestrictions {
       languages : Array[String]?; min_length : UInt?; max_length : UInt?; regex : String?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct BinaryRestrictions {
       mime_types : Array[String]?; min_bytes : UInt?; max_bytes : UInt?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// --- Path ---
 pub(all) enum PathDirection {
       INPUT; OUTPUT; IN_OUT
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 pub fn PathDirection::ordinal(self : PathDirection) -> Int {
       match self {
@@ -192,6 +192,7 @@ pub fn PathDirection::ordinal(self : PathDirection) -> Int {
       }
 }
 
+///|
 pub fn PathDirection::from(self : Int) -> PathDirection {
       match self {
             0 => INPUT
@@ -203,7 +204,7 @@ pub fn PathDirection::from(self : Int) -> PathDirection {
 ///|
 pub(all) enum PathKind {
       FILE; DIRECTORY; ANY
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 pub fn PathKind::ordinal(self : PathKind) -> Int {
       match self {
@@ -213,6 +214,7 @@ pub fn PathKind::ordinal(self : PathKind) -> Int {
       }
 }
 
+///|
 pub fn PathKind::from(self : Int) -> PathKind {
       match self {
             0 => FILE
@@ -224,12 +226,12 @@ pub fn PathKind::from(self : Int) -> PathKind {
 ///|
 pub(all) struct PathSpec {
       direction : PathDirection; kind : PathKind; allowed_mime_types : Array[String]?; allowed_extensions : Array[String]?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// --- URL ---
 pub(all) struct UrlRestrictions {
       allowed_schemes : Array[String]?; allowed_hosts : Array[String]?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// --- Quantity ---
 /// Fixed-point decimal value with unit: numeric value = `mantissa * 10^(-scale)`.
@@ -237,15 +239,15 @@ pub(all) struct UrlRestrictions {
 /// `quantity-spec` constrains the accepted set.
 pub(all) struct QuantityValue {
       mantissa : Int64; scale : Int; unit : String
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct QuantitySpec {
       base_unit : String; allowed_suffixes : Array[String]; min : QuantityValue?; max : QuantityValue?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct FieldDiscriminator {
       field_name : String; literal : String?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// How the decoder identifies that a value belongs to a given union branch.
 pub(all) enum DiscriminatorRule {
@@ -255,11 +257,11 @@ pub(all) enum DiscriminatorRule {
       Regex(String)
       FieldEquals(FieldDiscriminator)
       FieldAbsent(String)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct UnionBranch {
       tag : String; body : Int; discriminator : DiscriminatorRule; metadata : MetadataEnvelope
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// --- Discriminated union ---
 ///
@@ -303,20 +305,20 @@ pub(all) struct UnionBranch {
 ///     regex dialects differ.
 pub(all) struct UnionSpec {
       branches : Array[UnionBranch]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// --- Capability nodes ---
 pub(all) struct SecretSpec {
       inner : Int; category : String?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct QuotaTokenSpec {
       resource_name : String?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct PermissionCardSpec {
       polymorphic : Bool
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// The structural body of a `schema-type-node`.
 ///
@@ -375,7 +377,7 @@ pub(all) enum SchemaTypeBody {
       PermissionCardType(PermissionCardSpec)
       FutureType(Int?)
       StreamType(Int?)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// ============================================================
 /// Schema type
@@ -386,7 +388,7 @@ pub(all) enum SchemaTypeBody {
 /// index inside the body.
 pub(all) struct SchemaTypeNode {
       body : SchemaTypeBody; metadata : MetadataEnvelope
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// ============================================================
 /// Schema graph (self-contained type carrier)
@@ -397,15 +399,15 @@ pub(all) struct SchemaTypeNode {
 /// implicit external registry that consumers must look up.
 pub(all) struct SchemaGraph {
       type_nodes : Array[SchemaTypeNode]; defs : Array[SchemaTypeDef]; root : Int
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct VariantValuePayload {
       case : UInt; payload : Int?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct MapEntry {
       key : Int; value : Int
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Result payload: exactly one of `ok-value` / `err-value` is set. Each
 /// inner option allows `result<_, _>` cases whose ok/err type is unit (no
@@ -413,24 +415,24 @@ pub(all) struct MapEntry {
 pub(all) enum ResultValuePayload {
       OkValue(Int?)
       ErrValue(Int?)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct TextValuePayload {
       text : String; language : String?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct BinaryValuePayload {
       bytes : FixedArray[Byte]; mime_type : String?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Signed duration as total nanoseconds.
 pub(all) struct DurationValuePayload {
       nanoseconds : Int64
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct UnionValuePayload {
       tag : String; body : Int
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) enum SchemaValueNode {
       BoolValue(Bool)
@@ -468,7 +470,7 @@ pub(all) enum SchemaValueNode {
       QuotaTokenHandle(QuotaToken)
       PermissionCardHandle(PermissionCard)
       StreamValue(SchemaValueStream)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// ============================================================
 /// Schema value (always paired with a schema-graph)
@@ -485,7 +487,7 @@ pub(all) enum SchemaValueNode {
 /// schema.
 pub(all) struct SchemaValueTree {
       value_nodes : Array[SchemaValueNode]; root : Int
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// ============================================================
 /// Wire carriers
@@ -494,7 +496,7 @@ pub(all) struct SchemaValueTree {
 /// built against that schema.
 pub(all) struct TypedSchemaValue {
       graph : SchemaGraph; value : SchemaValueTree
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Parses a UUID from a string
 pub fn parse_uuid(uuid : String) -> Result[Uuid, String] {

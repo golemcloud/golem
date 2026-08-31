@@ -22,7 +22,7 @@
 /// when the graph is finalized (`into_schema_graph`), not during construction,
 /// matching the Rust `IntoSchema`.
 pub(open) trait IntoSchema {
-  fn type_id() -> @model.TypeId
+  fn type_id() -> String
   fn register_in(@model.SchemaBuilder) -> @model.SchemaType
   fn to_value(Self) -> @model.SchemaValue
 }
@@ -40,6 +40,7 @@ pub(open) trait FromSchema {
 ///|
 /// Errors produced by `FromSchema::from_value`. Mirrors the Rust
 /// `FromSchemaError`.
+#warnings("-unused_constructor")
 pub suberror FromSchemaError {
   /// The expected value shape does not match what was provided.
   ShapeMismatch(expected~ : String, actual~ : String, context~ : String)
@@ -49,7 +50,7 @@ pub suberror FromSchemaError {
   UnknownUnionTag(String)
   /// Free-form error message produced by generated decoders.
   Custom(String)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Construct a `ShapeMismatch` error.
@@ -127,6 +128,7 @@ pub fn value_kind(v : @model.SchemaValue) -> String {
 ///|
 /// Zero-sized type tag used to resolve `IntoSchema` / `FromSchema` static
 /// methods without needing a value instance.
+#warnings("-unused_type_variable")
 pub(all) struct TypeTag[T] {}
 
 ///|
@@ -157,14 +159,11 @@ pub fn[T] type_tag() -> TypeTag[T] {
 /// Append resolved type arguments to a base nominal `TypeId`, mirroring the
 /// Rust `type_id_with_args`. `Container<u32>` -> `Container<u32>`;
 /// `Container<u32, String>` -> `Container<u32, alloc.string.String>`.
-pub fn type_id_with_args(
-  base : String,
-  args : Array[@model.TypeId],
-) -> @model.TypeId {
+pub fn type_id_with_args(base : String, args : Array[String]) -> String {
   if args.is_empty() {
     base
   } else {
-    let parts = StringBuilder::new()
+    let parts = StringBuilder()
     parts.write_string(base)
     parts.write_char('<')
     for i, a in args {

@@ -18,14 +18,14 @@
 ///|
 /// A stable, language-independent identifier for a named type definition.
 /// Conventionally a package-qualified dotted type name.
-pub typealias String as TypeId
+pub type TypeId = String
 
 ///|
 /// A schema type node: a structural body plus its metadata envelope.
 pub(all) struct SchemaType {
   body : SchemaTypeBody
   metadata : @types.MetadataEnvelope
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// The structural body of a recursive schema type. Recursive positions hold
@@ -76,21 +76,21 @@ pub(all) enum SchemaTypeBody {
   // WASI P3 asynchronous values
   Future(SchemaType?)
   Stream(SchemaType?)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct NamedFieldType {
   name : String
   body : SchemaType
   metadata : @types.MetadataEnvelope
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct VariantCaseType {
   name : String
   payload : SchemaType?
   metadata : @types.MetadataEnvelope
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct UnionBranch {
@@ -99,14 +99,14 @@ pub(all) struct UnionBranch {
   body : SchemaType
   discriminator : @types.DiscriminatorRule
   metadata : @types.MetadataEnvelope
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct SecretSpec {
   /// Revealed payload type carried by this secret handle.
   inner : SchemaType
   category : String?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 // ============================================================
 // Schema graph (recursive, self-contained)
@@ -120,7 +120,7 @@ pub(all) struct SchemaTypeDef {
   /// Optional human-readable qualified name (display only).
   name : String?
   body : SchemaType
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// A self-contained schema graph: an ordered registry of named definitions
@@ -131,7 +131,7 @@ pub(all) struct SchemaTypeDef {
 pub(all) struct SchemaGraph {
   defs : Array[SchemaTypeDef]
   root : SchemaType
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 // ============================================================
 // Schema value (recursive)
@@ -190,13 +190,13 @@ pub(all) enum SchemaValue {
   Stream(GuestSchemaValueStreamHandle)
   // owned `permission-card` resource carried as an opaque, affine handle
   PermissionCard(GuestPermissionCardHandle)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct SchemaMapEntry {
   key : SchemaValue
   value : SchemaValue
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 // ============================================================
 // Wire carrier (recursive)
@@ -208,7 +208,7 @@ pub(all) struct SchemaMapEntry {
 pub(all) struct TypedSchemaValue {
   graph : SchemaGraph
   value : SchemaValue
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Host-provided cleanup for owned resources rejected at a schema-value

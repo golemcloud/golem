@@ -16,7 +16,7 @@
 ///
 /// In this interface, we use the term `bucket` to refer to a collection of key-value
 /// Soon: switch to `resource bucket { ... }`
-pub(all) struct Bucket(Int) derive(Debug, Show, Eq)
+pub(all) struct Bucket(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn Bucket::drop(self : Bucket) -> Unit {
@@ -27,7 +27,7 @@ pub fn Bucket::drop(self : Bucket) -> Unit {
 /// A value is the data stored in a key-value pair. The value can be of any type
 /// that can be represented in a byte array.
 /// Soon: switch to `resource value { ... }`
-pub(all) struct OutgoingValue(Int) derive(Debug, Show, Eq)
+pub(all) struct OutgoingValue(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn OutgoingValue::drop(self : OutgoingValue) -> Unit {
@@ -46,7 +46,7 @@ pub fn OutgoingValue::drop(self : OutgoingValue) -> Unit {
 /// This is useful when the value is large and the caller wants to allocate a buffer of
 /// the right size to consume the value.
 /// Soon: switch to `resource incoming-value { ... }`
-pub(all) struct IncomingValue(Int) derive(Debug, Show, Eq)
+pub(all) struct IncomingValue(Int) derive(Debug, Eq)
 
 /// Drops a resource handle.
 pub fn IncomingValue::drop(self : IncomingValue) -> Unit {

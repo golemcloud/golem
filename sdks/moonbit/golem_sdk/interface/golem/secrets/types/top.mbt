@@ -15,32 +15,32 @@
 /// Stable, opaque identifier scoped to the deployment.
 pub(all) struct SecretId {
       bytes : FixedArray[Byte]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// A secret-store-assigned, monotonic version identifier. The
 /// secret-store backend defines the ordering and the format;
 /// the type-tree treats it as opaque.
 pub(all) struct SecretVersion {
       bytes : FixedArray[Byte]
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 pub(all) struct SecretMetadata {
       config_key : Array[String]?; version : SecretVersion?; resolved_at : @system-clock.Instant; category : String?
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Errors common to operations on secrets.
 pub(all) suberror SecretError {
       Unavailable(String)
       VersionNotFound(SecretVersion)
       Internal(String)
-} derive(Debug, Show, Eq)
+} derive(Debug, Eq)
 ///|
 /// Stable opaque identifier. Comparing equal across two `secret` handles
 /// means "same secret material, same version" — useful for caching and audit
 /// correlation. Safe to log, oplog, and emit in traces.
-pub fn id(s : @types.Secret) -> SecretId {
+pub fn id(s : @types0.Secret) -> SecretId {
 
-      let @types.Secret(handle) = s
+      let @types0.Secret(handle) = s
       let return_area = mbt_ffi_malloc(8)
       wasmImportId(handle, return_area);
 
@@ -53,9 +53,9 @@ pub fn id(s : @types.Secret) -> SecretId {
 ///|
 /// Immutable metadata captured at resolve-time. Includes the config-key
 /// path, the resolved version, and the resolution timestamp. No plaintext.
-pub fn metadata(s : @types.Secret) -> SecretMetadata {
+pub fn metadata(s : @types0.Secret) -> SecretMetadata {
 
-      let @types.Secret(handle) = s
+      let @types0.Secret(handle) = s
       let return_area = mbt_ffi_malloc(56)
       wasmImportMetadata(handle, return_area);
 
