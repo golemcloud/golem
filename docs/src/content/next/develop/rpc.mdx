@@ -270,6 +270,52 @@ If we know the **phantom ID** of an agent, we can create a client targeting an e
   </Tabs.Tab>
 </Tabs>
 
+### Phantom agents through TypeScript reflection
+
+When the target type is selected at runtime, its reflected `client` exposes the
+same phantom operations as a definition client:
+
+```typescript
+import { getReflectedAgentType } from "@golemcloud/golem-ts-sdk";
+
+const weatherType = getReflectedAgentType("WeatherAgent");
+if (!weatherType) throw new Error("WeatherAgent is not registered");
+
+if (weatherType.mode === "durable") {
+  const { client, agentId, phantomId } = weatherType.client.newPhantom({
+    location: "London",
+  });
+  const samePhantom = weatherType.client.getPhantom(
+    { location: "London" },
+    phantomId,
+  );
+}
+```
+
+For an ephemeral reflected type, `newPhantom` returns the reflected client
+directly rather than a reusable `{ client, agentId, phantomId }` wrapper. The
+final one-shot agent ID and idempotency key are returned by each invocation:
+
+```typescript
+const requestType = getReflectedAgentType("RequestAgent");
+if (!requestType || requestType.mode !== "ephemeral") {
+  throw new Error("RequestAgent must be ephemeral");
+}
+
+const request = requestType.client.newPhantom({ route: "summarize" });
+if ("client" in request) throw new Error("unexpected durable phantom wrapper");
+
+const result = await request.method("run").invoke({ text: "hello" });
+console.log(result.metadata.agentId, result.metadata.idempotencyKey);
+```
+
+Ephemeral reflected types also expose `getPhantom` when the caller already has
+the phantom ID. That explicit handle does not make a final, already-invoked
+ephemeral agent ID reusable.
+
+See [Calling Agents with Runtime Reflection](/next/how-to-guides/ts/golem-call-agent-reflectively-ts)
+for discovery, schema inspection, concrete `AgentId` binding, and error handling.
+
 ## Calling a remote agent method
 
 Once we have a _client_ for a remote agent, it is possible to call its methods just as if it would be a local instance.

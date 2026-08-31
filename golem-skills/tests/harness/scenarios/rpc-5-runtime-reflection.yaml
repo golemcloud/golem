@@ -1,0 +1,54 @@
+name: "rpc-5-runtime-reflection"
+steps:
+  - id: "create-project"
+    only_if:
+      language: "ts"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-reflected-rpc"
+    only_if:
+      language: "ts"
+    prompt: >
+      In the TypeScript test-app project, add a durable `ReflectionTarget` agent
+      identified by a string `name`. Give it an `echo` method that accepts a string
+      `message` and returns that message.
+
+      Add a second durable `ReflectionCaller` agent with a `run` method. In `run`, use
+      the Golem TypeScript SDK runtime reflection APIs to list the registered agent
+      types, look up `ReflectionTarget` by name, inspect its `echo` method, and invoke
+      `ReflectionTarget("target")` through the reflected client with `"hello"`.
+      Construct the target's concrete AgentId from the reflected type, resolve its
+      current type with `getAgentTypeByAgentId` after the first invocation, bind that
+      reflected type to the AgentId, and invoke `echo` again with `"again"`.
+
+      Return exactly an object with fields `listed`, `typeName`, `methodName`, `first`,
+      and `second`. They must respectively contain whether `ReflectionTarget` appeared
+      in the discovered list, the discovered type name, the reflected method name, and
+      the two echoed values. Make sure the project builds successfully.
+    expectedSkills:
+      - "golem-call-agent-reflectively-ts"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-reflected-rpc"
+    only_if:
+      language: "ts"
+    invoke_json:
+      agent: 'ReflectionCaller("main")'
+      method: "run"
+    expect:
+      result_json:
+        - path: "$.listed"
+          equals: true
+        - path: "$.typeName"
+          equals: "ReflectionTarget"
+        - path: "$.methodName"
+          equals: "echo"
+        - path: "$.first"
+          equals: "hello"
+        - path: "$.second"
+          equals: "again"

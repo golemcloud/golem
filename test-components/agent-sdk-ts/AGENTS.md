@@ -27,7 +27,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-mark-read-only-ts` | Marking methods `readOnly` for a side-effect-free guarantee and result caching |
 | `golem-add-config-ts` | Adding typed configuration to a TypeScript agent |
 | `golem-add-secret-ts` | Adding secrets (`s.secret`, `Secret<T>`) to TypeScript agents |
-| `golem-call-another-agent-ts` | Calling another agent and awaiting the result through a definition client |
+| `golem-call-another-agent-ts` | Calling another agent and awaiting the result over RPC through a definition client |
 | `golem-call-from-external-ts` | Calling agents from external Node.js apps using generated bridge SDKs |
 | `golem-fire-and-forget-ts` | Triggering an agent invocation without waiting for the result (`.trigger`) |
 | `golem-parallel-workers-ts` | Fan out work to multiple parallel agents and collect results |

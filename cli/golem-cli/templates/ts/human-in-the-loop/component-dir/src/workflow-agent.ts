@@ -21,7 +21,7 @@ export const WorkflowAgentImpl = WorkflowAgent.implement({
       // 1. Create a promise that represents waiting for human input.
       const approvalPromiseId = createPromise();
 
-      // 2. Register the pending approval with the human (remote agent call).
+      // 2. Register the pending approval with the human over agent RPC.
       //    Normally you would surface this in a UI, email, etc.
       await HumanAgent.client.get({ username: approver }).requestApproval({
         workflowId: this.workflowId,

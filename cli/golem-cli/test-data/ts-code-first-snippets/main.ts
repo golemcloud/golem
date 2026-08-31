@@ -343,7 +343,7 @@ export const FooAgent = defineAgent({
 });
 
 export const FooAgentImpl = FooAgent.implement({
-  // Build the phantom BarAgent client mirroring the old `BarAgent.get("foooo", 1)`
+  // Build the typed RPC client for BarAgent, mirroring `BarAgent.get("foooo", 1)`
   // (constructor params optionalStringType = "foooo", optionalUnionType = 1).
   init: ({ id }) => ({
     input: id.input,
