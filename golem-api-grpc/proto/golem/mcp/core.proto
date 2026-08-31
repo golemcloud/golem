@@ -8,11 +8,13 @@ import "golem/registry/agent.proto";
 import "golem/customapi/core.proto";
 
 message CompiledMcp {
+  reserved 5;
+  reserved "agent_type_implementers";
+
   golem.common.AccountId account_id = 1;
   golem.common.EnvironmentId environment_id = 2;
   uint64 deployment_revision = 3;
   string domain = 4;
-  map<string, golem.registry.RegisteredAgentTypeImplementer> agent_type_implementers = 5;
   golem.customapi.SecuritySchemeDetails security_scheme = 6;
   repeated golem.registry.RegisteredAgentTypeSchema registered_agent_types = 7;
   string account_email = 8;

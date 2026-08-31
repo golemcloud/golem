@@ -480,26 +480,12 @@ impl DeploymentContext {
                 None
             };
 
-            let agent_type_implementers = registered_agent_types
-                .iter()
-                .map(|registered_agent_type| {
-                    (
-                        registered_agent_type.agent_type.type_name.clone(),
-                        (
-                            registered_agent_type.implemented_by.component_id,
-                            registered_agent_type.implemented_by.component_revision,
-                        ),
-                    )
-                })
-                .collect();
-
             let compiled_mcp = golem_service_base::mcp::CompiledMcp {
                 account_id,
                 account_email: self.environment.owner_account_email.clone(),
                 environment_id: self.environment.id,
                 deployment_revision,
                 domain: domain.clone(),
-                agent_type_implementers,
                 security_scheme_name,
                 security_scheme: None, // Will be resolved at runtime
                 registered_agent_types,
@@ -1307,21 +1293,8 @@ mod tests {
     #[test]
     fn compile_mcp_deployments_includes_selected_registered_agent_types() {
         let (compiled, expected) = compile_test_mcp();
-        let expected_implementers = expected
-            .iter()
-            .map(|registered_agent_type| {
-                (
-                    registered_agent_type.agent_type.type_name.clone(),
-                    (
-                        registered_agent_type.implemented_by.component_id,
-                        registered_agent_type.implemented_by.component_revision,
-                    ),
-                )
-            })
-            .collect();
 
         assert_eq!(compiled.registered_agent_types, expected);
-        assert_eq!(compiled.agent_type_implementers, expected_implementers);
     }
 
     #[test]
@@ -1339,21 +1312,8 @@ mod tests {
             mcp_data,
         })
         .unwrap();
-        let expected_implementers = expected
-            .iter()
-            .map(|registered_agent_type| {
-                (
-                    registered_agent_type.agent_type.type_name.clone(),
-                    (
-                        registered_agent_type.implemented_by.component_id,
-                        registered_agent_type.implemented_by.component_revision,
-                    ),
-                )
-            })
-            .collect();
 
         assert_eq!(restored.registered_agent_types, expected);
-        assert_eq!(restored.agent_type_implementers, expected_implementers);
     }
 
     #[test]
