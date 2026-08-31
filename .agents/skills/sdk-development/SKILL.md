@@ -11,9 +11,12 @@ The SDKs in `sdks/` are **not part of the main build flow** (`cargo make build` 
 
 ### Crates
 
-- `golem-rust` — Runtime API wrappers (transactions, durability, agentic framework, value conversions)
-- `golem-rust-macro` — Procedural macros (`#[derive(IntoSchema)]`, `#[derive(FromSchema)]`,
-  `#[agent_definition]`, etc.)
+- `golem-rust` — Runtime API wrappers (transactions, durability, agentic framework, value
+  conversions). Also re-exports the `#[derive(IntoSchema)]` / `#[derive(FromSchema)]` derives, which
+  are defined by the root-workspace `golem-schema-derive` crate, not by `golem-rust-macro`.
+- `golem-rust-macro` — Procedural macros: `#[agent_definition]`, `#[agent_implementation]`,
+  `#[tool_definition]`, `#[golem_operation]`, and the `MultimodalSchema`, `ConfigSchema`,
+  `AllowedLanguages`, `AllowedMimeTypes`, and `ToolError` derives.
 
 ### Building
 

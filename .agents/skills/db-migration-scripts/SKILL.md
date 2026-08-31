@@ -19,8 +19,41 @@ when one of these already owns the table.
 ## PostgreSQL and SQLite
 
 Every schema change must be implemented for **both** PostgreSQL and SQLite. Add matching files to
-the owning `postgres/` and `sqlite/` directories with the same numbered prefix and filename. Use
-the appropriate SQL dialect for each database; do not assume PostgreSQL DDL is accepted by SQLite.
+the owning `postgres/` and `sqlite/` directories with the same numbered prefix and filename. Do not
+assume PostgreSQL DDL is accepted by SQLite.
+
+By default, prefer one schema shape for both engines — column types included — so that a single SQL
+string can serve both. This is a preference, not a requirement. Some roots deliberately diverge
+because the two engines play genuinely different roles there. The deciding question is whether that
+root's query layer is shared:
+
+| Migration root | Query layer | Convention |
+|---|---|---|
+| `golem-registry-service/db/migration/` | one impl expanded per backend by `#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]` | converge by default |
+| `golem-shard-manager/db/migration/` | same `trait_gen` pattern (`src/quota/quota_repo.rs`, `src/sharding/persistence.rs`) | converge by default |
+| `golem-worker-executor/db/migration/{indexed,keyvalue,scheduler}/` | separate `postgres.rs` / `sqlite.rs` under `src/storage/<subsystem>/` (alongside `multi_sqlite.rs`, `redis.rs`, `memory.rs`) | diverge where the engine calls for it |
+
+### Shared-query roots
+
+In the registry service and shard manager, each SQL literal is written once and expanded for both
+pools, so a divergent schema would force the query layer to be split per dialect. Keep the resulting
+schema identical whenever possible. SQLite's type affinity accepts `UUID`, `TIMESTAMP`, `BIGINT`,
+`BYTEA`, and `NUMERIC` verbatim, so use them in both. Reach for an engine-specific type
+(`BIGSERIAL` vs `INTEGER PRIMARY KEY AUTOINCREMENT`, `TEXT[]` vs `TEXT`) only where there is no
+common alternative.
+
+DDL *mechanics* may still differ where SQLite requires it — no `ALTER COLUMN ... TYPE` (drop and
+recreate), no multi-column `ADD COLUMN` (split the statements), no `GREATEST` (use `CASE`). Converge
+on the same end-state schema regardless: after `002_code_first_routes.sql` takes either path, both
+tables have the same columns, types, and constraint names.
+
+### Per-engine roots
+
+The worker-executor storage subsystems have fully separate implementations per backend, so their
+migrations are free to diverge and already do: `BIGINT`/`BYTEA`/`DOUBLE PRECISION` against
+`INTEGER`/`BLOB`/`REAL`, different primary-key column ordering, different indexes, and
+PostgreSQL-only autovacuum tuning. Tune each engine on its own terms here rather than forcing a
+shared shape.
 
 ## File Naming
 
@@ -39,9 +72,22 @@ Check both database directories and choose the same next number in each.
 - Read neighboring migrations before choosing types, constraint names, index names, quoting, and
   DDL structure. Naming is not globally uniform across all migration roots.
 - Do not create an extra index for a primary key; both databases already index it.
-- Keep PostgreSQL and SQLite query-visible schema names aligned even when their underlying types or
-  DDL differ.
+- Keep PostgreSQL and SQLite query-visible schema names aligned.
 - Use uppercase SQL keywords and match the indentation of the neighboring files.
+
+Index and constraint naming follows the owning root:
+
+- `golem-registry-service` and `golem-shard-manager` use `<table>_<column(s)>_<idx|uk>` for indexes
+  (`_idx` regular, `_uk` unique) and `<table>_pk` for primary key constraints:
+
+  ```sql
+  CREATE INDEX accounts_deleted_at_idx ON accounts (deleted_at);
+  CREATE UNIQUE INDEX accounts_email_uk ON accounts (email) WHERE deleted_at IS NULL;
+  CONSTRAINT accounts_pk PRIMARY KEY (account_id)
+  ```
+
+- `golem-worker-executor`'s `keyvalue` and `indexed` roots use an `idx_<...>` prefix instead; its
+  `scheduler` root uses the suffix style above. Match the files you are editing.
 
 ## No Compatibility Layer
 
