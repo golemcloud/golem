@@ -874,7 +874,7 @@ fn use_parse(s : String, position~ : Position) -> Int raise ParseError {
 }
 
 ///|
-/// Use try! to abort if it raises, no raise in the signature 
+/// Use try! to abort if it raises, no raise in the signature
 fn use_parse2(position~ : Position) -> Int {
   let x = try! parse_int("123", position~) // label punning
   x * 2
@@ -909,13 +909,13 @@ test "integer and char literal overloading disambiguation via type in the curren
     1, 1, 1, 1, 1,
   )
   // The literal `1` is overloaded based on the expected type in the current context.
-  // compile time error if the literal cannot be represented in the target type, 
+  // compile time error if the literal cannot be represented in the target type,
   // e.g. let a7 : Byte = 256 // ❌ won't compile, 256 exceeds Byte max value 255
   assert_eq(int, uint16.to_int())
   let (a1, a2, a3) : (Int, Char, UInt16) = ('b', 'b', 'b')
-  // char literal overloading, `a1` will be the unicode value of 'b', 
-  // compile time error when the literal cannot be represented in the target type 
-  // e.g, let a6 : UInt16 = '𐍈' // ❌ won't compile, '𐍈' is U+10348, which exceeds UInt16 max value 0xffff  
+  // char literal overloading, `a1` will be the unicode value of 'b',
+  // compile time error when the literal cannot be represented in the target type
+  // e.g, let a6 : UInt16 = '𐍈' // ❌ won't compile, '𐍈' is U+10348, which exceeds UInt16 max value 0xffff
   let a4 : Byte = b'b' // Byte literal
 }
 ```

@@ -1356,11 +1356,11 @@ fn canonical_command(
 
 ///|
 test "canonical MoonBit tools preserve the shared Rust and Scala contract" {
-  let package = @lib.PackageInfo::{
+  let package_info = @lib.PackageInfo::{
     rel_path: "golem_moonbit_examples",
     dir: "../golem_sdk_example1/golem_moonbit_examples",
   }
-  let tools = @lib.parse_tools(@lib.scan_package(package).files)
+  let tools = @lib.parse_tools(@lib.scan_package(package_info).files)
   assert_eq(tools.length(), 5)
   let grep = canonical_tool(tools, "canonical-grep")
   assert_eq(grep.version, Some("2.0.0"))
@@ -1374,9 +1374,15 @@ test "canonical MoonBit tools preserve the shared Rust and Scala contract" {
   assert_true(
     grep_root.params.any(param => param.1 is @lib.Hidden(OutputStream)),
   )
-  inspect(
-    grep_root.errors.map(error => "\{error.name}:\{error.exit_code}"),
-    content="[InvalidPattern:Some(2), NoMatch:Some(1)]",
+  debug_inspect(
+    grep_root.errors.map(error => {
+      let exit_code = match error.exit_code {
+        Some(code) => "Some(" + code.to_string() + ")"
+        None => "None"
+      }
+      "\{error.name}:\{exit_code}"
+    }),
+    content="[\"InvalidPattern:Some(2)\", \"NoMatch:Some(1)\"]",
   )
   let git = canonical_tool(tools, "canonical-git")
   assert_true(git.root_command is None)
@@ -1386,8 +1392,11 @@ test "canonical MoonBit tools preserve the shared Rust and Scala contract" {
   guard commit.result is Some(result) else {
     fail("canonical commit must define result formatters")
   }
-  inspect(result.formatters, content="[human, porcelain, json]")
-  inspect(result.defaults, content="[human]")
+  debug_inspect(
+    result.formatters,
+    content="[\"human\", \"porcelain\", \"json\"]",
+  )
+  debug_inspect(result.defaults, content="[\"human\"]")
   let log = canonical_command(git, "log")
   assert_eq(log.read_only, Some(true))
   assert_eq(log.idempotent, Some(true))

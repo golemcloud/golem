@@ -15,4 +15,3 @@ pub fn get_directories() -> Array[(@types.Descriptor, String)]
 // Type aliases
 
 // Traits
-

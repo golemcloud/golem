@@ -67,7 +67,7 @@ fn json_bool(b : Bool) -> Json {
 
 ///|
 fn node(kind : String, value : Json) -> Json {
-  let m : Map[String, Json] = {}
+  let m : Map[String, Json] = Map([])
   m["kind"] = Json::string(kind)
   m["value"] = value
   Json::object(m)
@@ -75,7 +75,7 @@ fn node(kind : String, value : Json) -> Json {
 
 ///|
 fn obj(fields : Array[(String, Json)]) -> Json {
-  let m : Map[String, Json] = {}
+  let m : Map[String, Json] = Map([])
   for f in fields {
     m[f.0] = f.1
   }
@@ -389,7 +389,7 @@ pub fn schema_value_from_json(j : Json) -> SchemaValue raise {
     "binary" => {
       let m = expect_object(value)
       let arr = expect_array(get_field(m, "bytes"))
-      let buf = @buffer.new()
+      let buf = Buffer()
       for b in arr {
         buf.write_byte(parse_int_range(b, 0, 255, "byte").to_byte())
       }

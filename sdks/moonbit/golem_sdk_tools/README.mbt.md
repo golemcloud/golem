@@ -290,8 +290,8 @@ and `moonbit-agent-tool-middleware` for combined components.
 ## Requirements
 
 - MoonBit toolchain (`moon`)
-- `moonbitlang/parser` — for parsing source files and constructing AST
-- `moonbitlang/formatter` — for emitting generated MoonBit source
+- `moonbitlang/parser` — for parsing source files, constructing AST, and formatting generated source
+- `moonbitlang/lexer` — for lexer primitives used by the parser integration
 
 ## License
 

@@ -108,7 +108,7 @@ fn http_endpoint_str(endpoint : HttpEndpointInfo?) -> String {
         "{ query_param_name: \"\{escape_string_lit(q.query_param_name)}\", variable_name: \"\{escape_string_lit(q.variable_name)}\" }"
       })
       let query = "[" + query_parts.join(", ") + "]"
-      "[{ http_method: \{http_method_str(ep.method)}, path_suffix: \{path_suffix}, header_vars: \{header_vars}, query_vars: \{query}, auth_details: \{auth_details_str(ep.auth)}, cors_options: \{cors_options_str(ep.cors)} }]"
+      "[{ http_method: \{http_method_str(ep.http_method)}, path_suffix: \{path_suffix}, header_vars: \{header_vars}, query_vars: \{query}, auth_details: \{auth_details_str(ep.auth)}, cors_options: \{cors_options_str(ep.cors)} }]"
     }
   }
 }
