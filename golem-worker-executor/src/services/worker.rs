@@ -328,20 +328,27 @@ pub trait WorkerService: Send + Sync {
     /// flusher). The worker is added when [`should_track_for_assignment_recovery`] holds and
     /// removed otherwise. No-op for ephemeral workers.
     ///
-    /// Returns the storage error if the index could not be updated. The index is not worth aborting
-    /// the executor over: a crash loses the same entry the failed write would have added, plus every
-    /// invocation running on the node.
+    /// Returns the storage error if the index could not be updated. No caller may carry on as if
+    /// the worker were tracked: an agent missing from this index is an agent that a crash or a
+    /// reshard will not resume, so it silently stops running with nothing recording that it should
+    /// be. [`update_cached_status`](Self::update_cached_status) fails the operation it was part of,
+    /// and the hot path (`AgentStatusFlusher::on_status_changed`) treats it as fatal.
     async fn set_assignment_tracking(
         &self,
         owned_agent_id: &OwnedAgentId,
         status_value: &AgentStatusRecord,
     ) -> Result<(), String>;
 
-    /// Convenience cold-path helper that writes the blob *and* updates the recovery index in one
-    /// call. Hot paths use the background flusher (blob) together with [`set_assignment_tracking`]
-    /// (index) instead.
+    /// Convenience cold-path helper that updates the recovery index *and* writes the blob in one
+    /// call. Hot paths use [`set_assignment_tracking`](Self::set_assignment_tracking) (index)
+    /// together with the background flusher (blob) instead.
     ///
-    /// The blob write is reported rather than fatal. Both callers reach this from a path that can
+    /// The index is updated first and its failure is not swallowed. Both callers go on to make the
+    /// worker runnable, and a worker that runs while missing from `RunningWorkers` is one that no
+    /// crash or reshard will resume - reporting success here would hand the caller that state
+    /// silently.
+    ///
+    /// Both failures are returned rather than fatal. Both callers reach this from a path that can
     /// return an error, and a storage blip here would otherwise abort an executor holding live
     /// agents - forcing every one of them to replay from oplog or snapshot, which is far more
     /// expensive than failing the one operation that could not write.
@@ -351,14 +358,8 @@ pub trait WorkerService: Send + Sync {
         previous_status: Option<&AgentStatusRecord>,
         status_value: AgentStatusRecord,
     ) -> Result<(), String> {
-        if let Err(err) = self
-            .set_assignment_tracking(owned_agent_id, &status_value)
-            .await
-        {
-            error!(
-                "Failed to update the running workers recovery index for {owned_agent_id}: {err}"
-            );
-        }
+        self.set_assignment_tracking(owned_agent_id, &status_value)
+            .await?;
         self.write_cached_status(owned_agent_id, previous_status, status_value)
             .await
             .map(|_| ())

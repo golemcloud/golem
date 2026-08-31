@@ -849,11 +849,12 @@ mod tests {
         assert_ne!(a.queue_id, b.queue_id);
     }
 
-    /// A failed recovery-index update is logged, not fatal: the cached status is still written.
-    /// Aborting instead would drop every invocation on the node and leave the index exactly as
-    /// stale as the failed write left it.
+    /// A failed recovery-index update fails the whole call, and the blob is not written after it.
+    /// Reporting success would let the caller go on to run a worker that `RunningWorkers` does not
+    /// list - one that no crash or reshard would resume - while the blob left behind makes it look
+    /// accounted for.
     #[test]
-    async fn update_cached_status_writes_the_status_even_when_tracking_fails() {
+    async fn update_cached_status_fails_when_tracking_fails() {
         let service = MockWorkerService::arc();
         service.set_fail_tracking(true);
 
@@ -861,8 +862,24 @@ mod tests {
             .update_cached_status(&agent_id(), None, status(AgentStatus::Running, 1))
             .await;
 
-        assert_eq!(result, Ok(()));
+        assert_eq!(result, Err("injected tracking failure".to_string()));
         assert_eq!(service.tracking_count(), 1);
-        assert_eq!(service.write_count(), 1);
+        assert_eq!(service.write_count(), 0);
+    }
+
+    /// The blob write is reported too: it is the caller's only signal that the status it just
+    /// computed did not reach storage.
+    #[test]
+    async fn update_cached_status_reports_a_failed_status_write() {
+        let service = MockWorkerService::arc();
+        service.set_fail(true);
+
+        let result = service
+            .update_cached_status(&agent_id(), None, status(AgentStatus::Running, 1))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(service.tracking_count(), 1);
+        assert_eq!(service.write_count(), 0);
     }
 }
