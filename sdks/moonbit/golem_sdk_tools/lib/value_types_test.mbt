@@ -433,7 +433,9 @@ test "parse_value_types rejects multimodal in golem_schema payload" {
     #|pub(all) struct Wrapper {
     #|  data : @multimodal.Multimodal[Foo]
     #|}
-  let result : Result[_, _] = try? parse_value_types([("w.mbt", content)])
+  let result = capture_agent_parse_error(fn() raise AgentParseError {
+    parse_value_types([("w.mbt", content)])
+  })
   debug_inspect(
     result,
     content=(
@@ -450,7 +452,9 @@ test "parse_value_types rejects multimodal nested in golem_schema variant" {
     #|pub(all) enum Shape {
     #|  Tagged(Array[@multimodal.Multimodal[Foo]])
     #|}
-  let result : Result[_, _] = try? parse_value_types([("s.mbt", content)])
+  let result = capture_agent_parse_error(fn() raise AgentParseError {
+    parse_value_types([("s.mbt", content)])
+  })
   debug_inspect(
     result,
     content=(

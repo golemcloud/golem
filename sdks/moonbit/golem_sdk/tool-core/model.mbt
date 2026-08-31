@@ -215,17 +215,17 @@ pub fn ToolDef::to_tool(
 ) -> @toolCommon.Tool raise ToolBuildError {
   guard self.commands.length() > 0 else { raise EmptyCommandTree }
   let defs = @model.merge_graph_defs(self.collect_graphs()) catch {
-    e => raise SchemaModelError(e.to_string())
+    e => raise SchemaModelError(Repr(e).to_string())
   }
   let encoder = @model.GraphEncoder::new(defs) catch {
-    e => raise SchemaModelError(e.to_string())
+    e => raise SchemaModelError(Repr(e).to_string())
   }
   let nodes : Array[@toolCommon.CommandNode] = []
   for command in self.commands {
     nodes.push(command.to_command_node(encoder))
   }
   let schema = encoder.finish() catch {
-    e => raise SchemaModelError(e.to_string())
+    e => raise SchemaModelError(Repr(e).to_string())
   }
   {
     version: self.version,
@@ -327,7 +327,7 @@ fn GlobalsDef::to_globals(
   for option in self.options {
     options.push(option.to_option_spec(encoder))
   }
-  { options, flags: self.flags }
+  { options, flags: self.flags, }
 }
 
 ///|
@@ -469,7 +469,7 @@ fn ConstraintDef::to_constraint(
     MutexGroups(groups) => {
       let wit_groups : Array[@toolCommon.RefGroup] = []
       for group in groups {
-        wit_groups.push(@toolCommon.RefGroup::{ refs: refs_to_wit(group.refs) })
+        wit_groups.push(@toolCommon.RefGroup::{ refs: refs_to_wit(group.refs), })
       }
       @toolCommon.Constraint::MutexGroups(wit_groups)
     }
@@ -551,7 +551,7 @@ fn encode_graph_root(
   graph : @model.SchemaGraph,
 ) -> Int raise ToolBuildError {
   encoder.encode_type(graph.root) catch {
-    e => raise SchemaModelError(e.to_string())
+    e => raise SchemaModelError(Repr(e).to_string())
   }
 }
 
@@ -570,6 +570,6 @@ fn schema_value_to_wit(
   value : @model.SchemaValue,
 ) -> @types.SchemaValueTree raise ToolBuildError {
   @model.schema_value_to_wit(value) catch {
-    e => raise SchemaModelError(e.to_string())
+    e => raise SchemaModelError(Repr(e).to_string())
   }
 }

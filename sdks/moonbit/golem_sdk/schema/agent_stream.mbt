@@ -2,6 +2,7 @@
 /// A demand-driven agent stream. The native component reader is retained in
 /// the schema value and transferred affinely; no producer task or buffer is
 /// introduced by this wrapper.
+#warnings("-unused_type_variable")
 pub(all) struct AgentStream[T] {
   priv handle : @model.GuestSchemaValueStreamHandle
 }
@@ -10,7 +11,7 @@ pub(all) struct AgentStream[T] {
 pub fn[T] AgentStream::from_reader(
   reader : @async-core.Stream[@types.SchemaValueTree],
 ) -> AgentStream[T] {
-  { handle: @model.GuestSchemaValueStreamHandle::from_native(reader) }
+  { handle: @model.GuestSchemaValueStreamHandle::from_native(reader), }
 }
 
 ///|
@@ -28,12 +29,15 @@ pub async fn[T : FromSchema] AgentStream::read(
 ) -> T? raise FromSchemaError {
   let reader = self.handle.take_or_unwrap_native() catch {
     e =>
-      raise FromSchemaError::custom("agent stream is no longer readable: \{e}")
+      raise FromSchemaError::custom(
+        "agent stream is no longer readable: \{repr(e)}",
+      )
   }
-  let chunk = reader.read(1) catch {
-    e => {
-      self.handle.put_native(reader)
-      raise FromSchemaError::custom("failed reading agent stream: \{e}")
+  let chunk = {
+    errdefer self.handle.put_native(reader)
+    reader.read(1) catch {
+      e =>
+        raise FromSchemaError::custom("failed reading agent stream: \{repr(e)}")
     }
   }
   // Reassociate the exact same reader after each pull.
@@ -47,16 +51,11 @@ pub async fn[T : FromSchema] AgentStream::read(
     Some(values) => {
       let drops = @model_host.resource_drops()
       let value = @model_host.schema_value_from_wit(values[0]) catch {
-        e => raise FromSchemaError::custom("invalid agent stream item: \{e}")
+        e =>
+          raise FromSchemaError::custom("invalid agent stream item: \{repr(e)}")
       }
-      try Some(from_value_as(value)) catch {
-        e => {
-          value.release_resources(drops)
-          raise e
-        }
-      } noraise {
-        result => result
-      }
+      errdefer value.release_resources(drops)
+      Some(from_value_as(value))
     }
   }
 }

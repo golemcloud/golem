@@ -27,7 +27,7 @@ fn decode_test_value(
 ///|
 /// Round-trip a standalone type by wrapping it in a defs-less graph.
 fn rt_type(st : SchemaType) -> SchemaType raise {
-  schema_graph_from_wit(schema_graph_to_wit({ defs: [], root: st })).root
+  schema_graph_from_wit(schema_graph_to_wit({ defs: [], root: st, })).root
 }
 
 ///|
@@ -42,7 +42,7 @@ fn rt_graph(g : SchemaGraph) -> SchemaGraph raise {
 
 ///|
 fn encoded_body(st : SchemaType) -> @types.SchemaTypeBody raise {
-  let wit = schema_graph_to_wit({ defs: [], root: st })
+  let wit = schema_graph_to_wit({ defs: [], root: st, })
   wit.type_nodes[wit.root].body
 }
 
@@ -67,7 +67,7 @@ fn nr(
   max? : @types.NumericBound,
   unit? : String,
 ) -> @types.NumericRestrictions {
-  { min, max, unit }
+  { min, max, unit, }
 }
 
 ///|
@@ -116,38 +116,140 @@ test "numeric restrictions golden vectors round-trip" {
     schema_type(S8(Some(nr(min=sb(-1L), max=sb(1L))))),
     schema_type(F32(Some(nr(max=fb(4_609_434_218_613_702_656UL))))),
   ]
-  inspect(
+  debug_inspect(
     cases.map(rt_type),
     content=(
-      #|[{body: U32(None), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: U32(Some({min: Some(Unsigned(1)), max: None, unit: None})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: U32(Some({min: Some(Unsigned(1)), max: None, unit: Some(items)})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: U32(Some({min: Some(Unsigned(0)), max: Some(Unsigned(100)), unit: None})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: U32(Some({min: Some(Unsigned(0)), max: Some(Unsigned(100)), unit: Some(percent)})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: S64(Some({min: Some(Signed(0)), max: Some(Signed(9223372036854775807)), unit: None})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: S64(Some({min: Some(Signed(0)), max: Some(Signed(9223372036854775807)), unit: Some(ns)})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: U64(Some({min: Some(Unsigned(18446744073709551614)), max: Some(Unsigned(18446744073709551615)), unit: None})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: U64(Some({min: Some(Unsigned(18446744073709551614)), max: Some(Unsigned(18446744073709551615)), unit: Some(bytes)})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: F64(Some({min: Some(FloatBits(0)), max: None, unit: None})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: F64(Some({min: Some(FloatBits(0)), max: None, unit: Some(seconds)})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: S8(Some({min: Some(Signed(-1)), max: Some(Signed(1)), unit: None})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, {body: F32(Some({min: None, max: Some(FloatBits(4609434218613702656)), unit: None})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}]
+      #|[
+      #|  {
+      #|    body: U32(None),
+      #|    metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|  },
+      #|  {
+      #|    body: U32(Some({ min: Some(Unsigned(1)), max: None, unit: None })),
+      #|    metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|  },
+      #|  {
+      #|    body: U32(Some({ min: Some(Unsigned(1)), max: None, unit: Some("items") })),
+      #|    metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|  },
+      #|  {
+      #|    body: U32(Some({ min: Some(Unsigned(0)), max: Some(Unsigned(100)), unit: None })),
+      #|    metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|  },
+      #|  {
+      #|    body: U32(
+      #|      Some(
+      #|        {
+      #|          min: Some(Unsigned(0)),
+      #|          max: Some(Unsigned(100)),
+      #|          unit: Some("percent"),
+      #|        },
+      #|      ),
+      #|    ),
+      #|    metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|  },
+      #|  {
+      #|    body: S64(
+      #|      Some(
+      #|        {
+      #|          min: Some(Signed(0)),
+      #|          max: Some(Signed(9223372036854775807)),
+      #|          unit: None,
+      #|        },
+      #|      ),
+      #|    ),
+      #|    metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|  },
+      #|  {
+      #|    body: S64(
+      #|      Some(
+      #|        {
+      #|          min: Some(Signed(0)),
+      #|          max: Some(Signed(9223372036854775807)),
+      #|          unit: Some("ns"),
+      #|        },
+      #|      ),
+      #|    ),
+      #|    metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|  },
+      #|  {
+      #|    body: U64(
+      #|      Some(
+      #|        {
+      #|          min: Some(Unsigned(18446744073709551614)),
+      #|          max: Some(Unsigned(18446744073709551615)),
+      #|          unit: None,
+      #|        },
+      #|      ),
+      #|    ),
+      #|    metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|  },
+      #|  {
+      #|    body: U64(
+      #|      Some(
+      #|        {
+      #|          min: Some(Unsigned(18446744073709551614)),
+      #|          max: Some(Unsigned(18446744073709551615)),
+      #|          unit: Some("bytes"),
+      #|        },
+      #|      ),
+      #|    ),
+      #|    metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|  },
+      #|  {
+      #|    body: F64(Some({ min: Some(FloatBits(0)), max: None, unit: None })),
+      #|    metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|  },
+      #|  {
+      #|    body: F64(Some({ min: Some(FloatBits(0)), max: None, unit: Some("seconds") })),
+      #|    metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|  },
+      #|  {
+      #|    body: S8(Some({ min: Some(Signed(-1)), max: Some(Signed(1)), unit: None })),
+      #|    metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|  },
+      #|  {
+      #|    body: F32(Some({ min: None, max: Some(FloatBits(4609434218613702656)), unit: None })),
+      #|    metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|  },
+      #|]
     ),
   )
 }
 
 ///|
 test "numeric restrictions canonicalization" {
-  inspect(
+  debug_inspect(
     encoded_body(schema_type(U32(Some(nr())))),
     content=(
       #|U32Type(None)
     ),
   )
-  inspect(
+  debug_inspect(
     rt_type(schema_type(U32(Some(nr(unit=""))))),
     content=(
-      #|{body: U32(None), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}
+      #|{
+      #|  body: U32(None),
+      #|  metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|}
     ),
   )
-  inspect(
+  debug_inspect(
     rt_type(schema_type(U32(Some(nr(min=ub(1UL), unit=""))))),
     content=(
-      #|{body: U32(Some({min: Some(Unsigned(1)), max: None, unit: None})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}
+      #|{
+      #|  body: U32(Some({ min: Some(Unsigned(1)), max: None, unit: None })),
+      #|  metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|}
     ),
   )
-  inspect(
+  debug_inspect(
     rt_type(schema_type(F64(Some(nr(min=fb(9_223_372_036_854_775_808UL)))))),
     content=(
-      #|{body: F64(Some({min: Some(FloatBits(0)), max: None, unit: None})), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}
+      #|{
+      #|  body: F64(Some({ min: Some(FloatBits(0)), max: None, unit: None })),
+      #|  metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|}
     ),
   )
 }
@@ -193,7 +295,7 @@ test "composite types round-trip" {
   assert_eq(rt_type(inner), inner)
 
   let secret = schema_type(
-    Secret({ inner: schema_type(String), category: Some("api-key") }),
+    Secret({ inner: schema_type(String), category: Some("api-key"), }),
   )
   assert_eq(rt_type(secret), secret)
 }
@@ -222,8 +324,8 @@ test "values round-trip (primitives, composites, semantic)" {
     List([S32(1), S32(2), S32(3)]),
     FixedList([U8(1), U8(2)]),
     Map([
-      { key: String("a"), value: S32(1) },
-      { key: String("b"), value: S32(2) },
+      { key: String("a"), value: S32(1), },
+      { key: String("b"), value: S32(2), },
     ]),
     Option(Some(Bool(false))),
     Option(None),
@@ -234,9 +336,9 @@ test "values round-trip (primitives, composites, semantic)" {
     Binary(([0, 1, 255] : FixedArray[Byte]), Some("image/png")),
     Path("/tmp/x"),
     Url("https://golem.cloud"),
-    Datetime({ seconds: 100L, nanoseconds: 5U }),
+    Datetime({ seconds: 100L, nanoseconds: 5U, }),
     Duration(-123_456L),
-    Quantity({ mantissa: 1234L, scale: 2, unit: "kg" }),
+    Quantity({ mantissa: 1234L, scale: 2, unit: "kg", }),
     Union("circle", S32(42)),
   ])
   assert_eq(rt_value(v), v)
@@ -247,8 +349,8 @@ test "Ref maps to ref-type by first-seen def index" {
   // Definitions keep first-seen order: Zulu=0, Bravo=1 (not sorted).
   let g : SchemaGraph = {
     defs: [
-      { id: "Zulu", name: None, body: schema_type(String) },
-      { id: "Bravo", name: None, body: schema_type(S32(None)) },
+      { id: "Zulu", name: None, body: schema_type(String), },
+      { id: "Bravo", name: None, body: schema_type(S32(None)), },
     ],
     root: schema_type(
       Tuple([schema_type(Ref("Zulu")), schema_type(Ref("Bravo"))]),
@@ -256,7 +358,12 @@ test "Ref maps to ref-type by first-seen def index" {
   }
   let wit = schema_graph_to_wit(g)
   // Defs are emitted in first-seen order.
-  inspect(wit.defs.map(d => d.id), content="[Zulu, Bravo]")
+  debug_inspect(
+    wit.defs.map(d => d.id),
+    content=(
+      #|["Zulu", "Bravo"]
+    ),
+  )
   // The tuple's first element references Zulu (def-index 0), second Bravo (1).
   let refs = wit.type_nodes
     .iter()
@@ -267,7 +374,7 @@ test "Ref maps to ref-type by first-seen def index" {
       }
     })
     .collect()
-  inspect(refs, content="[0, 1]")
+  debug_inspect(refs, content="[0, 1]")
   // Full structural round-trip preserves the Refs.
   assert_eq(rt_graph(g), g)
 }
@@ -319,20 +426,24 @@ test "mutually-recursive types close via reserve/commit" {
 
 ///|
 test "encode rejects Ref to unknown type id" {
-  let g : SchemaGraph = { defs: [], root: schema_type(Ref("Ghost")) }
-  let r = try? schema_graph_to_wit(g)
+  let g : SchemaGraph = { defs: [], root: schema_type(Ref("Ghost")), }
+  let r = try schema_graph_to_wit(g) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(EncodeError(msg)) else {
-    fail("expected EncodeError, got \{r}")
+    fail("expected EncodeError, got \{repr(r)}")
   }
   assert_true(msg.contains("unknown type id"))
 }
 
 ///|
 test "decode rejects out-of-range root index" {
-  let bad : @types.SchemaGraph = { type_nodes: [], defs: [], root: 0 }
-  let r = try? schema_graph_from_wit(bad)
+  let bad : @types.SchemaGraph = { type_nodes: [], defs: [], root: 0, }
+  let r = try schema_graph_from_wit(bad) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(DecodeError(msg)) else {
-    fail("expected DecodeError, got \{r}")
+    fail("expected DecodeError, got \{repr(r)}")
   }
   assert_true(msg.contains("out of range"))
 }
@@ -340,13 +451,15 @@ test "decode rejects out-of-range root index" {
 ///|
 test "decode rejects out-of-range child index" {
   let bad : @types.SchemaGraph = {
-    type_nodes: [{ body: @types.ListType(9), metadata: empty_metadata() }],
+    type_nodes: [{ body: @types.ListType(9), metadata: empty_metadata(), }],
     defs: [],
     root: 0,
   }
-  let r = try? schema_graph_from_wit(bad)
+  let r = try schema_graph_from_wit(bad) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(DecodeError(msg)) else {
-    fail("expected DecodeError, got \{r}")
+    fail("expected DecodeError, got \{repr(r)}")
   }
   assert_true(msg.contains("out of range"))
 }
@@ -360,14 +473,16 @@ test "decode rejects duplicate def id" {
   let bad : @types.SchemaGraph = {
     type_nodes: [node],
     defs: [
-      { id: "Dup", name: None, body: 0 },
-      { id: "Dup", name: None, body: 0 },
+      { id: "Dup", name: None, body: 0, },
+      { id: "Dup", name: None, body: 0, },
     ],
     root: 0,
   }
-  let r = try? schema_graph_from_wit(bad)
+  let r = try schema_graph_from_wit(bad) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(DecodeError(msg)) else {
-    fail("expected DecodeError, got \{r}")
+    fail("expected DecodeError, got \{repr(r)}")
   }
   assert_true(msg.contains("duplicate def id"))
 }
@@ -376,23 +491,27 @@ test "decode rejects duplicate def id" {
 test "decode rejects a structural cycle in type nodes" {
   // Node 0 is a list whose element is node 0 (a self back-edge).
   let bad : @types.SchemaGraph = {
-    type_nodes: [{ body: @types.ListType(0), metadata: empty_metadata() }],
+    type_nodes: [{ body: @types.ListType(0), metadata: empty_metadata(), }],
     defs: [],
     root: 0,
   }
-  let r = try? schema_graph_from_wit(bad)
+  let r = try schema_graph_from_wit(bad) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(DecodeError(msg)) else {
-    fail("expected DecodeError, got \{r}")
+    fail("expected DecodeError, got \{repr(r)}")
   }
   assert_true(msg.contains("cyclic"))
 }
 
 ///|
 test "decode rejects out-of-range value node index" {
-  let bad : @types.SchemaValueTree = { value_nodes: [], root: 3 }
-  let r = try? decode_test_value(bad)
+  let bad : @types.SchemaValueTree = { value_nodes: [], root: 3, }
+  let r = try decode_test_value(bad) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(DecodeError(msg)) else {
-    fail("expected DecodeError, got \{r}")
+    fail("expected DecodeError, got \{repr(r)}")
   }
   assert_true(msg.contains("out of range"))
 }
@@ -401,9 +520,11 @@ test "decode rejects out-of-range value node index" {
 test "builder finish rejects an uncommitted reservation" {
   let b = SchemaBuilder::new()
   b.reserve("Pending")
-  let r = try? b.finish()
+  let r = try b.finish() |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(BuilderError(msg)) else {
-    fail("expected BuilderError, got \{r}")
+    fail("expected BuilderError, got \{repr(r)}")
   }
   assert_true(msg.contains("never committed"))
 }
@@ -415,23 +536,25 @@ test "merge_agent_graphs dedups shared defs and rejects conflicts" {
     name: None,
     body: schema_type(S32(None)),
   }
-  let g1 : SchemaGraph = { defs: [shared], root: schema_type(Ref("Shared")) }
+  let g1 : SchemaGraph = { defs: [shared], root: schema_type(Ref("Shared")), }
   let g2 : SchemaGraph = {
     defs: [shared],
     root: schema_type(List(schema_type(Ref("Shared")))),
   }
   let merged = merge_agent_graphs([g1, g2])
-  inspect(merged.defs.length(), content="1")
-  inspect(merged.roots.length(), content="2")
+  debug_inspect(merged.defs.length(), content="1")
+  debug_inspect(merged.roots.length(), content="2")
 
   // A conflicting body for the same id is rejected.
   let g3 : SchemaGraph = {
-    defs: [{ id: "Shared", name: None, body: schema_type(String) }],
+    defs: [{ id: "Shared", name: None, body: schema_type(String), }],
     root: schema_type(Ref("Shared")),
   }
-  let r = try? merge_agent_graphs([g1, g3])
+  let r = try merge_agent_graphs([g1, g3]) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(MergeConflict(id)) else {
-    fail("expected MergeConflict, got \{r}")
+    fail("expected MergeConflict, got \{repr(r)}")
   }
   assert_eq(id, "Shared")
 }
@@ -469,8 +592,8 @@ test "semantic and capability types round-trip" {
     inner: schema_type(String),
     category: Some("api-key"),
   }
-  let quota_s : @types.QuotaTokenSpec = { resource_name: Some("cpu") }
-  let card_s : @types.PermissionCardSpec = { polymorphic: true }
+  let quota_s : @types.QuotaTokenSpec = { resource_name: Some("cpu"), }
+  let card_s : @types.PermissionCardSpec = { polymorphic: true, }
   let branch_a : UnionBranch = {
     tag: "a",
     body: schema_type(S32(None)),
@@ -510,7 +633,7 @@ test "encode_merged_agent_graph shares one pool across roots" {
     name: None,
     body: schema_type(S32(None)),
   }
-  let g1 : SchemaGraph = { defs: [shared], root: schema_type(Ref("Shared")) }
+  let g1 : SchemaGraph = { defs: [shared], root: schema_type(Ref("Shared")), }
   let g2 : SchemaGraph = {
     defs: [shared],
     root: schema_type(List(schema_type(Ref("Shared")))),
@@ -518,8 +641,8 @@ test "encode_merged_agent_graph shares one pool across roots" {
   let merged = merge_agent_graphs([g1, g2])
   let enc = encode_merged_agent_graph(merged)
   // Two roots, in input order; shared def appears once.
-  inspect(enc.root_indices.length(), content="2")
-  inspect(enc.graph.defs.length(), content="1")
+  debug_inspect(enc.root_indices.length(), content="2")
+  debug_inspect(enc.graph.defs.length(), content="1")
   // All root indices are valid type-node indices into the shared pool.
   for idx in enc.root_indices {
     assert_true(idx >= 0 && idx < enc.graph.type_nodes.length())
@@ -528,12 +651,12 @@ test "encode_merged_agent_graph shares one pool across roots" {
   guard enc.graph.type_nodes[enc.graph.root].body is @types.RecordType(fields) else {
     fail("expected sentinel empty-record root")
   }
-  inspect(fields.length(), content="0")
+  debug_inspect(fields.length(), content="0")
   // Decode defs once, then each real root against the shared graph (public
   // multi-root decoder API).
   let dec = GraphDecoder::new(enc.graph)
   let defs = dec.decode_defs()
-  inspect(defs.length(), content="1")
+  debug_inspect(defs.length(), content="1")
   assert_eq(dec.decode_type_at(enc.root_indices[0]), g1.root)
   assert_eq(dec.decode_type_at(enc.root_indices[1]), g2.root)
 }
@@ -544,9 +667,11 @@ test "decode rejects out-of-range value child index" {
     value_nodes: [@types.RecordValue([5])],
     root: 0,
   }
-  let r = try? decode_test_value(bad)
+  let r = try decode_test_value(bad) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(DecodeError(msg)) else {
-    fail("expected DecodeError, got \{r}")
+    fail("expected DecodeError, got \{repr(r)}")
   }
   assert_true(msg.contains("out of range"))
 }
@@ -557,30 +682,36 @@ test "decode rejects a value structural cycle" {
     value_nodes: [@types.ListValue([0])],
     root: 0,
   }
-  let r = try? decode_test_value(bad)
+  let r = try decode_test_value(bad) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(DecodeError(msg)) else {
-    fail("expected DecodeError, got \{r}")
+    fail("expected DecodeError, got \{repr(r)}")
   }
   assert_true(msg.contains("cyclic"))
 }
 
 ///|
 test "datetime nanoseconds must be < 1e9 (encode + decode)" {
-  let v : SchemaValue = Datetime({ seconds: 0L, nanoseconds: 1_000_000_000U })
-  let re = try? schema_value_to_wit(v)
+  let v : SchemaValue = Datetime({ seconds: 0L, nanoseconds: 1_000_000_000U, })
+  let re = try schema_value_to_wit(v) |> Ok catch {
+    e => Err(e)
+  }
   guard re is Err(EncodeError(em)) else {
-    fail("expected EncodeError, got \{re}")
+    fail("expected EncodeError, got \{repr(re)}")
   }
   assert_true(em.contains("datetime"))
   let bad : @types.SchemaValueTree = {
     value_nodes: [
-      @types.DatetimeValue({ seconds: 0L, nanoseconds: 1_000_000_000U }),
+      @types.DatetimeValue({ seconds: 0L, nanoseconds: 1_000_000_000U, }),
     ],
     root: 0,
   }
-  let rd = try? decode_test_value(bad)
+  let rd = try decode_test_value(bad) |> Ok catch {
+    e => Err(e)
+  }
   guard rd is Err(DecodeError(dm)) else {
-    fail("expected DecodeError, got \{rd}")
+    fail("expected DecodeError, got \{repr(rd)}")
   }
   assert_true(dm.contains("datetime"))
 }
@@ -589,16 +720,18 @@ test "datetime nanoseconds must be < 1e9 (encode + decode)" {
 test "narrow integer values are range-checked" {
   let bad : Array[SchemaValue] = [S8(128), S8(-129), S16(32768), U16(65536U)]
   for v in bad {
-    let r = try? schema_value_to_wit(v)
+    let r = try schema_value_to_wit(v) |> Ok catch {
+      e => Err(e)
+    }
     guard r is Err(EncodeError(_)) else {
-      fail("expected EncodeError for out-of-range value, got \{r}")
+      fail("expected EncodeError for out-of-range value, got \{repr(r)}")
     }
   }
   // In-range boundary values still encode.
-  assert_true((try? schema_value_to_wit(S8(127))) is Ok(_))
-  assert_true((try? schema_value_to_wit(S8(-128))) is Ok(_))
-  assert_true((try? schema_value_to_wit(S16(-32768))) is Ok(_))
-  assert_true((try? schema_value_to_wit(U16(65535U))) is Ok(_))
+  schema_value_to_wit(S8(127)) |> ignore
+  schema_value_to_wit(S8(-128)) |> ignore
+  schema_value_to_wit(S16(-32768)) |> ignore
+  schema_value_to_wit(U16(65535U)) |> ignore
 }
 
 ///|
@@ -610,10 +743,12 @@ test "narrow integer values are range-checked on decode" {
     @types.U16Value(65536U),
   ]
   for node in bad {
-    let tree : @types.SchemaValueTree = { value_nodes: [node], root: 0 }
-    let r = try? decode_test_value(tree)
+    let tree : @types.SchemaValueTree = { value_nodes: [node], root: 0, }
+    let r = try decode_test_value(tree) |> Ok catch {
+      e => Err(e)
+    }
     guard r is Err(DecodeError(_)) else {
-      fail("expected DecodeError for out-of-range value, got \{r}")
+      fail("expected DecodeError for out-of-range value, got \{repr(r)}")
     }
   }
 }
@@ -646,9 +781,11 @@ test "secret value encodes to a handle node and decodes to a fresh handle" {
 test "encode preflight rejects the same secret handle used twice" {
   let handle = fake_secret_handle(8)
   let v : SchemaValue = Tuple([Secret(handle), Secret(handle)])
-  let r = try? schema_value_to_wit(v)
+  let r = try schema_value_to_wit(v) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(EncodeError(em)) else {
-    fail("expected EncodeError, got \{r}")
+    fail("expected EncodeError, got \{repr(r)}")
   }
   assert_true(em.contains("secret"))
   assert_true(handle.is_present())
@@ -686,9 +823,11 @@ test "quota-token value encodes to a handle node and decodes to a fresh handle" 
 test "encode preflight rejects an already-transferred quota-token handle" {
   let handle = fake_quota_handle(1)
   let _ = handle.take() // consume it up front
-  let r = try? schema_value_to_wit(QuotaToken(handle))
+  let r = try schema_value_to_wit(QuotaToken(handle)) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(EncodeError(em)) else {
-    fail("expected EncodeError, got \{r}")
+    fail("expected EncodeError, got \{repr(r)}")
   }
   assert_true(em.contains("quota-token"))
 }
@@ -697,9 +836,11 @@ test "encode preflight rejects an already-transferred quota-token handle" {
 test "encode preflight rejects the same quota-token handle used twice" {
   let handle = fake_quota_handle(2)
   let v : SchemaValue = Tuple([QuotaToken(handle), QuotaToken(handle)])
-  let r = try? schema_value_to_wit(v)
+  let r = try schema_value_to_wit(v) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(EncodeError(em)) else {
-    fail("expected EncodeError, got \{r}")
+    fail("expected EncodeError, got \{repr(r)}")
   }
   assert_true(em.contains("quota-token"))
   // The shared handle is left untouched when the preflight rejects the tree.
@@ -712,8 +853,12 @@ test "encode error after a quota-token does not consume the handle" {
   // preflight before the quota-token handle is moved, so the token survives.
   let handle = fake_quota_handle(9)
   let v : SchemaValue = Tuple([QuotaToken(handle), S8(128)])
-  let r = try? schema_value_to_wit(v)
-  guard r is Err(EncodeError(_)) else { fail("expected EncodeError, got \{r}") }
+  let r = try schema_value_to_wit(v) |> Ok catch {
+    e => Err(e)
+  }
+  guard r is Err(EncodeError(_)) else {
+    fail("expected EncodeError, got \{repr(r)}")
+  }
   assert_true(handle.is_present())
 }
 
@@ -722,7 +867,11 @@ test "stream alias preflight does not transfer the earlier stream" {
   let handle = GuestSchemaValueStreamHandle::from_wrapped(
     @types.SchemaValueStream::SchemaValueStream(10),
   )
-  let result = try? schema_value_to_wit(Tuple([Stream(handle), Stream(handle)]))
+  let result = try
+    schema_value_to_wit(Tuple([Stream(handle), Stream(handle)])) |> Ok
+  catch {
+    e => Err(e)
+  }
   guard result is Err(EncodeError(message)) else {
     fail("expected aliased stream EncodeError")
   }
@@ -735,7 +884,11 @@ test "encode rejects two holders wrapping the same stream endpoint" {
   let raw = @types.SchemaValueStream::SchemaValueStream(13)
   let first = GuestSchemaValueStreamHandle::from_wrapped(raw)
   let second = GuestSchemaValueStreamHandle::from_wrapped(raw)
-  let result = try? schema_value_to_wit(Tuple([Stream(first), Stream(second)]))
+  let result = try
+    schema_value_to_wit(Tuple([Stream(first), Stream(second)])) |> Ok
+  catch {
+    e => Err(e)
+  }
   guard result is Err(EncodeError(message)) else {
     fail("expected duplicate stream endpoint EncodeError")
   }
@@ -749,9 +902,13 @@ test "encode rejects two distinct holders wrapping the same raw handle" {
   let raw = @types.QuotaToken::QuotaToken(11)
   let a = GuestQuotaTokenHandle::new(raw)
   let b = GuestQuotaTokenHandle::new(raw)
-  let r = try? schema_value_to_wit(Tuple([QuotaToken(a), QuotaToken(b)]))
+  let r = try
+    schema_value_to_wit(Tuple([QuotaToken(a), QuotaToken(b)])) |> Ok
+  catch {
+    e => Err(e)
+  }
   guard r is Err(EncodeError(em)) else {
-    fail("expected EncodeError, got \{r}")
+    fail("expected EncodeError, got \{repr(r)}")
   }
   assert_true(em.contains("more than once"))
   // Neither handle was moved when the preflight rejected the tree.
@@ -769,9 +926,11 @@ test "decode rejects the same raw handle in two different nodes" {
     ],
     root: 2,
   }
-  let r = try? schema_value_from_wit(tree, test_resource_drops())
+  let r = try schema_value_from_wit(tree, test_resource_drops()) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(DecodeError(dm)) else {
-    fail("expected DecodeError, got \{r}")
+    fail("expected DecodeError, got \{repr(r)}")
   }
   assert_true(dm.contains("more than one handle node"))
 }
@@ -786,9 +945,11 @@ test "decode rejects a handle node referenced from two places" {
     ],
     root: 1,
   }
-  let r = try? schema_value_from_wit(tree, test_resource_drops())
+  let r = try schema_value_from_wit(tree, test_resource_drops()) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(DecodeError(dm)) else {
-    fail("expected DecodeError, got \{r}")
+    fail("expected DecodeError, got \{repr(r)}")
   }
   assert_true(dm.contains("more than once"))
 }
@@ -803,9 +964,11 @@ test "decode rejects a handle node unreachable from the root" {
     ],
     root: 0,
   }
-  let r = try? schema_value_from_wit(tree, test_resource_drops())
+  let r = try schema_value_from_wit(tree, test_resource_drops()) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(DecodeError(dm)) else {
-    fail("expected DecodeError, got \{r}")
+    fail("expected DecodeError, got \{repr(r)}")
   }
   assert_true(dm.contains("not referenced from the root"))
 }
@@ -836,18 +999,27 @@ test "permission-card value encodes to a handle node and decodes to a fresh hand
 test "permission-card preflight rejects consumed and duplicate handles without moving them" {
   let consumed = fake_permission_card_handle(21)
   let _ = consumed.take()
-  let consumed_result = try? schema_value_to_wit(PermissionCard(consumed))
+  let consumed_result = try
+    schema_value_to_wit(PermissionCard(consumed)) |> Ok
+  catch {
+    e => Err(e)
+  }
   guard consumed_result is Err(EncodeError(consumed_message)) else {
-    fail("expected EncodeError, got \{consumed_result}")
+    fail("expected EncodeError, got \{repr(consumed_result)}")
   }
   assert_true(consumed_message.contains("permission-card"))
 
   let duplicate = fake_permission_card_handle(22)
-  let duplicate_result = try? schema_value_to_wit(
-    Tuple([PermissionCard(duplicate), PermissionCard(duplicate)]),
-  )
+  let duplicate_result = try
+    schema_value_to_wit(
+      Tuple([PermissionCard(duplicate), PermissionCard(duplicate)]),
+    )
+    |> Ok
+  catch {
+    e => Err(e)
+  }
   guard duplicate_result is Err(EncodeError(duplicate_message)) else {
-    fail("expected EncodeError, got \{duplicate_result}")
+    fail("expected EncodeError, got \{repr(duplicate_result)}")
   }
   assert_true(duplicate_message.contains("permission-card"))
   assert_true(duplicate.is_present())
@@ -858,11 +1030,13 @@ test "permission-card preflight rejects distinct holders for one raw handle" {
   let raw = @types.PermissionCard::PermissionCard(23)
   let a = GuestPermissionCardHandle::new(raw)
   let b = GuestPermissionCardHandle::new(raw)
-  let result = try? schema_value_to_wit(
-    Tuple([PermissionCard(a), PermissionCard(b)]),
-  )
+  let result = try
+    schema_value_to_wit(Tuple([PermissionCard(a), PermissionCard(b)])) |> Ok
+  catch {
+    e => Err(e)
+  }
   guard result is Err(EncodeError(message)) else {
-    fail("expected EncodeError, got \{result}")
+    fail("expected EncodeError, got \{repr(result)}")
   }
   assert_true(message.contains("more than once"))
   assert_true(a.is_present() && b.is_present())
@@ -879,12 +1053,13 @@ test "permission-card decode rejects duplicate raw and repeated handle nodes" {
     ],
     root: 2,
   }
-  let duplicate_raw_result = try? schema_value_from_wit(
-    duplicate_raw,
-    test_resource_drops(),
-  )
+  let duplicate_raw_result = try
+    schema_value_from_wit(duplicate_raw, test_resource_drops()) |> Ok
+  catch {
+    e => Err(e)
+  }
   guard duplicate_raw_result is Err(DecodeError(duplicate_raw_message)) else {
-    fail("expected DecodeError, got \{duplicate_raw_result}")
+    fail("expected DecodeError, got \{repr(duplicate_raw_result)}")
   }
   assert_true(duplicate_raw_message.contains("more than one handle node"))
 
@@ -895,12 +1070,13 @@ test "permission-card decode rejects duplicate raw and repeated handle nodes" {
     ],
     root: 1,
   }
-  let repeated_node_result = try? schema_value_from_wit(
-    repeated_node,
-    test_resource_drops(),
-  )
+  let repeated_node_result = try
+    schema_value_from_wit(repeated_node, test_resource_drops()) |> Ok
+  catch {
+    e => Err(e)
+  }
   guard repeated_node_result is Err(DecodeError(repeated_node_message)) else {
-    fail("expected DecodeError, got \{repeated_node_result}")
+    fail("expected DecodeError, got \{repr(repeated_node_result)}")
   }
   assert_true(repeated_node_message.contains("more than once"))
 }
@@ -914,9 +1090,13 @@ test "permission-card decode rejects an unreachable handle node" {
     ],
     root: 0,
   }
-  let result = try? schema_value_from_wit(tree, test_resource_drops())
+  let result = try
+    schema_value_from_wit(tree, test_resource_drops()) |> Ok
+  catch {
+    e => Err(e)
+  }
   guard result is Err(DecodeError(message)) else {
-    fail("expected DecodeError, got \{result}")
+    fail("expected DecodeError, got \{repr(result)}")
   }
   assert_true(message.contains("not referenced from the root"))
 }
@@ -932,14 +1112,16 @@ test "duplicate def id is rejected before a bad body is decoded" {
   let bad : @types.SchemaGraph = {
     type_nodes: [node],
     defs: [
-      { id: "Dup", name: None, body: 0 },
-      { id: "Dup", name: None, body: 0 },
+      { id: "Dup", name: None, body: 0, },
+      { id: "Dup", name: None, body: 0, },
     ],
     root: 0,
   }
-  let r = try? schema_graph_from_wit(bad)
+  let r = try schema_graph_from_wit(bad) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(DecodeError(msg)) else {
-    fail("expected DecodeError, got \{r}")
+    fail("expected DecodeError, got \{repr(r)}")
   }
   assert_true(msg.contains("duplicate def id"))
 }

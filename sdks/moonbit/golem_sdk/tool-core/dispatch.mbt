@@ -22,36 +22,28 @@ fn decode_invocation_input_with_resource_drops(
   let typed = @model.typed_schema_value_from_wit(input, drops) catch {
     e =>
       raise @toolCommon.ToolError::InvalidInput(
-        "\{context}: invalid typed schema value input: \{e}",
+        "\{context}: invalid typed schema value input: \{Repr(e)}",
       )
   }
-  try {
-    validate_invocation_input_graph(typed.graph, arity, context)
-    if !value_matches_type(typed.graph, typed.graph.root, typed.value) {
-      raise @toolCommon.ToolError::InvalidInput(
-        "\{context}: input value does not match input schema graph",
-      )
-    }
-    let fields = @schema.expect_record(typed.value, context) catch {
-      e =>
-        raise @toolCommon.ToolError::InvalidInput(
-          "\{context}: expected a record input: \{e}",
-        )
-    }
-    guard fields.length() == arity else {
-      raise @toolCommon.ToolError::InvalidInput(
-        "\{context}: expected \{arity} parameter(s), got \{fields.length()}",
-      )
-    }
-    fields
-  } catch {
-    error => {
-      typed.value.release_resources(drops)
-      raise error
-    }
-  } noraise {
-    fields => fields
+  errdefer typed.value.release_resources(drops)
+  validate_invocation_input_graph(typed.graph, arity, context)
+  if !value_matches_type(typed.graph, typed.graph.root, typed.value) {
+    raise @toolCommon.ToolError::InvalidInput(
+      "\{context}: input value does not match input schema graph",
+    )
   }
+  let fields = @schema.expect_record(typed.value, context) catch {
+    e =>
+      raise @toolCommon.ToolError::InvalidInput(
+        "\{context}: expected a record input: \{Repr(e)}",
+      )
+  }
+  guard fields.length() == arity else {
+    raise @toolCommon.ToolError::InvalidInput(
+      "\{context}: expected \{arity} parameter(s), got \{fields.length()}",
+    )
+  }
+  fields
 }
 
 ///|
@@ -463,7 +455,7 @@ fn[T : @schema.FromSchema] decode_param_with_resource_drops(
     e => {
       @model.SchemaValue::Record(fields).release_resources(drops)
       raise @toolCommon.ToolError::InvalidInput(
-        "\{context}: missing parameter \{index}: \{e}",
+        "\{context}: missing parameter \{index}: \{Repr(e)}",
       )
     }
   }
@@ -471,7 +463,7 @@ fn[T : @schema.FromSchema] decode_param_with_resource_drops(
     e => {
       @model.SchemaValue::Record(fields).release_resources(drops)
       raise @toolCommon.ToolError::InvalidInput(
-        "\{context}: failed decoding parameter \{index}: \{e}",
+        "\{context}: failed decoding parameter \{index}: \{Repr(e)}",
       )
     }
   }
@@ -482,7 +474,7 @@ pub fn encode_invocation_input(
   graph : @model.SchemaGraph,
   values : Array[@model.SchemaValue],
 ) -> @model.TypedSchemaValue {
-  { graph, value: @model.SchemaValue::Record(values) }
+  { graph, value: @model.SchemaValue::Record(values), }
 }
 
 ///|
@@ -499,7 +491,7 @@ pub async fn[T : @schema.IntoSchema] encode_result_value(
     e => {
       typed.value.release_resources(@model_host.resource_drops())
       raise @toolCommon.ToolError::InvalidResult(
-        "failed serializing tool result: \{e}",
+        "failed serializing tool result: \{Repr(e)}",
       )
     }
   }
@@ -507,21 +499,21 @@ pub async fn[T : @schema.IntoSchema] encode_result_value(
 
 ///|
 pub fn invocation_result_empty() -> @toolCommon.InvocationResult {
-  { result: None, stdout: None }
+  { result: None, stdout: None, }
 }
 
 ///|
 pub async fn[T : @schema.IntoSchema] invocation_result_value(
   value : T,
 ) -> @toolCommon.InvocationResult raise @toolCommon.ToolError {
-  { result: Some(encode_result_value(value)), stdout: None }
+  { result: Some(encode_result_value(value)), stdout: None, }
 }
 
 ///|
 pub fn invocation_result_stdout(
   stdout : @async-core.Stream[Byte],
 ) -> @toolCommon.InvocationResult {
-  { result: None, stdout: Some(stdout) }
+  { result: None, stdout: Some(stdout), }
 }
 
 ///|
@@ -529,12 +521,8 @@ pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(
   value : T,
   stdout : @async-core.Stream[Byte],
 ) -> @toolCommon.InvocationResult raise @toolCommon.ToolError {
-  { result: Some(encode_result_value(value)), stdout: Some(stdout) } catch {
-    error => {
-      stdout.drop_sync()
-      raise error
-    }
-  }
+  errdefer stdout.drop_sync()
+  { result: Some(encode_result_value(value)), stdout: Some(stdout), }
 }
 
 ///|
@@ -545,7 +533,7 @@ pub async fn encode_error_payload(
     error => {
       payload.value.release_resources(@model_host.resource_drops())
       raise @toolCommon.ToolError::InvalidResult(
-        "failed serializing custom tool error: \{error}",
+        "failed serializing custom tool error: \{Repr(error)}",
       )
     }
   }

@@ -5,7 +5,7 @@ pub fn parse_pkg_exports(content : String) -> Array[String] {
   let exports : Array[String] = []
   let lines : Array[String] = content
     .split("\n")
-    .map(fn(sv) { sv.to_string() })
+    .map(fn(sv) { sv.to_owned() })
     .collect()
   let mut in_exports = false
   for i = 0; i < lines.length(); i = i + 1 {
@@ -49,7 +49,7 @@ pub fn transform_exports(exports : Array[String]) -> Array[String] {
           end=entry.length(),
         )
         let user_name = match fn_name.strip_prefix("mbt_ffi_") {
-          Some(stripped) => stripped.to_string()
+          Some(stripped) => stripped.to_owned()
           None => fn_name
         }
         "\{user_name}:\{wit_name}"
@@ -177,7 +177,7 @@ pub fn ensure_pkg_import(
 ) -> String raise ComponentRoleError {
   let lines : Array[String] = content
     .split("\n")
-    .map(fn(sv) { sv.to_string() })
+    .map(fn(sv) { sv.to_owned() })
     .collect()
   let block = find_regular_import_block(lines)
   guard block is Some((import_start, import_end)) else {
@@ -281,14 +281,14 @@ pub fn ensure_role_gen_import(
   content : String,
   import_path : String,
 ) -> String raise ComponentRoleError {
-  if not(is_generated_role_package(import_path)) {
+  if !is_generated_role_package(import_path) {
     component_role_fail(
       "Unsupported generated role package '" + import_path + "'",
     )
   }
   let lines : Array[String] = content
     .split("\n")
-    .map(fn(sv) { sv.to_string() })
+    .map(fn(sv) { sv.to_owned() })
     .collect()
   guard find_regular_import_block(lines) is Some((import_start, import_end)) else {
     return ensure_pkg_import(content, import_path, "@gen")
@@ -316,7 +316,7 @@ pub fn ensure_role_gen_import(
             "moon.pkg import alias @gen is used more than once",
           )
         }
-        if not(is_generated_role_package(entry.path)) {
+        if !is_generated_role_package(entry.path) {
           component_role_fail(
             "moon.pkg import alias @gen is already used by unrelated package '" +
             entry.path +
@@ -366,7 +366,7 @@ pub fn ensure_role_tool_import(
   }
   let lines : Array[String] = content
     .split("\n")
-    .map(fn(sv) { sv.to_string() })
+    .map(fn(sv) { sv.to_owned() })
     .collect()
   if find_regular_import_block(lines) is Some((import_start, import_end)) {
     for i in (import_start + 1)..<import_end {
@@ -400,7 +400,7 @@ fn is_generated_import_entry(line : String) -> Bool {
 fn remove_owned_generated_imports(content : String) -> String {
   let lines : Array[String] = content
     .split("\n")
-    .map(fn(sv) { sv.to_string() })
+    .map(fn(sv) { sv.to_owned() })
     .collect()
   guard find_regular_import_block(lines) is Some((import_start, import_end)) else {
     return content
@@ -423,7 +423,7 @@ fn validate_user_import_for_requirement(
 ) -> Bool raise ComponentRoleError {
   let lines : Array[String] = content
     .split("\n")
-    .map(fn(sv) { sv.to_string() })
+    .map(fn(sv) { sv.to_owned() })
     .collect()
   guard find_regular_import_block(lines) is Some((import_start, import_end)) else {
     return false
@@ -473,7 +473,7 @@ pub fn reconcile_pure_role_pkg_imports(
 ) -> String raise ComponentRoleError {
   let lines : Array[String] = content
     .split("\n")
-    .map(fn(sv) { sv.to_string() })
+    .map(fn(sv) { sv.to_owned() })
     .collect()
   guard find_regular_import_block(lines) is Some((import_start, import_end)) else {
     return content
@@ -508,7 +508,7 @@ pub fn reconcile_pure_role_pkg_imports(
 fn mark_generated_import(content : String, path : String) -> String {
   let lines : Array[String] = content
     .split("\n")
-    .map(fn(sv) { sv.to_string() })
+    .map(fn(sv) { sv.to_owned() })
     .collect()
   guard find_regular_import_block(lines) is Some((import_start, import_end)) else {
     return content
@@ -537,7 +537,7 @@ pub fn reconcile_generated_pkg_imports(
   if forbid_ambient_tool {
     result = reconcile_pure_role_pkg_imports(result)
   }
-  let added : Map[String, Unit] = {}
+  let added : Map[String, Unit] = Map([])
   for item in required {
     let (path, import_alias) = item
     if added.contains(path) {
@@ -562,7 +562,7 @@ pub fn update_pkg_link(content : String, exports : Array[String]) -> String {
   let link_lines = generate_link_block_lines(exports)
   let lines : Array[String] = content
     .split("\n")
-    .map(fn(sv) { sv.to_string() })
+    .map(fn(sv) { sv.to_owned() })
     .collect()
   // Find existing link: { line
   let mut link_start = -1

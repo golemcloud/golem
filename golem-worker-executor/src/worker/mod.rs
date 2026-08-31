@@ -47,7 +47,9 @@ use crate::durable_host::{
 };
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::metrics::workers::AdmissionPhase;
-use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
+use crate::model::{
+    AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, SnapshotSource, TrapType,
+};
 use crate::services::active_agents::{
     FilesystemStoragePermit, MemoryGrant, RegisteredConcurrentAccount, WorkerComponentCharge,
 };
@@ -1038,6 +1040,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 worker_metadata.created_by,
                 worker_metadata.created_by_email,
                 initial_agent_config,
+                None,
                 None,
                 agent_effective_surface,
                 Some(owner_component_metadata),
@@ -6471,19 +6474,40 @@ impl RunningWorker {
             .current_component
             .store(Arc::new(component_metadata.clone()));
 
-        let component_version_for_replay = worker_metadata
+        let automatic_snapshot = worker_metadata
             .last_known_status
-            .pending_updates
-            .front()
-            .and_then(|update| match update.kind {
-                PendingUpdateKind::SnapshotBased => Some(update.target_revision),
-                PendingUpdateKind::Automatic => None,
-            })
-            .unwrap_or(
+            .last_automatic_snapshot_index
+            .zip(
                 worker_metadata
                     .last_known_status
-                    .component_revision_for_replay,
-            );
+                    .last_automatic_snapshot_component_revision,
+            )
+            .filter(|(_, snapshot_revision)| {
+                *snapshot_revision == worker_metadata.last_known_status.component_revision
+            })
+            .filter(|_| {
+                pending_update.is_none()
+                    && !parent.snapshot_recovery_disabled.load(Ordering::Acquire)
+            });
+
+        let component_version_for_replay = automatic_snapshot.map_or_else(
+            || {
+                worker_metadata
+                    .last_known_status
+                    .pending_updates
+                    .front()
+                    .and_then(|update| match update.kind {
+                        PendingUpdateKind::SnapshotBased => Some(update.target_revision),
+                        PendingUpdateKind::Automatic => None,
+                    })
+                    .unwrap_or(
+                        worker_metadata
+                            .last_known_status
+                            .component_revision_for_replay,
+                    )
+            },
+            |(_, snapshot_revision)| snapshot_revision,
+        );
 
         let component_metadata_for_replay =
             if component_metadata.revision == component_version_for_replay {
@@ -6508,15 +6532,12 @@ impl RunningWorker {
         let mut last_snapshot_index = worker_metadata
             .last_known_status
             .last_manual_update_snapshot_index;
+        let mut last_snapshot_source = last_snapshot_index.map(|_| SnapshotSource::ManualUpdate);
 
-        // automatic snapshots are only considered until the first failure.
-        // additionally, if there are updates, the automatic snapshot is temporarily ignored to catch issues earlier
-        if let Some(snapshot_idx) = worker_metadata
-            .last_known_status
-            .last_automatic_snapshot_index
-            && pending_update.is_none()
-            && !parent.snapshot_recovery_disabled.load(Ordering::Acquire)
-        {
+        // Automatic snapshots are only considered until the first failure and while they match
+        // the active component revision. Pending updates temporarily ignore them so compatibility
+        // is established by replaying from the authoritative manual-update baseline.
+        if let Some((snapshot_idx, _)) = automatic_snapshot {
             let snapshot_skip =
                 DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
                     OplogIndex::INITIAL.next()..=snapshot_idx,
@@ -6525,6 +6546,7 @@ impl RunningWorker {
             skipped_regions.set_override(snapshot_skip);
 
             last_snapshot_index = Some(snapshot_idx);
+            last_snapshot_source = Some(SnapshotSource::Automatic);
         }
 
         let context = Ctx::create(
@@ -6562,6 +6584,7 @@ impl RunningWorker {
                 worker_metadata.created_by_email,
                 worker_metadata.config,
                 last_snapshot_index,
+                last_snapshot_source,
                 agent_effective_surface,
                 None,
             ),

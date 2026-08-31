@@ -19,6 +19,7 @@ EXTERNAL_ALLOWLIST = frozenset(
         "moonbitlang/core/encoding/utf8",
         "moonbitlang/core/ref",
         "moonbitlang/core/set",
+        "moonbitlang/core/string",
         "moonbitlang/core/strconv",
     }
 )
