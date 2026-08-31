@@ -34,10 +34,9 @@ use uuid::Uuid;
 
 const PERSISTENCE_SVC: &str = "persistence";
 
-/// Rows per multi-row `INSERT` into the mirror tables. Six binds per lease row keeps a chunk far
-/// below both Postgres' (65535) and SQLite's (32766) bind-parameter limits.
+/// Rows per multi-row `INSERT` into the mirror tables. Six binds per lease row, against SQLite's
+/// 32766 bind-parameter limit - the smaller of the two dialects'.
 const MIRROR_INSERT_CHUNK_SIZE: usize = 1000;
-// Six binds per lease row; SQLite's default SQLITE_MAX_VARIABLE_NUMBER is the smaller limit.
 const _: () = assert!(MIRROR_INSERT_CHUNK_SIZE * 6 <= 32766);
 
 /// Creates the single state row. Succeeds only while the row is absent: `DO NOTHING` turns the
@@ -128,8 +127,8 @@ impl RoutingTablePersistence for DbRoutingTablePersistence<PostgresPool> {
         let leases = lease_rows(shard_state);
         let assignments = assignment_rows(shard_state)?;
 
-        // One transaction: the compare-and-swap on the blob decides, and the mirror tables follow
-        // it or are left untouched with it.
+        // One transaction, so the mirror tables follow the compare-and-swap or, if it is rejected,
+        // are left untouched with it.
         let revision = self
             .pool
             .with_tx_err(PERSISTENCE_SVC, "write", |tx| {
@@ -223,7 +222,6 @@ impl DbRoutingTablePersistence<PostgresPool> {
     }
 }
 
-/// One `executor_leases` row.
 #[derive(Debug, Clone, PartialEq)]
 struct ExecutorLeaseRow {
     executor_id: Uuid,
@@ -234,7 +232,6 @@ struct ExecutorLeaseRow {
     pod_name: Option<String>,
 }
 
-/// One `shard_assignments` row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ShardAssignmentRow {
     shard_id: i32,

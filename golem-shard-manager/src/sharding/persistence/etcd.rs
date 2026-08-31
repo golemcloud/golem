@@ -43,15 +43,15 @@ impl EtcdRoutingTablePersistence {
             ));
         }
 
-        // TLS is not configurable, so an `https://` endpoint could only fail at connect time with
-        // an opaque transport error. Refuse it up front and say why instead.
+        // Only plain `http://` works: TLS is not configurable, and anything else - including a
+        // scheme-less `host:port` - would otherwise fail at connect time with an opaque error.
         if let Some(endpoint) = config
             .endpoints
             .iter()
             .find(|endpoint| !endpoint.starts_with("http://"))
         {
             return Err(ShardManagerError::Internal(format!(
-                "etcd endpoint {endpoint} is not an http:// URL; TLS is not supported"
+                "etcd endpoint {endpoint} must start with http:// (TLS is not supported)"
             )));
         }
 
@@ -76,8 +76,6 @@ impl EtcdRoutingTablePersistence {
 #[async_trait]
 impl RoutingTablePersistence for EtcdRoutingTablePersistence {
     async fn read(&self) -> Result<(ShardLeaseState, ExternalRevision), ShardManagerError> {
-        // `KvClient` is a cheap handle over the shared multiplexed channel; cloning it per call is
-        // how the generated stubs' `&mut self` is satisfied.
         let mut kv = self.client.kv_client();
         let response = kv.get(STATE_KEY, None).await?;
 
@@ -107,13 +105,10 @@ impl RoutingTablePersistence for EtcdRoutingTablePersistence {
         check_state_for_write(shard_state)?;
         let encoded = serialize(shard_state).map_err(ShardManagerError::SerializationError)?;
 
-        // etcd reports mod_revision 0 for a key that does not exist, so `prev_revision ==
-        // NO_REVISION` already means exactly "must not exist yet" - unlike the SQL backend, no
-        // branching is needed here.
-        //
-        // `or_else` is deliberately empty. Returning the winning state from a lost compare-and-swap
-        // would have to travel inside the error variant, which the SQL backend cannot fill in
-        // without a second query; the caller re-reads instead.
+        // etcd reports mod_revision 0 for a key that does not exist, so comparing it equal to
+        // `prev_revision == NO_REVISION` already means "the key must not exist yet" - create-only
+        // semantics, without the separate INSERT statement the SQL backend needs for the same
+        // guarantee.
         let txn = Txn::new()
             .when([Compare::mod_revision(
                 STATE_KEY,
@@ -129,13 +124,6 @@ impl RoutingTablePersistence for EtcdRoutingTablePersistence {
             return Err(ShardManagerError::ConcurrentModification);
         }
 
-        // A transaction that applied at least one mutation reports the NEW store revision in its
-        // header, and etcd stamps every key written by that transaction with exactly that
-        // revision - so this is the mod_revision our PUT produced.
-        //
-        // Do NOT replace this with a follow-up GET: another writer can land between the
-        // transaction and the GET, and we would cache their revision as ours, so our next
-        // compare-and-swap would compare-equal against their write and silently clobber it.
         let revision = response
             .header()
             .ok_or_else(|| {

@@ -477,14 +477,75 @@ pub fn make_config_loader() -> ConfigLoader<ShardManagerConfig> {
     ConfigLoader::new_with_examples(Path::new("config/shard-manager.toml"))
 }
 
+/// Environment variables that configured the shard manager's database before `db` became
+/// [`PersistenceConfig`].
+const LEGACY_DB_ENV_VAR_PREFIX: &str = "GOLEM__DB__";
+
+fn legacy_db_env_vars<I: IntoIterator<Item = String>>(names: I) -> Vec<String> {
+    let mut found: Vec<String> = names
+        .into_iter()
+        .filter(|name| name.starts_with(LEGACY_DB_ENV_VAR_PREFIX))
+        .collect();
+    found.sort();
+    found
+}
+
+/// Fails if the environment still configures the shard manager through the removed `db` key.
+///
+/// figment layers the environment over the defaults and serde then discards unknown keys, so
+/// without this a deployment that was not updated starts *successfully* on the default SQLite
+/// database, with an empty routing table and a quota ledger that resets on every restart.
+pub fn reject_legacy_db_env_vars() -> Result<(), String> {
+    let found = legacy_db_env_vars(std::env::vars().map(|(name, _)| name));
+    if found.is_empty() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "The shard manager's `db` configuration was replaced by `persistence`, which also selects \
+         which backend holds the shard lease state. The following environment variables are no \
+         longer read, and ignoring them would start the shard manager on the default SQLite \
+         database with an empty routing table:\n  {}\nRename them to `GOLEM__PERSISTENCE__*` (for \
+         example `GOLEM__DB__TYPE` becomes `GOLEM__PERSISTENCE__TYPE`).",
+        found.join("\n  ")
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use test_r::test;
 
-    use crate::config::make_config_loader;
+    use crate::config::{legacy_db_env_vars, make_config_loader};
 
     #[test]
     pub fn config_is_loadable() {
         let _ = make_config_loader().load().expect("Failed to load config");
+    }
+
+    #[test]
+    pub fn legacy_db_env_vars_are_detected() {
+        let found = legacy_db_env_vars(
+            [
+                "GOLEM__DB__CONFIG__HOST",
+                "GOLEM__PERSISTENCE__CONFIG__HOST",
+                "GOLEM__DB__TYPE",
+                "GOLEM__HTTP_PORT",
+                "PATH",
+                "SOMETHING__GOLEM__DB__TYPE",
+                "GOLEM__DBX__TYPE",
+            ]
+            .map(str::to_string),
+        );
+
+        assert_eq!(found, vec!["GOLEM__DB__CONFIG__HOST", "GOLEM__DB__TYPE"]);
+    }
+
+    #[test]
+    pub fn an_environment_without_the_legacy_key_is_accepted() {
+        let found = legacy_db_env_vars(
+            ["GOLEM__PERSISTENCE__TYPE", "GOLEM__HTTP_PORT"].map(str::to_string),
+        );
+
+        assert!(found.is_empty(), "unexpected legacy variables: {found:?}");
     }
 }

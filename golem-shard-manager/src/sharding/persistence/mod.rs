@@ -25,24 +25,17 @@ use golem_common::serialization::try_deserialize;
 
 /// An opaque, backend-assigned version of the persisted [`ShardLeaseState`].
 ///
-/// This is a *storage* fencing token, not a domain concept. It is deliberately unrelated to
-/// [`super::model::ShardLeaseRevision`], which lives inside the state blob and is bumped by the
-/// shard management loop when the routing table changes. The two are expected to drift apart and
-/// must never be compared or derived from each other.
+/// A *storage* fencing token, deliberately unrelated to [`super::model::ShardLeaseRevision`],
+/// which lives inside the blob and is bumped when the routing table changes. The two drift apart
+/// by design and must never be compared or derived from each other.
 ///
-/// Guarantees, upheld by every implementation:
-/// * [`NO_REVISION`] means "no state is stored".
-/// * Any *stored* state carries a revision `>= 1`, so [`NO_REVISION`] is unambiguous.
-/// * Successive successful writes return strictly increasing values.
+/// * [`NO_REVISION`] means "no state is stored"; any stored state carries `>= 1`.
+/// * Successive successful writes return strictly increasing values. The magnitude is meaningless:
+///   the SQL backend assigns `previous + 1`, etcd assigns its cluster-wide revision, which jumps.
 ///
-/// The magnitude is meaningless: the SQL backend assigns `previous + 1`, while the etcd backend
-/// assigns the cluster-wide etcd revision, which jumps by arbitrary amounts because every
-/// unrelated etcd mutation advances it.
-///
-/// Monotonicity is guaranteed only for as long as state remains stored. The SQL token is derived
-/// from the row, so deleting the row restarts the sequence at 1, whereas etcd's keeps climbing.
-/// A writer holding a token from before such a deletion is therefore not fenced by it; only
-/// leader election makes that safe.
+/// Monotonicity holds only while state remains stored: the SQL token is derived from the row, so
+/// deleting it restarts the sequence at 1 while etcd's keeps climbing. A writer holding a token
+/// from before such a deletion is therefore not fenced by it.
 pub type ExternalRevision = i64;
 
 /// The revision reported by [`RoutingTablePersistence::read`] when nothing is stored, and the
@@ -52,11 +45,6 @@ pub const NO_REVISION: ExternalRevision = 0;
 #[async_trait]
 pub trait RoutingTablePersistence: Send + Sync {
     /// Loads the persisted shard lease state together with the revision it is stored at.
-    ///
-    /// If nothing is stored, returns a freshly initialized [`ShardLeaseState`] paired with
-    /// [`NO_REVISION`]. The caller cannot distinguish "never written" from "written and then
-    /// externally deleted", and does not need to: both mean the routing table is rebuilt from
-    /// scratch as executors register.
     ///
     /// A stored blob that cannot be decoded, or that violates the state invariants, is an error.
     /// It is never silently replaced by a default state - that would drop a live routing table
@@ -73,11 +61,9 @@ pub trait RoutingTablePersistence: Send + Sync {
     ///   that revision"**. In particular, a write with `prev_revision > NO_REVISION` against
     ///   absent state fails; it does not resurrect it.
     ///
-    /// When that condition does not hold, returns [`ShardManagerError::ConcurrentModification`]
-    /// and stores nothing. Recovery is always the same: discard the in-memory state,
-    /// [`Self::read`] again, re-derive the intended change against what was read, and write with
-    /// the revision that came with it. Retrying with the same `prev_revision` can never succeed,
-    /// which is why the error is reported as non-retriable.
+    /// Otherwise returns [`ShardManagerError::ConcurrentModification`] having stored nothing.
+    /// Recovery is always re-read, re-derive, write; retrying the same `prev_revision` can never
+    /// succeed, which is why the error is non-retriable.
     ///
     /// The returned revision is always `>= 1` and always strictly greater than `prev_revision`.
     async fn write(
@@ -107,11 +93,8 @@ fn decode_shard_state(bytes: &[u8]) -> Result<ShardLeaseState, ShardManagerError
 
 /// Refuses to persist a state that violates [`ShardLeaseState::check_invariants`].
 ///
-/// Every backend calls this before touching its store, so an invalid state is rejected
-/// identically everywhere and before any I/O - rather than by whichever constraint a backend
-/// happens to enforce (the SQL mirror tables' foreign key, which SQLite only checks with
-/// `foreign_keys = true`), and rather than poisoning the store for every later
-/// [`RoutingTablePersistence::read`].
+/// Called by every backend before any I/O, so an invalid state is refused identically everywhere
+/// rather than by whichever constraint a backend happens to enforce.
 fn check_state_for_write(shard_state: &ShardLeaseState) -> Result<(), ShardManagerError> {
     shard_state.check_invariants().map_err(|violation| {
         ShardManagerError::Internal(format!(
@@ -121,8 +104,7 @@ fn check_state_for_write(shard_state: &ShardLeaseState) -> Result<(), ShardManag
 }
 
 /// Rejects a revision a backend claims to have stored at, if it would be indistinguishable from
-/// "absent" or would break monotonicity. Both implementations funnel their result through this,
-/// so a protocol violation surfaces as an error instead of silently corrupting the fencing chain.
+/// "absent" or would break monotonicity.
 fn check_stored_revision(
     revision: ExternalRevision,
     prev_revision: ExternalRevision,

@@ -25,7 +25,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::test;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, oneshot};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -51,6 +51,14 @@ struct TestPersistence {
     /// Per-write script: a `None` entry lets a write through, a `Some(err)` entry fails it before
     /// it reaches the store. Writes past the end of the script always succeed.
     injected: Arc<Mutex<VecDeque<Option<ShardManagerError>>>>,
+    gate: Arc<Mutex<Option<WriteGate>>>,
+}
+
+/// Suspends a single write: `entered` fires when it is reached, then it waits for `release`.
+#[derive(Debug)]
+struct WriteGate {
+    entered: oneshot::Sender<()>,
+    release: oneshot::Receiver<()>,
 }
 
 impl TestPersistence {
@@ -69,6 +77,7 @@ impl TestPersistence {
             writes: Arc::new(Mutex::new(Vec::new())),
             attempts: Arc::new(Mutex::new(0)),
             injected: Arc::new(Mutex::new(VecDeque::new())),
+            gate: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -79,6 +88,18 @@ impl TestPersistence {
     /// Scripts the outcome of the next writes. `vec![None, Some(err)]` fails only the second one.
     async fn fail_writes(&self, script: Vec<Option<ShardManagerError>>) {
         *self.injected.lock().await = script.into();
+    }
+
+    /// Suspends the next write. Returns a receiver that resolves once that write is in flight,
+    /// and the sender that lets it finish.
+    async fn block_next_write(&self) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        *self.gate.lock().await = Some(WriteGate {
+            entered: entered_tx,
+            release: release_rx,
+        });
+        (entered_rx, release_tx)
     }
 
     async fn write_count(&self) -> usize {
@@ -100,6 +121,13 @@ impl RoutingTablePersistence for TestPersistence {
         *self.attempts.lock().await += 1;
         if let Some(err) = self.injected.lock().await.pop_front().flatten() {
             return Err(err);
+        }
+
+        // Taken out of the mutex before awaiting, so the gate never holds a lock.
+        let gate = self.gate.lock().await.take();
+        if let Some(gate) = gate {
+            let _ = gate.entered.send(());
+            let _ = gate.release.await;
         }
 
         let mut store = self.store.lock().await;
@@ -772,6 +800,133 @@ async fn a_persistence_failure_rolls_back_the_state_and_stops_the_loop() {
     assert_eq!(after, before);
     assert_eq!(persistence.latest().await, persisted_before);
     assert!(worker_executors.local_assignment(new_pod).await.is_empty());
+}
+
+#[test]
+// The second persist of a pass runs *after* the rebalance reached the executors over gRPC, so
+// rolling it back leaves them holding shards the routing table no longer records - and a rebalance
+// planned from the rolled-back state then sees a balanced table and plans nothing, forever. Ending
+// the task is what saves it: the process restarts and re-sends every authoritative assignment.
+async fn a_persistence_failure_after_the_rebalance_was_executed_stops_the_loop() {
+    let existing_pod = pod(1, 9000);
+    let new_pod = pod(2, 9001);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+
+    let (shard_management, persistence, mut join_set) = new_shard_management(
+        shard_state_with_executors(
+            4,
+            vec![(
+                executor(1),
+                existing_pod,
+                "worker-executor-0",
+                &[0, 1, 2, 3],
+            )],
+        ),
+        worker_executors.clone(),
+    )
+    .await;
+
+    // Let the registration persist, then fail the persist of the applied rebalance.
+    persistence
+        .fail_writes(vec![None, Some(ShardManagerError::ConcurrentModification)])
+        .await;
+    let new_executor = shard_management
+        .register_executor(
+            ExecutorAddr::from(new_pod),
+            Some("worker-executor-1".into()),
+        )
+        .await;
+
+    let outcome = tokio::time::timeout(Duration::from_secs(5), join_set.join_next())
+        .await
+        .expect("the shard management loop should have stopped")
+        .expect("the loop task should exist")
+        .expect("the loop task should not panic");
+    assert!(
+        outcome.is_err(),
+        "the loop must end with the persistence error, got {outcome:?}"
+    );
+
+    // The first persist landed, so the registration survived both in memory and in the store.
+    let after = shard_management.current_snapshot().await;
+    assert!(
+        after.has_executor(new_executor),
+        "the registration was persisted by the first write and must not be rolled back"
+    );
+    assert_eq!(
+        after,
+        persistence.latest().await,
+        "the in-memory state must match the last state that was actually stored"
+    );
+
+    // ... but the rebalance it triggered was rolled back after the executor was told about it.
+    // That divergence is why the loop must stop rather than carry on.
+    assert!(
+        shards_at(&after, new_pod).is_empty(),
+        "the rolled-back rebalance must not appear in the routing table"
+    );
+    assert!(
+        !worker_executors.local_assignment(new_pod).await.is_empty(),
+        "the rebalance should have reached the executor before the persist failed - without that, \
+         this test is not exercising the second persist site"
+    );
+}
+
+#[test]
+// The write lock is held across the persistence round-trip, so nobody can read a state that is
+// still being stored and that a failed write is about to roll back. Releasing it early would let
+// `GetRoutingTable` hand out a routing table that never reached the store, then go backwards.
+async fn readers_cannot_observe_a_state_that_is_still_being_persisted() {
+    let existing_pod = pod(1, 9000);
+    let new_pod = pod(2, 9001);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+
+    let (shard_management, persistence, _join_set) = new_shard_management(
+        shard_state_with_executors(
+            4,
+            vec![(
+                executor(1),
+                existing_pod,
+                "worker-executor-0",
+                &[0, 1, 2, 3],
+            )],
+        ),
+        worker_executors.clone(),
+    )
+    .await;
+
+    let (entered, release) = persistence.block_next_write().await;
+
+    let _ = shard_management
+        .register_executor(
+            ExecutorAddr::from(new_pod),
+            Some("worker-executor-1".into()),
+        )
+        .await;
+
+    // Signalled from inside `write`, which the loop calls while holding the guard.
+    tokio::time::timeout(Duration::from_secs(5), entered)
+        .await
+        .expect("the loop should have reached a write")
+        .expect("the gate should have been signalled");
+
+    let blocked = tokio::time::timeout(
+        Duration::from_millis(200),
+        shard_management.current_snapshot(),
+    )
+    .await;
+    assert!(
+        blocked.is_err(),
+        "current_snapshot() must not be able to read a state that is still being persisted"
+    );
+
+    release.send(()).expect("the write should still be waiting");
+
+    wait_for_writes(&persistence, 4).await;
+    let after = tokio::time::timeout(Duration::from_secs(5), shard_management.current_snapshot())
+        .await
+        .expect("the read lock must be free once the persist completed");
+    assert_eq!(after, persistence.latest().await);
 }
 
 #[test]

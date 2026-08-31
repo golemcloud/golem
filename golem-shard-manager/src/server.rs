@@ -14,7 +14,9 @@
 
 use golem_common::SafeDisplay;
 use golem_common::tracing::init_tracing_with_default_env_filter;
-use golem_shard_manager::config::{ShardManagerConfig, make_config_loader};
+use golem_shard_manager::config::{
+    ShardManagerConfig, make_config_loader, reject_legacy_db_env_vars,
+};
 use prometheus::default_registry;
 use tokio::task::JoinSet;
 use tracing::info;
@@ -28,6 +30,8 @@ fn main() -> Result<(), anyhow::Error> {
 
             init_tracing_with_default_env_filter(&config.tracing);
             info!("Using configuration:\n{}", config.to_safe_string_indented());
+
+            reject_legacy_db_env_vars().map_err(|err| anyhow::anyhow!(err))?;
 
             let registry = default_registry().clone();
 

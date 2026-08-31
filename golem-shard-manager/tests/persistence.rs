@@ -367,7 +367,7 @@ impl GetRoutingTablePersistence for SqliteRoutingTablePersistence {
     }
 }
 
-// -- etcd: isolated by a fresh key prefix per store --------------------------------------------
+// -- etcd: isolated by one server per test worker, plus a wipe per store -----------------------
 
 struct EtcdRoutingTablePersistenceFactory {
     etcd: DockerEtcd,
@@ -587,16 +587,6 @@ async fn mirror_tables_follow_the_persisted_state(
         return;
     };
     assert_eq!(snapshot, MirrorSnapshot::of(&first));
-    // Orphaned shards are pending, not assigned, and must not show up as assignments.
-    for pending in &first.pending_rebalance {
-        assert!(
-            !snapshot
-                .assignments
-                .iter()
-                .any(|(shard_id, _, _)| i64::from(*shard_id) == pending.value()),
-            "pending shard {pending} must not appear in shard_assignments"
-        );
-    }
 
     // A rewrite replaces the mirror wholesale: rows of executors that are gone must not linger.
     let second = replacement_shard_state(NUMBER_OF_SHARDS);
@@ -685,7 +675,15 @@ async fn a_full_size_routing_table_roundtrips_and_is_mirrored(
     assert_eq!(actual, shard_state);
     assert_eq!(actual_revision, revision);
 
-    if let Some(snapshot) = store.mirror_snapshot().await {
+    let snapshot = store.mirror_snapshot().await;
+    assert_eq!(
+        snapshot.is_some(),
+        store.has_mirror(),
+        "a backend must report a mirror exactly when it has one"
+    );
+    // The only coverage of writes spanning more than one MIRROR_INSERT_CHUNK_SIZE chunk, which
+    // every production-sized write does, so it must not become skippable by accident.
+    if let Some(snapshot) = snapshot {
         assert_eq!(snapshot.assignments.len(), SHARDS);
         assert_eq!(snapshot, MirrorSnapshot::of(&shard_state));
     }

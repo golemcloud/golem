@@ -29,7 +29,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinSet;
+use tokio::time::timeout;
 use tracing::{Instrument, debug, error, info, warn};
+
+/// Bounds a persistence round-trip, so a wedged backend cannot hold the shard state lock forever,
+/// leaving every [`ShardManagement::current_snapshot`] reader waiting while the fail-stop that
+/// should end the process never runs.
+const PERSISTENCE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct ShardManagement {
@@ -55,7 +61,15 @@ impl ShardManagement {
         lease_ttl: Duration,
         join_set: &mut JoinSet<anyhow::Result<()>>,
     ) -> Result<Self, ShardManagerError> {
-        let (shard_state, external_revision) = persistence_service.read().await?;
+        let (shard_state, external_revision) =
+            match timeout(PERSISTENCE_TIMEOUT, persistence_service.read()).await {
+                Ok(read) => read?,
+                Err(_) => {
+                    return Err(ShardManagerError::Internal(format!(
+                        "reading the shard lease state timed out after {PERSISTENCE_TIMEOUT:?}"
+                    )));
+                }
+            };
 
         info!("Initial healthcheck started");
 
@@ -228,9 +242,8 @@ impl ShardManagement {
             })
             .await?;
 
-            // Race-free: the worker task is the only writer of the shard state. Reading the
-            // snapshot after the persist rather than out of the closure keeps its `revision`
-            // field consistent with what was stored.
+            // Read after the persist rather than out of the closure, so the snapshot's
+            // `revision` field is consistent with what was stored.
             let shard_state_snapshot = self.shard_state.read().await.clone();
 
             let mut full_assignments = Assignments::new();
@@ -308,9 +321,16 @@ impl ShardManagement {
 
         let written = match current_shard_state.bump_revision() {
             Ok(_) => {
-                self.persistence
-                    .write(&current_shard_state, prev_external_revision)
-                    .await
+                let write = self
+                    .persistence
+                    .write(&current_shard_state, prev_external_revision);
+
+                match timeout(PERSISTENCE_TIMEOUT, write).await {
+                    Ok(written) => written,
+                    Err(_) => Err(ShardManagerError::Internal(format!(
+                        "persisting the shard lease state timed out after {PERSISTENCE_TIMEOUT:?}"
+                    ))),
+                }
             }
             Err(err) => Err(err),
         };
