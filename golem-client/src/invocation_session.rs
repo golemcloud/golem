@@ -2120,7 +2120,7 @@ where
         config: request.config,
         idempotency_key: request.idempotency_key,
         method_parameters,
-        selector: request.selector,
+        selector: Box::new(request.selector),
         version: INVOCATION_SESSION_VERSION,
     };
     let provider: Arc<dyn InvocationSessionRequestProvider> =
@@ -3294,14 +3294,14 @@ mod tests {
             config: Vec::new(),
             idempotency_key: "invocation-key".to_string(),
             method_parameters: serde_json::json!({}),
-            selector: InvocationSelector {
+            selector: Box::new(InvocationSelector {
                 agent_type: "agent".to_string(),
                 application: "app".to_string(),
                 constructor_parameters: serde_json::json!({}),
                 environment: "env".to_string(),
                 method: "run".to_string(),
                 phantom_id: None,
-            },
+            }),
             version: 1,
         }
     }

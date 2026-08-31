@@ -143,14 +143,14 @@ fn public_start(
         config: Vec::new(),
         idempotency_key: IdempotencyKey::fresh().value,
         method_parameters,
-        selector: InvocationSelector {
+        selector: Box::new(InvocationSelector {
             agent_type: "StreamingRpcTarget".to_string(),
             application: application_name.to_string(),
             constructor_parameters: serde_json::json!({ "name": agent_name }),
             environment: environment_name.to_string(),
             method: method_name.to_string(),
             phantom_id: None,
-        },
+        }),
         version: INVOCATION_SESSION_VERSION,
     }
 }

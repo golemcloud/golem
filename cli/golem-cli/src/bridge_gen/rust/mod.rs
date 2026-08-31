@@ -1950,6 +1950,7 @@ impl RustBridgeGenerator {
             return Ok(quote! {});
         }
 
+        let generate_streaming_codecs = self.generate_streaming_codecs();
         let mut items = Vec::new();
         for (cases, name) in self.known_multimodals.clone() {
             let enum_ident = Ident::new(&name, Span::call_site());
@@ -1988,24 +1989,26 @@ impl RustBridgeGenerator {
                     });
                 }
 
-                let streaming_enc =
-                    self.emit_streaming_encode_expr(quote! { __inner }, payload, false, 0)?;
-                streaming_encode_arms.push(quote! {
-                    #enum_ident::#case_ident(__inner) => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Variant(crate::__golem_bridge_runtime::schema::VariantValuePayload {
-                        case: #idx_u32,
-                        payload: Some(Box::new(#streaming_enc?)),
-                    })),
-                });
+                if generate_streaming_codecs {
+                    let streaming_enc =
+                        self.emit_streaming_encode_expr(quote! { __inner }, payload, false, 0)?;
+                    streaming_encode_arms.push(quote! {
+                        #enum_ident::#case_ident(__inner) => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Variant(crate::__golem_bridge_runtime::schema::VariantValuePayload {
+                            case: #idx_u32,
+                            payload: Some(Box::new(#streaming_enc?)),
+                        })),
+                    });
 
-                let streaming_dec =
-                    self.emit_streaming_decode_expr(quote! { __pv }, payload, false, 0)?;
-                streaming_decode_arms.push(quote! {
-                    #idx_u32 => {
-                        let __p = payload.ok_or_else(|| format!("Missing multimodal payload for case {}", #case_name))?;
-                        let __pv = *__p;
-                        Ok(#enum_ident::#case_ident(#streaming_dec?))
-                    }
-                });
+                    let streaming_dec =
+                        self.emit_streaming_decode_expr(quote! { __pv }, payload, false, 0)?;
+                    streaming_decode_arms.push(quote! {
+                        #idx_u32 => {
+                            let __p = payload.ok_or_else(|| format!("Missing multimodal payload for case {}", #case_name))?;
+                            let __pv = *__p;
+                            Ok(#enum_ident::#case_ident(#streaming_dec?))
+                        }
+                    });
+                }
             }
 
             let encode_fn = Ident::new(&format!("encode_{name}"), Span::call_site());
@@ -2040,6 +2043,33 @@ impl RustBridgeGenerator {
                     }
                 }
             };
+            let streaming_codecs = if generate_streaming_codecs {
+                quote! {
+                    fn #streaming_encode_fn(
+                        value: #enum_ident,
+                        __stream_context: &golem_client::invocation_session::GeneratedEncodeContext,
+                    ) -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
+                        match value {
+                            #(#streaming_encode_arms)*
+                        }
+                    }
+
+                    fn #streaming_decode_fn(
+                        value: crate::__golem_bridge_runtime::schema::SchemaValue,
+                        __stream_context: &golem_client::invocation_session::GeneratedDecodeContext,
+                    ) -> Result<#enum_ident, String> {
+                        match value {
+                            crate::__golem_bridge_runtime::schema::SchemaValue::Variant(crate::__golem_bridge_runtime::schema::VariantValuePayload { case, payload }) => match case {
+                                #(#streaming_decode_arms)*
+                                __other => Err(format!("Invalid multimodal variant case index: {}", __other)),
+                            },
+                            __other => Err(format!("Expected variant value, got {:?}", __other)),
+                        }
+                    }
+                }
+            } else {
+                quote! {}
+            };
 
             items.push(quote! {
                 #derive
@@ -2049,27 +2079,7 @@ impl RustBridgeGenerator {
 
                 #ordinary_codecs
 
-                fn #streaming_encode_fn(
-                    value: #enum_ident,
-                    __stream_context: &golem_client::invocation_session::GeneratedEncodeContext,
-                ) -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
-                    match value {
-                        #(#streaming_encode_arms)*
-                    }
-                }
-
-                fn #streaming_decode_fn(
-                    value: crate::__golem_bridge_runtime::schema::SchemaValue,
-                    __stream_context: &golem_client::invocation_session::GeneratedDecodeContext,
-                ) -> Result<#enum_ident, String> {
-                    match value {
-                        crate::__golem_bridge_runtime::schema::SchemaValue::Variant(crate::__golem_bridge_runtime::schema::VariantValuePayload { case, payload }) => match case {
-                            #(#streaming_decode_arms)*
-                            __other => Err(format!("Invalid multimodal variant case index: {}", __other)),
-                        },
-                        __other => Err(format!("Expected variant value, got {:?}", __other)),
-                    }
-                }
+                #streaming_codecs
             });
         }
 
@@ -2080,13 +2090,17 @@ impl RustBridgeGenerator {
 
     // --- Type definitions + codecs -----------------------------------------
 
-    fn type_definitions(&mut self) -> anyhow::Result<TokenStream> {
-        let generate_streaming_codecs = self.mode == RustBridgeMode::ExternalRest
+    fn generate_streaming_codecs(&self) -> bool {
+        self.mode == RustBridgeMode::ExternalRest
             && self
                 .agent_type
                 .methods
                 .iter()
-                .any(|method| method.uses_streams(&self.agent_type.schema));
+                .any(|method| method.uses_streams(&self.agent_type.schema))
+    }
+
+    fn type_definitions(&mut self) -> anyhow::Result<TokenStream> {
+        let generate_streaming_codecs = self.generate_streaming_codecs();
         let types: Vec<(SchemaType, RustTypeName)> = self
             .type_naming
             .types()

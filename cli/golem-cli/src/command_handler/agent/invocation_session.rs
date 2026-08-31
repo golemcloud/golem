@@ -316,7 +316,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 config: config.clone(),
                 idempotency_key: idempotency_key_value.clone(),
                 method_parameters: method_parameters.clone(),
-                selector: selector.clone(),
+                selector: Box::new(selector.clone()),
                 version: INVOCATION_SESSION_VERSION,
             };
             let checkpoint = save_session.as_ref().map(|_| InvocationSessionCheckpoint {
@@ -643,10 +643,18 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     }
                     input_terminal |= *terminal;
                 }
-                if response_cancels_input(
-                    &server_frame,
-                    input_binding.as_ref().and_then(|binding| binding.channel),
-                ) {
+                let invocation_finished_with_open_input = accepted
+                    && !input_terminal
+                    && matches!(
+                        &server_frame,
+                        ServerFrame::Message(PublicServerMessage::InvocationFinished { .. })
+                    );
+                if invocation_finished_with_open_input
+                    || response_cancels_input(
+                        &server_frame,
+                        input_binding.as_ref().and_then(|binding| binding.channel),
+                    )
+                {
                     if validate_discarded_input {
                         input_discarded.cancel();
                     } else {
@@ -838,7 +846,7 @@ fn validate_pending_start(
         config: config.to_vec(),
         idempotency_key: idempotency_key.to_string(),
         method_parameters: expected_parameters,
-        selector: selector.clone(),
+        selector: Box::new(selector.clone()),
         version: INVOCATION_SESSION_VERSION,
     };
     if &expected != request {
@@ -2604,7 +2612,7 @@ mod public_tests {
             method_parameters: serde_json::json!({
                 "source":{"$stream":{"provisionalRef":saved_reference}}
             }),
-            selector: selector.clone(),
+            selector: Box::new(selector.clone()),
             version: INVOCATION_SESSION_VERSION,
         };
         let mut binding = InputBinding {
@@ -2715,7 +2723,9 @@ mod public_tests {
             provisional_ref: None,
             stream_token: "stream-one".to_string(),
         };
-        bindings.begin_connection(&[mapping.clone()]).unwrap();
+        bindings
+            .begin_connection(std::slice::from_ref(&mapping))
+            .unwrap();
         let rebound = PublicStreamMapping {
             channel: 4,
             ..mapping

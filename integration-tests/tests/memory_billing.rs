@@ -78,6 +78,35 @@ mod tests {
         Ok(usage.usage.memory_gb_seconds)
     }
 
+    async fn wait_for_memory_billing_to_settle(
+        deps: &EnvBasedTestDependencies,
+        user: &golem_test_framework::config::dsl_impl::TestUserContext<EnvBasedTestDependencies>,
+        must_reach: Option<u64>,
+    ) -> anyhow::Result<u64> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let mut last = memory_gb_seconds(deps, user).await?;
+        let mut unchanged_since = tokio::time::Instant::now();
+
+        loop {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let current = memory_gb_seconds(deps, user).await?;
+            if current != last {
+                last = current;
+                unchanged_since = tokio::time::Instant::now();
+            }
+            if unchanged_since.elapsed() >= Duration::from_secs(1)
+                && must_reach.is_none_or(|minimum| current >= minimum)
+            {
+                return Ok(current);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                anyhow::bail!(
+                    "memory billing did not settle at the required value before timeout: required={must_reach:?}, last={current}"
+                );
+            }
+        }
+    }
+
     #[test]
     #[timeout("2m")]
     async fn permit_ownership_defines_allocated_memory_billing_window() -> anyhow::Result<()> {
@@ -95,12 +124,7 @@ mod tests {
 
         user.invoke_and_await_agent(&component, &agent, "run_with_delay", data_value!(3_000u64))
             .await?;
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        let after_host_wait = memory_gb_seconds(&deps, &user).await?;
-        assert!(
-            after_host_wait.saturating_sub(before) >= 1,
-            "allocated memory must accrue while a permit-owning invocation waits in a host sleep: before={before}, after={after_host_wait}"
-        );
+        wait_for_memory_billing_to_settle(&deps, &user, Some(before.saturating_add(1))).await?;
 
         let invocation = user.invoke_and_await_agent(
             &component,
@@ -120,20 +144,18 @@ mod tests {
         invocation_result?;
         let before_replay = before_replay?;
 
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        let after_replay = memory_gb_seconds(&deps, &user).await?;
-        assert!(
-            after_replay.saturating_sub(before_replay) >= 2,
-            "recovery of the interrupted 512 MiB workload must accrue memory after the pre-crash baseline: before={before_replay}, after={after_replay}"
-        );
+        let after_replay =
+            wait_for_memory_billing_to_settle(&deps, &user, Some(before_replay.saturating_add(2)))
+                .await?;
 
         user.wait_for_status(&worker, AgentStatus::Idle, Duration::from_secs(10))
             .await?;
+        let after_permit_release = wait_for_memory_billing_to_settle(&deps, &user, None).await?;
         tokio::time::sleep(Duration::from_secs(5)).await;
         let after_idle = memory_gb_seconds(&deps, &user).await?;
         assert_eq!(
-            after_idle, after_replay,
-            "loaded-idle time after permit release must not accrue memory usage"
+            after_idle, after_permit_release,
+            "loaded-idle time after permit release must not accrue memory usage; replay settled at {after_replay}"
         );
 
         user.delete_worker(&worker).await?;

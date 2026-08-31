@@ -51,6 +51,14 @@ type = "Disabled"
 
 [grpc.tls.config]
 
+[invocation_session_tokens]
+issuer = "local-worker-service"
+verify_only_keys = []
+
+[invocation_session_tokens.active_key]
+id = "local-development"
+key = "0udALeSRcimBmmLXm6iKY1jg4+IZNXv6LaFkdIQ4hLA="
+
 [registry_service]
 connect_timeout = "10s"
 host = "localhost"
@@ -160,13 +168,6 @@ without_time = false
 [webhook_callback_handler]
 hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
 
-[invocation_session_tokens]
-issuer = "local-worker-service"
-
-[invocation_session_tokens.active_key]
-id = "local-development"
-key = "0udALeSRcimBmmLXm6iKY1jg4+IZNXv6LaFkdIQ4hLA="
-
 [worker_executor]
 connect_timeout = "10s"
 max_message_size = 33554432
@@ -189,3 +190,4 @@ multiplier = 2.0
 type = "Disabled"
 
 [worker_executor.tls.config]
+

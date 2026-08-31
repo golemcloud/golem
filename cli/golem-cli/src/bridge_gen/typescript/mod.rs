@@ -379,6 +379,9 @@ impl TypeScriptBridgeGenerator {
                     "typescript": "^5.9",
                     "tsx": "^4.7",
                     "@types/node": "^25",
+                },
+                "pnpm": {
+                    "onlyBuiltDependencies": ["esbuild"],
                 }
             }
         };

@@ -95,6 +95,7 @@ pub struct InvocationSessionState {
     resume_attempt_id: Option<crate::proto::golem::common::Uuid>,
     resume_callee_fingerprint: Option<crate::proto::golem::common::Uuid>,
     resume_accepted_epoch: Option<u64>,
+    terminal_resume_cursors: HashSet<(u64, u64)>,
     has_result: bool,
     inputs: HashMap<u64, InputState>,
     outputs: HashMap<u64, OutputState>,
@@ -116,6 +117,7 @@ impl Default for InvocationSessionState {
             resume_attempt_id: None,
             resume_callee_fingerprint: None,
             resume_accepted_epoch: None,
+            terminal_resume_cursors: HashSet::new(),
             has_result: false,
             inputs: HashMap::new(),
             outputs: HashMap::new(),
@@ -380,6 +382,25 @@ impl InvocationSessionState {
 
     pub fn all_inputs_terminal(&self) -> bool {
         self.inputs.values().all(|state| state.terminal)
+    }
+
+    pub fn mark_terminal_resume_cursor(
+        &mut self,
+        durable_stream_id: (u64, u64),
+    ) -> Result<(), String> {
+        if !matches!(self.phase, SessionPhase::AwaitDecision { resume: true }) {
+            return Err(
+                "terminal resume cursors can only be marked before resume acceptance".to_string(),
+            );
+        }
+        match self.resume_cursors.get(&durable_stream_id) {
+            Some(Some(_)) => {
+                self.terminal_resume_cursors.insert(durable_stream_id);
+                Ok(())
+            }
+            Some(None) => Err("a stream-start resume cursor cannot be terminal".to_string()),
+            None => Err("terminal resume cursor was not requested".to_string()),
+        }
     }
 
     fn validate_request(
@@ -648,11 +669,13 @@ impl InvocationSessionState {
                         );
                     }
                     StreamMappingRole::Output => {
+                        let terminal = self.terminal_resume_cursors.contains(&durable_stream_id);
                         self.outputs.insert(
                             mapping.transport_stream_id,
                             OutputState {
-                                resume_first_frame: true,
+                                resume_first_frame: !terminal,
                                 resume_mapping_announcement_pending: true,
+                                terminal,
                                 durable_stream_id,
                                 last_durable_offset: self
                                     .resume_cursors
@@ -2754,6 +2777,26 @@ mod tests {
             )]))
             .unwrap();
         assert!(!state.is_complete());
+    }
+
+    #[test]
+    fn terminal_resume_cursor_allows_completion_without_replaying_its_terminal() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_public_request(&resume_attach(vec![StreamCursor {
+                stream_id: Some(uuid(107)),
+                last_observed_offset: Some(durable_offset(1)),
+            }]))
+            .unwrap();
+        state.mark_terminal_resume_cursor((0, 107)).unwrap();
+        state
+            .validate_response(&resumed_acceptance(vec![mapping(
+                7,
+                StreamMappingRole::Output,
+            )]))
+            .unwrap();
+        state.validate_response(&result(stream(7))).unwrap();
+        state.validate_response(&success()).unwrap();
     }
 
     #[test]

@@ -1402,30 +1402,60 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let durable_attachment = acceptance.streams.clone();
         async {
             let result = async {
-            let component_revision = acceptance
-                .prepared
-                .attempt
-                .invocation
-                .target_component_revision;
-            let component = self
-                .component_service()
-                .get_metadata(
-                    acceptance.prepared.attempt.session_key.callee.component_id,
-                    Some(component_revision),
-                )
-                .await?;
-            let (input_schema, input_element_types) =
-                resumed_input_schema(&acceptance.prepared, &component.metadata)?;
-            acceptance.streams = acceptance.streams.clone().with_input_schema(
-                Arc::new(input_schema),
-                component_revision,
-                input_element_types,
-            );
-            Ok::<_, WorkerExecutorError>(acceptance)
+                let component_revision = acceptance
+                    .prepared
+                    .attempt
+                    .invocation
+                    .target_component_revision;
+                let component = self
+                    .component_service()
+                    .get_metadata(
+                        acceptance.prepared.attempt.session_key.callee.component_id,
+                        Some(component_revision),
+                    )
+                    .await?;
+                let (input_schema, input_element_types) =
+                    resumed_input_schema(&acceptance.prepared, &component.metadata)?;
+                acceptance.streams = acceptance.streams.clone().with_input_schema(
+                    Arc::new(input_schema),
+                    component_revision,
+                    input_element_types,
+                );
+                let cursor_map = resume
+                    .cursors
+                    .iter()
+                    .filter_map(|cursor| {
+                        let stream_id = cursor.stream_id.map(|stream_id| {
+                            golem_common::model::durable_stream::StreamId(stream_id.into())
+                        })?;
+                        let offset = cursor
+                            .last_observed_offset
+                            .as_ref()
+                            .and_then(|offset| offset.as_slice().try_into().ok())
+                            .and_then(|offset| {
+                                golem_common::model::durable_stream::StreamOffsetV1::from_bytes(
+                                    offset,
+                                )
+                                .ok()
+                            });
+                        Some((stream_id, offset))
+                    })
+                    .collect::<HashMap<_, _>>();
+                let terminal_cursor_stream_ids = acceptance
+                    .streams
+                    .terminal_output_cursor_stream_ids(&cursor_map)
+                    .await
+                    .map_err(WorkerExecutorError::invalid_request)?;
+                for stream_id in terminal_cursor_stream_ids {
+                    protocol_state
+                        .mark_terminal_resume_cursor(stream_id.0.as_u64_pair())
+                        .map_err(WorkerExecutorError::invalid_request)?;
+                }
+                Ok::<_, WorkerExecutorError>((acceptance, cursor_map))
             }
             .await;
-        let acceptance = match result {
-            Ok(acceptance) => acceptance,
+        let (acceptance, cursor_map) = match result {
+            Ok(result) => result,
             Err(error) => {
                 let rejection = InvocationResponse {
                     response: Some(invocation_response::Response::Rejected(
@@ -1465,12 +1495,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         });
         let streams = acceptance.streams;
-        let output_mapping_ids = acceptance
-            .mappings
-            .iter()
-            .filter(|mapping| mapping.role == SessionStreamRoleV1::Output)
-            .map(|mapping| mapping.transport_stream_id)
-            .collect::<Vec<_>>();
         let high_waters = match streams.input_high_waters().await {
             Ok(high_waters) => high_waters,
             Err(error) => {
@@ -1557,23 +1581,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
         let attachment_revoked = streams.wait_for_attachment_revocation();
         tokio::pin!(attachment_revoked);
-        let cursor_map = resume
-            .cursors
-            .iter()
-            .filter_map(|cursor| {
-                let stream_id = cursor.stream_id.map(|stream_id| {
-                    golem_common::model::durable_stream::StreamId(stream_id.into())
-                })?;
-                let offset = cursor
-                    .last_observed_offset
-                    .as_ref()
-                    .and_then(|offset| offset.as_slice().try_into().ok())
-                    .and_then(|offset| {
-                        golem_common::model::durable_stream::StreamOffsetV1::from_bytes(offset).ok()
-                    });
-                Some((stream_id, offset))
-            })
-            .collect::<HashMap<_, _>>();
 
         let (persisted_result, already_finished) = loop {
             match streams.persisted_result().await {
@@ -1645,6 +1652,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 return;
             }
 
+        let output_mapping_ids = match streams.session_root_output_mapping_ids().await {
+            Ok(output_mapping_ids) => output_mapping_ids,
+            Err(error) => {
+                send_protocol_failure(&responses, error).await;
+                return;
+            }
+        };
         {
             let mut output_pump = tokio::task::JoinSet::new();
             let output_streams = streams.clone();

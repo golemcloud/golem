@@ -292,7 +292,7 @@ pub enum PublicClientMessage {
         idempotency_key: String,
         #[serde(rename = "methodParameters")]
         method_parameters: Value,
-        selector: InvocationSelector,
+        selector: Box<InvocationSelector>,
         version: u8,
     },
     #[serde(rename = "resumeAttach")]

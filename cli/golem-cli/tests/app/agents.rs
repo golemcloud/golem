@@ -1191,18 +1191,18 @@ async fn test_generated_streaming_bridges_end_to_end() {
         console.log('TYPESCRIPT_STREAMING_BRIDGE_E2E_OK')
         "#};
     std::fs::write(typescript_client.join("e2e.ts"), typescript_driver).unwrap();
-    let mut typescript_install = std::process::Command::new("npx");
+    let mut typescript_install = std::process::Command::new("pnpm");
     typescript_install
-        .args(["pnpm", "install", "--ignore-workspace"])
+        .args(["install", "--ignore-workspace"])
         .current_dir(&typescript_client);
     assert_generated_driver(
         run_generated_driver(typescript_install).await,
         "TypeScript install",
         "",
     );
-    let mut typescript_command = std::process::Command::new("npx");
+    let mut typescript_command = std::process::Command::new("pnpm");
     typescript_command
-        .args(["tsx", "e2e.ts"])
+        .args(["exec", "tsx", "e2e.ts"])
         .current_dir(&typescript_client);
     let typescript_output = run_generated_driver(typescript_command).await;
     typescript_proxy_task.abort();

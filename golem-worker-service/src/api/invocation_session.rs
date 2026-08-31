@@ -1019,7 +1019,7 @@ where
                         ..
                     } => Ok(Some(InitialMessage::Start {
                         start: PublicAgentSessionStart {
-                            selector,
+                            selector: *selector,
                             config,
                             idempotency_key,
                             attempt_id,
