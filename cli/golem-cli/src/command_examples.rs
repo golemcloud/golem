@@ -514,11 +514,17 @@ pub const API_DOMAIN_DELETE: &str = "Examples:
 
 pub const PLUGIN_LIST: &str = "Examples:
   # List all plugins registered for the current account
-  golem-cli plugin list";
+  golem-cli plugin list
+
+  # List plugins owned by another account
+  golem-cli plugin list --account owner@example.com";
 
 pub const PLUGIN_GET: &str = "Examples:
-  # Show details of a registered plugin
-  golem-cli plugin get 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890";
+  # Show details by name and version
+  golem-cli plugin get my-plugin 1.0.0
+
+  # Show details by ID
+  golem-cli plugin get --id 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890";
 
 pub const PLUGIN_REGISTER: &str = "Examples:
   # Register a plugin from a manifest file on disk
@@ -528,8 +534,11 @@ pub const PLUGIN_REGISTER: &str = "Examples:
   cat my-plugin.json | golem-cli plugin register -";
 
 pub const PLUGIN_UNREGISTER: &str = "Examples:
-  # Unregister a plugin by ID (use `plugin list` / `plugin get` to find IDs)
-  golem-cli plugin unregister 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890";
+  # Unregister by name and version
+  golem-cli plugin unregister my-plugin 1.0.0
+
+  # Unregister by ID
+  golem-cli plugin unregister --id 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890";
 
 // Profile commands ---------------------------------------------------------------------------------
 

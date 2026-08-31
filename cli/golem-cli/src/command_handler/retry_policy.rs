@@ -15,9 +15,7 @@
 use crate::command::retry_policy::RetryPolicySubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
-use crate::log::log_error;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::retry_policy::{
     RetryPolicyCreateView, RetryPolicyDeleteView, RetryPolicyGetView, RetryPolicyListView,
@@ -137,18 +135,11 @@ impl RetryPolicyCommandHandler {
 
             let clients = self.ctx.golem_clients().await?;
 
-            let Some(result) = clients
+            let result = clients
                 .retry_policies
-                .list_environment_retry_policies(&environment.environment_id.0)
+                .get_environment_retry_policy(&environment.environment_id.0, &name)
                 .await
-                .map_service_error()?
-                .values
-                .into_iter()
-                .find(|p| p.name == name)
-            else {
-                log_error(format!("Retry policy '{}' not found in environment", name));
-                bail!(NonSuccessfulExit);
-            };
+                .map_service_error()?;
 
             Ok(result)
         } else if let Some(id) = id {

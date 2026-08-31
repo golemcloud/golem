@@ -79,23 +79,11 @@ impl SecretCommandHandler {
 
             let canonical = CanonicalAgentSecretPath::from_path_in_unknown_casing(&path.0);
 
-            let secrets = clients
+            Ok(clients
                 .agent_secrets
-                .list_environment_agent_secrets(&environment.environment_id.0)
+                .get_environment_agent_secret(&environment.environment_id.0, &canonical.0)
                 .await
-                .map_service_error()?
-                .values;
-
-            match secrets.into_iter().find(|s| s.path == canonical) {
-                Some(secret) => Ok(secret),
-                None => {
-                    log_error(format!(
-                        "Agent secret with path '{}' not found in environment",
-                        canonical
-                    ));
-                    bail!(NonSuccessfulExit);
-                }
-            }
+                .map_service_error()?)
         } else if let Some(id) = id {
             Ok(clients
                 .agent_secrets

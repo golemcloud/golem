@@ -122,6 +122,33 @@ The response is the updated account data.
 }
 ```
 
+## Retrieve an account by email address.
+Path|Method|Protected
+---|---|---
+`/v1/accounts/by-email/{account_email}`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "name": "string",
+  "email": "string",
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
+  "roles": [
+    "admin"
+  ],
+  "accountRootCardId": "dc9e74a3-7f70-412c-9cf0-c0704225960b"
+}
+```
+
 ## Get an account's plan
 Path|Method|Protected
 ---|---|---

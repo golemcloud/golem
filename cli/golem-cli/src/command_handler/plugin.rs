@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::command::plugin::PluginSubcommand;
+use crate::command::shared_args::AccountScopeArgs;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::MapServiceError;
@@ -44,16 +45,33 @@ impl PluginCommandHandler {
 
     pub async fn handle_command(&self, subcommand: PluginSubcommand) -> anyhow::Result<()> {
         match subcommand {
-            PluginSubcommand::List => self.cmd_list().await,
-            PluginSubcommand::Get { plugin_id: id } => self.cmd_get(id).await,
-            PluginSubcommand::Register { manifest } => self.cmd_register(manifest).await,
-            PluginSubcommand::Unregister { plugin_id: id } => self.cmd_unregister(id).await,
+            PluginSubcommand::List { account } => self.cmd_list(account).await,
+            PluginSubcommand::Get {
+                name,
+                version,
+                id,
+                account,
+            } => self.cmd_get(name, version, id, account).await,
+            PluginSubcommand::Register { manifest, account } => {
+                self.cmd_register(manifest, account).await
+            }
+            PluginSubcommand::Unregister {
+                name,
+                version,
+                id,
+                account,
+            } => self.cmd_unregister(name, version, id, account).await,
         }
     }
 
-    async fn cmd_list(&self) -> anyhow::Result<()> {
+    async fn cmd_list(&self, account: AccountScopeArgs) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
-        let account_id = self.ctx.account_id().await?;
+        let explicit_scope = account.account.is_some() || account.account_id.is_some();
+        let account_id = self
+            .ctx
+            .account_handler()
+            .select_account_id_or_err(account)
+            .await?;
 
         let own_plugins = clients
             .plugin
@@ -70,11 +88,12 @@ impl PluginCommandHandler {
             })
             .collect();
 
-        if let Ok(environment) = self
-            .ctx
-            .environment_handler()
-            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
-            .await
+        if !explicit_scope
+            && let Ok(environment) = self
+                .ctx
+                .environment_handler()
+                .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+                .await
             && let Ok(grants) = self
                 .ctx
                 .environment_handler()
@@ -109,14 +128,32 @@ impl PluginCommandHandler {
         Ok(())
     }
 
-    async fn cmd_get(&self, id: Uuid) -> anyhow::Result<()> {
+    async fn cmd_get(
+        &self,
+        name: Option<String>,
+        version: Option<String>,
+        id: Option<Uuid>,
+        account: AccountScopeArgs,
+    ) -> anyhow::Result<()> {
         let client = self.ctx.golem_clients().await?;
-
-        let result = client
-            .plugin
-            .get_plugin_by_id(&id)
-            .await
-            .map_service_error()?;
+        let result = if let Some(id) = id {
+            client
+                .plugin
+                .get_plugin_by_id(&id)
+                .await
+                .map_service_error()?
+        } else {
+            let account_id = self
+                .ctx
+                .account_handler()
+                .select_account_id_or_err(account)
+                .await?;
+            client
+                .plugin
+                .get_account_plugin(&account_id.0, &name.unwrap(), &version.unwrap())
+                .await
+                .map_service_error()?
+        };
 
         self.ctx
             .log_handler()
@@ -124,7 +161,11 @@ impl PluginCommandHandler {
         Ok(())
     }
 
-    async fn cmd_register(&self, manifest: PathBufOrStdin) -> anyhow::Result<()> {
+    async fn cmd_register(
+        &self,
+        manifest: PathBufOrStdin,
+        account: AccountScopeArgs,
+    ) -> anyhow::Result<()> {
         let manifest = manifest.read_to_string()?;
         let manifest: PluginManifest = serde_yaml::from_str(&manifest)
             .with_context(|| anyhow!("Failed to decode plugin manifest"))?;
@@ -156,10 +197,15 @@ impl PluginCommandHandler {
 
             let clients = self.ctx.golem_clients().await?;
 
+            let account_id = self
+                .ctx
+                .account_handler()
+                .select_account_id_or_err(account)
+                .await?;
             let result = clients
                 .plugin
                 .create_plugin(
-                    &self.ctx.account_id().await?.0,
+                    &account_id.0,
                     &PluginRegistrationCreation {
                         name: manifest.name,
                         version: manifest.version,
@@ -180,8 +226,31 @@ impl PluginCommandHandler {
         }
     }
 
-    async fn cmd_unregister(&self, id: Uuid) -> anyhow::Result<()> {
+    async fn cmd_unregister(
+        &self,
+        name: Option<String>,
+        version: Option<String>,
+        id: Option<Uuid>,
+        account: AccountScopeArgs,
+    ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
+
+        let id = if let Some(id) = id {
+            id
+        } else {
+            let account_id = self
+                .ctx
+                .account_handler()
+                .select_account_id_or_err(account)
+                .await?;
+            clients
+                .plugin
+                .get_account_plugin(&account_id.0, &name.unwrap(), &version.unwrap())
+                .await
+                .map_service_error()?
+                .id
+                .0
+        };
 
         let result = clients
             .plugin

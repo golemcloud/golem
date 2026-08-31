@@ -36,6 +36,12 @@ use std::sync::Arc;
 pub enum PluginRegistrationError {
     #[error("Registered plugin not found for id {0}")]
     PluginRegistrationNotFound(PluginRegistrationId),
+    #[error("Registered plugin {name}/{version} not found in account {account_id}")]
+    PluginRegistrationByNameNotFound {
+        account_id: AccountId,
+        name: String,
+        version: String,
+    },
     #[error("Target component for oplog processor does not exist")]
     OplogProcessorComponentDoesNotExist,
     #[error("Plugin with this name and version already exists")]
@@ -52,6 +58,7 @@ impl SafeDisplay for PluginRegistrationError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::PluginRegistrationNotFound(_) => self.to_string(),
+            Self::PluginRegistrationByNameNotFound { .. } => self.to_string(),
             Self::OplogProcessorComponentDoesNotExist => self.to_string(),
             Self::PluginNameAndVersionAlreadyExists => self.to_string(),
             Self::ParentAccountNotFound(_) => self.to_string(),
@@ -199,6 +206,50 @@ impl PluginRegistrationService {
         .map_err(|_| PluginRegistrationError::PluginRegistrationNotFound(plugin_id))?;
 
         Ok(plugin)
+    }
+
+    pub async fn get_account_plugin(
+        &self,
+        account_id: AccountId,
+        name: &str,
+        version: &str,
+        auth: &AuthCtx,
+    ) -> Result<PluginRegistration, PluginRegistrationError> {
+        let account =
+            self.account_service
+                .get(account_id, auth)
+                .await
+                .map_err(|err| match err {
+                    AccountError::AccountNotFound(id) => {
+                        PluginRegistrationError::ParentAccountNotFound(id)
+                    }
+                    other => other.into(),
+                })?;
+        authorize_account_plugin_permission(
+            auth,
+            &account.email,
+            AccountPluginVerb::View,
+            AccountPluginResourcePattern::Name(AccountPluginName(name.to_string())),
+        )
+        .map_err(
+            |_| PluginRegistrationError::PluginRegistrationByNameNotFound {
+                account_id,
+                name: name.to_string(),
+                version: version.to_string(),
+            },
+        )?;
+        self.plugin_repo
+            .get_by_name_and_version(account_id.0, name, version)
+            .await?
+            .ok_or_else(
+                || PluginRegistrationError::PluginRegistrationByNameNotFound {
+                    account_id,
+                    name: name.to_string(),
+                    version: version.to_string(),
+                },
+            )?
+            .try_into()
+            .map_err(Into::into)
     }
 
     async fn get_plugin_record(

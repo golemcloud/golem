@@ -78,6 +78,36 @@ Path|Method|Protected
 }
 ```
 
+## Get a security scheme in an environment by name.
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/security-schemes/{security_scheme_name}`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "name": "string",
+  "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+  "providerType": {
+    "type": "Gitlab"
+  },
+  "clientId": "string",
+  "redirectUrl": "string",
+  "scopes": [
+    "string"
+  ]
+}
+```
+
 ## Get security scheme
 Path|Method|Protected
 ---|---|---

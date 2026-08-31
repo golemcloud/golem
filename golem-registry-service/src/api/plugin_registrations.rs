@@ -137,6 +137,49 @@ impl PluginRegistrationsApi {
         }))
     }
 
+    /// Get an account plugin by name and version.
+    #[oai(
+        path = "/accounts/:account_id/plugins/:plugin_name/:plugin_version",
+        method = "get",
+        operation_id = "get_account_plugin",
+        tag = ApiTags::Account
+    )]
+    async fn get_account_plugin(
+        &self,
+        account_id: Path<AccountId>,
+        plugin_name: Path<String>,
+        plugin_version: Path<String>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<PluginRegistrationDto>> {
+        let record = recorded_http_api_request!(
+            "get_account_plugin",
+            account_id = account_id.0.to_string(),
+            plugin_name = plugin_name.0.clone(),
+            plugin_version = plugin_version.0.clone()
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let response = self
+            .get_account_plugin_internal(account_id.0, plugin_name.0, plugin_version.0, auth)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn get_account_plugin_internal(
+        &self,
+        account_id: AccountId,
+        plugin_name: String,
+        plugin_version: String,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<PluginRegistrationDto>> {
+        Ok(Json(
+            self.plugin_registration_service
+                .get_account_plugin(account_id, &plugin_name, &plugin_version, &auth)
+                .await?
+                .into(),
+        ))
+    }
+
     /// Get a plugin by id
     #[oai(
         path = "/plugins/:plugin_id",

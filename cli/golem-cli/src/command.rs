@@ -1122,9 +1122,12 @@ pub mod shared_args {
     }
 
     #[derive(Debug, Args)]
-    pub struct AccountIdOptionalArg {
+    pub struct AccountScopeArgs {
+        /// Account email
+        #[arg(long, conflicts_with = "account_id")]
+        pub account: Option<String>,
         /// Account ID
-        #[arg(long)]
+        #[arg(long, conflicts_with = "account")]
         pub account_id: Option<AccountId>,
     }
 }
@@ -2159,6 +2162,7 @@ pub mod retry_policy {
 }
 
 pub mod plugin {
+    use crate::command::shared_args::AccountScopeArgs;
     use crate::model::input::PathBufOrStdin;
     use clap::Subcommand;
     use uuid::Uuid;
@@ -2167,16 +2171,27 @@ pub mod plugin {
     pub enum PluginSubcommand {
         /// List account plugins
         #[command(after_help = crate::command_examples::PLUGIN_LIST)]
-        List,
+        List {
+            #[command(flatten)]
+            account: AccountScopeArgs,
+        },
         /// Get plugin details
         #[command(after_help = crate::command_examples::PLUGIN_GET)]
         Get {
-            /// Plugin ID
-            plugin_id: Uuid, // TODO: atomic: missing method for looking up by name
+            #[arg(required_unless_present = "id", conflicts_with = "id")]
+            name: Option<String>,
+            #[arg(required_unless_present = "id", conflicts_with = "id")]
+            version: Option<String>,
+            #[arg(long, required_unless_present_all = ["name", "version"], conflicts_with_all = ["name", "version", "account", "account_id"])]
+            id: Option<Uuid>,
+            #[command(flatten)]
+            account: AccountScopeArgs,
         },
         /// Register a new plugin for the account
         #[command(after_help = crate::command_examples::PLUGIN_REGISTER)]
         Register {
+            #[command(flatten)]
+            account: AccountScopeArgs,
             #[arg(
                 help = crate::command_glossary::PLUGIN_MANIFEST_SHORT,
                 long_help = crate::command_glossary::PLUGIN_MANIFEST_LONG,
@@ -2187,8 +2202,14 @@ pub mod plugin {
         /// Unregister a plugin
         #[command(after_help = crate::command_examples::PLUGIN_UNREGISTER)]
         Unregister {
-            /// Plugin ID
-            plugin_id: Uuid, // TODO: atomic: missing method for deleting by name
+            #[arg(required_unless_present = "id", conflicts_with = "id")]
+            name: Option<String>,
+            #[arg(required_unless_present = "id", conflicts_with = "id")]
+            version: Option<String>,
+            #[arg(long, required_unless_present_all = ["name", "version"], conflicts_with_all = ["name", "version", "account", "account_id"])]
+            id: Option<Uuid>,
+            #[command(flatten)]
+            account: AccountScopeArgs,
         },
     }
 }
@@ -2324,7 +2345,7 @@ pub mod api_token {
 }
 
 pub mod account {
-    use crate::command::shared_args::AccountIdOptionalArg;
+    use crate::command::shared_args::AccountScopeArgs;
     use clap::{Args, Subcommand};
     use golem_common::model::account_usage::{
         DEFAULT_STORAGE_USAGE_HISTORY_PERIODS, StorageUsagePeriod,
@@ -2336,7 +2357,7 @@ pub mod account {
         /// Show storage usage for current or selected billing period.
         Show {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeArgs,
 
             /// Billing period in YYYY-MM format.
             #[arg(long)]
@@ -2345,7 +2366,7 @@ pub mod account {
         /// Show storage usage for closed billing periods.
         History {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeArgs,
 
             /// Number of closed periods to show.
             #[arg(long, default_value_t = DEFAULT_STORAGE_USAGE_HISTORY_PERIODS)]
@@ -2358,12 +2379,12 @@ pub mod account {
         /// Show effective storage and memory limits.
         Show {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeArgs,
         },
         /// Set one storage or memory limit.
         Set {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeArgs,
 
             /// Maximum storage per agent in bytes. Cannot exceed the plan ceiling.
             #[arg(
@@ -2388,7 +2409,7 @@ pub mod account {
         /// Clear selected overrides. With no flags, clears storage for compatibility.
         Unset {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeArgs,
 
             /// Clear the maximum storage per-agent override.
             #[arg(
@@ -2424,7 +2445,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_LIST)]
         List {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeArgs,
 
             /// List permission shares targeting the account instead of owned by the account.
             #[arg(long)]
@@ -2440,7 +2461,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_GET_BY_NAME)]
         GetByName {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeArgs,
 
             /// Permission share name.
             name: String,
@@ -2449,7 +2470,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_NEW)]
         New {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeArgs,
 
             /// Target account email receiving the permissions.
             target_account_email: String,
@@ -2487,7 +2508,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_GET)]
         Get {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeArgs,
         },
         /// Update some information about the account.
         ///
@@ -2495,7 +2516,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_UPDATE)]
         Update {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeArgs,
             /// New name to set for the account.
             account_name: String,
         },
@@ -2511,7 +2532,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_DELETE)]
         Delete {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeArgs,
         },
         /// Show current or historical account storage usage.
         Usage {
@@ -2532,7 +2553,7 @@ pub mod account {
 }
 
 pub mod card {
-    use crate::command::shared_args::AccountIdOptionalArg;
+    use crate::command::shared_args::AccountScopeArgs;
     use crate::model::agent::RawAgentId;
     use clap::Subcommand;
     use golem_common::model::card::CardId;
@@ -2543,10 +2564,10 @@ pub mod card {
         #[command(after_help = crate::command_examples::CARD_LIST)]
         List {
             #[command(flatten)]
-            account_id: AccountIdOptionalArg,
+            account: AccountScopeArgs,
 
             /// List cards in an agent's wallet instead of account-owned cards. Activates the agent if not already active.
-            #[arg(long, conflicts_with = "account_id")]
+            #[arg(long, conflicts_with_all = ["account", "account_id"])]
             agent: Option<RawAgentId>,
 
             /// Include account root cards. If no include flags are set, all account card kinds are included.
@@ -3009,7 +3030,7 @@ mod test {
                     AccountSubcommand::Usage {
                         subcommand:
                             AccountUsageSubcommand::Show {
-                                account_id: selected_account_id,
+                                account: selected_account_id,
                                 period,
                             },
                     },

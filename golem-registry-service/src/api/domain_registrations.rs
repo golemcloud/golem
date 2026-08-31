@@ -17,7 +17,7 @@ use crate::services::auth::AuthService;
 use crate::services::domain_registration::DomainRegistrationService;
 use golem_common::model::Page;
 use golem_common::model::domain_registration::{
-    DomainRegistration, DomainRegistrationCreation, DomainRegistrationId,
+    Domain, DomainRegistration, DomainRegistrationCreation, DomainRegistrationId,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::poem::NoContentResponse;
@@ -133,6 +133,45 @@ impl DomainRegistrationsApi {
         Ok(Json(Page {
             values: domain_registrations,
         }))
+    }
+
+    /// Get a domain registration in an environment by domain.
+    #[oai(
+        path = "/envs/:environment_id/domain-registrations/:domain",
+        method = "get",
+        operation_id = "get_environment_domain_registration",
+        tag = ApiTags::Environment
+    )]
+    async fn get_environment_domain_registration(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        domain: Path<Domain>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<DomainRegistration>> {
+        let record = recorded_http_api_request!(
+            "get_environment_domain_registration",
+            environment_id = environment_id.0.to_string(),
+            domain = domain.0.to_string()
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let response = self
+            .get_environment_domain_registration_internal(environment_id.0, domain.0, auth)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn get_environment_domain_registration_internal(
+        &self,
+        environment_id: EnvironmentId,
+        domain: Domain,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<DomainRegistration>> {
+        Ok(Json(
+            self.domain_registration_service
+                .get_in_environment_by_id(environment_id, &domain, &auth)
+                .await?,
+        ))
     }
 
     /// Get domain registration by id

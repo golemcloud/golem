@@ -405,6 +405,26 @@ impl SecuritySchemeService {
         Ok(result)
     }
 
+    pub async fn get_in_environment(
+        &self,
+        environment_id: EnvironmentId,
+        name: &SecuritySchemeName,
+        auth: &AuthCtx,
+    ) -> Result<SecurityScheme, SecuritySchemeError> {
+        let environment = self
+            .environment_service
+            .get(environment_id, false, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) => {
+                    SecuritySchemeError::ParentEnvironmentNotFound(environment_id)
+                }
+                other => other.into(),
+            })?;
+        self.get_security_scheme_for_environment_and_name(&environment, name, auth)
+            .await
+    }
+
     async fn get_with_environment(
         &self,
         security_scheme_id: SecuritySchemeId,

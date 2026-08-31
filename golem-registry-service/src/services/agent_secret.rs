@@ -55,6 +55,11 @@ pub enum AgentSecretError {
     ParentEnvironmentNotFound(EnvironmentId),
     #[error("Agent secret {0} not found")]
     AgentSecretNotFound(AgentSecretId),
+    #[error("Agent secret for path {path} not found in environment {environment_id}")]
+    AgentSecretByPathNotFound {
+        environment_id: EnvironmentId,
+        path: CanonicalAgentSecretPath,
+    },
     #[error("Concurrent update attempt")]
     ConcurrentModification,
     #[error(transparent)]
@@ -344,6 +349,7 @@ impl SafeDisplay for AgentSecretError {
             Self::AgentSecretForPathAlreadyExists { .. } => self.to_string(),
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::AgentSecretNotFound(_) => self.to_string(),
+            Self::AgentSecretByPathNotFound { .. } => self.to_string(),
             Self::ConcurrentModification => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
@@ -555,6 +561,43 @@ impl AgentSecretService {
     ) -> Result<AgentSecret, AgentSecretError> {
         let (agent_secret, _) = self.get_with_environment(agent_secret_id, auth).await?;
         Ok(agent_secret)
+    }
+
+    pub async fn get_in_environment(
+        &self,
+        environment_id: EnvironmentId,
+        path: CanonicalAgentSecretPath,
+        auth: &AuthCtx,
+    ) -> Result<AgentSecret, AgentSecretError> {
+        let environment = self
+            .environment_service
+            .get(environment_id, false, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) => {
+                    AgentSecretError::ParentEnvironmentNotFound(environment_id)
+                }
+                other => other.into(),
+            })?;
+        authorize_agent_secret_permission(
+            auth,
+            &environment,
+            Some(&path),
+            EnvironmentAgentSecretVerb::View,
+        )
+        .map_err(|_| AgentSecretError::AgentSecretByPathNotFound {
+            environment_id,
+            path: path.clone(),
+        })?;
+        self.agent_secret_repo
+            .get_for_environment_and_path(environment_id.0, path.0.clone())
+            .await?
+            .ok_or(AgentSecretError::AgentSecretByPathNotFound {
+                environment_id,
+                path,
+            })?
+            .try_into()
+            .map_err(Into::into)
     }
 
     pub async fn list_in_environment(

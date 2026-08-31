@@ -48,6 +48,11 @@ pub enum RetryPolicyError {
     ParentEnvironmentNotFound(EnvironmentId),
     #[error("Retry policy {0} not found")]
     RetryPolicyNotFound(RetryPolicyId),
+    #[error("Retry policy {name} not found in environment {environment_id}")]
+    RetryPolicyByNameNotFound {
+        environment_id: EnvironmentId,
+        name: String,
+    },
     #[error("Concurrent update attempt")]
     ConcurrentModification,
     #[error(transparent)]
@@ -64,6 +69,7 @@ impl SafeDisplay for RetryPolicyError {
             Self::RetryPolicyForNameAlreadyExists { .. } => self.to_string(),
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::RetryPolicyNotFound(_) => self.to_string(),
+            Self::RetryPolicyByNameNotFound { .. } => self.to_string(),
             Self::ConcurrentModification => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
@@ -240,6 +246,43 @@ impl RetryPolicyService {
     ) -> Result<StoredRetryPolicy, RetryPolicyError> {
         let (retry_policy, _) = self.get_with_environment(retry_policy_id, auth).await?;
         Ok(retry_policy)
+    }
+
+    pub async fn get_in_environment(
+        &self,
+        environment_id: EnvironmentId,
+        name: &str,
+        auth: &AuthCtx,
+    ) -> Result<StoredRetryPolicy, RetryPolicyError> {
+        let environment = self
+            .environment_service
+            .get(environment_id, false, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) => {
+                    RetryPolicyError::ParentEnvironmentNotFound(environment_id)
+                }
+                other => other.into(),
+            })?;
+        authorize_retry_policy_permission(
+            auth,
+            &environment,
+            Some(name),
+            EnvironmentRetryPolicyVerb::View,
+        )
+        .map_err(|_| RetryPolicyError::RetryPolicyByNameNotFound {
+            environment_id,
+            name: name.to_string(),
+        })?;
+        self.retry_policy_repo
+            .get_for_environment_and_name(environment_id.0, name)
+            .await?
+            .ok_or_else(|| RetryPolicyError::RetryPolicyByNameNotFound {
+                environment_id,
+                name: name.to_string(),
+            })?
+            .try_into()
+            .map_err(Into::into)
     }
 
     pub async fn list_in_environment(

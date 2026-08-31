@@ -18,6 +18,7 @@ use crate::services::auth::AuthService;
 use golem_common::model::Page;
 use golem_common::model::agent_secret::{
     AgentSecretCreation, AgentSecretDto, AgentSecretId, AgentSecretRevision, AgentSecretUpdate,
+    CanonicalAgentSecretPath,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
@@ -133,6 +134,41 @@ impl AgentSecretsApi {
         let converted = result.into_iter().map(AgentSecretDto::from).collect();
 
         Ok(Json(Page { values: converted }))
+    }
+
+    /// Get an agent secret in an environment by its path segments.
+    #[oai(path = "/envs/:environment_id/agent-secrets/by-path", method = "get", operation_id = "get_environment_agent_secret", tag = ApiTags::Environment)]
+    async fn get_environment_agent_secret(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        path: Query<Vec<String>>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<AgentSecretDto>> {
+        let record = recorded_http_api_request!("get_environment_agent_secret", environment_id = environment_id.0.to_string(), path = ?path.0);
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let response = self
+            .get_environment_agent_secret_internal(
+                environment_id.0,
+                CanonicalAgentSecretPath(path.0),
+                auth,
+            )
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn get_environment_agent_secret_internal(
+        &self,
+        environment_id: EnvironmentId,
+        path: CanonicalAgentSecretPath,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<AgentSecretDto>> {
+        Ok(Json(
+            self.agent_secret_service
+                .get_in_environment(environment_id, path, &auth)
+                .await?
+                .into(),
+        ))
     }
 
     /// Get agent secret by id.
