@@ -15,7 +15,7 @@ test "collect reports stdout failure after structured success" {
   try
     select_collected_terminals(
       (
-        Ok({ result: None, stdout: None }) :
+        Ok({ result: None, stdout: None, }) :
         Result[InvocationResult, ToolError[NoToolError]]),
       CollectedStdout::Failed(ToolStreamError::Failed("stdout failed")),
     )

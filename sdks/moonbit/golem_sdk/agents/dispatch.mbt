@@ -12,6 +12,7 @@
 /// Decodes an invocation/constructor input wire value into its ordered
 /// parameter values, validating that it is a record of exactly `arity` fields.
 /// Decode and shape errors are mapped to `AgentError::InvalidInput`.
+#warnings("-unused_async")
 pub async fn decode_invocation_input(
   input : @types.SchemaValueTree,
   arity : Int,
@@ -21,14 +22,14 @@ pub async fn decode_invocation_input(
   let value = @model_host.schema_value_from_wit(input) catch {
     e =>
       raise @common.AgentError::InvalidInput(
-        "\{context}: invalid schema value input: \{e}",
+        "\{context}: invalid schema value input: \{repr(e)}",
       )
   }
   let fields = @schema.expect_record(value, context) catch {
     e => {
       value.release_resources(drops)
       raise @common.AgentError::InvalidInput(
-        "\{context}: expected a record input: \{e}",
+        "\{context}: expected a record input: \{repr(e)}",
       )
     }
   }
@@ -68,7 +69,7 @@ fn[T : @schema.FromSchema] decode_param_with_resource_drops(
     e => {
       @model.SchemaValue::Record(fields).release_resources(drops)
       raise @common.AgentError::InvalidInput(
-        "\{context}: missing parameter \{index}: \{e}",
+        "\{context}: missing parameter \{index}: \{repr(e)}",
       )
     }
   }
@@ -76,7 +77,7 @@ fn[T : @schema.FromSchema] decode_param_with_resource_drops(
     e => {
       @model.SchemaValue::Record(fields).release_resources(drops)
       raise @common.AgentError::InvalidInput(
-        "\{context}: failed decoding parameter \{index}: \{e}",
+        "\{context}: failed decoding parameter \{index}: \{repr(e)}",
       )
     }
   }
@@ -93,7 +94,7 @@ pub async fn[T : @schema.IntoSchema] encode_output(
     e => {
       model_value.release_resources(@model_host.resource_drops())
       raise @common.AgentError::InvalidType(
-        "failed serializing return value: \{e}",
+        "failed serializing return value: \{repr(e)}",
       )
     }
   }
@@ -111,7 +112,7 @@ pub fn encode_invocation_input(
     e => {
       model_value.release_resources(@model_host.resource_drops())
       raise @common.AgentError::InvalidInput(
-        "failed encoding invocation input: \{e}",
+        "failed encoding invocation input: \{repr(e)}",
       )
     }
   }
@@ -128,7 +129,7 @@ pub async fn encode_invocation_input_async(
     e => {
       model_value.release_resources(@model_host.resource_drops())
       raise @common.AgentError::InvalidInput(
-        "failed encoding invocation input: \{e}",
+        "failed encoding invocation input: \{repr(e)}",
       )
     }
   }
@@ -137,6 +138,7 @@ pub async fn encode_invocation_input_async(
 ///|
 /// Decodes the single output value of an RPC invocation result.
 /// Decode errors are mapped to `AgentError::InvalidType`.
+#warnings("-unused_async")
 pub async fn[T : @schema.FromSchema] decode_output(
   output : @types.SchemaValueTree,
   context : String,
@@ -145,14 +147,14 @@ pub async fn[T : @schema.FromSchema] decode_output(
   let value = @model_host.schema_value_from_wit(output) catch {
     e =>
       raise @common.AgentError::InvalidType(
-        "\{context}: invalid schema value output: \{e}",
+        "\{context}: invalid schema value output: \{repr(e)}",
       )
   }
   @schema.from_value_as(value) catch {
     e => {
       value.release_resources(drops)
       raise @common.AgentError::InvalidType(
-        "\{context}: failed decoding return value: \{e}",
+        "\{context}: failed decoding return value: \{repr(e)}",
       )
     }
   }

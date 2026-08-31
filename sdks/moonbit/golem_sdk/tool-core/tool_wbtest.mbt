@@ -91,17 +91,17 @@ test "rejected tool envelopes drop reached stream resources" {
       root: 0,
     },
   }
-  let result = try? decode_invocation_input_with_resource_drops(
-    input,
-    0,
-    "tool cleanup",
-    {
+  let result = try
+    decode_invocation_input_with_resource_drops(input, 0, "tool cleanup", {
       drop_secret: fn(_) {  },
       drop_quota_token: fn(_) {  },
       drop_stream: fn(_) { dropped[0] += 1 },
       drop_native_stream: fn(_) {  },
-    },
-  )
+    })
+    |> Ok
+  catch {
+    e => Err(e)
+  }
   guard result is Err(@toolCommon.ToolError::InvalidInput(_)) else {
     fail("expected the schema/value mismatch to be rejected")
   }
@@ -110,7 +110,7 @@ test "rejected tool envelopes drop reached stream resources" {
 
 ///|
 fn doc(summary : String) -> @toolCommon.Doc {
-  { summary, description: "details for " + summary, examples: [] }
+  { summary, description: "details for " + summary, examples: [], }
 }
 
 ///|
@@ -151,7 +151,7 @@ fn sample_tool() -> @toolCommon.Tool raise {
         name: "run",
         aliases: [],
         doc: doc("run grep"),
-        globals: { options: [], flags: [] },
+        globals: { options: [], flags: [], },
         subcommands: [],
         body: Some({
           positionals: {
@@ -237,10 +237,10 @@ test "forwarding matches short forms in their separate namespace" {
         name: "short-forward-child",
         aliases: [],
         doc: doc("short forward child"),
-        globals: { options: [], flags: [flag("child-verbose")] },
+        globals: { options: [], flags: [flag("child-verbose")], },
         subcommands: [],
         body: Some({
-          positionals: { fixed: [], tail: None },
+          positionals: { fixed: [], tail: None, },
           options: [],
           flags: [],
           constraints: [],
@@ -260,14 +260,19 @@ test "forwarding matches short forms in their separate namespace" {
         name: "short-forward-parent",
         aliases: [],
         doc: doc("short forward parent"),
-        globals: { options: [], flags: [flag("parent-verbose")] },
+        globals: { options: [], flags: [flag("parent-verbose")], },
         subcommands: [],
         body: None,
       },
     ],
   }
   let parent_fields = parent.canonical_input_fields(0)
-  inspect(parent_fields.map(field => field.name), content="[parent-verbose]")
+  debug_inspect(
+    parent_fields.map(field => field.name),
+    content=(
+      #|["parent-verbose"]
+    ),
+  )
   assert_eq(parent_fields[0].short, Some('v'))
   let model = parent.canonical_input_model(0)
   let input = build_canonical_input(model, [
@@ -312,7 +317,7 @@ test "forwarding keeps authored aliases separate from short forms" {
         name: "root",
         aliases: [],
         doc: doc("root"),
-        globals: { options: [option("format", ["f"], None)], flags: [] },
+        globals: { options: [option("format", ["f"], None)], flags: [], },
         subcommands: [1],
         body: None,
       },
@@ -320,10 +325,10 @@ test "forwarding keeps authored aliases separate from short forms" {
         name: "run",
         aliases: [],
         doc: doc("run"),
-        globals: { options: [], flags: [] },
+        globals: { options: [], flags: [], },
         subcommands: [],
         body: Some({
-          positionals: { fixed: [], tail: None },
+          positionals: { fixed: [], tail: None, },
           options: [option("file", [], Some('f'))],
           flags: [],
           constraints: [],
@@ -385,10 +390,10 @@ test "forwarding prefers an exact name over an unrelated short form" {
         name: "source",
         aliases: [],
         doc: doc("source"),
-        globals: { options: [option("format", None)], flags: [] },
+        globals: { options: [option("format", None)], flags: [], },
         subcommands: [],
         body: Some({
-          positionals: { fixed: [], tail: None },
+          positionals: { fixed: [], tail: None, },
           options: [option("file", Some('f'))],
           flags: [],
           constraints: [],
@@ -408,7 +413,7 @@ test "forwarding prefers an exact name over an unrelated short form" {
         name: "target",
         aliases: [],
         doc: doc("target"),
-        globals: { options: [option("format", Some('f'))], flags: [] },
+        globals: { options: [option("format", Some('f'))], flags: [], },
         subcommands: [],
         body: None,
       },
@@ -456,7 +461,7 @@ test "grafting rejects child short collision with strict ancestor" {
         name: "child",
         aliases: [],
         doc: doc("child"),
-        globals: { options: [], flags: [flag("child-verbose")] },
+        globals: { options: [], flags: [flag("child-verbose")], },
         subcommands: [],
         body: None,
       },
@@ -469,7 +474,7 @@ test "grafting rejects child short collision with strict ancestor" {
         name: "parent",
         aliases: [],
         doc: doc("parent"),
-        globals: { options: [], flags: [flag("ancestor-verbose")] },
+        globals: { options: [], flags: [flag("ancestor-verbose")], },
         subcommands: [],
         body: None,
       },
@@ -479,7 +484,7 @@ test "grafting rejects child short collision with strict ancestor" {
     parent.graft_subtree(
       child,
       "child",
-      { options: [], flags: [] },
+      { options: [], flags: [], },
       None,
       None,
       None,
@@ -515,7 +520,7 @@ test "grafting rejects distinct parent and child globals sharing only a short fo
         name: "parent",
         aliases: [],
         doc: doc("parent"),
-        globals: { options: [], flags: [] },
+        globals: { options: [], flags: [], },
         subcommands: [],
         body: None,
       },
@@ -528,7 +533,7 @@ test "grafting rejects distinct parent and child globals sharing only a short fo
         name: "child",
         aliases: [],
         doc: doc("child"),
-        globals: { options: [option("format")], flags: [] },
+        globals: { options: [option("format")], flags: [], },
         subcommands: [],
         body: None,
       },
@@ -538,7 +543,7 @@ test "grafting rejects distinct parent and child globals sharing only a short fo
     parent.graft_subtree(
       child,
       "child",
-      { options: [option("count")], flags: [] },
+      { options: [option("count")], flags: [], },
       None,
       None,
       None,
@@ -574,7 +579,7 @@ test "grafting rejects a child global matching two inherited identities" {
         name: "parent",
         aliases: [],
         doc: doc("parent"),
-        globals: { options: [option("alpha", [])], flags: [] },
+        globals: { options: [option("alpha", [])], flags: [], },
         subcommands: [],
         body: None,
       },
@@ -587,7 +592,7 @@ test "grafting rejects a child global matching two inherited identities" {
         name: "child",
         aliases: [],
         doc: doc("child"),
-        globals: { options: [option("alpha", ["beta"])], flags: [] },
+        globals: { options: [option("alpha", ["beta"])], flags: [], },
         subcommands: [],
         body: None,
       },
@@ -597,7 +602,7 @@ test "grafting rejects a child global matching two inherited identities" {
     parent.graft_subtree(
       child,
       "child",
-      { options: [option("beta", [])], flags: [] },
+      { options: [option("beta", [])], flags: [], },
       None,
       None,
       None,
@@ -637,10 +642,13 @@ test "deprojected child global does not consume a descendant local input" {
         name: "deproject-child",
         aliases: [],
         doc: doc("deproject child"),
-        globals: { options: [option("child-global", [], Some('f'))], flags: [] },
+        globals: {
+          options: [option("child-global", [], Some('f'))],
+          flags: [],
+        },
         subcommands: [1],
         body: Some({
-          positionals: { fixed: [], tail: None },
+          positionals: { fixed: [], tail: None, },
           options: [],
           flags: [],
           constraints: [],
@@ -655,10 +663,10 @@ test "deprojected child global does not consume a descendant local input" {
         name: "run",
         aliases: [],
         doc: doc("run"),
-        globals: { options: [], flags: [] },
+        globals: { options: [], flags: [], },
         subcommands: [],
         body: Some({
-          positionals: { fixed: [], tail: None },
+          positionals: { fixed: [], tail: None, },
           options: [option("format", [], None)],
           flags: [],
           constraints: [],
@@ -679,7 +687,7 @@ test "deprojected child global does not consume a descendant local input" {
         name: "deproject-parent",
         aliases: [],
         doc: doc("deproject parent"),
-        globals: { options: [], flags: [] },
+        globals: { options: [], flags: [], },
         subcommands: [],
         body: None,
       },
@@ -689,7 +697,7 @@ test "deprojected child global does not consume a descendant local input" {
     .graft_subtree(
       child_raw,
       "deproject-child",
-      { options: [option("count", ["child-global"], Some('f'))], flags: [] },
+      { options: [option("count", ["child-global"], Some('f'))], flags: [], },
       None,
       None,
       None,
@@ -699,9 +707,11 @@ test "deprojected child global does not consume a descendant local input" {
   guard parent_index is Some(parent_index) else {
     fail("expected grafted descendant command")
   }
-  inspect(
+  debug_inspect(
     parent.canonical_input_fields(parent_index).map(field => field.name),
-    content="[count, format]",
+    content=(
+      #|["count", "format"]
+    ),
   )
   let model = parent.canonical_input_model(parent_index)
   let input = build_canonical_input(model, [
@@ -744,7 +754,7 @@ test "bug finder forwarding prefers surviving descendant over ancestor alias" {
         name: "ranked-forward-child",
         aliases: [],
         doc: doc("ranked forward child"),
-        globals: { options: [option("format", ["leaf"])], flags: [] },
+        globals: { options: [option("format", ["leaf"])], flags: [], },
         subcommands: [1],
         body: None,
       },
@@ -752,10 +762,10 @@ test "bug finder forwarding prefers surviving descendant over ancestor alias" {
         name: "run",
         aliases: [],
         doc: doc("run"),
-        globals: { options: [], flags: [] },
+        globals: { options: [], flags: [], },
         subcommands: [],
         body: Some({
-          positionals: { fixed: [], tail: None },
+          positionals: { fixed: [], tail: None, },
           options: [option("leaf", [])],
           flags: [],
           constraints: [],
@@ -769,9 +779,11 @@ test "bug finder forwarding prefers surviving descendant over ancestor alias" {
     ],
   }
   let child = child_raw.normalize_inherited_globals()
-  inspect(
+  debug_inspect(
     child.canonical_input_fields(1).map(field => field.name),
-    content="[format]",
+    content=(
+      #|["format"]
+    ),
   )
   let parent_base : ToolDef = {
     version: "1",
@@ -780,7 +792,7 @@ test "bug finder forwarding prefers surviving descendant over ancestor alias" {
         name: "ranked-forward-parent",
         aliases: [],
         doc: doc("ranked forward parent"),
-        globals: { options: [], flags: [] },
+        globals: { options: [], flags: [], },
         subcommands: [],
         body: None,
       },
@@ -790,7 +802,7 @@ test "bug finder forwarding prefers surviving descendant over ancestor alias" {
     .graft_subtree(
       child_raw,
       "ranked-forward-child",
-      { options: [option("parent-value", ["format"])], flags: [] },
+      { options: [option("parent-value", ["format"])], flags: [], },
       None,
       None,
       None,
@@ -802,9 +814,11 @@ test "bug finder forwarding prefers surviving descendant over ancestor alias" {
   guard parent_index is Some(parent_index) else {
     fail("expected grafted descendant command")
   }
-  inspect(
+  debug_inspect(
     parent.canonical_input_fields(parent_index).map(field => field.name),
-    content="[parent-value, leaf]",
+    content=(
+      #|["parent-value", "leaf"]
+    ),
   )
   let model = parent.canonical_input_model(parent_index)
   let input = build_canonical_input(model, [
@@ -854,7 +868,7 @@ test "reverse-alias deprojection retains the surviving canonical value" {
         name: "reverse-alias",
         aliases: [],
         doc: doc("reverse alias"),
-        globals: { options: [option("format", [])], flags: [] },
+        globals: { options: [option("format", [])], flags: [], },
         subcommands: [1],
         body: None,
       },
@@ -862,10 +876,10 @@ test "reverse-alias deprojection retains the surviving canonical value" {
         name: "run",
         aliases: [],
         doc: doc("run"),
-        globals: { options: [option("count", ["format"])], flags: [] },
+        globals: { options: [option("count", ["format"])], flags: [], },
         subcommands: [],
         body: Some({
-          positionals: { fixed: [], tail: None },
+          positionals: { fixed: [], tail: None, },
           options: [],
           flags: [],
           constraints: [],
@@ -879,9 +893,11 @@ test "reverse-alias deprojection retains the surviving canonical value" {
     ],
   }
   let def = raw.normalize_inherited_globals()
-  inspect(
+  debug_inspect(
     def.canonical_input_fields(1).map(field => field.name),
-    content="[format]",
+    content=(
+      #|["format"]
+    ),
   )
   let input = build_canonical_input(def.canonical_input_model(1), [
     ("format", @model.SchemaValue::String("7")),
@@ -897,7 +913,12 @@ test "reverse-alias deprojection retains the surviving canonical value" {
   ) catch {
     _ => fail("surviving canonical field was not decoded")
   }
-  inspect(format, content="7")
+  debug_inspect(
+    format,
+    content=(
+      #|"7"
+    ),
+  )
 }
 
 ///|
@@ -909,7 +930,7 @@ test "panic top-level registration rejects an existing private subtool name" {
         name: "registry-collision",
         aliases: [],
         doc: doc("registry collision"),
-        globals: { options: [], flags: [] },
+        globals: { options: [], flags: [], },
         subcommands: [],
         body: None,
       },
@@ -1091,7 +1112,7 @@ test "normalization rejects a local field overlapping two inherited globals" {
         name: "root",
         aliases: [],
         doc: doc("root"),
-        globals: { options: [option("alpha", [])], flags: [] },
+        globals: { options: [option("alpha", [])], flags: [], },
         subcommands: [1],
         body: None,
       },
@@ -1099,7 +1120,7 @@ test "normalization rejects a local field overlapping two inherited globals" {
         name: "child",
         aliases: [],
         doc: doc("child"),
-        globals: { options: [option("beta", [])], flags: [] },
+        globals: { options: [option("beta", [])], flags: [], },
         subcommands: [2],
         body: None,
       },
@@ -1107,10 +1128,10 @@ test "normalization rejects a local field overlapping two inherited globals" {
         name: "leaf",
         aliases: [],
         doc: doc("leaf"),
-        globals: { options: [], flags: [] },
+        globals: { options: [], flags: [], },
         subcommands: [],
         body: Some({
-          positionals: { fixed: [], tail: None },
+          positionals: { fixed: [], tail: None, },
           options: [option("alpha", ["beta"])],
           flags: [],
           constraints: [],
@@ -1154,7 +1175,7 @@ test "normalization rejects distinct options sharing an inherited short form" {
         name: "root",
         aliases: [],
         doc: doc("root"),
-        globals: { options: [option("format")], flags: [] },
+        globals: { options: [option("format")], flags: [], },
         subcommands: [1],
         body: None,
       },
@@ -1162,10 +1183,10 @@ test "normalization rejects distinct options sharing an inherited short form" {
         name: "child",
         aliases: [],
         doc: doc("child"),
-        globals: { options: [], flags: [] },
+        globals: { options: [], flags: [], },
         subcommands: [],
         body: Some({
-          positionals: { fixed: [], tail: None },
+          positionals: { fixed: [], tail: None, },
           options: [option("file")],
           flags: [],
           constraints: [],
@@ -1206,7 +1227,7 @@ test "normalization resolves value-is literals against inherited globals" {
         name: "constraint-child",
         aliases: [],
         doc: doc("constraint child"),
-        globals: { options: [], flags: [] },
+        globals: { options: [], flags: [], },
         subcommands: [1],
         body: None,
       },
@@ -1214,10 +1235,10 @@ test "normalization resolves value-is literals against inherited globals" {
         name: "run",
         aliases: [],
         doc: doc("run"),
-        globals: { options: [], flags: [] },
+        globals: { options: [], flags: [], },
         subcommands: [],
         body: Some({
-          positionals: { fixed: [], tail: None },
+          positionals: { fixed: [], tail: None, },
           options: [],
           flags: [],
           constraints: [
@@ -1244,7 +1265,7 @@ test "normalization resolves value-is literals against inherited globals" {
         name: "constraint-parent",
         aliases: [],
         doc: doc("constraint parent"),
-        globals: { options: [], flags: [] },
+        globals: { options: [], flags: [], },
         subcommands: [],
         body: None,
       },
@@ -1254,7 +1275,7 @@ test "normalization resolves value-is literals against inherited globals" {
     .graft_subtree(
       child_raw,
       "constraint-child",
-      { options: [format], flags: [] },
+      { options: [format], flags: [], },
       None,
       None,
       None,
@@ -1290,7 +1311,7 @@ test "normalization does not resolve value-is literals by short form" {
         name: "root",
         aliases: [],
         doc: doc("root"),
-        globals: { options: [format], flags: [] },
+        globals: { options: [format], flags: [], },
         subcommands: [1],
         body: None,
       },
@@ -1298,10 +1319,10 @@ test "normalization does not resolve value-is literals by short form" {
         name: "render",
         aliases: [],
         doc: doc("render"),
-        globals: { options: [], flags: [] },
+        globals: { options: [], flags: [], },
         subcommands: [],
         body: Some({
-          positionals: { fixed: [], tail: None },
+          positionals: { fixed: [], tail: None, },
           options: [],
           flags: [],
           constraints: [
@@ -1331,13 +1352,18 @@ test "normalization does not resolve value-is literals by short form" {
   guard ref_
     is RefDef::ValueIs(
       {
-        name: "format",
-        value: ValueIsLiteralDef::Resolved(@model.SchemaValue::String("json")),
+        name: "f",
+        value: ValueIsLiteralDef::Deferred(ToolLiteral::Scalar("json")),
       }
     ) else {
-    fail("expected resolved value-is constraint")
+    fail("short-only value-is reference was unexpectedly resolved")
   }
-  let _wire = normalized.to_tool()
+  try normalized.to_tool() catch {
+    UnresolvedValueIsLiteral("f") => ()
+    _ => fail("unexpected conversion error")
+  } noraise {
+    _ => fail("expected unresolved short-only value-is reference")
+  }
 }
 
 ///|
@@ -1386,7 +1412,7 @@ fn canonical_test_def() -> ToolDef raise {
         name: "leaf",
         aliases: ["l"],
         doc: doc("leaf"),
-        globals: { options: [], flags: [] },
+        globals: { options: [], flags: [], },
         subcommands: [],
         body: Some({
           positionals: {
@@ -1472,11 +1498,13 @@ fn canonical_test_def() -> ToolDef raise {
 ///|
 test "canonical command lookup, ordering, shadowing, and collected shapes" {
   let def = canonical_test_def()
-  inspect(def.command_index_by_path(["l"]), content="Some(1)")
+  debug_inspect(def.command_index_by_path(["l"]), content="Some(1)")
   let fields = def.canonical_input_fields(1)
-  inspect(
+  debug_inspect(
     fields.map(field => field.name),
-    content="[global, count, arg, rest, items, values, force]",
+    content=(
+      #|["global", "count", "arg", "rest", "items", "values", "force"]
+    ),
   )
   assert_true(fields[0].type_.root.body is @model.SchemaTypeBody::String)
   assert_true(fields[1].type_.root.body is @model.SchemaTypeBody::U32(_))
@@ -1494,9 +1522,11 @@ test "canonical model builds and decodes the expected named record" {
     is @model.SchemaTypeBody::Record(record_fields) else {
     fail("expected canonical record")
   }
-  inspect(
+  debug_inspect(
     record_fields.map(field => field.name),
-    content="[global, count, arg, rest, items, values, force]",
+    content=(
+      #|["global", "count", "arg", "rest", "items", "values", "force"]
+    ),
   )
   let input = build_canonical_input(model, [
     ("force", @model.SchemaValue::Bool(true)),
@@ -1511,7 +1541,12 @@ test "canonical model builds and decodes the expected named record" {
   guard input.value is @model.SchemaValue::Record(values) else {
     fail("expected record value")
   }
-  inspect(values[0], content="String(new)")
+  debug_inspect(
+    values[0],
+    content=(
+      #|String("new")
+    ),
+  )
   let wire = @model.typed_schema_value_to_wit(input)
   let decoded = decode_canonical_input_for_test(def, 1, wire, "leaf")
   let force : Bool = decode_canonical_field_for_test(decoded, "f", "leaf")
@@ -1543,33 +1578,35 @@ test "canonical input rejects missing fields and mismatching wire schema" {
 
 ///|
 fn literal_graph(body : @model.SchemaTypeBody) -> @model.SchemaGraph {
-  { defs: [], root: @model.schema_type(body) }
+  { defs: [], root: @model.schema_type(body), }
 }
 
 ///|
 test "tool literals use the target schema" {
-  inspect(
+  debug_inspect(
     literal_to_schema_value(
       literal_graph(@model.SchemaTypeBody::Enum(["always", "auto"])),
       ToolLiteral::Scalar("auto"),
     ),
     content="Enum(1)",
   )
-  inspect(
+  debug_inspect(
     literal_to_schema_value(
       literal_graph(@model.SchemaTypeBody::String),
       ToolLiteral::Scalar("42"),
     ),
-    content="String(42)",
+    content=(
+      #|String("42")
+    ),
   )
-  inspect(
+  debug_inspect(
     literal_to_schema_value(
       literal_graph(@model.SchemaTypeBody::U64(None)),
       ToolLiteral::Scalar("18446744073709551615"),
     ),
     content="U64(18446744073709551615)",
   )
-  inspect(
+  debug_inspect(
     literal_to_schema_value(
       literal_graph(
         @model.SchemaTypeBody::List(
@@ -1580,7 +1617,7 @@ test "tool literals use the target schema" {
     ),
     content="List([S32(1), S32(-2)])",
   )
-  inspect(
+  debug_inspect(
     literal_to_schema_value(
       literal_graph(
         @model.SchemaTypeBody::Map(
@@ -1590,7 +1627,9 @@ test "tool literals use the target schema" {
       ),
       ToolLiteral::Map([("enabled", "true")]),
     ),
-    content="Map([{key: String(enabled), value: Bool(true)}])",
+    content=(
+      #|Map([{ key: String("enabled"), value: Bool(true) }])
+    ),
   )
 }
 
@@ -1607,7 +1646,7 @@ test "invalid literals and value-is element fallback" {
   } noraise {
     _ => fail("expected invalid literal")
   }
-  inspect(
+  debug_inspect(
     value_is_literal_to_schema_value(
       literal_graph(
         @model.SchemaTypeBody::Option(
@@ -1620,7 +1659,9 @@ test "invalid literals and value-is element fallback" {
       ),
       ToolLiteral::Scalar("needle"),
     ),
-    content="String(needle)",
+    content=(
+      #|String("needle")
+    ),
   )
 }
 
@@ -1632,10 +1673,17 @@ test "text path and url refinements overlay restrictions" {
     Some(2),
     Some(8),
   )
-  inspect(
+  debug_inspect(
     text.root.body,
     content=(
-      #|Text({languages: None, min_length: Some(2), max_length: Some(8), regex: Some(^[a-z]+$)})
+      #|Text(
+      #|  {
+      #|    languages: None,
+      #|    min_length: Some(2),
+      #|    max_length: Some(8),
+      #|    regex: Some("^[a-z]+$"),
+      #|  },
+      #|)
     ),
   )
   let path = refine_path(
@@ -1651,10 +1699,17 @@ test "text path and url refinements overlay restrictions" {
     Some(@types.PathKind::FILE),
     Some(["text/plain"]),
   )
-  inspect(
+  debug_inspect(
     path.root.body,
     content=(
-      #|Path({direction: OUTPUT, kind: FILE, allowed_mime_types: Some([text/plain]), allowed_extensions: Some([txt])})
+      #|Path(
+      #|  {
+      #|    direction: OUTPUT,
+      #|    kind: FILE,
+      #|    allowed_mime_types: Some(["text/plain"]),
+      #|    allowed_extensions: Some(["txt"]),
+      #|  },
+      #|)
     ),
   )
   let url = refine_url(
@@ -1666,10 +1721,15 @@ test "text path and url refinements overlay restrictions" {
     ),
     Some(["https"]),
   )
-  inspect(
+  debug_inspect(
     url.root.body,
     content=(
-      #|Url({allowed_schemes: Some([https]), allowed_hosts: Some([example.com])})
+      #|Url(
+      #|  {
+      #|    allowed_schemes: Some(["https"]),
+      #|    allowed_hosts: Some(["example.com"]),
+      #|  },
+      #|)
     ),
   )
 }
@@ -1684,7 +1744,7 @@ test "text-refined string canonical input round-trips through typed values" {
         name: "echo",
         aliases: [],
         doc: doc("echo"),
-        globals: { options: [], flags: [] },
+        globals: { options: [], flags: [], },
         subcommands: [],
         body: Some({
           positionals: {
@@ -1720,7 +1780,12 @@ test "text-refined string canonical input round-trips through typed values" {
   let wire = @model.typed_schema_value_to_wit(input)
   let decoded = decode_canonical_input_for_test(def, 0, wire, "echo")
   let value : String = decode_canonical_field_for_test(decoded, "value", "echo")
-  inspect(value, content="aaa")
+  debug_inspect(
+    value,
+    content=(
+      #|"aaa"
+    ),
+  )
 }
 
 ///|
@@ -1731,10 +1796,18 @@ test "numeric refinements infer kind and reject invalid ranges" {
     Some("18446744073709551615"),
     Some("bytes"),
   )
-  inspect(
+  debug_inspect(
     numeric.root.body,
     content=(
-      #|U64(Some({min: Some(Unsigned(1)), max: Some(Unsigned(18446744073709551615)), unit: Some(bytes)}))
+      #|U64(
+      #|  Some(
+      #|    {
+      #|      min: Some(Unsigned(1)),
+      #|      max: Some(Unsigned(18446744073709551615)),
+      #|      unit: Some("bytes"),
+      #|    },
+      #|  ),
+      #|)
     ),
   )
   try

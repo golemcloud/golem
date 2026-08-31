@@ -15,4 +15,3 @@ pub async fn send(@types.Request) -> Result[@types.Response, @types.ErrorCode]
 // Type aliases
 
 // Traits
-

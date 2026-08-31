@@ -64,6 +64,12 @@ impl ShardAssignmentCheck for ShardAssignment {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SnapshotSource {
+    Automatic,
+    ManualUpdate,
+}
+
 /// Worker-specific configuration. These values are used to initialize the worker, and they can
 /// be different for each worker.
 #[derive(Clone, Debug)]
@@ -76,6 +82,7 @@ pub struct AgentConfig {
     pub created_by_email: AccountEmail,
     pub initial_agent_config: Vec<TypedAgentConfigEntry>,
     pub last_snapshot_index: Option<OplogIndex>,
+    pub last_snapshot_source: Option<SnapshotSource>,
     pub agent_effective_surface: EffectiveSurface,
     pub owner_component_metadata: Option<Arc<Component>>,
 }
@@ -90,6 +97,7 @@ impl AgentConfig {
         created_by_email: AccountEmail,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         last_snapshot_index: Option<OplogIndex>,
+        last_snapshot_source: Option<SnapshotSource>,
         agent_effective_surface: EffectiveSurface,
         owner_component_metadata: Option<Arc<Component>>,
     ) -> AgentConfig {
@@ -102,6 +110,7 @@ impl AgentConfig {
             created_by_email,
             initial_agent_config,
             last_snapshot_index,
+            last_snapshot_source,
             agent_effective_surface,
             owner_component_metadata,
         }

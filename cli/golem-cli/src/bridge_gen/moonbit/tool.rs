@@ -120,6 +120,8 @@ impl MoonBitToolBridgeGenerator {
   "golemcloud/golem_sdk/schema_model" @model,
   "golemcloud/golem_sdk/tool",
 }
+
+supported_targets = "+wasm"
 "#,
         )?;
         let content = self.generate_client_source()?;
@@ -246,6 +248,7 @@ impl MoonBitToolBridgeGenerator {
 
         write_doc(writer, &child);
         writer.line("///|");
+        writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
             "pub fn {}::{}(self : {}{}) -> {} {{",
             parent.struct_name,
@@ -261,6 +264,9 @@ impl MoonBitToolBridgeGenerator {
                 self.inner
                     .encode_expr_with_multimodal(param, &field.type_)?,
             );
+            if !contains_identifier(&encoded, param) {
+                writer.line(format!("let _ = {param}"));
+            }
             writer.line(format!("let encoded = try {{ {encoded} }} catch{{"));
             writer.indent();
             writer.line(
@@ -320,6 +326,7 @@ impl MoonBitToolBridgeGenerator {
 
         write_doc(writer, &node);
         writer.line("///|");
+        writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
             "pub {}fn {}::{}(self : {}{}) -> Result[{}, @tool.ToolError[{}]] {{",
             if has_stdout { "" } else { "async " },
@@ -338,6 +345,9 @@ impl MoonBitToolBridgeGenerator {
                 self.inner
                     .encode_expr_with_multimodal(param, &field.type_)?,
             );
+            if !contains_identifier(&encoded, param) {
+                writer.line(format!("let _ = {param}"));
+            }
             writer.line(format!("let encoded = try {{ {encoded} }} catch{{"));
             writer.indent();
             writer.line(format!(
@@ -762,6 +772,19 @@ fn error_variant_names(body: &CommandBody) -> Vec<String> {
 
 fn error_decoder_name(error_name: &str) -> String {
     format!("decode_{}_error", to_moonbit_term_ident(error_name, false))
+}
+
+fn contains_identifier(source: &str, identifier: &str) -> bool {
+    source.match_indices(identifier).any(|(start, _)| {
+        let end = start + identifier.len();
+        let before = source[..start].chars().next_back();
+        let after = source[end..].chars().next();
+        !before.is_some_and(is_identifier_char) && !after.is_some_and(is_identifier_char)
+    })
+}
+
+fn is_identifier_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_'
 }
 
 fn collect_names(tool: &Tool, tool_name: &str) -> anyhow::Result<CollectedNames> {

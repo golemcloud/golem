@@ -34,7 +34,7 @@ pub struct ProviderStdout {
 
 ///|
 pub fn provider_stdout(writer : @toolHost.ToolStdoutWriter) -> ProviderStdout {
-  let state = @ref.new({ writer, open: true, busy: false, dropped: false })
+  let state = @ref.new({ writer, open: true, busy: false, dropped: false, })
   let output = @async-core.Sink::from_callbacks(
     async fn(bytes) {
       if !state.val.open || state.val.dropped {
@@ -82,7 +82,7 @@ pub fn provider_stdout(writer : @toolHost.ToolStdoutWriter) -> ProviderStdout {
     fn() { state.val.open && !state.val.dropped },
     None,
   )
-  { state, output }
+  { state, output, }
 }
 
 ///|

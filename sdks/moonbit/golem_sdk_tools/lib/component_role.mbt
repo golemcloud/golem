@@ -194,36 +194,11 @@ fn attrs_have_middleware_annotation(
 ///|
 fn type_desc_has_middleware_annotation(desc : @syntax.TypeDesc) -> Bool {
   match desc {
-    Record(fields~, constr_decl~) => {
-      if fields.any(field => attrs_have_middleware_annotation(field.attrs)) {
-        return true
-      }
-      match constr_decl {
-        Some(constr_decl) => attrs_have_middleware_annotation(constr_decl.attrs)
-        None => false
-      }
-    }
+    Record(fields~) =>
+      fields.any(field => attrs_have_middleware_annotation(field.attrs))
     Variant(constrs) | Error(EnumPayload(constrs)) =>
       constrs.any(constr => attrs_have_middleware_annotation(constr.attrs))
     _ => false
-  }
-}
-
-///|
-fn local_types_have_middleware_annotation(
-  local_types : @list.List[@syntax.LocalTypeDecl],
-) -> Bool {
-  local_types.any(local_type => {
-    type_desc_has_middleware_annotation(local_type.components)
-  })
-}
-
-///|
-fn decl_body_has_middleware_annotation(body : @syntax.DeclBody) -> Bool {
-  match body {
-    DeclBody(local_types~, ..) =>
-      local_types_have_middleware_annotation(local_types)
-    DeclNone | DeclStubs(_) => false
   }
 }
 
@@ -233,17 +208,12 @@ fn impl_has_middleware_annotation(impl_ : @syntax.Impl) -> Bool {
     TopTypeDef(decl) =>
       attrs_have_middleware_annotation(decl.attrs) ||
       type_desc_has_middleware_annotation(decl.components)
-    TopFuncDef(fun_decl~, decl_body~, ..) =>
-      attrs_have_middleware_annotation(fun_decl.attrs) ||
-      decl_body_has_middleware_annotation(decl_body)
-    TopImpl(attrs~, body~, ..) =>
-      attrs_have_middleware_annotation(attrs) ||
-      decl_body_has_middleware_annotation(body)
+    TopFuncDef(fun_decl~, ..) =>
+      attrs_have_middleware_annotation(fun_decl.attrs)
+    TopImpl(attrs~, ..) => attrs_have_middleware_annotation(attrs)
     TopImplRelation(attrs~, ..) => attrs_have_middleware_annotation(attrs)
     TopLetDef(attrs~, ..) => attrs_have_middleware_annotation(attrs)
-    TopTest(attrs~, local_types~, ..) =>
-      attrs_have_middleware_annotation(attrs) ||
-      local_types_have_middleware_annotation(local_types)
+    TopTest(attrs~, ..) => attrs_have_middleware_annotation(attrs)
     TopTrait(decl) =>
       attrs_have_middleware_annotation(decl.attrs) ||
       decl.methods.any(trait_method => {
@@ -253,8 +223,8 @@ fn impl_has_middleware_annotation(impl_ : @syntax.Impl) -> Bool {
     TopView(attrs~, view_constrs~, ..) =>
       attrs_have_middleware_annotation(attrs) ||
       view_constrs.any(constr => attrs_have_middleware_annotation(constr.attrs))
-    TopExpr(local_types~, ..) =>
-      local_types_have_middleware_annotation(local_types)
+    TopExtend(attrs~, ..) => attrs_have_middleware_annotation(attrs)
+    TopExpr(..) | TopImport(..) => false
   }
 }
 

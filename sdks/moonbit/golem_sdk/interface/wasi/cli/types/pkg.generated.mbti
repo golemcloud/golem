@@ -10,4 +10,3 @@ package "golemcloud/golem_sdk/interface/wasi/cli/types"
 // Type aliases
 
 // Traits
-

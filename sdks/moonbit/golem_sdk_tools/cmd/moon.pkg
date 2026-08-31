@@ -2,14 +2,15 @@ import {
   "moonbitlang/core/debug",
   "moonbitlang/core/env",
   "moonbitlang/core/list",
-  "moonbitlang/formatter",
+  "moonbitlang/parser/fmt" @formatter,
   "moonbitlang/parser/syntax",
   "moonbitlang/x/fs",
   "moonbitlang/x/sys",
   "golemcloud/golem_sdk_tools/lib",
 }
 
+pkgtype(kind: "executable")
+
 options(
   "bin-name": "golem-sdk-tools",
-  "is-main": true,
 )

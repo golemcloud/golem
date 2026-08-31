@@ -23,7 +23,7 @@ priv struct ToolState {
 }
 
 ///|
-let state : ToolState = { tools: {}, defs: {}, invokers: {} }
+let state : ToolState = { tools: {}, defs: {}, invokers: {}, }
 
 ///|
 fn ensure_tool_name_available(name : String) -> Unit {
@@ -227,7 +227,7 @@ async fn invoke_registered_subtool_with_resource_drops(
     Some(def) =>
       match def.command_index_by_path(command_path) {
         None => Err(@toolCommon.ToolError::InvalidCommandPath(command_path))
-        Some(index) if !state.invokers.contains(tool_name) =>
+        Some(_) if !state.invokers.contains(tool_name) =>
           Err(@toolCommon.ToolError::InvalidToolName(tool_name))
         Some(index) => Ok((def, index))
       }

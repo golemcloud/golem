@@ -1,112 +1,55 @@
 ---
 name: rebuild-all-test-components
-description: "Rebuilds all test WASM components from scratch. Use when explicitly asked to rebuild all test components, or when there are merge conflicts in any test-components/*.wasm files."
+description: Rebuilds the complete normal test-component artifact set. Use only when explicitly asked for a full rebuild or when many worker/integration test WASMs are missing.
 ---
 
 # Rebuild All Test Components
 
-Clean rebuild of every test WASM component in `test-components/`. This is a heavyweight operation — use it when all components need regeneration, or when worker executor / integration / CLI integration tests need many test-component artifacts and targeted rebuilds would be slower.
-
-## Quick Path (single command)
+Run from the repository root:
 
 ```shell
 cargo make build-test-components
 ```
 
-This handles everything: builds `golem-cli`, the TS SDK, then cleans and rebuilds all test components.
+This is the authoritative full rebuild. It builds repository prerequisites including **golem-cli** and the TypeScript SDK, then runs `test-components/build-components.sh rebuild` across its Rust, TypeScript, and benchmark arrays. Those arrays and `list-groups` output define the scope used by CI; do not maintain a second component list in this skill.
 
-## Manual Steps (if needed)
+Do not build the `golem` package as a substitute for `golem-cli`. The component script honors `GOLEM_CLI` and resolves the Cargo target directory; never hardcode `target/...`. Every mutating `golem build` invocation must include `--yes`.
 
-### 1. Build golem-cli
+## Keep Automatic Migrations
 
-The build scripts rely on `golem-cli` from the local build:
+Record the existing status under `test-components/` before the rebuild. The latest locally built
+Golem binary may migrate component source directories while rebuilding them, updating manifests,
+embedded skills, or other current-format metadata. Inspect newly produced source changes to confirm
+they came from the rebuild, then keep and include every such migration in the changeset, even when
+it is unrelated to the original reason for rebuilding. Do not revert or omit migrations to reduce
+the diff; a full rebuild also advances test components to the current Golem format.
 
-```shell
-cargo build -p golem
-```
+## Scope Exception
 
-The single-command `cargo make build-test-components` path still performs its configured broad prerequisites. In the manual path, building only `golem` avoids an additional unrelated workspace build.
+The full rebuild intentionally excludes two tracked minimal component-model-async fixtures:
 
-### 2. Clean and rebuild the TypeScript SDK (including agent template)
+- `cargo make build-concurrent-delivery-order-component`
+- `cargo make build-concurrent-runtime-events-component`
 
-The TS test components depend on the TS SDK and its embedded agent template WASM:
+Run those dedicated tasks only when their sources or committed WASMs must change. They validate their outputs and the resulting WASMs remain tracked; ordinary generated `test-components/*.wasm` files remain gitignored.
 
-```shell
-cd sdks/ts
-npx pnpm run clean
-npx pnpm install
-npx pnpm run build
-npx pnpm run build-agent-template
-```
+## TypeScript Caveat and Prerequisites
 
-**Requires `cargo-component` v0.21.1** — install with:
-```shell
-cargo install cargo-component --version 0.21.1
-```
+`build-test-components` depends on `build-sdk-ts`, which skips work if both the SDK `dist` directory and `wasm/agent_guest.wasm` already exist. This does not prove freshness. After TS SDK changes, clean and rebuild the SDK and agent template before the full rebuild.
 
-### 3. Clean all test components
+Required tools follow current CI and scoped SDK instructions: Rust targets, cargo-make, Node/pnpm, WASI SDK, and the configured `wasm-rquickjs-cli` version. Read `sdks/ts/AGENTS.md` and `.github/workflows/ci.yaml` rather than copying versions into this skill.
 
-```shell
-cd test-components
-./build-components.sh clean
-```
+## Focused Alternatives
 
-### 4. Build all test components
+Use `./build-components.sh rust`, `ts`, `benchmarks`, or a listed chunk (`rust-N`, `ts-N`) when a full rebuild is unnecessary. `./build-components.sh list-groups` is the CI matrix source. Use the `modifying-test-components` skill for one component.
 
-```shell
-cd test-components
-./build-components.sh
-```
+## Validation
 
-If any component fails to build, fix the issue and re-run `./build-components.sh`. The script will rebuild all components. Repeat until all components build successfully.
+After completion:
 
-## Rebuilding Only a Subset
+1. Check each selected application's copy destination exists and is non-empty; do not accept only intermediate `golem-temp` artifacts.
+2. Compare produced top-level WASM names/count against the selected arrays and inspect build failures rather than repeatedly rerunning everything.
+3. Use `wasm-tools validate --features all` for suspicious or structurally changed artifacts.
+4. Run the smallest relevant worker/integration/CLI test group.
 
-`./build-components.sh` accepts optional arguments to limit the work to a language group or a single chunk. Prefer these over a full rebuild when only some components changed.
-
-### Build a single language group
-
-```shell
-cd test-components
-./build-components.sh rust         # Rust test apps only
-./build-components.sh ts           # TypeScript test apps only
-./build-components.sh benchmarks   # Benchmark apps only
-```
-
-The `rust` group does not require Node/the TS SDK. The `ts` and `benchmarks` groups need the TS SDK and agent template built first (step 2 above).
-
-### Build a single chunk of a group
-
-The script splits Rust and TS apps into chunks for parallel CI builds. To build just one chunk:
-
-```shell
-cd test-components
-./build-components.sh rust-1       # Nth chunk of the rust group (1..RUST_CHUNKS)
-./build-components.sh ts-1         # Nth chunk of the ts group (1..TS_CHUNKS)
-```
-
-Chunk counts are defined by `RUST_CHUNKS` / `TS_CHUNKS` near the top of `build-components.sh`. Use `./build-components.sh list-groups` to print the available group names as JSON (used for CI matrix generation).
-
-### Other modifiers
-
-These can be combined with a group/chunk argument (e.g. `./build-components.sh clean rust`):
-
-```shell
-./build-components.sh clean        # Clean only, do not build
-./build-components.sh rebuild      # Clean, then build
-./build-components.sh check        # Run only `golem-cli build --step check` (no artifacts produced)
-```
-
-`check` cannot be combined with `clean` or `rebuild`.
-
-> For rebuilding one specific component (not a whole group), use the `modifying-test-components` skill instead.
-
-### 5. Verify
-
-After rebuilding, the `.wasm` files in `test-components/` should be present. Note: these files are gitignored and must be built before tests that use them.
-
-## Troubleshooting
-
-- **Missing `wasm-rquickjs-cli`**: Check the required version in `.github/workflows/ci.yaml` (`WASM_RQUICKJS_VERSION`) and install it: `cargo install wasm-rquickjs-cli --version <VERSION>`
-- **TS build failures**: Ensure `npx pnpm run build-agent-template` completed successfully before building TS test components
-- **Rust build failures**: The script sets `GOLEM_RUST_PATH` automatically to `sdks/rust/golem-rust`; ensure the Rust SDK builds cleanly with `cargo build -p golem-rust`
+Generated artifacts are prerequisites, not unit-test work: unit tests must never spawn Cargo, Golem, npm, or compilers. Do not add backwards-compatible build paths for removed component layouts.

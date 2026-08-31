@@ -7,4 +7,6 @@ import {
   "golemcloud/golem_sdk/tool",
 }
 
-warnings = "-44"
+warnings = "-44-1"
+
+supported_targets = "+wasm"

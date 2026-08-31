@@ -5,6 +5,7 @@ import {
   "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/golem/tool/common",
+  "moonbitlang/core/debug",
 }
 
 // Values
@@ -29,28 +30,28 @@ pub(all) suberror RpcError {
   RemoteToolError(@common.ToolError)
   Cancelled
   ResourceExhausted(String)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) suberror StreamWriteError {
   Closed(ByteStreamCloseCause)
   ConcurrentOperation
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 // Types and methods
 pub(all) enum ByteStreamCloseCause {
   Finished
   Failed(ByteStreamFailure)
   ConsumerCancelled
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum ByteStreamFailure {
   Cancelled
   Abandoned
   ResourceExhausted
   Failed(String)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct FutureInvokeResult(Int) derive(Eq, Show)
+pub(all) struct FutureInvokeResult(Int) derive(Eq, @debug.Debug)
 pub fn FutureInvokeResult::cancel(Self) -> Unit
 pub fn FutureInvokeResult::drop(Self) -> Unit
 pub async fn FutureInvokeResult::get(Self) -> Result[@common.InvocationResult, RpcError]
@@ -58,32 +59,32 @@ pub async fn FutureInvokeResult::get(Self) -> Result[@common.InvocationResult, R
 pub(all) struct RegisteredTool {
   definition : @common.Tool
   implemented_by : @types.ComponentId
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct ToolRpc(Int) derive(Eq, Show)
+pub(all) struct ToolRpc(Int) derive(Eq, @debug.Debug)
 pub fn ToolRpc::async_invoke_and_await(Self, Array[String], @types.TypedSchemaValue, ToolStdin?, ToolStdout?) -> FutureInvokeResult
 pub fn ToolRpc::drop(Self) -> Unit
 pub fn ToolRpc::invoke(Self, Array[String], @types.TypedSchemaValue, ToolStdin?) -> Result[Unit, RpcError]
 pub async fn ToolRpc::invoke_and_await(Self, Array[String], @types.TypedSchemaValue, ToolStdin?, ToolStdout?) -> Result[@common.InvocationResult, RpcError]
 pub fn ToolRpc::tool_rpc(String) -> Self
 
-pub(all) struct ToolStdin(Int) derive(Eq, Show)
+pub(all) struct ToolStdin(Int) derive(Eq, @debug.Debug)
 pub fn ToolStdin::drop(Self) -> Unit
 
-pub(all) struct ToolStdinClosed(Int) derive(Eq, Show)
+pub(all) struct ToolStdinClosed(Int) derive(Eq, @debug.Debug)
 pub fn ToolStdinClosed::drop(Self) -> Unit
 pub async fn ToolStdinClosed::wait(Self) -> ByteStreamCloseCause
 
-pub(all) struct ToolStdinWriter(Int) derive(Eq, Show)
+pub(all) struct ToolStdinWriter(Int) derive(Eq, @debug.Debug)
 pub fn ToolStdinWriter::drop(Self) -> Unit
 pub async fn ToolStdinWriter::fail(Self, ByteStreamFailure) -> Result[Unit, StreamWriteError]
 pub async fn ToolStdinWriter::finish(Self) -> Result[Unit, StreamWriteError]
 pub async fn ToolStdinWriter::write(Self, FixedArray[Byte]) -> Result[Unit, StreamWriteError]
 
-pub(all) struct ToolStdout(Int) derive(Eq, Show)
+pub(all) struct ToolStdout(Int) derive(Eq, @debug.Debug)
 pub fn ToolStdout::drop(Self) -> Unit
 
-pub(all) struct ToolStdoutWriter(Int) derive(Eq, Show)
+pub(all) struct ToolStdoutWriter(Int) derive(Eq, @debug.Debug)
 pub fn ToolStdoutWriter::drop(Self) -> Unit
 pub async fn ToolStdoutWriter::fail(Self, ByteStreamFailure) -> Result[Unit, StreamWriteError]
 pub async fn ToolStdoutWriter::finish(Self) -> Result[Unit, StreamWriteError]
@@ -92,4 +93,3 @@ pub async fn ToolStdoutWriter::write(Self, FixedArray[Byte]) -> Result[Unit, Str
 // Type aliases
 
 // Traits
-

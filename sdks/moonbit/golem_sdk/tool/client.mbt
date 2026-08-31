@@ -56,7 +56,7 @@ pub fn[T, E] typed_invocation(
   match invocation.stdout {
     None =>
       Err(tool_protocol_error("tool invocation did not create declared stdout"))
-    Some(stdout) => Ok({ invocation, decode, stdout })
+    Some(stdout) => Ok({ invocation, decode, stdout, })
   }
 }
 
@@ -181,7 +181,7 @@ pub(all) struct ToolClient {
 
 ///|
 pub fn ToolClient::new(tool_name : String) -> ToolClient {
-  { rpc: @toolHost.ToolRpc::tool_rpc(tool_name) }
+  { rpc: @toolHost.ToolRpc::tool_rpc(tool_name), }
 }
 
 ///|
@@ -199,7 +199,8 @@ pub fn[E] ToolClient::start(
   decode_error : (@model.TypedSchemaValue) -> Result[E, String],
 ) -> Result[ToolInvocation[E], ToolError[E]] {
   let wire_input = @model.typed_schema_value_to_wit(input) catch {
-    e => return Err(tool_protocol_error("failed to encode tool input: \{e}"))
+    e =>
+      return Err(tool_protocol_error("failed to encode tool input: \{Repr(e)}"))
   }
   let wire_stdin = prepare_stdin(stdin)
   let (wire_stdout, output, stdout_source) = if stdout {
@@ -211,7 +212,7 @@ pub fn[E] ToolClient::start(
   let future = self.rpc.async_invoke_and_await(
     command_path, wire_input, wire_stdin, wire_stdout,
   )
-  Ok({ future, decode_error, stdout_source, stdout: output })
+  Ok({ future, decode_error, stdout_source, stdout: output, })
 }
 
 ///|
@@ -270,7 +271,7 @@ pub async fn[E] invoke_and_await(
         Some(stdin) => stdin.drop_sync()
         None => ()
       }
-      return Err(tool_protocol_error("failed to encode tool input: \{e}"))
+      return Err(tool_protocol_error("failed to encode tool input: \{Repr(e)}"))
     }
   }
   let wire_stdin = prepare_stdin(stdin)
@@ -341,14 +342,16 @@ fn[E] decode_invocation_result(
             Some(stdout) => stdout.drop_sync()
             None => ()
           }
-          return Err(tool_protocol_error("failed to decode tool result: \{e}"))
+          return Err(
+            tool_protocol_error("failed to decode tool result: \{Repr(e)}"),
+          )
         }
       }
       Some(decoded_value)
     }
     None => None
   }
-  Ok({ result: decoded, stdout: result.stdout })
+  Ok({ result: decoded, stdout: result.stdout, })
 }
 
 ///|
@@ -499,7 +502,7 @@ fn[T : @schema.FromSchema, E] decode_expected_value(
   try @schema.from_value_as(value.value) catch {
     e => {
       value.value.release_resources(drops)
-      Err(tool_protocol_error("failed to decode tool result: \{e}"))
+      Err(tool_protocol_error("failed to decode tool result: \{Repr(e)}"))
     }
   } noraise {
     decoded => Ok(decoded)
@@ -544,7 +547,9 @@ fn[E] map_remote_tool_error(
     @toolCommon.ToolError::CustomError(value) => {
       let decoded = @model_host.typed_schema_value_from_wit(value) catch {
         e =>
-          return tool_protocol_error("failed to decode remote tool error: \{e}")
+          return tool_protocol_error(
+            "failed to decode remote tool error: \{Repr(e)}",
+          )
       }
       match decode_error(decoded) {
         Ok(error) => ToolError::Tool(error)
