@@ -10,7 +10,7 @@ pub(all) struct AgentStream[T] {
 pub fn[T] AgentStream::from_reader(
   reader : @async-core.Stream[@types.SchemaValueTree],
 ) -> AgentStream[T] {
-  { handle: @model.GuestSchemaValueStreamHandle::from_native(reader) }
+  { handle: @model.GuestSchemaValueStreamHandle::from_native(reader), }
 }
 
 ///|

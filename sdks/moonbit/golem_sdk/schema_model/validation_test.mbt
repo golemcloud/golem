@@ -9,7 +9,7 @@ fn vstr() -> SchemaType {
 
 ///|
 fn def(id : String, body : SchemaType) -> SchemaTypeDef {
-  { id, name: None, body }
+  { id, name: None, body, }
 }
 
 ///|
@@ -18,7 +18,7 @@ fn branch(
   body : SchemaType,
   discriminator : @types.DiscriminatorRule,
 ) -> UnionBranch {
-  { tag, body, discriminator, metadata: empty_metadata() }
+  { tag, body, discriminator, metadata: empty_metadata(), }
 }
 
 // ============================================================
@@ -66,7 +66,7 @@ test "duplicate type id" {
 
 ///|
 test "dangling ref" {
-  let g : SchemaGraph = { defs: [], root: schema_type(Ref("missing")) }
+  let g : SchemaGraph = { defs: [], root: schema_type(Ref("missing")), }
   inspect(
     validate_graph(g),
     content=(
@@ -81,7 +81,7 @@ test "dangling ref" {
 
 ///|
 test "empty variant" {
-  let g : SchemaGraph = { defs: [], root: schema_type(Variant([])) }
+  let g : SchemaGraph = { defs: [], root: schema_type(Variant([])), }
   inspect(
     validate_graph(g),
     content=(
@@ -92,7 +92,7 @@ test "empty variant" {
 
 ///|
 test "empty enum" {
-  let g : SchemaGraph = { defs: [], root: schema_type(Enum([])) }
+  let g : SchemaGraph = { defs: [], root: schema_type(Enum([])), }
   inspect(
     validate_graph(g),
     content=(
@@ -103,7 +103,7 @@ test "empty enum" {
 
 ///|
 test "empty flags" {
-  let g : SchemaGraph = { defs: [], root: schema_type(Flags([])) }
+  let g : SchemaGraph = { defs: [], root: schema_type(Flags([])), }
   inspect(
     validate_graph(g),
     content=(
@@ -114,7 +114,7 @@ test "empty flags" {
 
 ///|
 test "empty union" {
-  let g : SchemaGraph = { defs: [], root: schema_type(Union([])) }
+  let g : SchemaGraph = { defs: [], root: schema_type(Union([])), }
   inspect(
     validate_graph(g),
     content=(
@@ -157,7 +157,7 @@ test "duplicate variant case" {
 
 ///|
 test "duplicate enum case" {
-  let g : SchemaGraph = { defs: [], root: schema_type(Enum(["a", "a"])) }
+  let g : SchemaGraph = { defs: [], root: schema_type(Enum(["a", "a"])), }
   inspect(
     validate_graph(g),
     content=(
@@ -168,7 +168,7 @@ test "duplicate enum case" {
 
 ///|
 test "duplicate flag name" {
-  let g : SchemaGraph = { defs: [], root: schema_type(Flags(["f", "f"])) }
+  let g : SchemaGraph = { defs: [], root: schema_type(Flags(["f", "f"])), }
   inspect(
     validate_graph(g),
     content=(
@@ -230,7 +230,7 @@ test "map key not primitive (self-recursive ref chain)" {
 
 ///|
 test "fixed list zero length" {
-  let g : SchemaGraph = { defs: [], root: schema_type(FixedList(vstr(), 0)) }
+  let g : SchemaGraph = { defs: [], root: schema_type(FixedList(vstr(), 0)), }
   inspect(
     validate_graph(g),
     content=(
@@ -269,7 +269,7 @@ test "binary byte range inverted" {
   let g : SchemaGraph = {
     defs: [],
     root: schema_type(
-      Binary({ mime_types: None, min_bytes: Some(5U), max_bytes: Some(2U) }),
+      Binary({ mime_types: None, min_bytes: Some(5U), max_bytes: Some(2U), }),
     ),
   }
   inspect(
@@ -348,7 +348,7 @@ test "quantity min unit mismatch" {
       Quantity({
         base_unit: "m",
         allowed_suffixes: [],
-        min: Some({ mantissa: 0L, scale: 0, unit: "cm" }),
+        min: Some({ mantissa: 0L, scale: 0, unit: "cm", }),
         max: None,
       }),
     ),
@@ -390,7 +390,7 @@ test "union field rule on non-record body" {
         branch(
           "t",
           vstr(),
-          @types.FieldEquals({ field_name: "x", literal: None }),
+          @types.FieldEquals({ field_name: "x", literal: None, }),
         ),
       ]),
     ),
@@ -412,7 +412,7 @@ test "union field rule missing field" {
         branch(
           "t",
           schema_type(Record([field("y", vstr())])),
-          @types.FieldEquals({ field_name: "x", literal: None }),
+          @types.FieldEquals({ field_name: "x", literal: None, }),
         ),
       ]),
     ),
@@ -434,7 +434,7 @@ test "union field-equals literal on non-string field" {
         branch(
           "t",
           schema_type(Record([field("x", schema_type(S32(None)))])),
-          @types.FieldEquals({ field_name: "x", literal: Some("v") }),
+          @types.FieldEquals({ field_name: "x", literal: Some("v"), }),
         ),
       ]),
     ),
@@ -601,12 +601,12 @@ test "ambiguity: field-equals same field without literal" {
         branch(
           "a",
           rec1("k", vstr()),
-          @types.FieldEquals({ field_name: "k", literal: None }),
+          @types.FieldEquals({ field_name: "k", literal: None, }),
         ),
         branch(
           "b",
           rec1("k", vstr()),
-          @types.FieldEquals({ field_name: "k", literal: None }),
+          @types.FieldEquals({ field_name: "k", literal: None, }),
         ),
       ]),
     ),
@@ -628,12 +628,12 @@ test "ambiguity: field-equals same literal" {
         branch(
           "a",
           rec1("k", vstr()),
-          @types.FieldEquals({ field_name: "k", literal: Some("v") }),
+          @types.FieldEquals({ field_name: "k", literal: Some("v"), }),
         ),
         branch(
           "b",
           rec1("k", vstr()),
-          @types.FieldEquals({ field_name: "k", literal: Some("v") }),
+          @types.FieldEquals({ field_name: "k", literal: Some("v"), }),
         ),
       ]),
     ),
@@ -732,7 +732,7 @@ test "no ambiguity: distinct non-empty rules of different kinds" {
         branch(
           "b",
           rec1("k", vstr()),
-          @types.FieldEquals({ field_name: "k", literal: Some("v") }),
+          @types.FieldEquals({ field_name: "k", literal: Some("v"), }),
         ),
       ]),
     ),
@@ -745,7 +745,7 @@ fn field_equals_rule(
   field_name : String,
   literal : String?,
 ) -> @types.DiscriminatorRule {
-  @types.FieldEquals({ field_name, literal })
+  @types.FieldEquals({ field_name, literal, })
 }
 
 ///|
@@ -776,7 +776,7 @@ test "union classifier integration rejects only Reject" {
 ///|
 test "text is not a union string discriminator body" {
   let text = schema_type(
-    Text({ languages: None, min_length: None, max_length: None, regex: None }),
+    Text({ languages: None, min_length: None, max_length: None, regex: None, }),
   )
   let body_graph : SchemaGraph = {
     defs: [],
@@ -847,7 +847,7 @@ test "resolved_shape through refs (string + record) is well-formed" {
         branch(
           "b",
           schema_type(Ref("rec")),
-          @types.FieldEquals({ field_name: "k", literal: None }),
+          @types.FieldEquals({ field_name: "k", literal: None, }),
         ),
       ]),
     ),
@@ -868,7 +868,7 @@ test "quantity max unit mismatch" {
         base_unit: "m",
         allowed_suffixes: [],
         min: None,
-        max: Some({ mantissa: 0L, scale: 0, unit: "km" }),
+        max: Some({ mantissa: 0L, scale: 0, unit: "km", }),
       }),
     ),
   }

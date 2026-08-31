@@ -1,5 +1,5 @@
 ///|
-struct TestBytesUnit {} derive(Show, Eq)
+struct TestBytesUnit {} derive(Debug, Eq)
 
 ///|
 impl QuantityUnit for TestBytesUnit with fn type_id() {
@@ -45,7 +45,7 @@ test "rich type round-trips" {
       seconds: 1_700_000_000L,
       nanoseconds: 123U,
     }),
-    @types.Datetime::{ seconds: 1_700_000_000L, nanoseconds: 123U },
+    @types.Datetime::{ seconds: 1_700_000_000L, nanoseconds: 123U, },
   )
   assert_eq(rich_roundtrip(Duration::new(-42L)), Duration::new(-42L))
   assert_eq(
@@ -93,25 +93,25 @@ test "rich schema shapes" {
 ///|
 test "quantity rejects disallowed unit" {
   let accepted : Quantity[TestBytesUnit] = from_value_as(
-    @model.SchemaValue::Quantity({ mantissa: 1L, scale: 0, unit: "mb" }),
+    @model.SchemaValue::Quantity({ mantissa: 1L, scale: 0, unit: "mb", }),
   )
   assert_eq(accepted, Quantity::new(1L, 0, "mb"))
   let rejected_base_unit : Result[Quantity[TestBytesUnit], FromSchemaError] = try? from_value_as(
-    @model.SchemaValue::Quantity({ mantissa: 1L, scale: 0, unit: "bytes" }),
+    @model.SchemaValue::Quantity({ mantissa: 1L, scale: 0, unit: "bytes", }),
   )
-  inspect(
+  debug_inspect(
     rejected_base_unit,
     content=(
-      #|Err(Custom(quantity unit 'bytes' is not allowed for bytes))
+      #|Err(Custom("quantity unit 'bytes' is not allowed for bytes"))
     ),
   )
   let rejected : Result[Quantity[TestBytesUnit], FromSchemaError] = try? from_value_as(
-    @model.SchemaValue::Quantity({ mantissa: 1L, scale: 0, unit: "seconds" }),
+    @model.SchemaValue::Quantity({ mantissa: 1L, scale: 0, unit: "seconds", }),
   )
-  inspect(
+  debug_inspect(
     rejected,
     content=(
-      #|Err(Custom(quantity unit 'seconds' is not allowed for bytes))
+      #|Err(Custom("quantity unit 'seconds' is not allowed for bytes"))
     ),
   )
 }
@@ -121,10 +121,10 @@ test "quantity constructor rejects disallowed unit" {
   let rejected : Result[Quantity[TestBytesUnit], FromSchemaError] = try? Quantity::new(
     1L, 0, "seconds",
   )
-  inspect(
+  debug_inspect(
     rejected,
     content=(
-      #|Err(Custom(quantity unit 'seconds' is not allowed for bytes))
+      #|Err(Custom("quantity unit 'seconds' is not allowed for bytes"))
     ),
   )
 }

@@ -16,6 +16,9 @@ jobs:
 
       - name: Setup MoonBit
         uses: hustcer/setup-moonbit@v1
+        with:
+          version: 0.10.11+6ff76a5f9
+          core-version: 0.10.11+6ff76a5f9
 
       - name: Extract version from tag
         id: get_version

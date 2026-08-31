@@ -208,14 +208,9 @@ fn reject_middleware_type_desc_annotations(
   desc : @syntax.TypeDesc,
 ) -> Unit raise ToolMiddlewareParseError {
   match desc {
-    Record(fields~, constr_decl~) => {
+    Record(fields~) => {
       for field in fields {
         reject_middleware_annotations(field.attrs, false, false)
-      }
-      match constr_decl {
-        Some(constr_decl) =>
-          reject_middleware_annotations(constr_decl.attrs, false, false)
-        None => ()
       }
     }
     Variant(constrs) | Error(EnumPayload(constrs)) =>
@@ -223,26 +218,6 @@ fn reject_middleware_type_desc_annotations(
         reject_middleware_annotations(constr.attrs, false, false)
       }
     _ => ()
-  }
-}
-
-///|
-fn reject_local_type_middleware_annotations(
-  local_types : @list.List[@syntax.LocalTypeDecl],
-) -> Unit raise ToolMiddlewareParseError {
-  for local_type in local_types {
-    reject_middleware_type_desc_annotations(local_type.components)
-  }
-}
-
-///|
-fn reject_decl_body_middleware_annotations(
-  body : @syntax.DeclBody,
-) -> Unit raise ToolMiddlewareParseError {
-  match body {
-    DeclBody(local_types~, ..) =>
-      reject_local_type_middleware_annotations(local_types)
-    DeclNone | DeclStubs(_) => ()
   }
 }
 
@@ -255,20 +230,17 @@ fn validate_middleware_annotation_placement(
       reject_middleware_annotations(decl.attrs, true, false)
       reject_middleware_type_desc_annotations(decl.components)
     }
-    TopFuncDef(fun_decl~, decl_body~, ..) => {
+    TopFuncDef(fun_decl~, ..) => {
       reject_middleware_annotations(fun_decl.attrs, false, true)
-      reject_decl_body_middleware_annotations(decl_body)
     }
-    TopImpl(attrs~, body~, ..) => {
+    TopImpl(attrs~, ..) => {
       reject_middleware_annotations(attrs, false, false)
-      reject_decl_body_middleware_annotations(body)
     }
     TopImplRelation(attrs~, ..) =>
       reject_middleware_annotations(attrs, false, false)
     TopLetDef(attrs~, ..) => reject_middleware_annotations(attrs, false, false)
-    TopTest(attrs~, local_types~, ..) => {
+    TopTest(attrs~, ..) => {
       reject_middleware_annotations(attrs, false, false)
-      reject_local_type_middleware_annotations(local_types)
     }
     TopTrait(decl) => {
       reject_middleware_annotations(decl.attrs, false, false)
@@ -283,8 +255,9 @@ fn validate_middleware_annotation_placement(
         reject_middleware_annotations(constr.attrs, false, false)
       }
     }
-    TopExpr(local_types~, ..) =>
-      reject_local_type_middleware_annotations(local_types)
+    TopExtend(attrs~, ..) =>
+      reject_middleware_annotations(attrs, false, false)
+    TopExpr(..) | TopImport(..) => ()
   }
 }
 

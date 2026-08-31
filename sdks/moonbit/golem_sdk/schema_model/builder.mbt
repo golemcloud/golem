@@ -27,7 +27,7 @@ pub struct SchemaBuilder {
 
 ///|
 pub fn SchemaBuilder::new() -> SchemaBuilder {
-  { defs: [], reserved: Map::new() }
+  { defs: [], reserved: Map::new(), }
 }
 
 ///|
@@ -63,7 +63,7 @@ pub fn SchemaBuilder::commit(
   name : String?,
 ) -> Unit {
   let _ = self.reserved.remove(id)
-  let def : SchemaTypeDef = { id, name, body }
+  let def : SchemaTypeDef = { id, name, body, }
   match self.index_of(id) {
     Some(i) => self.defs[i] = def
     None => self.defs.push(def)
@@ -120,7 +120,7 @@ pub fn SchemaBuilder::build_graph(
   self : SchemaBuilder,
   root : SchemaType,
 ) -> SchemaGraph raise SchemaModelError {
-  { defs: self.finish(), root }
+  { defs: self.finish(), root, }
 }
 
 ///|
@@ -157,7 +157,7 @@ pub fn merge_graph_defs(
 pub(all) struct MergedAgentGraph {
   defs : Array[SchemaTypeDef]
   roots : Array[SchemaType]
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Combine the per-root graphs of an agent (one per constructor / method input
@@ -171,5 +171,5 @@ pub(all) struct MergedAgentGraph {
 pub fn merge_agent_graphs(
   graphs : Array[SchemaGraph],
 ) -> MergedAgentGraph raise SchemaModelError {
-  { defs: merge_graph_defs(graphs), roots: graphs.map(g => g.root) }
+  { defs: merge_graph_defs(graphs), roots: graphs.map(g => g.root), }
 }

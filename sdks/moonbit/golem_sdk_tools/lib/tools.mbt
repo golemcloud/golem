@@ -242,15 +242,9 @@ fn validate_type_member_tool_annotations(
   allow_error_case_annotations : Bool,
 ) -> Unit raise ToolParseError {
   match desc {
-    Record(fields~, constr_decl~) => {
+    Record(fields~) => {
       for field in fields {
         reject_tool_annotations(field.attrs, "a record field")
-      }
-      if constr_decl is Some(record_constructor) {
-        reject_tool_annotations(
-          record_constructor.attrs,
-          "a record constructor",
-        )
       }
     }
     Variant(constrs) | Error(EnumPayload(constrs)) =>
@@ -269,44 +263,22 @@ fn validate_type_member_tool_annotations(
 }
 
 ///|
-fn validate_local_type_tool_annotations(
-  local_types : @list.List[@syntax.LocalTypeDecl],
-) -> Unit raise ToolParseError {
-  for local_type in local_types {
-    validate_type_member_tool_annotations(local_type.components, false)
-  }
-}
-
-///|
-fn validate_decl_body_tool_annotations(
-  body : @syntax.DeclBody,
-) -> Unit raise ToolParseError {
-  match body {
-    DeclBody(local_types~, ..) =>
-      validate_local_type_tool_annotations(local_types)
-    DeclNone | DeclStubs(_) => ()
-  }
-}
-
-///|
 fn validate_unsupported_tool_annotations(
   impl_ : @syntax.Impl,
 ) -> Unit raise ToolParseError {
   match impl_ {
     TopTypeDef(decl) =>
       validate_type_member_tool_annotations(decl.components, true)
-    TopFuncDef(decl_body~, ..) => validate_decl_body_tool_annotations(decl_body)
-    TopImpl(attrs~, body~, ..) => {
+    TopFuncDef(..) => ()
+    TopImpl(attrs~, ..) => {
       reject_tool_annotations(attrs, "a trait implementation")
-      validate_decl_body_tool_annotations(body)
     }
     TopImplRelation(attrs~, ..) =>
       reject_tool_annotations(attrs, "a trait implementation")
     TopLetDef(attrs~, ..) =>
       reject_tool_annotations(attrs, "a value declaration")
-    TopTest(attrs~, local_types~, ..) => {
+    TopTest(attrs~, ..) => {
       reject_tool_annotations(attrs, "a test")
-      validate_local_type_tool_annotations(local_types)
     }
     TopTrait(decl) => {
       reject_tool_annotations(decl.attrs, "a trait")
@@ -322,8 +294,9 @@ fn validate_unsupported_tool_annotations(
         reject_tool_annotations(constr.attrs, "a view case")
       }
     }
-    TopExpr(local_types~, ..) =>
-      validate_local_type_tool_annotations(local_types)
+    TopExtend(attrs~, ..) =>
+      reject_tool_annotations(attrs, "an extension declaration")
+    TopExpr(..) | TopImport(..) => ()
   }
 }
 

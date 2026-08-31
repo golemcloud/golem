@@ -1511,7 +1511,7 @@ fn generated_project_layout_is_correct(#[tagged_as("counter_agent")] pkg: &Gener
 
     let mod_json = std::fs::read_to_string(dir.join("moon.mod.json")).unwrap();
     assert!(mod_json.contains("\"name\": \"counter-agent-client\""));
-    assert!(mod_json.contains("\"moonbitlang/async\": \"0.19.2\""));
+    assert!(mod_json.contains("\"moonbitlang/async\": \"0.21.2\""));
 
     for runtime_file in [
         "schema_value.mbt",

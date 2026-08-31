@@ -1,13 +1,13 @@
 ///|
 /// A BLAKE3-256 fingerprint of the deterministic-CBOR encoding of a schema
 /// closure. The byte representation is always 32 bytes.
-pub(all) struct SchemaFingerprintV1(FixedArray[Byte]) derive(Eq, Show)
+pub(all) struct SchemaFingerprintV1(FixedArray[Byte]) derive(Eq, Debug, Show)
 
 ///|
 pub suberror SchemaFingerprintError {
   InvalidSchema(String)
   DuplicateSetValue(field~ : String, value~ : String)
-} derive(Eq, Show)
+} derive(Eq, Debug, Show)
 
 ///|
 pub fn SchemaFingerprintV1::as_bytes(
@@ -53,10 +53,10 @@ pub fn canonical_schema_bytes_v1(
     None => schema_type(Tuple([]))
   }
   let defs = reachable_definitions(graph, root)
-  let projected = { defs, root }
+  let projected = { defs, root, }
   let errors = validate_graph(projected)
   if !errors.is_empty() {
-    raise InvalidSchema(errors.map(error => error.to_string()).join("; "))
+    raise InvalidSchema(errors.map(error => repr(error)).join("; "))
   }
   let encoder = CborEncoder::new()
   encoder.array(4)
@@ -585,7 +585,7 @@ priv struct CborEncoder {
 
 ///|
 fn CborEncoder::new() -> CborEncoder {
-  { bytes: [] }
+  { bytes: [], }
 }
 
 ///|
@@ -831,7 +831,7 @@ fn parent_output(
     block[i] = left[i]
     block[i + 8] = right[i]
   }
-  { cv: blake3_iv.copy(), block, counter: 0UL, block_len: 64, flags: 4U }
+  { cv: blake3_iv.copy(), block, counter: 0UL, block_len: 64, flags: 4U, }
 }
 
 ///|

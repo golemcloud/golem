@@ -2,7 +2,7 @@ import {
   "moonbitlang/core/debug",
   "moonbitlang/core/env",
   "moonbitlang/core/list",
-  "moonbitlang/formatter",
+  "moonbitlang/parser/fmt" @formatter,
   "moonbitlang/parser/syntax",
   "moonbitlang/x/fs",
   "moonbitlang/x/sys",

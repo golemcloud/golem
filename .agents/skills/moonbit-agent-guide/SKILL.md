@@ -806,7 +806,7 @@ test "string interpolation basics" {
   // ✅ Correct - extract to variable first:
   let has_key = config["cache"] // `"` not allowed in interpolation
   println("  - Checking if 'cache' section exists: \{has_key}")
-  let sb = StringBuilder::new()
+  let sb = StringBuilder()
   sb
   ..write_char('[') // dotdot for imperative method chaining
   ..write_view([1, 2, 3].map(x => "\{x}").join(","))
@@ -846,7 +846,7 @@ test "map literals and common operations" {
   // Map literal syntax
   let map : Map[String, Int] = { "a": 1, "b": 2, "c": 3 }
   let empty : Map[String, Int] = {} // Empty map, preferred
-  let also_empty : Map[String, Int] = Map::new()
+  let also_empty : Map[String, Int] = Map([])
   // From array of pairs
   let from_pairs : Map[String, Int] = Map::from_array([("x", 1), ("y", 2)])
 

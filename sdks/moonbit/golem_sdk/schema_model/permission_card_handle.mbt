@@ -14,7 +14,7 @@ pub(all) struct GuestPermissionCardHandle {
 pub fn GuestPermissionCardHandle::new(
   handle : @types.PermissionCard,
 ) -> GuestPermissionCardHandle {
-  { cell: Some(handle) }
+  { cell: Some(handle), }
 }
 
 ///|
@@ -52,6 +52,17 @@ pub fn[R] GuestPermissionCardHandle::with_handle(
 /// instance. An opaque capability has no structural content to compare.
 impl Eq for GuestPermissionCardHandle with fn equal(self, other) {
   physical_equal(self, other)
+}
+
+///|
+impl Debug for GuestPermissionCardHandle with fn to_repr(self) {
+  Repr::literal(
+    if self.is_present() {
+      "GuestPermissionCardHandle(present)"
+    } else {
+      "GuestPermissionCardHandle(consumed)"
+    },
+  )
 }
 
 ///|

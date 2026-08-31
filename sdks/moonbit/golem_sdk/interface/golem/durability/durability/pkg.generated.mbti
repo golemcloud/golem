@@ -5,6 +5,7 @@ import {
   "golemcloud/golem_sdk/interface/golem/api/oplog",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/wasi/clocks/system-clock",
+  "moonbitlang/core/debug",
 }
 
 // Values
@@ -18,16 +19,16 @@ pub fn observe_function_call(String, String) -> Unit
 pub(all) enum CustomDurableInvocation {
   Live(LiveCustomDurableInvocation)
   Replayed(PersistedDurableFunctionInvocation)
-} derive(Eq, Show)
+} derive(Eq, Show, @debug.Debug)
 
-pub(all) struct LiveCustomDurableInvocation(Int) derive(Eq, Show)
+pub(all) struct LiveCustomDurableInvocation(Int) derive(Eq, Show, @debug.Debug)
 pub fn LiveCustomDurableInvocation::drop(Self) -> Unit
 pub fn LiveCustomDurableInvocation::finish(Self, @types.TypedSchemaValue, Bool) -> Unit
 
 pub(all) enum OplogEntryVersion {
   V1
   V2
-} derive(Eq, Show)
+} derive(Eq, Show, @debug.Debug)
 pub fn OplogEntryVersion::from(Int) -> Self
 pub fn OplogEntryVersion::ordinal(Self) -> Int
 
@@ -37,9 +38,8 @@ pub(all) struct PersistedDurableFunctionInvocation {
   response : @types.TypedSchemaValue
   function_type : @oplog.WrappedFunctionType
   entry_version : OplogEntryVersion
-} derive(Eq, Show)
+} derive(Eq, Show, @debug.Debug)
 
 // Type aliases
 
 // Traits
-

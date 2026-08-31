@@ -158,7 +158,7 @@ test "typed decode drops value resources when its graph is malformed" {
     drop_native_stream: fn(_) {  },
   }
   let typed : @types.TypedSchemaValue = {
-    graph: { type_nodes: [], root: 0, defs: [] },
+    graph: { type_nodes: [], root: 0, defs: [], },
     value: {
       value_nodes: [
         @types.StreamValue(@types.SchemaValueStream::SchemaValueStream(12)),

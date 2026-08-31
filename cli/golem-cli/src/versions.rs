@@ -33,7 +33,7 @@ pub mod build_tool {
     pub const CARGO_MIN: &str = "1.94.0";
     pub const NODE_MIN: &str = "24.11.0";
     pub const NPM_MIN: &str = "11.6.2";
-    pub const MOON_MIN: &str = "0.1.20260409";
+    pub const MOON_MIN: &str = "0.1.20260827";
     pub const JAVA_MIN: &str = "17.0.0";
     pub const WASM_TOOLS_MIN: &str = "1.227.1";
 }
@@ -71,7 +71,7 @@ pub mod scala_dep {
 }
 
 pub mod moonbit_dep {
-    pub const ASYNC_VERSION: &str = "0.19.2";
+    pub const ASYNC_VERSION: &str = "0.21.2";
 }
 
 pub mod ai {

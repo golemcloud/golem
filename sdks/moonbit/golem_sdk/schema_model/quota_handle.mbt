@@ -34,7 +34,7 @@ pub(all) struct GuestQuotaTokenHandle {
 pub fn GuestQuotaTokenHandle::new(
   handle : @types.QuotaToken,
 ) -> GuestQuotaTokenHandle {
-  { cell: Some(handle) }
+  { cell: Some(handle), }
 }
 
 ///|
@@ -74,6 +74,17 @@ pub fn[R] GuestQuotaTokenHandle::with_handle(
 /// identity rather than by any (non-existent) structural content.
 impl Eq for GuestQuotaTokenHandle with fn equal(self, other) {
   physical_equal(self, other)
+}
+
+///|
+impl Debug for GuestQuotaTokenHandle with fn to_repr(self) {
+  Repr::literal(
+    if self.is_present() {
+      "GuestQuotaTokenHandle(present)"
+    } else {
+      "GuestQuotaTokenHandle(consumed)"
+    },
+  )
 }
 
 ///|

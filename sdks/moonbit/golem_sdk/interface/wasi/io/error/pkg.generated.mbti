@@ -1,12 +1,14 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "golemcloud/golem_sdk/interface/wasi/io/error"
 
+import {
+  "moonbitlang/core/debug",
+}
+
 // Values
 
 // Errors
-pub(all) suberror Error_ {
-  Error_(Int)
-} derive(Eq, Show)
+pub(all) suberror Error_ Int derive(Eq, Show, @debug.Debug)
 pub fn Error_::drop(Self) -> Unit
 pub fn Error_::to_debug_string(Self) -> String
 
@@ -15,4 +17,3 @@ pub fn Error_::to_debug_string(Self) -> String
 // Type aliases
 
 // Traits
-

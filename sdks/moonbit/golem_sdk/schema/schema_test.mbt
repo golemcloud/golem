@@ -20,7 +20,7 @@ impl FromSchema for StreamThenInt with fn from_value(value) {
     record_field(fields, 0, "StreamThenInt"),
   )
   let decoded : Int = from_value_as(record_field(fields, 1, "StreamThenInt"))
-  { stream, value: decoded }
+  { stream, value: decoded, }
 }
 
 ///|

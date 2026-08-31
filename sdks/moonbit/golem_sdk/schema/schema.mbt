@@ -49,7 +49,7 @@ pub suberror FromSchemaError {
   UnknownUnionTag(String)
   /// Free-form error message produced by generated decoders.
   Custom(String)
-} derive(Show, Eq)
+} derive(Debug, Show, Eq)
 
 ///|
 /// Construct a `ShapeMismatch` error.
@@ -132,7 +132,7 @@ pub(all) struct TypeTag[T] {}
 ///|
 /// Construct a `TypeTag` for `T`.
 pub fn[T] type_tag() -> TypeTag[T] {
-  TypeTag::{  }
+  TypeTag::{ }
 }
 
 ///|
@@ -209,7 +209,7 @@ pub fn[T : IntoSchema] try_into_typed_schema_value(
 ) -> @model.TypedSchemaValue raise {
   let tag : TypeTag[T] = type_tag()
   let graph = into_schema_graph(tag)
-  { graph, value: T::to_value(value) }
+  { graph, value: T::to_value(value), }
 }
 
 ///|

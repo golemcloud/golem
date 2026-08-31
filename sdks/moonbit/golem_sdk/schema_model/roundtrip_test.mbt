@@ -27,7 +27,7 @@ fn decode_test_value(
 ///|
 /// Round-trip a standalone type by wrapping it in a defs-less graph.
 fn rt_type(st : SchemaType) -> SchemaType raise {
-  schema_graph_from_wit(schema_graph_to_wit({ defs: [], root: st })).root
+  schema_graph_from_wit(schema_graph_to_wit({ defs: [], root: st, })).root
 }
 
 ///|
@@ -42,7 +42,7 @@ fn rt_graph(g : SchemaGraph) -> SchemaGraph raise {
 
 ///|
 fn encoded_body(st : SchemaType) -> @types.SchemaTypeBody raise {
-  let wit = schema_graph_to_wit({ defs: [], root: st })
+  let wit = schema_graph_to_wit({ defs: [], root: st, })
   wit.type_nodes[wit.root].body
 }
 
@@ -67,7 +67,7 @@ fn nr(
   max? : @types.NumericBound,
   unit? : String,
 ) -> @types.NumericRestrictions {
-  { min, max, unit }
+  { min, max, unit, }
 }
 
 ///|
@@ -193,7 +193,7 @@ test "composite types round-trip" {
   assert_eq(rt_type(inner), inner)
 
   let secret = schema_type(
-    Secret({ inner: schema_type(String), category: Some("api-key") }),
+    Secret({ inner: schema_type(String), category: Some("api-key"), }),
   )
   assert_eq(rt_type(secret), secret)
 }
@@ -222,8 +222,8 @@ test "values round-trip (primitives, composites, semantic)" {
     List([S32(1), S32(2), S32(3)]),
     FixedList([U8(1), U8(2)]),
     Map([
-      { key: String("a"), value: S32(1) },
-      { key: String("b"), value: S32(2) },
+      { key: String("a"), value: S32(1), },
+      { key: String("b"), value: S32(2), },
     ]),
     Option(Some(Bool(false))),
     Option(None),
@@ -234,9 +234,9 @@ test "values round-trip (primitives, composites, semantic)" {
     Binary(([0, 1, 255] : FixedArray[Byte]), Some("image/png")),
     Path("/tmp/x"),
     Url("https://golem.cloud"),
-    Datetime({ seconds: 100L, nanoseconds: 5U }),
+    Datetime({ seconds: 100L, nanoseconds: 5U, }),
     Duration(-123_456L),
-    Quantity({ mantissa: 1234L, scale: 2, unit: "kg" }),
+    Quantity({ mantissa: 1234L, scale: 2, unit: "kg", }),
     Union("circle", S32(42)),
   ])
   assert_eq(rt_value(v), v)
@@ -247,8 +247,8 @@ test "Ref maps to ref-type by first-seen def index" {
   // Definitions keep first-seen order: Zulu=0, Bravo=1 (not sorted).
   let g : SchemaGraph = {
     defs: [
-      { id: "Zulu", name: None, body: schema_type(String) },
-      { id: "Bravo", name: None, body: schema_type(S32(None)) },
+      { id: "Zulu", name: None, body: schema_type(String), },
+      { id: "Bravo", name: None, body: schema_type(S32(None)), },
     ],
     root: schema_type(
       Tuple([schema_type(Ref("Zulu")), schema_type(Ref("Bravo"))]),
@@ -319,7 +319,7 @@ test "mutually-recursive types close via reserve/commit" {
 
 ///|
 test "encode rejects Ref to unknown type id" {
-  let g : SchemaGraph = { defs: [], root: schema_type(Ref("Ghost")) }
+  let g : SchemaGraph = { defs: [], root: schema_type(Ref("Ghost")), }
   let r = try? schema_graph_to_wit(g)
   guard r is Err(EncodeError(msg)) else {
     fail("expected EncodeError, got \{r}")
@@ -329,7 +329,7 @@ test "encode rejects Ref to unknown type id" {
 
 ///|
 test "decode rejects out-of-range root index" {
-  let bad : @types.SchemaGraph = { type_nodes: [], defs: [], root: 0 }
+  let bad : @types.SchemaGraph = { type_nodes: [], defs: [], root: 0, }
   let r = try? schema_graph_from_wit(bad)
   guard r is Err(DecodeError(msg)) else {
     fail("expected DecodeError, got \{r}")
@@ -340,7 +340,7 @@ test "decode rejects out-of-range root index" {
 ///|
 test "decode rejects out-of-range child index" {
   let bad : @types.SchemaGraph = {
-    type_nodes: [{ body: @types.ListType(9), metadata: empty_metadata() }],
+    type_nodes: [{ body: @types.ListType(9), metadata: empty_metadata(), }],
     defs: [],
     root: 0,
   }
@@ -360,8 +360,8 @@ test "decode rejects duplicate def id" {
   let bad : @types.SchemaGraph = {
     type_nodes: [node],
     defs: [
-      { id: "Dup", name: None, body: 0 },
-      { id: "Dup", name: None, body: 0 },
+      { id: "Dup", name: None, body: 0, },
+      { id: "Dup", name: None, body: 0, },
     ],
     root: 0,
   }
@@ -376,7 +376,7 @@ test "decode rejects duplicate def id" {
 test "decode rejects a structural cycle in type nodes" {
   // Node 0 is a list whose element is node 0 (a self back-edge).
   let bad : @types.SchemaGraph = {
-    type_nodes: [{ body: @types.ListType(0), metadata: empty_metadata() }],
+    type_nodes: [{ body: @types.ListType(0), metadata: empty_metadata(), }],
     defs: [],
     root: 0,
   }
@@ -389,7 +389,7 @@ test "decode rejects a structural cycle in type nodes" {
 
 ///|
 test "decode rejects out-of-range value node index" {
-  let bad : @types.SchemaValueTree = { value_nodes: [], root: 3 }
+  let bad : @types.SchemaValueTree = { value_nodes: [], root: 3, }
   let r = try? decode_test_value(bad)
   guard r is Err(DecodeError(msg)) else {
     fail("expected DecodeError, got \{r}")
@@ -415,7 +415,7 @@ test "merge_agent_graphs dedups shared defs and rejects conflicts" {
     name: None,
     body: schema_type(S32(None)),
   }
-  let g1 : SchemaGraph = { defs: [shared], root: schema_type(Ref("Shared")) }
+  let g1 : SchemaGraph = { defs: [shared], root: schema_type(Ref("Shared")), }
   let g2 : SchemaGraph = {
     defs: [shared],
     root: schema_type(List(schema_type(Ref("Shared")))),
@@ -426,12 +426,12 @@ test "merge_agent_graphs dedups shared defs and rejects conflicts" {
 
   // A conflicting body for the same id is rejected.
   let g3 : SchemaGraph = {
-    defs: [{ id: "Shared", name: None, body: schema_type(String) }],
+    defs: [{ id: "Shared", name: None, body: schema_type(String), }],
     root: schema_type(Ref("Shared")),
   }
   let r = try? merge_agent_graphs([g1, g3])
   guard r is Err(MergeConflict(id)) else {
-    fail("expected MergeConflict, got \{r}")
+    fail("expected MergeConflict, got \{repr(r)}")
   }
   assert_eq(id, "Shared")
 }
@@ -469,8 +469,8 @@ test "semantic and capability types round-trip" {
     inner: schema_type(String),
     category: Some("api-key"),
   }
-  let quota_s : @types.QuotaTokenSpec = { resource_name: Some("cpu") }
-  let card_s : @types.PermissionCardSpec = { polymorphic: true }
+  let quota_s : @types.QuotaTokenSpec = { resource_name: Some("cpu"), }
+  let card_s : @types.PermissionCardSpec = { polymorphic: true, }
   let branch_a : UnionBranch = {
     tag: "a",
     body: schema_type(S32(None)),
@@ -510,7 +510,7 @@ test "encode_merged_agent_graph shares one pool across roots" {
     name: None,
     body: schema_type(S32(None)),
   }
-  let g1 : SchemaGraph = { defs: [shared], root: schema_type(Ref("Shared")) }
+  let g1 : SchemaGraph = { defs: [shared], root: schema_type(Ref("Shared")), }
   let g2 : SchemaGraph = {
     defs: [shared],
     root: schema_type(List(schema_type(Ref("Shared")))),
@@ -566,7 +566,7 @@ test "decode rejects a value structural cycle" {
 
 ///|
 test "datetime nanoseconds must be < 1e9 (encode + decode)" {
-  let v : SchemaValue = Datetime({ seconds: 0L, nanoseconds: 1_000_000_000U })
+  let v : SchemaValue = Datetime({ seconds: 0L, nanoseconds: 1_000_000_000U, })
   let re = try? schema_value_to_wit(v)
   guard re is Err(EncodeError(em)) else {
     fail("expected EncodeError, got \{re}")
@@ -574,7 +574,7 @@ test "datetime nanoseconds must be < 1e9 (encode + decode)" {
   assert_true(em.contains("datetime"))
   let bad : @types.SchemaValueTree = {
     value_nodes: [
-      @types.DatetimeValue({ seconds: 0L, nanoseconds: 1_000_000_000U }),
+      @types.DatetimeValue({ seconds: 0L, nanoseconds: 1_000_000_000U, }),
     ],
     root: 0,
   }
@@ -610,7 +610,7 @@ test "narrow integer values are range-checked on decode" {
     @types.U16Value(65536U),
   ]
   for node in bad {
-    let tree : @types.SchemaValueTree = { value_nodes: [node], root: 0 }
+    let tree : @types.SchemaValueTree = { value_nodes: [node], root: 0, }
     let r = try? decode_test_value(tree)
     guard r is Err(DecodeError(_)) else {
       fail("expected DecodeError for out-of-range value, got \{r}")
@@ -932,8 +932,8 @@ test "duplicate def id is rejected before a bad body is decoded" {
   let bad : @types.SchemaGraph = {
     type_nodes: [node],
     defs: [
-      { id: "Dup", name: None, body: 0 },
-      { id: "Dup", name: None, body: 0 },
+      { id: "Dup", name: None, body: 0, },
+      { id: "Dup", name: None, body: 0, },
     ],
     root: 0,
   }

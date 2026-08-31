@@ -221,7 +221,7 @@ pub impl[K : IntoSchema, V : IntoSchema] IntoSchema for Map[K, V] with fn to_val
 ) {
   let entries : Array[@model.SchemaMapEntry] = []
   for k, v in self {
-    entries.push({ key: K::to_value(k), value: V::to_value(v) })
+    entries.push({ key: K::to_value(k), value: V::to_value(v), })
   }
   Map(entries)
 }

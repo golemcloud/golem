@@ -86,7 +86,7 @@ generate_world() {
   wit-bindgen moonbit "$PWD/wit" \
     --world "$world_name" \
     --gen-dir "$gen_dir" \
-    --derive-show --derive-eq --derive-error \
+    --derive-debug --derive-show --derive-eq --derive-error \
     --project-name golemcloud/golem_sdk \
     --out-dir "$output_dir"
 }
@@ -157,6 +157,7 @@ echo "==> Fixing s8/s16 double sign-extension"
 find "${GENERATED_ROOTS[@]}" -name '*.mbt' -type f -print0 |
   while IFS= read -r -d '' f; do
   perl -i -pe 's/(mbt_ffi_load16\b[^\n]*?\)) - 0x10000\b/$1/g; s/(mbt_ffi_load8\b[^\n]*?\)) - 0x100\b/$1/g' "$f"
+  perl -i -0pe 's/\n+\z/\n/' "$f"
 done
 
 echo "==> Removing generated package descriptors shadowed by hand-maintained moon.pkg files"

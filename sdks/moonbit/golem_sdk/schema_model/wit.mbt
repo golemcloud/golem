@@ -125,7 +125,7 @@ pub fn GraphEncoder::new(
     }
     def_index_by_id[def.id] = i
   }
-  let enc : GraphEncoder = { type_nodes: [], def_index_by_id, wit_defs: [] }
+  let enc : GraphEncoder = { type_nodes: [], def_index_by_id, wit_defs: [], }
   // Encode each def body into the shared pool. All def indices are already
   // registered, so a `Ref` to any def (forward or back) resolves correctly.
   let bodies : Array[Int] = []
@@ -133,7 +133,7 @@ pub fn GraphEncoder::new(
     bodies.push(enc.encode_type(def.body))
   }
   for i, def in defs {
-    enc.wit_defs.push({ id: def.id, name: def.name, body: bodies[i] })
+    enc.wit_defs.push({ id: def.id, name: def.name, body: bodies[i], })
   }
   enc
 }
@@ -146,7 +146,7 @@ pub fn GraphEncoder::encode_type(
   st : SchemaType,
 ) -> Int raise SchemaModelError {
   let body = self.encode_body(st.body)
-  self.type_nodes.push({ body, metadata: st.metadata })
+  self.type_nodes.push({ body, metadata: st.metadata, })
   self.type_nodes.length() - 1
 }
 
@@ -213,7 +213,7 @@ fn GraphEncoder::encode_body(
     Tuple(elements) => @types.TupleType(elements.map(e => self.encode_type(e)))
     List(element) => @types.ListType(self.encode_type(element))
     FixedList(element, length) =>
-      @types.FixedListType({ element: self.encode_type(element), length })
+      @types.FixedListType({ element: self.encode_type(element), length, })
     Map(key, value) =>
       @types.MapType({
         key: self.encode_type(key),
@@ -221,7 +221,7 @@ fn GraphEncoder::encode_body(
       })
     Option(element) => @types.OptionType(self.encode_type(element))
     Result(ok, err) =>
-      @types.ResultType({ ok: self.encode_opt(ok), err: self.encode_opt(err) })
+      @types.ResultType({ ok: self.encode_opt(ok), err: self.encode_opt(err), })
     Text(restrictions) => @types.TextType(restrictions)
     Binary(restrictions) => @types.BinaryType(restrictions)
     Path(spec) => @types.PathType(spec)
@@ -260,7 +260,7 @@ pub fn GraphEncoder::encode_graph_root(
   root : SchemaType,
 ) -> @types.SchemaGraph raise SchemaModelError {
   let root_idx = self.encode_type(root)
-  { type_nodes: self.type_nodes, defs: self.wit_defs, root: root_idx }
+  { type_nodes: self.type_nodes, defs: self.wit_defs, root: root_idx, }
 }
 
 ///|
@@ -270,7 +270,7 @@ pub fn GraphEncoder::finish(
   self : GraphEncoder,
 ) -> @types.SchemaGraph raise SchemaModelError {
   let root = self.encode_type(schema_type(Record([])))
-  { type_nodes: self.type_nodes, defs: self.wit_defs, root }
+  { type_nodes: self.type_nodes, defs: self.wit_defs, root, }
 }
 
 ///|
@@ -302,7 +302,7 @@ pub fn encode_merged_agent_graph(
 ) -> EncodedAgentGraph raise SchemaModelError {
   let enc = GraphEncoder::new(merged.defs)
   let root_indices = merged.roots.map(r => enc.encode_type(r))
-  { graph: enc.finish(), root_indices }
+  { graph: enc.finish(), root_indices, }
 }
 
 // ============================================================
@@ -350,7 +350,7 @@ pub fn GraphDecoder::decode_defs(
 ) -> Array[SchemaTypeDef] raise SchemaModelError {
   let defs : Array[SchemaTypeDef] = []
   for d in self.wit_defs {
-    defs.push({ id: d.id, name: d.name, body: self.type_at(d.body) })
+    defs.push({ id: d.id, name: d.name, body: self.type_at(d.body), })
   }
   defs
 }
@@ -435,7 +435,7 @@ fn GraphDecoder::body_of(
       Record(
         fields.map(f => {
           (
-            { name: f.name, body: self.type_at(f.body), metadata: f.metadata } :
+            { name: f.name, body: self.type_at(f.body), metadata: f.metadata, } :
             NamedFieldType)
         }),
       )
@@ -481,7 +481,7 @@ fn GraphDecoder::body_of(
         }),
       )
     @types.SecretType(spec) =>
-      Secret({ inner: self.type_at(spec.inner), category: spec.category })
+      Secret({ inner: self.type_at(spec.inner), category: spec.category, })
     @types.QuotaTokenType(spec) => QuotaToken(spec)
     @types.PermissionCardType(spec) => PermissionCard(spec)
     @types.FutureType(element) => Future(self.decode_opt(element))
@@ -498,7 +498,7 @@ pub fn schema_graph_from_wit(
   let dec = GraphDecoder::new(wit)
   let defs = dec.decode_defs()
   let root = dec.decode_type_at(wit.root)
-  { defs, root }
+  { defs, root, }
 }
 
 // ============================================================
@@ -512,7 +512,7 @@ priv struct ValueEncoder {
 
 ///|
 fn ValueEncoder::new() -> ValueEncoder {
-  { value_nodes: [] }
+  { value_nodes: [], }
 }
 
 ///|
@@ -571,7 +571,7 @@ fn ValueEncoder::emit_node(
     String(s) => @types.StringValue(s)
     Record(fields) => @types.RecordValue(fields.map(f => self.emit(f)))
     Variant(case_, payload) =>
-      @types.VariantValue({ case: case_, payload: self.emit_opt(payload) })
+      @types.VariantValue({ case: case_, payload: self.emit_opt(payload), })
     Enum(case_) => @types.EnumValue(case_)
     Flags(flags) => @types.FlagsValue(flags)
     Tuple(elements) => @types.TupleValue(elements.map(e => self.emit(e)))
@@ -582,15 +582,15 @@ fn ValueEncoder::emit_node(
       @types.MapValue(
         entries.map(e => {
           (
-            { key: self.emit(e.key), value: self.emit(e.value) } :
+            { key: self.emit(e.key), value: self.emit(e.value), } :
             @types.MapEntry)
         }),
       )
     Option(o) => @types.OptionValue(self.emit_opt(o))
     ResultOk(o) => @types.ResultValue(@types.OkValue(self.emit_opt(o)))
     ResultErr(o) => @types.ResultValue(@types.ErrValue(self.emit_opt(o)))
-    Text(text, language) => @types.TextValue({ text, language })
-    Binary(bytes, mime_type) => @types.BinaryValue({ bytes, mime_type })
+    Text(text, language) => @types.TextValue({ text, language, })
+    Binary(bytes, mime_type) => @types.BinaryValue({ bytes, mime_type, })
     Path(s) => @types.PathValue(s)
     Url(s) => @types.UrlValue(s)
     Datetime(dt) => {
@@ -601,9 +601,9 @@ fn ValueEncoder::emit_node(
       }
       @types.DatetimeValue(dt)
     }
-    Duration(ns) => @types.DurationValue({ nanoseconds: ns })
+    Duration(ns) => @types.DurationValue({ nanoseconds: ns, })
     Quantity(q) => @types.QuantityValueNode(q)
-    Union(tag, body) => @types.UnionValue({ tag, body: self.emit(body) })
+    Union(tag, body) => @types.UnionValue({ tag, body: self.emit(body), })
     Secret(handle) =>
       // Move the owned `secret` resource out of the opaque handle exactly once.
       match handle.take() {
@@ -667,7 +667,7 @@ pub fn schema_value_to_wit(
   preflight_value(value)
   let enc = ValueEncoder::new()
   let root = enc.emit(value)
-  { value_nodes: enc.value_nodes, root }
+  { value_nodes: enc.value_nodes, root, }
 }
 
 ///|
@@ -1225,7 +1225,7 @@ fn ValueDecoder::from_node(
       Map(
         entries.map(e => {
           (
-            { key: self.from_idx(e.key), value: self.from_idx(e.value) } :
+            { key: self.from_idx(e.key), value: self.from_idx(e.value), } :
             SchemaMapEntry)
         }),
       )
@@ -1375,7 +1375,10 @@ pub fn schema_value_from_wit(
 pub fn typed_schema_value_to_wit(
   tv : TypedSchemaValue,
 ) -> @types.TypedSchemaValue raise SchemaModelError {
-  { graph: schema_graph_to_wit(tv.graph), value: schema_value_to_wit(tv.value) }
+  {
+    graph: schema_graph_to_wit(tv.graph),
+    value: schema_value_to_wit(tv.value),
+  }
 }
 
 ///|
@@ -1402,5 +1405,5 @@ pub fn typed_schema_value_from_wit(
       raise error
     }
   }
-  { graph, value: schema_value_from_wit(wit.value, drops) }
+  { graph, value: schema_value_from_wit(wit.value, drops), }
 }

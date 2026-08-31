@@ -25,7 +25,7 @@ pub typealias String as TypeId
 pub(all) struct SchemaType {
   body : SchemaTypeBody
   metadata : @types.MetadataEnvelope
-} derive(Show, Eq)
+} derive(Debug, Show, Eq)
 
 ///|
 /// The structural body of a recursive schema type. Recursive positions hold
@@ -76,21 +76,21 @@ pub(all) enum SchemaTypeBody {
   // WASI P3 asynchronous values
   Future(SchemaType?)
   Stream(SchemaType?)
-} derive(Show, Eq)
+} derive(Debug, Show, Eq)
 
 ///|
 pub(all) struct NamedFieldType {
   name : String
   body : SchemaType
   metadata : @types.MetadataEnvelope
-} derive(Show, Eq)
+} derive(Debug, Show, Eq)
 
 ///|
 pub(all) struct VariantCaseType {
   name : String
   payload : SchemaType?
   metadata : @types.MetadataEnvelope
-} derive(Show, Eq)
+} derive(Debug, Show, Eq)
 
 ///|
 pub(all) struct UnionBranch {
@@ -99,14 +99,14 @@ pub(all) struct UnionBranch {
   body : SchemaType
   discriminator : @types.DiscriminatorRule
   metadata : @types.MetadataEnvelope
-} derive(Show, Eq)
+} derive(Debug, Show, Eq)
 
 ///|
 pub(all) struct SecretSpec {
   /// Revealed payload type carried by this secret handle.
   inner : SchemaType
   category : String?
-} derive(Show, Eq)
+} derive(Debug, Show, Eq)
 
 // ============================================================
 // Schema graph (recursive, self-contained)
@@ -120,7 +120,7 @@ pub(all) struct SchemaTypeDef {
   /// Optional human-readable qualified name (display only).
   name : String?
   body : SchemaType
-} derive(Show, Eq)
+} derive(Debug, Show, Eq)
 
 ///|
 /// A self-contained schema graph: an ordered registry of named definitions
@@ -131,7 +131,7 @@ pub(all) struct SchemaTypeDef {
 pub(all) struct SchemaGraph {
   defs : Array[SchemaTypeDef]
   root : SchemaType
-} derive(Show, Eq)
+} derive(Debug, Show, Eq)
 
 // ============================================================
 // Schema value (recursive)
@@ -190,13 +190,13 @@ pub(all) enum SchemaValue {
   Stream(GuestSchemaValueStreamHandle)
   // owned `permission-card` resource carried as an opaque, affine handle
   PermissionCard(GuestPermissionCardHandle)
-} derive(Show, Eq)
+} derive(Debug, Show, Eq)
 
 ///|
 pub(all) struct SchemaMapEntry {
   key : SchemaValue
   value : SchemaValue
-} derive(Show, Eq)
+} derive(Debug, Show, Eq)
 
 // ============================================================
 // Wire carrier (recursive)
@@ -208,7 +208,7 @@ pub(all) struct SchemaMapEntry {
 pub(all) struct TypedSchemaValue {
   graph : SchemaGraph
   value : SchemaValue
-} derive(Show, Eq)
+} derive(Debug, Show, Eq)
 
 ///|
 /// Host-provided cleanup for owned resources rejected at a schema-value
@@ -275,7 +275,7 @@ pub fn SchemaValue::release_resources(
 ///|
 /// An empty metadata envelope (no docs / aliases / examples / deprecation / role).
 pub fn empty_metadata() -> @types.MetadataEnvelope {
-  { doc: None, aliases: [], examples: [], deprecated: None, role: None }
+  { doc: None, aliases: [], examples: [], deprecated: None, role: None, }
 }
 
 ///|
@@ -284,7 +284,7 @@ pub fn schema_type(
   body : SchemaTypeBody,
   metadata? : @types.MetadataEnvelope = empty_metadata(),
 ) -> SchemaType {
-  { body, metadata }
+  { body, metadata, }
 }
 
 ///|
@@ -294,7 +294,7 @@ pub fn field(
   body : SchemaType,
   metadata? : @types.MetadataEnvelope = empty_metadata(),
 ) -> NamedFieldType {
-  { name, body, metadata }
+  { name, body, metadata, }
 }
 
 ///|
@@ -304,5 +304,5 @@ pub fn variant_case(
   payload? : SchemaType,
   metadata? : @types.MetadataEnvelope = empty_metadata(),
 ) -> VariantCaseType {
-  { name, payload, metadata }
+  { name, payload, metadata, }
 }

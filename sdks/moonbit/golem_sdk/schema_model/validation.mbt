@@ -62,7 +62,7 @@ pub suberror SchemaError {
   /// JSON wire (option-of-option, option-of-union-with-nullable-branch,
   /// option-of-ref-resolving-to-nullable). `inner` is a short description.
   NullableNesting(inner~ : String)
-} derive(Show, Eq)
+} derive(Debug, Show, Eq)
 
 // ============================================================
 // Driver
@@ -669,7 +669,7 @@ fn discriminator_classification_kind(
 
 ///|
 test "discriminator_pair_classification_matches_portable_matrix" {
-  let fe = (name, literal) => @types.FieldEquals({ field_name: name, literal })
+  let fe = (name, literal) => @types.FieldEquals({ field_name: name, literal, })
   let cases : Array[
     (String, @types.DiscriminatorRule, @types.DiscriminatorRule, Int),
   ] = [

@@ -69,7 +69,6 @@ fn make_apply(func : @syntax.Expr, args : Array[@syntax.Expr]) -> @syntax.Expr {
   @syntax.Expr::Apply(
     func~,
     args=to_list(args.map(make_positional_arg)),
-    attr=@syntax.ApplyAttr::NoAttr,
     loc=dummy_loc,
   )
 }

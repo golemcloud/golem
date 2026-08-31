@@ -17,14 +17,14 @@ pub(all) struct GuestSchemaValueStreamHandle {
 pub fn GuestSchemaValueStreamHandle::from_wrapped(
   value : @types.SchemaValueStream,
 ) -> GuestSchemaValueStreamHandle {
-  { cell: Some(Wrapped(value)) }
+  { cell: Some(Wrapped(value)), }
 }
 
 ///|
 pub fn GuestSchemaValueStreamHandle::from_native(
   reader : @async-core.Stream[@types.SchemaValueTree],
 ) -> GuestSchemaValueStreamHandle {
-  { cell: Some(Native(reader)) }
+  { cell: Some(Native(reader)), }
 }
 
 ///|
@@ -115,6 +115,17 @@ pub fn GuestSchemaValueStreamHandle::put_native(
 ///|
 impl Eq for GuestSchemaValueStreamHandle with fn equal(self, other) {
   physical_equal(self, other)
+}
+
+///|
+impl Debug for GuestSchemaValueStreamHandle with fn to_repr(self) {
+  Repr::literal(
+    if self.is_present() {
+      "GuestSchemaValueStreamHandle(present)"
+    } else {
+      "GuestSchemaValueStreamHandle(consumed)"
+    },
+  )
 }
 
 ///|

@@ -1,6 +1,10 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "golemcloud/golem_sdk/interface/wasi/clocks/system-clock"
 
+import {
+  "moonbitlang/core/debug",
+}
+
 // Values
 pub fn get_resolution() -> UInt64
 
@@ -12,9 +16,8 @@ pub fn now() -> Instant
 pub(all) struct Instant {
   seconds : Int64
   nanoseconds : UInt
-} derive(Eq, Show)
+} derive(Eq, Show, @debug.Debug)
 
 // Type aliases
 
 // Traits
-

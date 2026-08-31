@@ -147,6 +147,9 @@ function executeRanges(fileAndIndex) {
   for (const [filename, ranges] of fileAndIndex) {
     for (const { start, end } of ranges) {
       for (let index = start; index < end; index++) {
+        console.log("----- BEGIN MOON TEST RESULT -----")
+        console.log(JSON.stringify({ type: "start", file: filename, index }))
+        console.log("----- END MOON TEST RESULT -----")
         try {
           instance.exports.moonbit_test_driver_internal_execute(filename, index)
         } catch (error) {
@@ -154,10 +157,9 @@ function executeRanges(fileAndIndex) {
           console.log("----- BEGIN MOON TEST RESULT -----")
           console.log(
             JSON.stringify({
-              package: testOptions?.package ?? "",
-              filename,
-              index: String(index),
-              test_name: String(index),
+              type: "result",
+              file: filename,
+              index,
               message,
             }),
           )

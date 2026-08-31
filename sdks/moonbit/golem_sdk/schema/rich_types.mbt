@@ -1,7 +1,7 @@
 ///|
 pub(all) struct Path {
   value : String
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub fn Path::new(value : String) -> Path {
@@ -11,7 +11,7 @@ pub fn Path::new(value : String) -> Path {
 ///|
 pub(all) struct Url {
   value : String
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub fn Url::new(value : String) -> Url {
@@ -21,7 +21,7 @@ pub fn Url::new(value : String) -> Url {
 ///|
 pub(all) struct Duration {
   nanoseconds : Int64
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub fn Duration::new(nanoseconds : Int64) -> Duration {
@@ -40,7 +40,7 @@ pub struct Quantity[U] {
   mantissa : Int64
   scale : Int
   unit : String
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub fn[U : QuantityUnit] unit_allowed(_tag : TypeTag[U], unit : String) -> Bool {
@@ -60,7 +60,7 @@ pub fn[U : QuantityUnit] Quantity::new(
 ) -> Quantity[U] raise FromSchemaError {
   let tag : TypeTag[U] = type_tag()
   if unit_allowed(tag, unit) {
-    { mantissa, scale, unit }
+    { mantissa, scale, unit, }
   } else {
     raise FromSchemaError::custom(
       "quantity unit '\{unit}' is not allowed for \{U::base_unit()}",
@@ -70,7 +70,7 @@ pub fn[U : QuantityUnit] Quantity::new(
 
 ///|
 pub fn[U] Quantity::value(self : Quantity[U]) -> @types.QuantityValue {
-  { mantissa: self.mantissa, scale: self.scale, unit: self.unit }
+  { mantissa: self.mantissa, scale: self.scale, unit: self.unit, }
 }
 
 ///|
@@ -85,7 +85,7 @@ fn default_path_spec() -> @types.PathSpec {
 
 ///|
 fn default_url_restrictions() -> @types.UrlRestrictions {
-  { allowed_schemes: None, allowed_hosts: None }
+  { allowed_schemes: None, allowed_hosts: None, }
 }
 
 ///|
@@ -220,7 +220,7 @@ pub impl[U : QuantityUnit] FromSchema for Quantity[U] with fn from_value(v) {
     Quantity(value) => {
       let tag : TypeTag[U] = type_tag()
       if unit_allowed(tag, value.unit) {
-        { mantissa: value.mantissa, scale: value.scale, unit: value.unit }
+        { mantissa: value.mantissa, scale: value.scale, unit: value.unit, }
       } else {
         raise FromSchemaError::custom(
           "quantity unit '\{value.unit}' is not allowed for \{U::base_unit()}",

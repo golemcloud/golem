@@ -6,7 +6,7 @@
 enum TextOrImage {
   Text(String)
   Image(Bytes)
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 pub impl MultimodalModality for TextOrImage with fn multimodal_type_id() {
