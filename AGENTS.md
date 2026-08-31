@@ -4,6 +4,21 @@
 
 Golem is a distributed computing platform built in Rust. It uses `cargo-make` for build orchestration.
 
+## Backward Compatibility
+
+Golem development currently makes no backward-compatibility guarantees. Until this section is
+explicitly revised, **do not perform backward-compatibility work**.
+
+- Make breaking changes directly and update every in-tree producer, consumer, test, fixture,
+  generated artifact, and document to the new contract in the same change.
+- Do not add compatibility shims, legacy aliases, deprecated variants, fallback parsing, dual
+  serialization, version negotiation, migration paths, or support for old protocols, schemas,
+  configuration shapes, persisted formats, APIs, or behavior.
+- When replacing a contract or representation, remove the old path instead of preserving both.
+- Do not expand the scope of a task to accommodate older clients, servers, deployments, or stored
+  data. If a task appears to require backward compatibility, treat it as conflicting with this
+  repository policy rather than implementing it.
+
 ## Prerequisites
 
 - **Rust**: Latest stable toolchain via rustup, with `wasm32-wasip2` target
