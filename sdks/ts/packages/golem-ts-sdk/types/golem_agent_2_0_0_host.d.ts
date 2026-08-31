@@ -11,10 +11,6 @@ declare module 'golem:agent/host@2.0.0' {
    */
   export function getAgentType(agentTypeName: string): RegisteredAgentType | undefined;
   /**
-   * Gets the registered agent type used by an existing agent, identified by its agent ID.
-   */
-  export function getAgentTypeByAgentId(agentId: AgentId): RegisteredAgentType | undefined;
-  /**
    * Constructs a string agent-id from the agent type and its constructor parameters
    * and an optional phantom ID.
    * `input` is a value tree whose root encodes the constructor's parameter list.
@@ -38,6 +34,10 @@ declare module 'golem:agent/host@2.0.0' {
    * @throws ConfigValueError
    */
   export function getConfigValue(key: string[], expected: SchemaGraph): SchemaValueTree;
+  /**
+   * Gets the registered agent type used by an existing agent, identified by its agent ID.
+   */
+  export function getAgentTypeByAgentId(agentId: AgentId): RegisteredAgentType | undefined;
   export class WasmRpc {
     /**
      * Creates an RPC client connecting to the given target agent.
@@ -46,15 +46,6 @@ declare module 'golem:agent/host@2.0.0' {
      * cannot be created and is intended for statically generated clients.
      */
     constructor(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]);
-    /**
-     * Creates an RPC client connecting to the given target agent.
-     * `constructor` is a value tree whose root encodes the target agent
-     * constructor's parameter list. This fallible form returns an RPC error
-     * if the client cannot be created and is intended for reflective and
-     * other dynamic clients.
-     * @throws RpcError
-     */
-    static create(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]): WasmRpc;
     /**
      * Invokes a remote method with the given parameters, and awaits the result.
      * `input` encodes the method's parameter list. The returned result is
@@ -86,6 +77,15 @@ declare module 'golem:agent/host@2.0.0' {
      * @throws RpcError
      */
     scheduleCancelableInvocation(scheduledTime: Datetime, methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): CancelableScheduledInvocationReceipt;
+    /**
+     * Creates an RPC client connecting to the given target agent.
+     * `constructor` is a value tree whose root encodes the target agent
+     * constructor's parameter list. This fallible form returns an RPC error
+     * if the client cannot be created and is intended for reflective and
+     * other dynamic clients.
+     * @throws RpcError
+     */
+    static create(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]): WasmRpc;
   }
   export class FutureInvokeResult {
     /**

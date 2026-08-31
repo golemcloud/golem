@@ -20,14 +20,25 @@ steps:
       the Golem TypeScript SDK runtime reflection APIs to list the registered agent
       types, look up `ReflectionTarget` by name, inspect its `echo` method, and invoke
       `ReflectionTarget("target")` through the reflected client with `"hello"`.
+
+      Also define a complete caller-owned `ReflectionTarget` client contract whose
+      string ID uses a Standard Schema library. Construct the same target AgentId in
+      two ways: first through the contract's `agentId` helper, and then explicitly
+      with `AgentId.create` and a Golem `SchemaValue` built with the SDK's `v` helpers.
+      Bind the contract to each ID and invoke `echo` with `"schema library"` and
+      `"schema value"` respectively.
+
       Construct the target's concrete AgentId from the reflected type, resolve its
       current type with `getAgentTypeByAgentId` after the first invocation, bind that
       reflected type to the AgentId, and invoke `echo` again with `"again"`.
 
       Return exactly an object with fields `listed`, `typeName`, `methodName`, `first`,
-      and `second`. They must respectively contain whether `ReflectionTarget` appeared
-      in the discovered list, the discovered type name, the reflected method name, and
-      the two echoed values. Make sure the project builds successfully.
+      `second`, `schemaIdsMatch`, `schemaLibrary`, and `schemaValue`. They must
+      respectively contain whether `ReflectionTarget` appeared in the discovered
+      list, the discovered type name, the reflected method name, the two reflected
+      echoed values, whether both caller-constructed AgentIds have the same agent ID
+      string, and the two contract-call results. Make sure the project builds
+      successfully.
     expectedSkills:
       - "golem-call-agent-reflectively-ts"
     verify:
@@ -52,3 +63,9 @@ steps:
           equals: "hello"
         - path: "$.second"
           equals: "again"
+        - path: "$.schemaIdsMatch"
+          equals: true
+        - path: "$.schemaLibrary"
+          equals: "schema library"
+        - path: "$.schemaValue"
+          equals: "schema value"

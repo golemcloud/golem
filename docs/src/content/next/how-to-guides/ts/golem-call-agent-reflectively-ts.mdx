@@ -70,6 +70,54 @@ also return identity metadata. Client creation and invocation failures are
 reported as structured `RemoteCallError` values; use `isRemoteCallError` to
 inspect their `cause` without parsing messages.
 
+## Construct an Agent ID with Caller-Owned Schemas
+
+A complete caller-owned contract is the Level 2 option when the target name,
+constructor shape, and methods are known locally but the target implementation
+is not imported. Its `agentId` helper accepts values described by any supported
+Standard Schema library:
+
+```typescript
+import { z } from 'zod';
+import {
+  AgentId,
+  defineAgentClient,
+  method,
+} from '@golemcloud/golem-ts-sdk';
+import { v } from '@golemcloud/golem-ts-sdk/schema';
+
+const CounterContract = defineAgentClient({
+  name: 'CounterAgent',
+  id: { name: z.string() },
+  methods: {
+    echo: method({ input: { message: z.string() }, returns: z.string() }),
+  },
+});
+
+const schemaLibraryId = CounterContract.agentId({ name: 'main' });
+const first = await schemaLibraryId
+  .client(CounterContract)
+  .echo({ message: 'from Zod' });
+
+const constructorValue = v.record([v.string('main')]);
+const schemaValueId = AgentId.create({
+  componentId: schemaLibraryId.componentId,
+  typeName: CounterContract.name,
+  constructorValue,
+});
+const second = await schemaValueId
+  .client(CounterContract)
+  .echo({ message: 'from SchemaValue' });
+```
+
+The first form validates and packs constructor fields through the caller's
+schema library. The explicit `AgentId.create` form is for infrastructure that
+already owns a Golem `SchemaValue`; record fields must be in the target
+constructor's declared order. It does not validate that value against the
+remote constructor schema. When runtime metadata is available, prefer
+`agentType.agentId(json)` or pack with `agentType.constructorInput` before
+calling `agentType.agentIdValue(value)`.
+
 ## Bind a Concrete Agent ID
 
 After an agent exists, resolve the schema registered for that concrete identity
