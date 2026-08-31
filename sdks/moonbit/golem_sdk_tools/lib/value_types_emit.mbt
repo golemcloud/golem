@@ -17,7 +17,7 @@ pub fn generate_value_type_impls(
   types : Array[ValueTypeInfo],
   type_id_prefix? : String = "",
 ) -> @list.List[@syntax.Impl] {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for t in types {
     // Default `type_id()` is the package-qualified dotted MoonBit type name
     // (the stable identity used for Refs / def dedup / agent-graph merge). The
@@ -35,7 +35,7 @@ pub fn generate_value_type_impls(
   }
   let source = buf.to_string()
   if source.is_empty() {
-    return @list.List::from_array([])
+    return @list.List([])
   }
   parse_generated_impls(source, "value types")
 }
@@ -43,7 +43,7 @@ pub fn generate_value_type_impls(
 ///|
 /// Escapes a MoonBit string literal body (backslash, quote, newline).
 fn escape_string_lit(s : String) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for ch in s {
     match ch {
       '\\' => buf.write_string("\\\\")

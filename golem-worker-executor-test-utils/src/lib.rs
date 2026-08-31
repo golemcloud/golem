@@ -606,6 +606,24 @@ impl TestWorkerExecutor {
         )
     }
 
+    pub fn fail_next_oplog_download(&self, agent_id: &AgentId) {
+        self.additional_test_deps
+            .fail_next_oplog_download(agent_id.clone());
+    }
+
+    pub fn return_no_op_after_oplog_reads(
+        &self,
+        agent_id: &AgentId,
+        oplog_index: OplogIndex,
+        reads_to_skip: usize,
+    ) {
+        self.additional_test_deps.return_no_op_after_oplog_reads(
+            agent_id.clone(),
+            oplog_index,
+            reads_to_skip,
+        );
+    }
+
     pub async fn commit_oplog_entry_bypassing_worker_status(
         &self,
         agent_id: &AgentId,
@@ -3263,6 +3281,12 @@ impl Oplog for TestOplog {
     }
 
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+        if self
+            .additional_test_deps
+            .take_no_op_oplog_read(&self.owned_agent_id.agent_id, oplog_index)
+        {
+            return OplogEntry::no_op();
+        }
         self.oplog.read(oplog_index).await
     }
 
@@ -3297,6 +3321,12 @@ impl Oplog for TestOplog {
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
+        if self
+            .additional_test_deps
+            .take_oplog_download_failure(&self.owned_agent_id.agent_id)
+        {
+            return Err("injected oplog payload download failure".to_string());
+        }
         self.oplog.download_raw_payload(payload_id, md5_hash).await
     }
 
@@ -3576,6 +3606,8 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
 pub struct AdditionalTestDeps {
     oplog_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     oplog_call_counts: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, &'static str), usize>>>,
+    oplog_download_failures: Arc<std::sync::Mutex<HashSet<AgentId>>>,
+    no_op_oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), usize>>>,
     rdbms_tx_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     /// One-shot gates pausing the first consume-body chunk `End` append of an
     /// agent inside the [`TestOplog`] wrapper — after the entry is durable in
@@ -3607,6 +3639,8 @@ impl AdditionalTestDeps {
         Self {
             oplog_failures,
             oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            oplog_download_failures: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            no_op_oplog_reads: Arc::new(std::sync::Mutex::new(HashMap::new())),
             rdbms_tx_failures,
             consume_body_chunk_end_gates: Arc::new(scc::HashMap::new()),
             consume_body_scope_start_gates: Arc::new(scc::HashMap::new()),
@@ -3753,6 +3787,48 @@ impl AdditionalTestDeps {
             .get(&(owned_agent_id.clone(), api))
             .copied()
             .unwrap_or_default()
+    }
+
+    fn fail_next_oplog_download(&self, agent_id: AgentId) {
+        self.oplog_download_failures
+            .lock()
+            .unwrap()
+            .insert(agent_id);
+    }
+
+    fn take_oplog_download_failure(&self, agent_id: &AgentId) -> bool {
+        self.oplog_download_failures
+            .lock()
+            .unwrap()
+            .remove(agent_id)
+    }
+
+    fn return_no_op_after_oplog_reads(
+        &self,
+        agent_id: AgentId,
+        oplog_index: OplogIndex,
+        reads_to_skip: usize,
+    ) {
+        self.no_op_oplog_reads
+            .lock()
+            .unwrap()
+            .insert((agent_id, oplog_index), reads_to_skip);
+    }
+
+    fn take_no_op_oplog_read(&self, agent_id: &AgentId, oplog_index: OplogIndex) -> bool {
+        let key = (agent_id.clone(), oplog_index);
+        let mut reads = self.no_op_oplog_reads.lock().unwrap();
+        match reads.get_mut(&key) {
+            Some(0) => {
+                reads.remove(&key);
+                true
+            }
+            Some(reads_to_skip) => {
+                *reads_to_skip -= 1;
+                false
+            }
+            None => false,
+        }
     }
 
     /// Stores the executor's `ActiveAgents` registry on first call. Subsequent

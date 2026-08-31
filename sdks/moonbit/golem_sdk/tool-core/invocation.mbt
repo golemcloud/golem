@@ -14,7 +14,7 @@ pub fn encode_typed_input(
   input : @model.TypedSchemaValue,
 ) -> Result[@types.TypedSchemaValue, String] {
   try @model.typed_schema_value_to_wit(input) catch {
-    error => Err("failed to encode tool input: \{error}")
+    error => Err("failed to encode tool input: \{Repr(error)}")
   } noraise {
     encoded => Ok(encoded)
   }
@@ -26,7 +26,7 @@ pub fn decode_typed_value(
   context : String,
 ) -> Result[@model.TypedSchemaValue, String] {
   try @model_host.typed_schema_value_from_wit(value) catch {
-    error => Err("failed to decode \{context}: \{error}")
+    error => Err("failed to decode \{context}: \{Repr(error)}")
   } noraise {
     decoded => Ok(decoded)
   }
@@ -50,7 +50,7 @@ pub fn decode_invocation_result(
       }
     None => None
   }
-  Ok({ result: decoded, stdout: result.stdout })
+  Ok({ result: decoded, stdout: result.stdout, })
 }
 
 ///|
@@ -76,7 +76,7 @@ pub fn[T : @schema.FromSchema] decode_custom_error(
   try @schema.from_value_as(value.value) catch {
     error => {
       @model.drop_owned_capabilities(value.value)
-      Err("failed to decode remote tool error: \{error}")
+      Err("failed to decode remote tool error: \{Repr(error)}")
     }
   } noraise {
     decoded => Ok(decoded)
@@ -203,7 +203,7 @@ fn[T : @schema.FromSchema] decode_expected_value(
     Err(error) => return Err(error)
   }
   try @schema.from_value_as(value.value) catch {
-    error => Err("failed to decode tool result: \{error}")
+    error => Err("failed to decode tool result: \{Repr(error)}")
   } noraise {
     decoded => Ok(decoded)
   }

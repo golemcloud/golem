@@ -732,6 +732,8 @@ pub struct AgentStatusRecord {
     pub last_automatic_snapshot_index: Option<OplogIndex>,
     /// Timestamp of the last automatic snapshot entry in the oplog.
     pub last_automatic_snapshot_timestamp: Option<Timestamp>,
+    /// Component revision that created the last automatic snapshot.
+    pub last_automatic_snapshot_component_revision: Option<ComponentRevision>,
     /// The agent mode the worker was created with. Decided at create time and persisted in the
     /// `Create` oplog entry; immutable for the life of the worker. `#[transient]`: it is not part
     /// of the serialized record (it is persisted separately) and defaults to `Durable` on
@@ -768,6 +770,7 @@ impl Default for AgentStatusRecord {
             last_manual_update_snapshot_index: None,
             last_automatic_snapshot_index: None,
             last_automatic_snapshot_timestamp: None,
+            last_automatic_snapshot_component_revision: None,
             agent_mode: AgentMode::Durable,
         }
     }

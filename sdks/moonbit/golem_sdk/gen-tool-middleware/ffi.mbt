@@ -2,88 +2,66 @@
 
 ///|
 pub fn mbt_ffi_cabi_realloc(
-  src_offset : Int,
-  src_size : Int,
-  _dst_alignment : Int,
-  dst_size : Int,
+src_offset : Int,
+src_size : Int,
+_dst_alignment : Int,
+dst_size : Int,
 ) -> Int {
-  // malloc
-  if src_offset == 0 && src_size == 0 {
-    return mbt_ffi_malloc(dst_size)
-  }
-  // free
-  if dst_size == 0 {
-    mbt_ffi_free(src_offset)
-    return 0
-  }
-  // realloc
-  let dst = mbt_ffi_malloc(dst_size)
-  mbt_ffi_copy(
-    dst,
-    src_offset,
-    if src_size < dst_size {
-      src_size
-    } else {
-      dst_size
-    },
-  )
-  mbt_ffi_free(src_offset)
-  dst
+      // malloc
+      if src_offset == 0 && src_size == 0 {
+            return mbt_ffi_malloc(dst_size)
+      }
+      // free
+      if dst_size == 0 {
+            mbt_ffi_free(src_offset)
+            return 0
+      }
+      // realloc
+      let dst = mbt_ffi_malloc(dst_size)
+      mbt_ffi_copy(dst, src_offset, if src_size < dst_size { src_size } else { dst_size })
+      mbt_ffi_free(src_offset)
+      dst
 }
 
 ///|
 extern "wasm" fn mbt_ffi_copy(dest : Int, src : Int, len : Int) =
-  #|(func (param i32) (param i32) (param i32) local.get 0 local.get 1 local.get 2 memory.copy)
-
+#|(func (param i32) (param i32) (param i32) local.get 0 local.get 1 local.get 2 memory.copy)
 ///|
 extern "wasm" fn mbt_ffi_free(position : Int) =
-  #|(func (param i32) local.get 0 call $moonbit.decref)
-
+#|(func (param i32) local.get 0 call $moonbit.decref)
 ///|
 extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
-  #|(func (param i32) (result i32) (local i32)
-  #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
-  #| local.tee 1 i32.const 0 call $moonbit.init_array8
-  #| local.get 1)
-
+#|(func (param i32) (result i32) (local i32)
+#| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
+#| local.tee 1 i32.const 0 call $moonbit.init_array8
+#| local.get 1)
 ///|
 #doc(hidden)
-pub fn wasmExportAsyncInvokeToolMiddleware(
-  event_raw : Int,
-  waitable : Int,
-  code : Int,
-) -> Int {
-  @tool-middleware-guest.wasmExportAsyncInvokeToolMiddleware(
-    event_raw, waitable, code,
-  )
+pub fn wasmExportAsyncInvokeToolMiddleware(event_raw : Int, waitable : Int, code : Int) -> Int {
+      @tool-middleware-guest.wasmExportAsyncInvokeToolMiddleware(event_raw, waitable, code)
 }
-
 ///|
 #doc(hidden)
 pub fn wasmExportDiscoverToolMiddlewares() -> Int {
-  @tool-middleware-guest.wasmExportDiscoverToolMiddlewares()
+      @tool-middleware-guest.wasmExportDiscoverToolMiddlewares()
 }
-
 ///|
 #doc(hidden)
 pub fn wasmExportDiscoverToolMiddlewaresPostReturn(p0 : Int) -> Unit {
-  @tool-middleware-guest.wasmExportDiscoverToolMiddlewaresPostReturn(p0)
+      @tool-middleware-guest.wasmExportDiscoverToolMiddlewaresPostReturn(p0)
 }
-
 ///|
 #doc(hidden)
 pub fn wasmExportGetToolMiddleware(p0 : Int, p1 : Int) -> Int {
-  @tool-middleware-guest.wasmExportGetToolMiddleware(p0, p1)
+      @tool-middleware-guest.wasmExportGetToolMiddleware(p0, p1)
 }
-
 ///|
 #doc(hidden)
 pub fn wasmExportGetToolMiddlewarePostReturn(p0 : Int) -> Unit {
-  @tool-middleware-guest.wasmExportGetToolMiddlewarePostReturn(p0)
+      @tool-middleware-guest.wasmExportGetToolMiddlewarePostReturn(p0)
 }
-
 ///|
 #doc(hidden)
 pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int {
-  @tool-middleware-guest.wasmExportInvokeToolMiddleware(p0)
+      @tool-middleware-guest.wasmExportInvokeToolMiddleware(p0)
 }

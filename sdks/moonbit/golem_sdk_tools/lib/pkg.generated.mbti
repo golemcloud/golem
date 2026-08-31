@@ -78,7 +78,7 @@ pub fn parse_component_role(String) -> ComponentRole raise ComponentRoleError
 
 pub fn parse_component_role_marker(String) -> ComponentRole raise ComponentRoleError
 
-pub fn parse_config_types(Array[(String, String)], package? : String) -> Array[ConfigTypeInfo] raise AgentParseError
+pub fn parse_config_types(Array[(String, String)], package_path? : String) -> Array[ConfigTypeInfo] raise AgentParseError
 
 pub fn parse_duration_seconds(String) -> UInt64 raise AgentParseError
 
@@ -208,7 +208,7 @@ pub fn ComponentRole::name(Self) -> String
 
 pub(all) struct ConfigTypeInfo {
   name : String
-  package : String
+  package_path : String
   fields : Array[(String, ParamType)]
 } derive(Eq, @debug.Debug)
 
@@ -220,7 +220,7 @@ pub(all) struct FnSignature {
 }
 
 pub(all) struct HttpEndpointInfo {
-  method : String
+  http_method : String
   path : String
   headers : Array[(String, String)]
   auth : Bool?
@@ -480,4 +480,3 @@ pub(all) enum VariantPayload {
 // Type aliases
 
 // Traits
-

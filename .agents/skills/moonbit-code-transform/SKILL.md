@@ -1,12 +1,12 @@
 ---
 name: moonbit-code-transform
-description: Writing MoonBit source-to-source code transformations using moonbitlang/parser and moonbitlang/formatter. Use when parsing MoonBit source into AST, constructing new AST nodes, or emitting generated MoonBit code.
+description: Writing MoonBit source-to-source code transformations using moonbitlang/parser and its fmt package. Use when parsing MoonBit source into AST, constructing new AST nodes, or emitting generated MoonBit code.
 ---
 
 # MoonBit Code Transformations
 
 Guide for building source-to-source code generation tools in MoonBit using
-`moonbitlang/parser` to parse source into AST and `moonbitlang/formatter` to
+`moonbitlang/parser` to parse source into AST and `moonbitlang/parser/fmt` to
 emit generated code. Uses `golem_sdk_tools` as the reference implementation.
 
 ## Pipeline Overview
@@ -28,8 +28,8 @@ In `moon.mod.json`:
 ```json
 {
   "deps": {
-    "moonbitlang/parser": "0.1.16",
-    "moonbitlang/formatter": "..."
+    "moonbitlang/parser": "0.3.18",
+    "moonbitlang/lexer": "0.3.15"
   }
 }
 ```
@@ -44,14 +44,14 @@ import {
 }
 
 import {
-  "moonbitlang/formatter",
+  "moonbitlang/parser/fmt" @formatter,
 } for "test"
 ```
 
 In the CLI/main package `moon.pkg` (where formatting and file I/O happen):
 ```
 import {
-  "moonbitlang/formatter",
+  "moonbitlang/parser/fmt" @formatter,
   "moonbitlang/x/fs",
   "your/module/lib" @lib,
 }
@@ -59,7 +59,7 @@ import {
 
 **Key separation**: The library package constructs `@list.List[@syntax.Impl]`.
 The CLI package calls `@formatter.impls_to_string(impls)` and writes the result.
-Tests in the library import `moonbitlang/formatter` via `for "test"` to verify
+Tests in the library import `moonbitlang/parser/fmt` as `@formatter` via `for "test"` to verify
 output without depending on it at runtime.
 
 ## Parsing Source Files

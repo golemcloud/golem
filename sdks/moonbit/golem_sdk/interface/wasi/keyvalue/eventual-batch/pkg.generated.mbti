@@ -22,4 +22,3 @@ pub fn set_many(@types.Bucket, Array[(String, @types.OutgoingValue)]) -> Result[
 // Type aliases
 
 // Traits
-

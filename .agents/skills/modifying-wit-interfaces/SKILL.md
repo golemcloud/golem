@@ -33,11 +33,16 @@ To change a Golem WIT interface, edit the relevant file under the **root**
 `wit/deps/<package>/` (e.g. `wit/deps/golem-core-v2/golem-core-v2.wit`,
 `wit/deps/golem-quota/types.wit`) or `wit/host.wit`.
 
+Make contract changes directly in the current package and update every in-tree host, SDK, test
+component, generated binding, and synchronized copy. Do not add old-signature aliases, duplicate
+legacy interfaces/packages, fallback handling, or adapters for older guests or hosts.
+
 ### Synchronized copies (generated — do not hand-edit)
 
 `cargo make wit` mirrors the configured root dependencies into the `wit/deps/`
-directories below. **Never manually edit a sub-project `wit/deps/` copy** — your
-changes will be overwritten. Edit the root and re-sync.
+directories below. **Never manually edit one of these generated copies** — your changes will be
+overwritten. Edit the root and re-sync. The explicitly hand-synchronized `golem-schema` copies in
+the following section are the exception.
 
 | Target | WIT deps copied |
 |--------|----------------|
@@ -59,13 +64,12 @@ them manually in the same change:
 
 | Hand-synced copy | Embeds | Keep in sync with |
 |------------------|--------|-------------------|
-| `golem-schema/wit/deps/golem-core-v2/golem-core-v2.wit` | golem-core-v2 only | `wit/deps/golem-core-v2/golem-core-v2.wit` |
+| `golem-schema/wit/deps/golem-core-v2/golem-core-v2.wit` | `golem:core/types@2.0.0` | `wit/deps/golem-core-v2/golem-core-v2.wit` |
+| `golem-schema/wit/deps/golem-tool/common.wit` | `golem:tool/common@0.1.0` | `wit/deps/golem-tool/common.wit` |
 
-`golem-schema` generates the shared `golem:core/types` transport types (guest +
-host) from this copy via its `golem-schema.wit` world, so it must match the root
-`golem-core-v2` exactly. After `cargo make wit`, run e.g.
-`cp wit/deps/golem-core-v2/golem-core-v2.wit golem-schema/wit/deps/golem-core-v2/golem-core-v2.wit`
-and verify with `diff -q`.
+`golem-schema` generates the shared core and tool transport types and host bindings from these
+copies via its `golem-schema.wit` world, so both must match their root source exactly. After
+`cargo make wit`, copy each changed file into `golem-schema` and verify it with `diff -q`.
 
 Note also that `golem-quota` is copied only to the SDKs (via the `wit-sdks`
 glob), not to `golem-common` or `cli/golem-cli`.
@@ -74,22 +78,33 @@ glob), not to `golem-common` or `cli/golem-cli`.
 
 ### Step 1: Edit the WIT file
 
-Edit the relevant `.wit` file in the root `wit/` directory (e.g., `wit/host.wit` or a file under `wit/deps/<package>/`). This is the source of truth — never edit a sub-project `wit/deps/` copy.
+Edit the relevant `.wit` file in the root `wit/` directory (e.g., `wit/host.wit` or a file under `wit/deps/<package>/`). This is the source of truth. Do not edit generated sub-project copies; update the explicitly hand-synchronized `golem-schema` copies after changing the root.
 
 ### Step 2: Synchronize WIT across sub-projects
 
 ```shell
 cargo make wit
+cp wit/deps/golem-core-v2/golem-core-v2.wit \
+  golem-schema/wit/deps/golem-core-v2/golem-core-v2.wit
+cp wit/deps/golem-tool/common.wit \
+  golem-schema/wit/deps/golem-tool/common.wit
+diff -q wit/deps/golem-core-v2/golem-core-v2.wit \
+  golem-schema/wit/deps/golem-core-v2/golem-core-v2.wit
+diff -q wit/deps/golem-tool/common.wit \
+  golem-schema/wit/deps/golem-tool/common.wit
 ```
 
-This mirrors the correct subset of the root `wit/deps/` into each sub-project, idempotently (it rewrites only files whose bytes changed, so unchanged files keep their mtime — avoiding needless rebuilds).
+`cargo make wit` mirrors the correct subset of the root `wit/deps/` into each sub-project,
+idempotently (it rewrites only files whose bytes changed, so unchanged files keep their mtime —
+avoiding needless rebuilds). Run only the `cp`/`diff` pairs for a hand-synchronized package that
+changed; they are shown together so neither `golem-schema` exception is missed.
 
 ### Step 3: Review synchronization
 
 ```shell
 cargo make wit
 git status --short -- \
-  golem-common/wit/deps cli/golem-cli/wit/deps \
+  golem-common/wit/deps golem-schema/wit/deps cli/golem-cli/wit/deps \
   sdks/rust/golem-rust/wit/deps sdks/ts/wit/deps \
   sdks/scala/wit/deps sdks/moonbit/golem_sdk/wit/deps
 ```
@@ -131,10 +146,11 @@ WIT changes can have wide-reaching effects:
 
 | What changed | What needs rebuilding |
 |---|---|
-| Core interfaces (`golem-1.x`, `golem-core-v2`) | Everything: services, SDKs, test components |
+| Core interfaces (`golem-1.x`, `golem-core-v2`) | `golem-schema`, services, SDKs, and test components |
 | Agent interfaces (`golem-agent`) | golem-common, CLI, SDKs, agent test components |
 | `clocks` | golem-common, CLI, and SDKs that import the changed definitions |
-| `golem-secrets` or `golem-tool` | golem-common and SDKs that import the changed definitions |
+| `golem-secrets` | golem-common and SDKs that import the changed definitions |
+| `golem-tool` | `golem-schema`, golem-common, and SDKs that import the changed definitions |
 | `logging` | CLI and SDKs that import the changed definitions |
 | Other package under `wit/deps/` | All four synchronized SDK inputs; rebuild SDK bindings/components that import it |
 | Host interface (`host.wit`) | Worker executor, services |
@@ -151,13 +167,14 @@ If WIT changes affect SDK interfaces:
 
 ## Checklist
 
-1. WIT file edited in root `wit/` directory (not in a `wit/deps/` copy)
+1. WIT file edited in root `wit/`; generated copies were not hand-edited
 2. `cargo make wit` run to synchronize
-3. Synchronized-copy diff reviewed; `cargo make check-wit` left to clean-checkout/CI validation unless verifying a committed checkout
-4. `Makefile.toml` sync tasks updated if a new dependency was added
-5. Root crates affected according to the impact table check/build successfully
-6. SDKs rebuilt if SDK interfaces changed
-7. Relevant SDK tests run when their WIT inputs changed
-8. Test components rebuilt if their interfaces changed
-9. Full root workspace build run only for broad or unclear root-workspace impact
-10. Formatting and linting follow the scope-based `pre-pr-checklist`
+3. Changed `golem-schema` core/tool copies synchronized by hand and byte-compared with the root
+4. Synchronized-copy diff reviewed; `cargo make check-wit` left to clean-checkout/CI validation unless verifying a committed checkout
+5. `Makefile.toml` sync tasks updated if a new dependency was added
+6. Root crates affected according to the impact table check/build successfully
+7. SDKs rebuilt if SDK interfaces changed
+8. Relevant SDK tests run when their WIT inputs changed
+9. Test components rebuilt if their interfaces changed
+10. Full root workspace build run only for broad or unclear root-workspace impact
+11. Formatting and linting follow the scope-based `pre-pr-checklist`
