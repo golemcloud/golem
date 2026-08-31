@@ -185,7 +185,7 @@ enum NativeOperation {
     SeedFile,
     FileUpdate,
     RecursiveCleanup,
-    Synchronization,
+    Flush,
     Quota,
 }
 
@@ -198,7 +198,7 @@ impl NativeOperation {
             | Self::SeedFile
             | Self::FileUpdate
             | Self::RecursiveCleanup
-            | Self::Synchronization
+            | Self::Flush
             | Self::Quota => false,
         }
     }
@@ -1672,7 +1672,7 @@ mod tests {
             NativeOperation::SeedFile,
             NativeOperation::FileUpdate,
             NativeOperation::RecursiveCleanup,
-            NativeOperation::Synchronization,
+            NativeOperation::Flush,
             NativeOperation::Quota,
         ] {
             assert_eq!(

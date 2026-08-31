@@ -40,10 +40,9 @@ use crate::services::agent_filesystem::{
 use crate::wasi_filesystem::{
     AgentDescriptor, AgentOpenRequest, AgentOpenRouteError, advance_write_placement,
     agent_descriptor_guest_path, calculate_metadata_hash_parts, delete_agent_descriptor,
-    filesystem_permission_targets, get_agent_descriptor, push_agent_descriptor,
-    resize_attribute_changes, route_agent_namespace_edit, route_agent_open,
-    route_agent_set_attributes, route_agent_synchronize, route_agent_write,
-    run_agent_filesystem_call, synchronization_level,
+    filesystem_permission_targets, flush_level, get_agent_descriptor, push_agent_descriptor,
+    resize_attribute_changes, route_agent_flush, route_agent_namespace_edit, route_agent_open,
+    route_agent_set_attributes, route_agent_write, run_agent_filesystem_call,
 };
 use crate::workerctx::WorkerCtx;
 use bytes::{Bytes, BytesMut};
@@ -455,14 +454,14 @@ pub(crate) fn route_set_times(
     Ok(async move { call.await.map_err(p3_agent_error) })
 }
 
-/// Starts a P3 descriptor synchronization through `agent_filesystem`.
-/// `data_only` selects data sync rather than data-and-metadata sync.
-pub(crate) fn route_synchronize(
+/// Starts a P3 descriptor flush through `agent_filesystem`.
+/// `data_only` selects a data-only flush rather than a data-and-metadata flush.
+pub(crate) fn route_flush(
     generation_handle: &FilesystemGenerationHandle,
     node: &OpenNode,
     data_only: bool,
 ) -> FilesystemResult<impl Future<Output = FilesystemResult<()>> + Send + 'static + use<>> {
-    let call = route_agent_synchronize(generation_handle, node, synchronization_level(data_only))
+    let call = route_agent_flush(generation_handle, node, flush_level(data_only))
         .map_err(p3_agent_error)?;
     Ok(async move { call.await.map_err(p3_agent_error) })
 }
@@ -1698,8 +1697,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let descriptor = store
             .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
-        let operation =
-            descriptor.with_node(|node| route_synchronize(&generation_handle, node, true))?;
+        let operation = descriptor.with_node(|node| route_flush(&generation_handle, node, true))?;
         operation.await
     }
 
@@ -1889,7 +1887,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
         let operation =
-            descriptor.with_node(|node| route_synchronize(&generation_handle, node, false))?;
+            descriptor.with_node(|node| route_flush(&generation_handle, node, false))?;
         operation.await
     }
 
@@ -2342,7 +2340,7 @@ mod tests {
     };
     use crate::wasi_filesystem::{
         AgentOpenDecision, AgentOpenPolicyError, decide_agent_existing_open, decide_agent_open,
-        replay_time_changes, resize_attribute_changes, synchronization_level,
+        flush_level, replay_time_changes, resize_attribute_changes,
     };
     use fs_set_times::{SystemTimeSpec, set_symlink_times, set_times};
     use golem_common::model::oplog::types::SerializableDateTime;
@@ -3028,7 +3026,7 @@ mod tests {
     }
 
     #[test]
-    fn p2_p3_attribute_and_synchronization_translation_is_identical() {
+    fn p2_p3_attribute_and_flush_translation_is_identical() {
         use wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime as P2Datetime;
         use wasmtime_wasi::p2::bindings::filesystem::types::NewTimestamp as P2NewTimestamp;
 
@@ -3062,13 +3060,10 @@ mod tests {
                 },
             }
         );
+        assert_eq!(flush_level(true), agent_filesystem::FlushLevel::Data);
         assert_eq!(
-            synchronization_level(true),
-            agent_filesystem::Synchronization::Data
-        );
-        assert_eq!(
-            synchronization_level(false),
-            agent_filesystem::Synchronization::DataAndMetadata
+            flush_level(false),
+            agent_filesystem::FlushLevel::DataAndMetadata
         );
     }
 
@@ -3150,9 +3145,9 @@ mod tests {
         use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
         use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
         use crate::services::agent_filesystem::{
-            PreparedInitialFiles, ResolvedStorageLimits, bind_resource_usage_metering,
+            PreparedInitialFiles, ResolvedStorageLimits, bind_resource_usage_metering, close,
             create_fresh, delete, finish_reconstruction, finish_replay, materialize_initial_files,
-            open, open_resource_usage_window, reconstruction_generation_handle, release,
+            open, open_resource_usage_window, reconstruction_generation_handle,
             resident_generation_handle, seal,
         };
         use crate::services::golem_config::FilesystemStorageConfig;
@@ -3287,11 +3282,11 @@ mod tests {
         .unwrap()
         .await
         .unwrap();
-        crate::wasi_filesystem::p2::types::route_synchronize(&generation_handle, &node, true)
+        crate::wasi_filesystem::p2::types::route_flush(&generation_handle, &node, true)
             .unwrap()
             .await
             .unwrap();
-        route_synchronize(&generation_handle, &node, false)
+        route_flush(&generation_handle, &node, false)
             .unwrap()
             .await
             .unwrap();
@@ -3532,8 +3527,8 @@ mod tests {
         .await
         .unwrap();
 
-        release(node).await.unwrap();
-        release(root_node).await.unwrap();
+        close(node).await.unwrap();
+        close(root_node).await.unwrap();
 
         let reconstructing = finish_replay(reconstructing).await.unwrap();
         let filesystem = finish_reconstruction(reconstructing).await.unwrap();
@@ -3562,7 +3557,7 @@ mod tests {
                 .unwrap(),
             Bytes::from_static(b"p2-replay-p3")
         );
-        release(reopened.node).await.unwrap();
+        close(reopened.node).await.unwrap();
 
         let root_node = route_open(
             &generation_handle,
@@ -3586,7 +3581,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["file".to_string()]
         );
-        release(root_node).await.unwrap();
+        close(root_node).await.unwrap();
         close_window(window, Instant::now() + Duration::from_secs(1))
             .await
             .unwrap();

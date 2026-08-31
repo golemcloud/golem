@@ -22,8 +22,8 @@ use crate::durable_host::authorization::targets::{
 };
 use crate::services::agent_filesystem::{
     self as agent_filesystem, AccessMode, AttributeChanges, Error as AgentFilesystemError,
-    File as AgentFile, FileDisposition, FilesystemCall, FilesystemGenerationHandle, Follow,
-    NamespaceEdit, ObjectKind, OpenNode, OpenOptions, Opened, PathTarget, Synchronization, Target,
+    File as AgentFile, FileDisposition, FilesystemCall, FilesystemGenerationHandle, FlushLevel,
+    Follow, NamespaceEdit, ObjectKind, OpenNode, OpenOptions, Opened, PathTarget, Target,
     TimeChange, TimeChanges, WritePlacement, WriteResult,
 };
 use crate::workerctx::WorkerCtx;
@@ -141,7 +141,7 @@ pub(crate) fn push_agent_descriptor<T: 'static>(
 }
 
 /// Consumes an owned P2/P3 descriptor handle and removes its agent descriptor from the resource table.
-/// Dropping the final shared descriptor starts the agent-filesystem node release; bad ownership traps.
+/// Dropping the final shared descriptor starts the agent-filesystem node close; bad ownership traps.
 pub(crate) fn delete_agent_descriptor<T: 'static>(
     ctx: &mut impl AgentFilesystemResources,
     resource: Resource<T>,
@@ -205,7 +205,7 @@ impl From<AgentOpenPolicyError> for AgentOpenRouteError {
 }
 
 /// Applies the common P2/P3 open policy to WASI flags without touching the filesystem.
-/// It rejects unsupported synchronization and invalid directory mutations, or returns the required open step.
+/// It rejects unsupported sync flags and invalid directory mutations, or returns the required open step.
 pub(crate) fn decide_agent_open(
     request: AgentOpenRequest,
 ) -> Result<AgentOpenDecision, AgentOpenPolicyError> {
@@ -302,15 +302,14 @@ pub(crate) fn route_agent_set_attributes(
         .map_err(AgentFilesystemError::Access)
 }
 
-/// Submits a P2/P3 data or metadata synchronization request to `agent_filesystem`.
+/// Submits a P2/P3 data or metadata flush request to `agent_filesystem`.
 /// The returned call retains the generation admission needed through sandbox completion.
-pub(crate) fn route_agent_synchronize(
+pub(crate) fn route_agent_flush(
     generation_handle: &FilesystemGenerationHandle,
     node: &OpenNode,
-    level: Synchronization,
+    level: FlushLevel,
 ) -> Result<FilesystemCall<()>, AgentFilesystemError> {
-    agent_filesystem::synchronize(generation_handle, node, level)
-        .map_err(AgentFilesystemError::Access)
+    agent_filesystem::flush(generation_handle, node, level).map_err(AgentFilesystemError::Access)
 }
 
 /// Submits a P2/P3 namespace edit to `agent_filesystem` and returns its deferred call.
@@ -350,12 +349,12 @@ pub(crate) fn resize_attribute_changes(size: u64) -> AttributeChanges {
     }
 }
 
-/// Maps the P2/P3 `data_only` synchronization flag to the agent-filesystem level.
-pub(crate) fn synchronization_level(data_only: bool) -> Synchronization {
+/// Maps the P2/P3 `data_only` flag to the agent-filesystem flush level.
+pub(crate) fn flush_level(data_only: bool) -> FlushLevel {
     if data_only {
-        Synchronization::Data
+        FlushLevel::Data
     } else {
-        Synchronization::DataAndMetadata
+        FlushLevel::DataAndMetadata
     }
 }
 

@@ -219,7 +219,7 @@ async fn create_file(
             .written,
         expected
     );
-    release(OpenNode::File(file)).await.unwrap();
+    close(OpenNode::File(file)).await.unwrap();
 }
 
 async fn read_file_exact(
@@ -254,7 +254,7 @@ async fn read_file_exact(
     .await
     .unwrap();
     assert_eq!(&actual, expected);
-    release(OpenNode::File(file)).await.unwrap();
+    close(OpenNode::File(file)).await.unwrap();
 }
 
 async fn assert_file_metadata(
@@ -328,7 +328,7 @@ async fn list_directory_exact(
             .len(),
         count
     );
-    release(OpenNode::Directory(directory)).await.unwrap();
+    close(OpenNode::Directory(directory)).await.unwrap();
 }
 
 async fn remove(

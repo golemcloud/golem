@@ -19,11 +19,11 @@ use crate::sandbox_filesystem::{
     FilesystemLimits, FilesystemStorageError, InstalledLimits, SandboxAccessMode,
     SandboxAttributes, SandboxDirectoryCoordinationKey, SandboxFile, SandboxFileDisposition,
     SandboxFilePermissions, SandboxFileUpdate, SandboxFilesystem, SandboxFilesystemAdapter,
-    SandboxFilesystemName, SandboxFilesystemProvisioning, SandboxFollow,
+    SandboxFilesystemName, SandboxFilesystemProvisioning, SandboxFlushLevel, SandboxFollow,
     SandboxNamespaceCoordinationKey, SandboxNode, SandboxObjectKind, SandboxOpenOptions,
     SandboxOpened, SandboxPath, SandboxReadRange, SandboxResolvedNamespaceTarget,
-    SandboxSymlinkTarget, SandboxSynchronization, SandboxTargetIdentity, SandboxTimeChange,
-    SandboxTimeChanges, SandboxWriteAttempt, SandboxWritePlacement,
+    SandboxSymlinkTarget, SandboxTargetIdentity, SandboxTimeChange, SandboxTimeChanges,
+    SandboxWriteAttempt, SandboxWritePlacement,
 };
 use crate::services::active_agents::ConcurrentAgentPermit;
 use crate::services::file_loader::{FileLoader, InitialFileSource};
@@ -1369,7 +1369,7 @@ pub(crate) fn delete_created<Adapter: SandboxFilesystemAdapter>(
 /// Waits until a `Sealed` filesystem has no admitted calls or open nodes.
 ///
 /// Unload code uses this when it must retain the sandbox filesystem rather than delete it. The
-/// function has no error result and does not itself release or delete sandbox resources.
+/// function has no error result and does not itself close open nodes or delete sandbox resources.
 pub(crate) async fn drain_sealed_filesystem<Adapter: SandboxFilesystemAdapter>(
     filesystem: &SealedFilesystem<Adapter>,
 ) {
@@ -2007,32 +2007,30 @@ impl<T: 'static> Drop for FilesystemCall<T> {
 }
 
 #[must_use]
-pub(crate) struct FilesystemRelease {
-    state: ReleaseState,
+pub(crate) struct FilesystemClose {
+    state: CloseState,
 }
 
-enum ReleaseState {
+enum CloseState {
     Unstarted { task: Option<CallTask<()>> },
     CallerDriven { task: Option<CallTask<()>> },
     Done,
 }
 
-impl Future for FilesystemRelease {
+impl Future for FilesystemClose {
     type Output = Result<(), Error>;
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
             match &mut self.state {
-                ReleaseState::Unstarted { task } => {
-                    let task = task
-                        .take()
-                        .expect("filesystem release task already started");
-                    self.state = ReleaseState::CallerDriven { task: Some(task) };
+                CloseState::Unstarted { task } => {
+                    let task = task.take().expect("filesystem close task already started");
+                    self.state = CloseState::CallerDriven { task: Some(task) };
                 }
-                ReleaseState::CallerDriven { task } => {
+                CloseState::CallerDriven { task } => {
                     let result = match task
                         .as_mut()
-                        .expect("filesystem release task missing")
+                        .expect("filesystem close task missing")
                         .as_mut()
                         .poll(context)
                     {
@@ -2040,20 +2038,20 @@ impl Future for FilesystemRelease {
                         Poll::Pending => return Poll::Pending,
                     };
                     task.take();
-                    self.state = ReleaseState::Done;
+                    self.state = CloseState::Done;
                     return Poll::Ready(result);
                 }
-                ReleaseState::Done => panic!("filesystem release polled after completion"),
+                CloseState::Done => panic!("filesystem close polled after completion"),
             }
         }
     }
 }
 
-impl Drop for FilesystemRelease {
+impl Drop for FilesystemClose {
     fn drop(&mut self) {
         let task = match &mut self.state {
-            ReleaseState::Unstarted { task } | ReleaseState::CallerDriven { task } => task.take(),
-            ReleaseState::Done => return,
+            CloseState::Unstarted { task } | CloseState::CallerDriven { task } => task.take(),
+            CloseState::Done => return,
         };
         if let Some(task) = task {
             spawn_module_task(async move {
@@ -2083,7 +2081,7 @@ impl OpenNode {
     /// Returns the access mode granted when this node was opened.
     ///
     /// Host adapters use it to enforce descriptor capabilities before submitting mutations. The
-    /// mode remains available until release and does not revalidate generation access.
+    /// mode remains available until close and does not revalidate generation access.
     pub(crate) fn access(&self) -> AccessMode {
         node_ownership(self).access
     }
@@ -2102,7 +2100,7 @@ struct NodeOwnership {
     generation_id: usize,
     access: AccessMode,
     node_lease: Option<NodeLease>,
-    release: Option<Box<dyn FnOnce(SandboxNode, NodeLease) -> FilesystemRelease + Send>>,
+    close: Option<Box<dyn FnOnce(SandboxNode, NodeLease) -> FilesystemClose + Send>>,
 }
 
 impl Debug for File {
@@ -2119,14 +2117,14 @@ impl Debug for Directory {
 
 impl Drop for NodeOwnership {
     fn drop(&mut self) {
-        let (Some(sandbox), Some(node_lease), Some(release)) = (
+        let (Some(sandbox), Some(node_lease), Some(close)) = (
             self.sandbox.take(),
             self.node_lease.take(),
-            self.release.take(),
+            self.close.take(),
         ) else {
             return;
         };
-        drop(release(sandbox, node_lease));
+        drop(close(sandbox, node_lease));
     }
 }
 
@@ -2134,21 +2132,16 @@ impl NodeOwnership {
     fn sandbox(&self) -> &SandboxNode {
         self.sandbox
             .as_ref()
-            .expect("filesystem node already released")
+            .expect("filesystem node already closed")
     }
 
-    fn into_release(mut self) -> FilesystemRelease {
-        let sandbox = self
-            .sandbox
-            .take()
-            .expect("filesystem node already released");
+    fn into_close(mut self) -> FilesystemClose {
+        let sandbox = self.sandbox.take().expect("filesystem node already closed");
         let node_lease = self
             .node_lease
             .take()
             .expect("filesystem node lease missing");
-        self.release
-            .take()
-            .expect("filesystem node release missing")(sandbox, node_lease)
+        self.close.take().expect("filesystem node close missing")(sandbox, node_lease)
     }
 }
 
@@ -2218,7 +2211,7 @@ pub(crate) enum WritePlacement {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Synchronization {
+pub(crate) enum FlushLevel {
     Data,
     DataAndMetadata,
 }
@@ -2593,34 +2586,34 @@ pub(crate) fn edit_namespace<Adapter: SandboxFilesystemAdapter>(
     }))
 }
 
-/// Synchronizes an open node's data, or its data and metadata, with sandbox storage.
+/// Flushes an open node's data, or its data and metadata, to sandbox storage.
 ///
 /// Host adapters call this for an open node in the admitted reconstruction or resident generation.
-/// Admission errors are immediate. Any sandbox synchronization failure invalidates the generation
+/// Admission errors are immediate. Any sandbox flush failure invalidates the generation
 /// and is returned as `RuntimeInvalidated` by the deferred call.
-pub(crate) fn synchronize<Adapter: SandboxFilesystemAdapter>(
+pub(crate) fn flush<Adapter: SandboxFilesystemAdapter>(
     generation_handle: &FilesystemGenerationHandle<Adapter>,
     node: &OpenNode,
-    level: Synchronization,
+    level: FlushLevel,
 ) -> Result<FilesystemCall<()>, AccessError> {
     let ownership = node_ownership(node);
     let generation = admit_node(generation_handle, ownership.generation_id)?;
     let lease = generation.registry.lease_call()?;
     let node = ownership.sandbox().clone();
     Ok(FilesystemCall::new(lease, async move {
-        execute_synchronize(generation, node, level).await
+        execute_flush(generation, node, level).await
     }))
 }
 
-/// Explicitly releases an open file or directory.
+/// Explicitly closes an open file or directory.
 ///
 /// Host adapters await this when closing a descriptor; dropping an `OpenNode` starts the same work
-/// in the background. The returned release completes the sandbox close and relinquishes the node
+/// in the background. The returned close completes the sandbox close and relinquishes the node
 /// lease even if the caller drops it, and reports sandbox or generation invalidation errors.
-pub(crate) fn release(node: OpenNode) -> FilesystemRelease {
+pub(crate) fn close(node: OpenNode) -> FilesystemClose {
     match node {
-        OpenNode::File(file) => file.ownership.into_release(),
-        OpenNode::Directory(directory) => directory.ownership.into_release(),
+        OpenNode::File(file) => file.ownership.into_close(),
+        OpenNode::Directory(directory) => directory.ownership.into_close(),
     }
 }
 
@@ -2636,7 +2629,7 @@ impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
         if return_to_caller {
             Ok(Opened { node: open_node })
         } else {
-            release(open_node).await?;
+            close(open_node).await?;
             Err(Error::Access(AccessError::Revoked))
         }
     }
@@ -2654,8 +2647,8 @@ impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
             generation_id,
             access,
             node_lease: Some(node_lease),
-            release: Some(Box::new(move |node, node_lease| {
-                generation.start_release(node, node_lease)
+            close: Some(Box::new(move |node, node_lease| {
+                generation.start_close(node, node_lease)
             })),
         };
         match node {
@@ -2664,16 +2657,12 @@ impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
         }
     }
 
-    fn start_release(
-        self: Arc<Self>,
-        node: SandboxNode,
-        node_lease: NodeLease,
-    ) -> FilesystemRelease {
+    fn start_close(self: Arc<Self>, node: SandboxNode, node_lease: NodeLease) -> FilesystemClose {
         let call_lease = self.registry.lease_internal_call();
-        FilesystemRelease {
-            state: ReleaseState::Unstarted {
+        FilesystemClose {
+            state: CloseState::Unstarted {
                 task: Some(Box::pin(async move {
-                    let result = execute_release(Arc::clone(&self), node).await;
+                    let result = execute_close(Arc::clone(&self), node).await;
                     drop(node_lease);
                     drop(call_lease);
                     result
@@ -3906,17 +3895,15 @@ fn namespace_kind_mismatch_error(
     )
 }
 
-async fn execute_synchronize<Adapter: SandboxFilesystemAdapter>(
+async fn execute_flush<Adapter: SandboxFilesystemAdapter>(
     generation: Arc<FilesystemGeneration<Adapter>>,
     node: SandboxNode,
-    level: Synchronization,
+    level: FlushLevel,
 ) -> Result<(), Error> {
     let result = {
         let sandbox = generation.sandbox.read().await;
         let sandbox = sandbox.as_ref().ok_or(Error::RuntimeInvalidated)?;
-        sandbox
-            .synchronize(&node, sandbox_synchronization(level))
-            .await
+        sandbox.flush(&node, sandbox_flush_level(level)).await
     };
     match result {
         Ok(()) => Ok(()),
@@ -3927,7 +3914,7 @@ async fn execute_synchronize<Adapter: SandboxFilesystemAdapter>(
     }
 }
 
-async fn execute_release<Adapter: SandboxFilesystemAdapter>(
+async fn execute_close<Adapter: SandboxFilesystemAdapter>(
     generation: Arc<FilesystemGeneration<Adapter>>,
     node: SandboxNode,
 ) -> Result<(), Error> {
@@ -3936,7 +3923,7 @@ async fn execute_release<Adapter: SandboxFilesystemAdapter>(
         let result = {
             let sandbox = generation.sandbox.read().await;
             let sandbox = sandbox.as_ref().ok_or(Error::RuntimeInvalidated)?;
-            sandbox.release(node.clone()).await
+            sandbox.close(node.clone()).await
         };
         let error = match result {
             Ok(()) => return Ok(()),
@@ -4364,10 +4351,10 @@ fn sandbox_follow(follow: Follow) -> SandboxFollow {
     }
 }
 
-fn sandbox_synchronization(level: Synchronization) -> SandboxSynchronization {
+fn sandbox_flush_level(level: FlushLevel) -> SandboxFlushLevel {
     match level {
-        Synchronization::Data => SandboxSynchronization::Data,
-        Synchronization::DataAndMetadata => SandboxSynchronization::DataAndMetadata,
+        FlushLevel::Data => SandboxFlushLevel::Data,
+        FlushLevel::DataAndMetadata => SandboxFlushLevel::DataAndMetadata,
     }
 }
 

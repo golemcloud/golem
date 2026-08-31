@@ -2934,10 +2934,10 @@ mod tests {
     use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
     use crate::services::active_agents::stop_loaded_idle_if_eligible;
     use crate::services::agent_filesystem::{
-        AccessError, FilesystemStorageError, Follow, OpenNode, PathTarget, Synchronization, Target,
-        attributes, billing_metered_resident_with_open_node_for_unload_test, delete,
-        filesystem_activity, metered_resident_with_open_node_for_unload_test, release,
-        resident_for_unload_test, seal, synchronize,
+        AccessError, FilesystemStorageError, FlushLevel, Follow, OpenNode, PathTarget, Target,
+        attributes, billing_metered_resident_with_open_node_for_unload_test, close, delete,
+        filesystem_activity, flush, metered_resident_with_open_node_for_unload_test,
+        resident_for_unload_test, seal,
     };
     use crate::services::resource_usage_metering::close_window;
     use crate::worker::invocation::InvokeResult;
@@ -2979,14 +2979,14 @@ mod tests {
         let (_commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
         let waiting =
             tokio::spawn(async move { wait_for_resident_wakeup(&mut receiver, &activity).await });
-        control.push_synchronize(Err(FilesystemStorageError::io(
-            "detached terminal synchronize",
+        control.push_flush(Err(FilesystemStorageError::io(
+            "detached terminal flush",
             Path::new("<idle-wakeup-test>"),
             std::io::ErrorKind::Other.into(),
         )));
 
         assert!(matches!(
-            synchronize(&generation_handle, &node, Synchronization::Data)
+            flush(&generation_handle, &node, FlushLevel::Data)
                 .unwrap()
                 .await,
             Err(crate::services::agent_filesystem::Error::RuntimeInvalidated)
@@ -3003,8 +3003,8 @@ mod tests {
         close_window(window, Instant::now() + Duration::from_secs(1))
             .await
             .unwrap();
-        control.push_release(Ok(()));
-        release(node).await.unwrap();
+        control.push_close(Ok(()));
+        close(node).await.unwrap();
         control.push_delete_and_verify(Ok(()));
         delete(seal(filesystem)).await.unwrap();
     }
@@ -3250,8 +3250,8 @@ mod tests {
     async fn concrete_unload_running_agent_publishes_only_after_verified_deletion() {
         let (filesystem, control, window, generation_handle, node) =
             metered_resident_with_open_node_for_unload_test().await;
-        control.push_release(Ok(()));
-        let release = control.block("release");
+        control.push_close(Ok(()));
+        let close = control.block("close");
         control.push_delete_and_verify(Ok(()));
         let deletion = control.block("delete_and_verify");
         let held = Arc::new(AtomicBool::new(false));
@@ -3292,10 +3292,10 @@ mod tests {
             Err(AccessError::Revoked)
         ));
         assert!(activity.lock().unwrap().is_none());
-        release.wait_started().await;
+        close.wait_started().await;
         assert!(store_dropped.load(Ordering::Acquire));
         assert!(held.load(Ordering::Acquire));
-        release.release();
+        close.release();
 
         deletion.wait_started().await;
         assert!(!held.load(Ordering::Acquire));
@@ -3311,7 +3311,7 @@ mod tests {
     async fn concrete_unload_deletion_failure_publishes_cleanup_failed() {
         let (filesystem, control, window, _generation_handle, node) =
             metered_resident_with_open_node_for_unload_test().await;
-        control.push_release(Ok(()));
+        control.push_close(Ok(()));
         control.push_delete_and_verify(Err(FilesystemStorageError::verification(
             "injected verified deletion failure",
             Path::new("<unload-test>"),
@@ -3355,8 +3355,8 @@ mod tests {
     async fn dropped_production_unload_observer_does_not_cancel_owned_cleanup() {
         let (filesystem, control, window, _generation_handle, node) =
             metered_resident_with_open_node_for_unload_test().await;
-        control.push_release(Ok(()));
-        let release = control.block("release");
+        control.push_close(Ok(()));
+        let close = control.block("close");
         control.push_delete_and_verify(Ok(()));
         let deletion = control.block("delete_and_verify");
         let held = Arc::new(AtomicBool::new(false));
@@ -3379,8 +3379,8 @@ mod tests {
         );
         drop(observer);
 
-        release.wait_started().await;
-        release.release();
+        close.wait_started().await;
+        close.release();
         deletion.wait_started().await;
         assert!(!held.load(Ordering::Acquire));
         deletion.release();
@@ -3388,11 +3388,11 @@ mod tests {
 
     #[test]
     #[timeout("5s")]
-    async fn production_unload_starts_final_observation_after_native_release_drains() {
+    async fn production_unload_starts_final_observation_after_native_close_drains() {
         let (filesystem, control, window, _generation_handle, node) =
             billing_metered_resident_with_open_node_for_unload_test().await;
-        control.push_release(Ok(()));
-        let release = control.block("release");
+        control.push_close(Ok(()));
+        let close = control.block("close");
         control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
             allocated_bytes: 100,
             filesystem_objects: 1,
@@ -3418,13 +3418,13 @@ mod tests {
             &activity,
         );
 
-        release.wait_started().await;
+        close.wait_started().await;
         assert!(
             tokio::time::timeout(Duration::from_millis(20), final_observation.wait_started())
                 .await
                 .is_err()
         );
-        release.release();
+        close.release();
         final_observation.wait_started().await;
         final_observation.release();
 
@@ -3437,8 +3437,8 @@ mod tests {
     async fn concrete_unload_deadline_publishes_cleanup_failed_and_cleanup_continues() {
         let (filesystem, control, window, _generation_handle, node) =
             metered_resident_with_open_node_for_unload_test().await;
-        control.push_release(Ok(()));
-        let release = control.block("release");
+        control.push_close(Ok(()));
+        let close = control.block("close");
         control.push_delete_and_verify(Ok(()));
         let deletion = control.block("delete_and_verify");
         let held = Arc::new(AtomicBool::new(false));
@@ -3460,7 +3460,7 @@ mod tests {
             &activity,
         );
 
-        release.wait_started().await;
+        close.wait_started().await;
         let cleanup_error = tokio::time::timeout(Duration::from_millis(200), observer)
             .await
             .expect("deadline must resolve the lifecycle observer")
@@ -3486,7 +3486,7 @@ mod tests {
                 .any(|call| call.starts_with("delete_and_verify("))
         );
 
-        release.release();
+        close.release();
         deletion.wait_started().await;
         deletion.release();
         deletion.wait_completed().await;
@@ -3497,8 +3497,8 @@ mod tests {
     async fn filesystem_pressure_stop_seam_reaches_concrete_unload_with_exact_deadline() {
         let (filesystem, control, window, _generation_handle, node) =
             metered_resident_with_open_node_for_unload_test().await;
-        control.push_release(Ok(()));
-        let release = control.block("release");
+        control.push_close(Ok(()));
+        let close = control.block("close");
         control.push_delete_and_verify(Ok(()));
         let deletion = control.block("delete_and_verify");
         let held = Arc::new(AtomicBool::new(false));
@@ -3538,9 +3538,9 @@ mod tests {
             },
         ));
 
-        release.wait_started().await;
+        close.wait_started().await;
         assert!(held.load(Ordering::Acquire));
-        release.release();
+        close.release();
         deletion.wait_started().await;
         assert!(!held.load(Ordering::Acquire));
         deletion.release();

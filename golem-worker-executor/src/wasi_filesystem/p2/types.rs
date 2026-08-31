@@ -55,10 +55,10 @@ use golem_common::model::oplog::{
 use crate::wasi_filesystem::{
     AgentDescriptor, AgentOpenRequest, AgentOpenRouteError, advance_write_placement,
     agent_descriptor_guest_path, calculate_metadata_hash_parts, delete_agent_descriptor,
-    filesystem_permission_targets, get_agent_descriptor, push_agent_descriptor,
-    resize_attribute_changes, route_agent_namespace_edit, route_agent_open,
-    route_agent_set_attributes, route_agent_synchronize, route_agent_write,
-    route_replay_timestamp_restoration, run_agent_filesystem_call, synchronization_level,
+    filesystem_permission_targets, flush_level, get_agent_descriptor, push_agent_descriptor,
+    resize_attribute_changes, route_agent_flush, route_agent_namespace_edit, route_agent_open,
+    route_agent_set_attributes, route_agent_write, route_replay_timestamp_restoration,
+    run_agent_filesystem_call,
 };
 
 fn p2_descriptor_guest_path(
@@ -372,14 +372,14 @@ pub(crate) fn route_set_times(
     Ok(async move { call.await.map_err(p2_agent_error) })
 }
 
-/// Starts a P2 descriptor synchronization through `agent_filesystem`.
-/// `data_only` selects data sync rather than data-and-metadata sync.
-pub(crate) fn route_synchronize(
+/// Starts a P2 descriptor flush through `agent_filesystem`.
+/// `data_only` selects a data-only flush rather than a data-and-metadata flush.
+pub(crate) fn route_flush(
     generation_handle: &FilesystemGenerationHandle,
     node: &OpenNode,
     data_only: bool,
 ) -> Result<impl Future<Output = Result<(), FsError>> + Send + 'static + use<>, FsError> {
-    let call = route_agent_synchronize(generation_handle, node, synchronization_level(data_only))
+    let call = route_agent_flush(generation_handle, node, flush_level(data_only))
         .map_err(p2_agent_error)?;
     Ok(async move { call.await.map_err(p2_agent_error) })
 }
@@ -811,8 +811,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let path = p2_descriptor_guest_path(&descriptor, "")?;
         let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
         self.observe_function_call("filesystem::types::descriptor", "sync_data");
-        let operation =
-            descriptor.with_node(|node| route_synchronize(&generation_handle, node, true))?;
+        let operation = descriptor.with_node(|node| route_flush(&generation_handle, node, true))?;
         operation.await
     }
 
@@ -958,7 +957,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
         self.observe_function_call("filesystem::types::descriptor", "sync");
         let operation =
-            descriptor.with_node(|node| route_synchronize(&generation_handle, node, false))?;
+            descriptor.with_node(|node| route_flush(&generation_handle, node, false))?;
         operation.await
     }
 

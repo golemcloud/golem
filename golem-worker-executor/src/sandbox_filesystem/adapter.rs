@@ -715,7 +715,7 @@ pub(crate) struct SandboxTimeChanges {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SandboxSynchronization {
+pub(crate) enum SandboxFlushLevel {
     Data,
     DataAndMetadata,
 }
@@ -899,16 +899,16 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send;
 
     /// Flushes an open node's data, or its data and metadata, to stable storage.
-    fn synchronize(
+    fn flush(
         &self,
         node: &SandboxNode,
-        level: SandboxSynchronization,
+        level: SandboxFlushLevel,
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send;
 
-    /// Releases one owned open node.
+    /// Closes one owned open node.
     ///
-    /// Releasing the final handle to an unlinked file may free allocated storage.
-    fn release(
+    /// Closing the final handle to an unlinked file may free allocated storage.
+    fn close(
         &self,
         node: SandboxNode,
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send;
@@ -1590,10 +1590,10 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         }
     }
 
-    fn synchronize(
+    fn flush(
         &self,
         node: &SandboxNode,
-        level: SandboxSynchronization,
+        level: SandboxFlushLevel,
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
         let path = match node {
             SandboxNode::File(file) => file.path.clone(),
@@ -1602,20 +1602,18 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         let node = node.clone();
         let storage_profile = self.storage_profile();
         async move {
-            execute_native(
-                storage_profile,
-                NativeOperation::Synchronization,
-                move || host_node(&node)?.synchronize(level),
-            )
+            execute_native(storage_profile, NativeOperation::Flush, move || {
+                host_node(&node)?.flush(level)
+            })
             .await
-            .map_err(|error| task_error("synchronize sandbox filesystem node", &path, error))?
+            .map_err(|error| task_error("flush sandbox filesystem node", &path, error))?
             .map_err(|error| {
-                FilesystemStorageError::io("synchronize sandbox filesystem node", &path, error)
+                FilesystemStorageError::io("flush sandbox filesystem node", &path, error)
             })
         }
     }
 
-    async fn release(&self, node: SandboxNode) -> Result<(), FilesystemStorageError> {
+    async fn close(&self, node: SandboxNode) -> Result<(), FilesystemStorageError> {
         drop(node);
         Ok(())
     }
@@ -2008,7 +2006,7 @@ impl HostNode {
         }
     }
 
-    fn synchronize(&self, level: SandboxSynchronization) -> std::io::Result<()> {
+    fn flush(&self, level: SandboxFlushLevel) -> std::io::Result<()> {
         #[cfg(windows)]
         let is_file = matches!(self, Self::File(_));
         let file = match self {
@@ -2016,8 +2014,8 @@ impl HostNode {
             Self::Directory(directory) => directory.open(Component::CurDir)?.into_std(),
         };
         let result = match level {
-            SandboxSynchronization::Data => file.sync_data(),
-            SandboxSynchronization::DataAndMetadata => file.sync_all(),
+            SandboxFlushLevel::Data => file.sync_data(),
+            SandboxFlushLevel::DataAndMetadata => file.sync_all(),
         };
         #[cfg(windows)]
         if is_file
@@ -2213,8 +2211,8 @@ mod scripted {
         rename: VecDeque<Result<(), FilesystemStorageError>>,
         remove_directory: VecDeque<Result<(), FilesystemStorageError>>,
         unlink_file: VecDeque<Result<(), FilesystemStorageError>>,
-        synchronize: VecDeque<Result<(), FilesystemStorageError>>,
-        release: VecDeque<Result<(), FilesystemStorageError>>,
+        flush: VecDeque<Result<(), FilesystemStorageError>>,
+        close: VecDeque<Result<(), FilesystemStorageError>>,
         seed_file: VecDeque<Result<(), FilesystemStorageError>>,
         observe_allocation: VecDeque<Result<FilesystemAllocation, FilesystemStorageError>>,
         install_limits: VecDeque<Result<InstalledLimits, FilesystemStorageError>>,
@@ -2402,12 +2400,12 @@ mod scripted {
             self.state().unlink_file.push_back(outcome);
         }
 
-        pub(crate) fn push_synchronize(&self, outcome: Result<(), FilesystemStorageError>) {
-            self.state().synchronize.push_back(outcome);
+        pub(crate) fn push_flush(&self, outcome: Result<(), FilesystemStorageError>) {
+            self.state().flush.push_back(outcome);
         }
 
-        pub(crate) fn push_release(&self, outcome: Result<(), FilesystemStorageError>) {
-            self.state().release.push_back(outcome);
+        pub(crate) fn push_close(&self, outcome: Result<(), FilesystemStorageError>) {
+            self.state().close.push_back(outcome);
         }
 
         pub(crate) fn push_seed_file(&self, outcome: Result<(), FilesystemStorageError>) {
@@ -2747,24 +2745,21 @@ mod scripted {
             })
         }
 
-        fn synchronize(
+        fn flush(
             &self,
             node: &SandboxNode,
-            level: SandboxSynchronization,
+            level: SandboxFlushLevel,
         ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
-            self.outcome(
-                format!("synchronize(node={node:?}, level={level:?})"),
-                |state| &mut state.synchronize,
-            )
+            self.outcome(format!("flush(node={node:?}, level={level:?})"), |state| {
+                &mut state.flush
+            })
         }
 
-        fn release(
+        fn close(
             &self,
             node: SandboxNode,
         ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
-            self.outcome(format!("release(node={node:?})"), |state| {
-                &mut state.release
-            })
+            self.outcome(format!("close(node={node:?})"), |state| &mut state.close)
         }
 
         fn seed_file(
@@ -3208,8 +3203,8 @@ mod tests {
         control.push_rename(Ok(()));
         control.push_remove_directory(Ok(()));
         control.push_unlink_file(Ok(()));
-        control.push_synchronize(Ok(()));
-        control.push_release(Ok(()));
+        control.push_flush(Ok(()));
+        control.push_close(Ok(()));
         control.push_seed_file(Ok(()));
         control.push_observe_allocation(Ok(allocation));
         control.push_install_limits(Ok(InstalledLimits { limits, allocation }));
@@ -3317,14 +3312,14 @@ mod tests {
             .await
             .unwrap();
         filesystem
-            .synchronize(
+            .flush(
                 &SandboxNode::File(file.clone()),
-                SandboxSynchronization::DataAndMetadata,
+                SandboxFlushLevel::DataAndMetadata,
             )
             .await
             .unwrap();
         filesystem
-            .release(SandboxNode::File(file.clone()))
+            .close(SandboxNode::File(file.clone()))
             .await
             .unwrap();
         filesystem
@@ -3362,8 +3357,8 @@ mod tests {
                 "rename(source=SandboxPath { base: Directory(directory(9)), path: \"before\" }, destination=SandboxPath { base: Directory(directory(9)), path: \"after\" })",
                 "remove_directory(path=SandboxPath { base: Directory(directory(9)), path: \"old-dir\" })",
                 "unlink_file(path=SandboxPath { base: Directory(directory(9)), path: \"old-file\" })",
-                "synchronize(node=File(file(7)), level=DataAndMetadata)",
-                "release(node=File(file(7)))",
+                "flush(node=File(file(7)), level=DataAndMetadata)",
+                "close(node=File(file(7)))",
                 "seed_file(source=seed-source, sandbox_path=SandboxPath { base: Root, path: \"seed-destination\" }, permissions=ReadWrite)",
                 "observe_allocation()",
                 "install_limits(limits=FilesystemLimits { allocated_bytes: 4096, filesystem_objects: 8 })",
@@ -3770,10 +3765,10 @@ mod tests {
         )
         .await
         .unwrap();
-        <SandboxFilesystem as SandboxFilesystemAdapter>::synchronize(
+        <SandboxFilesystem as SandboxFilesystemAdapter>::flush(
             &filesystem,
             &SandboxNode::File(file.clone()),
-            SandboxSynchronization::DataAndMetadata,
+            SandboxFlushLevel::DataAndMetadata,
         )
         .await
         .unwrap();
@@ -3849,7 +3844,7 @@ mod tests {
                 .is_err()
         );
 
-        <SandboxFilesystem as SandboxFilesystemAdapter>::release(
+        <SandboxFilesystem as SandboxFilesystemAdapter>::close(
             &filesystem,
             SandboxNode::File(file),
         )
@@ -3869,7 +3864,7 @@ mod tests {
         )
         .await
         .unwrap();
-        <SandboxFilesystem as SandboxFilesystemAdapter>::release(
+        <SandboxFilesystem as SandboxFilesystemAdapter>::close(
             &filesystem,
             SandboxNode::Directory(directory),
         )
@@ -4293,7 +4288,7 @@ mod tests {
     }
 
     #[test]
-    async fn root_release_linearizes_access_and_preserves_admitted_capability_lifetime() {
+    async fn root_close_linearizes_access_and_preserves_admitted_capability_lifetime() {
         let parent = tempfile::tempdir().unwrap();
         let provisioning = unmanaged_provisioning(parent.path().to_path_buf());
         let filesystem = <SandboxFilesystem as SandboxFilesystemAdapter>::create_fresh(

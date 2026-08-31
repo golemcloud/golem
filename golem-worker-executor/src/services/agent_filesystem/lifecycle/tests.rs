@@ -1062,7 +1062,7 @@ async fn reconstruction_mutations_without_storage_metering_need_no_billing_windo
 
 #[test]
 #[timeout("5s")]
-async fn reconstruction_opened_unlinked_node_release_does_not_observe_allocation() {
+async fn reconstruction_opened_unlinked_node_close_does_not_observe_allocation() {
     let (filesystem, control, entry) =
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
     let window = open_resource_usage_window(&filesystem, permit(&entry).await)
@@ -1133,11 +1133,11 @@ async fn reconstruction_opened_unlinked_node_release_does_not_observe_allocation
         Bytes::from_static(b"still-open")
     );
 
-    let observations_before_release = call_count(&control, "observe_allocation(");
-    control.push_release(Ok(()));
-    let release_gate = control.block("release");
-    let releasing = tokio::spawn(release(node));
-    release_gate.wait_started().await;
+    let observations_before_close = call_count(&control, "observe_allocation(");
+    control.push_close(Ok(()));
+    let close_gate = control.block("close");
+    let node_close = tokio::spawn(close(node));
+    close_gate.wait_started().await;
     let closing = tokio::spawn(close_window(
         window,
         Instant::now() + Duration::from_secs(1),
@@ -1146,15 +1146,15 @@ async fn reconstruction_opened_unlinked_node_release_does_not_observe_allocation
     assert!(closing.is_finished());
     assert_eq!(
         call_count(&control, "observe_allocation("),
-        observations_before_release
+        observations_before_close
     );
 
     closing.await.unwrap().unwrap();
-    release_gate.release();
-    releasing.await.unwrap().unwrap();
+    close_gate.release();
+    node_close.await.unwrap().unwrap();
     assert_eq!(
         call_count(&control, "observe_allocation("),
-        observations_before_release
+        observations_before_close
     );
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
@@ -1318,38 +1318,38 @@ async fn dropping_a_started_call_transfers_the_same_operation_once() {
 
 #[test]
 #[timeout("5s")]
-async fn dropping_a_started_release_transfers_it_once_and_unblocks_deletion() {
+async fn dropping_a_started_close_transfers_it_once_and_unblocks_deletion() {
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
     let generation_handle = resident_generation_handle(&filesystem);
     let file = open_file(&generation_handle, &control, 701).await;
-    control.push_release(Ok(()));
+    control.push_close(Ok(()));
     control.push_delete_and_verify(Ok(()));
-    let release_gate = control.block("release");
+    let close_gate = control.block("close");
 
-    let observer = tokio::spawn(release(OpenNode::File(file)));
-    release_gate.wait_started().await;
+    let observer = tokio::spawn(close(OpenNode::File(file)));
+    close_gate.wait_started().await;
     observer.abort();
     let _ = observer.await;
     let deletion = tokio::spawn(delete(seal(filesystem)));
     tokio::task::yield_now().await;
     assert!(!deletion.is_finished());
 
-    release_gate.release();
-    release_gate.wait_completed().await;
+    close_gate.release();
+    close_gate.wait_completed().await;
     deletion.await.unwrap().unwrap();
-    assert_eq!(call_count(&control, "release("), 1);
+    assert_eq!(call_count(&control, "close("), 1);
 }
 
 #[test]
-async fn delete_waits_for_started_query_and_release_after_observers_drop() {
+async fn delete_waits_for_started_query_and_close_after_observers_drop() {
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
     let generation_handle = resident_generation_handle(&filesystem);
     let file = open_file(&generation_handle, &control, 7).await;
     control.push_read(Ok(Bytes::from_static(b"read")));
-    control.push_release(Ok(()));
+    control.push_close(Ok(()));
     control.push_delete_and_verify(Ok(()));
     let read_gate = control.block("read");
-    let release_gate = control.block("release");
+    let close_gate = control.block("close");
 
     let query = tokio::spawn(
         read_file(
@@ -1365,8 +1365,8 @@ async fn delete_waits_for_started_query_and_release_after_observers_drop() {
     read_gate.wait_started().await;
     query.abort();
     let _ = query.await;
-    drop(release(OpenNode::File(file)));
-    release_gate.wait_started().await;
+    drop(close(OpenNode::File(file)));
+    close_gate.wait_started().await;
 
     let deletion = tokio::spawn(delete(seal(filesystem)));
     tokio::task::yield_now().await;
@@ -1376,19 +1376,19 @@ async fn delete_waits_for_started_query_and_release_after_observers_drop() {
     read_gate.release();
     tokio::task::yield_now().await;
     assert!(!deletion.is_finished());
-    release_gate.release();
+    close_gate.release();
     deletion.await.unwrap().unwrap();
 }
 
 #[test]
-async fn open_finishing_after_seal_registers_then_releases_before_deletion() {
+async fn open_finishing_after_seal_registers_then_closes_before_deletion() {
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
     let generation_handle = resident_generation_handle(&filesystem);
     control.push_open(Ok(SandboxOpened::scripted_file(9)));
-    control.push_release(Ok(()));
+    control.push_close(Ok(()));
     control.push_delete_and_verify(Ok(()));
     let open_gate = control.block("open");
-    let release_gate = control.block("release");
+    let close_gate = control.block("close");
     let opening = tokio::spawn(
         open(
             &generation_handle,
@@ -1405,11 +1405,11 @@ async fn open_finishing_after_seal_registers_then_releases_before_deletion() {
 
     let deletion = tokio::spawn(delete(seal(filesystem)));
     open_gate.release();
-    release_gate.wait_started().await;
+    close_gate.wait_started().await;
     assert!(!deletion.is_finished());
     assert!(!has_call(&control, "delete_and_verify("));
 
-    release_gate.release();
+    close_gate.release();
     assert!(matches!(
         opening.await.unwrap(),
         Err(Error::Access(AccessError::Revoked))
@@ -1418,33 +1418,33 @@ async fn open_finishing_after_seal_registers_then_releases_before_deletion() {
 }
 
 #[test]
-async fn an_existing_node_can_transition_to_release_after_seal() {
+async fn an_existing_node_can_transition_to_close_after_seal() {
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
     let generation_handle = resident_generation_handle(&filesystem);
     let file = open_file(&generation_handle, &control, 11).await;
     let filesystem = seal(filesystem);
-    control.push_release(Ok(()));
+    control.push_close(Ok(()));
     control.push_delete_and_verify(Ok(()));
 
-    release(OpenNode::File(file)).await.unwrap();
+    close(OpenNode::File(file)).await.unwrap();
     delete(filesystem).await.unwrap();
-    assert!(has_call(&control, "release("));
+    assert!(has_call(&control, "close("));
     assert!(has_call(&control, "delete_and_verify("));
 }
 
 #[test]
-async fn delete_waits_for_an_open_node_before_its_release_transition() {
+async fn delete_waits_for_an_open_node_before_its_close_transition() {
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
     let generation_handle = resident_generation_handle(&filesystem);
     let file = open_file(&generation_handle, &control, 20).await;
-    control.push_release(Ok(()));
+    control.push_close(Ok(()));
     control.push_delete_and_verify(Ok(()));
 
     let deletion = tokio::spawn(delete(seal(filesystem)));
     tokio::task::yield_now().await;
     assert!(!deletion.is_finished());
     assert!(!has_call(&control, "delete_and_verify("));
-    release(OpenNode::File(file)).await.unwrap();
+    close(OpenNode::File(file)).await.unwrap();
     deletion.await.unwrap().unwrap();
 }
 
@@ -1493,7 +1493,7 @@ async fn delete_barrier_covers_directory_attribute_and_symlink_queries() {
                     generation_id: file.ownership.generation_id,
                     access: file.ownership.access,
                     node_lease: None,
-                    release: None,
+                    close: None,
                 },
             })),
         )
@@ -1505,8 +1505,8 @@ async fn delete_barrier_covers_directory_attribute_and_symlink_queries() {
     directory_gate.wait_started().await;
     attributes_gate.wait_started().await;
     symlink_gate.wait_started().await;
-    control.push_release(Ok(()));
-    control.push_release(Ok(()));
+    control.push_close(Ok(()));
+    control.push_close(Ok(()));
     control.push_delete_and_verify(Ok(()));
 
     let deletion = tokio::spawn(delete(seal(filesystem)));
@@ -1519,8 +1519,8 @@ async fn delete_barrier_covers_directory_attribute_and_symlink_queries() {
     listing.await.unwrap().unwrap();
     attributes.await.unwrap().unwrap();
     symlink.await.unwrap().unwrap();
-    drop(release(OpenNode::File(file)));
-    drop(release(OpenNode::Directory(directory)));
+    drop(close(OpenNode::File(file)));
+    drop(close(OpenNode::Directory(directory)));
     deletion.await.unwrap().unwrap();
 }
 
@@ -1561,8 +1561,8 @@ async fn terminal_file_read_failure_invalidates_generation_handle() {
         Err(AccessError::Revoked)
     ));
 
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -1762,8 +1762,8 @@ async fn open_admitted_before_limit_change_returns_its_node_while_transitioning(
         LimitTransition::Resident(filesystem) => filesystem,
         LimitTransition::MustUnload(_) => panic!("transition unexpectedly required unload"),
     };
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -1871,8 +1871,8 @@ async fn directory_insert_preserves_decisive_already_exists_error() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -1915,8 +1915,8 @@ async fn symlink_insert_preserves_decisive_already_exists_error() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -1953,8 +1953,8 @@ async fn missing_remove_executes_sandbox_and_preserves_not_found() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -2024,8 +2024,8 @@ async fn ambiguous_insert_from_absent_to_desired_state_is_accepted() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -2135,8 +2135,8 @@ async fn decisive_namespace_guest_errors_skip_observation_and_pressure_recovery(
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -2193,8 +2193,8 @@ async fn initially_absent_remove_is_no_effect_not_desired_completion() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -2240,8 +2240,8 @@ async fn hard_link_preexisting_destination_is_no_effect_without_identity_inferen
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -2283,8 +2283,8 @@ async fn ambiguous_symlink_insert_requires_the_exact_target() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -2379,8 +2379,8 @@ async fn terminal_raw_namespace_error_invalidates_despite_no_effect_postconditio
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -2457,8 +2457,8 @@ async fn rename_guest_failure_and_time_postcondition_keep_generation_handle_vali
     .expect("proven namespace or time result invalidated filesystem generation handle");
     drop(admitted);
 
-    control.push_release(Ok(()));
-    release(node).await.unwrap();
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
@@ -2549,8 +2549,8 @@ async fn unknown_attribute_effect_invalidates_without_retry() {
         1
     );
 
-    control.push_release(Ok(()));
-    release(node).await.unwrap();
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
@@ -2657,10 +2657,10 @@ async fn hard_link_keeps_exact_resolved_source_and_destination_roles() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(source_parent)).await.unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(destination_parent))
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(source_parent)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(destination_parent))
         .await
         .unwrap();
     control.push_delete_and_verify(Ok(()));
@@ -2717,10 +2717,10 @@ async fn rename_keeps_exact_resolved_source_and_destination_roles() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(source_parent)).await.unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(destination_parent))
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(source_parent)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(destination_parent))
         .await
         .unwrap();
     control.push_delete_and_verify(Ok(()));
@@ -2831,8 +2831,8 @@ async fn every_namespace_operation_executes_without_billing_observation() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -2901,10 +2901,10 @@ async fn namespace_authorization_and_expected_kind_reject_before_sandbox_mutatio
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(read_only)).await.unwrap();
-    release(OpenNode::Directory(writable)).await.unwrap();
+    control.push_close(Ok(()));
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(read_only)).await.unwrap();
+    close(OpenNode::Directory(writable)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -3059,8 +3059,8 @@ async fn semantic_initial_file_policy_covers_root_descriptor_and_alias_targets()
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(parent)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(parent)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -3300,8 +3300,8 @@ async fn namespace_coordination_uses_semantic_name_sets_and_keeps_unrelated_name
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -3390,10 +3390,10 @@ async fn ambiguous_remove_retry_excludes_a_conflicting_file_recreation() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(recreated.node).await.unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(recreated.node).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -3475,10 +3475,10 @@ async fn rename_evidence_excludes_a_conflicting_file_recreation() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(recreated.node).await.unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(recreated.node).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -3565,10 +3565,10 @@ async fn file_creation_open_blocks_only_conflicting_namespace_edits() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(opened.node).await.unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(opened.node).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -3626,10 +3626,10 @@ async fn existing_file_open_does_not_block_a_namespace_edit() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(opened.node).await.unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(opened.node).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -3694,8 +3694,8 @@ async fn direct_and_alias_descriptors_use_the_same_directory_identity() {
         .await
         .unwrap();
     for directory in [direct, alias, reused] {
-        control.push_release(Ok(()));
-        release(OpenNode::Directory(directory)).await.unwrap();
+        control.push_close(Ok(()));
+        close(OpenNode::Directory(directory)).await.unwrap();
     }
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
@@ -3786,8 +3786,8 @@ async fn target_move_and_remove_conflict_with_descendant_edits_through_aliases()
         .await
         .unwrap();
     for directory in [direct, alias] {
-        control.push_release(Ok(()));
-        release(OpenNode::Directory(directory)).await.unwrap();
+        control.push_close(Ok(()));
+        close(OpenNode::Directory(directory)).await.unwrap();
     }
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
@@ -3858,8 +3858,8 @@ async fn sandbox_equivalent_names_share_one_coordination_key() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -4042,8 +4042,8 @@ async fn symlink_alias_descriptors_preserve_object_identity_across_entry_move() 
         current_descendant,
         reused_source,
     ] {
-        control.push_release(Ok(()));
-        release(OpenNode::Directory(directory)).await.unwrap();
+        control.push_close(Ok(()));
+        close(OpenNode::Directory(directory)).await.unwrap();
     }
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
@@ -4125,8 +4125,8 @@ async fn directory_open_registers_before_a_conflicting_move_can_publish() {
         .await
         .unwrap();
     for directory in [raced, current] {
-        control.push_release(Ok(()));
-        release(OpenNode::Directory(directory)).await.unwrap();
+        control.push_close(Ok(()));
+        close(OpenNode::Directory(directory)).await.unwrap();
     }
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
@@ -4242,8 +4242,8 @@ async fn namespace_postconditions_retry_only_no_effect_and_accept_desired_state(
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -4288,8 +4288,8 @@ async fn remove_unknown_kind_change_invalidates_without_retry() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -4335,8 +4335,8 @@ async fn namespace_quota_precedes_pressure_and_proven_no_effect_can_recover_capa
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 
@@ -4379,8 +4379,8 @@ async fn namespace_quota_precedes_pressure_and_proven_no_effect_can_recover_capa
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -4475,8 +4475,8 @@ async fn successful_namespace_edit_does_not_consume_a_queued_observation_failure
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -4512,39 +4512,39 @@ async fn dropped_namespace_observer_keeps_sandbox_work_without_billing_close_cou
     gate.wait_started().await;
     observer.abort();
 
-    let close = tokio::spawn(close_window(
+    let window_close = tokio::spawn(close_window(
         window,
         Instant::now() + Duration::from_secs(1),
     ));
     tokio::time::sleep(Duration::from_millis(20)).await;
-    assert!(close.is_finished());
+    assert!(window_close.is_finished());
     assert_eq!(
         call_count(&control, "observe_allocation("),
         observations_before
     );
 
-    close.await.unwrap().unwrap();
+    window_close.await.unwrap().unwrap();
     gate.release();
     gate.wait_completed().await;
     assert_eq!(
         call_count(&control, "observe_allocation("),
         observations_before
     );
-    control.push_release(Ok(()));
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
 
 #[test]
-async fn unknown_synchronization_effect_invalidates_without_retry() {
+async fn unknown_flush_effect_invalidates_without_retry() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
     let node = OpenNode::File(open_file(&generation_handle, &control, 26).await);
-    control.push_synchronize(Err(sandbox_error("synchronize", std::io::ErrorKind::Other)));
+    control.push_flush(Err(sandbox_error("flush", std::io::ErrorKind::Other)));
 
     assert!(matches!(
-        synchronize(&generation_handle, &node, Synchronization::DataAndMetadata)
+        flush(&generation_handle, &node, FlushLevel::DataAndMetadata)
             .unwrap()
             .await,
         Err(Error::RuntimeInvalidated)
@@ -4553,13 +4553,13 @@ async fn unknown_synchronization_effect_invalidates_without_retry() {
         control
             .calls()
             .iter()
-            .filter(|call| call.starts_with("synchronize("))
+            .filter(|call| call.starts_with("flush("))
             .count(),
         1
     );
 
-    control.push_release(Ok(()));
-    release(node).await.unwrap();
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
@@ -4568,20 +4568,17 @@ async fn unknown_synchronization_effect_invalidates_without_retry() {
 }
 
 #[test]
-async fn unknown_release_effect_invalidates_and_still_drains_deletion() {
+async fn unknown_close_effect_invalidates_and_still_drains_deletion() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
     let node = OpenNode::File(open_file(&generation_handle, &control, 27).await);
-    control.push_release(Err(sandbox_error("release", std::io::ErrorKind::Other)));
+    control.push_close(Err(sandbox_error("close", std::io::ErrorKind::Other)));
 
-    assert!(matches!(
-        release(node).await,
-        Err(Error::RuntimeInvalidated)
-    ));
+    assert!(matches!(close(node).await, Err(Error::RuntimeInvalidated)));
     assert!(matches!(
         open(
             &generation_handle,
-            PathTarget::at_root(&generation_handle, "after-release-failure").unwrap(),
+            PathTarget::at_root(&generation_handle, "after-close-failure").unwrap(),
             OpenOptions::Existing {
                 expected: ObjectKind::File,
                 access: AccessMode::Read,
@@ -5042,7 +5039,7 @@ async fn managed_xfs_allocated_bytes_flow_through_resource_billing() {
         entry.durable_byte_seconds_delta() > 0,
         "authoritative managed-XFS allocation produced no durable storage charge"
     );
-    release(OpenNode::File(file)).await.unwrap();
+    close(OpenNode::File(file)).await.unwrap();
     delete(seal(resident)).await.unwrap();
 }
 
@@ -5176,8 +5173,8 @@ async fn partial_write_retries_only_the_unwritten_suffix() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -5222,8 +5219,8 @@ async fn failed_attempt_preserves_its_prefix_and_retries_only_its_suffix() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -5282,8 +5279,8 @@ async fn zero_progress_transient_failure_retries_without_observing_usage() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -5337,8 +5334,8 @@ async fn terminal_zero_progress_failure_invalidates_without_observing_usage() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -5379,8 +5376,8 @@ async fn dropped_terminal_write_observer_notifies_the_resident_generation() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -5445,8 +5442,8 @@ async fn unknown_effect_after_an_observed_prefix_invalidates_without_replaying_i
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -5493,8 +5490,8 @@ async fn successful_write_progress_does_not_consume_a_queued_observation_failure
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -5519,20 +5516,20 @@ async fn dropped_write_observer_keeps_call_lease_without_billing_close_coupling(
     write_gate.wait_started().await;
     observer.abort();
 
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
-    let close = tokio::spawn(close_window(
+    let window_close = tokio::spawn(close_window(
         window,
         Instant::now() + Duration::from_secs(1),
     ));
     let deletion = tokio::spawn(delete(seal(filesystem)));
     tokio::time::sleep(Duration::from_millis(20)).await;
-    assert!(close.is_finished());
+    assert!(window_close.is_finished());
     assert!(!deletion.is_finished());
     assert!(!has_call(&control, "delete_and_verify("));
 
-    close.await.unwrap().unwrap();
+    window_close.await.unwrap().unwrap();
     write_gate.release();
     write_gate.wait_completed().await;
     deletion.await.unwrap().unwrap();
@@ -5562,8 +5559,8 @@ async fn call_lease_blocks_deletion_before_sandbox_work_starts() {
     assert!(!has_call(&control, "write("));
     observer.abort();
 
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     let deletion = tokio::spawn(delete(seal(filesystem)));
     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -5590,11 +5587,11 @@ async fn unstarted_write_without_storage_metering_does_not_block_billing_close()
         Bytes::from_static(b"not-started"),
     )
     .unwrap();
-    let close = tokio::spawn(close_window(
+    let window_close = tokio::spawn(close_window(
         window,
         Instant::now() + Duration::from_secs(1),
     ));
-    tokio::time::timeout(Duration::from_secs(1), close)
+    tokio::time::timeout(Duration::from_secs(1), window_close)
         .await
         .unwrap()
         .unwrap()
@@ -5603,8 +5600,8 @@ async fn unstarted_write_without_storage_metering_does_not_block_billing_close()
 
     drop(unstarted);
     assert!(!has_call(&control, "write("));
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -5723,10 +5720,10 @@ async fn append_guard_covers_prefix_classification_suffix_retry_and_completion()
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
-    release(OpenNode::File(alias)).await.unwrap();
+    control.push_close(Ok(()));
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
+    close(OpenNode::File(alias)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -5829,8 +5826,8 @@ async fn append_coordination_does_not_block_positioned_writes() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -5885,10 +5882,10 @@ async fn append_coordination_is_independent_for_unrelated_files() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    control.push_release(Ok(()));
-    release(OpenNode::File(first_file)).await.unwrap();
-    release(OpenNode::File(second_file)).await.unwrap();
+    control.push_close(Ok(()));
+    control.push_close(Ok(()));
+    close(OpenNode::File(first_file)).await.unwrap();
+    close(OpenNode::File(second_file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -5925,8 +5922,8 @@ async fn zero_progress_write_attempt_uses_a_bounded_no_effect_retry() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -5979,8 +5976,8 @@ async fn successful_short_writes_advance_until_the_full_buffer_is_written() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -6038,8 +6035,8 @@ async fn no_effect_failure_after_prefix_returns_the_prefix_when_budget_is_exhaus
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -6091,8 +6088,8 @@ async fn unknown_write_effect_invalidates_instead_of_retrying() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -6148,8 +6145,8 @@ async fn unmanaged_storage_exhaustion_returns_without_retry_or_invalidation() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -6223,8 +6220,8 @@ async fn storage_exhaustion_uses_quota_facts_without_guessing_physical_pressure(
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -6297,8 +6294,8 @@ async fn quota_failure_after_progress_returns_the_prefix_without_pressure_retry(
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -6337,8 +6334,8 @@ async fn quota_exhaustion_never_requests_physical_recovery() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -6388,8 +6385,8 @@ async fn proven_physical_pressure_recovers_once_and_retries_only_the_suffix() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -6436,8 +6433,8 @@ async fn unavailable_pressure_authority_does_not_guess_or_retry() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -6497,8 +6494,8 @@ async fn denied_physical_recovery_returns_prefix_or_capacity_failure() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -6534,20 +6531,20 @@ async fn dropped_write_observer_keeps_recovery_without_billing_close_coupling() 
     observer.abort();
 
     control.push_delete_and_verify(Ok(()));
-    let close = tokio::spawn(close_window(
+    let window_close = tokio::spawn(close_window(
         window,
         Instant::now() + Duration::from_secs(1),
     ));
     let deletion = tokio::spawn(delete(seal(filesystem)));
     tokio::time::sleep(Duration::from_millis(20)).await;
-    assert!(close.is_finished());
+    assert!(window_close.is_finished());
     assert!(!deletion.is_finished());
     assert!(!has_call(&control, "delete_and_verify("));
 
-    close.await.unwrap().unwrap();
+    window_close.await.unwrap().unwrap();
     recovery.release();
-    control.push_release(Ok(()));
-    release(OpenNode::File(file)).await.unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
     deletion.await.unwrap().unwrap();
     assert_eq!(recovery.calls.load(Ordering::Acquire), 1);
     assert_eq!(
@@ -6565,15 +6562,15 @@ async fn dropping_delete_observer_keeps_verified_deletion_module_owned() {
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
     let generation_handle = resident_generation_handle(&filesystem);
     let file = open_file(&generation_handle, &control, 19).await;
-    control.push_release(Ok(()));
+    control.push_close(Ok(()));
     control.push_delete_and_verify(Ok(()));
-    let release_gate = control.block("release");
-    drop(release(OpenNode::File(file)));
-    release_gate.wait_started().await;
+    let close_gate = control.block("close");
+    drop(close(OpenNode::File(file)));
+    close_gate.wait_started().await;
 
     drop(delete(seal(filesystem)));
     assert!(!has_call(&control, "delete_and_verify("));
-    release_gate.release();
+    close_gate.release();
     tokio::time::timeout(Duration::from_secs(1), async {
         while !has_call(&control, "delete_and_verify(") {
             tokio::task::yield_now().await;
@@ -6639,10 +6636,10 @@ async fn read_only_attribute_targets_are_rejected_before_sandbox_work() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    control.push_release(Ok(()));
-    release(node).await.unwrap();
-    release(OpenNode::Directory(directory)).await.unwrap();
+    control.push_close(Ok(()));
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
+    close(OpenNode::Directory(directory)).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -6686,8 +6683,8 @@ async fn successful_set_size_does_not_observe_allocation() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(node).await.unwrap();
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -6775,8 +6772,8 @@ async fn resize_postconditions_accept_desired_retry_no_effect_and_invalidate_unk
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(node).await.unwrap();
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -6813,8 +6810,8 @@ async fn replay_time_restoration_accepts_a_read_only_descriptor() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(node).await.unwrap();
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -6881,8 +6878,8 @@ async fn timestamp_postconditions_preserve_keep_and_retry_only_proven_no_effect(
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(node).await.unwrap();
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -6922,8 +6919,8 @@ async fn successful_set_times_never_observes_allocation() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(node).await.unwrap();
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 
@@ -6959,8 +6956,8 @@ async fn successful_set_times_never_observes_allocation() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(node).await.unwrap();
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -7002,8 +6999,8 @@ async fn successful_resize_ignores_unrelated_observer_failure() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(node).await.unwrap();
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
@@ -7054,8 +7051,8 @@ async fn resize_quota_precedes_pressure_and_growth_can_use_proven_recovery() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(node).await.unwrap();
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 
@@ -7096,14 +7093,14 @@ async fn resize_quota_precedes_pressure_and_growth_can_use_proven_recovery() {
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(node).await.unwrap();
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
 
 #[test]
-async fn read_only_file_and_directory_synchronization_skips_billing_observation() {
+async fn read_only_file_and_directory_flush_skips_billing_observation() {
     let (filesystem, control, window) =
         authoritative_metered_resident(ResolvedStorageLimits::Unlimited, allocation(70, 2)).await;
     let generation_handle = resident_generation_handle(&filesystem);
@@ -7114,27 +7111,23 @@ async fn read_only_file_and_directory_synchronization_skips_billing_observation(
         open_directory_with_access(&generation_handle, &control, 70, AccessMode::Read).await,
     );
     let observations_before = call_count(&control, "observe_allocation(");
-    control.push_synchronize(Ok(()));
-    synchronize(&generation_handle, &file, Synchronization::Data)
+    control.push_flush(Ok(()));
+    flush(&generation_handle, &file, FlushLevel::Data)
         .unwrap()
         .await
         .unwrap();
-    control.push_synchronize(Ok(()));
-    synchronize(
-        &generation_handle,
-        &directory,
-        Synchronization::DataAndMetadata,
-    )
-    .unwrap()
-    .await
-    .unwrap();
-    let synchronizations: Vec<_> = control
+    control.push_flush(Ok(()));
+    flush(&generation_handle, &directory, FlushLevel::DataAndMetadata)
+        .unwrap()
+        .await
+        .unwrap();
+    let flushes: Vec<_> = control
         .calls()
         .into_iter()
-        .filter(|call| call.starts_with("synchronize("))
+        .filter(|call| call.starts_with("flush("))
         .collect();
-    assert!(synchronizations[0].contains("level=Data)"));
-    assert!(synchronizations[1].contains("level=DataAndMetadata)"));
+    assert!(flushes[0].contains("level=Data)"));
+    assert!(flushes[1].contains("level=DataAndMetadata)"));
     assert_eq!(
         call_count(&control, "observe_allocation("),
         observations_before
@@ -7143,23 +7136,23 @@ async fn read_only_file_and_directory_synchronization_skips_billing_observation(
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    control.push_release(Ok(()));
-    release(file).await.unwrap();
-    release(directory).await.unwrap();
+    control.push_close(Ok(()));
+    control.push_close(Ok(()));
+    close(file).await.unwrap();
+    close(directory).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
 
 #[test]
-async fn successful_synchronization_is_independent_from_storage_observer_failure() {
+async fn successful_flush_is_independent_from_storage_observer_failure() {
     let (filesystem, control, window) =
         authoritative_metered_resident(ResolvedStorageLimits::Unlimited, allocation(73, 2)).await;
     let generation_handle = resident_generation_handle(&filesystem);
     let node = OpenNode::File(open_file(&generation_handle, &control, 73).await);
-    control.push_synchronize(Ok(()));
+    control.push_flush(Ok(()));
     let observations_before = call_count(&control, "observe_allocation(");
-    synchronize(&generation_handle, &node, Synchronization::Data)
+    flush(&generation_handle, &node, FlushLevel::Data)
         .unwrap()
         .await
         .unwrap();
@@ -7171,15 +7164,15 @@ async fn successful_synchronization_is_independent_from_storage_observer_failure
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
-    control.push_release(Ok(()));
-    release(node).await.unwrap();
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
 
 #[test]
 #[timeout("5s")]
-async fn dropped_attribute_and_sync_observers_need_no_billing_close_coupling() {
+async fn dropped_attribute_and_flush_observers_need_no_billing_close_coupling() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
     let node = OpenNode::File(open_file(&generation_handle, &control, 71).await);
@@ -7208,13 +7201,13 @@ async fn dropped_attribute_and_sync_observers_need_no_billing_close_coupling() {
     );
     resize_gate.wait_started().await;
     observer.abort();
-    let close = tokio::spawn(close_window(
+    let window_close = tokio::spawn(close_window(
         window,
         Instant::now() + Duration::from_secs(1),
     ));
     tokio::time::sleep(Duration::from_millis(20)).await;
-    assert!(close.is_finished());
-    close.await.unwrap().unwrap();
+    assert!(window_close.is_finished());
+    window_close.await.unwrap().unwrap();
     resize_gate.release();
     resize_gate.wait_completed().await;
 
@@ -7223,17 +7216,11 @@ async fn dropped_attribute_and_sync_observers_need_no_billing_close_coupling() {
     let node2 = OpenNode::File(
         open_file_with_access(&generation_handle2, &control2, 72, AccessMode::Read).await,
     );
-    control2.push_synchronize(Ok(()));
-    let sync_gate = control2.block("synchronize");
-    let observer = tokio::spawn(
-        synchronize(
-            &generation_handle2,
-            &node2,
-            Synchronization::DataAndMetadata,
-        )
-        .unwrap(),
-    );
-    sync_gate.wait_started().await;
+    control2.push_flush(Ok(()));
+    let flush_gate = control2.block("flush");
+    let observer =
+        tokio::spawn(flush(&generation_handle2, &node2, FlushLevel::DataAndMetadata).unwrap());
+    flush_gate.wait_started().await;
     observer.abort();
     let close2 = tokio::spawn(close_window(
         window2,
@@ -7242,15 +7229,15 @@ async fn dropped_attribute_and_sync_observers_need_no_billing_close_coupling() {
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert!(close2.is_finished());
     close2.await.unwrap().unwrap();
-    sync_gate.release();
-    sync_gate.wait_completed().await;
+    flush_gate.release();
+    flush_gate.wait_completed().await;
 
-    control.push_release(Ok(()));
-    release(node).await.unwrap();
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
-    control2.push_release(Ok(()));
-    release(node2).await.unwrap();
+    control2.push_close(Ok(()));
+    close(node2).await.unwrap();
     control2.push_delete_and_verify(Ok(()));
     delete(seal(filesystem2)).await.unwrap();
 }
