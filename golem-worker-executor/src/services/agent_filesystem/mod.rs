@@ -99,8 +99,15 @@ impl AgentFilesystems {
             settings.cleanup_retry.clone(),
         )?;
         let space = observe_space_at_binding(provisioning.volume())?;
-        if let FilesystemSpace::Observed { total_bytes, .. } = space {
-            settings.pressure.validate_capacity(total_bytes)?;
+        if let FilesystemSpace::Observed {
+            total_bytes,
+            total_filesystem_objects,
+            ..
+        } = space
+        {
+            settings
+                .pressure
+                .validate_capacity(total_bytes, total_filesystem_objects)?;
         }
         Ok(Self {
             provisioning,
@@ -301,5 +308,30 @@ mod tests {
         if let Err(error) = result {
             panic!("binding rejected a pressure target equal to observed capacity: {error}");
         }
+    }
+
+    #[test]
+    fn agent_filesystems_binding_rejects_object_pressure_target_above_observed_capacity() {
+        let settings = FilesystemStorageConfig::default();
+        let observed_total_objects = settings.pressure.target_available_filesystem_objects() - 1;
+
+        let result = with_binding_space_observation(
+            FilesystemSpace::Observed {
+                total_bytes: u64::MAX,
+                available_bytes: u64::MAX,
+                total_filesystem_objects: observed_total_objects,
+                available_filesystem_objects: observed_total_objects,
+            },
+            || AgentFilesystems::new(&settings),
+        );
+
+        let error = result
+            .err()
+            .expect("binding must reject an object pressure target above observed capacity");
+        assert!(
+            error
+                .to_string()
+                .contains("fit filesystem pressure object target within managed capacity")
+        );
     }
 }

@@ -589,6 +589,52 @@ struct LeaseState {
     cleanup: NativeCleanup,
 }
 
+struct RestoringLeaseState<'a> {
+    slot: &'a Mutex<Option<LeaseState>>,
+    state: Option<LeaseState>,
+}
+
+impl<'a> RestoringLeaseState<'a> {
+    fn take(slot: &'a Mutex<Option<LeaseState>>) -> Option<Self> {
+        let state = slot
+            .lock()
+            .expect("sandbox filesystem lease lock poisoned")
+            .take()?;
+        Some(Self {
+            slot,
+            state: Some(state),
+        })
+    }
+
+    fn cleanup(&mut self) -> &mut NativeCleanup {
+        &mut self
+            .state
+            .as_mut()
+            .expect("armed lease state must be present")
+            .cleanup
+    }
+
+    fn disarm(mut self) {
+        drop(
+            self.state
+                .take()
+                .expect("armed lease state must be present")
+                .lifecycle,
+        );
+    }
+}
+
+impl Drop for RestoringLeaseState<'_> {
+    fn drop(&mut self) {
+        if let Some(state) = self.state.take() {
+            *self
+                .slot
+                .lock()
+                .expect("sandbox filesystem lease lock poisoned") = Some(state);
+        }
+    }
+}
+
 enum NativeCleanup {
     Unmanaged {
         path: PathBuf,
@@ -982,43 +1028,22 @@ impl SandboxFilesystem {
 
     pub(crate) async fn delete_and_verify(&self) -> Result<(), FilesystemStorageError> {
         self.root.close();
-        let Some(mut state) = self
-            .lease
-            .state
-            .lock()
-            .expect("sandbox filesystem lease lock poisoned")
-            .take()
-        else {
+        let Some(mut state) = RestoringLeaseState::take(&self.lease.state) else {
             return Ok(());
         };
-        match state.cleanup.delete().await {
-            Ok(()) => {
-                drop(state.lifecycle);
-                Ok(())
-            }
-            Err(error) => {
-                *self
-                    .lease
-                    .state
-                    .lock()
-                    .expect("sandbox filesystem lease lock poisoned") = Some(state);
-                Err(error)
-            }
-        }
+        state.cleanup().delete().await?;
+        state.disarm();
+        Ok(())
     }
 
     pub(crate) fn delete_and_verify_blocking(&self) -> Result<(), FilesystemStorageError> {
         self.root.close();
-        let Some(mut state) = self
-            .lease
-            .state
-            .lock()
-            .expect("sandbox filesystem lease lock poisoned")
-            .take()
-        else {
+        let Some(mut state) = RestoringLeaseState::take(&self.lease.state) else {
             return Ok(());
         };
-        state.cleanup.delete_blocking()
+        state.cleanup().delete_blocking()?;
+        state.disarm();
+        Ok(())
     }
 
     #[cfg(all(test, target_os = "linux"))]
@@ -1802,6 +1827,26 @@ mod tests {
             .await
             .unwrap();
         assert!(!root.exists());
+    }
+
+    #[test]
+    async fn cancelling_armed_cleanup_restores_lease_state() {
+        let parent = tempfile::tempdir().unwrap();
+        let provisioning = unmanaged_provisioning(parent.path().to_path_buf());
+        let filesystem = provisioning.create_fresh(name()).await.unwrap();
+
+        let mut cleanup = Box::pin(async {
+            let _state = RestoringLeaseState::take(&filesystem.lease.state).unwrap();
+            std::future::pending::<()>().await;
+        });
+        assert!(futures::poll!(cleanup.as_mut()).is_pending());
+        assert!(filesystem.lease.state.lock().unwrap().is_none());
+        drop(cleanup);
+        assert!(filesystem.lease.state.lock().unwrap().is_some());
+
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
     }
 
     #[test]

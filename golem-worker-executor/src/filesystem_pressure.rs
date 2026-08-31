@@ -30,15 +30,24 @@ use std::time::{Duration, Instant};
 static RECOVERY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 impl FilesystemPressureConfig {
-    pub(crate) fn validate_capacity(&self, total_bytes: u64) -> Result<(), FilesystemStorageError> {
-        if self.target_available_bytes() <= total_bytes {
-            Ok(())
-        } else {
-            Err(FilesystemStorageError::verification(
+    pub(crate) fn validate_capacity(
+        &self,
+        total_bytes: u64,
+        total_filesystem_objects: u64,
+    ) -> Result<(), FilesystemStorageError> {
+        if self.target_available_bytes() > total_bytes {
+            return Err(FilesystemStorageError::verification(
                 "fit filesystem pressure byte target within managed capacity",
                 std::path::Path::new("<configuration>"),
-            ))
+            ));
         }
+        if self.target_available_filesystem_objects() > total_filesystem_objects {
+            return Err(FilesystemStorageError::verification(
+                "fit filesystem pressure object target within managed capacity",
+                std::path::Path::new("<configuration>"),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -51,6 +60,7 @@ pub(crate) struct FilesystemCapacityTarget {
 }
 
 impl FilesystemCapacityTarget {
+    #[cfg(test)]
     pub(crate) fn available_bytes(
         available_bytes: u64,
         reclamation_observation_attempts: u32,
@@ -78,7 +88,6 @@ impl FilesystemCapacityTarget {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn combined(
         available_bytes: u64,
         available_filesystem_objects: u64,
@@ -127,6 +136,7 @@ impl CapacityReclamation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FilesystemWritePressurePolicy {
     minimum_available_bytes: u64,
+    minimum_available_filesystem_objects: u64,
     target: FilesystemCapacityTarget,
 }
 
@@ -134,8 +144,10 @@ impl FilesystemWritePressurePolicy {
     pub(crate) fn from_config(config: &FilesystemPressureConfig) -> Self {
         Self {
             minimum_available_bytes: config.minimum_available_bytes(),
-            target: FilesystemCapacityTarget::available_bytes(
+            minimum_available_filesystem_objects: config.minimum_available_filesystem_objects(),
+            target: FilesystemCapacityTarget::combined(
                 config.target_available_bytes(),
+                config.target_available_filesystem_objects(),
                 config.reclamation_observation_attempts(),
                 config.reclamation_observation_delay(),
             ),
@@ -147,8 +159,10 @@ impl FilesystemWritePressurePolicy {
             observation,
             FilesystemSpace::Observed {
                 available_bytes,
+                available_filesystem_objects,
                 ..
             } if available_bytes <= self.minimum_available_bytes
+                || available_filesystem_objects <= self.minimum_available_filesystem_objects
         )
     }
 }
@@ -572,12 +586,17 @@ mod tests {
         let policy = FilesystemWritePressurePolicy::from_config(&config);
 
         assert_eq!(policy.minimum_available_bytes, 5);
+        assert_eq!(policy.minimum_available_filesystem_objects, 7);
         assert_eq!(policy.target.available_bytes, Some(10));
+        assert_eq!(policy.target.available_filesystem_objects, Some(12));
         assert_eq!(policy.target.reclamation_observation_attempts, 3);
         assert_eq!(
             policy.target.reclamation_observation_delay,
             Duration::from_millis(4)
         );
+        assert!(!policy.physical_pressure(space(6, 8)));
+        assert!(policy.physical_pressure(space(5, 8)));
+        assert!(policy.physical_pressure(space(6, 7)));
     }
 
     #[test]

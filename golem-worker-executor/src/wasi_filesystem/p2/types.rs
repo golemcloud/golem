@@ -1476,7 +1476,7 @@ mod tests {
             ))),
             ErrorCode::NotPermitted
         );
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         {
             let sandbox = FilesystemStorageError::io(
                 "hard link",

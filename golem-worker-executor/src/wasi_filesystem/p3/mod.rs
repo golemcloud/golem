@@ -3120,7 +3120,7 @@ mod tests {
         assert_eq!(p2, P2ErrorCode::CrossDevice);
         assert!(matches!(p3, types::ErrorCode::CrossDevice));
 
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         {
             let storage_error = || {
                 FilesystemStorageError::io(

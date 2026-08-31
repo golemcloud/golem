@@ -14,8 +14,8 @@
 
 use super::*;
 use rustix::fs::{
-    FlockOperation, Mode, OFlags, StatVfsMountFlags, flock, fstatfs, fstatvfs, ioctl_ficlone,
-    mkdirat, openat,
+    AtFlags, FlockOperation, Mode, OFlags, StatVfsMountFlags, StatxAttributes, StatxFlags, flock,
+    fstatfs, fstatvfs, ioctl_ficlone, mkdirat, openat, statx,
 };
 use rustix::ioctl::{Getter, Setter, ioctl};
 use std::collections::HashMap;
@@ -27,6 +27,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 const XFS_SUPER_MAGIC: u64 = 0x5846_5342;
+// XFS reserves inode 128 for the filesystem root.
+const XFS_ROOT_INODE: u64 = 128;
 const XFS_BASIC_BLOCK_BYTES: u64 = 512;
 const XQM_PRJQUOTA: u32 = 2;
 const Q_XGETQUOTA: u32 = (b'X' as u32) << 8 | 3;
@@ -155,13 +157,6 @@ impl ManagedProvisioning {
     ) -> Result<Self, FilesystemStorageError> {
         let root_fd = File::open(root)
             .map_err(|error| FilesystemStorageError::io("open managed XFS root", root, error))?;
-        flock(&root_fd, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
-            FilesystemStorageError::io(
-                "acquire exclusive ownership of managed XFS root",
-                root,
-                errno_to_io(error),
-            )
-        })?;
         let filesystem = fstatfs(&root_fd).map_err(|error| {
             FilesystemStorageError::io("inspect managed XFS root", root, errno_to_io(error))
         })?;
@@ -171,6 +166,14 @@ impl ManagedProvisioning {
                 root,
             ));
         }
+        validate_managed_xfs_root_location(&root_fd, root)?;
+        flock(&root_fd, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
+            FilesystemStorageError::io(
+                "acquire exclusive ownership of managed XFS root",
+                root,
+                errno_to_io(error),
+            )
+        })?;
         let filesystem_block_bytes = u64::try_from(filesystem.f_bsize).map_err(|_| {
             FilesystemStorageError::verification("validate managed XFS filesystem block size", root)
         })?;
@@ -693,6 +696,49 @@ impl ManagedProvisioning {
             Ok(())
         }
     }
+}
+
+fn validate_managed_xfs_root_location(
+    root_fd: &File,
+    root: &Path,
+) -> Result<(), FilesystemStorageError> {
+    let location = statx(
+        root_fd,
+        "",
+        AtFlags::EMPTY_PATH | AtFlags::NO_AUTOMOUNT,
+        StatxFlags::empty(),
+    )
+    .map_err(|error| {
+        FilesystemStorageError::io(
+            "inspect managed XFS root mount location",
+            root,
+            errno_to_io(error),
+        )
+    })?;
+    let inode = root_fd.metadata().map_err(|error| {
+        FilesystemStorageError::io("inspect managed XFS root inode", root, error)
+    })?;
+    if !managed_xfs_root_location_is_valid(
+        inode.ino(),
+        location.stx_attributes,
+        location.stx_attributes_mask,
+    ) {
+        return Err(FilesystemStorageError::verification(
+            "validate managed XFS root is the filesystem mount root",
+            root,
+        ));
+    }
+    Ok(())
+}
+
+fn managed_xfs_root_location_is_valid(
+    inode: u64,
+    attributes: StatxAttributes,
+    attributes_mask: StatxAttributes,
+) -> bool {
+    inode == XFS_ROOT_INODE
+        && attributes_mask.contains(StatxAttributes::MOUNT_ROOT)
+        && attributes.contains(StatxAttributes::MOUNT_ROOT)
 }
 
 pub(super) fn observe_space(
@@ -1477,6 +1523,32 @@ mod tests {
         assert!(proof.matches_device(17));
         assert!(!proof.matches_device(18));
         assert!(validated_managed_xfs_name_mode(0, identity).is_none());
+    }
+
+    #[test]
+    fn managed_root_must_be_the_xfs_filesystem_mount_root() {
+        let mount_root = StatxAttributes::MOUNT_ROOT;
+
+        assert!(managed_xfs_root_location_is_valid(
+            XFS_ROOT_INODE,
+            mount_root,
+            mount_root,
+        ));
+        assert!(!managed_xfs_root_location_is_valid(
+            XFS_ROOT_INODE + 1,
+            mount_root,
+            mount_root,
+        ));
+        assert!(!managed_xfs_root_location_is_valid(
+            XFS_ROOT_INODE,
+            StatxAttributes::empty(),
+            mount_root,
+        ));
+        assert!(!managed_xfs_root_location_is_valid(
+            XFS_ROOT_INODE,
+            StatxAttributes::empty(),
+            StatxAttributes::empty(),
+        ));
     }
 
     #[test]
