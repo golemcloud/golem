@@ -1,305 +1,79 @@
 ---
 name: golem-scala-development
-description: "Compile, publish, and test the Golem Scala SDK. Use when working on the sdks/scala/ subtree: building the SDK, publishing locally, compiling/running the example demo, regenerating the agent_guest.wasm, or debugging end-to-end deployment."
+description: "Compiles, tests, and publishes the Golem Scala SDK and its sbt/Mill plugins. Use for changes under sdks/scala, including public APIs, generated consumers, local publication, or guest-runtime integration."
 ---
 
 # Golem Scala SDK Development
 
-The Golem SDK for Scala.js lives under `sdks/scala/` in the Golem repository. It targets the Golem WIT API v1.5.0 and produces WASM components that run on the Golem platform via a QuickJS-based guest runtime.
+Work from `sdks/scala/` unless a command says repository root. The Scala SDK is independent of the root Rust build: `cargo make build` does not build it.
 
-## Repository Layout
+## Authoritative build matrix
 
-```
-sdks/scala/
-├── core/           # golem-scala-core (Scala.js facades, agent framework) — JS-only
-├── model/          # golem-scala-model (WIT value types, RPC types)
-├── macros/         # golem-scala-macros (Scala 3 macros, JVM-only)
-├── codegen/        # Shared build-time code generation library
-├── sbt/            # golem-scala-sbt (SBT plugin, Scala 2.12)
-├── mill/           # Mill plugin
-├── wit/            # WIT definitions (main.wit + deps/)
-│   ├── main.wit    # Primary WIT — package golem:agent-guest, world agent-guest
-│   ├── deps/       # WIT dependencies (copied from golem repo)
-│   └── dts/        # Generated TypeScript d.ts (source of truth for JS exports)
-├── scripts/        # generate-agent-guest-wasm.sh
-├── example/        # Standalone demo project (separate sbt build)
-├── test-agents/    # Test agent definitions + implementations for integration tests
-├── integration-tests/ # Integration test suite
-└── docs/           # Documentation
-```
+- JDK 17+, sbt 1.12.x (`project/build.properties` is authoritative)
+- Scala **3.8.2** for SDK modules and the Mill plugin build
+- Scala **2.12.21** only for sbt 1.x plugin loading and its shared codegen dependency
+- Scala **3.3.7** in the current Mill consumer fixtures; this is fixture configuration, not a general Scala.js limit
+- Mill **1.1.8** and Scala.js **1.22.0** in the current Mill build
 
-## Scala Versions
+Scala 2 applications are not supported. `project/plugins.sbt`, `build.sbt`, and `mill/build.mill` are the version sources of truth. Always select the intended Scala version explicitly, especially with an sbt client that may retain session state.
 
-- **Scala 3.8.2** — All Golem Scala 3 projects. Prefix sbt commands with `++3.8.2` (without `!` — only golem projects with 3.8.2 in crossScalaVersions are affected).
-- **Scala 2.12.21** — The SBT plugin (`golemScalaSbt`) only. Use `++2.12.21!` (the `!` forces override).
+## Current project IDs
 
-> **Important**: `sbt --client` mode preserves Scala version across invocations. Always specify the version explicitly to avoid version drift.
+Use sbt project IDs, not artifact names:
 
-## SBT Project Names
+- `modelJVM`, `modelJS`, `core`, `macros`, `codegen`
+- `sbtPlugin`, `testAgents`, `integrationTests`
+- fixtures: `emptyAutoRegisterFixture`, `middlewareGuestLinkFixture`
 
-| Project | Description |
-|---------|-------------|
-| `core` | Core agent framework, Scala.js facades (JS-only) |
-| `modelJS` / `modelJVM` | WIT value types, RPC types |
-| `macros` | Scala 3 macros (JVM only, cross-used at compile time) |
-| `codegen` | Shared build-time code generation library (Scala 2.12 + 3.x cross-compiled) |
-| `sbtPlugin` | SBT plugin (Scala 2.12) |
-| `testAgents` | Test agents for integration tests |
-| `integrationTests` | Integration test suite |
+The published sbt plugin is loaded with `addSbtPlugin("dev.zio" % "zio-golem-sbt" % version)` and enabled as `golem.sbt.GolemPlugin`. The Mill plugin is loaded as `dev.zio::zio-golem-mill` and mixed in via `golem.mill.GolemAutoRegister`. Check the example and Mill README for complete consumer setup.
 
-## Choosing Scala Tests
+## Compile and test
 
-Start with the affected project and Scala version. Examples from `sdks/scala/`:
+Start with affected projects, then compile `testAgents` for public API, macro, codegen, or plugin changes:
 
 ```bash
-sbt "++3.8.2; core/test"
-sbt "++3.8.2; modelJVM/test; modelJS/test"
-sbt "++3.8.2; macros/test"
-sbt "++3.8.2; codegen/test"
-sbt "++2.12.21!; sbtPlugin/test"
-```
-
-Compile affected consumers such as `testAgents` when public APIs, macros, code generation, or plugin behavior changes. Run focused integration tests when behavior reaches generated applications or the Golem platform.
-
-The only broad test alias is:
-
-| Alias | What it runs |
-|-------|-------------|
-| `sbt golemTestAll` | Scala 3.8.2 `modelJVM`, `modelJS`, `core`, and `macros` tests, then `testAgents/fastLinkJS` |
-
-`golemTestAll` does not run `codegen` tests, Scala 2.12 tests, sbt plugin tests, or integration tests. Add the relevant commands explicitly for broad changes:
-
-```bash
-# Shared codegen and sbt plugin behavior across their supported Scala versions
-sbt "++3.8.2; codegen/test; ++2.12.21!; codegen/test; sbtPlugin/test"
-
-# Generated-application/platform behavior
-GOLEM_TS_PACKAGES_PATH=<TS_PACKAGES_PATH> sbt "++3.8.2; integrationTests/test"
-```
-
-Run `golemTestAll` plus the applicable explicit commands for broad shared-model, codegen/plugin, generated-application, release-sensitive, or unclear changes. Isolated project changes need only focused coverage.
-
-Integration tests require the TypeScript SDK packages path. The `GOLEM_TS_PACKAGES_PATH` env var is forwarded automatically by `build.sbt`, but `sbt --client` doesn't propagate env vars. Use non-client `sbt` instead:
-
-```bash
-cd sdks/scala
-GOLEM_TS_PACKAGES_PATH=<TS_PACKAGES_PATH> sbt "++3.8.2; integrationTests/test"
-```
-
-For formatting, use the affected project's `scalafmtCheckAll` task where possible; use root `scalafmtCheckAll` for cross-project formatting changes. Apply `scalafmtAll` only when formatting fixes are needed.
-
-## Compiling
-
-From `sdks/scala/`:
-
-```bash
-# Compile test agents (good smoke test)
-sbt "++3.8.2; testAgents/fastLinkJS"
-
-# Compile core
 sbt "++3.8.2; core/compile"
-
-# Compile model
-sbt "++3.8.2; modelJS/compile"
+sbt "++3.8.2; modelJVM/test; modelJS/test"
+sbt "++3.8.2; macros/test; codegen/test"
+sbt "++2.12.21!; codegen/test; sbtPlugin/test"
+sbt "++3.8.2; testAgents/fastLinkJS"
 ```
 
-Use the sbt logging pattern:
-```bash
-cd sdks/scala
-LOG=".git/agent-logs/sbt-$(date +%s)-$$.log"
-mkdir -p "$(dirname "$LOG")"
-sbt -Dsbt.color=false "++3.8.2; testAgents/fastLinkJS" >"$LOG" 2>&1
-echo "Exit: $? | Log: $LOG"
-# Query: tail -50 "$LOG" or grep -i error "$LOG"
-```
+`sbt golemTestAll` covers Scala 3 model/core/macros tests and links `testAgents`; it deliberately excludes codegen, Scala 2.12, sbt-plugin, and integration tests. Add those checks explicitly when affected. Use scoped `scalafmtCheckAll`; run `scalafmtAll` only to fix formatting.
 
-## Publishing Locally
+## Local publication
 
-The `example` project depends on `0.0.0-SNAPSHOT` artifacts. All golem projects have `publish / skip := true` by default, so you must override it.
-
-### Step 1: Publish Dependencies + Golem Libraries (Scala 3.8.2)
+The canonical SDK alias is:
 
 ```bash
 cd sdks/scala
-sbt '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal'
+sbt golemPublishLocal
 ```
 
-### Step 2: Publish Codegen + SBT Plugin (Scala 2.12.21)
-
-The SBT plugin depends on `codegen`, so both must be published for Scala 2.12:
+For the repository's complete local prerequisite flow (WIT sync, all three guest runtimes, all cross-published modules, and marker caching), use:
 
 ```bash
-cd sdks/scala
-sbt '++2.12.21!; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; codegen/publishLocal; sbtPlugin/publishLocal'
+# Repository root
+cargo make build-sdk-scala
 ```
 
-> **Note**: The `golemPublishLocal` alias exists in `build.sbt` but may need `set every (publish / skip) := false` prepended to work correctly. The explicit commands above are the most reliable approach.
+Delete `sdks/scala/target/.local-publish-marker` before rerunning that cargo-make task when inputs changed. For release/CI-sensitive work, copy the explicit publish matrix from current `Makefile.toml` or `.github/workflows/ci.yaml`; do not preserve an older hand-written sequence in documentation.
 
-## Building the Example Project
+## Runtime and WIT changes
 
-The `example` project at `sdks/scala/example/` is a standalone sbt project (its own `build.sbt`, `project/plugins.sbt`). It depends on the SDK at `0.0.0-SNAPSHOT`.
+The Scala.js core exposes the current schema-based host surface. Useful authorities are:
 
-### Prerequisites
-1. Publish the SDK locally (both steps above).
+- `HostApi.scala` for typed agent IDs, registry/metadata, oplog, update/fork/revert, promises, and related `golem:api/host@1.5.0` facades;
+- `host/DurabilityApi.scala` for schema-typed synchronous and asynchronous custom durable calls;
+- `runtime/rpc/` and `RpcCodegen.scala` for invocation and mode-aware client signatures;
+- `wit/main.wit` for three Preview 3 guest worlds and current versioned dependencies.
 
-### Clean Build
-```bash
-cd sdks/scala/example
-rm -rf target project/target .bsp .generated .golem
-sbt -batch -no-colors -Dsbt.supershell=false compile
-```
+Durable generated clients return plain values/`Unit` plus cancellation tokens where applicable. Ephemeral invocations return metadata-bearing `InvocationResult`, `InvocationReceipt`, `CancelableAsyncInvocation`, and `CancelableInvocationReceipt` values. Do not describe the old wasm-rpc resource API without checking these files.
 
-### Key SBT Tasks
-- `sbt golemPrepare` — Generates `.generated/agent_guest.wasm` (extracted from plugin resources) and `.generated/scala-js-template.yaml` (component manifest template).
-- `sbt compile` — Compiles the Scala agent code.
-- `sbt fastLinkJS` — Links the Scala.js bundle (produces the JS that QuickJS will run).
+After WIT or guest-role changes, sync and regenerate as described by `golem-scala-base-image`. The script uses `wasm-rquickjs` 0.4.2, Preview 3, and `wasm32-wasip2`; generated WASMs are ignored while ordinary-role d.ts files are tracked.
 
-### Project Structure
-- `build.sbt` — Enables `ScalaJSPlugin` + `GolemPlugin`, sets `scalaJSUseMainModuleInitializer := false`, ESModule output.
-- `project/plugins.sbt` — Adds `golem-scala-sbt` and `sbt-scalajs`.
-- `golem.yaml` — Declares app name, includes `.generated/scala-js-template.yaml`, defines component `scala:demo`.
-- `repl-counter.rib` — Rib script for end-to-end testing via `golem-cli repl`.
+## Example and end-to-end work
 
-## End-to-End Testing
+`example/` is a standalone consumer. Its README, `build.sbt`, `golem.yaml`, and `run.sh` are authoritative. Publish locally before building it. Use the repository binary name `golem`, not the retired `golem-cli`, and do not assume the example reproduces every test-agent or multi-component scenario.
 
-### Start the Local Golem Server
-```bash
-golem-cli server run --clean
-```
-This starts the all-in-one Golem server on `localhost:9881`.
-
-### Using run.sh
-```bash
-cd sdks/scala/example
-bash run.sh
-```
-
-The script does:
-1. `sbt golemPrepare` — Generate wasm + manifest template
-2. `golem-cli build --yes` — Build the WASM component (links QuickJS runtime + Scala.js bundle)
-3. `golem-cli deploy --yes` — Deploy to local Golem server
-4. `golem-cli repl scala:demo --script-file repl-counter.rib` — Run the demo
-
-### Manual Steps
-```bash
-cd sdks/scala/example
-sbt golemPrepare
-golem-cli build --yes
-golem-cli deploy --yes --local
-golem-cli repl scala:demo --script-file repl-counter.rib --local
-```
-
-## Regenerating agent_guest.wasm
-
-The agent_guest.wasm is the QuickJS-based WASM runtime that wraps the Scala.js bundle. Regenerate it when WIT definitions change.
-
-### Script
-```bash
-cd sdks/scala
-./scripts/generate-agent-guest-wasm.sh
-```
-
-### What It Does
-1. Stages WIT package from `sdks/scala/wit/` (skipping the `all/` dep directory).
-2. Generates TypeScript d.ts definitions via `wasm-rquickjs generate-dts` → saved to `sdks/scala/wit/dts/`.
-3. Generates QuickJS wrapper crate via `wasm-rquickjs generate-wrapper-crate`.
-4. Builds with `cargo component build --release`.
-5. Installs the wasm into `sdks/scala/sbt/src/main/resources/golem/wasm/agent_guest.wasm` and `sdks/scala/mill/resources/golem/wasm/agent_guest.wasm`.
-6. Copies d.ts files to `sdks/scala/wit/dts/`.
-
-### Prerequisites
-Before running the script, sync WIT dependencies from the repo root:
-```bash
-cargo make wit
-```
-
-### Requirements
-- `wasm-rquickjs` v0.1.0 (`cargo install wasm-rquickjs-cli@0.1.0`)
-- Rust toolchain + `cargo-component` (`cargo install cargo-component`)
-
-## WIT Management
-
-### Files
-- **Primary**: `sdks/scala/wit/main.wit` — The `golem:agent-guest` package definition.
-- **Dependencies**: `sdks/scala/wit/deps/` — Copied from `wit/deps/` in the Golem repo root.
-- **TypeScript reference**: `sdks/scala/wit/dts/` — Generated d.ts files showing exact JS types expected by the wasm runtime. `exports.d.ts` is the source of truth for what the JS module must export.
-
-### Updating WIT Dependencies
-WIT dependencies are managed the same way as the Rust and TypeScript SDKs — via `cargo make wit` from the repository root:
-```bash
-cargo make wit
-```
-This copies all WIT packages from `wit/deps/` into `sdks/scala/wit/deps/`. The results are committed to the repository.
-
-### TypeScript SDK Reference
-The TypeScript SDK at `sdks/ts/wit/` is the reference for correct WIT definitions when in doubt.
-
-## RPC Client Architecture
-
-The Scala SDK's remote agent call path uses `async-invoke-and-await` from the WIT `golem:agent/host@1.5.0` interface, matching the TypeScript SDK behavior:
-
-### Host functions used
-
-| WIT function | Scala SDK usage |
-|---|---|
-| `wasm-rpc.async-invoke-and-await` | Default `apply()` and `cancelable()` — returns `FutureInvokeResult`, polled via `subscribe()` → `pollable.promise()` → `get()` |
-| `wasm-rpc.invoke` | Fire-and-forget `trigger()` |
-| `wasm-rpc.invoke-and-await` | Kept for backward compatibility but not used by generated clients |
-| `wasm-rpc.schedule-invocation` | `scheduleAt()` |
-| `wasm-rpc.schedule-cancelable-invocation` | `scheduleCancelableAt()` |
-
-### Key files
-
-| File | Role |
-|---|---|
-| `core/js/.../host/WasmRpcApi.scala` | Scala.js `@JSImport` facades for `WasmRpc`, `FutureInvokeResult` (with `subscribe`/`get`/`cancel`) |
-| `core/js/.../rpc/RpcInvoker.scala` | Trait defining `invokeAndAwait`, `asyncInvokeAndAwait`, `cancelableAsyncInvokeAndAwait`, `invoke`, `schedule*` |
-| `core/js/.../rpc/RemoteAgentClient.scala` | `WasmRpcInvoker` — implements async polling via `pollable.promise()` → `FutureInterop.fromPromise` |
-| `core/js/.../rpc/AgentClientRuntime.scala` | `ResolvedAgent` — `runAwaitable` uses `asyncInvokeAndAwait`; `runCancelableAwaitable` returns `(Future, CancellationToken)` |
-| `core/js/.../rpc/AbstractRemoteMethod.scala` | Base class for generated per-method wrappers (`awaitWith`, `cancelableAwaitWith`, `triggerWith`, `scheduleWith`) |
-| `core/js/.../rpc/CancellationToken.scala` | Wraps a `() => Unit` cancel function (from `FutureInvokeResult.cancel()` or `RawCancellationToken`) |
-| `codegen/.../rpc/RpcCodegen.scala` | Generates `XClient` objects with `apply`, `cancelable`, `trigger`, `scheduleAt`, `scheduleCancelableAt` |
-
-### Async behavior
-
-- `apply()` returns a genuinely async `Future[Out]` — the WASM event loop is yielded while waiting
-- `cancelable()` returns `(Future[Out], CancellationToken)` — calling `token.cancel()` invokes `FutureInvokeResult.cancel()` (best-effort)
-- Multiple concurrent RPC calls are possible since each uses its own `FutureInvokeResult` resource
-- `trigger()`, `scheduleAt()`, `scheduleCancelableAt()` remain synchronous (wrapped in `Future`)
-
-## Known Issue: Multi-Component App Scala.js Linking Error
-
-When a Scala component is part of a **multi-component** (mixed-language) app, the `build_mixed_language_app` CLI test fails with:
-
-```
-Referring to non-existent class golem.runtime.__generated.autoregister.component_name.RegisterAgents
-```
-
-**Root cause** (two issues):
-
-1. **Source directory mismatch**: The common `build.sbt` configures `.in(file("."))` (root project), so sbt scans `./src/main/scala/`. But in a multi-component app, Scala sources are in a subdirectory like `scala-main/src/main/scala/`. The SBT plugin's source generator finds zero `@agentImplementation` classes → `RegisterAgents.scala` is never generated.
-
-2. **Literal `component_name` in common template**: The common `build.sbt` has `golemBasePackage := Some("component_name")`. Common templates have no `ComponentName` context (it's `None`), so the placeholder is never substituted. The module initializer references `golem.runtime.__generated.autoregister.component_name.RegisterAgents` but the class doesn't exist.
-
-**Impact**: The Scala template works for standalone (single-language) apps because sources land at the root `src/main/scala/`. It fails only in multi-component apps where each language's sources are in a component subdirectory.
-
-**Fix needed**: The GolemPlugin must auto-discover source directories from component subdirectories, and either auto-infer `golemBasePackage` from discovered sources or the template system must pass the component name to the common `build.sbt`.
-
-**Relevant files**:
-- `cli/golem-cli/templates/scala/common/build.sbt` — template with literal `component_name`
-- `cli/golem-cli/src/app/template/generator.rs` — template transform logic (common templates get no `ComponentName` transform)
-- `sdks/scala/sbt/src/main/scala/golem/sbt/GolemPlugin.scala` — SBT plugin source generator and module initializer
-- `sdks/scala/codegen/src/main/scala/golem/codegen/autoregister/AutoRegisterCodegen.scala` — returns empty result when no impls found but module initializer still references generated class
-
-## Common Errors and Solutions
-
-| Error | Cause | Solution |
-|-------|-------|----------|
-| `Referring to non-existent class ...RegisterAgents` | Multi-component app: sbt can't find sources in component subdirectory, so `RegisterAgents` is never generated | See "Known Issue: Multi-Component App" above |
-| `Function discover-agent-types not found in interface golem:agent/guest@1.5.0` | Stale `agent_guest.wasm` built from old WIT | Regenerate wasm with `generate-agent-guest-wasm.sh` |
-| `Cannot find exported JS function guest.discoverAgentTypes` | Scala.js Guest object doesn't match WIT signature | Update `Guest.scala` to export all 4 functions with correct v1.5.0 signatures (including `principal` param) |
-| `YAML deserialization error` in `golem.yaml` about `BuildCommand` | Old GolemPlugin manifest format | Update `GolemPlugin.scala` to use v1.5.0 format (`componentWasm`/`outputWasm`) |
-| `Provided exports: (empty)` after deploy | QuickJS fails to evaluate the JS module silently | JS crashes during initialization — check for ESM strict-mode issues, bundle size limits, or import path mismatches |
-| `publish / skip` preventing local publish | Default setting in `build.sbt` | Use `set every (publish / skip) := false` in the sbt command |
-| Wrong Scala 2.12 version for plugin | Alias or cached sbt version uses wrong 2.12.x | Use the explicit `++2.12.21!` command to force the correct version |
-| `Error downloading cloud.golem:golem-scala-codegen_2.12:0.0.0-SNAPSHOT` | The `codegen` library was not published locally for Scala 2.12 | Publish codegen: `sbt '++2.12.21!; set ...; codegen/publishLocal'` (see Publishing Locally section) |
+For platform behavior use the dedicated integration-test skill. Do not run heavyweight Scala or integration builds merely to verify documentation edits.
