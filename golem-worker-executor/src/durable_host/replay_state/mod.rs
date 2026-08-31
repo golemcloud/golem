@@ -22,7 +22,7 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AtomicOplogIndex, DurableFunctionType, HostRequest, HostResponse, HostResponseGolemApiFork,
-    LogLevel, OplogEntry, OplogIndex, OplogPayload, OplogScopeProjection,
+    LogLevel, OplogEntry, OplogIndex, OplogPayload, OplogScopeProjection, ScopeScanState,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
@@ -117,6 +117,21 @@ pub struct ClaimedConcurrentStart {
     pub function_name: HostFunctionName,
     pub durable_function_type: DurableFunctionType,
     pub timestamp: Timestamp,
+}
+
+pub(crate) enum ScopeStartClaimOutcome {
+    Claimed {
+        begin_index: OplogIndex,
+        handle: ReplayCallHandle,
+    },
+    Missing,
+    MissingSwitchedToLive,
+}
+
+enum StartClaimAttempt {
+    Claimed(ReplayCallHandle, Box<OplogEntry>),
+    Blocked,
+    Missing,
 }
 
 mod abandoned;
