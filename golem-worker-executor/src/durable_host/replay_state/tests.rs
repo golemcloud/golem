@@ -191,6 +191,22 @@ fn test_agent_id() -> OwnedAgentId {
     }
 }
 
+async fn test_replay_state(
+    owned_agent_id: OwnedAgentId,
+    oplog: Arc<dyn Oplog>,
+    skipped_regions: DeletedRegions,
+    initial_snapshot_skip_end: Option<OplogIndex>,
+) -> Result<ReplayState, WorkerExecutorError> {
+    ReplayState::new_for_owner(
+        owned_agent_id,
+        oplog,
+        skipped_regions,
+        initial_snapshot_skip_end,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
+    )
+    .await
+}
+
 fn noop() -> OplogEntry {
     OplogEntry::NoOp {
         timestamp: Timestamp::now_utc(),
@@ -1017,7 +1033,7 @@ async fn replay_state_over(entries: Vec<OplogEntry>) -> ReplayState {
         oplog.add(entry).await;
     }
     let oplog: Arc<dyn Oplog> = oplog;
-    ReplayState::new(test_agent_id(), oplog, DeletedRegions::default(), None)
+    test_replay_state(test_agent_id(), oplog, DeletedRegions::default(), None)
         .await
         .expect("failed to build replay state")
 }
@@ -1049,7 +1065,7 @@ async fn held_completed_reconstruction() -> (
     oplog.add(noop()).await;
     oplog.add(start).await;
     oplog.add(end_for(2, 1)).await;
-    let replay = ReplayState::new(
+    let replay = test_replay_state(
         test_agent_id(),
         oplog.clone(),
         DeletedRegions::default(),
@@ -1073,7 +1089,7 @@ async fn held_completed_reconstruction() -> (
 async fn growing_replay_target_revokes_published_live_state() {
     let oplog = Arc::new(InMemoryOplog::new());
     oplog.add(noop()).await;
-    let replay = ReplayState::new(
+    let replay = test_replay_state(
         test_agent_id(),
         oplog.clone(),
         DeletedRegions::default(),
@@ -1340,7 +1356,7 @@ async fn permission_events_replay_after_invocation_wallet_pin() {
         oplog.add(entry).await;
     }
     let oplog: Arc<dyn Oplog> = oplog;
-    let replay_state = ReplayState::new(owned_agent_id, oplog, DeletedRegions::default(), None)
+    let replay_state = test_replay_state(owned_agent_id, oplog, DeletedRegions::default(), None)
         .await
         .expect("failed to build replay state");
 
@@ -1466,7 +1482,7 @@ async fn permission_events_are_recovered_from_skipped_regions() {
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
-    let replay_state = ReplayState::new(test_agent_id(), oplog, skipped, None)
+    let replay_state = test_replay_state(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
 
@@ -1501,7 +1517,7 @@ async fn snapshot_prefix_suppresses_replayed_permission_events() {
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
-    let replay_state = ReplayState::new(
+    let replay_state = test_replay_state(
         test_agent_id(),
         oplog,
         skipped,
@@ -1628,7 +1644,7 @@ async fn start_claim_reports_matching_deleted_region_while_replay_continues() {
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
+    let rs = test_replay_state(test_agent_id(), oplog, skipped, None)
         .await
         .unwrap();
 
@@ -1668,7 +1684,7 @@ async fn request_matching_downloads_uncached_external_payloads() {
     }
 
     let oplog: Arc<dyn Oplog> = oplog;
-    let rs = ReplayState::new(test_agent_id(), oplog, DeletedRegions::default(), None)
+    let rs = test_replay_state(test_agent_id(), oplog, DeletedRegions::default(), None)
         .await
         .unwrap();
 
@@ -3149,7 +3165,7 @@ async fn marker_in_deleted_region_delivers_end_normally() {
             end: OplogIndex::from_u64(4),
         }])
         .build();
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
+    let rs = test_replay_state(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
     let handle = rs
@@ -3192,7 +3208,7 @@ async fn delivered_marker_with_deleted_start_is_skipped_as_orphan() {
             end: OplogIndex::from_u64(3),
         }])
         .build();
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
+    let rs = test_replay_state(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
 
@@ -3218,7 +3234,7 @@ async fn duplicate_completion_discarded_markers_fail_construction() {
         oplog.add(entry).await;
     }
     let oplog: Arc<dyn Oplog> = oplog;
-    let err = ReplayState::new(test_agent_id(), oplog, DeletedRegions::default(), None)
+    let err = test_replay_state(test_agent_id(), oplog, DeletedRegions::default(), None)
         .await
         .expect_err("duplicate markers must fail replay state construction");
     assert!(
@@ -3240,7 +3256,7 @@ async fn conflicting_completion_markers_fail_construction() {
         oplog.add(entry).await;
     }
     let oplog: Arc<dyn Oplog> = oplog;
-    let err = ReplayState::new(test_agent_id(), oplog, DeletedRegions::default(), None)
+    let err = test_replay_state(test_agent_id(), oplog, DeletedRegions::default(), None)
         .await
         .expect_err("conflicting markers must fail replay state construction");
     assert!(
@@ -3262,7 +3278,7 @@ async fn marker_recorded_at_runtime_is_visible_to_replay() {
         oplog.add(entry).await;
     }
     let oplog: Arc<dyn Oplog> = oplog;
-    let rs = ReplayState::new(
+    let rs = test_replay_state(
         test_agent_id(),
         oplog.clone(),
         DeletedRegions::default(),
@@ -4032,7 +4048,7 @@ async fn replay_finished_emitted_when_skipped_region_reaches_target() {
         start: OplogIndex::from_u64(3),
         end: OplogIndex::from_u64(4),
     }]);
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
+    let rs = test_replay_state(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
 
@@ -4598,7 +4614,7 @@ async fn orphan_end_with_deleted_start_is_skipped() {
         start: OplogIndex::from_u64(2),
         end: OplogIndex::from_u64(2),
     }]);
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
+    let rs = test_replay_state(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
 
@@ -4637,7 +4653,7 @@ async fn orphan_cancelled_with_deleted_start_is_skipped() {
         start: OplogIndex::from_u64(2),
         end: OplogIndex::from_u64(2),
     }]);
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
+    let rs = test_replay_state(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
 
@@ -4664,7 +4680,7 @@ async fn positional_reader_skips_orphan_terminal() {
         start: OplogIndex::from_u64(2),
         end: OplogIndex::from_u64(2),
     }]);
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
+    let rs = test_replay_state(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
 
@@ -4688,7 +4704,7 @@ async fn deleted_terminal_reports_incomplete() {
         start: OplogIndex::from_u64(3),
         end: OplogIndex::from_u64(3),
     }]);
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
+    let rs = test_replay_state(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
 
@@ -4817,7 +4833,7 @@ async fn replay_skips_deleted_regions_fuzz() {
             start: OplogIndex::from_u64(s),
             end: OplogIndex::from_u64(e),
         }));
-        let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
+        let rs = test_replay_state(test_agent_id(), oplog, skipped, None)
             .await
             .expect("failed to build replay state");
 

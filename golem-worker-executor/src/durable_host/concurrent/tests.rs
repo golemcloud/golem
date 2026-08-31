@@ -369,7 +369,7 @@ async fn live_delivery_token(
         })
         .await;
     let seed_oplog_dyn: Arc<dyn Oplog> = seed_oplog;
-    let replay_state = ReplayState::new(
+    let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
             agent_id: golem_common::model::AgentId {
@@ -380,6 +380,7 @@ async fn live_delivery_token(
         seed_oplog_dyn,
         golem_common::model::regions::DeletedRegions::default(),
         None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
     )
     .await
     .expect("failed to build replay state");
@@ -464,7 +465,7 @@ async fn completion_delivery_markers_preserve_handoff_order() {
         })
         .await;
     let seed_oplog_dyn: Arc<dyn Oplog> = seed_oplog;
-    let replay_state = ReplayState::new(
+    let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
             agent_id: golem_common::model::AgentId {
@@ -475,6 +476,7 @@ async fn completion_delivery_markers_preserve_handoff_order() {
         seed_oplog_dyn,
         golem_common::model::regions::DeletedRegions::default(),
         None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
     )
     .await
     .expect("failed to build replay state");
@@ -704,7 +706,7 @@ async fn tail_gated_token_over_crash_tail(
         oplog.add(entry).await;
     }
     let oplog_dyn: Arc<dyn Oplog> = oplog.clone();
-    let replay_state = ReplayState::new(
+    let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
             agent_id: golem_common::model::AgentId {
@@ -715,6 +717,7 @@ async fn tail_gated_token_over_crash_tail(
         oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
         None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
     )
     .await
     .expect("failed to build replay state");
@@ -1178,7 +1181,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
     assert_eq!(permit_counter.load(Ordering::Acquire), 1);
 
     let persist_oplog: Arc<dyn Oplog> = oplog.clone();
-    let persist_replay_state = ReplayState::new(
+    let persist_replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
             agent_id: golem_common::model::AgentId {
@@ -1189,6 +1192,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
         persist_oplog.clone(),
         golem_common::model::regions::DeletedRegions::default(),
         None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
     )
     .await
     .expect("failed to build replay state");

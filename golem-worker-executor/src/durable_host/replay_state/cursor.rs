@@ -1678,22 +1678,6 @@ impl CursorTx<'_> {
 }
 
 impl ReplayState {
-    pub async fn new(
-        owned_agent_id: OwnedAgentId,
-        oplog: Arc<dyn Oplog>,
-        skipped_regions: DeletedRegions,
-        initial_snapshot_skip_end: Option<OplogIndex>,
-    ) -> Result<Self, WorkerExecutorError> {
-        Self::new_for_owner(
-            owned_agent_id,
-            oplog,
-            skipped_regions,
-            initial_snapshot_skip_end,
-            crate::durable_host::tool::operation::OwnerToolOperations::new(),
-        )
-        .await
-    }
-
     pub(crate) async fn new_for_owner(
         owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
