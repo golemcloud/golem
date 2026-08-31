@@ -71,18 +71,17 @@ struct GrantedSlot {
     raw: Option<OwnedSemaphorePermit>,
     account: Arc<AccountScheduler>,
     account_id: AccountId,
-}
-
-impl Drop for GrantedSlot {
-    fn drop(&mut self) {
-        if let Some(raw) = self.raw.take() {
-            // Return the raw permit to the semaphore first so it is available
-            // for the next queued agent's synchronous try-acquire.
+    fn drop(&mut self){
+        if let Some(raw)=self.raw.take(){
             drop(raw);
-            try_grant_next_sync(&self.account, &self.account_id);
+            let account = self.account.clone();
+            let account_id=self.account_id.clone();
+            tokio::spawn(async move{
+                try_grant_next_sync(&account_id);
+            });
         }
-    }
 }
+    
 
 impl GrantedSlot {
     /// Take the raw permit out, suppressing this slot's `Drop` bookkeeping.
