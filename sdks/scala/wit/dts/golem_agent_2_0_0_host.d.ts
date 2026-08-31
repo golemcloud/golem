@@ -159,7 +159,7 @@ declare module 'golem:agent/host@2.0.0' {
     tag: 'remote-internal-error'
     val: string
   } |
-  /** The remote agent operation was rejected with an agent-domain error */
+  /** The remote endpoint returned an agent-domain error */
   {
     tag: 'remote-agent-error'
     val: AgentError
