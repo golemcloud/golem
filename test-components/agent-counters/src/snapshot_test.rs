@@ -10,6 +10,9 @@ trait SnapshotCounter {
     fn busy_for(&mut self, millis: u32) -> u32;
     fn oplog_heavy(&mut self, entries: u32) -> u32;
     fn get(&self) -> u32;
+    /// Which build this agent is running, so a replay across a build change is
+    /// detectable. 
+    fn component_version(&self) -> u32;
     fn was_recovered_from_snapshot(&self) -> bool;
 }
 
@@ -51,6 +54,10 @@ impl SnapshotCounter for SnapshotCounterImpl {
 
     fn get(&self) -> u32 {
         self.count
+    }
+
+    fn component_version(&self) -> u32 {
+        1
     }
 
     fn was_recovered_from_snapshot(&self) -> bool {

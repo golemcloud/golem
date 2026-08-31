@@ -46,6 +46,10 @@ inherit_test_dep!(
     #[tagged_as("agent_update_v2")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("agent_counters")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 pub struct F1Blocker {
@@ -1242,6 +1246,209 @@ async fn agent_can_be_invoked_after_manual_snapshot_update_and_restart(
     assert_eq!(result, data_value!(0u64));
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
+
+    Ok(())
+}
+
+/// A second manual update on the same agent. The first one leaves a snapshot
+/// baseline behind, and everything after it still has to be replayed unless the
+/// pending update's own override survives.
+#[test]
+#[tracing::instrument]
+async fn manual_update_on_idle_twice(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter_id = agent_id!("SnapshotCounter", "twice");
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+
+    for _ in 0..3 {
+        executor
+            .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+            .await?;
+    }
+
+    // Both updates move forward, to two revisions carrying the same build, so
+    // nothing here depends on direction or on a behaviour change.
+    let first = executor
+        .update_component(&component.id, "it_agent_counters_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, first.revision, false)
+        .await?;
+    let after_first = executor
+        .invoke_and_await_agent(&component, &counter_id, "get", data_value!())
+        .await?;
+
+    let second = executor
+        .update_component(&component.id, "it_agent_counters_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, second.revision, false)
+        .await?;
+    let after_second = executor
+        .invoke_and_await_agent(&component, &counter_id, "get", data_value!())
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+
+    assert_ne!(second.revision, first.revision);
+    assert_eq!(after_first, data_value!(3u32));
+    assert_eq!(after_second, data_value!(3u32));
+    assert_eq!(metadata.component_revision, second.revision);
+    assert_eq!(update_counts(&metadata), (0, 2, 0));
+
+    Ok(())
+}
+
+/// A manual update to a revision carrying an earlier build. Automatic update
+/// cannot do this once any recorded invocation diverges, which is what makes
+/// the snapshot path the one a rollback has to use.
+#[test]
+#[tracing::instrument]
+async fn manual_update_on_idle_to_earlier_component(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter_id = agent_id!("SnapshotCounter", "rollback");
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+
+    for _ in 0..3 {
+        executor
+            .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+            .await?;
+    }
+
+    let forward = executor
+        .update_component(&component.id, "it_agent_counters_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, forward.revision, false)
+        .await?;
+    let after_forward = executor
+        .invoke_and_await_agent(&component, &counter_id, "get", data_value!())
+        .await?;
+
+    // Re-uploading the original build as a new revision is what a rollback is.
+    let back = executor
+        .update_component(&component.id, "it_agent_counters_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, back.revision, false)
+        .await?;
+    let after_rollback = executor
+        .invoke_and_await_agent(&component, &counter_id, "get", data_value!())
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+
+    // The snapshot has to carry the agent's state across both builds.
+    assert_eq!(after_forward, data_value!(3u32));
+    assert_eq!(after_rollback, data_value!(3u32));
+    assert_eq!(metadata.component_revision, back.revision);
+    assert_eq!(update_counts(&metadata), (0, 2, 0));
+
+    Ok(())
+}
+
+/// An automatic update on an agent that has already had a manual one.
+///
+/// The manual update's snapshot is the authoritative replay baseline, so a later
+/// automatic update must replay only the suffix after it. Replaying from the
+/// start would repeat the pre-migration history, and here that history cannot
+/// replay: it recorded a `component_version` of 1 under a build that now
+/// answers 2, so divergence detection would fail the update.
+///
+/// Two separate mechanisms skip that prefix, and either one alone is enough, so
+/// this test does not attribute the skip to one of them. It goes red when both
+/// are gone.
+#[test]
+#[tracing::instrument]
+async fn auto_update_on_idle_after_manual_update(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter_id = agent_id!("SnapshotCounter", "auto-after-manual");
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+    // Recorded under the original build, and unreplayable under any other one.
+    let version_before = executor
+        .invoke_and_await_agent(&component, &counter_id, "component_version", data_value!())
+        .await?;
+
+    let migrated = executor
+        .update_component(&component.id, "it_agent_counters_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, migrated.revision, false)
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+
+    // Same build again, so nothing after the snapshot can diverge.
+    let later = executor
+        .update_component(&component.id, "it_agent_counters_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, later.revision, false)
+        .await?;
+    let count = executor
+        .invoke_and_await_agent(&component, &counter_id, "get", data_value!())
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+
+    assert_eq!(version_before, data_value!(1u32));
+    assert_eq!(count, data_value!(2u32));
+    assert_eq!(metadata.component_revision, later.revision);
+    // One manual then one automatic, both successful and neither failed.
+    assert_eq!(update_counts(&metadata), (0, 2, 0));
 
     Ok(())
 }
