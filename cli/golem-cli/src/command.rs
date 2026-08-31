@@ -1189,16 +1189,26 @@ pub mod environment {
         /// Grant a published tool release to an environment
         Grant(EnvironmentToolGrantArgs),
         /// List active tool grants in an environment
-        List { environment: EnvironmentReference },
+        List {
+            /// Environment reference
+            environment: EnvironmentReference,
+        },
         /// Delete a tool grant
-        Delete { grant_id: EnvironmentToolGrantId },
+        Delete {
+            /// Environment tool grant ID
+            grant_id: EnvironmentToolGrantId,
+        },
         /// Restore a deleted tool grant
-        Restore { grant_id: EnvironmentToolGrantId },
+        Restore {
+            /// Environment tool grant ID
+            grant_id: EnvironmentToolGrantId,
+        },
     }
 
     #[derive(Debug, Args)]
     #[command(group(ArgGroup::new("release").required(true).multiple(false).args(["release_id", "account"])))]
     pub struct EnvironmentToolGrantArgs {
+        /// Environment reference
         pub environment: EnvironmentReference,
         /// Published tool release ID
         #[arg(long)]
