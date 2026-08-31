@@ -496,10 +496,10 @@ struct PreparedToolCall {
 }
 
 enum ToolCallPreparation {
-    Ready(PreparedToolCall),
+    Ready(Box<PreparedToolCall>),
     Rejected {
         request: Box<HostRequestGolemToolInvoke>,
-        response: ToolInvokeResponse,
+        response: Box<ToolInvokeResponse>,
         stdin: Option<StreamReader<u8>>,
     },
 }
@@ -555,9 +555,9 @@ where
                     empty_tool_input(),
                     has_stdin,
                 )),
-                response: Err(SerializableToolRpcError::ProtocolError(format!(
+                response: Box::new(Err(SerializableToolRpcError::ProtocolError(format!(
                     "invalid tool input: {error}"
-                ))),
+                )))),
                 stdin,
             });
         }
@@ -573,7 +573,7 @@ where
         )
         .await
     {
-        Ok(ToolActivationOutcome::Ready(activation)) => activation,
+        Ok(ToolActivationOutcome::Ready(activation)) => *activation,
         Ok(ToolActivationOutcome::NotBound) => {
             return Ok(ToolCallPreparation::Rejected {
                 request: Box::new(invocation_request(
@@ -583,10 +583,10 @@ where
                     input,
                     has_stdin,
                 )),
-                response: Err(SerializableToolRpcError::Denied(format!(
+                response: Box::new(Err(SerializableToolRpcError::Denied(format!(
                     "tool '{}' is not bound to agent type '{agent_type}'",
                     rpc.tool_name
-                ))),
+                )))),
                 stdin,
             });
         }
@@ -599,10 +599,10 @@ where
                     input,
                     has_stdin,
                 )),
-                response: Err(SerializableToolRpcError::NotFound(format!(
+                response: Box::new(Err(SerializableToolRpcError::NotFound(format!(
                     "tool '{}' is not registered",
                     rpc.tool_name
-                ))),
+                )))),
                 stdin,
             });
         }
@@ -616,9 +616,9 @@ where
                     input,
                     has_stdin,
                 )),
-                response: Err(SerializableToolRpcError::RemoteInternalError(
+                response: Box::new(Err(SerializableToolRpcError::RemoteInternalError(
                     error.to_string(),
-                )),
+                ))),
                 stdin,
             });
         }
@@ -639,7 +639,7 @@ where
                     input,
                     has_stdin,
                 )),
-                response: Err(SerializableToolRpcError::ProtocolError(error)),
+                response: Box::new(Err(SerializableToolRpcError::ProtocolError(error))),
                 stdin,
             });
         }
@@ -650,9 +650,9 @@ where
         Err(error) => {
             return Ok(ToolCallPreparation::Rejected {
                 request: Box::new(request),
-                response: Err(SerializableToolRpcError::RemoteInternalError(
+                response: Box::new(Err(SerializableToolRpcError::RemoteInternalError(
                     error.to_string(),
-                )),
+                ))),
                 stdin,
             });
         }
@@ -676,7 +676,9 @@ where
         Err(error) => {
             return Ok(ToolCallPreparation::Rejected {
                 request: Box::new(request),
-                response: Err(SerializableToolRpcError::ProtocolError(error.to_string())),
+                response: Box::new(Err(SerializableToolRpcError::ProtocolError(
+                    error.to_string(),
+                ))),
                 stdin,
             });
         }
@@ -692,18 +694,18 @@ where
         Err(error) => {
             return Ok(ToolCallPreparation::Rejected {
                 request: Box::new(request),
-                response: Err(SerializableToolRpcError::Denied(error.to_string())),
+                response: Box::new(Err(SerializableToolRpcError::Denied(error.to_string()))),
                 stdin,
             });
         }
     };
 
-    Ok(ToolCallPreparation::Ready(PreparedToolCall {
+    Ok(ToolCallPreparation::Ready(Box::new(PreparedToolCall {
         stdin,
         request,
         permit,
         dispatch_target,
-    }))
+    })))
 }
 
 async fn close_stdin<U, D>(
@@ -1022,6 +1024,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                 response,
                 stdin,
             } => {
+                let response = *response;
                 close_stdin(accessor, stdin).await?;
                 let handle = DurableCallSession::<GolemToolRpcInvoke, Cancellable>::start_access(
                     accessor,
@@ -1043,7 +1046,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                     accessor.with(|mut access| project_tool_unit(response.result, access.get()))
                 );
             }
-            ToolCallPreparation::Ready(prepared) => prepared,
+            ToolCallPreparation::Ready(prepared) => *prepared,
         };
 
         let handle = DurableCallSession::<GolemToolRpcInvoke, Cancellable>::start_access(
@@ -1137,6 +1140,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                 response,
                 stdin,
             } => {
+                let response = *response;
                 close_stdin(accessor, stdin).await?;
                 let handle =
                     DurableCallSession::<GolemToolRpcInvokeAndAwait, Cancellable>::start_access(
@@ -1156,7 +1160,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                     .await?;
                 return Ok(project_tool_response(accessor, response.result));
             }
-            ToolCallPreparation::Ready(prepared) => prepared,
+            ToolCallPreparation::Ready(prepared) => *prepared,
         };
 
         let handle = DurableCallSession::<GolemToolRpcInvokeAndAwait, Cancellable>::start_access(
@@ -1256,6 +1260,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                 response,
                 stdin,
             } => {
+                let response = *response;
                 close_stdin(accessor, stdin).await?;
                 let handle =
                     DurableCallSession::<GolemToolRpcAsyncInvokeAndAwait, Cancellable>::start_access(
@@ -1279,7 +1284,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                     })?)
                 });
             }
-            ToolCallPreparation::Ready(prepared) => prepared,
+            ToolCallPreparation::Ready(prepared) => *prepared,
         };
         let handle =
             DurableCallSession::<GolemToolRpcAsyncInvokeAndAwait, Cancellable>::start_access(

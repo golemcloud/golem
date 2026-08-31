@@ -3145,13 +3145,11 @@ fn parse_component_dependency_reference(
         }
     };
 
-    if name.is_empty() {
-        if matches!(source, SubjectSource::Local { .. }) {
-            validation.add_error(format!(
-                "Invalid {kind} dependency. Dependency name must not be empty"
-            ));
-            return None;
-        }
+    if name.is_empty() && matches!(source, SubjectSource::Local { .. }) {
+        validation.add_error(format!(
+            "Invalid {kind} dependency. Dependency name must not be empty"
+        ));
+        return None;
     }
 
     Some((source, name))

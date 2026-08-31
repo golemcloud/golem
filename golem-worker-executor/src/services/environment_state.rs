@@ -184,7 +184,7 @@ pub struct ToolActivationSnapshot {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ToolActivationOutcome {
-    Ready(ToolActivationSnapshot),
+    Ready(Box<ToolActivationSnapshot>),
     NotBound,
     NotRegistered,
 }
@@ -197,7 +197,7 @@ pub enum ToolDispatchTarget {
         implementation_version: String,
         deployment_revision: golem_common::model::deployment::DeploymentRevision,
         provision: ToolProvisionConfig,
-        binding: CompiledToolBinding,
+        binding: Box<CompiledToolBinding>,
         filesystem: FilesystemCapability,
     },
 }
@@ -240,7 +240,7 @@ impl ToolActivationSnapshot {
                 implementation_version,
                 deployment_revision: self.registered_tool.deployment_revision,
                 provision: self.registered_tool.provision,
-                binding: self.binding,
+                binding: Box::new(self.binding),
                 filesystem: self.filesystem,
             }),
         }
@@ -319,11 +319,13 @@ pub fn get_tool_activation_from_deployment(
         }
     };
 
-    Ok(ToolActivationOutcome::Ready(ToolActivationSnapshot {
-        filesystem,
-        registered_tool: registered_tool.clone(),
-        binding: binding.clone(),
-    }))
+    Ok(ToolActivationOutcome::Ready(Box::new(
+        ToolActivationSnapshot {
+            filesystem,
+            registered_tool: registered_tool.clone(),
+            binding: binding.clone(),
+        },
+    )))
 }
 
 impl From<ToolDeploymentState> for ToolDiscoverySnapshot {
@@ -778,7 +780,7 @@ mod tests {
     ) -> ToolActivationSnapshot {
         match get_tool_activation_from_deployment(Some(deployment), agent_type, tool_name).unwrap()
         {
-            ToolActivationOutcome::Ready(activation) => activation,
+            ToolActivationOutcome::Ready(activation) => *activation,
             outcome => panic!("expected ready activation, got {outcome:?}"),
         }
     }
@@ -997,7 +999,7 @@ mod tests {
         assert_eq!(actual_implementation_version, implementation_version);
         assert_eq!(deployment_revision, expected_revision);
         assert_eq!(provision, expected_provision);
-        assert_eq!(binding, expected_binding);
+        assert_eq!(*binding, expected_binding);
         assert_eq!(filesystem, FilesystemCapability::Capable);
     }
 

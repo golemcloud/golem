@@ -240,11 +240,10 @@ impl Services {
 
         let builtin_plugin_owner_account_id = config
             .initial_accounts
-            .values()
-            .find(|a| a.role == golem_common::model::auth::AccountRole::BuiltinPluginOwner)
-            .map(|a| a.id)
+            .get("builtin_plugin_owner")
+            .map(|account| account.id)
             .ok_or(anyhow!(
-                "No builtin-plugin-owner account found in initial_accounts"
+                "No builtin_plugin_owner account found in initial_accounts"
             ))?;
 
         let builtin_tool_owner_account_id = config

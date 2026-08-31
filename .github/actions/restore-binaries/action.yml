@@ -30,4 +30,4 @@ runs:
       shell: bash
       run: |
         mkdir -pv target/debug
-        find target/nextest-archive/target/dev-ci -maxdepth 1 -type f | xargs mv -t target/debug/
+        find target/nextest-archive/target/dev-ci -maxdepth 1 -type f | xargs cp -t target/debug/

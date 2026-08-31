@@ -238,9 +238,11 @@ mod tests {
     fn deployment_hash(tool: RemoteToolDeployment, published: bool) -> Hash {
         Deployment {
             remote_tools: BTreeMap::from([("grep".to_string(), tool.into())]),
-            published_tools: published
-                .then(|| BTreeSet::from(["local-tool".to_string()]))
-                .unwrap_or_default(),
+            published_tools: if published {
+                BTreeSet::from(["local-tool".to_string()])
+            } else {
+                BTreeSet::new()
+            },
             ..Deployment::default()
         }
         .hash()

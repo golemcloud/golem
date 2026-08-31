@@ -120,20 +120,20 @@ fn remote_tool_request(
     release: ToolReleaseReference,
     bind_to_host_api: bool,
 ) -> RemoteToolDeployment {
-    let agent_bindings = bind_to_host_api
-        .then(|| {
-            BTreeMap::from([(
-                AgentTypeName("GolemHostApi".to_string()),
-                ToolBindingInput {
-                    version: None,
-                    parameters: NormalizedJsonValue::new(json!({"index": "consumer-documents"})),
-                    account: None,
-                    secret_keys_readable: consumer_secret_scope(),
-                    secret_keys_revealable: consumer_secret_scope(),
-                },
-            )])
-        })
-        .unwrap_or_default();
+    let agent_bindings = if bind_to_host_api {
+        BTreeMap::from([(
+            AgentTypeName("GolemHostApi".to_string()),
+            ToolBindingInput {
+                version: None,
+                parameters: NormalizedJsonValue::new(json!({"index": "consumer-documents"})),
+                account: None,
+                secret_keys_readable: consumer_secret_scope(),
+                secret_keys_revealable: consumer_secret_scope(),
+            },
+        )])
+    } else {
+        BTreeMap::new()
+    };
     RemoteToolDeployment {
         name: ToolName::try_from("search").unwrap(),
         release,
@@ -152,21 +152,21 @@ fn remote_tool_hash_input(
     grant: &EnvironmentToolGrantWithDetails,
     bind_to_host_api: bool,
 ) -> DiffRemoteToolDeployment {
-    let bindings = bind_to_host_api
-        .then(|| {
-            BTreeMap::from([(
-                AgentTypeName("GolemHostApi".to_string()),
-                EffectiveToolBinding {
-                    parameters: NormalizedJsonValue::new(json!({
-                        "index": "consumer-documents"
-                    })),
-                    secret_keys_readable: consumer_secret_scope(),
-                    secret_keys_revealable: consumer_secret_scope(),
-                    filesystem_access: ToolFilesystemAccess::Unset,
-                },
-            )])
-        })
-        .unwrap_or_default();
+    let bindings = if bind_to_host_api {
+        BTreeMap::from([(
+            AgentTypeName("GolemHostApi".to_string()),
+            EffectiveToolBinding {
+                parameters: NormalizedJsonValue::new(json!({
+                    "index": "consumer-documents"
+                })),
+                secret_keys_readable: consumer_secret_scope(),
+                secret_keys_revealable: consumer_secret_scope(),
+                filesystem_access: ToolFilesystemAccess::Unset,
+            },
+        )])
+    } else {
+        BTreeMap::new()
+    };
     DiffRemoteToolDeployment {
         release_id: grant.release.id,
         version: grant.release.version.clone(),

@@ -1587,7 +1587,7 @@ mod tests {
 
         let compiled = context.compile_tools_with_remote(
             golem_common::model::deployment::DeploymentRevision::INITIAL,
-            &[remote.clone()],
+            std::slice::from_ref(&remote),
             &mut errors,
             &mut warnings,
         );

@@ -383,6 +383,23 @@ fn is_user_grantable(
     origin == ToolReleaseOrigin::Ordinary || availability == Some(SystemToolAvailability::Grantable)
 }
 
+fn authorize_account_tool_release_permission(
+    auth: &AuthCtx,
+    account_email: &AccountEmail,
+    verb: AccountToolReleaseVerb,
+    name: ToolName,
+) -> Result<(), AuthorizationError> {
+    auth.authorize_permission(&PermissionTarget::AccountToolRelease(
+        ClassPermissionTarget {
+            verb: Some(verb),
+            owner: AccountOwnerPattern::Account {
+                account: account_email.clone(),
+            },
+            resource: AccountToolReleaseResourcePattern::Name(name),
+        },
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::is_user_grantable;
@@ -405,21 +422,4 @@ mod tests {
             Some(SystemToolAvailability::Ambient)
         ));
     }
-}
-
-fn authorize_account_tool_release_permission(
-    auth: &AuthCtx,
-    account_email: &AccountEmail,
-    verb: AccountToolReleaseVerb,
-    name: ToolName,
-) -> Result<(), AuthorizationError> {
-    auth.authorize_permission(&PermissionTarget::AccountToolRelease(
-        ClassPermissionTarget {
-            verb: Some(verb),
-            owner: AccountOwnerPattern::Account {
-                account: account_email.clone(),
-            },
-            resource: AccountToolReleaseResourcePattern::Name(name),
-        },
-    ))
 }
