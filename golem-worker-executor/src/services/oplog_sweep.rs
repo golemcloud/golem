@@ -585,6 +585,13 @@ impl OplogSweeper {
         let mut environments: HashMap<ComponentId, Option<EnvironmentId>> =
             HashMap::with_capacity(components.len());
         for component_id in components {
+            // Same boundary as the archive phase below. A cold cache makes each of these a
+            // registry call, and there is one per component the page turned up, so a shutdown
+            // should not have to wait the list out. Leaving the rest unresolved costs nothing:
+            // once cancelled, the archive phase declines every agent anyway.
+            if shutdown.is_cancelled() {
+                break;
+            }
             let resolved = self.environment_of(component_id).await;
             environments.insert(component_id, resolved);
         }
