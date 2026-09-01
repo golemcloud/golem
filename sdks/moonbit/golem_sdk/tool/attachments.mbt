@@ -141,7 +141,7 @@ pub fn byte_stream(
           }
       }
     }
-  })
+  }, on_unstarted_drop=fn() { source.drop_sync() })
 }
 
 ///|
@@ -162,6 +162,7 @@ fn stdin_byte_stream(
         }
         match chunk {
           None => return
+          Some(bytes) if bytes.length() == 0 => continue
           Some(bytes) => {
             let item : Result[FixedArray[Byte], @toolHost.ByteStreamFailure] = Ok(
               bytes,
