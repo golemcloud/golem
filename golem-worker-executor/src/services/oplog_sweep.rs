@@ -184,7 +184,7 @@ impl RouteReport {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct SweepReport {
     routes: Vec<(RouteId, RouteReport)>,
-    /// True when the sweep ran without a shard assignment, in which case it did nothing.
+    /// True when the sweep ran with no usable shard assignment, in which case it did nothing.
     unassigned: bool,
 }
 
@@ -442,9 +442,13 @@ impl OplogSweeper {
     /// and the next one retries, because the work list is the layer itself. A tick is usually a
     /// fraction of a scan pass, which is what `passes` and [`Self::finish_pass`] track.
     async fn sweep_once(&self, shutdown: &CancellationToken) -> SweepReport {
-        let Some(assignment) = self.shards.try_get_current_assignment() else {
-            // Without an assignment every agent would look like someone else's, and archiving an
-            // agent this executor may not own is what the shard check is for.
+        // Without an assignment every agent would look like someone else's, and archiving an
+        // agent this executor may not own is what the shard check is for. A zero-shard assignment
+        // is the same state in a different shape: `ShardService` installs `ShardAssignment::default`
+        // before it has a shard count to record, and routing an agent through that count divides by
+        // zero.
+        let assignment = self.shards.try_get_current_assignment();
+        let Some(assignment) = assignment.filter(|it| it.number_of_shards > 0) else {
             return SweepReport {
                 routes: Vec::new(),
                 unassigned: true,
@@ -2364,6 +2368,29 @@ mod tests {
         );
 
         let report = sweeper.sweep_once(&CancellationToken::new()).await;
+        assert!(report.unassigned);
+        assert_eq!(report.scanned(), 0);
+        assert_eq!(report.archived(), 0);
+    }
+
+    #[test]
+    async fn a_sweep_holding_a_zero_shard_assignment_does_nothing() {
+        let layers = layers();
+        let environment_id = EnvironmentId::new();
+        let agent_id = agent("counter-1", ComponentId::new());
+        stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
+
+        // Assigning shards before any registration installs `ShardAssignment::default`, which
+        // carries shard ids and a shard count of zero. Routing an agent through that count is a
+        // division by zero, and a panic here aborts the pod from a background task.
+        let shards = Arc::new(ShardServiceDefault::new());
+        shards
+            .assign_shards(&HashSet::from([ShardId::new(0)]))
+            .expect("assignment");
+        let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
+
+        let report = sweeper.sweep_once(&CancellationToken::new()).await;
+
         assert!(report.unassigned);
         assert_eq!(report.scanned(), 0);
         assert_eq!(report.archived(), 0);
