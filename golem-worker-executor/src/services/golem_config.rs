@@ -1656,10 +1656,12 @@ pub struct OplogSweepConfig {
     /// archived on the way.
     ///
     /// It bounds round trips, not their cost. A scan is an `OFFSET` on the SQL backends, so a page
-    /// taken deep into a large namespace reads every row of the keys before it, and a whole pass
-    /// costs roughly the square of the namespace size. That only shows up on a real backlog of
-    /// stranded oplogs, and it is a property of the scan interface rather than of the sweep: the
-    /// agent-listing path pages the same way.
+    /// taken deep into a namespace reads past every row before it and a whole pass costs roughly
+    /// the square of the namespace size. What keeps that tolerable here is which namespace the
+    /// sweep walks: a compressed archive layer holds one row per transferred chunk, not one per
+    /// oplog entry as the primary does, so the rows it pages past are close to the keys it counts.
+    /// It still only shows up on a real backlog of stranded oplogs, and the sweep is unusual in
+    /// walking a whole namespace with no prefix, over and over, rather than a slice on demand.
     pub max_scanned_per_tick: usize,
     /// Upper bound on the table remembering each agent's previous index. Losing an entry costs one
     /// extra tick of latency for that agent and nothing else, because the work list lives in
