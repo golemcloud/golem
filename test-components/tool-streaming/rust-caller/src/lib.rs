@@ -147,8 +147,9 @@ fn evidence(
 async fn read_all(mut stdout: InputStream) -> Vec<u8> {
     let mut output = Vec::new();
     while let Some(item) = stdout.next().await {
-        if let Ok(chunk) = item {
-            output.extend(chunk);
+        match item {
+            Ok(chunk) => output.extend(chunk),
+            Err(failure) => panic!("tool stdout failed: {failure:?}"),
         }
     }
     output
