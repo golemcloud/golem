@@ -700,6 +700,77 @@ async fn scan_with_no_pattern_paginated(
     assert!(all.contains(&key3.to_string()));
 }
 
+/// Pins the contract `IndexedStorage::scan_cursor_after_removals` exists for.
+///
+/// A caller that deletes the keys it scanned cannot resume from the cursor `scan` handed back: with
+/// a positional cursor the keys behind it have shifted down. Every backend has to be able to carry
+/// on without stepping over a key nothing has looked at, whether its cursor is an offset, a
+/// composite of file and offset, or an opaque token.
+///
+/// The second namespace is what gives this test teeth. It stands for the lower oplog layers an
+/// archive step drains on its way down: the caller removes keys there too, but counts only the ones
+/// it removed from the namespace it is scanning. A cursor scoped to that namespace is unmoved by
+/// them. A cursor that counted everything the backend holds would be short by exactly those, and
+/// would skip.
+#[test]
+#[tracing::instrument]
+async fn scan_resumes_past_deleted_keys(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+
+    let mut expected: Vec<String> = (0..6).map(|i| format!("swept-{i}")).collect();
+    expected.sort();
+    for key in &expected {
+        is.append("svc", "api", "entity", ns.ns.clone(), key, 1, b"v".to_vec())
+            .await
+            .unwrap();
+        is.append(
+            "svc",
+            "api",
+            "entity",
+            ns2.ns.clone(),
+            key,
+            1,
+            b"v".to_vec(),
+        )
+        .await
+        .unwrap();
+    }
+
+    // Scan a page, delete what it handed back along with that key's entry in the layer below,
+    // correct the cursor by what left the scanned namespace alone, carry on. The sweep's tick in
+    // miniature.
+    let mut seen: Vec<String> = Vec::new();
+    let mut cursor = ScanCursor::default();
+    for _ in 0..64 {
+        let (next, chunk) = is
+            .scan("svc", "api", ns.meta.clone(), None, cursor, 2)
+            .await
+            .unwrap();
+        let removed = chunk.len() as u64;
+        for key in &chunk {
+            is.delete("svc", "api", ns.ns.clone(), key).await.unwrap();
+            is.delete("svc", "api", ns2.ns.clone(), key).await.unwrap();
+        }
+        seen.extend(chunk);
+        if next == 0 {
+            break;
+        }
+        cursor = is.scan_cursor_after_removals(next, removed);
+    }
+
+    seen.sort();
+    seen.dedup();
+    assert_eq!(
+        seen, expected,
+        "a key was skipped: the cursor moved past something nothing had examined"
+    );
+}
+
 #[test]
 #[tracing::instrument]
 async fn scan_with_prefix_pattern_single_paged(
