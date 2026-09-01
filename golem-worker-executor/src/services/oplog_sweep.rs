@@ -273,6 +273,13 @@ fn triage(keys: &[String], assignment: &ShardAssignment) -> (Vec<AgentId>, Vec<O
     (candidates, settled)
 }
 
+/// A memo entry: the index an agent showed, and the scan pass that last saw it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Seen {
+    index: OplogIndex,
+    pass: u64,
+}
+
 struct Route {
     id: RouteId,
     namespace: IndexedStorageMetaNamespace,
@@ -288,9 +295,16 @@ pub struct OplogSweeper {
     worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
     /// The index each agent showed on the previous tick, per route. Losing it costs one extra tick
     /// of latency, never a stranded oplog: the work list comes from storage.
-    memo: Mutex<HashMap<(RouteId, AgentId), OplogIndex>>,
+    ///
+    /// Ephemeral agent ids are unbounded (an invocation with no phantom id gets a fresh
+    /// `Uuid::new_v4()`), and an agent drained by `archive_ephemeral_oplog` leaves the layer for
+    /// good, so its entry here would never be visited again. Entries are stamped with the scan
+    /// pass that touched them and dropped when a pass completes without seeing them.
+    memo: Mutex<HashMap<(RouteId, AgentId), Seen>>,
     /// Where each route's scan stopped, so a budgeted tick resumes rather than restarting.
     cursors: Mutex<HashMap<RouteId, ScanCursor>>,
+    /// Which scan pass each route is on. Bumped when a pass reaches the end of the namespace.
+    passes: Mutex<HashMap<RouteId, u64>>,
 }
 
 impl OplogSweeper {
@@ -350,6 +364,7 @@ impl OplogSweeper {
             worker_access,
             memo: Mutex::new(HashMap::new()),
             cursors: Mutex::new(HashMap::new()),
+            passes: Mutex::new(HashMap::new()),
         })
     }
 
@@ -421,6 +436,14 @@ impl OplogSweeper {
         // namespace, which is what the budgets exist to prevent.
         let mut report = RouteReport::default();
         let mut truncated = false;
+        let mut exhausted = false;
+        let pass = self
+            .passes
+            .lock()
+            .await
+            .get(&route.id)
+            .copied()
+            .unwrap_or(0);
 
         loop {
             let page = self
@@ -440,7 +463,7 @@ impl OplogSweeper {
 
             let (candidates, settled) = triage(&keys, assignment);
             let probed: Vec<Outcome> = stream::iter(candidates)
-                .map(|agent_id| self.sweep_agent(route, agent_id))
+                .map(|agent_id| self.sweep_agent(route, agent_id, pass))
                 .buffer_unordered(self.config.max_concurrency.max(1))
                 .collect()
                 .await;
@@ -448,6 +471,7 @@ impl OplogSweeper {
 
             cursor = next_cursor;
             if cursor == 0 {
+                exhausted = true;
                 break;
             }
             if report.archived >= self.config.max_archives_per_tick as u64
@@ -465,6 +489,13 @@ impl OplogSweeper {
         // nothing extra because the keys this tick archived are the ones that are now gone.
         let resume = if report.archived == 0 { cursor } else { 0 };
         self.cursors.lock().await.insert(route.id, resume);
+
+        if exhausted {
+            // A pass covered the whole namespace, so anything it did not see has left the layer,
+            // usually drained by `archive_ephemeral_oplog`. Those agents never come back under the
+            // same id, so their entries are dropped here rather than left to fill the table.
+            self.finish_pass(route.id, pass).await;
+        }
         self.forget_stale(route.id, assignment).await;
 
         report.truncated = truncated;
@@ -473,13 +504,30 @@ impl OplogSweeper {
     }
 
     /// Decides one agent and, if it is quiet, runs a single archive step against it.
-    async fn sweep_agent(&self, route: &Route, agent_id: AgentId) -> Outcome {
-        // Reading an indexed layer is keyed by agent and mode only, so any environment addresses
-        // the same rows. The real one is resolved below, before anything that needs it.
+    ///
+    /// The checks run cheapest first. Both the residency probe and the index probe are keyed by
+    /// agent and mode alone, so they need no environment, and the component lookup that resolves
+    /// one happens only for an agent about to be archived.
+    async fn sweep_agent(&self, route: &Route, agent_id: AgentId, pass: u64) -> Outcome {
+        // Reading an indexed layer, and looking an agent up in `ActiveWorkers`, are both keyed by
+        // agent and mode only, so any environment addresses the same thing. The real one is
+        // resolved further down, once it is needed.
         let probe = OwnedAgentId {
             environment_id: EnvironmentId::new(),
             agent_id: agent_id.clone(),
         };
+
+        // In memory, and it comes first because on a busy executor most scanned keys belong to
+        // agents this pod is running. Probing their index would be one storage read each, every
+        // tick, to learn what this answers for free.
+        if self
+            .worker_access
+            .active_worker_fingerprint(&probe)
+            .await
+            .is_some()
+        {
+            return Outcome::Resident;
+        }
 
         let current = route
             .source
@@ -495,17 +543,17 @@ impl OplogSweeper {
             .lock()
             .await
             .get(&(route.id, agent_id.clone()))
-            .copied();
+            .map(|seen| seen.index);
         if assess(remembered, current) == Verdict::Wait {
-            self.remember(route.id, &agent_id, current).await;
+            self.remember(route.id, &agent_id, current, pass).await;
             return Outcome::Moving;
         }
 
         // The layer below addresses its objects by environment, and the scanned key does not carry
-        // one. The `Create` entry does, but it is the first entry of the oplog and an earlier
-        // archive step will have moved it out of this layer, which is the ordinary state for any
-        // agent invoked more than once. The component is the durable source: an agent's
-        // environment is its component's environment.
+        // one. The `Create` entry does, but it is the oplog's first entry and an earlier archive
+        // step will have moved it out of this layer, which is where any agent that outgrew
+        // `entry_count_limit` ends up. The component is the durable source: an agent's environment
+        // is its component's environment.
         let Some(environment_id) = self.environment_of(&agent_id).await else {
             return Outcome::Unaddressable;
         };
@@ -513,17 +561,6 @@ impl OplogSweeper {
             environment_id,
             agent_id: agent_id.clone(),
         };
-
-        // Cheap pre-filter for the expensive check below. An agent this executor is running has a
-        // live `Worker` holding the oplog, and opening it would only queue behind that.
-        if self
-            .worker_access
-            .active_worker_fingerprint(&owned_agent_id)
-            .await
-            .is_some()
-        {
-            return Outcome::Resident;
-        }
 
         // Building the suspended `Worker` is the mutual exclusion, exactly as it is for
         // `ScheduledAction::ArchiveOplog`. It costs one construction per agent that genuinely has a
@@ -570,18 +607,38 @@ impl OplogSweeper {
         }
     }
 
-    async fn remember(&self, route: RouteId, agent_id: &AgentId, index: OplogIndex) {
+    async fn remember(&self, route: RouteId, agent_id: &AgentId, index: OplogIndex, pass: u64) {
         let mut memo = self.memo.lock().await;
         if memo.len() >= self.config.max_tracked_agents {
-            // The memo only defers work, so shedding it costs one extra tick for whichever agents
-            // lose their entry. Clearing beats evicting arbitrarily: it keeps the bound obvious.
+            // A backstop, not the mechanism: `finish_pass` drops entries whose agents have left the
+            // layer, so reaching this means a single pass is tracking more agents than the bound
+            // allows. Clearing costs every agent one extra tick, so say so.
             warn!(
                 tracked = memo.len(),
                 "Oplog sweep tracking table full, clearing it"
             );
             memo.clear();
         }
-        memo.insert((route, agent_id.clone()), index);
+        memo.insert((route, agent_id.clone()), Seen { index, pass });
+    }
+
+    /// Closes a scan pass: entries the pass did not touch belong to agents that have left the
+    /// layer, so they are dropped and the route moves on to the next pass.
+    async fn finish_pass(&self, route: RouteId, pass: u64) {
+        let before = {
+            let mut memo = self.memo.lock().await;
+            let before = memo.len();
+            memo.retain(|(memo_route, _), seen| *memo_route != route || seen.pass == pass);
+            before - memo.len()
+        };
+        self.passes.lock().await.insert(route, pass + 1);
+        if before > 0 {
+            debug!(
+                route = %route,
+                dropped = before,
+                "Oplog sweep dropped tracking entries for agents that left the layer"
+            );
+        }
     }
 
     async fn forget(&self, route: RouteId, agent_id: &AgentId) {
@@ -1276,11 +1333,80 @@ mod tests {
             HashSet::from([agent_id.clone()]),
         );
 
-        sweeper.sweep_once().await;
-        let second = sweeper.sweep_once().await;
+        // Residency is decided in memory before anything is read, so it lands on the first tick
+        // rather than after the two-tick quiet gate.
+        let first = sweeper.sweep_once().await;
+        assert_eq!(first.route(EPHEMERAL_L1).resident, 1);
+        assert_eq!(first.archived(), 0);
 
+        // And nothing about a running agent is remembered, because it was never a candidate.
+        assert!(sweeper.memo.lock().await.is_empty());
+
+        let second = sweeper.sweep_once().await;
         assert_eq!(second.route(EPHEMERAL_L1).resident, 1);
         assert_eq!(second.archived(), 0);
+    }
+
+    #[test]
+    async fn a_completed_pass_drops_the_agents_that_left_the_layer() {
+        // Ephemeral agent ids are unbounded: an invocation with no phantom id gets a fresh
+        // `Uuid::new_v4()`. An agent the sweep sees once and that is then drained by its own
+        // teardown never appears again, so without this its tracking entry would live until the
+        // table was cleared wholesale, which is also what would stop anything from ever being
+        // archived.
+        let layers = layers();
+        let environment_id = EnvironmentId::new();
+        let component_id = ComponentId::new();
+        let transient = agent("counter-drained", component_id);
+        let staying = agent("counter-staying", component_id);
+        stranded_ephemeral_oplog(&layers, &transient, environment_id).await;
+        stranded_ephemeral_oplog(&layers, &staying, environment_id).await;
+
+        let sweeper = build(
+            &layers,
+            manual(),
+            all_shards(),
+            environment_id,
+            HashSet::new(),
+        );
+
+        sweeper.sweep_once().await;
+        assert_eq!(sweeper.memo.lock().await.len(), 2, "both were remembered");
+
+        // The transient agent's own teardown drains its layer, exactly as
+        // `archive_ephemeral_oplog` does, and its key disappears.
+        layers.archives[0]
+            .delete(
+                &OwnedAgentId::new(environment_id, &transient),
+                AgentMode::Ephemeral,
+            )
+            .await;
+
+        // The other agent keeps working, so the next pass sees it and it stays tracked.
+        let oplog = layers
+            .oplog_service
+            .open(
+                &OwnedAgentId::new(environment_id, &staying),
+                AgentMode::Ephemeral,
+                None,
+                metadata(&staying, environment_id),
+                status_lock(),
+                execution_lock(),
+            )
+            .await;
+        oplog.add(OplogEntry::suspend()).await;
+        oplog.commit(CommitLevel::Always).await;
+        drop(oplog);
+
+        sweeper.sweep_once().await;
+
+        let memo = sweeper.memo.lock().await;
+        assert_eq!(
+            memo.len(),
+            1,
+            "the drained agent must not be tracked forever"
+        );
+        assert!(memo.contains_key(&(EPHEMERAL_L1, staying)));
     }
 
     #[test]
