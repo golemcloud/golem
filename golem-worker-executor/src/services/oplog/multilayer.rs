@@ -24,6 +24,7 @@ use crate::services::oplog::multilayer::BackgroundTransferMessage::{
 use crate::services::oplog::{
     CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService, downcast_oplog, scan_modes,
 };
+use crate::storage::indexed::IndexedStorageMetaNamespace;
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
@@ -108,6 +109,16 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
     ) -> OplogIndex;
+
+    /// The meta-namespace whose keys enumerate every agent this archive currently holds entries
+    /// for, when the backing storage can enumerate them.
+    ///
+    /// `None` means the archive cannot be enumerated, so it can receive an archive step but never
+    /// be the source of one. Blob-backed archives answer `None`, which is why the bottom of a
+    /// layer stack is always a target.
+    fn scan_namespace(&self, _agent_mode: AgentMode) -> Option<IndexedStorageMetaNamespace> {
+        None
+    }
 }
 
 /// Interface for secondary oplog archives - requires less functionality than the primary archive

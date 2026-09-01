@@ -1009,6 +1009,25 @@ pub mod oplog {
             &["account_id", "environment_id"]
         )
         .unwrap();
+        static ref OPLOG_SWEEP_OUTCOME_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_sweep_outcome_total",
+            "Keys the oplog sweep examined, by what it decided about each",
+            &["route", "outcome"]
+        )
+        .unwrap();
+        static ref OPLOG_SWEEP_TICK_TIME: HistogramVec = register_histogram_vec!(
+            "oplog_sweep_tick",
+            "Time taken by one oplog sweep tick",
+            &["route"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref OPLOG_SWEEP_TRUNCATED_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_sweep_truncated_total",
+            "Oplog sweep ticks that hit a budget before reaching the end of the namespace",
+            &["route"]
+        )
+        .unwrap();
         static ref OPLOG_STORAGE_RETRY_TOTAL: CounterVec = register_counter_vec!(
             "oplog_storage_retry_total",
             "Number of oplog storage operation retries due to transient errors",
@@ -1031,6 +1050,25 @@ pub mod oplog {
         OPLOG_STORAGE_RETRY_TOTAL
             .with_label_values(&[op_name])
             .inc();
+    }
+
+    pub fn record_oplog_sweep_outcome(route: &str, outcome: &'static str, count: u64) {
+        if count > 0 {
+            OPLOG_SWEEP_OUTCOME_TOTAL
+                .with_label_values(&[route, outcome])
+                .inc_by(count as f64);
+        }
+    }
+
+    pub fn record_oplog_sweep_tick(route: &str, duration: std::time::Duration, truncated: bool) {
+        OPLOG_SWEEP_TICK_TIME
+            .with_label_values(&[route])
+            .observe(duration.as_secs_f64());
+        if truncated {
+            OPLOG_SWEEP_TRUNCATED_TOTAL
+                .with_label_values(&[route])
+                .inc();
+        }
     }
 
     pub fn record_scheduled_archive(duration: std::time::Duration, has_more: bool) {

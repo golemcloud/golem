@@ -19,6 +19,7 @@ use golem_common::config::{
     ConfigExample, ConfigLoader, DbPostgresConfig, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
 use golem_common::model::RetryConfig;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::base64::Base64;
 use golem_common::tracing::TracingConfig;
 use golem_common::{SafeDisplay, grpc_uri};
@@ -666,6 +667,9 @@ pub struct OplogConfig {
     /// connection resets). Defaults to 3 attempts, 100 ms–1 s exponential backoff.
     #[serde(default = "default_oplog_indexed_storage_retry")]
     pub indexed_storage_retry: RetryConfig,
+    /// Controls the background sweep that archives the oplogs of agents which have gone quiet.
+    #[serde(default)]
+    pub sweep: OplogSweepConfig,
 }
 
 impl SafeDisplay for OplogConfig {
@@ -726,6 +730,8 @@ impl SafeDisplay for OplogConfig {
             "indexed storage retry: {:?}",
             self.indexed_storage_retry
         );
+        let _ = writeln!(&mut result, "sweep:");
+        let _ = writeln!(&mut result, "{}", self.sweep.to_safe_string());
         result
     }
 }
@@ -1600,6 +1606,107 @@ impl Default for OplogConfig {
             plugin_max_elapsed_time: Duration::from_secs(5),
             oplog_rate_limit_enabled: false,
             indexed_storage_retry: default_oplog_indexed_storage_retry(),
+            sweep: OplogSweepConfig::default(),
+        }
+    }
+}
+
+/// Controls the background sweep that archives the oplogs of agents which have gone quiet.
+///
+/// The sweep replaces the work list that `ScheduledAction::ArchiveOplog` builds from a row written
+/// on the oplog commit path. It finds the same agents by paginating the oplog layer itself, and
+/// runs the same archive step against them, so no scheduler-storage write happens per invocation.
+///
+/// Every field except `enabled` and `interval` bounds what one tick may consume. A tick that hits
+/// a bound keeps its scan cursor and resumes there on the next tick, so work is deferred, never
+/// dropped.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OplogSweepConfig {
+    /// Whether the sweep runs at all. When false `ScheduledAction::ArchiveOplog` stays the only
+    /// archiving mechanism, which is the rollback lever.
+    pub enabled: bool,
+    /// How often a tick runs. Also the quiet threshold: an agent is archived once its last oplog
+    /// index survives one whole interval unchanged.
+    #[serde(with = "humantime_serde")]
+    pub interval: Duration,
+    /// Whether ephemeral oplog layers are swept.
+    pub ephemeral: bool,
+    /// Whether durable oplog layers are swept. Off until the durable primary hop is safe to
+    /// resume: `IndexedStorage::append` is a plain `INSERT` against a table with
+    /// `PRIMARY KEY (namespace, key, id)`, so re-appending a prefix into an indexed layer fails
+    /// non-transiently, and `retry_storage_op` turns that into a panic.
+    pub durable: bool,
+    /// Keys read per scan call.
+    pub page_size: u64,
+    /// Agents archived concurrently within one tick. Shares the executor's indexed-storage
+    /// connection budget with the invocation path, so it is deliberately small. It is also the
+    /// memory bound: `BackgroundTransfer::run` moves an agent's whole layer through one `Vec`, so
+    /// peak memory is this many layers, not this many chunks.
+    pub max_concurrency: usize,
+    /// Archive steps one tick may run before it stops and keeps its cursor.
+    pub max_archives_per_tick: usize,
+    /// Keys one tick may scan before it stops and keeps its cursor. Bounds the scan round trips a
+    /// tick issues against a namespace far larger than the work it holds.
+    pub max_scanned_per_tick: usize,
+    /// Upper bound on the table remembering each agent's previous index. Losing an entry costs one
+    /// extra tick of latency for that agent and nothing else, because the work list lives in
+    /// storage.
+    pub max_tracked_agents: usize,
+}
+
+impl OplogSweepConfig {
+    /// The agent modes this configuration sweeps.
+    pub fn agent_modes(&self) -> Vec<AgentMode> {
+        [
+            (AgentMode::Ephemeral, self.ephemeral),
+            (AgentMode::Durable, self.durable),
+        ]
+        .into_iter()
+        .filter_map(|(mode, on)| on.then_some(mode))
+        .collect()
+    }
+}
+
+impl SafeDisplay for OplogSweepConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "enabled: {}", self.enabled);
+        let _ = writeln!(&mut result, "interval: {:?}", self.interval);
+        let _ = writeln!(&mut result, "ephemeral: {}", self.ephemeral);
+        let _ = writeln!(&mut result, "durable: {}", self.durable);
+        let _ = writeln!(&mut result, "page size: {}", self.page_size);
+        let _ = writeln!(&mut result, "max concurrency: {}", self.max_concurrency);
+        let _ = writeln!(
+            &mut result,
+            "max archives per tick: {}",
+            self.max_archives_per_tick
+        );
+        let _ = writeln!(
+            &mut result,
+            "max scanned per tick: {}",
+            self.max_scanned_per_tick
+        );
+        let _ = writeln!(
+            &mut result,
+            "max tracked agents: {}",
+            self.max_tracked_agents
+        );
+        result
+    }
+}
+
+impl Default for OplogSweepConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval: Duration::from_secs(60),
+            ephemeral: true,
+            durable: false,
+            page_size: 128,
+            max_concurrency: 4,
+            max_archives_per_tick: 256,
+            max_scanned_per_tick: 4096,
+            max_tracked_agents: 100_000,
         }
     }
 }
