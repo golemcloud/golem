@@ -1017,8 +1017,9 @@ pub mod oplog {
         .unwrap();
         static ref OPLOG_SWEEP_OUTCOME_TOTAL: CounterVec = register_counter_vec!(
             "oplog_sweep_outcome_total",
-            "Keys the oplog sweep examined, by what it decided about each. The `drained` outcome is \
-             a subset of `archived`, not a sibling of it, so summing every outcome double-counts",
+            "Keys the oplog sweep examined, by what it decided about each. The `drained` \
+             outcome is a subset of `archived`, not a sibling of it, so summing every outcome \
+             double-counts",
             &["route", "outcome"]
         )
         .unwrap();
