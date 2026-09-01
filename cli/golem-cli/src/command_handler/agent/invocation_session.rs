@@ -612,12 +612,19 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                         binding.stream_token = Some(stream_token);
                         binding.channel = Some(channel);
                         if input_buffer.is_terminal() {
-                            input_cancelled.cancel();
+                            // A terminal replay high-water also represents server cancellation.
+                            if validate_discarded_input {
+                                input_discarded.cancel();
+                            } else {
+                                input_cancelled.cancel();
+                            }
                             input_rx.close();
                             while input_rx.try_recv().is_ok() {}
                             input_buffer.clear();
-                            input_failure_open = false;
-                            input_failure_rx.close();
+                            if !validate_discarded_input {
+                                input_failure_open = false;
+                                input_failure_rx.close();
+                            }
                             stdin_open = false;
                             input_terminal = true;
                         }
