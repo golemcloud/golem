@@ -118,9 +118,13 @@ pub trait IndexedStorage: Debug + Sync {
     /// A caller that deletes what it scanned cannot resume from the cursor `scan` handed back: with
     /// a positional cursor the keys behind it have shifted down by the number removed. Only the
     /// backend knows what its cursor means, so it does the correction; one built on an opaque token
-    /// returns it unchanged. Given an accurate `removed`, the result may repeat a key already
-    /// seen but never sits past a key nothing has examined, so over-counting is the safe direction
-    /// and under-counting is not.
+    /// returns it unchanged.
+    ///
+    /// `removed` counts only the keys taken out of the namespace, and matching the prefix, that
+    /// `scan` was called with. Deletions elsewhere in the backend must not be counted, even when
+    /// the backend keeps every namespace in one place. Given an accurate `removed` the result may
+    /// repeat a key already seen but never sits past a key nothing has examined, so over-counting
+    /// is the safe direction and under-counting is not.
     fn scan_cursor_after_removals(&self, cursor: ScanCursor, removed: u64) -> ScanCursor;
 
     /// Appends an entry to the given key with the given id
@@ -688,6 +692,13 @@ pub enum IndexedStorageNamespace {
 pub enum IndexedStorageMetaNamespace {
     Oplog { agent_mode: AgentMode },
     CompressedOplog { agent_mode: AgentMode, level: usize },
+}
+
+/// Corrects a positional scan cursor, one that counts the matching keys walked so far, after
+/// `removed` of them were deleted from behind it. Shared by every backend whose cursor is a plain
+/// offset; see [`IndexedStorage::scan_cursor_after_removals`].
+pub fn positional_cursor_after_removals(cursor: ScanCursor, removed: u64) -> ScanCursor {
+    cursor.saturating_sub(removed)
 }
 
 /// Returns the symmetric per-mode prefix used by all indexed-storage backends.

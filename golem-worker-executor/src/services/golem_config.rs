@@ -1654,6 +1654,12 @@ pub struct OplogSweepConfig {
     /// back more. Bounds the scan round trips a tick issues against a namespace far larger than the
     /// work it holds. A tick that stops here resumes where it left off, corrected for whatever it
     /// archived on the way.
+    ///
+    /// It bounds round trips, not their cost. A scan is an `OFFSET` on the SQL backends, so a page
+    /// taken deep into a large namespace reads every row of the keys before it, and a whole pass
+    /// costs roughly the square of the namespace size. That only shows up on a real backlog of
+    /// stranded oplogs, and it is a property of the scan interface rather than of the sweep: the
+    /// agent-listing path pages the same way.
     pub max_scanned_per_tick: usize,
     /// Upper bound on the table remembering each agent's previous index. Losing an entry costs one
     /// extra tick of latency for that agent and nothing else, because the work list lives in

@@ -204,9 +204,7 @@ impl IndexedStorage for SqliteIndexedStorage {
     }
 
     fn scan_cursor_after_removals(&self, cursor: ScanCursor, removed: u64) -> ScanCursor {
-        // The cursor is an offset into the key order, so removing keys below it shifts the rest
-        // down by exactly that many places.
-        cursor.saturating_sub(removed)
+        super::positional_cursor_after_removals(cursor, removed)
     }
 
     async fn append(
