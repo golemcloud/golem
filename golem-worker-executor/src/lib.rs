@@ -95,6 +95,7 @@ use crate::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueStorage;
 use crate::storage::keyvalue::namespace_routed::NamespaceRoutedKeyValueStorage;
 use crate::storage::keyvalue::postgres::PostgresKeyValueStorage;
 use crate::storage::keyvalue::redis::RedisKeyValueStorage;
+use crate::storage::keyvalue::retrying::RetryingKeyValueStorage;
 use crate::storage::scheduler::SchedulerStorage;
 use crate::storage::scheduler::memory::InMemorySchedulerStorage;
 use crate::storage::scheduler::postgres::PostgresSchedulerStorage;
@@ -601,6 +602,14 @@ pub async fn create_worker_executor_impl<
             (None, None, key_value_storage)
         }
     };
+
+    // Applied outermost, above the namespace router, so every backend - and every namespace - gets
+    // the identical retry policy for transient failures.
+    let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
+        Arc::new(RetryingKeyValueStorage::new(
+            key_value_storage,
+            golem_config.key_value_storage_retry.clone(),
+        ));
 
     let scheduler_storage = build_scheduler_storage(&golem_config.scheduler_storage).await?;
 

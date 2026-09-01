@@ -82,6 +82,13 @@ database = "../data/worker-executor-key-value-storage.db"
 foreign_keys = false
 max_connections = 10
 
+[key_value_storage_retry]
+max_attempts = 15
+max_delay = "10s"
+max_jitter_factor = 0.15
+min_delay = "200ms"
+multiplier = 2.0
+
 [limits]
 ephemeral_fuel_overdraft_multiplier = 100
 epoch_interval = "10ms"
@@ -375,6 +382,13 @@ without_time = false
 # database = "../data/worker-executor-key-value-storage.db"
 # foreign_keys = false
 # max_connections = 10
+# 
+# [key_value_storage_retry]
+# max_attempts = 15
+# max_delay = "10s"
+# max_jitter_factor = 0.15
+# min_delay = "200ms"
+# multiplier = 2.0
 # 
 # [limits]
 # ephemeral_fuel_overdraft_multiplier = 100

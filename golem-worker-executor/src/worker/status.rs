@@ -84,9 +84,17 @@ where
         agent_mode,
         last_known,
         || async move {
+            // The checkpoint is only a fold baseline, and this function has no way to report a
+            // read failure: falling back to a full recompute costs time, not correctness.
             worker_service
                 .read_status_checkpoint(owned_agent_id, agent_mode)
                 .await
+                .unwrap_or_else(|err| {
+                    tracing::error!(
+                        "Failed to read the status checkpoint for {owned_agent_id}: {err}"
+                    );
+                    None
+                })
         },
     )
     .await

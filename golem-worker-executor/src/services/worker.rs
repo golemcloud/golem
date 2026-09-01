@@ -34,7 +34,7 @@ use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tracing::debug;
+use tracing::{debug, error};
 
 /// Hash field holding the bounded part of the cached `AgentStatusRecord` (everything except the
 /// unbounded fields that are stored separately). Always present for a cached status; its absence is
@@ -215,13 +215,37 @@ pub struct GetWorkerMetadataResult {
 /// Service for persisting the current set of Golem workers represented by their metadata
 #[async_trait]
 pub trait WorkerService: Send + Sync {
-    async fn get(&self, owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult>;
+    /// Loads the worker's initial metadata and last known cached status.
+    ///
+    /// `Ok(None)` means the worker has no oplog (it does not exist). `Err` means the underlying
+    /// storage could not be read (after the storage layer's own retries); it is never conflated
+    /// with a missing worker, because doing so would make an outage look like a wave of deleted
+    /// workers and force a full oplog re-fold for every one of them.
+    async fn get(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError>;
 
-    async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult>;
+    /// Enumerates the workers this executor must recover, per assigned shard.
+    ///
+    /// Returns `Err` when the recovery index itself could not be read; individual workers that
+    /// cannot be loaded are skipped and logged, so one of them cannot block the rest.
+    async fn get_running_workers_in_shards(
+        &self,
+    ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError>;
 
-    async fn remove(&self, owned_agent_id: &OwnedAgentId);
+    /// Deletes the worker: its oplog, its cached status and its entry in the recovery index.
+    ///
+    /// Returns `Err` when the storage could not be reached. Delete is not retried by the caller:
+    /// a retry would re-run the oplog delete, so the error is reported instead.
+    async fn remove(&self, owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError>;
 
-    async fn remove_cached_status(&self, owned_agent_id: &OwnedAgentId);
+    /// Deletes every cached status blob for the worker (live cache, clean checkpoint, the legacy
+    /// key and the dedicated `agent_mode` key), leaving the oplog untouched.
+    async fn remove_cached_status(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError>;
 
     /// Returns the persisted [`AgentMode`] for the worker, if it exists.
     ///
@@ -230,7 +254,14 @@ pub trait WorkerService: Send + Sync {
     /// cached status record (which exists for active durable workers) and, on cache miss,
     /// probes both oplog namespaces (durable and ephemeral). Returns `None` if no oplog
     /// exists in either namespace.
-    async fn get_agent_mode(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentMode>;
+    ///
+    /// Returns `Err` when the underlying storage could not be read (after the storage layer's
+    /// own retries), so callers can surface the failure instead of mistaking it for a missing
+    /// worker.
+    async fn get_agent_mode(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<AgentMode>, WorkerExecutorError>;
 
     /// Writes the cached status *blob* for the worker (no `RunningWorkers` index maintenance).
     ///
@@ -267,13 +298,14 @@ pub trait WorkerService: Send + Sync {
     /// an open jump region, it serves as a fold baseline for status recompute that predates any
     /// later jump, avoiding a full re-read of the oplog from index 1.
     ///
-    /// Returns `None` on a cache miss or stale format. The transient `agent_mode` field (not part
-    /// of the persisted `core`) is restored from `agent_mode`.
+    /// Returns `Ok(None)` on a cache miss or stale format, and `Err` when the storage could not be
+    /// read. The transient `agent_mode` field (not part of the persisted `core`) is restored from
+    /// `agent_mode`.
     async fn read_status_checkpoint(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> Option<AgentStatusRecord>;
+    ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError>;
 
     /// Writes the worker's *clean* status checkpoint blob.
     ///
@@ -295,28 +327,42 @@ pub trait WorkerService: Send + Sync {
     /// to resume, so it is always maintained synchronously (never deferred to the background
     /// flusher). The worker is added when [`should_track_for_assignment_recovery`] holds and
     /// removed otherwise. No-op for ephemeral workers.
+    ///
+    /// Returns the storage error if the index could not be updated. No caller may carry on as if
+    /// the worker were tracked: an agent missing from this index is an agent that a crash or a
+    /// reshard will not resume, so it silently stops running with nothing recording that it should
+    /// be. [`update_cached_status`](Self::update_cached_status) fails the operation it was part of,
+    /// and the hot path (`AgentStatusFlusher::on_status_changed`) treats it as fatal.
     async fn set_assignment_tracking(
         &self,
         owned_agent_id: &OwnedAgentId,
         status_value: &AgentStatusRecord,
-    );
+    ) -> Result<(), String>;
 
-    /// Convenience cold-path helper that writes the blob *and* updates the recovery index in one
-    /// call. Panics on a blob write failure (cold paths cannot meaningfully recover). Hot paths use
-    /// the background flusher (blob) together with [`set_assignment_tracking`] (index) instead.
+    /// Convenience cold-path helper that updates the recovery index *and* writes the blob in one
+    /// call. Hot paths use [`set_assignment_tracking`](Self::set_assignment_tracking) (index)
+    /// together with the background flusher (blob) instead.
+    ///
+    /// The index is updated first and its failure is not swallowed. Both callers go on to make the
+    /// worker runnable, and a worker that runs while missing from `RunningWorkers` is one that no
+    /// crash or reshard will resume - reporting success here would hand the caller that state
+    /// silently.
+    ///
+    /// Both failures are returned rather than fatal. Both callers reach this from a path that can
+    /// return an error, and a storage blip here would otherwise abort an executor holding live
+    /// agents - forcing every one of them to replay from oplog or snapshot, which is far more
+    /// expensive than failing the one operation that could not write.
     async fn update_cached_status(
         &self,
         owned_agent_id: &OwnedAgentId,
         previous_status: Option<&AgentStatusRecord>,
         status_value: AgentStatusRecord,
-    ) {
+    ) -> Result<(), String> {
         self.set_assignment_tracking(owned_agent_id, &status_value)
-            .await;
+            .await?;
         self.write_cached_status(owned_agent_id, previous_status, status_value)
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to write cached status for {owned_agent_id}: {err}")
-            });
+            .map(|_| ())
     }
 }
 
@@ -346,34 +392,63 @@ impl DefaultWorkerService {
         }
     }
 
-    async fn enum_workers_at_key(&self, key: &str) -> Vec<GetWorkerMetadataResult> {
+    async fn enum_workers_at_key(
+        &self,
+        key: &str,
+    ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
         record_worker_call("enum");
 
+        // The index itself is not per-worker: without it there is no list of workers to recover,
+        // so this failure is reported to the caller rather than silently yielding an empty shard.
         let value: Vec<OwnedAgentId> = self
             .key_value_storage
             .with_entity("worker", "enum", "agent_id")
             .members_of_set(KeyValueStorageNamespace::RunningWorkers, key)
             .await
-            .unwrap_or_else(|err| panic!("failed to get worker ids from KV storage: {err}"));
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to get worker ids from KV storage: {err}"
+                ))
+            })?;
 
         let mut workers = Vec::new();
 
         for owned_agent_id in value {
-            let metadata = self
-                .get(&owned_agent_id)
-                .await
-                .unwrap_or_else(|| panic!("failed to get worker metadata from KV storage"));
-            workers.push(metadata);
+            // Only a worker that is genuinely gone may be skipped. The two outcomes are not the
+            // same failure wearing different clothes:
+            //
+            // - `Ok(None)` means there is no oplog, so the index entry outlived the worker - a
+            //   delete that raced this read. There is nothing to resume, and skipping is correct.
+            // - `Err` means the entry may well exist and we simply could not read it. Skipping
+            //   would leave a running agent suspended for as long as this executor owns the shard,
+            //   which breaks the guarantee that a reshard or a crash does not stop a running
+            //   worker - and it would do so silently. Failing the scan is the safe answer: a
+            //   transient cause is already absorbed by the storage retry budget, and one that
+            //   outlives it leaves this executor unable to do its job, so replacing it beats
+            //   carrying on with an unknown number of agents stranded.
+            match self.get(&owned_agent_id).await {
+                Ok(Some(metadata)) => workers.push(metadata),
+                Ok(None) => {
+                    debug!(
+                        "Skipping {owned_agent_id} during recovery: no oplog (the worker was deleted)"
+                    );
+                }
+                Err(err) => {
+                    return Err(WorkerExecutorError::runtime(format!(
+                        "failed to read {owned_agent_id} during recovery, so it cannot be resumed: {err}"
+                    )));
+                }
+            }
         }
 
-        workers
+        Ok(workers)
     }
 
     /// Namespace holding the agent's split cached status (one per-agent hash whose fields are
     /// `core`, `regions`, `updates`, and `ir:{idempotency_key}`).
     fn status_namespace(agent_id: &AgentId) -> KeyValueStorageNamespace {
         KeyValueStorageNamespace::AgentStatus {
-            agent_id: agent_id.clone(),
+            agent_id: Arc::new(agent_id.clone()),
         }
     }
 
@@ -383,7 +458,7 @@ impl DefaultWorkerService {
     /// fold baseline that always predates any later jump region.
     fn checkpoint_namespace(agent_id: &AgentId) -> KeyValueStorageNamespace {
         KeyValueStorageNamespace::AgentStatusCheckpoint {
-            agent_id: agent_id.clone(),
+            agent_id: Arc::new(agent_id.clone()),
         }
     }
 
@@ -412,7 +487,10 @@ impl DefaultWorkerService {
     ///
     /// `agent_mode` is `#[transient]` and not part of `core`, so the returned record carries the
     /// `Durable` deserialization default; callers must restore it from the authoritative source.
-    async fn read_cached_status(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentStatusRecord> {
+    async fn read_cached_status(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
         self.read_split_status(
             owned_agent_id,
             Self::status_namespace(&owned_agent_id.agent_id),
@@ -430,7 +508,7 @@ impl DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         namespace: KeyValueStorageNamespace,
-    ) -> Option<AgentStatusRecord> {
+    ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
         // Single atomic read of every field of the per-agent status hash (`core`, `regions`,
         // `updates`, `ir:{key}`). This is one round-trip (Redis `HGETALL`, a single
         // `SELECT ... WHERE namespace`, or one locked scan in memory) that observes a consistent
@@ -444,16 +522,18 @@ impl DefaultWorkerService {
             .with_entity("worker", "read_cached_status", "agent_status")
             .get_all_raw(namespace)
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to get agent status for {owned_agent_id} from KV storage: {err}")
-            });
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to get agent status for {owned_agent_id} from KV storage: {err}"
+                ))
+            })?;
 
         // No `core` field -> nothing cached (or a torn/partial write); treat as a cache miss.
         if !fields.iter().any(|(name, _)| name == STATUS_CORE_FIELD) {
-            return None;
+            return Ok(None);
         }
 
-        reassemble_cached_status(fields)
+        Ok(reassemble_cached_status(fields))
     }
 
     /// Writes the split status fields for an agent, sending only the parts that changed.
@@ -506,7 +586,7 @@ impl DefaultWorkerService {
             to_delete.push(STATUS_CORE_FIELD.to_string());
             self.key_value_storage
                 .with("worker", "update_status")
-                .del_many(namespace.clone(), to_delete)
+                .del_many(namespace.clone(), to_delete.into())
                 .await
                 .map_err(|err| {
                     format!(
@@ -570,80 +650,103 @@ impl DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         namespace: KeyValueStorageNamespace,
-    ) {
+    ) -> Result<(), WorkerExecutorError> {
         let status_fields = self
             .key_value_storage
             .with("worker", "remove")
             .keys(namespace.clone())
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to list agent status fields for {owned_agent_id}: {err}")
-            });
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to list agent status fields for {owned_agent_id}: {err}"
+                ))
+            })?;
 
         if !status_fields.is_empty() {
             self.key_value_storage
                 .with("worker", "remove")
-                .del_many(namespace, status_fields)
+                .del_many(namespace, status_fields.into())
                 .await
-                .unwrap_or_else(|err| {
-                    panic!("failed to remove agent status in the KV storage: {err}")
-                });
+                .map_err(|err| {
+                    WorkerExecutorError::runtime(format!(
+                        "failed to remove agent status in the KV storage: {err}"
+                    ))
+                })?;
         }
+
+        Ok(())
     }
 
-    async fn remove_legacy_cached_status(&self, owned_agent_id: &OwnedAgentId) {
+    async fn remove_legacy_cached_status(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError> {
         self.key_value_storage
             .with("worker", "remove_legacy_status")
             .del(
                 KeyValueStorageNamespace::Worker {
-                    agent_id: owned_agent_id.agent_id(),
+                    agent_id: Arc::new(owned_agent_id.agent_id()),
                 },
                 &Self::legacy_status_key(&owned_agent_id.agent_id),
             )
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to remove legacy status for {owned_agent_id}: {err}")
-            });
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to remove legacy status for {owned_agent_id}: {err}"
+                ))
+            })
     }
 
     /// Reads the dedicated `agent_mode` key, if present. Returns `None` on a cache miss or if the
     /// stored value cannot be deserialized in the current format (treated as a miss).
-    async fn read_cached_agent_mode(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
+    async fn read_cached_agent_mode(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<AgentMode>, WorkerExecutorError> {
         let value: Option<Result<AgentMode, String>> = self
             .key_value_storage
             .with_entity("worker", "read_cached_agent_mode", "agent_mode")
             .get_attempt_deserialize(
                 KeyValueStorageNamespace::Worker {
-                    agent_id: owned_agent_id.agent_id(),
+                    agent_id: Arc::new(owned_agent_id.agent_id()),
                 },
                 &Self::agent_mode_key(&owned_agent_id.agent_id),
             )
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to get agent mode for {owned_agent_id} from KV storage: {err}")
-            });
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to get agent mode for {owned_agent_id} from KV storage: {err}"
+                ))
+            })?;
 
-        match value {
+        Ok(match value {
             Some(Ok(agent_mode)) => Some(agent_mode),
             Some(Err(_)) | None => None,
-        }
+        })
     }
 
     /// Populates the dedicated `agent_mode` key. Only called on a `get_agent_mode` cache miss for
     /// durable workers, never on the per-commit hot path. The value is immutable for the life of
     /// the worker, so concurrent writers would write the same value.
-    async fn write_cached_agent_mode(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
+    ///
+    /// Returns `Err` instead of panicking so the caller can treat the write as best-effort: the
+    /// key is purely an optimisation that lets later lookups skip the oplog probe.
+    async fn write_cached_agent_mode(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<(), String> {
         self.key_value_storage
             .with_entity("worker", "write_cached_agent_mode", "agent_mode")
             .set(
                 KeyValueStorageNamespace::Worker {
-                    agent_id: owned_agent_id.agent_id(),
+                    agent_id: Arc::new(owned_agent_id.agent_id()),
                 },
                 &Self::agent_mode_key(&owned_agent_id.agent_id),
                 &agent_mode,
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to set agent mode in KV storage: {err}"));
+            .map_err(|err| format!("failed to set agent mode in KV storage: {err}"))
     }
 
     pub(crate) fn should_track_for_assignment_recovery(status: &AgentStatusRecord) -> bool {
@@ -656,10 +759,15 @@ impl DefaultWorkerService {
 
 #[async_trait]
 impl WorkerService for DefaultWorkerService {
-    async fn get(&self, owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
+    async fn get(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
         record_worker_call("get");
 
-        let agent_mode = self.get_agent_mode(owned_agent_id).await?;
+        let Some(agent_mode) = self.get_agent_mode(owned_agent_id).await? else {
+            return Ok(None);
+        };
 
         let initial_oplog_entry = self
             .oplog_service
@@ -671,7 +779,7 @@ impl WorkerService for DefaultWorkerService {
         debug!("Found initial oplog entry for worker: {initial_oplog_entry:?}");
 
         match initial_oplog_entry {
-            None => None,
+            None => Ok(None),
             Some((
                 _,
                 OplogEntry::Create {
@@ -707,7 +815,10 @@ impl WorkerService for DefaultWorkerService {
                     )
                     .unwrap_or_else(|err| {
                         panic!("failed to get component metadata for {owned_agent_id}: {err}")
-                    })?;
+                    });
+                let Some(component_metadata) = component_metadata else {
+                    return Ok(None);
+                };
 
                 let config = local_agent_config
                     .into_iter()
@@ -741,7 +852,7 @@ impl WorkerService for DefaultWorkerService {
                     agent_mode,
                 };
 
-                let last_known_status = match self.read_cached_status(owned_agent_id).await {
+                let last_known_status = match self.read_cached_status(owned_agent_id).await? {
                     Some(mut status) => {
                         // `agent_mode` is `#[transient]` and therefore not part of the status
                         // blob; restore it from the authoritative value resolved above so the
@@ -759,49 +870,65 @@ impl WorkerService for DefaultWorkerService {
                             owned_agent_id,
                             agent_mode,
                             None,
-                            || self.read_status_checkpoint(owned_agent_id, agent_mode),
+                            || async {
+                                // The checkpoint is only a fold baseline: a read failure here
+                                // costs a full recompute, not correctness, and the function has
+                                // no way to report it. The live cached status above is the read
+                                // that propagates.
+                                self.read_status_checkpoint(owned_agent_id, agent_mode)
+                                    .await
+                                    .unwrap_or_else(|err| {
+                                        error!(
+                                            "Failed to read the status checkpoint for {owned_agent_id}: {err}"
+                                        );
+                                        None
+                                    })
+                            },
                         )
                         .await
                         .expect("Failed to recompute worker status for existing worker");
 
                         // Cold path: no in-memory previous, reconcile against stored fields.
                         self.update_cached_status(owned_agent_id, None, last_known_status.clone())
-                            .await;
-                        self.remove_legacy_cached_status(owned_agent_id).await;
+                            .await
+                            .map_err(WorkerExecutorError::runtime)?;
+                        self.remove_legacy_cached_status(owned_agent_id).await?;
 
                         Some(last_known_status)
                     }
                 };
 
-                Some(GetWorkerMetadataResult {
+                Ok(Some(GetWorkerMetadataResult {
                     initial_worker_metadata,
                     last_known_status,
-                })
+                }))
             }
             Some(_) => panic!("Encountered malformed oplog without create oplog entry"),
         }
     }
 
-    async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult> {
+    async fn get_running_workers_in_shards(
+        &self,
+    ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
         let shard_assignment = self.shard_service.try_get_current_assignment();
         let mut result: Vec<GetWorkerMetadataResult> = vec![];
         if let Some(shard_assignment) = shard_assignment {
             for shard_id in shard_assignment.shard_ids {
                 let key = Self::running_in_shard_key(&shard_id);
-                let mut shard_worker = self.enum_workers_at_key(&key).await;
+                let mut shard_worker = self.enum_workers_at_key(&key).await?;
                 result.append(&mut shard_worker);
             }
         }
-        result
+        Ok(result)
     }
 
-    async fn remove(&self, owned_agent_id: &OwnedAgentId) {
+    async fn remove(&self, owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError> {
         record_worker_call("remove");
 
-        if let Some(agent_mode) = self.get_agent_mode(owned_agent_id).await {
+        if let Some(agent_mode) = self.get_agent_mode(owned_agent_id).await? {
             self.oplog_service.delete(owned_agent_id, agent_mode).await;
         }
-        self.remove_cached_status(owned_agent_id).await;
+        self.remove_cached_status(owned_agent_id).await?;
 
         let shard_assignment = self
             .shard_service
@@ -815,46 +942,54 @@ impl WorkerService for DefaultWorkerService {
             .with_entity("worker", "remove", "agent_id")
             .remove_from_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_agent_id)
             .await
-            .unwrap_or_else(|err| {
-                panic!(
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
                     "failed to remove worker from the set of running worker ids per shard in KV storage: {err}"
-                )
-            });
+                ))
+            })
     }
 
-    async fn remove_cached_status(&self, owned_agent_id: &OwnedAgentId) {
+    async fn remove_cached_status(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError> {
         record_worker_call("remove_cached_status");
 
         let agent_id = &owned_agent_id.agent_id;
 
         // Delete the live cached status hash and the clean checkpoint hash.
         self.remove_split_status(owned_agent_id, Self::status_namespace(agent_id))
-            .await;
+            .await?;
         self.remove_split_status(owned_agent_id, Self::checkpoint_namespace(agent_id))
-            .await;
-        self.remove_legacy_cached_status(owned_agent_id).await;
+            .await?;
+        self.remove_legacy_cached_status(owned_agent_id).await?;
 
         // The `agent_mode` key has its own lifecycle and lives in the `Worker` namespace.
         self.key_value_storage
             .with("worker", "remove")
             .del(
                 KeyValueStorageNamespace::Worker {
-                    agent_id: agent_id.clone(),
+                    agent_id: Arc::new(agent_id.clone()),
                 },
                 &Self::agent_mode_key(agent_id),
             )
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to remove worker agent mode in the KV storage: {err}")
-            });
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to remove worker agent mode in the KV storage: {err}"
+                ))
+            })
     }
 
-    async fn get_agent_mode(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
+    async fn get_agent_mode(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<AgentMode>, WorkerExecutorError> {
         record_worker_call("get_agent_mode");
 
         // Fast path: dedicated `agent_mode` key (only populated for durable workers).
-        if let Some(agent_mode) = self.read_cached_agent_mode(owned_agent_id).await {
-            return Some(agent_mode);
+        if let Some(agent_mode) = self.read_cached_agent_mode(owned_agent_id).await? {
+            return Ok(Some(agent_mode));
         }
 
         // Cache miss (e.g. ephemeral worker, or durable worker whose dedicated key has not been
@@ -867,17 +1002,24 @@ impl WorkerService for DefaultWorkerService {
             // Populate the dedicated key so subsequent lookups skip the oplog probe. Only durable
             // workers are cached (mirrors `update_cached_status`): an ephemeral worker's oplog is
             // transient, so caching its mode could outlive the worker and return a stale `Some`.
-            self.write_cached_agent_mode(owned_agent_id, AgentMode::Durable)
-                .await;
-            Some(AgentMode::Durable)
+            //
+            // The mode is already known here, so a failed cache write is logged and ignored
+            // rather than discarding a correct answer (the oplog probe is the source of truth).
+            if let Err(err) = self
+                .write_cached_agent_mode(owned_agent_id, AgentMode::Durable)
+                .await
+            {
+                error!("Failed to cache the agent mode for {owned_agent_id}: {err}");
+            }
+            Ok(Some(AgentMode::Durable))
         } else if self
             .oplog_service
             .exists(owned_agent_id, AgentMode::Ephemeral)
             .await
         {
-            Some(AgentMode::Ephemeral)
+            Ok(Some(AgentMode::Ephemeral))
         } else {
-            None
+            Ok(None)
         }
     }
 
@@ -904,18 +1046,20 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> Option<AgentStatusRecord> {
+    ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
         record_worker_call("read_status_checkpoint");
 
-        let mut status = self
+        let status = self
             .read_split_status(
                 owned_agent_id,
                 Self::checkpoint_namespace(&owned_agent_id.agent_id),
             )
             .await?;
         // `agent_mode` is transient (not part of `core`); restore the authoritative value.
-        status.agent_mode = agent_mode;
-        Some(status)
+        Ok(status.map(|mut status| {
+            status.agent_mode = agent_mode;
+            status
+        }))
     }
 
     async fn write_status_checkpoint(
@@ -944,12 +1088,12 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         status_value: &AgentStatusRecord,
-    ) {
+    ) -> Result<(), String> {
         record_worker_call("set_assignment_tracking");
 
         // Ephemeral workers are never tracked for recovery (mirrors `write_cached_status`).
         if status_value.agent_mode == AgentMode::Ephemeral {
-            return;
+            return Ok(());
         }
 
         let shard_assignment = self
@@ -963,29 +1107,35 @@ impl WorkerService for DefaultWorkerService {
         if Self::should_track_for_assignment_recovery(status_value) {
             debug!("Adding worker to the set of running workers in shard {shard_id}");
 
-            self
-                .key_value_storage
+            self.key_value_storage
                 .with_entity("worker", "add", "agent_id")
-                .add_to_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_agent_id)
+                .add_to_set(
+                    KeyValueStorageNamespace::RunningWorkers,
+                    &Self::running_in_shard_key(&shard_id),
+                    owned_agent_id,
+                )
                 .await
-                .unwrap_or_else(|err| {
-                    panic!(
+                .map_err(|err| {
+                    format!(
                         "failed to add worker to the set of running workers per shard ids on KV storage: {err}"
                     )
-                });
+                })
         } else {
             debug!("Removing worker from the set of running workers in shard {shard_id}");
 
-            self
-                .key_value_storage
+            self.key_value_storage
                 .with_entity("worker", "remove", "agent_id")
-                .remove_from_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_agent_id)
+                .remove_from_set(
+                    KeyValueStorageNamespace::RunningWorkers,
+                    &Self::running_in_shard_key(&shard_id),
+                    owned_agent_id,
+                )
                 .await
-                .unwrap_or_else(|err| {
-                    panic!(
+                .map_err(|err| {
+                    format!(
                         "failed to remove worker from the set of running worker ids per shard on KV storage: {err}"
                     )
-                });
+                })
         }
     }
 }
@@ -1011,13 +1161,29 @@ impl HasComponentService for DefaultWorkerService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::ExecutionStatus;
+    use crate::services::oplog::Oplog;
+    use crate::services::shard::ShardServiceDefault;
+    use crate::storage::keyvalue::KeyValueStorageError;
+    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+    use async_trait::async_trait;
     use bytes::Bytes;
     use golem_common::model::Timestamp;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::application::ApplicationId;
+    use golem_common::model::component::ComponentId;
     use golem_common::model::component::ComponentRevision;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::oplog::{PayloadId, RawOplogPayload};
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
-    use golem_common::model::{PendingInvocationRef, PendingUpdateKind, PendingUpdateRef};
-    use std::collections::VecDeque;
+    use golem_common::model::{
+        PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, ScanCursor,
+    };
+    use golem_common::read_only_lock;
+    use golem_service_base::model::component::Component;
+    use std::collections::{BTreeMap, VecDeque};
     use test_r::test;
+    use uuid::Uuid;
 
     fn idempotency_key(value: &str) -> IdempotencyKey {
         IdempotencyKey::new(value.to_string())
@@ -1250,5 +1416,458 @@ mod tests {
         assert!(!DefaultWorkerService::should_track_for_assignment_recovery(
             &status
         ));
+    }
+
+    /// Oplog service that only answers "does this agent have an oplog?"; the recovery scan needs
+    /// nothing else from it.
+    #[derive(Debug, Default)]
+    struct FakeOplogService {
+        existing: Vec<OwnedAgentId>,
+    }
+
+    #[async_trait]
+    impl OplogService for FakeOplogService {
+        async fn create(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _initial_entry: OplogEntry,
+            _initial_worker_metadata: AgentMetadata,
+            _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+            _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        ) -> Arc<dyn Oplog + 'static> {
+            unreachable!()
+        }
+
+        async fn open(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _last_oplog_index: Option<OplogIndex>,
+            _initial_worker_metadata: AgentMetadata,
+            _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+            _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        ) -> Arc<dyn Oplog + 'static> {
+            unreachable!()
+        }
+
+        async fn get_last_index(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+        ) -> OplogIndex {
+            unreachable!()
+        }
+
+        async fn delete(&self, _owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) {
+            unreachable!()
+        }
+
+        async fn read(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _idx: OplogIndex,
+            _n: u64,
+        ) -> BTreeMap<OplogIndex, OplogEntry> {
+            BTreeMap::new()
+        }
+
+        async fn exists(&self, owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) -> bool {
+            self.existing.contains(owned_agent_id)
+        }
+
+        async fn scan_for_component(
+            &self,
+            _environment_id: &EnvironmentId,
+            _component_id: &ComponentId,
+            _modes: Option<AgentMode>,
+            _cursor: ScanCursor,
+            _count: u64,
+        ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+            unreachable!()
+        }
+
+        async fn upload_raw_payload(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _data: Vec<u8>,
+        ) -> Result<RawOplogPayload, String> {
+            unreachable!()
+        }
+
+        async fn download_raw_payload(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _payload_id: PayloadId,
+            _md5_hash: Vec<u8>,
+        ) -> Result<Vec<u8>, String> {
+            unreachable!()
+        }
+    }
+
+    #[derive(Debug)]
+    struct UnusedComponentService;
+
+    #[async_trait]
+    impl ComponentService for UnusedComponentService {
+        async fn get(
+            &self,
+            _engine: &wasmtime::Engine,
+            _component_id: ComponentId,
+            _component_revision: ComponentRevision,
+        ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError> {
+            unreachable!()
+        }
+
+        async fn get_metadata(
+            &self,
+            _component_id: ComponentId,
+            _forced_revision: Option<ComponentRevision>,
+        ) -> Result<Component, WorkerExecutorError> {
+            unreachable!()
+        }
+
+        async fn resolve_component(
+            &self,
+            _component_reference: String,
+            _resolving_environment: EnvironmentId,
+            _resolving_application: ApplicationId,
+            _resolving_account: AccountId,
+        ) -> Result<Option<ComponentId>, WorkerExecutorError> {
+            unreachable!()
+        }
+
+        async fn all_cached_metadata(&self) -> Vec<Component> {
+            unreachable!()
+        }
+
+        async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {
+            unreachable!()
+        }
+    }
+
+    /// Key-value storage whose every operation fails, standing in for an unreachable cluster.
+    #[derive(Debug, Default)]
+    struct UnreachableKeyValueStorage {
+        /// When set, `members_of_set` succeeds and returns these while every other read still
+        /// fails - the shape of an index that is readable but whose workers are not.
+        readable_index: Option<Vec<Bytes>>,
+    }
+
+    impl UnreachableKeyValueStorage {
+        fn error<T>() -> Result<T, KeyValueStorageError> {
+            Err(KeyValueStorageError::NotAttempted(
+                "pool acquire timed out".to_string(),
+            ))
+        }
+
+        fn with_readable_index(members: Vec<Bytes>) -> Self {
+            Self {
+                readable_index: Some(members),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl KeyValueStorage for UnreachableKeyValueStorage {
+        async fn set(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+            _value: &[u8],
+        ) -> Result<(), KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn set_many(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _pairs: &[(&str, &[u8])],
+        ) -> Result<(), KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn set_if_not_exists(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+            _value: &[u8],
+        ) -> Result<bool, KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn get(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+        ) -> Result<Option<Bytes>, KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn get_many(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _keys: Arc<[String]>,
+        ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn get_all(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+        ) -> Result<Vec<(String, Bytes)>, KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn del(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+        ) -> Result<(), KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn del_many(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _keys: Arc<[String]>,
+        ) -> Result<(), KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn exists(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+        ) -> Result<bool, KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn keys(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+        ) -> Result<Vec<String>, KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn add_to_set(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+            _value: &[u8],
+        ) -> Result<(), KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn remove_from_set(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+            _value: &[u8],
+        ) -> Result<(), KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn members_of_set(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+        ) -> Result<Vec<Bytes>, KeyValueStorageError> {
+            match &self.readable_index {
+                Some(members) => Ok(members.clone()),
+                None => Self::error(),
+            }
+        }
+
+        async fn add_to_sorted_set(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+            _score: f64,
+            _value: &[u8],
+        ) -> Result<(), KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn remove_from_sorted_set(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+            _value: &[u8],
+        ) -> Result<(), KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn get_sorted_set(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+        ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn query_sorted_set(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+            _min: f64,
+            _max: f64,
+        ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
+            Self::error()
+        }
+    }
+
+    fn test_owned_agent_id(name: &str) -> OwnedAgentId {
+        OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: name.to_string(),
+            },
+        )
+    }
+
+    fn test_worker_service(
+        key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
+        oplog_service: Arc<dyn OplogService>,
+    ) -> DefaultWorkerService {
+        DefaultWorkerService::new(
+            key_value_storage,
+            Arc::new(ShardServiceDefault::new()),
+            oplog_service,
+            Arc::new(UnusedComponentService),
+            Arc::new(GolemConfig::default()),
+        )
+    }
+
+    #[test]
+    async fn recovery_scan_skips_workers_whose_oplog_is_gone() {
+        let storage = Arc::new(InMemoryKeyValueStorage::new());
+        let shard_key = DefaultWorkerService::running_in_shard_key(&ShardId::new(0));
+        let deleted = test_owned_agent_id("deleted-by-a-racing-delete");
+        storage
+            .with_entity("worker", "add", "agent_id")
+            .add_to_set(
+                KeyValueStorageNamespace::RunningWorkers,
+                &shard_key,
+                &deleted,
+            )
+            .await
+            .unwrap();
+
+        let service = test_worker_service(storage, Arc::new(FakeOplogService::default()));
+
+        // The index entry outlived the worker; recovery isolates that instead of aborting.
+        let workers = service.enum_workers_at_key(&shard_key).await.unwrap();
+        assert!(workers.is_empty());
+    }
+
+    /// The distinction that matters more than the skip: an entry we could not *read* is not an
+    /// entry that is gone. Skipping it would leave a running agent suspended for as long as this
+    /// executor owns the shard, and would do it silently.
+    #[test]
+    async fn recovery_scan_fails_rather_than_stranding_a_worker_it_cannot_read() {
+        let shard_key = DefaultWorkerService::running_in_shard_key(&ShardId::new(0));
+        let stranded = test_owned_agent_id("running-but-unreadable");
+        let index = vec![Bytes::from(serialize(&stranded).unwrap())];
+
+        let service = test_worker_service(
+            Arc::new(UnreachableKeyValueStorage::with_readable_index(index)),
+            Arc::new(FakeOplogService::default()),
+        );
+
+        let result = service.enum_workers_at_key(&shard_key).await;
+
+        assert!(
+            result.is_err(),
+            "an unreadable worker must fail the scan, not be skipped: {result:?}"
+        );
+    }
+
+    #[test]
+    async fn delete_reports_an_unreachable_storage() {
+        let service = test_worker_service(
+            Arc::new(UnreachableKeyValueStorage::default()),
+            Arc::new(FakeOplogService::default()),
+        );
+        let owned_agent_id = test_owned_agent_id("doomed");
+
+        assert!(
+            service.remove_cached_status(&owned_agent_id).await.is_err(),
+            "expected the cached status delete failure to surface"
+        );
+        assert!(
+            service.remove(&owned_agent_id).await.is_err(),
+            "expected the delete failure to surface"
+        );
+    }
+
+    #[test]
+    async fn recovery_scan_reports_an_unreadable_index() {
+        let service = test_worker_service(
+            Arc::new(UnreachableKeyValueStorage::default()),
+            Arc::new(FakeOplogService::default()),
+        );
+
+        let result = service
+            .enum_workers_at_key(&DefaultWorkerService::running_in_shard_key(&ShardId::new(
+                0,
+            )))
+            .await;
+
+        assert!(
+            result.is_err(),
+            "expected the index read failure to surface"
+        );
     }
 }
