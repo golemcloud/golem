@@ -132,6 +132,27 @@ enum Verdict {
     Move,
 }
 
+/// The agent modes the sweep covers. Fixed on purpose: neither entry is a setting.
+///
+/// Ephemeral is not optional. `Worker::schedule_oplog_archive_if_needed` returns early for
+/// ephemeral agents, so nothing registers `ScheduledAction::ArchiveOplog` for them any more and
+/// this sweep is the only thing left that moves an ephemeral oplog a crashed pod stranded.
+///
+/// Durable is absent rather than off, because adding it would not be safe today.
+/// `IndexedStorage::append` is a plain `INSERT` against a table with
+/// `PRIMARY KEY (namespace, key, id)`, a unique violation is not classified transient, and
+/// `retry_storage_op` turns that into a panic under `panic = "abort"`. Re-appending a prefix into
+/// an indexed layer therefore takes the pod down, and an archive step that is interrupted between
+/// its append and its `drop_prefix` leaves exactly that prefix to be re-appended. Blob targets are
+/// safe, since their append is a `put` at a path keyed by the chunk's last index. With the default
+/// stack the ephemeral hop targets blob and the durable primary hop targets the indexed compressed
+/// layer.
+///
+/// Extending this needs that append to become an upsert first, and a layer passed to
+/// [`OplogSweeper::over_layers`] that can enumerate the primary's keys. Both are code changes, and
+/// keeping the list here rather than in `OplogSweepConfig` is what makes them so.
+pub const SWEPT_MODES: &[AgentMode] = &[AgentMode::Ephemeral];
+
 /// The most archive steps one agent gets in a single tick. A step moves a whole layer, so the
 /// layer stack bounds this well below the limit; it exists so a miscounting layer cannot spin.
 const MAX_ARCHIVE_STEPS: u32 = 16;
@@ -350,8 +371,8 @@ impl OplogSweeper {
     /// stack is a target only.
     ///
     /// `archives` is the archive stack alone, so the primary layer is never a source and the
-    /// level-0 hop stays with `ScheduledAction::ArchiveOplog`. Turning the durable routes on
-    /// reaches the compressed levels and leaves that first hop where it is; driving it as well
+    /// level-0 hop stays with `ScheduledAction::ArchiveOplog`. A mode added to [`SWEPT_MODES`]
+    /// would reach the compressed levels and leave that first hop where it is; driving it as well
     /// would mean passing a layer here that implements `OplogArchiveService`.
     ///
     /// Pure: no I/O, no task, no runtime needed. Call [`run`](Self::run) to start ticking.
@@ -365,10 +386,9 @@ impl OplogSweeper {
     ) -> Arc<Self> {
         // The bottom layer receives entries and has nowhere to pass them on to.
         let sources = archives.len().saturating_sub(1);
-        let modes = config.agent_modes();
         let mut routes: Vec<Route> = Vec::new();
         for source in archives.iter().take(sources) {
-            for agent_mode in &modes {
+            for agent_mode in SWEPT_MODES {
                 let Some(namespace) = source.scan_namespace(*agent_mode) else {
                     continue;
                 };
@@ -781,7 +801,7 @@ impl OplogSweeper {
 
         self.forget(route.id, &agent_id).await;
         debug!(agent_id = %agent_id, steps, more, "Oplog sweep archived an agent");
-        // When the durable routes are enabled, `more == false` is where
+        // If a durable route is ever added to `SWEPT_MODES`, `more == false` is where
         // `WorkerService::remove_cached_status` belongs, as it does in the scheduled action.
         Outcome::Archived { more }
     }
@@ -791,8 +811,8 @@ impl OplogSweeper {
     /// The layer below addresses its objects by environment and a scanned key does not carry one.
     /// The `Create` entry does, but it is the oplog's first entry and an earlier archive step will
     /// have moved it out of the layer being scanned, which is where any agent that outgrew
-    /// `entry_count_limit` ends up. The component is the durable source: an agent's environment is
-    /// its component's environment.
+    /// `entry_count_limit` ends up. The component answers instead, because an agent's environment
+    /// is its component's environment.
     async fn environment_of(&self, component_id: ComponentId) -> Option<EnvironmentId> {
         match self.components.get_metadata(component_id, None).await {
             Ok(component) => Some(component.environment_id),
@@ -987,6 +1007,37 @@ mod tests {
             }
             .to_string(),
             "durable-l2"
+        );
+    }
+
+    #[test]
+    fn no_setting_can_route_a_durable_layer() {
+        // The durable primary hop targets the indexed compressed layer, where re-appending a
+        // prefix hits a unique violation that `retry_storage_op` turns into a pod-killing panic.
+        // Reaching that has to cost a code change, so the mode list is a const with no setting
+        // behind it. This fails the moment one is added.
+        let layers = layers();
+        let sweeper = build(
+            &layers,
+            OplogSweepConfig::default(),
+            all_shards(),
+            EnvironmentId::new(),
+            HashSet::new(),
+        );
+
+        assert!(
+            sweeper.routes.iter().any(|route| route.id == EPHEMERAL_L1),
+            "the ephemeral route is not optional either"
+        );
+        let modes: Vec<AgentMode> = sweeper
+            .routes
+            .iter()
+            .map(|route| route.id.agent_mode)
+            .filter(|mode| *mode != AgentMode::Ephemeral)
+            .collect();
+        assert!(
+            modes.is_empty(),
+            "routed a mode the archive step cannot survive: {modes:?}"
         );
     }
 

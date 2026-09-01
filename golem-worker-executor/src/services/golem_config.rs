@@ -19,7 +19,6 @@ use golem_common::config::{
     ConfigExample, ConfigLoader, DbPostgresConfig, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
 use golem_common::model::RetryConfig;
-use golem_common::model::agent::AgentMode;
 use golem_common::model::base64::Base64;
 use golem_common::tracing::TracingConfig;
 use golem_common::{SafeDisplay, grpc_uri};
@@ -1620,6 +1619,9 @@ impl Default for OplogConfig {
 /// Every field except `enabled` and `interval` bounds what one tick may consume. A tick that hits
 /// a bound keeps its scan cursor and resumes there on the next tick, so work is deferred, never
 /// dropped.
+///
+/// Which agent modes the sweep covers is deliberately not a setting. See
+/// [`SWEPT_MODES`](crate::services::oplog_sweep::SWEPT_MODES).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OplogSweepConfig {
     /// Whether the sweep runs at all. When false `ScheduledAction::ArchiveOplog` stays the only
@@ -1632,13 +1634,6 @@ pub struct OplogSweepConfig {
     /// one full pass over it otherwise.
     #[serde(with = "humantime_serde")]
     pub interval: Duration,
-    /// Whether ephemeral oplog layers are swept.
-    pub ephemeral: bool,
-    /// Whether durable oplog layers are swept. Off until the durable primary hop is safe to
-    /// resume: `IndexedStorage::append` is a plain `INSERT` against a table with
-    /// `PRIMARY KEY (namespace, key, id)`, so re-appending a prefix into an indexed layer fails
-    /// non-transiently, and `retry_storage_op` turns that into a panic.
-    pub durable: bool,
     /// Keys read per scan call.
     pub page_size: u64,
     /// Agents archived concurrently within one tick. Shares the executor's indexed-storage
@@ -1669,26 +1664,11 @@ pub struct OplogSweepConfig {
     pub max_tracked_agents: usize,
 }
 
-impl OplogSweepConfig {
-    /// The agent modes this configuration sweeps.
-    pub fn agent_modes(&self) -> Vec<AgentMode> {
-        [
-            (AgentMode::Ephemeral, self.ephemeral),
-            (AgentMode::Durable, self.durable),
-        ]
-        .into_iter()
-        .filter_map(|(mode, on)| on.then_some(mode))
-        .collect()
-    }
-}
-
 impl SafeDisplay for OplogSweepConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "enabled: {}", self.enabled);
         let _ = writeln!(&mut result, "interval: {:?}", self.interval);
-        let _ = writeln!(&mut result, "ephemeral: {}", self.ephemeral);
-        let _ = writeln!(&mut result, "durable: {}", self.durable);
         let _ = writeln!(&mut result, "page size: {}", self.page_size);
         let _ = writeln!(&mut result, "max concurrency: {}", self.max_concurrency);
         let _ = writeln!(
@@ -1715,8 +1695,6 @@ impl Default for OplogSweepConfig {
         Self {
             enabled: true,
             interval: Duration::from_secs(60),
-            ephemeral: true,
-            durable: false,
             page_size: 128,
             max_concurrency: 4,
             max_archives_per_tick: 256,

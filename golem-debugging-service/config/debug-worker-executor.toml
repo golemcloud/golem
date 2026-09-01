@@ -137,9 +137,7 @@ type = "EveryNInvocation"
 count = 10
 
 [oplog.sweep]
-durable = false
 enabled = true
-ephemeral = true
 interval = "1m"
 max_archives_per_tick = 256
 max_concurrency = 4
@@ -433,9 +431,7 @@ without_time = false
 # count = 10
 # 
 # [oplog.sweep]
-# durable = false
 # enabled = true
-# ephemeral = true
 # interval = "1m"
 # max_archives_per_tick = 256
 # max_concurrency = 4
