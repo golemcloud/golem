@@ -183,7 +183,9 @@ fn nested_input(bytes: Vec<u8>) -> InputStream {
     let (mut writer, reader) =
         golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
     spawn_local(async move {
-        let _ = writer.write_all(vec![Ok(bytes)]).await;
+        if !bytes.is_empty() {
+            let _ = writer.write_all(vec![Ok(bytes)]).await;
+        }
     });
     reader
 }
