@@ -27,7 +27,8 @@ use golem_worker_executor::storage::indexed::postgres::PostgresIndexedStorage;
 use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{
-    IndexedStorage, IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanCursor,
+    IndexedStorage, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
+    IndexedStorageNamespace, ScanCursor,
 };
 use golem_worker_executor_test_utils::WorkerExecutorTestDependencies;
 use pretty_assertions::assert_eq;
@@ -762,8 +763,10 @@ async fn scan_stable_resumes_past_deleted_keys(
     let mut resume = None;
     let mut terminated = false;
     for _ in 0..256 {
+        // Through the labelled wrapper, which is how every caller reaches this.
         let (next, chunk) = is
-            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 2)
+            .with("svc", "api")
+            .scan_stable(ns.meta.clone(), None, resume, 2)
             .await
             .unwrap();
         for key in &chunk {
@@ -809,7 +812,8 @@ async fn last_id_matches_last_without_the_value(
     let key = format!("{}-last-id", Uuid::new_v4());
 
     assert_eq!(
-        is.last_id("svc", "api", "entity", ns.ns.clone(), &key)
+        is.with_entity("svc", "api", "entity")
+            .last_id(ns.ns.clone(), &key)
             .await
             .unwrap(),
         None,
@@ -834,8 +838,10 @@ async fn last_id_matches_last_without_the_value(
         .last("svc", "api", "entity", ns.ns.clone(), &key)
         .await
         .unwrap();
+    // Through the labelled wrapper, which is how every caller reaches this.
     let last_id = is
-        .last_id("svc", "api", "entity", ns.ns.clone(), &key)
+        .with_entity("svc", "api", "entity")
+        .last_id(ns.ns.clone(), &key)
         .await
         .unwrap();
 

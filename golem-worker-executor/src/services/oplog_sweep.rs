@@ -850,6 +850,7 @@ mod tests {
     };
     use crate::services::shard::ShardServiceDefault;
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
+    use crate::storage::indexed::{IndexedStorageError, IndexedStorageNamespace, ScanCursor};
     use async_trait::async_trait;
     use golem_common::model::account::AccountId;
     use golem_common::model::application::ApplicationId;
@@ -1113,6 +1114,247 @@ mod tests {
         }
     }
 
+    /// Hands back a fixed number of keys per page whatever it was asked for, and forwards
+    /// everything else. A real backend does both: Redis treats the count as a hint, so a page can
+    /// come back short with the walk still live, or longer than the ask.
+    #[derive(Debug)]
+    struct FixedPages {
+        inner: Arc<InMemoryIndexedStorage>,
+        keys_per_page: u64,
+    }
+
+    #[async_trait]
+    impl IndexedStorage for FixedPages {
+        async fn number_of_replicas(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+        ) -> Result<u8, IndexedStorageError> {
+            self.inner.number_of_replicas(svc_name, api_name).await
+        }
+
+        async fn wait_for_replicas(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            replicas: u8,
+            timeout: Duration,
+        ) -> Result<u8, IndexedStorageError> {
+            self.inner
+                .wait_for_replicas(svc_name, api_name, replicas, timeout)
+                .await
+        }
+
+        async fn exists(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            namespace: IndexedStorageNamespace,
+            key: &str,
+        ) -> Result<bool, IndexedStorageError> {
+            self.inner.exists(svc_name, api_name, namespace, key).await
+        }
+
+        async fn scan(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            namespace: IndexedStorageMetaNamespace,
+            prefix: Option<&str>,
+            cursor: ScanCursor,
+            count: u64,
+        ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
+            self.inner
+                .scan(svc_name, api_name, namespace, prefix, cursor, count)
+                .await
+        }
+
+        async fn scan_stable(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            namespace: IndexedStorageMetaNamespace,
+            prefix: Option<&str>,
+            resume: Option<ScanResume>,
+            _count: u64,
+        ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+            self.inner
+                .scan_stable(
+                    svc_name,
+                    api_name,
+                    namespace,
+                    prefix,
+                    resume,
+                    self.keys_per_page,
+                )
+                .await
+        }
+
+        async fn append(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            entity_name: &'static str,
+            namespace: IndexedStorageNamespace,
+            key: &str,
+            id: u64,
+            value: Vec<u8>,
+        ) -> Result<(), IndexedStorageError> {
+            self.inner
+                .append(svc_name, api_name, entity_name, namespace, key, id, value)
+                .await
+        }
+
+        async fn length(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            namespace: IndexedStorageNamespace,
+            key: &str,
+        ) -> Result<u64, IndexedStorageError> {
+            self.inner.length(svc_name, api_name, namespace, key).await
+        }
+
+        async fn delete(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            namespace: IndexedStorageNamespace,
+            key: &str,
+        ) -> Result<(), IndexedStorageError> {
+            self.inner.delete(svc_name, api_name, namespace, key).await
+        }
+
+        async fn read(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            entity_name: &'static str,
+            namespace: IndexedStorageNamespace,
+            key: &str,
+            start_id: u64,
+            end_id: u64,
+        ) -> Result<Vec<(u64, Vec<u8>)>, IndexedStorageError> {
+            self.inner
+                .read(
+                    svc_name,
+                    api_name,
+                    entity_name,
+                    namespace,
+                    key,
+                    start_id,
+                    end_id,
+                )
+                .await
+        }
+
+        async fn first(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            entity_name: &'static str,
+            namespace: IndexedStorageNamespace,
+            key: &str,
+        ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
+            self.inner
+                .first(svc_name, api_name, entity_name, namespace, key)
+                .await
+        }
+
+        async fn last(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            entity_name: &'static str,
+            namespace: IndexedStorageNamespace,
+            key: &str,
+        ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
+            self.inner
+                .last(svc_name, api_name, entity_name, namespace, key)
+                .await
+        }
+
+        async fn last_id(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            entity_name: &'static str,
+            namespace: IndexedStorageNamespace,
+            key: &str,
+        ) -> Result<Option<u64>, IndexedStorageError> {
+            self.inner
+                .last_id(svc_name, api_name, entity_name, namespace, key)
+                .await
+        }
+
+        async fn closest(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            entity_name: &'static str,
+            namespace: IndexedStorageNamespace,
+            key: &str,
+            id: u64,
+        ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
+            self.inner
+                .closest(svc_name, api_name, entity_name, namespace, key, id)
+                .await
+        }
+
+        async fn drop_prefix(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            namespace: IndexedStorageNamespace,
+            key: &str,
+            last_dropped_id: u64,
+        ) -> Result<(), IndexedStorageError> {
+            self.inner
+                .drop_prefix(svc_name, api_name, namespace, key, last_dropped_id)
+                .await
+        }
+    }
+
+    /// A stack with more layers below its source than one archive pass is allowed to walk.
+    fn deep_layers(compressed_levels: usize) -> Layers {
+        let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+        let blob_storage = Arc::new(InMemoryBlobStorage::new());
+        let mut archives: Vec<Arc<dyn OplogArchiveService>> = (1..=compressed_levels)
+            .map(|level| {
+                Arc::new(CompressedOplogArchiveService::new(
+                    indexed_storage.clone(),
+                    level,
+                    RetryConfig::default(),
+                )) as Arc<dyn OplogArchiveService>
+            })
+            .collect();
+        archives.push(Arc::new(BlobOplogArchiveService::new(
+            blob_storage.clone(),
+            0,
+        )));
+        let mut stack = nev![archives[0].clone()];
+        for archive in archives.iter().skip(1) {
+            stack.push(archive.clone());
+        }
+        Layers {
+            oplog_service: Arc::new(MultiLayerOplogService::new(
+                Arc::new(futures::executor::block_on(PrimaryOplogService::new(
+                    indexed_storage.clone(),
+                    blob_storage.clone(),
+                    100,
+                    100,
+                    1024,
+                    RetryConfig::default(),
+                ))),
+                stack,
+                1000,
+                1000,
+            )),
+            archives,
+            indexed_storage,
+        }
+    }
+
     fn metadata(agent_id: &AgentId, environment_id: EnvironmentId) -> AgentMetadata {
         AgentMetadata {
             agent_id: agent_id.clone(),
@@ -1268,9 +1510,28 @@ mod tests {
         environment_id: EnvironmentId,
         resident: HashSet<AgentId>,
     ) -> Arc<OplogSweeper> {
+        build_over(
+            layers.indexed_storage.clone(),
+            layers,
+            config,
+            shards,
+            environment_id,
+            resident,
+        )
+    }
+
+    /// The same, over a storage the test supplies, for the pages a backend can hand back.
+    fn build_over(
+        indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
+        layers: &Layers,
+        config: OplogSweepConfig,
+        shards: Arc<dyn ShardService>,
+        environment_id: EnvironmentId,
+        resident: HashSet<AgentId>,
+    ) -> Arc<OplogSweeper> {
         OplogSweeper::over_layers(
             config,
-            layers.indexed_storage.clone(),
+            indexed_storage,
             &layers.archives,
             shards,
             Arc::new(FixedEnvironment {
@@ -1906,6 +2167,118 @@ mod tests {
         let second = sweeper.sweep_once(&CancellationToken::new()).await;
         assert_eq!(second.scanned(), 3);
         assert_eq!(sweeper.memo.lock().await.len(), 6);
+    }
+
+    #[test]
+    async fn an_agent_stops_at_the_step_limit_rather_than_draining_without_end() {
+        // One layer more than a pass may walk, so a full drain cannot finish inside one. Without
+        // the limit an oplog that keeps reporting more to move holds the tick for the life of the
+        // pod.
+        let layers = deep_layers(MAX_ARCHIVE_STEPS as usize + 1);
+        let environment_id = EnvironmentId::new();
+        let agent_id = agent("counter-1", ComponentId::new());
+        stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
+
+        let sweeper = build(
+            &layers,
+            manual(),
+            all_shards(),
+            environment_id,
+            HashSet::new(),
+        );
+
+        sweeper.sweep_once(&CancellationToken::new()).await;
+        let second = sweeper.sweep_once(&CancellationToken::new()).await;
+
+        assert_eq!(second.route(EPHEMERAL_L1).archived, 1);
+        assert_eq!(
+            second.route(EPHEMERAL_L1).drained,
+            0,
+            "the step limit stopped the walk short of the bottom layer"
+        );
+    }
+
+    #[test]
+    async fn a_tick_stops_at_its_page_budget_when_pages_come_back_short() {
+        let layers = layers();
+        let environment_id = EnvironmentId::new();
+        let component_id = ComponentId::new();
+        for i in 0..10 {
+            stranded_ephemeral_oplog(
+                &layers,
+                &agent(&format!("counter-{i}"), component_id),
+                environment_id,
+            )
+            .await;
+        }
+
+        // A budget of eight over a page of four allows two pages. This backend answers with one
+        // key however much it is asked for, so the tick never walks its eight and only the page
+        // budget can stop it. Without one, a backend that keeps answering short pages holds a
+        // tick for as long as it likes.
+        let sweeper = build_over(
+            Arc::new(FixedPages {
+                inner: layers.indexed_storage.clone(),
+                keys_per_page: 1,
+            }),
+            &layers,
+            OplogSweepConfig {
+                enabled: false,
+                page_size: 4,
+                max_scanned_per_tick: 8,
+                ..OplogSweepConfig::default()
+            },
+            all_shards(),
+            environment_id,
+            HashSet::new(),
+        );
+
+        let report = sweeper.sweep_once(&CancellationToken::new()).await;
+        assert_eq!(report.scanned(), 2, "one key a page, and two pages allowed");
+        assert!(report.route(EPHEMERAL_L1).truncated);
+    }
+
+    #[test]
+    async fn a_tick_stops_at_its_scan_budget_when_pages_come_back_long() {
+        let layers = layers();
+        let environment_id = EnvironmentId::new();
+        let component_id = ComponentId::new();
+        for i in 0..10 {
+            stranded_ephemeral_oplog(
+                &layers,
+                &agent(&format!("counter-{i}"), component_id),
+                environment_id,
+            )
+            .await;
+        }
+
+        // A budget of six over a page of one leaves room for six pages, so the page budget is not
+        // what stops this. The backend answers every ask with four keys and the tick has to count
+        // what it was handed, not what it asked for.
+        let sweeper = build_over(
+            Arc::new(FixedPages {
+                inner: layers.indexed_storage.clone(),
+                keys_per_page: 4,
+            }),
+            &layers,
+            OplogSweepConfig {
+                enabled: false,
+                page_size: 1,
+                max_scanned_per_tick: 6,
+                ..OplogSweepConfig::default()
+            },
+            all_shards(),
+            environment_id,
+            HashSet::new(),
+        );
+
+        let report = sweeper.sweep_once(&CancellationToken::new()).await;
+        assert_eq!(
+            report.scanned(),
+            8,
+            "two pages of four, the second one carrying past the budget"
+        );
+        assert!(report.route(EPHEMERAL_L1).truncated);
     }
 
     #[test]
