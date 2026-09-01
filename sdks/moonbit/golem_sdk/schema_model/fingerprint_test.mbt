@@ -1,6 +1,6 @@
 ///|
 fn empty_graph() -> SchemaGraph {
-  { defs: [], root: schema_type(String) }
+  { defs: [], root: schema_type(String), }
 }
 
 ///|
@@ -81,7 +81,7 @@ test "SchemaFingerprintV1 golden vectors" {
     87,
     "b985cdb5445862be90e8dca06bbfa9c46b50cf40edc84ed34205bb3a214c5bb0",
   )
-  let card_spec : @types.PermissionCardSpec = { polymorphic: true }
+  let card_spec : @types.PermissionCardSpec = { polymorphic: true, }
   assert_vector(
     graph,
     Some(schema_type(PermissionCard(card_spec))),
@@ -108,7 +108,7 @@ test "SchemaFingerprintV1 canonical constrained text bytes" {
     },
   )
   let bytes = canonical_schema_bytes_v1(empty_graph(), Some(constrained))
-  let hex = StringBuilder::new(size_hint=bytes.length() * 2)
+  let hex = StringBuilder(size_hint=bytes.length() * 2)
   let digits = "0123456789abcdef"
   for byte in bytes {
     hex.write_char(
@@ -156,7 +156,7 @@ test "set restrictions normalize and reject duplicates" {
   )
   try schema_fingerprint_v1(empty_graph(), Some(duplicate)) catch {
     DuplicateSetValue(..) => ()
-    error => fail("unexpected error: \{error}")
+    error => fail("unexpected error: \{repr(error)}")
   } noraise {
     _ => fail("expected duplicate set value error")
   }

@@ -172,7 +172,7 @@ fn reconcile_globals(
       _ => conflict(flag.long, command)
     }
   }
-  { options, flags }
+  { options, flags, }
 }
 
 ///|
@@ -241,7 +241,7 @@ fn reconcile_body(
       _ => conflict(flag.long, command)
     }
   }
-  { ..body, positionals: { fixed, tail }, options, flags }
+  { ..body, positionals: { fixed, tail, }, options, flags, }
 }
 
 ///|
@@ -292,7 +292,7 @@ fn value_is_scope(
   globals : GlobalsDef,
   body : CommandBodyDef,
 ) -> Map[String, ValueIsComparand] {
-  let scope : Map[String, ValueIsComparand] = {}
+  let scope : Map[String, ValueIsComparand] = Map([])
   for global in inherited {
     register_value_is_global(scope, global)
   }
@@ -335,13 +335,13 @@ fn resolve_value_is_ref(
   scope : Map[String, ValueIsComparand],
 ) -> RefDef raise ToolBuildError {
   match ref_ {
-    ValueIs({ name, value: Deferred(literal) }) =>
+    ValueIs({ name, value: Deferred(literal), }) =>
       match scope.get(name) {
         Some(Typed(canonical_name, graph)) => {
           let value = value_is_literal_to_schema_value(graph, literal) catch {
             _ => raise ValueIsTypeMismatch(name)
           }
-          ValueIs({ name: canonical_name, value: Resolved(value) })
+          ValueIs({ name: canonical_name, value: Resolved(value), })
         }
         Some(Flag) => raise ValueIsTypeMismatch(name)
         None => ref_
@@ -369,7 +369,7 @@ fn resolve_value_is_constraint(
     RequiresAny(refs) => RequiresAny(resolve_value_is_refs(refs, scope))
     MutexGroups(groups) =>
       MutexGroups(
-        groups.map(group => { refs: resolve_value_is_refs(group.refs, scope) }),
+        groups.map(group => { refs: resolve_value_is_refs(group.refs, scope), }),
       )
     Implies(implies) =>
       Implies({
@@ -429,7 +429,7 @@ fn normalize_command(
     }
     None => None
   }
-  commands[index] = { ..node, globals, body }
+  commands[index] = { ..node, globals, body, }
   let child_inherited = inherited.copy()
   for global in globals_as_effective(globals) {
     child_inherited.push(global)
@@ -452,7 +452,7 @@ pub fn ToolDef::normalize_inherited_globals(
 
 ///|
 fn shift_node(node : CommandNodeDef, offset : Int) -> CommandNodeDef {
-  { ..node, subcommands: node.subcommands.map(index => index + offset) }
+  { ..node, subcommands: node.subcommands.map(index => index + offset), }
 }
 
 ///|

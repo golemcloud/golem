@@ -25,7 +25,7 @@ pub fn resource_candidate(
   raw_index : Int,
   drop_raw : () -> Unit,
 ) -> ResourceCandidate {
-  { kind, raw_index, drop_raw }
+  { kind, raw_index, drop_raw, }
 }
 
 ///|
@@ -235,7 +235,7 @@ pub fn OwnershipContext::acquire_resources(
     })
     tokens.push(token)
   }
-  let carrier = { context: self, tokens, valid }
+  let carrier = { context: self, tokens, valid, }
   if self.state.val.revoked {
     ignore(carrier.drop())
   }
@@ -365,9 +365,9 @@ pub fn OwnershipContext::own_stdin(
   stream : @async-core.Stream[Byte],
 ) -> MiddlewareStdin {
   let state : Ref[MiddlewareStdinState] = {
-    val: { stream: Some(stream), ownership: StdinAvailable },
+    val: { stream: Some(stream), ownership: StdinAvailable, },
   }
-  let owned : MiddlewareStdin = { context: self, state }
+  let owned : MiddlewareStdin = { context: self, state, }
   self.register_cleanup(fn() { owned.drop_if_available() })
   owned
 }
@@ -470,9 +470,9 @@ fn OwnershipContext::own_result_with_cleanup(
   cleanup : (@toolCore.InvocationResult) -> Unit,
 ) -> OwnedInvocationResult {
   let state : Ref[OwnedInvocationResultState] = {
-    val: { result: Some(result), ownership: ResultAvailable, cleanup },
+    val: { result: Some(result), ownership: ResultAvailable, cleanup, },
   }
-  let owned : OwnedInvocationResult = { context: self, state }
+  let owned : OwnedInvocationResult = { context: self, state, }
   self.register_cleanup(fn() { owned.drop_if_available() })
   owned
 }
@@ -520,30 +520,18 @@ fn transfer_aware_stdout(
 ) -> @async-core.Stream[Byte] {
   @async-core.Stream::produce(
     async fn(sink) {
-      try {
-        for ;; {
-          match source.read(64) {
-            Some(data) => if !sink.write_all(data[:]) { break }
-            None => {
-              sink.close()
-              break
-            }
+      defer @async-core.protect_from_cancel(
+        async fn() { source.drop() },
+        resume_on_cancel=true,
+      )
+      for ;; {
+        match source.read(64) {
+          Some(data) => if !sink.write_all(data[:]) { break }
+          None => {
+            sink.close()
+            break
           }
         }
-      } catch {
-        error => {
-          @async-core.protect_from_cancel(
-            async fn() { source.drop() },
-            resume_on_cancel=true,
-          )
-          raise error
-        }
-      } noraise {
-        _ =>
-          @async-core.protect_from_cancel(
-            async fn() { source.drop() },
-            resume_on_cancel=true,
-          )
       }
     },
     on_unstarted_drop=fn() { source.drop_sync() },

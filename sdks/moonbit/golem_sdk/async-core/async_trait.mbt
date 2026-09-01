@@ -42,7 +42,7 @@ pub async fn[X] Sink::write(self : Sink[X], data : ArrayView[X]) -> Int {
   // The callback may suspend, so it must not retain the caller's borrowed view.
   let buffer = FixedArray::makei(length, i => data[i])
   let written = (self.write)(buffer[:])
-  guard written >= 0 && written <= length
+  guard! written >= 0 && written <= length
   if !(self.is_open)() && written < length && (self.has_cleanup)() {
     self.cleanup_unaccepted(buffer[:], written)
     return length
@@ -67,7 +67,7 @@ pub async fn Sink::write_bytes(self : Sink[Byte], data : BytesView) -> Int {
   }
   let buffer = FixedArray::makei(length, i => data[i])
   let written = (self.write)(buffer[:])
-  guard written >= 0 && written <= length
+  guard! written >= 0 && written <= length
   if !(self.is_open)() && written < length && (self.has_cleanup)() {
     self.cleanup_unaccepted(buffer[:], written)
     return length
@@ -124,18 +124,18 @@ pub async fn[X] Sink::write_all(self : Sink[X], data : ArrayView[X]) -> Bool {
     if offset >= data.length() {
       return true
     }
-    let written = self.write(data[offset:]) catch {
-      err => {
+    let written = {
+      errdefer {
         self.cleanup_unaccepted(data, offset)
-        raise err
       }
+      self.write(data[offset:])
     }
     offset = offset + written
     if !self.is_open() {
       self.cleanup_unaccepted(data, offset)
       return false
     }
-    guard written > 0
+    guard! written > 0
   }
 }
 
@@ -147,18 +147,18 @@ pub async fn Sink::write_all_bytes(self : Sink[Byte], data : BytesView) -> Bool 
     if offset >= data.length() {
       return true
     }
-    let written = self.write_bytes(data[offset:]) catch {
-      err => {
+    let written = {
+      errdefer {
         self.cleanup_unaccepted_bytes(data, offset)
-        raise err
       }
+      self.write_bytes(data[offset:])
     }
     offset = offset + written
     if !self.is_open() {
       self.cleanup_unaccepted_bytes(data, offset)
       return false
     }
-    guard written > 0
+    guard! written > 0
   }
 }
 

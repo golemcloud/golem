@@ -8,7 +8,7 @@ priv struct LoggingState {
 }
 
 ///|
-let state : LoggingState = { context: "", min_level: TRACE }
+let state : LoggingState = { context: "", min_level: TRACE, }
 
 ///|
 /// Sets the global default context string used by module-level logging functions.
@@ -37,7 +37,7 @@ pub fn Logger::new(
   context? : String = "",
   min_level? : Level? = None,
 ) -> Logger {
-  { context, min_level }
+  { context, min_level, }
 }
 
 ///|
@@ -52,13 +52,13 @@ pub fn Logger::with_name(self : Logger, name : String) -> Logger {
   } else {
     self.context + "/" + name
   }
-  { ..self, context: new_context }
+  { ..self, context: new_context, }
 }
 
 ///|
 /// Returns a new logger with the given minimum level override.
 pub fn Logger::with_min_level(self : Logger, level : Level) -> Logger {
-  { ..self, min_level: Some(level) }
+  { ..self, min_level: Some(level), }
 }
 
 ///|

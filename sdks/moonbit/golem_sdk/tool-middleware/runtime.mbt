@@ -42,7 +42,7 @@ fn new_underlying_tool(
   ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError],
   drop_raw : () -> Unit,
 ) -> UnderlyingTool {
-  { ownership: OwnershipContext::new(drop_raw), invoke }
+  { ownership: OwnershipContext::new(drop_raw), invoke, }
 }
 
 ///|
@@ -213,7 +213,7 @@ pub fn encode_tool_error(
         error => {
           @model.drop_owned_capabilities(value.value)
           return @toolCommon.ToolError::InvalidResult(
-            "failed to encode tool error: \{error}",
+            "failed to encode tool error: \{Repr(error)}",
           )
         }
       }

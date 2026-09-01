@@ -58,7 +58,7 @@ fn ToolMiddleware::to_wit(self : ToolMiddleware) -> @toolCommon.ToolMiddleware {
 
 ///|
 fn ToolMiddleware::registration_error(self : ToolMiddleware) -> String? {
-  let seen : Map[String, Unit] = {}
+  let seen : Map[String, Unit] = Map([])
   let identities = [self.name]
   identities.append(self.aliases)
   for identity in identities {
@@ -160,6 +160,7 @@ pub async fn invoke_registered_tool_middleware(
 }
 
 ///|
+#warnings("-unused_value")
 fn clear_tool_middlewares_for_tests() -> Unit {
   tool_middleware_state.descriptors.clear()
   tool_middleware_state.invokers.clear()

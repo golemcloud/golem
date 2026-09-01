@@ -43,7 +43,7 @@ fn lower_first(s : String) -> String {
   }
   let c = chars[0]
   if c >= 'A' && c <= 'Z' {
-    chars[0] = Char::from_int(c.to_int() + 32)
+    chars[0] = (c.to_int() + 32).unsafe_to_char()
   }
   String::from_array(chars)
 }
@@ -126,7 +126,7 @@ fn emit_input_params(
 ) -> Unit {
   for p in params {
     let (name, pt) = p
-    if not(is_config_type(pt)) {
+    if !is_config_type(pt) {
       buf.write_string(
         "\{indent}{ name: \"\{escape_string_lit(name)}\", source: \{input_param_source_str(pt)} },\n",
       )
@@ -248,7 +248,7 @@ fn emit_construct(buf : StringBuilder, agent : AgentInfo) -> Unit {
     .map(fn(p) { if is_principal_type(p.1) { "principal" } else { p.0 } })
     .join(", ")
   buf.write_string("          let agent = \{agent.name}::new(\{args})\n")
-  let use_auto_json = agent.has_json_derives && not(agent.has_snapshottable)
+  let use_auto_json = agent.has_json_derives && !agent.has_snapshottable
   let (snap, fmt) = if agent.has_snapshottable || use_auto_json {
     let f = if agent.has_snapshottable { "Binary" } else { "Json" }
     ("Some(agent)", "Some(@agents.SnapshotFormat::\{f})")
@@ -347,7 +347,7 @@ fn emit_method_arm(
 ///|
 /// Emits the `impl @agents.RawAgent for <Name>` dispatch block.
 fn emit_raw_agent(buf : StringBuilder, agent : AgentInfo) -> Unit {
-  buf.write_string("///|\n")
+  buf.write_string("///|\n#warnings(\"-partial_match\")\n")
   buf.write_string(
     "impl @agents.RawAgent for \{agent.name} with invoke(self, method_name, input, principal) {\n",
   )
@@ -377,7 +377,6 @@ fn emit_raw_agent(buf : StringBuilder, agent : AgentInfo) -> Unit {
   buf.write_string(
     "    @common.AgentError::CustomError(value) => Err(@common.AgentError::CustomError(value))\n",
   )
-  buf.write_string("    e => raise e\n")
   buf.write_string("  }\n")
   buf.write_string("}\n\n")
 }
@@ -387,7 +386,7 @@ fn emit_raw_agent(buf : StringBuilder, agent : AgentInfo) -> Unit {
 /// (`ToJson` + `FromJson`) and has no hand-written `Snapshottable`. Uses
 /// UTF-8-safe byte conversion for the JSON snapshot envelope.
 fn emit_snapshottable(buf : StringBuilder, agent : AgentInfo) -> Unit {
-  if not(agent.has_json_derives) || agent.has_snapshottable {
+  if !agent.has_json_derives || agent.has_snapshottable {
     return
   }
   let name = agent.name
@@ -395,7 +394,7 @@ fn emit_snapshottable(buf : StringBuilder, agent : AgentInfo) -> Unit {
   buf.write_string(
     "impl @agents.Snapshottable for \{name} with save_snapshot(self) -> Bytes {\n",
   )
-  buf.write_string("  @utf8.encode(self.to_json().stringify()[:])\n")
+  buf.write_string("  @utf8.encode(ToJson::to_json(self).stringify()[:])\n")
   buf.write_string("}\n\n")
   buf.write_string("///|\n")
   buf.write_string(
@@ -430,7 +429,7 @@ fn emit_snapshottable(buf : StringBuilder, agent : AgentInfo) -> Unit {
 pub fn generate_agent_registration(
   agents : Array[AgentInfo],
 ) -> @list.List[@syntax.Impl] {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   emit_init(buf, agents)
   for a in agents {
     emit_raw_agent(buf, a)
