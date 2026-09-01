@@ -12,40 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Finds oplog layers that hold entries for agents which have gone quiet, and runs one archive
-//! step against each.
+//! Finds oplog layers holding entries for agents that have gone quiet, and runs one archive step
+//! against each.
 //!
 //! This is the work list, not the mover. `MultiLayerOplog::try_archive_blocking` and
-//! `EphemeralOplog::try_archive_blocking` already move a prefix down one layer, handle both the
-//! primary hop and the lower hops, and report whether another layer still holds entries. The
-//! sweeper decides *which* agents to run that against.
+//! `EphemeralOplog::try_archive_blocking` already move a prefix down one layer and report whether a
+//! layer below still holds entries. `ScheduledAction::ArchiveOplog` answers the same question from
+//! a row written on the oplog commit path, one synchronous scheduler-storage write per invocation
+//! held under `update_state_lock`; the sweep answers it from a paginated scan of the layer itself.
 //!
-//! `ScheduledAction::ArchiveOplog` answers the same question from a row written on the oplog
-//! commit path, one synchronous scheduler-storage write per invocation, held under
-//! `update_state_lock`. The sweeper answers it from a paginated scan of the layer itself, so the
-//! write disappears and the scheduler table stops accumulating a row per invocation.
+//! The scanned layer is self-cleaning: an archive step ends in `drop_prefix`, which removes the
+//! key. The scan therefore enumerates work rather than agents.
 //!
-//! The layer being scanned is self-cleaning: an archive step ends in `drop_prefix`, which removes
-//! the key. So the scan enumerates work rather than agents, and a sweep that finds nothing costs
-//! one storage round trip.
+//! # Failure
 //!
-//! # What a tick costs
+//! A non-transient indexed-storage error inside a tick panics through `retry_storage_op`, and this
+//! workspace builds with `panic = "abort"`, so it takes the process down. That is how every other
+//! oplog operation already behaves; the sweep adds another caller, not another failure mode. There
+//! is nothing to catch.
 //!
-//! The scan pages, the fan-out is capped by `max_concurrency`, and a tick stops after
-//! `max_archives_per_tick` archive steps, keeping its cursor so the next tick resumes rather than
-//! restarting. Work is deferred, never dropped.
+//! # Memory
 //!
-//! One bound is missing, and it is not the sweeper's to fix. Moving a prefix reads the whole source
-//! layer into one `Vec` before appending it, so peak memory per agent is its layer, not a constant.
-//! The same shape is written out twice: `EphemeralOplog::background_transfer` in `ephemeral.rs`
-//! serves ephemeral, and `BackgroundTransfer::run` in `multilayer.rs` serves durable. The sweeper
-//! inherits whichever applies rather than adding a third copy, so an agent costs the sweep exactly
-//! what `archive_ephemeral_oplog` already costs it on teardown today. What the sweeper does add is
-//! a cap on how many run at once: the teardown drain spawns one task per finishing invocation with
-//! no ceiling, while a tick holds at most `max_concurrency`. Bounding the read itself means
-//! chunking both copies, or unifying them first, and belongs in its own change with its own tests.
+//! Moving a prefix reads the whole source layer into one `Vec`, in
+//! `EphemeralOplog::background_transfer` and again in `BackgroundTransfer::run`. The sweep calls
+//! whichever applies rather than adding a third copy, so an agent costs it exactly what
+//! `archive_ephemeral_oplog` already costs on teardown. What the sweep adds is a ceiling on how
+//! many run at once: the teardown drain spawns one task per finishing invocation with nothing
+//! capping it, a tick holds at most `max_concurrency`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::sync::Arc;
 use std::time::Instant;
@@ -54,7 +49,7 @@ use futures::stream::{self, StreamExt};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::{OplogEntry, OplogIndex};
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{AgentId, OwnedAgentId, ShardAssignment, ShardId};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -62,6 +57,7 @@ use tracing::{Instrument, debug, info, info_span, warn};
 use uuid::Uuid;
 
 use crate::metrics::oplog::{record_oplog_sweep_outcome, record_oplog_sweep_tick};
+use crate::services::component::ComponentService;
 use crate::services::golem_config::OplogSweepConfig;
 use crate::services::oplog::{EphemeralOplog, MultiLayerOplog, OplogArchiveService};
 use crate::services::scheduler::SchedulerWorkerAccess;
@@ -70,8 +66,8 @@ use crate::storage::indexed::{
     IndexedStorage, IndexedStorageLabelledApi, IndexedStorageMetaNamespace, ScanCursor,
 };
 
-/// One archive step the sweeper performs: entries for agents of `agent_mode` move out of the layer
-/// at `source_level` into the layer below it.
+/// One archive step: entries for agents of `agent_mode` move out of the layer at `source_level`
+/// into the layer below it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RouteId {
     pub agent_mode: AgentMode,
@@ -88,39 +84,40 @@ impl Display for RouteId {
     }
 }
 
-/// What the sweeper decided about one scanned key. Every scanned key produces exactly one of
-/// these, which is what makes [`tally`] a total fold.
+/// What the sweep decided about one scanned key. Every scanned key produces exactly one, which is
+/// what makes [`tally`] a total fold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Outcome {
+enum Outcome {
     /// The key did not parse as `{component_id}:{agent_name}`.
     Unparseable,
     /// Another executor owns this agent's shard.
     NotOwned,
-    /// The layer holds nothing. The key lost its entries between the scan and the probe.
+    /// The layer holds nothing; the key lost its entries between the scan and the probe.
     Empty,
     /// The layer's last index moved since the previous tick, so something is still writing.
     Moving,
     /// This executor is running the agent right now.
     Resident,
-    /// The layer holds no `Create` entry, so the target address cannot be recovered.
+    /// The agent's component could not be resolved, so the environment its entries belong to is
+    /// unknown.
     Unaddressable,
     /// Opening the oplog failed.
     OpenFailed,
-    /// One archive step ran. `more` carries the `try_archive` contract: a layer below this one
-    /// still holds entries for this agent, so a later tick has work to do.
+    /// One archive step ran. `more` carries the `try_archive` contract: a layer below still holds
+    /// entries for this agent, so a later tick has work to do.
     Archived { more: bool },
 }
 
 /// Whether an agent has been quiet long enough to archive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Verdict {
-    /// Remember this index and reconsider on the next tick.
+enum Verdict {
+    /// Remember this index and reconsider next tick.
     Wait,
-    /// The index has not moved since the previous tick. Archive.
+    /// The index has not moved since the previous tick.
     Move,
 }
 
-/// Per-route counters. Every field counts scanned keys except `entries` and `drained`, and the
+/// Per-route counters. Every field counts scanned keys except `drained` and `truncated`, and the
 /// counted fields sum to `scanned`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RouteReport {
@@ -135,7 +132,7 @@ pub struct RouteReport {
     pub archived: u64,
     /// Archive steps that reported no further layer to drain. A subset of `archived`.
     pub drained: u64,
-    /// True when a budget stopped the tick before the scan reached the end of the namespace.
+    /// A budget stopped the tick, or a scan failed, before the namespace was exhausted.
     pub truncated: bool,
 }
 
@@ -162,7 +159,7 @@ impl RouteReport {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SweepReport {
     pub routes: Vec<(RouteId, RouteReport)>,
-    /// True when the sweeper ran without a shard assignment, in which case it did nothing.
+    /// True when the sweep ran without a shard assignment, in which case it did nothing.
     pub unassigned: bool,
 }
 
@@ -186,7 +183,7 @@ impl SweepReport {
 
 /// Layer keys are `{component_id}:{agent_name}`, written by `AgentId::to_redis_key`. An agent name
 /// may itself contain `:`, so only the first separator is significant.
-pub fn parse_agent_id(key: &str) -> Option<AgentId> {
+fn parse_agent_id(key: &str) -> Option<AgentId> {
     let (component, name) = key.split_once(':')?;
     if name.is_empty() {
         return None;
@@ -198,7 +195,7 @@ pub fn parse_agent_id(key: &str) -> Option<AgentId> {
 }
 
 /// Whether this executor owns the agent under the assignment it is currently running.
-pub fn owns(assignment: &ShardAssignment, agent_id: &AgentId) -> bool {
+fn owns(assignment: &ShardAssignment, agent_id: &AgentId) -> bool {
     let shard_id = ShardId::from_routing_hash(
         ShardId::hash_agent_id(agent_id),
         assignment.number_of_shards,
@@ -206,33 +203,18 @@ pub fn owns(assignment: &ShardAssignment, agent_id: &AgentId) -> bool {
     assignment.shard_ids.contains(&shard_id)
 }
 
-/// The quiet gate.
-///
-/// `ScheduledAction::ArchiveOplog` carries the index the agent had when the action was registered
-/// and acts only if the current index still matches. The sweeper has no registration to carry an
-/// index, so it compares against what it saw on its own previous tick. An agent therefore becomes
-/// eligible after its index survives one whole interval unchanged.
-pub fn assess(remembered: Option<OplogIndex>, current: OplogIndex) -> Verdict {
+/// The quiet gate. `ScheduledAction::ArchiveOplog` carries the index the agent had when the action
+/// was registered and acts only if the current index still matches; with no row to carry an index,
+/// the sweep compares against what it saw on its own previous tick.
+fn assess(remembered: Option<OplogIndex>, current: OplogIndex) -> Verdict {
     match remembered {
         Some(previous) if previous == current => Verdict::Move,
         _ => Verdict::Wait,
     }
 }
 
-/// The environment an agent's entries belong to.
-///
-/// Reading an indexed layer needs only an `AgentId`, but opening the oplog needs an
-/// `OwnedAgentId`, and the blob layer below addresses its objects by environment. The `Create`
-/// entry carries it, so the entries being moved are their own address book.
-pub fn environment_of(entries: &BTreeMap<OplogIndex, OplogEntry>) -> Option<EnvironmentId> {
-    entries.values().find_map(|entry| match entry {
-        OplogEntry::Create { environment_id, .. } => Some(*environment_id),
-        _ => None,
-    })
-}
-
-/// Adds two reports. `truncated` is sticky: a tick that hit a budget on any page hit it.
-pub fn merge(left: RouteReport, right: RouteReport) -> RouteReport {
+/// Adds two reports. `truncated` is sticky: a tick that stopped early on any page stopped early.
+fn merge(left: RouteReport, right: RouteReport) -> RouteReport {
     RouteReport {
         scanned: left.scanned + right.scanned,
         unparseable: left.unparseable + right.unparseable,
@@ -249,7 +231,7 @@ pub fn merge(left: RouteReport, right: RouteReport) -> RouteReport {
 }
 
 /// Folds per-key outcomes into a report.
-pub fn tally(outcomes: impl IntoIterator<Item = Outcome>) -> RouteReport {
+fn tally(outcomes: impl IntoIterator<Item = Outcome>) -> RouteReport {
     outcomes
         .into_iter()
         .fold(RouteReport::default(), |mut report, outcome| {
@@ -297,32 +279,15 @@ struct Route {
     source: Arc<dyn OplogArchiveService>,
 }
 
-/// A running tick loop.
-///
-/// The loop stops when the token given to [`OplogSweeper::spawn`] is cancelled, or when
-/// [`stop`](Self::stop) is called. Dropping this handle leaves the loop running: the executor's
-/// other background loops, `SchedulerServiceDefault` and `AgentStatusFlushQueue`, are governed by
-/// their shutdown token the same way, and threading a drop guard through `All` would put a
-/// lifetime holder into a thirty-argument constructor for no gain.
-pub struct SweepLoop {
-    stop: CancellationToken,
-}
-
-impl SweepLoop {
-    /// Stops the loop after the tick it is currently running.
-    pub fn stop(&self) {
-        self.stop.cancel();
-    }
-}
-
 pub struct OplogSweeper {
     config: OplogSweepConfig,
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
     routes: Vec<Route>,
     shards: Arc<dyn ShardService>,
+    components: Arc<dyn ComponentService>,
     worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
-    /// The index each agent showed on the previous tick, per route. Losing it costs one extra
-    /// tick of latency, never a stranded oplog: the work list comes from storage.
+    /// The index each agent showed on the previous tick, per route. Losing it costs one extra tick
+    /// of latency, never a stranded oplog: the work list comes from storage.
     memo: Mutex<HashMap<(RouteId, AgentId), OplogIndex>>,
     /// Where each route's scan stopped, so a budgeted tick resumes rather than restarting.
     cursors: Mutex<HashMap<RouteId, ScanCursor>>,
@@ -333,18 +298,18 @@ impl OplogSweeper {
     ///
     /// A layer is a source when it can enumerate its own keys and something sits below it to
     /// receive them. Blob-backed archives answer `None` to `scan_namespace`, so the bottom of the
-    /// stack is a target only, and no route can source from it.
+    /// stack is a target only.
     ///
-    /// Pure: no I/O, no task, no runtime needed. Call [`spawn`](Self::spawn) to start ticking.
+    /// Pure: no I/O, no task, no runtime needed. Call [`run`](Self::run) to start ticking.
     pub fn over_layers(
         config: OplogSweepConfig,
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         archives: &[Arc<dyn OplogArchiveService>],
         shards: Arc<dyn ShardService>,
+        components: Arc<dyn ComponentService>,
         worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
     ) -> Arc<Self> {
-        // The bottom layer receives entries and has nowhere to pass them on to, so it is never a
-        // source.
+        // The bottom layer receives entries and has nowhere to pass them on to.
         let sources = archives.len().saturating_sub(1);
         let modes = config.agent_modes();
         let mut routes: Vec<Route> = Vec::new();
@@ -381,45 +346,40 @@ impl OplogSweeper {
             indexed_storage,
             routes,
             shards,
+            components,
             worker_access,
             memo: Mutex::new(HashMap::new()),
             cursors: Mutex::new(HashMap::new()),
         })
     }
 
-    /// Starts the tick loop, which runs until the token is cancelled. A no-op when the config is
-    /// disabled or no route exists, in which case `ScheduledAction::ArchiveOplog` remains the only
-    /// archiving mechanism.
-    pub fn spawn(self: &Arc<Self>, shutdown: CancellationToken) -> SweepLoop {
-        let stop = shutdown.child_token();
+    /// Runs ticks until `shutdown` is cancelled, then returns.
+    ///
+    /// Cancellation is observed only between ticks, so shutting down never interrupts an archive
+    /// step between its append to the layer below and its drop from the layer above. Spawn this
+    /// into the executor's `JoinSet` so that shutdown waits for the tick in flight.
+    ///
+    /// Returns immediately when the sweep is disabled or the layer stack offers no route, leaving
+    /// `ScheduledAction::ArchiveOplog` as the only archiving mechanism.
+    pub async fn run(self: Arc<Self>, shutdown: CancellationToken) {
         if !self.config.enabled || self.routes.is_empty() {
-            return SweepLoop { stop };
+            return;
         }
-
-        let sweeper = self.clone();
-        let ticking = stop.clone();
-        let interval = self.config.interval;
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = ticking.cancelled() => break,
-                    _ = tokio::time::sleep(interval) => {}
-                }
-                if ticking.is_cancelled() {
-                    break;
-                }
-                let report = sweeper.sweep_once().await;
-                if report.archived() > 0 {
-                    debug!(
-                        archived = report.archived(),
-                        scanned = report.scanned(),
-                        "Oplog sweep tick"
-                    );
-                }
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => break,
+                _ = tokio::time::sleep(self.config.interval) => {}
             }
-        });
-
-        SweepLoop { stop }
+            let report = self.sweep_once().await;
+            if report.archived() > 0 {
+                debug!(
+                    archived = report.archived(),
+                    scanned = report.scanned(),
+                    "Oplog sweep tick"
+                );
+            }
+        }
+        debug!("Oplog sweep loop stopped");
     }
 
     /// Runs one pass over every route. Never fails: a storage error ends the affected route's tick
@@ -427,7 +387,7 @@ impl OplogSweeper {
     pub async fn sweep_once(&self) -> SweepReport {
         let Some(assignment) = self.shards.try_get_current_assignment() else {
             // Without an assignment every agent would look like someone else's, and archiving an
-            // agent this executor may not own is exactly what the shard check is for.
+            // agent this executor may not own is what the shard check is for.
             return SweepReport {
                 routes: Vec::new(),
                 unassigned: true,
@@ -458,7 +418,7 @@ impl OplogSweeper {
             .copied()
             .unwrap_or(0);
         // Folded page by page: holding every outcome would make a tick's memory grow with the
-        // namespace, which is the thing the budgets exist to prevent.
+        // namespace, which is what the budgets exist to prevent.
         let mut report = RouteReport::default();
         let mut truncated = false;
 
@@ -473,6 +433,7 @@ impl OplogSweeper {
                 Ok(page) => page,
                 Err(error) => {
                     warn!(route = %route.id, "Oplog sweep scan failed: {error}");
+                    truncated = true;
                     break;
                 }
             };
@@ -497,8 +458,14 @@ impl OplogSweeper {
             }
         }
 
-        self.cursors.lock().await.insert(route.id, cursor);
-        self.forget_stale(route.id).await;
+        // A scan cursor is positional in every indexed-storage backend here, an `OFFSET` in
+        // Postgres and SQLite and an iteration count in memory. Archiving deletes the key, so a
+        // cursor taken before a delete points past unexamined keys. Resuming is only sound while
+        // the key set held still; otherwise start the next tick from the beginning, which costs
+        // nothing extra because the keys this tick archived are the ones that are now gone.
+        let resume = if report.archived == 0 { cursor } else { 0 };
+        self.cursors.lock().await.insert(route.id, resume);
+        self.forget_stale(route.id, assignment).await;
 
         report.truncated = truncated;
         report.record(&route.id.to_string(), started.elapsed());
@@ -508,8 +475,7 @@ impl OplogSweeper {
     /// Decides one agent and, if it is quiet, runs a single archive step against it.
     async fn sweep_agent(&self, route: &Route, agent_id: AgentId) -> Outcome {
         // Reading an indexed layer is keyed by agent and mode only, so any environment addresses
-        // the same rows. The real one is recovered from the `Create` entry below, before anything
-        // that needs it.
+        // the same rows. The real one is resolved below, before anything that needs it.
         let probe = OwnedAgentId {
             environment_id: EnvironmentId::new(),
             agent_id: agent_id.clone(),
@@ -535,11 +501,12 @@ impl OplogSweeper {
             return Outcome::Moving;
         }
 
-        let head = route
-            .source
-            .read(&probe, route.id.agent_mode, OplogIndex::INITIAL, 1)
-            .await;
-        let Some(environment_id) = environment_of(&head) else {
+        // The layer below addresses its objects by environment, and the scanned key does not carry
+        // one. The `Create` entry does, but it is the first entry of the oplog and an earlier
+        // archive step will have moved it out of this layer, which is the ordinary state for any
+        // agent invoked more than once. The component is the durable source: an agent's
+        // environment is its component's environment.
+        let Some(environment_id) = self.environment_of(&agent_id).await else {
             return Outcome::Unaddressable;
         };
         let owned_agent_id = OwnedAgentId {
@@ -559,8 +526,8 @@ impl OplogSweeper {
         }
 
         // Building the suspended `Worker` is the mutual exclusion, exactly as it is for
-        // `ScheduledAction::ArchiveOplog`. It costs one construction per agent that genuinely has
-        // a tail to move, where the scheduled action paid one per registered row.
+        // `ScheduledAction::ArchiveOplog`. It costs one construction per agent that genuinely has a
+        // tail to move, where the scheduled action paid one per registered row.
         let oplog = match self.worker_access.open_oplog(&owned_agent_id).await {
             Ok(oplog) => oplog,
             Err(error) => {
@@ -581,7 +548,26 @@ impl OplogSweeper {
 
         self.forget(route.id, &agent_id).await;
         debug!(agent_id = %agent_id, more, "Oplog sweep archived one layer");
+        // When the durable routes are enabled, `more == false` is where
+        // `WorkerService::remove_cached_status` belongs, as it does in the scheduled action.
         Outcome::Archived { more }
+    }
+
+    async fn environment_of(&self, agent_id: &AgentId) -> Option<EnvironmentId> {
+        match self
+            .components
+            .get_metadata(agent_id.component_id, None)
+            .await
+        {
+            Ok(component) => Some(component.environment_id),
+            Err(error) => {
+                warn!(
+                    agent_id = %agent_id,
+                    "Oplog sweep could not resolve the component of a stranded oplog: {error}"
+                );
+                None
+            }
+        }
     }
 
     async fn remember(&self, route: RouteId, agent_id: &AgentId, index: OplogIndex) {
@@ -602,15 +588,13 @@ impl OplogSweeper {
         self.memo.lock().await.remove(&(route, agent_id.clone()));
     }
 
-    /// Drops memo entries for agents this executor no longer owns, so a reshard does not leave
-    /// them behind forever.
-    async fn forget_stale(&self, route: RouteId) {
-        let Some(assignment) = self.shards.try_get_current_assignment() else {
-            return;
-        };
-        self.memo.lock().await.retain(|(memo_route, agent_id), _| {
-            *memo_route != route || owns(&assignment, agent_id)
-        });
+    /// Drops memo entries for agents this executor no longer owns, so a reshard does not leave them
+    /// behind forever.
+    async fn forget_stale(&self, route: RouteId, assignment: &ShardAssignment) {
+        self.memo
+            .lock()
+            .await
+            .retain(|(memo_route, agent_id), _| *memo_route != route || owns(assignment, agent_id));
     }
 }
 
@@ -626,19 +610,28 @@ mod tests {
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use async_trait::async_trait;
     use golem_common::model::account::AccountId;
-    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::model::application::ApplicationId;
+    use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
+    use golem_common::model::component_metadata::ComponentMetadata;
     use golem_common::model::oplog::OplogEntry;
     use golem_common::model::{
         AgentFingerprint, AgentInvocation, AgentMetadata, AgentStatusRecord, RetryConfig, Timestamp,
     };
     use golem_common::read_only_lock;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use golem_service_base::model::component::Component;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use nonempty_collections::nev;
-    use std::collections::HashSet;
+    use std::collections::{BTreeMap, HashSet};
     use std::sync::RwLock;
+    use std::time::Duration;
     use test_r::test;
     use uuid::Uuid;
+
+    const EPHEMERAL_L1: RouteId = RouteId {
+        agent_mode: AgentMode::Ephemeral,
+        source_level: 1,
+    };
 
     fn agent(name: &str, component_id: ComponentId) -> AgentId {
         AgentId {
@@ -715,17 +708,16 @@ mod tests {
     }
 
     #[test]
-    fn environment_comes_from_the_create_entry() {
-        let environment_id = EnvironmentId::new();
-        let agent_id = agent("counter-1", ComponentId::new());
-
-        let mut with_create = BTreeMap::new();
-        with_create.insert(OplogIndex::INITIAL, create_entry(&agent_id, environment_id));
-        assert_eq!(environment_of(&with_create), Some(environment_id));
-
-        let mut without_create = BTreeMap::new();
-        without_create.insert(OplogIndex::INITIAL, OplogEntry::suspend());
-        assert_eq!(environment_of(&without_create), None);
+    fn a_route_names_its_mode_and_source_level() {
+        assert_eq!(EPHEMERAL_L1.to_string(), "ephemeral-l1");
+        assert_eq!(
+            RouteId {
+                agent_mode: AgentMode::Durable,
+                source_level: 2
+            }
+            .to_string(),
+            "durable-l2"
+        );
     }
 
     #[test]
@@ -759,18 +751,48 @@ mod tests {
     }
 
     #[test]
-    fn merge_adds_reports_and_keeps_truncation_sticky() {
-        let left = tally([Outcome::Moving, Outcome::Archived { more: false }]);
-        let mut right = tally([Outcome::Resident]);
-        right.truncated = true;
+    fn merge_adds_every_field() {
+        // Distinct non-zero values on both sides, so a field added wrongly cannot coincide with
+        // the right answer.
+        let left = RouteReport {
+            scanned: 2,
+            unparseable: 3,
+            not_owned: 4,
+            empty: 5,
+            moving: 6,
+            resident: 7,
+            unaddressable: 8,
+            open_failed: 9,
+            archived: 10,
+            drained: 11,
+            truncated: false,
+        };
+        let right = RouteReport {
+            scanned: 12,
+            unparseable: 13,
+            not_owned: 14,
+            empty: 15,
+            moving: 16,
+            resident: 17,
+            unaddressable: 18,
+            open_failed: 19,
+            archived: 20,
+            drained: 21,
+            truncated: true,
+        };
 
         let merged = merge(left, right);
-        assert_eq!(merged.scanned, 3);
-        assert_eq!(merged.moving, 1);
-        assert_eq!(merged.archived, 1);
-        assert_eq!(merged.drained, 1);
-        assert_eq!(merged.resident, 1);
-        assert!(merged.truncated);
+        assert_eq!(merged.scanned, 14);
+        assert_eq!(merged.unparseable, 16);
+        assert_eq!(merged.not_owned, 18);
+        assert_eq!(merged.empty, 20);
+        assert_eq!(merged.moving, 22);
+        assert_eq!(merged.resident, 24);
+        assert_eq!(merged.unaddressable, 26);
+        assert_eq!(merged.open_failed, 28);
+        assert_eq!(merged.archived, 30);
+        assert_eq!(merged.drained, 32);
+        assert!(merged.truncated, "truncation is sticky");
     }
 
     #[test]
@@ -865,9 +887,88 @@ mod tests {
         }
     }
 
-    /// Opens the oplog directly instead of building a `Worker` around it. The production adapter
-    /// is `Arc<dyn WorkerActivator<Ctx>>`, whose `open_oplog` goes through
-    /// `get_or_create_suspended`; both hand the sweeper the same `Arc<dyn Oplog>`.
+    fn status_lock() -> read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord> {
+        read_only_lock::tokio::ReadOnlyLock::new(Arc::new(tokio::sync::RwLock::new(
+            AgentStatusRecord::default(),
+        )))
+    }
+
+    fn execution_lock() -> read_only_lock::std::ReadOnlyLock<ExecutionStatus> {
+        read_only_lock::std::ReadOnlyLock::new(Arc::new(RwLock::new(ExecutionStatus::Suspended {
+            agent_mode: AgentMode::Ephemeral,
+            timestamp: Timestamp::now_utc(),
+        })))
+    }
+
+    /// Resolves every component to one environment, which is what the real component service does
+    /// for the agents of a given component.
+    struct FixedEnvironment {
+        environment_id: EnvironmentId,
+        fails: bool,
+    }
+
+    #[async_trait]
+    impl ComponentService for FixedEnvironment {
+        async fn get(
+            &self,
+            _engine: &wasmtime::Engine,
+            _component_id: ComponentId,
+            _component_revision: ComponentRevision,
+        ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError> {
+            unreachable!("the sweep never loads a component")
+        }
+
+        async fn get_metadata(
+            &self,
+            component_id: ComponentId,
+            _forced_revision: Option<ComponentRevision>,
+        ) -> Result<Component, WorkerExecutorError> {
+            if self.fails {
+                return Err(WorkerExecutorError::runtime("component not found"));
+            }
+            Ok(Component {
+                id: component_id,
+                revision: ComponentRevision::INITIAL,
+                environment_id: self.environment_id,
+                component_name: ComponentName("sweep-test".to_string()),
+                hash: golem_common::model::diff::Hash::empty(),
+                application_id: ApplicationId::new(),
+                account_id: AccountId::new(),
+                component_size: 100,
+                metadata: ComponentMetadata::from_parts(
+                    Default::default(),
+                    vec![],
+                    None,
+                    None,
+                    vec![],
+                    BTreeMap::new(),
+                ),
+                created_at: chrono::Utc::now(),
+                wasm_hash: golem_common::model::diff::Hash::empty(),
+                object_store_key: String::new(),
+            })
+        }
+
+        async fn resolve_component(
+            &self,
+            _component_reference: String,
+            _resolving_environment: EnvironmentId,
+            _resolving_application: ApplicationId,
+            _resolving_account: AccountId,
+        ) -> Result<Option<ComponentId>, WorkerExecutorError> {
+            Ok(None)
+        }
+
+        async fn all_cached_metadata(&self) -> Vec<Component> {
+            Vec::new()
+        }
+
+        async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
+    }
+
+    /// Opens the oplog directly instead of building a `Worker` around it. The production adapter is
+    /// `Arc<dyn WorkerActivator<Ctx>>`, whose `open_oplog` goes through `get_or_create_suspended`;
+    /// both hand the sweep the same `Arc<dyn Oplog>`.
     struct DirectAccess {
         oplog_service: Arc<dyn OplogService>,
         resident: HashSet<AgentId>,
@@ -897,15 +998,8 @@ mod tests {
                     AgentMode::Ephemeral,
                     None,
                     metadata(&owned_agent_id.agent_id, owned_agent_id.environment_id),
-                    read_only_lock::tokio::ReadOnlyLock::new(Arc::new(tokio::sync::RwLock::new(
-                        AgentStatusRecord::default(),
-                    ))),
-                    read_only_lock::std::ReadOnlyLock::new(Arc::new(RwLock::new(
-                        ExecutionStatus::Suspended {
-                            agent_mode: AgentMode::Ephemeral,
-                            timestamp: Timestamp::now_utc(),
-                        },
-                    ))),
+                    status_lock(),
+                    execution_lock(),
                 )
                 .await)
         }
@@ -919,31 +1013,28 @@ mod tests {
         }
     }
 
-    fn shards_owning(agent_id: &AgentId) -> Arc<dyn ShardService> {
+    fn all_shards() -> Arc<ShardServiceDefault> {
         let shard_service = Arc::new(ShardServiceDefault::new());
-        shard_service.register(
-            1,
-            &HashSet::from([ShardId::from_routing_hash(
-                ShardId::hash_agent_id(agent_id),
-                1,
-            )]),
-        );
+        shard_service.register(1, &HashSet::from([ShardId::new(0)]));
         shard_service
     }
 
-    fn sweeper(
+    fn build(
         layers: &Layers,
-        agent_id: &AgentId,
+        config: OplogSweepConfig,
+        shards: Arc<dyn ShardService>,
+        environment_id: EnvironmentId,
         resident: HashSet<AgentId>,
     ) -> Arc<OplogSweeper> {
         OplogSweeper::over_layers(
-            OplogSweepConfig {
-                enabled: false, // no tick loop; the test drives `sweep_once` itself
-                ..OplogSweepConfig::default()
-            },
+            config,
             layers.indexed_storage.clone(),
             &layers.archives,
-            shards_owning(agent_id),
+            shards,
+            Arc::new(FixedEnvironment {
+                environment_id,
+                fails: false,
+            }),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
                 resident,
@@ -951,8 +1042,21 @@ mod tests {
         )
     }
 
-    async fn stranded_ephemeral_oplog(layers: &Layers, agent_id: &AgentId) -> EnvironmentId {
-        let environment_id = EnvironmentId::new();
+    /// No tick loop: the test drives `sweep_once` itself.
+    fn manual() -> OplogSweepConfig {
+        OplogSweepConfig {
+            enabled: false,
+            ..OplogSweepConfig::default()
+        }
+    }
+
+    /// Leaves an ephemeral oplog in the compressed layer with nothing to drain it, which is the
+    /// state a crash between the last commit and `archive_ephemeral_oplog` leaves behind.
+    async fn stranded_ephemeral_oplog(
+        layers: &Layers,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+    ) {
         let owned_agent_id = OwnedAgentId::new(environment_id, agent_id);
         let oplog = layers
             .oplog_service
@@ -961,91 +1065,93 @@ mod tests {
                 AgentMode::Ephemeral,
                 create_entry(agent_id, environment_id),
                 metadata(agent_id, environment_id),
-                read_only_lock::tokio::ReadOnlyLock::new(Arc::new(tokio::sync::RwLock::new(
-                    AgentStatusRecord::default(),
-                ))),
-                read_only_lock::std::ReadOnlyLock::new(Arc::new(RwLock::new(
-                    ExecutionStatus::Suspended {
-                        agent_mode: AgentMode::Ephemeral,
-                        timestamp: Timestamp::now_utc(),
-                    },
-                ))),
+                status_lock(),
+                execution_lock(),
             )
             .await;
         oplog.add(OplogEntry::suspend()).await;
         oplog.add(OplogEntry::exited()).await;
         oplog.commit(CommitLevel::Always).await;
-        // The agent is gone. Nothing drained its layer, which is the state a crash between the
-        // last commit and `archive_ephemeral_oplog` leaves behind.
         drop(oplog);
-        environment_id
     }
 
     #[test]
     async fn the_bottom_layer_is_never_a_source() {
         let layers = layers();
-        let agent_id = agent("counter-1", ComponentId::new());
-        let sweeper = sweeper(&layers, &agent_id, HashSet::new());
+        let sweeper = build(
+            &layers,
+            manual(),
+            all_shards(),
+            EnvironmentId::new(),
+            HashSet::new(),
+        );
 
         // Two archives, one route: the blob layer receives entries and cannot enumerate its own.
         assert_eq!(sweeper.routes.len(), 1);
-        assert_eq!(
-            sweeper.routes[0].id,
-            RouteId {
-                agent_mode: AgentMode::Ephemeral,
-                source_level: 1
-            }
-        );
+        assert_eq!(sweeper.routes[0].id, EPHEMERAL_L1);
     }
 
     #[test]
     async fn a_quiet_ephemeral_layer_is_archived_on_the_second_tick() {
         let layers = layers();
+        let environment_id = EnvironmentId::new();
         let agent_id = agent("counter-1", ComponentId::new());
-        let environment_id = stranded_ephemeral_oplog(&layers, &agent_id).await;
+        stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-        let route = RouteId {
-            agent_mode: AgentMode::Ephemeral,
-            source_level: 1,
-        };
+        let sweeper = build(
+            &layers,
+            manual(),
+            all_shards(),
+            environment_id,
+            HashSet::new(),
+        );
 
-        let sweeper = sweeper(&layers, &agent_id, HashSet::new());
-
-        // An ephemeral oplog never reaches the primary: its entries start in the first lower
-        // layer, and the layer below is empty.
-        let source_before = layers.archives[0]
-            .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-            .await;
-        let target_before = layers.archives[1]
-            .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-            .await;
-        assert_eq!(source_before, OplogIndex::from_u64(3));
-        assert_eq!(target_before, OplogIndex::NONE);
+        // An ephemeral oplog never reaches the primary: its entries start in the first lower layer,
+        // and the layer below is empty.
+        assert_eq!(
+            layers.archives[0]
+                .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
+                .await,
+            OplogIndex::from_u64(3)
+        );
+        assert_eq!(
+            layers.archives[1]
+                .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
+                .await,
+            OplogIndex::NONE
+        );
 
         // The first tick has nothing to compare against, so it only records the index.
         let first = sweeper.sweep_once().await;
-        assert_eq!(first.route(route).scanned, 1);
-        assert_eq!(first.route(route).moving, 1);
-        assert_eq!(first.route(route).archived, 0);
+        assert_eq!(first.scanned(), 1);
+        assert_eq!(first.route(EPHEMERAL_L1).moving, 1);
+        assert_eq!(first.archived(), 0);
 
         // The index has not moved, so the second tick archives.
         let second = sweeper.sweep_once().await;
-        assert_eq!(second.route(route).archived, 1);
-
-        // `drop_prefix` removes the key, so the layer no longer enumerates the agent at all. The
-        // scan returns work, not agents.
-        let third = sweeper.sweep_once().await;
-        assert_eq!(third.route(route).scanned, 0);
+        assert_eq!(second.archived(), 1);
+        assert_eq!(second.route(EPHEMERAL_L1).drained, 1);
 
         // The entries changed layer, which is what "archived" has to mean.
-        let source_after = layers.archives[0]
-            .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-            .await;
-        let target_after = layers.archives[1]
-            .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-            .await;
-        assert_eq!(source_after, OplogIndex::NONE);
-        assert_eq!(target_after, OplogIndex::from_u64(3));
+        assert_eq!(
+            layers.archives[0]
+                .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
+                .await,
+            OplogIndex::NONE
+        );
+        assert_eq!(
+            layers.archives[1]
+                .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
+                .await,
+            OplogIndex::from_u64(3)
+        );
+
+        // An archived agent is dropped from the tracking table rather than left to grow it.
+        assert!(sweeper.memo.lock().await.is_empty());
+
+        // `drop_prefix` removes the key, so the layer no longer enumerates the agent at all.
+        let third = sweeper.sweep_once().await;
+        assert_eq!(third.scanned(), 0);
 
         // Nothing was lost on the way down.
         let entries = layers
@@ -1065,44 +1171,85 @@ mod tests {
     }
 
     #[test]
-    async fn an_agent_this_executor_is_running_is_left_alone() {
+    async fn an_agent_invoked_a_second_time_is_still_archived() {
+        // Regression: the first archive step moves the `Create` entry down a layer, and a second
+        // invocation continues the same index space. So the layer holds entries starting above
+        // `OplogIndex::INITIAL` with no `Create` in it, which is the ordinary state for any
+        // ephemeral agent invoked more than once, and it used to make the sweep skip that agent
+        // forever.
         let layers = layers();
+        let environment_id = EnvironmentId::new();
         let agent_id = agent("counter-1", ComponentId::new());
-        stranded_ephemeral_oplog(&layers, &agent_id).await;
-        let route = RouteId {
-            agent_mode: AgentMode::Ephemeral,
-            source_level: 1,
-        };
+        stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        let sweeper = build(
+            &layers,
+            manual(),
+            all_shards(),
+            environment_id,
+            HashSet::new(),
+        );
 
-        let sweeper = sweeper(&layers, &agent_id, HashSet::from([agent_id.clone()]));
+        sweeper.sweep_once().await;
+        assert_eq!(sweeper.sweep_once().await.archived(), 1, "first lifetime");
+
+        let oplog = layers
+            .oplog_service
+            .open(
+                &owned_agent_id,
+                AgentMode::Ephemeral,
+                None,
+                metadata(&agent_id, environment_id),
+                status_lock(),
+                execution_lock(),
+            )
+            .await;
+        oplog.add(OplogEntry::suspend()).await;
+        oplog.add(OplogEntry::exited()).await;
+        oplog.commit(CommitLevel::Always).await;
+        drop(oplog);
+
+        let stranded = layers.archives[0]
+            .read(
+                &owned_agent_id,
+                AgentMode::Ephemeral,
+                OplogIndex::INITIAL,
+                1,
+            )
+            .await;
+        assert!(
+            stranded.is_empty(),
+            "the second lifetime must not start at OplogIndex::INITIAL, or this proves nothing"
+        );
 
         sweeper.sweep_once().await;
         let second = sweeper.sweep_once().await;
-
-        assert_eq!(second.route(route).resident, 1);
-        assert_eq!(second.route(route).archived, 0);
+        assert_eq!(second.route(EPHEMERAL_L1).unaddressable, 0);
+        assert_eq!(second.archived(), 1, "second lifetime");
+        assert_eq!(
+            layers.archives[0]
+                .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
+                .await,
+            OplogIndex::NONE
+        );
     }
 
     #[test]
-    async fn an_agent_on_another_shard_is_left_alone() {
+    async fn an_agent_whose_component_cannot_be_resolved_is_reported_not_skipped_silently() {
         let layers = layers();
+        let environment_id = EnvironmentId::new();
         let agent_id = agent("counter-1", ComponentId::new());
-        stranded_ephemeral_oplog(&layers, &agent_id).await;
-        let route = RouteId {
-            agent_mode: AgentMode::Ephemeral,
-            source_level: 1,
-        };
+        stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
 
-        let shard_service = Arc::new(ShardServiceDefault::new());
-        shard_service.register(4, &HashSet::new());
         let sweeper = OplogSweeper::over_layers(
-            OplogSweepConfig {
-                enabled: false,
-                ..OplogSweepConfig::default()
-            },
+            manual(),
             layers.indexed_storage.clone(),
             &layers.archives,
-            shard_service,
+            all_shards(),
+            Arc::new(FixedEnvironment {
+                environment_id,
+                fails: true,
+            }),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
                 resident: HashSet::new(),
@@ -1111,78 +1258,278 @@ mod tests {
 
         sweeper.sweep_once().await;
         let second = sweeper.sweep_once().await;
+        assert_eq!(second.route(EPHEMERAL_L1).unaddressable, 1);
+        assert_eq!(second.archived(), 0);
+    }
 
-        assert_eq!(second.route(route).not_owned, 1);
-        assert_eq!(second.route(route).archived, 0);
+    #[test]
+    async fn an_agent_this_executor_is_running_is_left_alone() {
+        let layers = layers();
+        let environment_id = EnvironmentId::new();
+        let agent_id = agent("counter-1", ComponentId::new());
+        stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
+        let sweeper = build(
+            &layers,
+            manual(),
+            all_shards(),
+            environment_id,
+            HashSet::from([agent_id.clone()]),
+        );
+
+        sweeper.sweep_once().await;
+        let second = sweeper.sweep_once().await;
+
+        assert_eq!(second.route(EPHEMERAL_L1).resident, 1);
+        assert_eq!(second.archived(), 0);
+    }
+
+    #[test]
+    async fn an_agent_on_another_shard_is_left_alone() {
+        let layers = layers();
+        let environment_id = EnvironmentId::new();
+        let agent_id = agent("counter-1", ComponentId::new());
+        stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
+
+        let shards = Arc::new(ShardServiceDefault::new());
+        shards.register(4, &HashSet::new());
+        let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
+
+        sweeper.sweep_once().await;
+        let second = sweeper.sweep_once().await;
+
+        assert_eq!(second.route(EPHEMERAL_L1).not_owned, 1);
+        assert_eq!(second.archived(), 0);
+    }
+
+    #[test]
+    async fn a_reshard_drops_the_tracking_entries_it_no_longer_owns() {
+        let layers = layers();
+        let environment_id = EnvironmentId::new();
+        let agent_id = agent("counter-1", ComponentId::new());
+        stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
+
+        let shards = all_shards();
+        let sweeper = build(
+            &layers,
+            manual(),
+            shards.clone(),
+            environment_id,
+            HashSet::new(),
+        );
+
+        sweeper.sweep_once().await;
+        assert_eq!(sweeper.memo.lock().await.len(), 1);
+
+        // The shard moves to another executor before the agent ever went quiet for us.
+        shards
+            .set_shard_assignment(4, &HashSet::new())
+            .expect("assignment");
+        sweeper.sweep_once().await;
+
+        assert!(
+            sweeper.memo.lock().await.is_empty(),
+            "a tracking entry for an agent we no longer own must not be kept"
+        );
     }
 
     #[test]
     async fn a_budgeted_tick_resumes_where_it_stopped() {
         let layers = layers();
+        let environment_id = EnvironmentId::new();
         let component_id = ComponentId::new();
         let agents: Vec<AgentId> = (0..3)
             .map(|i| agent(&format!("counter-{i}"), component_id))
             .collect();
         for agent_id in &agents {
-            stranded_ephemeral_oplog(&layers, agent_id).await;
+            stranded_ephemeral_oplog(&layers, agent_id, environment_id).await;
         }
-        let route = RouteId {
-            agent_mode: AgentMode::Ephemeral,
-            source_level: 1,
-        };
 
-        // One key per scan call, one key per tick: three ticks to see three agents.
-        let sweeper = OplogSweeper::over_layers(
+        // One key per scan call, one key per tick: three ticks to see three agents. Nothing is
+        // archived in these ticks, so the scan cursor stays valid across them.
+        let sweeper = build(
+            &layers,
             OplogSweepConfig {
                 enabled: false,
                 page_size: 1,
                 max_scanned_per_tick: 1,
                 ..OplogSweepConfig::default()
             },
-            layers.indexed_storage.clone(),
-            &layers.archives,
-            shards_owning(&agents[0]),
-            Arc::new(DirectAccess {
-                oplog_service: layers.oplog_service.clone(),
-                resident: HashSet::new(),
-            }),
+            all_shards(),
+            environment_id,
+            HashSet::new(),
         );
 
         let mut seen = 0;
         for _ in 0..3 {
             let report = sweeper.sweep_once().await;
-            assert!(report.route(route).truncated);
-            seen += report.route(route).scanned;
+            assert!(report.route(EPHEMERAL_L1).truncated);
+            seen += report.route(EPHEMERAL_L1).scanned;
         }
 
-        // Each tick stopped after its budget and the next one carried on, so three ticks covered
-        // all three agents rather than revisiting the first.
-        assert_eq!(seen, 3);
+        assert_eq!(
+            seen, 3,
+            "each tick carried on rather than revisiting the first"
+        );
         assert_eq!(sweeper.memo.lock().await.len(), 3);
+    }
+
+    #[test]
+    async fn the_archive_budget_stops_a_tick() {
+        let layers = layers();
+        let environment_id = EnvironmentId::new();
+        let component_id = ComponentId::new();
+        for i in 0..2 {
+            stranded_ephemeral_oplog(
+                &layers,
+                &agent(&format!("counter-{i}"), component_id),
+                environment_id,
+            )
+            .await;
+        }
+
+        let sweeper = build(
+            &layers,
+            OplogSweepConfig {
+                enabled: false,
+                page_size: 1,
+                max_archives_per_tick: 1,
+                ..OplogSweepConfig::default()
+            },
+            all_shards(),
+            environment_id,
+            HashSet::new(),
+        );
+
+        // Two ticks to make both agents quiet, then a tick that may archive only one of them.
+        sweeper.sweep_once().await;
+        sweeper.sweep_once().await;
+        let budgeted = sweeper.sweep_once().await;
+
+        assert_eq!(budgeted.archived(), 1);
+        assert!(budgeted.route(EPHEMERAL_L1).truncated);
     }
 
     #[test]
     async fn a_sweep_without_a_shard_assignment_does_nothing() {
         let layers = layers();
+        let environment_id = EnvironmentId::new();
         let agent_id = agent("counter-1", ComponentId::new());
-        stranded_ephemeral_oplog(&layers, &agent_id).await;
+        stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
 
-        let sweeper = OplogSweeper::over_layers(
+        let sweeper = build(
+            &layers,
+            manual(),
+            Arc::new(ShardServiceDefault::new()),
+            environment_id,
+            HashSet::new(),
+        );
+
+        let report = sweeper.sweep_once().await;
+        assert!(report.unassigned);
+        assert_eq!(report.scanned(), 0);
+        assert_eq!(report.archived(), 0);
+    }
+
+    #[test]
+    async fn a_disabled_sweep_never_ticks() {
+        let layers = layers();
+        let environment_id = EnvironmentId::new();
+        let agent_id = agent("counter-1", ComponentId::new());
+        stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
+        let sweeper = build(
+            &layers,
             OplogSweepConfig {
                 enabled: false,
+                interval: Duration::from_millis(1),
+                ..OplogSweepConfig::default()
+            },
+            all_shards(),
+            environment_id,
+            HashSet::new(),
+        );
+
+        tokio::time::timeout(
+            Duration::from_millis(200),
+            sweeper.clone().run(CancellationToken::new()),
+        )
+        .await
+        .expect("a disabled sweep must return instead of ticking");
+        assert_eq!(sweeper.memo.lock().await.len(), 0);
+    }
+
+    #[test]
+    async fn a_stack_with_no_source_layer_never_ticks() {
+        let layers = layers();
+        let sweeper = OplogSweeper::over_layers(
+            OplogSweepConfig {
+                enabled: true,
+                interval: Duration::from_millis(1),
                 ..OplogSweepConfig::default()
             },
             layers.indexed_storage.clone(),
-            &layers.archives,
-            Arc::new(ShardServiceDefault::new()),
+            // Only the bottom layer, which can never be a source.
+            &layers.archives[1..],
+            all_shards(),
+            Arc::new(FixedEnvironment {
+                environment_id: EnvironmentId::new(),
+                fails: false,
+            }),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
                 resident: HashSet::new(),
             }),
         );
 
-        let report = sweeper.sweep_once().await;
-        assert!(report.unassigned);
-        assert_eq!(report.scanned(), 0);
+        assert!(sweeper.routes.is_empty());
+        tokio::time::timeout(
+            Duration::from_millis(200),
+            sweeper.run(CancellationToken::new()),
+        )
+        .await
+        .expect("a sweep with no route must return instead of ticking");
+    }
+
+    #[test]
+    async fn cancelling_the_token_stops_the_loop() {
+        let layers = layers();
+        let environment_id = EnvironmentId::new();
+        let agent_id = agent("counter-1", ComponentId::new());
+        stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
+        let sweeper = build(
+            &layers,
+            OplogSweepConfig {
+                enabled: true,
+                interval: Duration::from_millis(5),
+                ..OplogSweepConfig::default()
+            },
+            all_shards(),
+            environment_id,
+            HashSet::new(),
+        );
+
+        let token = CancellationToken::new();
+        let running = tokio::spawn({
+            let sweeper = sweeper.clone();
+            let token = token.clone();
+            async move { sweeper.run(token).await }
+        });
+
+        // Long enough for several ticks, so the agent is archived before shutdown is asked for.
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        token.cancel();
+
+        tokio::time::timeout(Duration::from_secs(2), running)
+            .await
+            .expect("the loop must stop once the token is cancelled")
+            .expect("the loop must not panic");
+
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        assert_eq!(
+            layers.archives[1]
+                .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
+                .await,
+            OplogIndex::from_u64(3),
+            "the loop should have archived before it was asked to stop"
+        );
     }
 }

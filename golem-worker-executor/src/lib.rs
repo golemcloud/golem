@@ -920,15 +920,23 @@ pub async fn create_worker_executor_impl<
     );
 
     // Same work as `ScheduledAction::ArchiveOplog`, driven by a paginated scan of the oplog layers
-    // instead of a row written on the oplog commit path.
+    // instead of a row written on the oplog commit path. Spawned into the executor's join set so a
+    // shutdown waits for the tick in flight rather than cutting an archive step in half.
     let oplog_sweeper = OplogSweeper::over_layers(
         golem_config.oplog.sweep.clone(),
         indexed_storage.clone(),
         &sweep_archives,
         shard_service.clone(),
+        component_service.clone(),
         Arc::new(lazy_worker_activator.clone() as Arc<dyn WorkerActivator<Ctx>>),
     );
-    oplog_sweeper.spawn(shutdown_token.clone());
+    join_set.spawn({
+        let shutdown_token = shutdown_token.clone();
+        async move {
+            oplog_sweeper.run(shutdown_token).await;
+            Ok(())
+        }
+    });
 
     let additional_deps = bootstrap.create_additional_deps(registry_service.clone());
 
