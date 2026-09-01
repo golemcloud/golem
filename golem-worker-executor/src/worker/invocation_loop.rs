@@ -17,7 +17,7 @@ use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
-use crate::services::{HasActiveAgents, HasEvents, HasOplog, HasWorker};
+use crate::services::{HasActiveAgents, HasEvents, HasOplog, HasShardService, HasWorker};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
@@ -137,6 +137,19 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         let mut deferred_wakeups = VecDeque::new();
 
         'outer: loop {
+            if let Err(err @ WorkerExecutorError::InvalidShardId { .. }) =
+                self.parent.shard_service().check_worker(&agent_id)
+            {
+                debug!(
+                    %agent_id,
+                    "Invocation queue loop unloading agent whose shard is no longer owned"
+                );
+                self.parent.acknowledge_interruption();
+                self.stop_unloaded(Some(err)).await;
+                self.parent.remove_from_active_agents().await;
+                break;
+            }
+
             let entity_generation = self
                 .parent
                 .active_agents()

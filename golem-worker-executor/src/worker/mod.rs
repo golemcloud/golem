@@ -721,6 +721,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         principal: Principal,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Self, WorkerExecutorError> {
+        deps.shard_service()
+            .check_worker(&owned_agent_id.agent_id)?;
+
         let start = std::time::Instant::now();
         let GetOrCreateWorkerResult {
             initial_worker_metadata,
@@ -1096,6 +1099,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Err(err.clone())
             }
             WorkerInstance::Unloaded { .. } => {
+                // A revoke may have landed after the caller's ownership check (for
+                // example while this worker's creation was in flight and the shard
+                // drain waited it out as unloaded). Loading it now would run an agent
+                // of a lost shard after RevokeShards already returned, so re-check
+                // before committing to a load; the caller re-resolves the owner.
+                this.shard_service()
+                    .check_worker(&this.owned_agent_id.agent_id)?;
+
                 this.mark_as_loading();
                 crate::metrics::workers::inc_worker_waiting_for_memory();
                 *instance_guard = WorkerInstance::WaitingForPermit(WaitingWorker::new(
@@ -1377,6 +1388,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             agent_mode: execution_status.agent_mode(),
             timestamp: Timestamp::now_utc(),
         };
+    }
+
+    /// Resolves a pending interruption without going through the worker's store, releasing
+    /// whoever is awaiting it via the receiver handed out by `set_interrupting`. Used when the
+    /// invocation loop unloads the worker instead of restarting it, which is the one exit that
+    /// does not pass through the store's `set_suspended`.
+    pub(crate) fn acknowledge_interruption(&self) {
+        let mut execution_status = self.execution_status.write().unwrap();
+        if let ExecutionStatus::Interrupting {
+            agent_mode,
+            await_interruption,
+            ..
+        } = execution_status.clone()
+        {
+            *execution_status = ExecutionStatus::Suspended {
+                agent_mode,
+                timestamp: Timestamp::now_utc(),
+            };
+            await_interruption.send(()).ok();
+        }
     }
 
     pub fn get_initial_worker_metadata(&self) -> AgentMetadata {

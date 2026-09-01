@@ -62,7 +62,9 @@ impl ShardManagement {
 
         let change = Arc::new(Notify::new());
         // NOTE: We consider all healthy pods as new pods to trigger full assigment, given they might be lagging:
-        //       this can happen with interleaved shard-manager and worker restarts
+        //       this can happen with interleaved shard-manager and worker restarts.
+        //       The first pass reconciles them BEFORE its rebalance (the pre-rebalance stage in
+        //       `worker`), so a lagging pod drops stale shards before they can be reassigned.
         let updates = Arc::new(Mutex::new(ShardManagementChanges::new(
             healthy_pods,
             unhealthy_pods,
@@ -142,8 +144,9 @@ impl ShardManagement {
             // Getting a write lock while
             //   - the rebalance plan is calculated,
             //   - new and removed pods are added to the routing table and got persisted,
+            //   - a snapshot of that persisted state is taken for the pre-rebalance reconciles,
             // but the rebalance plan is NOT applied yet. The lock is then release for apply.
-            let (mut rebalance, full_assignment_pods) = {
+            let (mut rebalance, carried_over_pods, pass_start_snapshot) = {
                 let mut current_routing_table = routing_table.write().await;
 
                 for pod in removed_pods {
@@ -165,15 +168,15 @@ impl ShardManagement {
                 }
                 let rebalance = Rebalance::from_routing_table(&current_routing_table, threshold);
 
-                let mut full_assignment_pods: HashSet<Pod> = HashSet::new();
+                let mut carried_over_pods: HashSet<Pod> = HashSet::new();
 
                 for pod in send_full_assignment {
-                    full_assignment_pods.insert(pod);
+                    carried_over_pods.insert(pod);
                 }
 
                 for pod in retry_full_assignment_pods {
                     if current_routing_table.has_pod(pod) {
-                        full_assignment_pods.insert(pod);
+                        carried_over_pods.insert(pod);
                     }
                 }
 
@@ -182,8 +185,39 @@ impl ShardManagement {
                     .await
                     .expect("Failed to persist routing table after pod changes");
 
-                (rebalance, full_assignment_pods)
+                (rebalance, carried_over_pods, current_routing_table.clone())
             };
+
+            // Pods carried over from a previous pass (failed reconciles) or (re)connecting pods
+            // may still hold shards the routing table no longer credits them with; they get their
+            // authoritative assignment BEFORE the rebalance below can hand any of those shards to
+            // another pod. Failures are retried once more this pass from the post-rebalance
+            // snapshot (the pod is still in the table mid-pass), and a failure of that retry is
+            // re-queued for the next pass by the handler further down.
+            let mut full_assignment_pods: HashSet<Pod> = HashSet::new();
+            if !carried_over_pods.is_empty() {
+                let pre_assignments =
+                    Self::full_assignments_for(&pass_start_snapshot, &carried_over_pods);
+                let failed_pre_sets = if pre_assignments.is_empty() {
+                    Vec::new()
+                } else {
+                    set_shard_assignments(
+                        worker_executors.clone(),
+                        pass_start_snapshot.number_of_shards,
+                        &pre_assignments,
+                    )
+                    .await
+                };
+                if !failed_pre_sets.is_empty() {
+                    warn!(
+                        failed_pods = failed_pre_sets.iter().map(|(pod, _)| pod).join(", "),
+                        "Some pods could not receive their authoritative shard assignment before the rebalance; retrying after it"
+                    );
+                    for (pod, _) in &failed_pre_sets {
+                        full_assignment_pods.insert(*pod);
+                    }
+                }
+            }
 
             debug!(rebalance=%rebalance, "Applying rebalance plan");
             let rebalance_failures =
@@ -200,16 +234,17 @@ impl ShardManagement {
 
                 warn!(
                     failed_shards = failed_shards.iter().join(", "),
-                    "Some shards could not be assigned and will be left unassigned for retry"
+                    "Some shards could not be assigned; they are left unassigned and the pods get their authoritative assignment"
                 );
 
-                {
-                    let mut updates_guard = updates.lock().await;
-                    for (pod, _) in &rebalance_failures.failed_assignments {
-                        if full_assignment_pods.contains(pod) {
-                            updates_guard.retry_full_assignment(*pod);
-                        }
-                    }
+                // The executor may have applied the assignment even though the call failed
+                // (for example a timeout), so the pod receives its authoritative assignment in
+                // this pass - the post-rebalance snapshot no longer credits it with the failed
+                // shards - before the next pass can hand them to another pod. If that
+                // reconciliation fails too, it is re-queued below and re-sent at the START of the
+                // next pass, before that pass's rebalance.
+                for (pod, _) in &rebalance_failures.failed_assignments {
+                    full_assignment_pods.insert(*pod);
                 }
                 needs_retry = true;
             }
@@ -221,8 +256,17 @@ impl ShardManagement {
                         .iter()
                         .map(|(pod, _)| pod)
                         .join(", "),
-                    "Some shards could not be unassigned and rebalance will be retried"
+                    "Some shards could not be unassigned; they are left unassigned and the pods get their authoritative assignment"
                 );
+                // A failed revoke does not mean the executor still holds the shards - it may have
+                // dropped them and only the response was lost. The shards are left unassigned in
+                // the routing table (the unassignment stays in the plan), and the pod receives its
+                // authoritative assignment in this pass, before the next pass hands the shards to
+                // another pod. If that reconciliation fails too, it is re-queued below and re-sent
+                // at the START of the next pass, before that pass's rebalance.
+                for (pod, _) in &rebalance_failures.failed_unassignments {
+                    full_assignment_pods.insert(*pod);
+                }
                 needs_retry = true;
             }
 
@@ -234,16 +278,8 @@ impl ShardManagement {
                 .await
                 .expect("Failed to persist routing table after rebalance");
 
-            let mut full_assignments = Assignments::new();
-            for pod in &full_assignment_pods {
-                if let Some(mut shard_ids) = routing_table_snapshot.get_shards(*pod) {
-                    full_assignments
-                        .assignments
-                        .entry(*pod)
-                        .or_default()
-                        .append(&mut shard_ids);
-                }
-            }
+            let full_assignments =
+                Self::full_assignments_for(&routing_table_snapshot, &full_assignment_pods);
 
             let failed_full_assignments = if full_assignments.is_empty() {
                 Vec::new()
@@ -280,6 +316,23 @@ impl ShardManagement {
         }
     }
 
+    /// The full authoritative assignment message for each of `pods`, read from `snapshot`.
+    /// A pod not in the snapshot gets none (it was removed meanwhile); a pod without shards
+    /// gets an explicit empty assignment, which tells it to drop everything it still holds.
+    fn full_assignments_for(snapshot: &RoutingTable, pods: &HashSet<Pod>) -> Assignments {
+        let mut full_assignments = Assignments::new();
+        for pod in pods {
+            if let Some(mut shard_ids) = snapshot.get_shards(*pod) {
+                full_assignments
+                    .assignments
+                    .entry(*pod)
+                    .or_default()
+                    .append(&mut shard_ids);
+            }
+        }
+        full_assignments
+    }
+
     async fn execute_rebalance(
         worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
         rebalance: &mut Rebalance,
@@ -294,15 +347,15 @@ impl ShardManagement {
         }
         let failed_unassignments =
             revoke_shards(worker_executors.clone(), rebalance.get_unassignments()).await;
-        let failed_shards = failed_unassignments
+        let failed_shards: HashSet<ShardId> = failed_unassignments
             .iter()
             .flat_map(|(_, shard_ids)| shard_ids.clone())
             .collect();
-        rebalance.remove_shards(&failed_shards);
+        rebalance.remove_assignment_shards(&failed_shards);
         if !failed_shards.is_empty() {
             warn!(
                 failed_shards = failed_shards.iter().join(", "),
-                "Some shards could not be unassigned and have been removed from rebalance"
+                "Some shards could not be unassigned and are left unassigned for retry"
             );
         }
 

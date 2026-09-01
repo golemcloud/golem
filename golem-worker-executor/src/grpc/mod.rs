@@ -32,15 +32,17 @@ use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
     All, HasActiveAgents, HasAll, HasComponentService, HasEvents, HasOplogService,
     HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
-    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
+    HasShutdownToken, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
 pub use crate::worker::{
     PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
 };
 use crate::worker::{Worker, WorkerUpdateMode};
 use crate::workerctx::WorkerCtx;
+use futures::FutureExt;
 use futures::Stream;
 use futures::StreamExt;
+use futures::future::join_all;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::worker::{Cursor, InvocationRequest, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
@@ -83,7 +85,8 @@ use golem_common::model::{
     AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata,
     AgentStatus, IdempotencyKey, OwnedAgentId, ScanCursor, ShardId, Timestamp,
 };
-use golem_common::{model as common_model, recorded_grpc_api_request};
+use golem_common::tracing::TraceOrigin;
+use golem_common::{model as common_model, recorded_grpc_api_request, related_span};
 use golem_service_base::error::worker_executor::*;
 use golem_service_base::grpc::{
     proto_agent_id_string, proto_idempotency_key_string, proto_promise_id_string,
@@ -93,15 +96,107 @@ use golem_service_base::model::auth::AuthCtx;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
 use tracing::info_span;
-use tracing::{Instrument, info};
+use tracing::{Instrument, Level, debug, error, info};
 use wasmtime::Error;
+
+/// The shard manager call that changed this executor's shard assignment. Only used to label the
+/// drain and recovery that follow, so they can be attributed to their cause in traces and logs.
+#[derive(Clone, Copy, Debug)]
+enum ShardAssignmentChange {
+    Revoke,
+    Assign,
+    Set,
+}
+
+impl ShardAssignmentChange {
+    fn trigger(self) -> &'static str {
+        match self {
+            ShardAssignmentChange::Revoke => "revoke_shards",
+            ShardAssignmentChange::Assign => "assign_shards",
+            ShardAssignmentChange::Set => "set_shard_assignment",
+        }
+    }
+}
+
+/// Single-flights the lost-agent drain across concurrent shard-assignment RPCs.
+///
+/// At most one drain task exists per executor. Each RPC bumps `generation` after mutating
+/// the shard assignment and then waits until a drain that *started* at a generation at
+/// least as new has completed: every drain pass re-reads `check_worker`, so such a drain
+/// has observed the caller's mutation. Without this, each shard-manager retry against a
+/// wedged agent would park another drain task until executor shutdown.
+struct DrainSingleFlight {
+    inner: std::sync::Mutex<DrainSingleFlightInner>,
+    /// Publishes `(generation the finished drain started at, its result)`. Written with
+    /// `send_replace` so a result published before a waiter subscribes is still seen.
+    completed: tokio::sync::watch::Sender<DrainCompletion>,
+}
+
+type DrainCompletion = (u64, Option<Result<(), WorkerExecutorError>>);
+
+struct DrainSingleFlightInner {
+    generation: u64,
+    owner_running: bool,
+    /// The open `shard_drain` span, so joining RPCs can link their trace origins to it.
+    span: Option<tracing::Span>,
+}
+
+impl DrainSingleFlight {
+    fn new() -> Self {
+        Self {
+            inner: std::sync::Mutex::new(DrainSingleFlightInner {
+                generation: 0,
+                owner_running: false,
+                span: None,
+            }),
+            completed: tokio::sync::watch::channel((0, None)).0,
+        }
+    }
+
+    /// Poison is harmless here: every critical section only performs simple
+    /// assignments, so the state is consistent even after a panic inside one.
+    fn lock(&self) -> std::sync::MutexGuard<'_, DrainSingleFlightInner> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// Releases the drain owner slot if the owner task dies outside its `catch_unwind`
+/// window (a panic in span creation, or task abort at runtime shutdown). Without
+/// this, `owner_running` would stay set with no live owner and every future drain
+/// waiter would park forever.
+struct DrainOwnerGuard {
+    drain: Arc<DrainSingleFlight>,
+    defused: bool,
+}
+
+impl Drop for DrainOwnerGuard {
+    fn drop(&mut self) {
+        if self.defused {
+            return;
+        }
+        let mut inner = self.drain.lock();
+        inner.owner_running = false;
+        inner.span = None;
+        let generation = inner.generation;
+        self.drain.completed.send_replace((
+            generation,
+            Some(Err(WorkerExecutorError::runtime(
+                "Drain owner terminated unexpectedly",
+            ))),
+        ));
+    }
+}
 
 /// This is the implementation of the Worker Executor gRPC API
 pub struct WorkerExecutorImpl<
@@ -113,6 +208,7 @@ pub struct WorkerExecutorImpl<
     /// Holds the strong Arc to the worker activator so the Weak reference
     /// stored in LazyWorkerActivator remains valid while the gRPC server runs.
     _worker_activator: Arc<dyn WorkerActivator<Ctx>>,
+    drain: Arc<DrainSingleFlight>,
     ctx: PhantomData<Ctx>,
 }
 
@@ -123,6 +219,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Self {
             services: self.services.clone(),
             _worker_activator: self._worker_activator.clone(),
+            drain: self.drain.clone(),
             ctx: PhantomData,
         }
     }
@@ -159,6 +256,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let worker_executor = WorkerExecutorImpl {
             services: services.clone(),
             _worker_activator: worker_activator,
+            drain: Arc::new(DrainSingleFlight::new()),
             ctx: PhantomData,
         };
 
@@ -950,16 +1048,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
 
         self.shard_service().revoke_shards(&shard_ids)?;
-
-        for (agent_id, worker_details) in self.active_agents().snapshot().await {
-            if self.shard_service().check_worker(&agent_id).is_err()
-                && let Some(mut await_interrupted) = worker_details
-                    .set_interrupting(InterruptKind::Restart)
-                    .await
-            {
-                await_interrupted.recv().await.unwrap();
-            }
-        }
+        self.drain_lost_agents(ShardAssignmentChange::Revoke)
+            .await?;
 
         Ok(())
     }
@@ -973,7 +1063,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
 
         self.shard_service().assign_shards(&shard_ids)?;
-        Ctx::on_shard_assignment_changed(self).await?;
+        self.recover_gained_agents_in_background(ShardAssignmentChange::Assign);
 
         Ok(())
     }
@@ -990,20 +1080,268 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.shard_service()
             .set_shard_assignment(number_of_shards, &shard_ids)?;
-
-        for (agent_id, worker_details) in self.active_agents().snapshot().await {
-            if self.shard_service().check_worker(&agent_id).is_err()
-                && let Some(mut await_interrupted) = worker_details
-                    .set_interrupting(InterruptKind::Restart)
-                    .await
-            {
-                await_interrupted.recv().await.unwrap();
-            }
-        }
-
-        Ctx::on_shard_assignment_changed(self).await?;
+        self.drain_lost_agents(ShardAssignmentChange::Set).await?;
+        self.recover_gained_agents_in_background(ShardAssignmentChange::Set);
 
         Ok(())
+    }
+
+    async fn drain_lost_agents(
+        &self,
+        change: ShardAssignmentChange,
+    ) -> Result<(), WorkerExecutorError> {
+        let origin = TraceOrigin::capture_current();
+        // Subscribe before the election: `wait_for` re-checks the current value, so a
+        // result published between the bump and the wait is never missed.
+        let mut rx = self.drain.completed.subscribe();
+        let (my_generation, spawn_owner) = {
+            let mut inner = self.drain.lock();
+            inner.generation += 1;
+            let spawn = !inner.owner_running;
+            if spawn {
+                inner.owner_running = true;
+            } else if let Some(span) = &inner.span {
+                origin.add_as_link_to(span);
+            }
+            (inner.generation, spawn)
+        };
+        if spawn_owner {
+            let this = self.clone();
+            // Deliberately not instrumented with the current span: the owner serves
+            // later callers too and must outlive this RPC.
+            tokio::spawn(async move { this.run_drain_owner(change, origin).await });
+        }
+        let completion = rx
+            .wait_for(|(generation, _)| *generation >= my_generation)
+            .await
+            .map_err(|_| WorkerExecutorError::runtime("Drain task state dropped"))?;
+        completion
+            .1
+            .clone()
+            .expect("every published drain generation carries a result")
+    }
+
+    /// The single drain owner: repeats the drain until it has covered the newest
+    /// requested generation, publishing each result to the waiters, then releases the
+    /// owner slot. The publish and the release happen under one critical section, so a
+    /// caller can never observe "no owner running" while its generation is uncovered.
+    async fn run_drain_owner(&self, change: ShardAssignmentChange, origin: TraceOrigin) {
+        let mut owner_guard = DrainOwnerGuard {
+            drain: self.drain.clone(),
+            defused: false,
+        };
+        loop {
+            let observed = { self.drain.lock().generation };
+            let span = related_span!(
+                origin,
+                Level::INFO,
+                "shard_drain",
+                trigger = change.trigger()
+            );
+            {
+                self.drain.lock().span = Some(span.clone());
+            }
+            // A panic must not leave `owner_running` set forever, wedging every future
+            // drain; it is published as an error instead.
+            let result = AssertUnwindSafe(
+                self.drain_lost_agents_to_completion(change)
+                    .instrument(span),
+            )
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|_| {
+                Err(WorkerExecutorError::runtime(
+                    "Draining the agents of the revoked shards panicked",
+                ))
+            });
+            let exit = {
+                let mut inner = self.drain.lock();
+                inner.span = None;
+                self.drain.completed.send_replace((observed, Some(result)));
+                if inner.generation == observed {
+                    inner.owner_running = false;
+                    true
+                } else {
+                    false
+                }
+            };
+            if exit {
+                break;
+            }
+        }
+        owner_guard.defused = true;
+    }
+
+    async fn drain_lost_agents_to_completion(
+        &self,
+        change: ShardAssignmentChange,
+    ) -> Result<(), WorkerExecutorError> {
+        let trigger = change.trigger();
+        let started = Instant::now();
+        let shutdown = self.shutdown_token();
+
+        let drain = async {
+            let mut lost_total: usize = 0;
+            let mut signalled: usize = 0;
+            let mut acknowledged: usize = 0;
+            let mut passes: usize = 0;
+
+            loop {
+                passes += 1;
+
+                // Agents whose creation is still in flight sit in ActiveAgents as *pending*
+                // entries, invisible to snapshot(). All of a creation's durable writes happen
+                // inside the pending closure (Worker::new), so awaiting the entry's resolution
+                // is a write barrier; creations that begin after the revocation are rejected by
+                // the ownership gate at the top of Worker::new and write nothing. The drain
+                // therefore only finishes on a pass that finds neither a loaded agent nor a
+                // pending creation in a lost shard.
+                let mut lost = Vec::new();
+                for (agent_id, worker) in self.active_agents().snapshot().await {
+                    if self.shard_service().check_worker(&agent_id).is_err()
+                        && worker.is_loaded().await
+                    {
+                        lost.push((agent_id, worker));
+                    }
+                }
+
+                let pending_lost: Vec<OwnedAgentId> = self
+                    .active_agents()
+                    .pending_agent_ids()
+                    .await
+                    .into_iter()
+                    .filter(|owned| self.shard_service().check_worker(&owned.agent_id).is_err())
+                    .collect();
+
+                if lost.is_empty() && pending_lost.is_empty() {
+                    break;
+                }
+                if lost.is_empty() {
+                    // Only in-flight creations left: park on each entry's watch until it
+                    // resolves (Ok or Err - a failed creation has also stopped writing), then
+                    // re-check from the top. No polling and no sleep needed.
+                    for owned in &pending_lost {
+                        let _ = self.active_agents().await_settled(owned).await;
+                    }
+                    continue;
+                }
+                lost_total += lost.len();
+
+                // Signal all of them at once.
+                let receivers: Vec<_> =
+                    join_all(lost.iter().map(|(agent_id, worker)| async move {
+                        worker
+                            .set_interrupting(InterruptKind::Restart)
+                            .await
+                            .map(|receiver| (agent_id.clone(), receiver))
+                    }))
+                    .await
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                signalled += receivers.len();
+
+                let acks = join_all(receivers.into_iter().map(
+                    |(agent_id, mut receiver)| async move {
+                        match receiver.recv().await {
+                            Ok(()) => true,
+                            Err(err) => {
+                                debug!(
+                                    agent_id = %agent_id,
+                                    error = %err,
+                                    "Agent went away before acknowledging its interruption"
+                                );
+                                false
+                            }
+                        }
+                    },
+                ))
+                .await;
+                acknowledged += acks.into_iter().filter(|acked| *acked).count();
+
+                // Wait until every lost agent has left memory. `is_loaded` only turns false after
+                // the worker's final oplog commit and status flush. The checks of a round are
+                // issued together and only for what is still loaded, with a backoff between
+                // rounds, so a wedged agent costs one lock touch per round rather than a busy
+                // wait.
+                let mut remaining = lost;
+                let mut backoff = Duration::from_millis(10);
+                loop {
+                    let still_loaded = join_all(remaining.iter().map(|(agent_id, worker)| {
+                        async move {
+                            // A shard handed back to this executor while the drain was running
+                            // is owned again: its agents will not unload, so stop waiting for
+                            // them.
+                            self.shard_service().check_worker(agent_id).is_err()
+                                && worker.is_loaded().await
+                        }
+                    }))
+                    .await;
+                    remaining = remaining
+                        .into_iter()
+                        .zip(still_loaded)
+                        .filter_map(|(entry, loaded)| loaded.then_some(entry))
+                        .collect();
+                    if remaining.is_empty() {
+                        break;
+                    }
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(Duration::from_millis(100));
+                }
+            }
+
+            (lost_total, signalled, acknowledged, passes)
+        };
+
+        tokio::select! {
+            (lost, signalled, acknowledged, passes) = drain => {
+                info!(
+                    trigger,
+                    lost,
+                    signalled,
+                    acknowledged,
+                    passes,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "Drained agents in revoked shards"
+                );
+                Ok(())
+            }
+            _ = shutdown.cancelled() => {
+                info!(
+                    trigger,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "Draining agents in revoked shards interrupted by executor shutdown"
+                );
+                Err(WorkerExecutorError::runtime("Executor is shutting down"))
+            }
+        }
+    }
+
+    fn recover_gained_agents_in_background(&self, change: ShardAssignmentChange) {
+        let trigger = change.trigger();
+        let origin = TraceOrigin::capture_current();
+        let this = self.clone();
+        tokio::spawn(async move {
+            let span = related_span!(origin, Level::INFO, "shard_assignment_recovery", trigger);
+            async move {
+                let started = Instant::now();
+                match Ctx::on_shard_assignment_changed(&this).await {
+                    Ok(()) => info!(
+                        trigger,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "Recovered running agents of newly owned shards"
+                    ),
+                    Err(err) => error!(
+                        trigger,
+                        error = %err,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "Failed to recover running agents of newly owned shards"
+                    ),
+                }
+            }
+            .instrument(span)
+            .await
+        });
     }
 
     async fn get_agent_metadata_internal(

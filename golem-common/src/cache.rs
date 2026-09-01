@@ -592,6 +592,23 @@ impl<
         keys
     }
 
+    /// Keys whose entries are still pending (their producer has not resolved yet).
+    /// Complements `iter`, which returns only cached entries, and `keys`, which
+    /// returns both.
+    pub async fn pending_keys(&self) -> Vec<K> {
+        let mut keys = vec![];
+        self.state
+            .items
+            .iter_async(|key, value| {
+                if matches!(value, Item::Pending { .. }) {
+                    keys.push(key.clone());
+                }
+                true
+            })
+            .await;
+        keys
+    }
+
     pub async fn remove(&self, key: &K) {
         let removed = self.state.items.remove_async(key).await.is_some();
         if removed {
@@ -2119,6 +2136,50 @@ mod tests {
         assert_eq!(pairs, vec![(1, 10)], "iter() should exclude pending key 2");
 
         f2_proceed.notify_one();
+    }
+
+    #[test]
+    async fn pending_keys_returns_only_pending_keys() {
+        let cache = test_cache("pending_keys_only");
+        let f2_entered = Arc::new(tokio::sync::Notify::new());
+        let f2_proceed = Arc::new(tokio::sync::Notify::new());
+
+        // Insert a cached value for key 1
+        cache
+            .get_or_insert_simple(&1, || async { Ok(10u64) })
+            .await
+            .unwrap();
+
+        // Start a pending insert for key 2
+        let cache_clone = cache.clone();
+        let entered = f2_entered.clone();
+        let proceed = f2_proceed.clone();
+        let producer = tokio::spawn(async move {
+            cache_clone
+                .get_or_insert_simple(&2, || async move {
+                    entered.notify_one();
+                    proceed.notified().await;
+                    Ok(20u64)
+                })
+                .await
+        });
+
+        f2_entered.notified().await;
+
+        assert_eq!(
+            cache.pending_keys().await,
+            vec![2],
+            "pending_keys() should contain exactly the pending key"
+        );
+
+        f2_proceed.notify_one();
+        producer.await.unwrap().unwrap();
+
+        assert_eq!(
+            cache.pending_keys().await,
+            Vec::<u64>::new(),
+            "pending_keys() should be empty once the producer resolved"
+        );
     }
 
     // ---- Remove while pending ----

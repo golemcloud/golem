@@ -289,7 +289,7 @@ impl Default for WorkerExecutorServiceConfig {
         Self {
             assign_shards_timeout: Duration::from_secs(5),
             health_check_timeout: Duration::from_secs(2),
-            revoke_shards_timeout: Duration::from_secs(5),
+            revoke_shards_timeout: Duration::from_secs(60),
             retries: RetryConfig::max_attempts_5(),
             client_config: GrpcClientConfig {
                 connect_timeout: Duration::from_secs(10),

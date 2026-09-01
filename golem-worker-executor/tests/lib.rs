@@ -54,6 +54,7 @@ pub mod revert;
 pub mod rpc;
 pub mod scalability;
 pub mod scope_cards;
+pub mod sharding;
 pub mod storage_quota;
 pub mod tool_discovery;
 pub mod transactions;
@@ -101,6 +102,7 @@ tag_suite!(instance_layer, group2);
 tag_suite!(transactions, group2);
 tag_suite!(observability, group2);
 tag_suite!(retry_policies, group2);
+tag_suite!(sharding, group2);
 tag_suite!(storage_quota, storage_quota);
 
 tag_suite!(rpc, group3);
@@ -124,6 +126,7 @@ tag_suite!(tool_discovery, group1);
 sequential_suite!(key_value_storage);
 sequential_suite!(namespace_routed_key_value_storage);
 sequential_suite!(indexed_storage);
+sequential_suite!(sharding);
 sequential_suite!(oplog_blob_archive);
 sequential_suite!(resource_limits);
 

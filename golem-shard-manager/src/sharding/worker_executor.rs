@@ -363,7 +363,7 @@ impl WorkerExecutorServiceDefault {
         };
 
         let set_shard_assignment_response = timeout(
-            self.config.assign_shards_timeout,
+            self.config.revoke_shards_timeout,
             self.client.call(
                 "set_shard_assignment",
                 pod.uri(self.config.client_config.tls_enabled()),
