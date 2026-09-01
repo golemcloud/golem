@@ -341,6 +341,11 @@ impl OplogSweeper {
     /// receive them. Blob-backed archives answer `None` to `scan_namespace`, so the bottom of the
     /// stack is a target only.
     ///
+    /// `archives` is the archive stack alone, so the primary layer is never a source and the
+    /// level-0 hop stays with `ScheduledAction::ArchiveOplog`. Turning the durable routes on
+    /// reaches the compressed levels and leaves that first hop where it is; driving it as well
+    /// would mean passing a layer here that implements `OplogArchiveService`.
+    ///
     /// Pure: no I/O, no task, no runtime needed. Call [`run`](Self::run) to start ticking.
     pub fn over_layers(
         config: OplogSweepConfig,
@@ -361,6 +366,8 @@ impl OplogSweeper {
                 };
                 let source_level = match namespace {
                     IndexedStorageMetaNamespace::CompressedOplog { level, .. } => level,
+                    // No archive service answers with this today: the primary layer is not one,
+                    // and it is the only layer that would report level 0.
                     IndexedStorageMetaNamespace::Oplog { .. } => 0,
                 };
                 routes.push(Route {
@@ -806,7 +813,7 @@ impl OplogSweeper {
     /// Closes a scan pass: entries the pass did not touch belong to agents that have left the
     /// layer, so they are dropped and the route moves on to the next pass.
     async fn finish_pass(&self, route: RouteId, pass: u64) {
-        let before = {
+        let dropped = {
             let mut memo = self.memo.lock().await;
             let before = memo.len();
             // One pass of grace, not none. A concurrent teardown drain removes keys this tick had
@@ -817,10 +824,10 @@ impl OplogSweeper {
             before - memo.len()
         };
         self.passes.lock().await.insert(route, pass + 1);
-        if before > 0 {
+        if dropped > 0 {
             debug!(
                 route = %route,
-                dropped = before,
+                dropped,
                 "Oplog sweep dropped tracking entries for agents that left the layer"
             );
         }

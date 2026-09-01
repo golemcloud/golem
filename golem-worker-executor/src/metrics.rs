@@ -1017,7 +1017,7 @@ pub mod oplog {
         )
         .unwrap();
         static ref OPLOG_SWEEP_TICK_TIME: HistogramVec = register_histogram_vec!(
-            "oplog_sweep_tick",
+            "oplog_sweep_tick_seconds",
             "Time taken by one oplog sweep tick",
             &["route"],
             // Reaches well past the default minute. A tick is a budgeted walk of a storage

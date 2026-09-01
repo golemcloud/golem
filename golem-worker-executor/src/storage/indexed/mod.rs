@@ -620,7 +620,6 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         self.first_raw(namespace, key).await.map(|r| r.map(|p| p.0))
     }
 
-    /// Gets the last entry in the index of the given key, returning as raw bytes
     /// Gets the last entry in the index of the given key, deserializing the value
     pub async fn last<V: BinaryDeserializer>(
         &self,
