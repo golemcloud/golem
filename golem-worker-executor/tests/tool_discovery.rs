@@ -52,6 +52,7 @@ type ToolSummary = (String, String, String, Vec<String>, u64, u64);
 fn registered_tool(
     name: &str,
     component_id: ComponentId,
+    component_revision: ComponentRevision,
     deployment_revision: DeploymentRevision,
 ) -> RegisteredTool {
     RegisteredTool {
@@ -86,7 +87,7 @@ fn registered_tool(
         provision: ToolProvisionConfig::default(),
         source: ToolSource::Component {
             component_id,
-            component_revision: ComponentRevision::try_from(1_u64).unwrap(),
+            component_revision,
             component_name: ComponentName("tool-component".to_string()),
         },
         owner_account_id: AccountId::new(),
@@ -119,6 +120,7 @@ fn binding(
 pub(crate) fn deployment_state(
     agent_type: &AgentTypeName,
     deployment_revision: u64,
+    component_revision: ComponentRevision,
     tools: &[(&str, ComponentId, bool)],
 ) -> ToolDeploymentState {
     let deployment_revision = DeploymentRevision::try_from(deployment_revision).unwrap();
@@ -126,7 +128,12 @@ pub(crate) fn deployment_state(
         .iter()
         .map(|(name, component_id, _)| {
             let name = ToolName::try_from(*name).unwrap();
-            let tool = registered_tool(name.as_str(), *component_id, deployment_revision);
+            let tool = registered_tool(
+                name.as_str(),
+                *component_id,
+                component_revision,
+                deployment_revision,
+            );
             (name, tool)
         })
         .collect::<BTreeMap<_, _>>();
@@ -196,6 +203,7 @@ async fn tool_discovery_host_filters_and_uses_caller_deployment_scope(
     let mut initial_deployment = deployment_state(
         &agent_type,
         1,
+        ComponentRevision::try_from(1_u64).unwrap(),
         &[
             ("beta", beta_component, true),
             ("unbound", unbound_component, false),
@@ -232,6 +240,7 @@ async fn tool_discovery_host_filters_and_uses_caller_deployment_scope(
         Some(deployment_state(
             &agent_type,
             1,
+            ComponentRevision::try_from(1_u64).unwrap(),
             &[("other-component", other_component_tool, true)],
         )),
     );
@@ -293,6 +302,7 @@ async fn tool_discovery_host_filters_and_uses_caller_deployment_scope(
         Some(deployment_state(
             &agent_type,
             1,
+            ComponentRevision::try_from(1_u64).unwrap(),
             &[("other-environment", other_environment_tool_component, true)],
         )),
     );
@@ -365,6 +375,7 @@ async fn tool_discovery_host_filters_and_uses_caller_deployment_scope(
         Some(deployment_state(
             &agent_type,
             2,
+            ComponentRevision::try_from(1_u64).unwrap(),
             &[("gamma", gamma_component, true)],
         )),
     );
@@ -385,6 +396,7 @@ async fn tool_discovery_host_filters_and_uses_caller_deployment_scope(
         Some(deployment_state(
             &agent_type,
             3,
+            ComponentRevision::try_from(1_u64).unwrap(),
             &[("epsilon", epsilon_component, true)],
         )),
     );
@@ -457,6 +469,7 @@ async fn tool_discovery_replay_uses_persisted_result_without_environment_lookup(
         Some(deployment_state(
             &agent_type,
             1,
+            ComponentRevision::try_from(1_u64).unwrap(),
             &[("alpha", alpha_component, true)],
         )),
     );
@@ -482,6 +495,7 @@ async fn tool_discovery_replay_uses_persisted_result_without_environment_lookup(
         Some(deployment_state(
             &agent_type,
             2,
+            ComponentRevision::try_from(1_u64).unwrap(),
             &[("beta", beta_component, true)],
         )),
     );

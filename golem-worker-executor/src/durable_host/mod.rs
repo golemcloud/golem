@@ -3599,41 +3599,38 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if self.state.durability_is_suppressed() {
             return Ok(());
         } else if self.is_live() {
-            // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
-            // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
-            // The final marker and the scope `End` are appended as an atomic pair so they can never
-            // be split across a crash boundary (which would leave a marker without its `End`).
-            self.state
-                .oplog
-                .fallible_add_pair(
-                    OplogEntry::committed_remote_transaction(begin_index),
-                    OplogEntry::End {
-                        timestamp: Timestamp::now_utc(),
-                        start_index: begin_index,
-                        response: None,
-                        forced_commit: true,
-                    },
-                )
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
-
-            self.public_state
-                .worker()
-                .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
-            // The transaction scope opened in `begin_transaction_function` is now closed: the
-            // `CommittedRemoteTransaction` marker and the scope `End` have been durably committed,
-            // so the tip is no longer inside a jumpable scope on its account.
-            self.state.remove_durable_scope(begin_index)?;
+            self.persist_transaction_terminal(
+                begin_index,
+                OplogEntry::committed_remote_transaction(begin_index),
+            )
+            .await?;
         } else {
-            let (_, _) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::CommittedRemoteTransaction
-            )?;
-            // The scope `End` was folded into the resolver at scope-open, so await it (the
-            // terminal marker stays positional). If a crash split the marker/`End` pair, the
-            // `End` resolves as `Incomplete` and is repaired live. Also closes the in-memory scope.
-            self.close_durable_scope_replay(begin_index).await?;
+            let marker = self
+                .state
+                .replay_state
+                .try_get_oplog_entry(|entry| entry.is_committed_remote_transaction(begin_index))
+                .await?;
+            if marker.is_some() {
+                // The scope `End` was folded into the resolver at scope-open, so await it (the
+                // terminal marker stays positional). Also closes the in-memory scope.
+                self.close_durable_scope_replay(begin_index).await?;
+            } else if self.state.replay_state.is_live() {
+                // The external commit succeeded, but the process crashed before persisting the
+                // marker pair. The preceding pre-commit marker exhausted replay, so repair the
+                // missing local transaction terminal without issuing the commit again.
+                self.switch_to_live().await?;
+                self.persist_transaction_terminal(
+                    begin_index,
+                    OplogEntry::committed_remote_transaction(begin_index),
+                )
+                .await?;
+            } else {
+                let (_, _) = crate::get_oplog_entry!(
+                    self.state.replay_state,
+                    OplogEntry::CommittedRemoteTransaction
+                )?;
+                unreachable!("the speculative marker read left a matching entry unconsumed");
+            }
         }
         // The live branch above just committed/updated the status, so this is a clean boundary at
         // the committed tip (the helper is a no-op during replay and while any other region is
@@ -3650,47 +3647,72 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if self.state.durability_is_suppressed() {
             return Ok(());
         } else if self.is_live() {
-            // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
-            // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
-            // The final marker and the scope `End` are appended as an atomic pair so they can never
-            // be split across a crash boundary (which would leave a marker without its `End`).
-            self.state
-                .oplog
-                .fallible_add_pair(
-                    OplogEntry::rolled_back_remote_transaction(begin_index),
-                    OplogEntry::End {
-                        timestamp: Timestamp::now_utc(),
-                        start_index: begin_index,
-                        response: None,
-                        forced_commit: true,
-                    },
-                )
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
-
-            self.public_state
-                .worker()
-                .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
-            // The transaction scope opened in `begin_transaction_function` is now closed: the
-            // `RolledBackRemoteTransaction` marker and the scope `End` have been durably committed,
-            // so the tip is no longer inside a jumpable scope on its account.
-            self.state.remove_durable_scope(begin_index)?;
+            self.persist_transaction_terminal(
+                begin_index,
+                OplogEntry::rolled_back_remote_transaction(begin_index),
+            )
+            .await?;
         } else {
-            let (_, _) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::RolledBackRemoteTransaction
-            )?;
-            // The scope `End` was folded into the resolver at scope-open, so await it (the
-            // terminal marker stays positional). If a crash split the marker/`End` pair, the
-            // `End` resolves as `Incomplete` and is repaired live. Also closes the in-memory scope.
-            self.close_durable_scope_replay(begin_index).await?;
+            let marker = self
+                .state
+                .replay_state
+                .try_get_oplog_entry(|entry| entry.is_rolled_back_remote_transaction(begin_index))
+                .await?;
+            if marker.is_some() {
+                // The scope `End` was folded into the resolver at scope-open, so await it (the
+                // terminal marker stays positional). Also closes the in-memory scope.
+                self.close_durable_scope_replay(begin_index).await?;
+            } else if self.state.replay_state.is_live() {
+                // The external rollback succeeded, but the process crashed before persisting the
+                // marker pair. Repair the missing local terminal without issuing the rollback again.
+                self.switch_to_live().await?;
+                self.persist_transaction_terminal(
+                    begin_index,
+                    OplogEntry::rolled_back_remote_transaction(begin_index),
+                )
+                .await?;
+            } else {
+                let (_, _) = crate::get_oplog_entry!(
+                    self.state.replay_state,
+                    OplogEntry::RolledBackRemoteTransaction
+                )?;
+                unreachable!("the speculative marker read left a matching entry unconsumed");
+            }
         }
         // The live branch above just committed/updated the status, so this is a clean boundary at
         // the committed tip (the helper is a no-op during replay and while any other region is
         // open) — a good place to advance the mid-invocation checkpoint for transaction-heavy
         // invocations.
         self.maybe_mid_invocation_checkpoint().await;
+        Ok(())
+    }
+
+    async fn persist_transaction_terminal(
+        &mut self,
+        begin_index: OplogIndex,
+        marker: OplogEntry,
+    ) -> Result<(), WorkerExecutorError> {
+        // Tests can inject failures into the worker's local oplog handle, so write through it while
+        // committing through the public worker state. The marker and scope `End` are atomic: a
+        // successful append can never leave one without the other.
+        self.state
+            .oplog
+            .fallible_add_pair(
+                marker,
+                OplogEntry::End {
+                    timestamp: Timestamp::now_utc(),
+                    start_index: begin_index,
+                    response: None,
+                    forced_commit: true,
+                },
+            )
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
+        self.public_state
+            .worker()
+            .commit_oplog_and_update_state(CommitLevel::Always)
+            .await;
+        self.state.remove_durable_scope(begin_index)?;
         Ok(())
     }
 }

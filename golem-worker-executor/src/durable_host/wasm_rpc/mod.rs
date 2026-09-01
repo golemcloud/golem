@@ -14,9 +14,9 @@
 
 use crate::durable_host::authorization::targets::agent_method_target;
 use crate::durable_host::concurrent::{
-    CallReplayOutcome, Cancellable, DeferredCallReplayOutcome, DurableCallSession, NotCancellable,
-    authorize_live_permissions_at_serialized_access, finish_span_in_memory,
-    try_agent_auth_ctx_at_serialized_access,
+    BegunCallReplayOutcome, CallReplayOutcome, Cancellable, DeferredCallReplayOutcome,
+    DurableCallSession, NotCancellable, authorize_live_permissions_at_serialized_access,
+    finish_span_in_memory, try_agent_auth_ctx_at_serialized_access,
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::durable_session::{
@@ -508,29 +508,35 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let parent_key = self.state.get_current_idempotency_key().ok_or_else(|| {
                 anyhow::anyhow!("durable streaming RPC requires a caller invocation key")
             })?;
-            let request_prepared = prepared.clone();
-            let request_parent_key = parent_key.clone();
-            let request_scope_card = scope_card.clone();
-            let mut handle = if begun.is_live() {
-                begun
-                    .start_live_with_index(self, move |start_index| {
-                        let idempotency_key =
-                            IdempotencyKey::derived(&request_parent_key, start_index);
-                        let remote_agent_id = invocation_target_agent_id(
-                            &request_prepared.logical_remote_agent_id,
-                            request_prepared.ephemeral_logical_agent_id.as_ref(),
-                            &idempotency_key,
-                        )
-                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-                        Ok(request_prepared.invoke_request(
-                            &remote_agent_id,
-                            &idempotency_key,
-                            request_scope_card.as_ref(),
-                        ))
-                    })
-                    .await?
+            let begun = if begun.is_live() {
+                BegunCallReplayOutcome::ContinueLive(begun)
             } else {
-                begun.start_replay(self).await?
+                begun.start_replay_or_continue_live(self).await?
+            };
+            let mut handle = match begun {
+                BegunCallReplayOutcome::Claimed(handle) => handle,
+                BegunCallReplayOutcome::ContinueLive(begun) => {
+                    let request_prepared = prepared.clone();
+                    let request_parent_key = parent_key.clone();
+                    let request_scope_card = scope_card.clone();
+                    begun
+                        .start_live_with_index(self, move |start_index| {
+                            let idempotency_key =
+                                IdempotencyKey::derived(&request_parent_key, start_index);
+                            let remote_agent_id = invocation_target_agent_id(
+                                &request_prepared.logical_remote_agent_id,
+                                request_prepared.ephemeral_logical_agent_id.as_ref(),
+                                &idempotency_key,
+                            )
+                            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                            Ok(request_prepared.invoke_request(
+                                &remote_agent_id,
+                                &idempotency_key,
+                                request_scope_card.as_ref(),
+                            ))
+                        })
+                        .await?
+                }
             };
             let idempotency_key = IdempotencyKey::derived(&parent_key, handle.start_index());
             let remote_agent_id = invocation_target_agent_id(
@@ -684,35 +690,35 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             };
         }
 
-        let call = if self.state.is_live() {
-            Either::Left(
-                DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>::
-                    begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
-                    .await?,
-            )
-        } else {
-            let begun = DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>::
+        let begun =
+            DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>::
                 begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
                 .await?;
+        let call = if begun.is_live() {
+            Either::Left(begun)
+        } else {
             let begin_index = begun.begin_index();
-            match begun.start_replay(self).await?.replay(self).await? {
-                CallReplayOutcome::Replayed(persisted) => {
-                    let idempotency_key = self.derive_idempotency_key(begin_index);
-                    let remote_agent_id = invocation_target_agent_id(
-                        &prepared.logical_remote_agent_id,
-                        prepared.ephemeral_logical_agent_id.as_ref(),
-                        &idempotency_key,
-                    )?;
-                    let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-                    return match persisted.result {
-                        Ok(value) => Ok(Ok(InvocationResultWithMetadata {
-                            metadata,
-                            result: schema_value_to_wire_output(&value, self)?,
-                        })),
-                        Err(err) => Ok(Err(InternalRpcError::from(err).into())),
-                    };
-                }
-                CallReplayOutcome::Incomplete(live) => Either::Right(live),
+            match begun.start_replay_or_continue_live(self).await? {
+                BegunCallReplayOutcome::Claimed(handle) => match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(persisted) => {
+                        let idempotency_key = self.derive_idempotency_key(begin_index);
+                        let remote_agent_id = invocation_target_agent_id(
+                            &prepared.logical_remote_agent_id,
+                            prepared.ephemeral_logical_agent_id.as_ref(),
+                            &idempotency_key,
+                        )?;
+                        let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
+                        return match persisted.result {
+                            Ok(value) => Ok(Ok(InvocationResultWithMetadata {
+                                metadata,
+                                result: schema_value_to_wire_output(&value, self)?,
+                            })),
+                            Err(err) => Ok(Err(InternalRpcError::from(err).into())),
+                        };
+                    }
+                    CallReplayOutcome::Incomplete(live) => Either::Right(live),
+                },
+                BegunCallReplayOutcome::ContinueLive(begun) => Either::Left(begun),
             }
         };
         let begin_index = match &call {

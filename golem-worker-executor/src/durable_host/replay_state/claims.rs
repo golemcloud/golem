@@ -23,6 +23,7 @@ pub(crate) enum StartClaim {
     Unowned {
         function_name: HostFunctionName,
         function_type: DurableFunctionType,
+        observational_owner: Option<OplogIndex>,
         /// When `Some`, the recorded request payload must additionally match this value by
         /// value; see [`recorded_request_payload_matches`].
         matching_request: Option<RequestClaimIdentity>,
@@ -33,6 +34,7 @@ pub(crate) enum StartClaim {
         function_name: HostFunctionName,
         function_type: DurableFunctionType,
         parent_start_index: OplogIndex,
+        observational_owner: Option<OplogIndex>,
         /// When `Some`, the recorded request payload must additionally match this value by
         /// value; see [`recorded_request_payload_matches`].
         matching_request: Option<RequestClaimIdentity>,
@@ -45,6 +47,7 @@ pub(crate) enum StartClaim {
         rejected_function_name: HostFunctionName,
         function_type: DurableFunctionType,
         parent_start_index: OplogIndex,
+        observational_owner: Option<OplogIndex>,
         matching_request: RequestClaimIdentity,
     },
     /// A durable-*scope* `Start`: request-less and optionally owned by an entity invocation.
@@ -53,6 +56,7 @@ pub(crate) enum StartClaim {
         function_name: HostFunctionName,
         function_type: DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
+        observational_owner: Option<OplogIndex>,
     },
     /// Any top-level durable-call `Start`, whatever its function name and durable function type
     /// (the dynamic guest-facing durability read learns the identity from the claimed entry
@@ -70,6 +74,7 @@ impl StartClaim {
         Self::Unowned {
             function_name: function_name.clone(),
             function_type: function_type.clone(),
+            observational_owner: None,
             matching_request: None,
         }
     }
@@ -84,6 +89,7 @@ impl StartClaim {
         Self::Unowned {
             function_name: function_name.clone(),
             function_type: function_type.clone(),
+            observational_owner: None,
             matching_request: Some(RequestClaimIdentity::Exact(request.clone())),
         }
     }
@@ -96,6 +102,7 @@ impl StartClaim {
         Self::Unowned {
             function_name: function_name.clone(),
             function_type: function_type.clone(),
+            observational_owner: None,
             matching_request: Some(RequestClaimIdentity::EntityInvocation(request.clone())),
         }
     }
@@ -110,6 +117,7 @@ impl StartClaim {
             function_name: function_name.clone(),
             function_type: function_type.clone(),
             parent_start_index,
+            observational_owner: None,
             matching_request: None,
         }
     }
@@ -126,6 +134,7 @@ impl StartClaim {
             function_name: function_name.clone(),
             function_type: function_type.clone(),
             parent_start_index,
+            observational_owner: None,
             matching_request: Some(RequestClaimIdentity::Exact(request.clone())),
         }
     }
@@ -140,6 +149,7 @@ impl StartClaim {
             function_name: function_name.clone(),
             function_type: function_type.clone(),
             parent_start_index,
+            observational_owner: None,
             matching_request: Some(RequestClaimIdentity::EntityInvocation(request.clone())),
         }
     }
@@ -156,6 +166,7 @@ impl StartClaim {
             rejected_function_name: rejected_function_name.clone(),
             function_type: function_type.clone(),
             parent_start_index,
+            observational_owner: None,
             matching_request: RequestClaimIdentity::ToolInvocation(Box::new(request.clone())),
         }
     }
@@ -170,7 +181,36 @@ impl StartClaim {
             function_name: function_name.clone(),
             function_type: function_type.clone(),
             parent_start_index,
+            observational_owner: None,
         }
+    }
+
+    pub(crate) fn with_observational_owner(
+        mut self,
+        observational_owner: Option<OplogIndex>,
+    ) -> Self {
+        match &mut self {
+            Self::Unowned {
+                observational_owner: expected,
+                ..
+            }
+            | Self::Owned {
+                observational_owner: expected,
+                ..
+            }
+            | Self::OwnedToolInvocation {
+                observational_owner: expected,
+                ..
+            }
+            | Self::Scope {
+                observational_owner: expected,
+                ..
+            } => *expected = observational_owner,
+            Self::AnyUnownedCall => {
+                debug_assert!(observational_owner.is_none());
+            }
+        }
+        self
     }
 
     /// See [`StartClaim::AnyUnownedCall`].
@@ -261,6 +301,28 @@ impl StartClaim {
         }
     }
 
+    pub(super) fn expected_observational_owner(&self) -> Option<OplogIndex> {
+        match self {
+            Self::Unowned {
+                observational_owner,
+                ..
+            }
+            | Self::Owned {
+                observational_owner,
+                ..
+            }
+            | Self::OwnedToolInvocation {
+                observational_owner,
+                ..
+            }
+            | Self::Scope {
+                observational_owner,
+                ..
+            } => *observational_owner,
+            Self::AnyUnownedCall => None,
+        }
+    }
+
     pub(super) fn is_reconstruction_claim(&self) -> bool {
         match self {
             Self::Owned {
@@ -289,7 +351,7 @@ impl StartClaim {
                 .expected_function_type()
                 .is_none_or(|expected| durable_function_type == expected)
             && invocation_id.is_none()
-            && observational_owner.is_none()
+            && *observational_owner == self.expected_observational_owner()
             && request.is_some() == self.carries_request()
             && *parent_start_index == self.expected_parent_start_index())
     }
@@ -306,6 +368,7 @@ impl StartClaim {
                 function_name,
                 function_type,
                 parent_start_index,
+                ..
             } => {
                 format!(
                     "Start {{ {function_name}, {function_type:?}, request: None, parent_start_index: {parent_start_index:?} }}"
@@ -315,6 +378,7 @@ impl StartClaim {
                 function_name,
                 function_type,
                 matching_request,
+                ..
             } => {
                 let parent = parent_start_index_of(function_type);
                 if matching_request.is_some() {
@@ -332,6 +396,7 @@ impl StartClaim {
                 function_type,
                 parent_start_index,
                 matching_request,
+                ..
             } => {
                 if matching_request.is_some() {
                     format!(

@@ -1488,26 +1488,7 @@ impl CursorTx<'_> {
     ) -> Result<StartClaimAttempt, WorkerExecutorError> {
         debug_assert!(!claim.carries_request());
         let outcome = self
-            .claim_start_matching(|entry| {
-                matches!(entry, OplogEntry::Start {
-                    function_name,
-                    invocation_id,
-                    observational_owner,
-                    request,
-                    durable_function_type,
-                    parent_start_index,
-                    ..
-                } if claim
-                    .expected_function_name()
-                    .is_some_and(|expected| function_name == expected)
-                    && claim
-                        .expected_function_type()
-                        .is_some_and(|expected| durable_function_type == expected)
-                    && invocation_id.is_none()
-                    && observational_owner.is_none()
-                    && request.is_none()
-                    && *parent_start_index == claim.expected_parent_start_index())
-            })
+            .claim_start_matching(|entry| claim.matches_start_identity(entry))
             .await?;
         if !matches!(outcome, StartClaimAttempt::Missing) {
             return Ok(outcome);

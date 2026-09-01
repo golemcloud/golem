@@ -5414,6 +5414,60 @@ async fn entity_owned_scope_claim_requires_the_recorded_parent() {
     ));
 }
 
+#[test]
+fn start_claim_requires_the_recorded_observational_owner() {
+    let owner = OplogIndex::from_u64(7);
+    let scope_name = HostFunctionName::Custom("<scope:batched-write:req:owned>".to_string());
+    let scope_start = OplogEntry::Start {
+        timestamp: Timestamp::now_utc(),
+        parent_start_index: None,
+        function_name: scope_name.clone(),
+        invocation_id: None,
+        observational_owner: Some(owner),
+        request: None,
+        durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+    };
+
+    assert!(
+        StartClaim::scope(
+            &scope_name,
+            &DurableFunctionType::WriteRemoteBatched(None),
+            None,
+        )
+        .with_observational_owner(Some(owner))
+        .matches_start_identity(&scope_start)
+    );
+    assert!(
+        !StartClaim::scope(
+            &scope_name,
+            &DurableFunctionType::WriteRemoteBatched(None),
+            None,
+        )
+        .matches_start_identity(&scope_start),
+        "an unowned replay claim must not steal an observationally owned scope"
+    );
+
+    let call_start = OplogEntry::Start {
+        timestamp: Timestamp::now_utc(),
+        parent_start_index: None,
+        function_name: HostFunctionName::MonotonicClockNow,
+        invocation_id: None,
+        observational_owner: Some(owner),
+        request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
+            HostRequestNoInput {},
+        )))),
+        durable_function_type: DurableFunctionType::ReadLocal,
+    };
+    assert!(
+        StartClaim::unowned(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .with_observational_owner(Some(owner))
+        .matches_start_identity(&call_start)
+    );
+}
+
 /// Pins the exact "expected" label each [`StartClaim`] variant renders for
 /// `unexpected_oplog_entry` claim errors, so diagnostic wording does not silently drift.
 #[test]
