@@ -868,7 +868,7 @@ mod tests {
     use std::collections::{BTreeMap, HashSet};
     use std::sync::RwLock;
     use std::time::Duration;
-    use test_r::test;
+    use test_r::{test, timeout};
     use uuid::Uuid;
 
     const EPHEMERAL_L1: RouteId = RouteId {
@@ -1595,6 +1595,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout("1m")]
     async fn a_quiet_ephemeral_layer_is_archived_on_the_second_tick() {
         let layers = layers();
         let environment_id = EnvironmentId::new();
@@ -1674,6 +1675,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout("1m")]
     async fn an_agent_invoked_a_second_time_is_still_archived() {
         // Regression: the first archive step moves the `Create` entry down a layer, and a second
         // invocation continues the same index space. So the layer holds entries starting above
@@ -2012,6 +2014,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout("1m")]
     async fn the_archive_budget_stops_a_tick() {
         let layers = layers();
         let environment_id = EnvironmentId::new();
@@ -2048,6 +2051,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout("1m")]
     async fn one_tick_archives_every_quiet_agent_across_pages() {
         let layers = layers();
         let environment_id = EnvironmentId::new();
@@ -2090,6 +2094,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout("1m")]
     async fn a_full_tracking_table_declines_an_agent_rather_than_forgetting_every_agent() {
         let layers = layers();
         let environment_id = EnvironmentId::new();
@@ -2170,6 +2175,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout("1m")]
     async fn an_agent_stops_at_the_step_limit_rather_than_draining_without_end() {
         // One layer more than a pass may walk, so a full drain cannot finish inside one. Without
         // the limit an oplog that keeps reporting more to move holds the tick for the life of the
@@ -2282,6 +2288,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout("1m")]
     async fn a_tick_that_archives_resumes_where_it_left_off() {
         let layers = layers();
         let environment_id = EnvironmentId::new();
