@@ -166,7 +166,7 @@ fn synthesize_leaf_method(
     };
     let value_inserts = value_inserts(ir, cmd, &inherited_params, tool_name, omitted_names);
     let result_ty = client_result_type(&cmd.output, has_stdout);
-    let decode_result = decode_client_result(&cmd.output, has_stdout);
+    let decode_result = decode_client_result(&cmd.output);
     let invoke = invoke_call(&cmd.output, stdin_expr.clone());
     let input_expr = input_build_expr(&descriptor_fn_ident, quote! { __golem_param_values });
 
@@ -279,7 +279,7 @@ fn synthesize_leaf_method_dynamic(
         None => quote! { ::std::option::Option::None },
     };
     let result_ty = client_result_type(&cmd.output, has_stdout);
-    let decode_result = decode_client_result(&cmd.output, has_stdout);
+    let decode_result = decode_client_result(&cmd.output);
     let invoke = invoke_call(&cmd.output, stdin_expr.clone());
     let input_expr = input_build_expr(&descriptor_fn_ident, param_values.clone());
 
@@ -1262,19 +1262,15 @@ fn invoke_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
     }
 }
 
-fn decode_client_result(output: &ReturnType, has_stdout: bool) -> TokenStream {
+/// Only reached for commands without stdout; a stdout-bearing command returns a
+/// started invocation before this is used.
+fn decode_client_result(output: &ReturnType) -> TokenStream {
     let (ok, _) = split_result(output);
-    match (ok, has_stdout) {
-        (Some(ok), true) => quote! {
-            golem_rust::agentic::decode_result_with_stdout::<#ok, _>(__result)
-        },
-        (None, true) => quote! {
-            golem_rust::agentic::decode_result_stdout_only(__result)
-        },
-        (Some(ok), false) => quote! {
+    match ok {
+        Some(ok) => quote! {
             golem_rust::agentic::decode_result_value::<#ok, _>(__result)
         },
-        (None, false) => quote! {
+        None => quote! {
             golem_rust::agentic::decode_result_empty(__result)
         },
     }
