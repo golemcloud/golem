@@ -77,16 +77,16 @@ fn literal_mismatch(
   literal : ToolLiteral,
 ) -> ToolBuildError {
   LiteralTypeMismatch(
-    "literal \{to_repr(literal)} is not valid for schema type \{type_.body}",
+    "literal \{Repr(literal)} is not valid for schema type \{Repr(type_.body)}",
   )
 }
 
 ///|
-fn[T : @strconv.FromStr] parse_authored(
+fn[T : @string.FromStr] parse_authored(
   token : String,
   expected : String,
 ) -> T raise ToolBuildError {
-  @strconv.from_str(token) catch {
+  @string.FromStr::from_str(token[:]) catch {
     _ => raise InvalidLiteral("invalid \{expected} literal '\{token}'")
   }
 }
@@ -155,8 +155,8 @@ fn interpret_scalar(
     @model.SchemaTypeBody::Path(_) => @model.SchemaValue::Path(token)
     @model.SchemaTypeBody::Url(_) => @model.SchemaValue::Url(token)
     @model.SchemaTypeBody::Enum(cases) =>
-      match cases.find_index(case => case == token) {
-        Some(index) => @model.SchemaValue::Enum(index.to_uint())
+      match cases.search_by(case => case == token) {
+        Some(index) => @model.SchemaValue::Enum(index.reinterpret_as_uint())
         None =>
           raise InvalidLiteral(
             "enum case '\{token}' is not one of [\{cases.join(", ")}]",
@@ -184,7 +184,7 @@ fn interpret_literal(
         tokens.map(token => interpret_scalar(graph, item, token)),
       )
     (@model.SchemaTypeBody::FixedList(item, length), ToolLiteral::List(tokens)) => {
-      guard tokens.length().to_uint() == length else {
+      guard tokens.length().reinterpret_as_uint() == length else {
         raise InvalidLiteral(
           "fixed-list literal has \{tokens.length()} items, expected \{length}",
         )

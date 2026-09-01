@@ -1,5 +1,6 @@
 ///|
 #derive.tool("presented")
+#warnings("-struct_never_constructed")
 struct Presented {}
 
 ///|
@@ -7,6 +8,13 @@ struct Presented {}
 pub(all) enum RunError {
   #derive.error(kind="runtime-error")
   Broken(String)
+}
+
+///|
+extend RunError with @tool.ToolErrorSchema::{
+  error_cases,
+  from_error_payload_value,
+  to_error_payload_value,
 }
 
 ///|
@@ -63,6 +71,7 @@ pub fn Presented::admin(verbose : Bool) -> Unit {
 
 ///|
 #derive.tool("nested")
+#warnings("-struct_never_constructed")
 struct Nested {}
 
 ///|
@@ -72,6 +81,7 @@ pub fn Nested::run(name : String) -> String {
 
 ///|
 #derive.tool_middleware("policy", presented="Presented")
+#warnings("-struct_never_constructed")
 struct Policy {}
 
 ///|
@@ -159,6 +169,7 @@ pub async fn Policy::admin__run(
 
 ///|
 #derive.tool("storage")
+#warnings("-struct_never_constructed")
 struct Storage {}
 
 ///|
@@ -168,9 +179,11 @@ pub fn Storage::fetch(key : String) -> String {
 
 ///|
 #derive.tool_middleware("adapter", presented="Presented", expected="Storage")
+#warnings("-struct_never_constructed")
 struct Adapter {}
 
 ///|
+#warnings("-unused_async")
 pub async fn Adapter::unit(
   underlying : StorageUnderlying,
 ) -> Result[Unit, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] {
@@ -201,6 +214,7 @@ pub async fn Adapter::retry(
 }
 
 ///|
+#warnings("-unused_async")
 pub async fn Adapter::stdout(
   underlying : StorageUnderlying,
 ) -> Result[
@@ -212,6 +226,7 @@ pub async fn Adapter::stdout(
 }
 
 ///|
+#warnings("-unused_async")
 pub async fn Adapter::abandon_stdout(
   underlying : StorageUnderlying,
 ) -> Result[
@@ -223,6 +238,7 @@ pub async fn Adapter::abandon_stdout(
 }
 
 ///|
+#warnings("-unused_async")
 pub async fn Adapter::value_stdout(
   underlying : StorageUnderlying,
   value : String,
@@ -236,6 +252,7 @@ pub async fn Adapter::value_stdout(
 }
 
 ///|
+#warnings("-unused_async")
 pub async fn Adapter::io(
   underlying : StorageUnderlying,
   input : @toolMiddleware.MiddlewareStdin,

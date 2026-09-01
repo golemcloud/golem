@@ -64,7 +64,7 @@ pub fn generate_client_code(
   config_types? : Array[ConfigTypeInfo] = [],
   agent_package? : String = "",
 ) -> @list.List[@syntax.Impl] {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for agent in agents {
     if has_rpc_incompatible_constructor(agent) {
       continue
@@ -73,7 +73,7 @@ pub fn generate_client_code(
   }
   let source = buf.to_string()
   if source.is_empty() {
-    return @list.List::from_array([])
+    return @list.List([])
   }
   parse_generated_impls(source, "clients")
 }
@@ -175,7 +175,7 @@ fn emit_client(
       // Use the same recursive "has overridable leaves" predicate as the
       // config emitter, so we only emit `_with_config` variants when an
       // `*Override` type + walker were actually generated for `ct`.
-      let by_name : Map[String, ConfigTypeInfo] = {}
+      let by_name : Map[String, ConfigTypeInfo] = Map([])
       for c in config_types {
         by_name[c.name] = c
       }
@@ -465,9 +465,9 @@ fn resolve_config_type(
     Some(type_name) =>
       if decode_qualified(type_name) is Some(_) {
         for ct in config_types {
-          if ct.package.length() > 0 {
-            let alias = last_path_segment(ct.package)
-            if "@\{alias}.\{ct.name}" == type_name {
+          if ct.package_path.length() > 0 {
+            let package_alias = last_path_segment(ct.package_path)
+            if "@\{package_alias}.\{ct.name}" == type_name {
               return Some(ct)
             }
           }
@@ -475,7 +475,7 @@ fn resolve_config_type(
         None
       } else {
         for ct in config_types {
-          if ct.name == type_name && ct.package == agent_package {
+          if ct.name == type_name && ct.package_path == agent_package {
             return Some(ct)
           }
         }

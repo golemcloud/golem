@@ -24,7 +24,7 @@ fn parse_generated_impls(
   }
   let (parsed, reports) = @parser.parse_string(source)
   if reports.length() > 0 {
-    let buf = StringBuilder::new()
+    let buf = StringBuilder()
     buf.write_string(
       "golem_sdk_tools: generated \{context} code failed to parse:\n",
     )
