@@ -1625,8 +1625,10 @@ pub struct OplogSweepConfig {
     /// Whether the sweep runs at all. When false `ScheduledAction::ArchiveOplog` stays the only
     /// archiving mechanism, which is the rollback lever.
     pub enabled: bool,
-    /// How often a tick runs. Also the quiet threshold: an agent is archived once its last oplog
-    /// index survives one whole interval unchanged.
+    /// How long a tick waits after the previous one finished. Sets the quiet threshold, because an
+    /// agent is archived once its last oplog index survives from one tick to the next: a lower
+    /// bound of one interval, and more than that whenever a tick itself takes a while, which under
+    /// a large backlog it will.
     #[serde(with = "humantime_serde")]
     pub interval: Duration,
     /// Whether ephemeral oplog layers are swept.
@@ -1643,13 +1645,15 @@ pub struct OplogSweepConfig {
     /// memory bound: an archive step moves an agent's whole layer through one `Vec`, so peak memory
     /// is this many layers, not this many chunks.
     pub max_concurrency: usize,
-    /// Agents one tick may archive before it stops and keeps its cursor. A page is probed as a
-    /// unit, so a tick stops at the first page that carries it past this and can exceed it by up to
-    /// `page_size`.
+    /// Agents one tick may archive before it stops. A page is probed as a unit, so a tick stops at
+    /// the first page that carries it past this and can exceed it by up to `page_size`.
     pub max_archives_per_tick: usize,
-    /// Keys one tick may scan before it stops and keeps its cursor. Exact: a tick asks each scan
-    /// for only what is left of the budget. Bounds the scan round trips a tick issues against a
-    /// namespace far larger than the work it holds.
+    /// Keys one tick may scan before it stops, because a tick asks each scan for no more than what
+    /// is left of the budget. Exact wherever the storage holds a page to the count it was asked
+    /// for, which the SQL and in-memory backends do; Redis treats `COUNT` as a hint and may hand
+    /// back more. Bounds the scan round trips a tick issues against a namespace far larger than the
+    /// work it holds. A tick that stops here resumes where it left off, corrected for whatever it
+    /// archived on the way.
     pub max_scanned_per_tick: usize,
     /// Upper bound on the table remembering each agent's previous index. Losing an entry costs one
     /// extra tick of latency for that agent and nothing else, because the work list lives in

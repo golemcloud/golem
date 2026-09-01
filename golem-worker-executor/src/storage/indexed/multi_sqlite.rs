@@ -266,6 +266,16 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         Ok((0, results))
     }
 
+    fn scan_cursor_after_removals(&self, cursor: ScanCursor, removed: u64) -> ScanCursor {
+        // The cursor packs a file index in the upper 32 bits and that file's own offset in the
+        // lower 32. Only the offset is positional, and `removed` counts keys across every file the
+        // scan walked, so subtracting all of it saturates to the start of the current file rather
+        // than stepping into it.
+        let file_index = cursor >> 32;
+        let file_cursor = cursor & 0xFFFF_FFFF;
+        (file_index << 32) | file_cursor.saturating_sub(removed)
+    }
+
     async fn append(
         &self,
         svc_name: &'static str,

@@ -203,6 +203,12 @@ impl IndexedStorage for RedisIndexedStorage {
         Ok((cursor, keys))
     }
 
+    fn scan_cursor_after_removals(&self, cursor: ScanCursor, _removed: u64) -> ScanCursor {
+        // A Redis `SCAN` cursor is an opaque token over the hash space, not a position, so deleting
+        // keys does not move it and arithmetic on it is meaningless.
+        cursor
+    }
+
     async fn append(
         &self,
         svc_name: &'static str,

@@ -84,8 +84,10 @@ impl Display for RouteId {
     }
 }
 
-/// What the sweep decided about one scanned key. Every scanned key produces exactly one, which is
-/// what makes [`tally`] a total fold.
+/// What the sweep decided about one scanned key. A key the tick reached produces exactly one,
+/// which is what makes [`tally`] a total fold over what it reached. A shutdown between archive
+/// batches is the one case that leaves scanned keys with no outcome, so `scanned` counts what the
+/// tick decided rather than what it walked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Outcome {
     /// The key did not parse as `{component_id}:{agent_name}`.
@@ -130,7 +132,8 @@ enum Decision {
 }
 
 /// Per-route counters. Every field counts scanned keys except `drained` and `truncated`, and the
-/// counted fields sum to `scanned`.
+/// counted fields sum to `scanned`. A shutdown between archive batches is the one case that leaves
+/// a scanned key with no outcome, so under it `scanned` counts fewer keys than the scan walked.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RouteReport {
     scanned: u64,
@@ -144,7 +147,8 @@ struct RouteReport {
     archived: u64,
     /// Archive steps that reported no further layer to drain. A subset of `archived`.
     drained: u64,
-    /// A budget stopped the tick, or a scan failed, before the namespace was exhausted.
+    /// A budget stopped the tick, a scan failed, or the node began shutting down, before the
+    /// namespace was exhausted.
     truncated: bool,
 }
 
@@ -383,9 +387,11 @@ impl OplogSweeper {
 
     /// Runs ticks until `shutdown` is cancelled, then returns.
     ///
-    /// Cancellation is observed only between ticks, so shutting down never interrupts an archive
-    /// step between its append to the layer below and its drop from the layer above. Spawn this
-    /// into the executor's `JoinSet` so that shutdown waits for the tick in flight.
+    /// Cancellation is observed between routes, between scan pages, and between archive batches,
+    /// but never inside an archive step, so shutting down never interrupts one between its append
+    /// to the layer below and its drop from the layer above. Spawn this into the executor's
+    /// `JoinSet` so that shutdown waits for the step in flight; a tick stops at the next boundary
+    /// rather than running to completion.
     ///
     /// Returns immediately when the sweep is disabled or the layer stack offers no route, leaving
     /// `ScheduledAction::ArchiveOplog` as the only archiving mechanism.
@@ -533,32 +539,32 @@ impl OplogSweeper {
             }
         }
 
-        // Now the deletes. Cancellation is checked between batches, never inside an archive step,
-        // so a shutdown waits for the transfer in flight and no further ones start.
-        let batch = self.config.max_concurrency.max(1);
-        let mut queue = pending.into_iter();
-        loop {
-            if shutdown.is_cancelled() {
-                truncated = true;
-                break;
-            }
-            let chunk: Vec<AgentId> = queue.by_ref().take(batch).collect();
-            if chunk.is_empty() {
-                break;
-            }
-            let archived: Vec<Outcome> = stream::iter(chunk)
-                .map(|agent_id| self.archive_agent(route, agent_id))
-                .buffer_unordered(batch)
-                .collect()
-                .await;
-            report = merge(report, tally(archived));
+        // Now the deletes. One stream over the whole list rather than fixed batches, because the
+        // cost of a step varies with how much the layer holds and a batch would run at the speed of
+        // its slowest member. The cancellation check sits before a step and never inside one, so a
+        // shutdown waits for the transfer in flight and starts no more.
+        let archived: Vec<Option<Outcome>> = stream::iter(pending)
+            .map(|agent_id| async move {
+                if shutdown.is_cancelled() {
+                    return None;
+                }
+                Some(self.archive_agent(route, agent_id).await)
+            })
+            .buffer_unordered(self.config.max_concurrency.max(1))
+            .collect()
+            .await;
+        if archived.iter().any(Option::is_none) {
+            truncated = true;
         }
+        report = merge(report, tally(archived.into_iter().flatten()));
 
-        // The scan above is safe within the tick, but the archives just invalidated the cursor for
-        // the next one. Resuming is only sound while the key set held still; otherwise start from
-        // the beginning, which costs nothing extra because the keys this tick archived are the
-        // ones that are now gone.
-        let resume = if report.archived == 0 { cursor } else { 0 };
+        // The scan above is safe within the tick, but the archives just removed keys the cursor
+        // had already walked past. Restarting from the beginning instead would starve the tail of a
+        // namespace larger than one tick's scan budget: any tick that archived would rewind, so a
+        // key beyond the budget would only ever be reached on a tick that archived nothing.
+        let resume = self
+            .indexed_storage
+            .scan_cursor_after_removals(cursor, report.archived);
         self.cursors.lock().await.insert(route.id, resume);
 
         if exhausted {
@@ -625,7 +631,8 @@ impl OplogSweeper {
         Decision::Archive(agent_id)
     }
 
-    /// Moves one agent's entries out of this layer, and keeps going until none are left.
+    /// Moves one agent's entries out of this layer, and keeps going until no layer below holds
+    /// any, or until [`MAX_ARCHIVE_STEPS`] steps have run.
     ///
     /// Runs only after the scan has finished paging, because every step ends in a `drop_prefix`
     /// that removes the key the scan walked.
@@ -1763,6 +1770,55 @@ mod tests {
         let second = sweeper.sweep_once(&CancellationToken::new()).await;
         assert_eq!(second.scanned(), 3);
         assert_eq!(sweeper.memo.lock().await.len(), 6);
+    }
+
+    #[test]
+    async fn a_tick_that_archives_resumes_past_what_it_removed() {
+        let layers = layers();
+        let environment_id = EnvironmentId::new();
+        let component_id = ComponentId::new();
+        let mut resident = HashSet::new();
+        for i in 0..6 {
+            let agent_id = agent(&format!("counter-{i}"), component_id);
+            stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
+            // Two agents that can never be archived, so the tick walks more keys than it removes.
+            if i >= 4 {
+                resident.insert(agent_id);
+            }
+        }
+
+        // One page wide enough for the whole namespace, so which keys a page holds does not depend
+        // on the storage's iteration order, and an archive budget low enough to stop the tick.
+        let sweeper = build(
+            &layers,
+            OplogSweepConfig {
+                enabled: false,
+                page_size: 6,
+                max_scanned_per_tick: 6,
+                max_archives_per_tick: 1,
+                ..OplogSweepConfig::default()
+            },
+            all_shards(),
+            environment_id,
+            resident,
+        );
+
+        // Two ticks to finish a pass and make the four candidates quiet.
+        sweeper.sweep_once(&CancellationToken::new()).await;
+        sweeper.sweep_once(&CancellationToken::new()).await;
+
+        let report = sweeper.sweep_once(&CancellationToken::new()).await;
+        assert_eq!(report.scanned(), 6);
+        assert_eq!(report.archived(), 4);
+        assert!(report.route(EPHEMERAL_L1).truncated);
+
+        // Six keys walked, four of them now gone, so the two the tick could not archive sit at the
+        // front and the cursor lands just past them. Rewinding to 0 instead would mean a namespace
+        // larger than one tick's budget never gets swept past its first page.
+        assert_eq!(
+            sweeper.cursors.lock().await.get(&EPHEMERAL_L1).copied(),
+            Some(2)
+        );
     }
 
     #[test]

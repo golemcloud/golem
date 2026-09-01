@@ -182,6 +182,12 @@ impl IndexedStorage for InMemoryIndexedStorage {
         }
     }
 
+    fn scan_cursor_after_removals(&self, cursor: ScanCursor, removed: u64) -> ScanCursor {
+        // The cursor is an offset into the key order, so removing keys below it shifts the rest
+        // down by exactly that many places.
+        cursor.saturating_sub(removed)
+    }
+
     async fn append(
         &self,
         _svc_name: &'static str,

@@ -113,6 +113,15 @@ pub trait IndexedStorage: Debug + Sync {
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError>;
 
+    /// Corrects a `scan` cursor after `removed` keys it had already walked past were deleted.
+    ///
+    /// A caller that deletes what it scanned cannot resume from the cursor `scan` handed back: with
+    /// a positional cursor the keys behind it have shifted down by the number removed. Only the
+    /// backend knows what its cursor means, so it does the correction; one built on an opaque token
+    /// returns it unchanged. The result may repeat a key already seen, but must never sit past a
+    /// key nothing has examined.
+    fn scan_cursor_after_removals(&self, cursor: ScanCursor, removed: u64) -> ScanCursor;
+
     /// Appends an entry to the given key with the given id
     async fn append(
         &self,
