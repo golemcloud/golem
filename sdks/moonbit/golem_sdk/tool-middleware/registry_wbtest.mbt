@@ -1,6 +1,6 @@
 ///|
 fn registry_doc(summary : String) -> @toolCommon.Doc {
-  { summary, description: summary + " description", examples: [] }
+  { summary, description: summary + " description", examples: [], }
 }
 
 ///|
@@ -13,13 +13,13 @@ fn registry_tool(name : String) -> @toolCommon.Tool {
           name,
           aliases: [],
           doc: registry_doc(name),
-          globals: { options: [], flags: [] },
+          globals: { options: [], flags: [], },
           subcommands: [],
           body: None,
         },
       ],
     },
-    schema: { type_nodes: [], defs: [], root: 0 },
+    schema: { type_nodes: [], defs: [], root: 0, },
   }
 }
 
@@ -28,10 +28,11 @@ fn universal_middleware(
   name : String,
   aliases : Array[String],
 ) -> ToolMiddleware {
-  { name, aliases, doc: registry_doc(name), scope: Universal }
+  { name, aliases, doc: registry_doc(name), scope: Universal, }
 }
 
 ///|
+#warnings("-unused_async")
 async fn empty_registry_invoker(
   invocation : RawToolInvocation,
   _underlying : UnderlyingTool,
@@ -153,6 +154,7 @@ fn drop_registry_raw_resources(value : @types.TypedSchemaValue) -> Unit {
 }
 
 ///|
+#warnings("-unused_async")
 test "guest boundary preserves raw carriers and tears down after final transfer" {
   clear_tool_middlewares_for_tests()
   reset_resource_drop_counts()
@@ -252,7 +254,7 @@ test "universal middleware short-circuits without invoking and cleans raw input"
       let underlying = new_scoped_underlying_tool(
         (_, _, _) => {
           backend_calls.val = backend_calls.val + 1
-          Ok({ result: None, stdout: None })
+          Ok({ result: None, stdout: None, })
         },
         fn() { raw_drops.val = raw_drops.val + 1 },
         group,
@@ -267,7 +269,7 @@ test "universal middleware short-circuits without invoking and cleans raw input"
         @agentCommon.Principal::Anonymous,
         underlying,
       )
-      assert_true(result is Ok({ result: None, stdout: None }))
+      assert_true(result is Ok({ result: None, stdout: None, }))
       assert_eq(backend_calls.val, 0)
       assert_eq(raw_drops.val, 0)
     })
@@ -309,7 +311,7 @@ test "universal middleware can retry the underlying capability sequentially" {
           if backend_calls.val == 1 {
             Err(@toolCommon.ToolError::ConstraintViolation("retry"))
           } else {
-            Ok({ result: None, stdout: None })
+            Ok({ result: None, stdout: None, })
           }
         },
         fn() { raw_drops.val = raw_drops.val + 1 },
@@ -327,7 +329,7 @@ test "universal middleware can retry the underlying capability sequentially" {
         @agentCommon.Principal::Anonymous,
         underlying,
       )
-      assert_true(result is Ok({ result: None, stdout: None }))
+      assert_true(result is Ok({ result: None, stdout: None, }))
       assert_eq(backend_calls.val, 2)
       assert_eq(raw_drops.val, 0)
     })
@@ -347,7 +349,7 @@ test "guest boundary cleans uninvoked input stdin and underlying on lookup failu
       let underlying = new_scoped_underlying_tool(
         (_, _, _) => {
           backend_calls.val = backend_calls.val + 1
-          Ok({ result: None, stdout: None })
+          Ok({ result: None, stdout: None, })
         },
         fn() { raw_drops.val = raw_drops.val + 1 },
         group,
@@ -375,6 +377,7 @@ test "guest boundary cleans uninvoked input stdin and underlying on lookup failu
 }
 
 ///|
+#warnings("-unused_async")
 test "guest boundary preserves protocol errors and transfers raw custom errors" {
   clear_tool_middlewares_for_tests()
   reset_resource_drop_counts()
@@ -395,7 +398,7 @@ test "guest boundary preserves protocol errors and transfers raw custom errors" 
     let custom_payload : Ref[@types.TypedSchemaValue?] = Ref(None)
     @async-core.with_task_group(async fn(group) {
       let protocol_underlying = new_scoped_underlying_tool(
-        (_, _, _) => Ok({ result: None, stdout: None }),
+        (_, _, _) => Ok({ result: None, stdout: None, }),
         fn() { raw_drops.val = raw_drops.val + 1 },
         group,
       )
@@ -415,7 +418,7 @@ test "guest boundary preserves protocol errors and transfers raw custom errors" 
         protocol is Err(@toolCommon.ToolError::ConstraintViolation("denied")),
       )
       let custom_underlying = new_scoped_underlying_tool(
-        (_, _, _) => Ok({ result: None, stdout: None }),
+        (_, _, _) => Ok({ result: None, stdout: None, }),
         fn() { raw_drops.val = raw_drops.val + 1 },
         group,
       )
@@ -450,6 +453,7 @@ test "guest boundary preserves protocol errors and transfers raw custom errors" 
 priv suberror RegistryInvokerFailure derive(Debug)
 
 ///|
+#warnings("-unused_async")
 test "guest boundary group teardown runs when a registered invoker raises" {
   clear_tool_middlewares_for_tests()
   reset_resource_drop_counts()
@@ -465,7 +469,7 @@ test "guest boundary group teardown runs when a registered invoker raises" {
     try
       @async-core.with_task_group(async fn(group) {
         let underlying = new_scoped_underlying_tool(
-          (_, _, _) => Ok({ result: None, stdout: None }),
+          (_, _, _) => Ok({ result: None, stdout: None, }),
           fn() { raw_drops.val = raw_drops.val + 1 },
           group,
         )

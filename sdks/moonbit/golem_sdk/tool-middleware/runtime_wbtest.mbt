@@ -193,7 +193,7 @@ test "recursive owned capability cleanup canonicalizes duplicate raw handles" {
 test "malformed wire custom error drops each distinct capability exactly once" {
   reset_resource_drop_counts()
   let malformed : @types.TypedSchemaValue = {
-    graph: { type_nodes: [], defs: [], root: 0 },
+    graph: { type_nodes: [], defs: [], root: 0, },
     value: {
       value_nodes: [
         @types.SecretValue(@types.Secret::Secret(201)),
@@ -331,7 +331,7 @@ test "raw resource values transfer exact acquisitions and reject duplicates" {
   reset_resource_drop_counts()
   let malformed_context = OwnershipContext::new(no_raw_drop)
   let malformed : @types.TypedSchemaValue = {
-    graph: { type_nodes: [], defs: [], root: 0 },
+    graph: { type_nodes: [], defs: [], root: 0, },
     value: {
       value_nodes: [
         @types.SecretValue(@types.Secret::Secret(602)),
@@ -369,7 +369,7 @@ test "failed local typed decode drops raw capabilities exactly once" {
   reset_resource_drop_counts()
   let context = OwnershipContext::new(no_raw_drop)
   let malformed : @types.TypedSchemaValue = {
-    graph: { type_nodes: [], defs: [], root: 0 },
+    graph: { type_nodes: [], defs: [], root: 0, },
     value: {
       value_nodes: [@types.SecretValue(@types.Secret::Secret(611))],
       root: 1,
@@ -479,7 +479,7 @@ test "failed raw result transfer retains nested resources and stdout for teardow
   let context = OwnershipContext::new(no_raw_drop)
   let stdout_drops = Ref(0)
   let malformed : @types.TypedSchemaValue = {
-    graph: { type_nodes: [], defs: [], root: 0 },
+    graph: { type_nodes: [], defs: [], root: 0, },
     value: {
       value_nodes: [
         @types.SecretValue(@types.Secret::Secret(609)),
@@ -511,7 +511,7 @@ test "raw invoke rejects foreign input without consuming it" {
     let underlying = new_underlying_tool(
       (_, _, _) => {
         backend_calls.val = backend_calls.val + 1
-        Ok({ result: None, stdout: None })
+        Ok({ result: None, stdout: None, })
       },
       no_raw_drop,
     )
@@ -543,7 +543,7 @@ test "raw invoke preflights stdin before transferring input" {
     let underlying = new_underlying_tool(
       (_, _, _) => {
         backend_calls.val = backend_calls.val + 1
-        Ok({ result: None, stdout: None })
+        Ok({ result: None, stdout: None, })
       },
       no_raw_drop,
     )
@@ -584,7 +584,7 @@ test "raw invoke supports sequential calls and raw backend errors" {
         if calls.val == 3 {
           Err(@toolCommon.ToolError::CustomError(raw_secret_value(606)))
         } else {
-          Ok({ result: Some(raw_unit_value()), stdout: None })
+          Ok({ result: Some(raw_unit_value()), stdout: None, })
         }
       },
       no_raw_drop,
@@ -668,8 +668,8 @@ test "overlapping raw schema streams cannot create two owners" {
   let raw_stream = @types.SchemaValueStream::SchemaValueStream(17)
   let make_carrier = fn() -> RawTypedSchemaValue {
     context.own_raw_typed_schema_value({
-      graph: { type_nodes: [], defs: [], root: 0 },
-      value: { value_nodes: [@types.StreamValue(raw_stream)], root: 0 },
+      graph: { type_nodes: [], defs: [], root: 0, },
+      value: { value_nodes: [@types.StreamValue(raw_stream)], root: 0, },
     })
   }
   let older = make_carrier()
@@ -741,7 +741,7 @@ test "stale stdin is rejected before fresh input capabilities transfer" {
     let underlying = new_underlying_tool(
       (_, _, _) => {
         backend_calls.val = backend_calls.val + 1
-        Ok({ result: None, stdout: None })
+        Ok({ result: None, stdout: None, })
       },
       no_raw_drop,
     )
@@ -778,7 +778,7 @@ test "abandoned and explicitly rejected results synchronously clean up" {
   let abandoned_drops = Ref(0)
   let context = OwnershipContext::new(no_raw_drop)
   let abandoned = context.own_result_with_cleanup(
-    { result: None, stdout: Some(counted_stream(abandoned_drops)) },
+    { result: None, stdout: Some(counted_stream(abandoned_drops)), },
     fn(result) {
       match result.stdout {
         Some(stdout) => stdout.drop_sync()
@@ -793,7 +793,7 @@ test "abandoned and explicitly rejected results synchronously clean up" {
   let rejected_drops = Ref(0)
   let rejected_context = OwnershipContext::new(no_raw_drop)
   let rejected = rejected_context.own_result_with_cleanup(
-    { result: None, stdout: Some(counted_stream(rejected_drops)) },
+    { result: None, stdout: Some(counted_stream(rejected_drops)), },
     fn(result) {
       match result.stdout {
         Some(stdout) => stdout.drop_sync()
@@ -823,8 +823,8 @@ test "projection rejection and malformed wire results release stdout" {
 
   let malformed_drops = Ref(0)
   let malformed : @types.TypedSchemaValue = {
-    graph: { type_nodes: [], defs: [], root: 0 },
-    value: { value_nodes: [], root: 0 },
+    graph: { type_nodes: [], defs: [], root: 0, },
+    value: { value_nodes: [], root: 0, },
   }
   let decoded = @toolCore.decode_invocation_result({
     result: Some(malformed),
@@ -915,7 +915,7 @@ test "final result transfer precedes revocation and preserves stdout" {
   let stdout_drops = Ref(0)
   let context = OwnershipContext::new(no_raw_drop)
   let owned = context.own_result_with_cleanup(
-    { result: None, stdout: Some(counted_stream(stdout_drops)) },
+    { result: None, stdout: Some(counted_stream(stdout_drops)), },
     fn(result) {
       match result.stdout {
         Some(stdout) => stdout.drop_sync()
@@ -945,7 +945,7 @@ test "fake backend supports sequential calls and clears active state" {
     let underlying = new_underlying_tool(
       (_, _, _) => {
         calls.val = calls.val + 1
-        Ok({ result: None, stdout: None })
+        Ok({ result: None, stdout: None, })
       },
       no_raw_drop,
     )
@@ -976,7 +976,7 @@ test "fake backend overlap is rejected while the first call is suspended" {
       async fn(_, _, _) {
         ignore(started_promise.complete(()))
         release.get()
-        Ok({ result: None, stdout: None })
+        Ok({ result: None, stdout: None, })
       },
       no_raw_drop,
     )
@@ -1006,7 +1006,7 @@ test "revocation during an active call delays and deduplicates raw drop" {
       async fn(_, _, _) {
         ignore(started_promise.complete(()))
         release.get()
-        Ok({ result: None, stdout: None })
+        Ok({ result: None, stdout: None, })
       },
       fn() { raw_drops.val = raw_drops.val + 1 },
     )
@@ -1066,7 +1066,7 @@ test "cancelling a suspended backend call clears active state" {
       async fn(_, _, _) {
         ignore(started_promise.complete(()))
         blocked.get()
-        Ok({ result: None, stdout: None })
+        Ok({ result: None, stdout: None, })
       },
       no_raw_drop,
     )
@@ -1087,12 +1087,13 @@ test "cancelling a suspended backend call clears active state" {
 }
 
 ///|
+#warnings("-unused_async")
 test "scoped underlying teardown runs after normal and raised group exits" {
   run_component_async(async fn() {
     let normal_drops = Ref(0)
     @async-core.with_task_group(async fn(group) {
       let _underlying = new_scoped_underlying_tool(
-        (_, _, _) => Ok({ result: None, stdout: None }),
+        (_, _, _) => Ok({ result: None, stdout: None, }),
         fn() { normal_drops.val = normal_drops.val + 1 },
         group,
       )
@@ -1104,7 +1105,7 @@ test "scoped underlying teardown runs after normal and raised group exits" {
     try
       @async-core.with_task_group(async fn(group) {
         let _underlying = new_scoped_underlying_tool(
-          (_, _, _) => Ok({ result: None, stdout: None }),
+          (_, _, _) => Ok({ result: None, stdout: None, }),
           fn() { raised_drops.val = raised_drops.val + 1 },
           group,
         )
@@ -1135,7 +1136,7 @@ test "enclosing group cancellation settles active call before scoped raw drop" {
             async fn(_, _, _) {
               ignore(started_promise.complete(()))
               blocked.get()
-              Ok({ result: None, stdout: None })
+              Ok({ result: None, stdout: None, })
             },
             fn() {
               match underlying_holder.val {

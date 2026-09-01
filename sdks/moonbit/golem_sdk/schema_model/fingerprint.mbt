@@ -1,13 +1,13 @@
 ///|
 /// A BLAKE3-256 fingerprint of the deterministic-CBOR encoding of a schema
 /// closure. The byte representation is always 32 bytes.
-pub(all) struct SchemaFingerprintV1(FixedArray[Byte]) derive(Eq, Show)
+pub(all) struct SchemaFingerprintV1(FixedArray[Byte]) derive(Eq, Debug)
 
 ///|
 pub suberror SchemaFingerprintError {
   InvalidSchema(String)
   DuplicateSetValue(field~ : String, value~ : String)
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 pub fn SchemaFingerprintV1::as_bytes(
@@ -19,7 +19,7 @@ pub fn SchemaFingerprintV1::as_bytes(
 ///|
 pub fn SchemaFingerprintV1::to_hex(self : SchemaFingerprintV1) -> String {
   let digits = "0123456789abcdef"
-  let out = StringBuilder::new(size_hint=64)
+  let out = StringBuilder(size_hint=64)
   for byte in self.0 {
     out.write_char(
       digits.code_unit_at((byte.to_int() >> 4) & 15).to_int().unsafe_to_char(),
@@ -53,10 +53,10 @@ pub fn canonical_schema_bytes_v1(
     None => schema_type(Tuple([]))
   }
   let defs = reachable_definitions(graph, root)
-  let projected = { defs, root }
+  let projected = { defs, root, }
   let errors = validate_graph(projected)
   if !errors.is_empty() {
-    raise InvalidSchema(errors.map(error => error.to_string()).join("; "))
+    raise InvalidSchema(errors.map(error => repr(error)).join("; "))
   }
   let encoder = CborEncoder::new()
   encoder.array(4)
@@ -84,7 +84,7 @@ pub fn canonical_schema_bytes_v1(
 fn reject_duplicate_definitions(
   graph : SchemaGraph,
 ) -> Unit raise SchemaFingerprintError {
-  let seen : Map[String, Unit] = Map::new()
+  let seen : Map[String, Unit] = Map([])
   for def in graph.defs {
     if seen.contains(def.id) {
       raise InvalidSchema("duplicate type id `\{def.id}`")
@@ -98,7 +98,7 @@ fn reachable_definitions(
   graph : SchemaGraph,
   root : SchemaType,
 ) -> Array[SchemaTypeDef] {
-  let wanted : Map[String, Unit] = Map::new()
+  let wanted : Map[String, Unit] = Map([])
   collect_refs(root, wanted)
   let result : Array[SchemaTypeDef] = []
   let mut changed = true
@@ -526,7 +526,7 @@ fn utf8_compare(a : String, b : String) -> Int {
 fn encode_optional_quantity(
   e : CborEncoder,
   value : @types.QuantityValue?,
-) -> Unit raise SchemaFingerprintError {
+) -> Unit {
   match value {
     None => e.null()
     Some(value) => {
@@ -542,7 +542,7 @@ fn encode_optional_quantity(
 fn encode_discriminator(
   e : CborEncoder,
   value : @types.DiscriminatorRule,
-) -> Unit raise SchemaFingerprintError {
+) -> Unit {
   match value {
     @types.Prefix(s) => {
       e.array(2)
@@ -585,7 +585,7 @@ priv struct CborEncoder {
 
 ///|
 fn CborEncoder::new() -> CborEncoder {
-  { bytes: [] }
+  { bytes: [], }
 }
 
 ///|
@@ -604,10 +604,7 @@ fn CborEncoder::array(self : CborEncoder, length : Int) -> Unit {
 }
 
 ///|
-fn CborEncoder::text(
-  self : CborEncoder,
-  value : String,
-) -> Unit raise SchemaFingerprintError {
+fn CborEncoder::text(self : CborEncoder, value : String) -> Unit {
   let bytes = @utf8.encode(value)
   self.major(3, bytes.length().to_uint64())
   for byte in bytes {
@@ -616,10 +613,7 @@ fn CborEncoder::text(
 }
 
 ///|
-fn CborEncoder::optional_text(
-  self : CborEncoder,
-  value : String?,
-) -> Unit raise SchemaFingerprintError {
+fn CborEncoder::optional_text(self : CborEncoder, value : String?) -> Unit {
   match value {
     Some(value) => self.text(value)
     None => self.null()
@@ -647,9 +641,9 @@ fn CborEncoder::unsigned(self : CborEncoder, value : UInt64) -> Unit {
 ///|
 fn CborEncoder::signed(self : CborEncoder, value : Int64) -> Unit {
   if value >= 0L {
-    self.unsigned(value.to_uint64())
+    self.unsigned(value.reinterpret_as_uint64())
   } else {
-    self.major(1, (-1L - value).to_uint64())
+    self.major(1, (-1L - value).reinterpret_as_uint64())
   }
 }
 
@@ -743,7 +737,7 @@ fn compress(output : BlakeOutput, root : Bool) -> FixedArray[UInt] {
   }
   v[12] = output.counter.to_uint()
   v[13] = (output.counter >> 32).to_uint()
-  v[14] = output.block_len.to_uint()
+  v[14] = output.block_len.reinterpret_as_uint()
   v[15] = output.flags | (if root { 8U } else { 0U })
   let schedule = FixedArray::makei(16, i => i)
   for _ in 0..<7 {
@@ -831,7 +825,7 @@ fn parent_output(
     block[i] = left[i]
     block[i + 8] = right[i]
   }
-  { cv: blake3_iv.copy(), block, counter: 0UL, block_len: 64, flags: 4U }
+  { cv: blake3_iv.copy(), block, counter: 0UL, block_len: 64, flags: 4U, }
 }
 
 ///|

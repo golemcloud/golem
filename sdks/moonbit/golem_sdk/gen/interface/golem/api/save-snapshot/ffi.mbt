@@ -2,52 +2,50 @@
 
 ///|
 #doc(hidden)
-pub fn wasmExportSave() -> Int {
-  @async-core.with_waitableset(async fn() {
-    @async-core.with_task_group(async fn(background_group) {
-      let return_result : Ref[@host.Snapshot?] = Ref(None)
-      return_result.val = Some(save(background_group))
-      save_task_return(return_result)
-    })
-  })
+pub fn wasmExportAsyncSave(event_raw : Int, waitable : Int, code : Int) -> Int {
+      @async-core.cb(event_raw, waitable, code)
 }
+///|
+fn wasmExportAsyncSaveTaskReturn(p0: Int, p1: Int, p2: Int, p3: Int) = "[export]golem:api/save-snapshot@1.5.0" "[task-return]save"
 
 ///|
-fn wasmExportAsyncSaveTaskReturn(p0 : Int, p1 : Int, p2 : Int, p3 : Int) = "[export]golem:api/save-snapshot@1.5.0" "[task-return]save"
+fn save_task_return(return_result: Ref[@host.Snapshot?]) -> Unit {
 
-///|
-fn save_task_return(return_result : Ref[@host.Snapshot?]) -> Unit {
-  match return_result.val {
-    Some(return_value) => {
-      let ptr = mbt_ffi_bytes2ptr(return_value.payload)
+      match return_result.val {
+            Some(return_value) => {
 
-      let ptr0 = mbt_ffi_str2ptr(return_value.mime_type)
+                  let ptr = mbt_ffi_bytes2ptr((return_value).payload)
 
-      wasmExportAsyncSaveTaskReturn(
-        ptr,
-        return_value.payload.length(),
-        ptr0,
-        return_value.mime_type.length(),
-      )
+                  let ptr0 = mbt_ffi_str2ptr((return_value).mime_type)
 
-      @async-core.task_returned()
-    }
-    None => ()
-  }
+                  wasmExportAsyncSaveTaskReturn(ptr, (return_value).payload.length(), ptr0, (return_value).mime_type.length())
+
+                  @async-core.task_returned()
+
+            }
+            None => ()
+      }
+
 }
 
 ///|
 #doc(hidden)
-pub fn wasmExportAsyncSave(event_raw : Int, waitable : Int, code : Int) -> Int {
-  @async-core.cb(event_raw, waitable, code)
-}
+pub fn wasmExportSave() -> Int {
+      @async-core.with_waitableset(async fn() {
+            @async-core.with_task_group(async fn(background_group) {
 
+                  let return_result: Ref[@host.Snapshot?] = Ref(None)
+                  return_result.val = Some(save(background_group))
+                  save_task_return(return_result)
+
+            })
+      })
+}
 ///|
 #owned(bytes)
 extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
-  #|(func (param i32) (result i32) local.get 0)
-
+#|(func (param i32) (result i32) local.get 0)
 ///|
 #owned(str)
 extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
-  #|(func (param i32) (result i32) local.get 0)
+#|(func (param i32) (result i32) local.get 0)

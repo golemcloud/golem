@@ -68,6 +68,7 @@ fn reset_generated_middlewares() -> Unit raise {
 }
 
 ///|
+#warnings("-unused_async")
 fn counted_source_stream(drops : Ref[Int]) -> @async-core.Stream[Byte] {
   let emitted = Ref(false)
   let closed = Ref(false)
@@ -92,6 +93,7 @@ fn counted_source_stream(drops : Ref[Int]) -> @async-core.Stream[Byte] {
 }
 
 ///|
+#warnings("-unused_async")
 fn directly_counted_source_stream(
   read : async (Int) -> FixedArray[Byte]?,
   close_attempts : Ref[Int],
@@ -117,6 +119,7 @@ fn projected_stdout_producer(
 priv suberror ProjectedStdoutSourceFailure derive(Debug)
 
 ///|
+#warnings("-unused_async")
 test "generated monomorphic dispatch forwards, short-circuits, and retries" {
   reset_generated_middlewares()
   run_component_async(async fn() {
@@ -127,7 +130,7 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
           forward_calls.val = forward_calls.val + 1
           assert_eq(path, ["value"])
           assert_true(stdin is None)
-          Ok({ result: Some(generated_result(5)), stdout: None })
+          Ok({ result: Some(generated_result(5)), stdout: None, })
         },
         no_raw_drop,
         group,
@@ -146,7 +149,7 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
           let value : Int = generated_result_value(result)
           assert_eq(value, 5)
         }
-        Err(error) => fail("generated forwarding failed: \{error}")
+        Err(error) => fail("generated forwarding failed: \{Repr(error)}")
       }
     })
     assert_eq(forward_calls.val, 1)
@@ -156,7 +159,7 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
       let underlying = new_scoped_underlying_tool(
         async fn(_, _, _) {
           short_circuit_calls.val = short_circuit_calls.val + 1
-          Ok({ result: Some(generated_result(())), stdout: None })
+          Ok({ result: Some(generated_result(())), stdout: None, })
         },
         no_raw_drop,
         group,
@@ -168,7 +171,7 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
         None,
         underlying,
       )
-      assert_true(result is Ok({ result: None, stdout: None }))
+      assert_true(result is Ok({ result: None, stdout: None, }))
     })
     assert_eq(short_circuit_calls.val, 0)
 
@@ -179,7 +182,7 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
           adapter_calls.val = adapter_calls.val + 1
           assert_eq(path, ["fetch"])
           assert_true(stdin is None)
-          Ok({ result: Some(generated_result("stored")), stdout: None })
+          Ok({ result: Some(generated_result("stored")), stdout: None, })
         },
         no_raw_drop,
         group,
@@ -198,7 +201,7 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
           let value : Int = generated_result_value(result)
           assert_eq(value, 6)
         }
-        Err(error) => fail("generated adapter dispatch failed: \{error}")
+        Err(error) => fail("generated adapter dispatch failed: \{Repr(error)}")
       }
     })
     assert_eq(adapter_calls.val, 1)
@@ -209,7 +212,7 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
         async fn(path, _, _) {
           retry_calls.val = retry_calls.val + 1
           assert_eq(path, ["retry"])
-          Ok({ result: Some(generated_result(retry_calls.val)), stdout: None })
+          Ok({ result: Some(generated_result(retry_calls.val)), stdout: None, })
         },
         no_raw_drop,
         group,
@@ -228,7 +231,7 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
           let value : Int = generated_result_value(result)
           assert_eq(value, 2)
         }
-        Err(error) => fail("generated retry failed: \{error}")
+        Err(error) => fail("generated retry failed: \{Repr(error)}")
       }
     })
     assert_eq(retry_calls.val, 2)
@@ -236,6 +239,7 @@ test "generated monomorphic dispatch forwards, short-circuits, and retries" {
 }
 
 ///|
+#warnings("-unused_async")
 test "generated monomorphic dispatch rejects malformed input and result" {
   reset_generated_middlewares()
   run_component_async(async fn() {
@@ -244,7 +248,7 @@ test "generated monomorphic dispatch rejects malformed input and result" {
       let underlying = new_scoped_underlying_tool(
         async fn(_, _, _) {
           malformed_input_calls.val = malformed_input_calls.val + 1
-          Ok({ result: Some(generated_result(1)), stdout: None })
+          Ok({ result: Some(generated_result(1)), stdout: None, })
         },
         no_raw_drop,
         group,
@@ -265,7 +269,7 @@ test "generated monomorphic dispatch rejects malformed input and result" {
       let underlying = new_scoped_underlying_tool(
         async fn(_, _, _) {
           malformed_result_calls.val = malformed_result_calls.val + 1
-          Ok({ result: Some(generated_result(())), stdout: None })
+          Ok({ result: Some(generated_result(())), stdout: None, })
         },
         no_raw_drop,
         group,
@@ -286,6 +290,7 @@ test "generated monomorphic dispatch rejects malformed input and result" {
 }
 
 ///|
+#warnings("-unused_async")
 test "generated monomorphic dispatch decodes and re-encodes custom errors" {
   reset_generated_middlewares()
   let stdin_drops = Ref(0)
@@ -350,6 +355,7 @@ test "generated monomorphic dispatch decodes and re-encodes custom errors" {
 }
 
 ///|
+#warnings("-unused_async")
 test "generated monomorphic dispatch cleans abandoned stdout and transfers returned stdout" {
   reset_generated_middlewares()
   let abandoned_drops = Ref(0)
@@ -358,7 +364,7 @@ test "generated monomorphic dispatch cleans abandoned stdout and transfers retur
       let underlying = new_scoped_underlying_tool(
         async fn(path, _, _) {
           assert_eq(path, ["abandon-stdout"])
-          Ok({ result: None, stdout: Some(counted_stream(abandoned_drops)) })
+          Ok({ result: None, stdout: Some(counted_stream(abandoned_drops)), })
         },
         no_raw_drop,
         group,
@@ -385,7 +391,7 @@ test "generated monomorphic dispatch cleans abandoned stdout and transfers retur
       let underlying = new_scoped_underlying_tool(
         async fn(path, _, _) {
           assert_eq(path, ["stdout"])
-          Ok({ result: None, stdout: Some(counted_stream(returned_drops)) })
+          Ok({ result: None, stdout: Some(counted_stream(returned_drops)), })
         },
         no_raw_drop,
         group,
@@ -405,7 +411,7 @@ test "generated monomorphic dispatch cleans abandoned stdout and transfers retur
             None => fail("generated stdout dispatch lost final stream")
           }
         }
-        Err(error) => fail("generated stdout dispatch failed: \{error}")
+        Err(error) => fail("generated stdout dispatch failed: \{Repr(error)}")
       }
       assert_eq(returned_drops.val, 0)
     })
@@ -423,6 +429,7 @@ test "generated monomorphic dispatch cleans abandoned stdout and transfers retur
 }
 
 ///|
+#warnings("-unused_async")
 test "generated monomorphic dispatch relays lifted stdout after group teardown" {
   reset_generated_middlewares()
   let source_drops = Ref(0)
@@ -434,7 +441,10 @@ test "generated monomorphic dispatch relays lifted stdout after group teardown" 
       let underlying = new_scoped_underlying_tool(
         async fn(path, _, _) {
           assert_eq(path, ["stdout"])
-          Ok({ result: None, stdout: Some(counted_source_stream(source_drops)) })
+          Ok({
+            result: None,
+            stdout: Some(counted_source_stream(source_drops)),
+          })
         },
         no_raw_drop,
         group,
@@ -452,7 +462,7 @@ test "generated monomorphic dispatch relays lifted stdout after group teardown" 
             Some(stdout) => transferred_producer.val = stdout.take_producer()
             None => fail("generated stdout dispatch lost lifted source")
           }
-        Err(error) => fail("generated stdout dispatch failed: \{error}")
+        Err(error) => fail("generated stdout dispatch failed: \{Repr(error)}")
       }
       assert_eq(source_drops.val, 0)
     })
@@ -474,6 +484,7 @@ test "generated monomorphic dispatch relays lifted stdout after group teardown" 
 }
 
 ///|
+#warnings("-unused_async")
 test "transfer-aware stdout closes its source when the consumer closes early" {
   let close_attempts = Ref(0)
   run_component_async(async fn() {
@@ -491,6 +502,7 @@ test "transfer-aware stdout closes its source when the consumer closes early" {
 }
 
 ///|
+#warnings("-unused_async")
 test "transfer-aware stdout closes its source when reading raises" {
   let close_attempts = Ref(0)
   run_component_async(async fn() {
@@ -546,6 +558,7 @@ test "transfer-aware stdout closes its source when its producer is cancelled" {
 }
 
 ///|
+#warnings("-unused_async")
 test "transfer-aware stdout closes an unstarted source exactly once" {
   let close_attempts = Ref(0)
   run_component_async(async fn() {

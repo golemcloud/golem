@@ -4,3 +4,5 @@ import {
   "golemcloud/golem_sdk/interface/wasi/filesystem/types",
   "moonbitlang/core/encoding/utf8",
 }
+
+supported_targets = "+wasm"

@@ -68,7 +68,15 @@ def normalize(text: str, path: Path) -> str:
     wrapper_index: int | None = None
     wrapper_trailer: str | None = None
     wrapper_names: list[str] = []
+    wrappers: list[tuple[str, str]] = []
+    wrapper_indices: list[int] = []
     for index, part in enumerate(parts):
+        stripped = part.strip()
+        if stripped.startswith("#doc(hidden)\n"):
+            matches = list(WRAPPER_DECL.finditer(stripped))
+            if len(matches) == 1:
+                wrappers.append((matches[0].group(1), stripped))
+                wrapper_indices.append(index)
         name = helper_name(part, path)
         if name is None:
             continue
@@ -86,6 +94,12 @@ def normalize(text: str, path: Path) -> str:
         raise SystemExit(f"duplicate generated FFI helper in {path}")
     for index, (_, helper) in zip(helper_indices, sorted(helpers), strict=True):
         parts[index] = helper
+    standalone_wrapper_names = [name for name, _ in wrappers]
+    if len(standalone_wrapper_names) != len(set(standalone_wrapper_names)):
+        raise SystemExit(f"duplicate generated wrapper in {path}")
+    for index, (_, wrapper) in zip(wrapper_indices, sorted(wrappers), strict=True):
+        parts[index] = wrapper
+    wrapper_names.extend(standalone_wrapper_names)
     if wrapper_index is not None and wrapper_trailer is not None:
         normalized_wrappers, wrapper_names = normalize_wrappers(wrapper_trailer, path)
         parts[wrapper_index] += "\n\n" + normalized_wrappers

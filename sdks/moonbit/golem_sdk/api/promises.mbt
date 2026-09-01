@@ -18,7 +18,7 @@ pub fn create_promise() -> PromiseId {
 /// Gets a handle to the result of a promise.
 /// Can only be called in the same agent that originally created the promise.
 pub fn get_promise(promise_id : PromiseId) -> PromiseResult {
-  { inner: @raw.get_promise(promise_id) }
+  { inner: @raw.get_promise(promise_id), }
 }
 
 ///|
@@ -36,7 +36,7 @@ pub fn complete_promise(promise_id : PromiseId, data : Bytes) -> Bool {
 ///|
 /// Awaits and returns the result of the promise.
 pub async fn PromiseResult::get(self : PromiseResult) -> Bytes {
-  Bytes::from_fixedarray(self.inner.get())
+  Bytes::from_array(self.inner.get())
 }
 
 ///|

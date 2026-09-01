@@ -5,12 +5,12 @@ pub impl @tool.ToolErrorSchema for RunError with fn error_cases() {
   Ok([
     {
       name: "broken",
-      doc: { summary: "", description: "", examples: [] },
+      doc: { summary: "", description: "", examples: [], },
       kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
       exit_code: 1,
       payload: Some(
         @schema.into_schema_graph(
-          (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
         ),
       ),
     },
@@ -114,7 +114,7 @@ fn __golem_middleware_tool_append_prepared(
   for node in child.commands {
     commands.push(__golem_middleware_tool_rebase_node(node, offset))
   }
-  { version: def.version, commands }
+  { version: def.version, commands, }
 }
 
 ///|
@@ -126,19 +126,19 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
         {
           name: "presented",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
-          globals: { options: [], flags: [] },
+          doc: { summary: "", description: "", examples: [], },
+          globals: { options: [], flags: [], },
           subcommands: [1, 2, 3, 4, 5, 6, 7],
           body: None,
         },
         {
           name: "unit",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
-          globals: { options: [], flags: [] },
+          doc: { summary: "", description: "", examples: [], },
+          globals: { options: [], flags: [], },
           subcommands: [],
           body: Some({
-            positionals: { fixed: [], tail: None },
+            positionals: { fixed: [], tail: None, },
             options: [],
             flags: [],
             constraints: [],
@@ -157,18 +157,18 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
         {
           name: "value",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
-          globals: { options: [], flags: [] },
+          doc: { summary: "", description: "", examples: [], },
+          globals: { options: [], flags: [], },
           subcommands: [],
           body: Some({
             positionals: {
               fixed: [
                 {
                   name: "value",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                   value_name: None,
                   type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                   default: None,
                   required: true,
@@ -184,13 +184,13 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
             stdout: None,
             result: Some({
               type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{  } : @schema.TypeTag[Int]),
+                (@schema.TypeTag::{ } : @schema.TypeTag[Int]),
               ),
-              doc: { summary: "", description: "", examples: [] },
+              doc: { summary: "", description: "", examples: [], },
               formatters: [
                 {
                   name: "default",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                 },
               ],
               default_formatter: "default",
@@ -207,18 +207,18 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
         {
           name: "retry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
-          globals: { options: [], flags: [] },
+          doc: { summary: "", description: "", examples: [], },
+          globals: { options: [], flags: [], },
           subcommands: [],
           body: Some({
             positionals: {
               fixed: [
                 {
                   name: "value",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                   value_name: None,
                   type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                   default: None,
                   required: true,
@@ -234,13 +234,13 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
             stdout: None,
             result: Some({
               type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{  } : @schema.TypeTag[Int]),
+                (@schema.TypeTag::{ } : @schema.TypeTag[Int]),
               ),
-              doc: { summary: "", description: "", examples: [] },
+              doc: { summary: "", description: "", examples: [], },
               formatters: [
                 {
                   name: "default",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                 },
               ],
               default_formatter: "default",
@@ -257,17 +257,17 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
         {
           name: "stdout",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
-          globals: { options: [], flags: [] },
+          doc: { summary: "", description: "", examples: [], },
+          globals: { options: [], flags: [], },
           subcommands: [],
           body: Some({
-            positionals: { fixed: [], tail: None },
+            positionals: { fixed: [], tail: None, },
             options: [],
             flags: [],
             constraints: [],
             stdin: None,
             stdout: Some({
-              doc: { summary: "", description: "", examples: [] },
+              doc: { summary: "", description: "", examples: [], },
               mime: [],
               required: true,
             }),
@@ -284,17 +284,17 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
         {
           name: "abandon-stdout",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
-          globals: { options: [], flags: [] },
+          doc: { summary: "", description: "", examples: [], },
+          globals: { options: [], flags: [], },
           subcommands: [],
           body: Some({
-            positionals: { fixed: [], tail: None },
+            positionals: { fixed: [], tail: None, },
             options: [],
             flags: [],
             constraints: [],
             stdin: None,
             stdout: Some({
-              doc: { summary: "", description: "", examples: [] },
+              doc: { summary: "", description: "", examples: [], },
               mime: [],
               required: true,
             }),
@@ -311,18 +311,18 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
         {
           name: "value-stdout",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
-          globals: { options: [], flags: [] },
+          doc: { summary: "", description: "", examples: [], },
+          globals: { options: [], flags: [], },
           subcommands: [],
           body: Some({
             positionals: {
               fixed: [
                 {
                   name: "value",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                   value_name: None,
                   type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                   default: None,
                   required: true,
@@ -336,19 +336,19 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
             constraints: [],
             stdin: None,
             stdout: Some({
-              doc: { summary: "", description: "", examples: [] },
+              doc: { summary: "", description: "", examples: [], },
               mime: [],
               required: true,
             }),
             result: Some({
               type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{  } : @schema.TypeTag[Int]),
+                (@schema.TypeTag::{ } : @schema.TypeTag[Int]),
               ),
-              doc: { summary: "", description: "", examples: [] },
+              doc: { summary: "", description: "", examples: [], },
               formatters: [
                 {
                   name: "default",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                 },
               ],
               default_formatter: "default",
@@ -365,33 +365,33 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
         {
           name: "io",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
-          globals: { options: [], flags: [] },
+          doc: { summary: "", description: "", examples: [], },
+          globals: { options: [], flags: [], },
           subcommands: [],
           body: Some({
-            positionals: { fixed: [], tail: None },
+            positionals: { fixed: [], tail: None, },
             options: [],
             flags: [],
             constraints: [],
             stdin: Some({
-              doc: { summary: "", description: "", examples: [] },
+              doc: { summary: "", description: "", examples: [], },
               mime: [],
               required: true,
             }),
             stdout: Some({
-              doc: { summary: "", description: "", examples: [] },
+              doc: { summary: "", description: "", examples: [], },
               mime: [],
               required: true,
             }),
             result: Some({
               type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                (@schema.TypeTag::{ } : @schema.TypeTag[String]),
               ),
-              doc: { summary: "", description: "", examples: [] },
+              doc: { summary: "", description: "", examples: [], },
               formatters: [
                 {
                   name: "default",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                 },
               ],
               default_formatter: "default",
@@ -431,7 +431,7 @@ fn __golem_middleware_tool_def_prepare_Presented(
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
+          doc: { summary: "", description: "", examples: [], },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -462,7 +462,7 @@ fn __golem_middleware_tool_def_prepare_Presented(
             long: "verbose",
             short: None,
             aliases: [],
-            doc: { summary: "", description: "", examples: [] },
+            doc: { summary: "", description: "", examples: [], },
             shape: @toolCommon.FlagShape::BoolFlag({
               default: false,
               negatable: false,
@@ -485,8 +485,8 @@ fn __golem_middleware_tool_def_prepare_Presented(
 ///|
 fn __golem_middleware_tool_def_Presented() -> @tool.ToolDef {
   __golem_middleware_tool_def_prepare_Presented(
-    { options: [], flags: [] },
-    { options: [], flags: [] },
+    { options: [], flags: [], },
+    { options: [], flags: [], },
     None,
     None,
     None,
@@ -504,26 +504,26 @@ fn __golem_middleware_tool_def_raw_Nested() -> @tool.ToolDef {
         {
           name: "nested",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
-          globals: { options: [], flags: [] },
+          doc: { summary: "", description: "", examples: [], },
+          globals: { options: [], flags: [], },
           subcommands: [1],
           body: None,
         },
         {
           name: "run",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
-          globals: { options: [], flags: [] },
+          doc: { summary: "", description: "", examples: [], },
+          globals: { options: [], flags: [], },
           subcommands: [],
           body: Some({
             positionals: {
               fixed: [
                 {
                   name: "name",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                   value_name: None,
                   type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                   default: None,
                   required: true,
@@ -539,13 +539,13 @@ fn __golem_middleware_tool_def_raw_Nested() -> @tool.ToolDef {
             stdout: None,
             result: Some({
               type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                (@schema.TypeTag::{ } : @schema.TypeTag[String]),
               ),
-              doc: { summary: "", description: "", examples: [] },
+              doc: { summary: "", description: "", examples: [], },
               formatters: [
                 {
                   name: "default",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                 },
               ],
               default_formatter: "default",
@@ -582,7 +582,7 @@ fn __golem_middleware_tool_def_prepare_Nested(
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
+          doc: { summary: "", description: "", examples: [], },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -609,8 +609,8 @@ fn __golem_middleware_tool_def_prepare_Nested(
 ///|
 fn __golem_middleware_tool_def_Nested() -> @tool.ToolDef {
   __golem_middleware_tool_def_prepare_Nested(
-    { options: [], flags: [] },
-    { options: [], flags: [] },
+    { options: [], flags: [], },
+    { options: [], flags: [], },
     None,
     None,
     None,
@@ -628,26 +628,26 @@ fn __golem_middleware_tool_def_raw_Storage() -> @tool.ToolDef {
         {
           name: "storage",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
-          globals: { options: [], flags: [] },
+          doc: { summary: "", description: "", examples: [], },
+          globals: { options: [], flags: [], },
           subcommands: [1],
           body: None,
         },
         {
           name: "fetch",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
-          globals: { options: [], flags: [] },
+          doc: { summary: "", description: "", examples: [], },
+          globals: { options: [], flags: [], },
           subcommands: [],
           body: Some({
             positionals: {
               fixed: [
                 {
                   name: "key",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                   value_name: None,
                   type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                   default: None,
                   required: true,
@@ -663,13 +663,13 @@ fn __golem_middleware_tool_def_raw_Storage() -> @tool.ToolDef {
             stdout: None,
             result: Some({
               type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                (@schema.TypeTag::{ } : @schema.TypeTag[String]),
               ),
-              doc: { summary: "", description: "", examples: [] },
+              doc: { summary: "", description: "", examples: [], },
               formatters: [
                 {
                   name: "default",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                 },
               ],
               default_formatter: "default",
@@ -706,7 +706,7 @@ fn __golem_middleware_tool_def_prepare_Storage(
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
+          doc: { summary: "", description: "", examples: [], },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -733,8 +733,8 @@ fn __golem_middleware_tool_def_prepare_Storage(
 ///|
 fn __golem_middleware_tool_def_Storage() -> @tool.ToolDef {
   __golem_middleware_tool_def_prepare_Storage(
-    { options: [], flags: [] },
-    { options: [], flags: [] },
+    { options: [], flags: [], },
+    { options: [], flags: [], },
     None,
     None,
     None,
@@ -1482,7 +1482,9 @@ async fn __golem_monomorphic_tool_middleware_invoke_Adapter(
         ),
       )
     }
-    let __golem_expected = StorageUnderlying::{ underlying: __golem_underlying }
+    let __golem_expected = StorageUnderlying::{
+      underlying: __golem_underlying,
+    }
     match Adapter::unit(__golem_expected) {
       Ok(__golem_result) => {
         ignore(__golem_result)
@@ -1511,7 +1513,9 @@ async fn __golem_monomorphic_tool_middleware_invoke_Adapter(
       Ok(__golem_value) => __golem_value
       Err(__golem_error) => return Err(__golem_error)
     }
-    let __golem_expected = StorageUnderlying::{ underlying: __golem_underlying }
+    let __golem_expected = StorageUnderlying::{
+      underlying: __golem_underlying,
+    }
     match Adapter::value(__golem_expected, value) {
       Ok(__golem_result) =>
         return __golem_invocation.typed_result_value(__golem_result)
@@ -1538,7 +1542,9 @@ async fn __golem_monomorphic_tool_middleware_invoke_Adapter(
       Ok(__golem_value) => __golem_value
       Err(__golem_error) => return Err(__golem_error)
     }
-    let __golem_expected = StorageUnderlying::{ underlying: __golem_underlying }
+    let __golem_expected = StorageUnderlying::{
+      underlying: __golem_underlying,
+    }
     match Adapter::retry(__golem_expected, value) {
       Ok(__golem_result) =>
         return __golem_invocation.typed_result_value(__golem_result)
@@ -1558,7 +1564,9 @@ async fn __golem_monomorphic_tool_middleware_invoke_Adapter(
         ),
       )
     }
-    let __golem_expected = StorageUnderlying::{ underlying: __golem_underlying }
+    let __golem_expected = StorageUnderlying::{
+      underlying: __golem_underlying,
+    }
     match Adapter::stdout(__golem_expected) {
       Ok(__golem_result) =>
         return __golem_invocation.typed_result_stdout(__golem_result)
@@ -1579,7 +1587,9 @@ async fn __golem_monomorphic_tool_middleware_invoke_Adapter(
         ),
       )
     }
-    let __golem_expected = StorageUnderlying::{ underlying: __golem_underlying }
+    let __golem_expected = StorageUnderlying::{
+      underlying: __golem_underlying,
+    }
     match Adapter::abandon_stdout(__golem_expected) {
       Ok(__golem_result) =>
         return __golem_invocation.typed_result_stdout(__golem_result)
@@ -1606,7 +1616,9 @@ async fn __golem_monomorphic_tool_middleware_invoke_Adapter(
       Ok(__golem_value) => __golem_value
       Err(__golem_error) => return Err(__golem_error)
     }
-    let __golem_expected = StorageUnderlying::{ underlying: __golem_underlying }
+    let __golem_expected = StorageUnderlying::{
+      underlying: __golem_underlying,
+    }
     match Adapter::value_stdout(__golem_expected, value) {
       Ok(__golem_result) => {
         let (__golem_value, __golem_stdout) = __golem_result
@@ -1634,7 +1646,9 @@ async fn __golem_monomorphic_tool_middleware_invoke_Adapter(
         )
     }
     let principal = __golem_invocation.principal()
-    let __golem_expected = StorageUnderlying::{ underlying: __golem_underlying }
+    let __golem_expected = StorageUnderlying::{
+      underlying: __golem_underlying,
+    }
     match Adapter::io(__golem_expected, input, principal) {
       Ok(__golem_result) => {
         let (__golem_value, __golem_stdout) = __golem_result
@@ -1674,7 +1688,9 @@ async fn __golem_monomorphic_tool_middleware_invoke_Adapter(
       Ok(__golem_value) => __golem_value
       Err(__golem_error) => return Err(__golem_error)
     }
-    let __golem_expected = StorageUnderlying::{ underlying: __golem_underlying }
+    let __golem_expected = StorageUnderlying::{
+      underlying: __golem_underlying,
+    }
     match Adapter::admin__run(__golem_expected, verbose, name) {
       Ok(__golem_result) =>
         return __golem_invocation.typed_result_value(__golem_result)
@@ -1695,7 +1711,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
     {
       name: "audit",
       aliases: [],
-      doc: { summary: "", description: "", examples: [] },
+      doc: { summary: "", description: "", examples: [], },
       scope: @toolMiddleware.ToolMiddlewareScope::Universal,
     },
     __golem_universal_tool_middleware_invoke_audit,
@@ -1704,7 +1720,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
     {
       name: "policy",
       aliases: [],
-      doc: { summary: "", description: "", examples: [] },
+      doc: { summary: "", description: "", examples: [], },
       scope: @toolMiddleware.ToolMiddlewareScope::Monomorphic({
         presented: __golem_middleware_tool_def_Presented().to_tool(),
         expected: __golem_middleware_tool_def_Presented().to_tool(),
@@ -1716,7 +1732,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
     {
       name: "adapter",
       aliases: [],
-      doc: { summary: "", description: "", examples: [] },
+      doc: { summary: "", description: "", examples: [], },
       scope: @toolMiddleware.ToolMiddlewareScope::Monomorphic({
         presented: __golem_middleware_tool_def_Presented().to_tool(),
         expected: __golem_middleware_tool_def_Storage().to_tool(),

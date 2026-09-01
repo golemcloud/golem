@@ -78,7 +78,7 @@ fn normalize_path(path : String) -> String {
   if start == 0 {
     path
   } else {
-    path.substring(start~, end=len)
+    path[start:].to_owned()
   }
 }
 
@@ -177,7 +177,7 @@ pub async fn read_string(
   match read_bytes(root, path) {
     Err(e) => Err(e)
     Ok(bytes) => {
-      let bs = Bytes::from_fixedarray(bytes)
+      let bs = Bytes::from_array(bytes)
       Ok(@utf8.decode_lossy(bs[:]))
     }
   }
