@@ -404,8 +404,8 @@ impl OplogSweeper {
 
     /// Runs ticks until `shutdown` is cancelled, then returns.
     ///
-    /// Cancellation is observed between routes, between scan pages, and before each agent the
-    /// archive phase reaches, but never inside one, so shutting down never interrupts an archive
+    /// Cancellation is observed between routes, between scan pages, before each component the
+    /// archive phase has to resolve, and before each agent it reaches, but never inside one, so shutting down never interrupts an archive
     /// step between its append to the layer below and its drop from the layer above. An agent
     /// already under way is finished, all of its layers, before the loop returns. Spawn this into the executor's
     /// `JoinSet` so that shutdown waits for the step in flight; a tick stops at the next boundary
