@@ -10,7 +10,6 @@ import {
   type FutureInvokeResult,
   type RpcError,
   type ToolError,
-  type ToolStdin,
 } from 'golem:tool/host@0.1.0';
 import {
   preflightWitTypedSchemaValue,
@@ -58,7 +57,7 @@ export function createToolClientTransport(toolName: string): ToolClientTransport
         inputEndpoints?.[1],
         outputEndpoints?.[0],
       );
-      if (inputEndpoints) void pumpToolStdin(stdin!, ...inputEndpoints);
+      if (inputEndpoints) void pumpToolStdin(stdin!, inputEndpoints[0], inputEndpoints[2]);
       return {
         stdout: outputEndpoints?.[1],
         result: future.get(),
@@ -71,7 +70,6 @@ export function createToolClientTransport(toolName: string): ToolClientTransport
 async function pumpToolStdin(
   source: ToolInputStream,
   writer: ReturnType<typeof createStdin>[0],
-  _capability: ToolStdin,
   closed: ReturnType<typeof createStdin>[2],
 ): Promise<void> {
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
