@@ -39,6 +39,14 @@
 //! `archive_ephemeral_oplog` already costs on teardown. What the sweep adds is a ceiling on how
 //! many run at once: the teardown drain spawns one task per finishing invocation with nothing
 //! capping it, a tick holds at most `max_concurrency`.
+//!
+//! That ceiling covers the transfer, not everything an archive leaves behind. Archiving an agent
+//! builds a suspended `Worker` through `open_oplog`, and nothing evicts it: `stop_if_evictable`
+//! matches only a running instance. Each archived agent therefore keeps an `ActiveWorkers` entry
+//! for the life of the pod, outside `max_tracked_agents`. It is inherited from
+//! `ScheduledAction::ArchiveOplog`, which built the same worker far more often, and it is why
+//! `archive_agent` drains an agent fully rather than leaving a hop for a later tick: from the next
+//! tick on, the residency probe reports that agent as running and skips it.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display};
@@ -405,11 +413,12 @@ impl OplogSweeper {
     /// Runs ticks until `shutdown` is cancelled, then returns.
     ///
     /// Cancellation is observed between routes, between scan pages, before each component the
-    /// archive phase has to resolve, and before each agent it reaches, but never inside one, so shutting down never interrupts an archive
-    /// step between its append to the layer below and its drop from the layer above. An agent
-    /// already under way is finished, all of its layers, before the loop returns. Spawn this into the executor's
-    /// `JoinSet` so that shutdown waits for the step in flight; a tick stops at the next boundary
-    /// rather than running to completion.
+    /// archive phase has to resolve, and before each agent it reaches, but never inside one, so
+    /// shutting down never interrupts an archive step between its append to the layer below and
+    /// its drop from the layer above. An agent already under way is finished, all of its layers,
+    /// before the loop returns. Spawn this into the executor's `JoinSet` so that shutdown waits
+    /// for the step in flight; a tick stops at the next boundary rather than running to
+    /// completion.
     ///
     /// Returns immediately when the sweep is disabled or the layer stack offers no route, leaving
     /// `ScheduledAction::ArchiveOplog` as the only archiving mechanism.
@@ -444,9 +453,9 @@ impl OplogSweeper {
     async fn sweep_once(&self, shutdown: &CancellationToken) -> SweepReport {
         // Without an assignment every agent would look like someone else's, and archiving an
         // agent this executor may not own is what the shard check is for. A zero-shard assignment
-        // is the same state in a different shape: `ShardService` installs `ShardAssignment::default`
-        // before it has a shard count to record, and routing an agent through that count divides by
-        // zero.
+        // is the same state in a different shape: `ShardService` installs
+        // `ShardAssignment::default` before it has a shard count to record, and routing an agent
+        // through that count divides by zero.
         let assignment = self.shards.try_get_current_assignment();
         let Some(assignment) = assignment.filter(|it| it.number_of_shards > 0) else {
             return SweepReport {
