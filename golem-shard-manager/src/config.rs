@@ -221,18 +221,29 @@ pub struct EtcdConfig {
     /// fails to deserialize:
     /// `GOLEM__PERSISTENCE__CONFIG__ENDPOINTS=["http://a:2379","http://b:2379"]`
     pub endpoints: Vec<String>,
-    #[serde(with = "humantime_serde")]
+    /// Defaulted, so that selecting etcd by environment variable does not also require setting
+    /// every timeout: figment merges `GOLEM__PERSISTENCE__CONFIG__*` over the *default* variant's
+    /// map, which is SQLite's, so these two would otherwise be missing rather than inherited.
+    #[serde(with = "humantime_serde", default = "default_etcd_connect_timeout")]
     pub connect_timeout: Duration,
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "humantime_serde", default = "default_etcd_request_timeout")]
     pub request_timeout: Duration,
+}
+
+fn default_etcd_connect_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
+fn default_etcd_request_timeout() -> Duration {
+    Duration::from_secs(5)
 }
 
 impl Default for EtcdConfig {
     fn default() -> Self {
         Self {
             endpoints: vec!["http://localhost:2379".to_string()],
-            connect_timeout: Duration::from_secs(10),
-            request_timeout: Duration::from_secs(5),
+            connect_timeout: default_etcd_connect_timeout(),
+            request_timeout: default_etcd_request_timeout(),
         }
     }
 }

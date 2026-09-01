@@ -177,103 +177,6 @@ impl QuotaRepo for UnavailableQuotaRepo {
     }
 }
 
-#[cfg(test)]
-mod unavailable_quota_repo_tests {
-    use test_r::test;
-
-    use super::{QuotaRepo, UnavailableQuotaRepo};
-    use golem_common::model::quota::ResourceDefinitionId;
-
-    #[test]
-    async fn writes_are_refused_rather_than_silently_dropped() {
-        let repo = UnavailableQuotaRepo;
-        let id = ResourceDefinitionId(uuid::Uuid::new_v4());
-
-        assert!(repo.delete_resource_and_leases(id).await.is_err());
-        assert!(repo.delete_leases_for_resource(id).await.is_err());
-    }
-
-    #[test]
-    // Reads must stay infallible: `QuotaService::restore_state` propagates their errors, so
-    // failing them would abort startup and take down the shard lease state, which *is* durable
-    // in this mode. Making every method fail uniformly looks tidier and breaks etcd mode.
-    async fn reads_report_no_state_instead_of_failing() {
-        let repo = UnavailableQuotaRepo;
-
-        assert!(
-            repo.get_all_resources()
-                .await
-                .expect("reads must not fail")
-                .is_empty()
-        );
-        assert!(
-            repo.get_all_leases()
-                .await
-                .expect("reads must not fail")
-                .is_empty()
-        );
-    }
-}
-
-/// A [`QuotaRepo`] that persists nothing, for the quota service unit tests.
-#[cfg(test)]
-#[derive(Debug, Default)]
-pub struct InMemoryQuotaRepo;
-
-#[cfg(test)]
-#[async_trait]
-impl QuotaRepo for InMemoryQuotaRepo {
-    async fn save_lease_change(
-        &self,
-        _resource: &QuotaResourceRecord,
-        _previous_resource_revision: i64,
-        _lease: &QuotaLeaseRecord,
-        _expired_pods: &[(Blob<IpAddr>, i32)],
-    ) -> Result<(), QuotaRepoError> {
-        Ok(())
-    }
-
-    async fn save_lease_release(
-        &self,
-        _resource: &QuotaResourceRecord,
-        _previous_resource_revision: i64,
-        _pod_ip: Blob<IpAddr>,
-        _pod_port: i32,
-    ) -> Result<(), QuotaRepoError> {
-        Ok(())
-    }
-
-    async fn save_resource(
-        &self,
-        _record: &QuotaResourceRecord,
-        _previous_revision: i64,
-    ) -> Result<(), QuotaRepoError> {
-        Ok(())
-    }
-
-    async fn delete_resource_and_leases(
-        &self,
-        _resource_definition_id: ResourceDefinitionId,
-    ) -> Result<(), QuotaRepoError> {
-        Ok(())
-    }
-
-    async fn get_all_resources(&self) -> Result<Vec<QuotaResourceRecord>, QuotaRepoError> {
-        Ok(Vec::new())
-    }
-
-    async fn get_all_leases(&self) -> Result<Vec<QuotaLeaseRecord>, QuotaRepoError> {
-        Ok(Vec::new())
-    }
-
-    async fn delete_leases_for_resource(
-        &self,
-        _resource_definition_id: ResourceDefinitionId,
-    ) -> Result<(), QuotaRepoError> {
-        Ok(())
-    }
-}
-
 static SPAN_NAME: &str = "quota repository";
 
 pub struct LoggedQuotaRepo<Repo: QuotaRepo> {
@@ -627,5 +530,104 @@ impl DbQuotaRepo<PostgresPool> {
         )
         .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod unavailable_quota_repo_tests {
+    use test_r::test;
+
+    use super::*;
+    use chrono::Utc;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::quota::{
+        EnforcementAction, ResourceCapacityLimit, ResourceDefinitionRevision, ResourceLimit,
+        ResourceName,
+    };
+    use std::net::Ipv4Addr;
+
+    fn a_resource() -> QuotaResourceRecord {
+        let now = SqlDateTime::new(Utc::now());
+        QuotaResourceRecord {
+            resource_definition_id: Uuid::new_v4(),
+            revision: 1,
+            definition: Blob::new(ResourceDefinition {
+                id: ResourceDefinitionId(Uuid::new_v4()),
+                revision: ResourceDefinitionRevision::INITIAL,
+                environment_id: EnvironmentId(Uuid::new_v4()),
+                name: ResourceName("tokens".to_string()),
+                limit: ResourceLimit::Capacity(ResourceCapacityLimit { value: 100 }),
+                enforcement_action: EnforcementAction::Reject,
+                unit: "token".to_string(),
+                units: "tokens".to_string(),
+            }),
+            remaining: NumericU64::new(100),
+            last_refilled_at: now.clone(),
+            last_refreshed_at: now,
+        }
+    }
+
+    fn a_lease() -> QuotaLeaseRecord {
+        let now = SqlDateTime::new(Utc::now());
+        QuotaLeaseRecord {
+            resource_definition_id: Uuid::new_v4(),
+            pod_ip: Blob::new(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+            pod_port: 9000,
+            epoch: NumericU64::new(1),
+            allocated: NumericU64::new(10),
+            granted_at: now.clone(),
+            expires_at: now,
+            pending_reservations: Blob::new(Vec::new()),
+        }
+    }
+
+    #[test]
+    // Every write, not just the cheap ones. `save_lease_change` is the path that grants budget,
+    // and it is the specific silent success this type exists to prevent - a test that skipped it
+    // would stay green if the method were reverted to `Ok(())`.
+    async fn writes_are_refused_rather_than_silently_dropped() {
+        let repo = UnavailableQuotaRepo;
+        let id = ResourceDefinitionId(Uuid::new_v4());
+
+        assert!(
+            repo.save_lease_change(&a_resource(), 1, &a_lease(), &[])
+                .await
+                .is_err(),
+            "granting a quota lease must fail rather than report success against nothing"
+        );
+        assert!(
+            repo.save_lease_release(
+                &a_resource(),
+                1,
+                Blob::new(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                9000
+            )
+            .await
+            .is_err()
+        );
+        assert!(repo.save_resource(&a_resource(), 1).await.is_err());
+        assert!(repo.delete_resource_and_leases(id).await.is_err());
+        assert!(repo.delete_leases_for_resource(id).await.is_err());
+    }
+
+    #[test]
+    // Reads must stay infallible: `QuotaService::restore_state` propagates their errors, so
+    // failing them would abort startup and take down the shard lease state, which *is* durable
+    // in this mode. Making every method fail uniformly looks tidier and breaks etcd mode.
+    async fn reads_report_no_state_instead_of_failing() {
+        let repo = UnavailableQuotaRepo;
+
+        assert!(
+            repo.get_all_resources()
+                .await
+                .expect("reads must not fail")
+                .is_empty()
+        );
+        assert!(
+            repo.get_all_leases()
+                .await
+                .expect("reads must not fail")
+                .is_empty()
+        );
     }
 }

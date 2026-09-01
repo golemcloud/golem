@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::quota_lease::QuotaLease;
-use super::quota_repo::{InMemoryQuotaRepo, QuotaRepo};
+use super::quota_repo::{QuotaLeaseRecord, QuotaRepo, QuotaRepoError, QuotaResourceRecord};
 use super::quota_service::{QuotaError, QuotaService};
 use super::resource_definition_fetcher::{FetchError, ResourceDefinitionFetcher};
 use crate::config::QuotaServiceConfig;
@@ -26,12 +26,71 @@ use golem_common::model::quota::{
     ResourceDefinitionId, ResourceDefinitionRevision, ResourceLimit, ResourceName,
     ResourceRateLimit, TimePeriod,
 };
+use golem_service_base::repo::Blob;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::test;
 use tokio::sync::RwLock;
+
+/// A [`QuotaRepo`] that persists nothing, so these tests exercise the service and state
+/// machinery without a database.
+#[derive(Debug, Default)]
+struct InMemoryQuotaRepo;
+
+#[async_trait]
+impl QuotaRepo for InMemoryQuotaRepo {
+    async fn save_lease_change(
+        &self,
+        _resource: &QuotaResourceRecord,
+        _previous_resource_revision: i64,
+        _lease: &QuotaLeaseRecord,
+        _expired_pods: &[(Blob<IpAddr>, i32)],
+    ) -> Result<(), QuotaRepoError> {
+        Ok(())
+    }
+
+    async fn save_lease_release(
+        &self,
+        _resource: &QuotaResourceRecord,
+        _previous_resource_revision: i64,
+        _pod_ip: Blob<IpAddr>,
+        _pod_port: i32,
+    ) -> Result<(), QuotaRepoError> {
+        Ok(())
+    }
+
+    async fn save_resource(
+        &self,
+        _record: &QuotaResourceRecord,
+        _previous_revision: i64,
+    ) -> Result<(), QuotaRepoError> {
+        Ok(())
+    }
+
+    async fn delete_resource_and_leases(
+        &self,
+        _resource_definition_id: ResourceDefinitionId,
+    ) -> Result<(), QuotaRepoError> {
+        Ok(())
+    }
+
+    async fn get_all_resources(&self) -> Result<Vec<QuotaResourceRecord>, QuotaRepoError> {
+        Ok(Vec::new())
+    }
+
+    async fn get_all_leases(&self) -> Result<Vec<QuotaLeaseRecord>, QuotaRepoError> {
+        Ok(Vec::new())
+    }
+
+    async fn delete_leases_for_resource(
+        &self,
+        _resource_definition_id: ResourceDefinitionId,
+    ) -> Result<(), QuotaRepoError> {
+        Ok(())
+    }
+}
 
 fn test_repo() -> Arc<dyn QuotaRepo> {
     Arc::new(InMemoryQuotaRepo)
