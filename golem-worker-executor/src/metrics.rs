@@ -86,6 +86,12 @@ const SCHEDULER_TICK_DURATION_BUCKETS: &[f64; 24] = &[
     2.5, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 60.0,
 ];
 
+/// Tick-duration buckets for the oplog sweep. They reach well past the shared set's minute: a
+/// tick is a budgeted walk of a storage namespace, so slow storage is exactly when its duration
+/// is worth reading, and the shared buckets saturate there.
+const OPLOG_SWEEP_TICK_BUCKETS: &[f64; 9] =
+    &[0.01, 0.1, 1.0, 5.0, 15.0, 60.0, 300.0, 900.0, 3600.0];
+
 /// Buckets for the size of a single `memory.grow` allocation. Deliberately
 /// fine-grained in the 1-32 MiB band where typical guest grows cluster, so
 /// that p90/p99 quantiles are not pinned to a coarse 4-16 MiB bucket edge.
@@ -1020,10 +1026,7 @@ pub mod oplog {
             "oplog_sweep_tick_seconds",
             "Time taken by one oplog sweep tick",
             &["route"],
-            // Reaches well past the default minute. A tick is a budgeted walk of a storage
-            // namespace, so slow storage is exactly when its duration is worth reading, and the
-            // shared buckets saturate there.
-            vec![0.01, 0.1, 1.0, 5.0, 15.0, 60.0, 300.0, 900.0, 3600.0]
+            crate::metrics::OPLOG_SWEEP_TICK_BUCKETS.to_vec()
         )
         .unwrap();
         static ref OPLOG_SWEEP_TRUNCATED_TOTAL: CounterVec = register_counter_vec!(
