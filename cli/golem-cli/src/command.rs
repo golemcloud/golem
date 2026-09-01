@@ -1225,64 +1225,6 @@ pub mod component {
             component_name: OptionalComponentNames,
         },
     }
-
-    pub mod plugin {
-        use crate::args::parse_key_val;
-        use crate::command::shared_args::OptionalComponentName;
-        use clap::Subcommand;
-
-        #[derive(Debug, Subcommand)]
-        pub enum ComponentPluginSubcommand {
-            /// Install a plugin for selected component
-            Install {
-                #[command(flatten)]
-                component_name: OptionalComponentName,
-                /// The plugin to install
-                #[arg(long)]
-                plugin_name: String,
-                /// The version of the plugin to install
-                #[arg(long)]
-                plugin_version: String,
-                /// Priority of the plugin - largest priority is applied first
-                #[arg(long)]
-                priority: i32,
-                /// List of parameters (key-value pairs) passed to the plugin
-                #[arg(long, value_parser = parse_key_val, value_name = "KEY=VAL")]
-                param: Vec<(String, String)>,
-            },
-            /// Get the installed plugins of the component
-            Get {
-                #[command(flatten)]
-                component_name: OptionalComponentName,
-                /// The revision of the component
-                revision: Option<u64>,
-            },
-            /// Update component plugin
-            Update {
-                /// The component to update the plugin for
-                #[command(flatten)]
-                component_name: OptionalComponentName,
-                /// Priority of the plugin to update
-                #[arg(long)]
-                plugin_to_update: i32,
-                /// Updated priority of the plugin - largest priority is applied first
-                #[arg(long)]
-                priority: i32,
-                /// Updated list of parameters (key-value pairs) passed to the plugin
-                #[arg(long, value_parser = parse_key_val, value_name = "KEY=VAL")]
-                param: Vec<(String, String)>,
-            },
-            /// Uninstall a plugin for selected component
-            Uninstall {
-                /// The component to uninstall the plugin from
-                #[command(flatten)]
-                component_name: OptionalComponentName,
-                /// Priority of the plugin to update
-                #[arg(long)]
-                plugin_to_update: i32,
-            },
-        }
-    }
 }
 
 pub mod worker {
@@ -2178,10 +2120,21 @@ pub mod plugin {
         /// Get plugin details
         #[command(after_help = crate::command_examples::PLUGIN_GET)]
         Get {
-            #[arg(required_unless_present = "id", conflicts_with = "id")]
+            /// Plugin name. Must be used together with VERSION.
+            #[arg(
+                value_name = "NAME",
+                required_unless_present = "id",
+                conflicts_with = "id"
+            )]
             name: Option<String>,
-            #[arg(required_unless_present = "id", conflicts_with = "id")]
+            /// Plugin version. Must be used together with NAME.
+            #[arg(
+                value_name = "VERSION",
+                required_unless_present = "id",
+                conflicts_with = "id"
+            )]
             version: Option<String>,
+            /// Plugin ID. Conflicts with NAME, VERSION, and account scope.
             #[arg(long, required_unless_present_all = ["name", "version"], conflicts_with_all = ["name", "version", "account", "account_id"])]
             id: Option<Uuid>,
             #[command(flatten)]
@@ -2202,10 +2155,21 @@ pub mod plugin {
         /// Unregister a plugin
         #[command(after_help = crate::command_examples::PLUGIN_UNREGISTER)]
         Unregister {
-            #[arg(required_unless_present = "id", conflicts_with = "id")]
+            /// Plugin name. Must be used together with VERSION.
+            #[arg(
+                value_name = "NAME",
+                required_unless_present = "id",
+                conflicts_with = "id"
+            )]
             name: Option<String>,
-            #[arg(required_unless_present = "id", conflicts_with = "id")]
+            /// Plugin version. Must be used together with NAME.
+            #[arg(
+                value_name = "VERSION",
+                required_unless_present = "id",
+                conflicts_with = "id"
+            )]
             version: Option<String>,
+            /// Plugin ID. Conflicts with NAME, VERSION, and account scope.
             #[arg(long, required_unless_present_all = ["name", "version"], conflicts_with_all = ["name", "version", "account", "account_id"])]
             id: Option<Uuid>,
             #[command(flatten)]
@@ -2355,6 +2319,7 @@ pub mod account {
     #[derive(Debug, Subcommand)]
     pub enum AccountUsageSubcommand {
         /// Show storage usage for current or selected billing period.
+        #[command(after_help = crate::command_examples::ACCOUNT_USAGE_SHOW)]
         Show {
             #[command(flatten)]
             account: AccountScopeArgs,
@@ -2364,6 +2329,7 @@ pub mod account {
             period: Option<StorageUsagePeriod>,
         },
         /// Show storage usage for closed billing periods.
+        #[command(after_help = crate::command_examples::ACCOUNT_USAGE_HISTORY)]
         History {
             #[command(flatten)]
             account: AccountScopeArgs,
@@ -2377,11 +2343,13 @@ pub mod account {
     #[derive(Debug, Subcommand)]
     pub enum AccountLimitsSubcommand {
         /// Show effective storage and memory limits.
+        #[command(after_help = crate::command_examples::ACCOUNT_LIMITS_SHOW)]
         Show {
             #[command(flatten)]
             account: AccountScopeArgs,
         },
         /// Set one storage or memory limit.
+        #[command(after_help = crate::command_examples::ACCOUNT_LIMITS_SET)]
         Set {
             #[command(flatten)]
             account: AccountScopeArgs,
@@ -2407,6 +2375,7 @@ pub mod account {
             monthly_memory_gb_seconds: Option<u64>,
         },
         /// Clear selected overrides. With no flags, clears storage for compatibility.
+        #[command(after_help = crate::command_examples::ACCOUNT_LIMITS_UNSET)]
         Unset {
             #[command(flatten)]
             account: AccountScopeArgs,
@@ -3174,6 +3143,133 @@ mod test {
             GolemCliCommand::try_parse_from(["golem", "account", "limits", "set", "not-a-size",])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn account_scopes_accept_email_or_id_and_reject_both() {
+        let account_id = "00000000-0000-0000-0000-000000000001";
+        let commands: &[&[&str]] = &[
+            &["account", "get"],
+            &["account", "update", "new-name"],
+            &["account", "delete"],
+            &["account", "usage", "show"],
+            &["account", "usage", "history"],
+            &["account", "limits", "show"],
+            &["account", "limits", "set", "1024"],
+            &["account", "limits", "unset"],
+            &["account", "permission-share", "list"],
+            &["account", "permission-share", "get-by-name", "share"],
+            &[
+                "account",
+                "permission-share",
+                "new",
+                "target@example.com",
+                "share",
+            ],
+            &["plugin", "list"],
+            &["plugin", "register", "-"],
+            &["card", "list"],
+        ];
+
+        for command in commands {
+            let base = std::iter::once("golem").chain(command.iter().copied());
+            assert!(
+                GolemCliCommand::try_parse_from(
+                    base.clone().chain(["--account", "owner@example.com"])
+                )
+                .is_ok(),
+                "email scope failed for {command:?}"
+            );
+            assert!(
+                GolemCliCommand::try_parse_from(base.clone().chain(["--account-id", account_id]))
+                    .is_ok(),
+                "ID scope failed for {command:?}"
+            );
+            assert!(
+                GolemCliCommand::try_parse_from(base.chain([
+                    "--account",
+                    "owner@example.com",
+                    "--account-id",
+                    account_id
+                ]))
+                .is_err(),
+                "conflicting scope accepted for {command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_identity_forms_are_complete_and_exclusive() {
+        let id = "8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890";
+        for action in ["get", "unregister"] {
+            assert!(
+                GolemCliCommand::try_parse_from(["golem", "plugin", action, "name", "1.0.0"])
+                    .is_ok()
+            );
+            assert!(
+                GolemCliCommand::try_parse_from(["golem", "plugin", action, "--id", id]).is_ok()
+            );
+            assert!(GolemCliCommand::try_parse_from(["golem", "plugin", action, "name"]).is_err());
+            assert!(GolemCliCommand::try_parse_from(["golem", "plugin", action, id]).is_err());
+            assert!(
+                GolemCliCommand::try_parse_from([
+                    "golem", "plugin", action, "name", "1.0.0", "--id", id
+                ])
+                .is_err()
+            );
+            assert!(
+                GolemCliCommand::try_parse_from([
+                    "golem",
+                    "plugin",
+                    action,
+                    "--id",
+                    id,
+                    "--account",
+                    "owner@example.com"
+                ])
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn card_agent_conflicts_with_account_scope_and_include_filters() {
+        assert!(
+            GolemCliCommand::try_parse_from([
+                "golem",
+                "card",
+                "list",
+                "--agent",
+                "shopping-cart/123"
+            ])
+            .is_ok()
+        );
+        for conflicting in [
+            "--account",
+            "--account-id",
+            "--include-root",
+            "--include-permission-shares",
+            "--include-environment-defaults",
+            "--include-agent-initials",
+        ] {
+            let mut args = vec![
+                "golem",
+                "card",
+                "list",
+                "--agent",
+                "shopping-cart/123",
+                conflicting,
+            ];
+            if conflicting == "--account" {
+                args.push("owner@example.com");
+            } else if conflicting == "--account-id" {
+                args.push("00000000-0000-0000-0000-000000000001");
+            }
+            assert!(
+                GolemCliCommand::try_parse_from(args).is_err(),
+                "accepted --agent with {conflicting}"
+            );
+        }
     }
 
     #[test]

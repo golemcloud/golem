@@ -65,6 +65,13 @@ async fn can_create_and_fetch_plugins(deps: &EnvBasedTestDependencies) -> anyhow
         assert_eq!(fetched_plugin, plugin);
     }
 
+    {
+        let fetched_plugin = client
+            .get_account_plugin(&user.account_id.0, &plugin.name, &plugin.version)
+            .await?;
+        assert_eq!(fetched_plugin, plugin);
+    }
+
     // check other user cannot fetch plugin
     {
         let user_2 = deps.user().await?;

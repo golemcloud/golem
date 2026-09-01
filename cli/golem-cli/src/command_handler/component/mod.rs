@@ -1353,8 +1353,6 @@ impl ComponentCommandHandler {
                 })
                 .collect();
 
-            // TODO: atomic: cannot lookup by account email
-            // Look up plugin grants
             let plugins_by_grant_id = manifest_config
                 .plugins
                 .iter()

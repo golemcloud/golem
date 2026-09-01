@@ -561,14 +561,7 @@ impl AccountCommandHandler {
     }
 
     async fn get(&self, account: AccountScopeArgs) -> anyhow::Result<Account> {
-        Ok(self
-            .ctx
-            .golem_clients()
-            .await?
-            .account
-            .get_account(&self.select_account_id_or_err(account).await?.0)
-            .await
-            .map_service_error()?)
+        self.select_account_or_err(account).await
     }
 
     async fn get_permission_share(
@@ -605,6 +598,31 @@ impl AccountCommandHandler {
                 .id),
             (None, Some(account_id)) => Ok(account_id),
             (None, None) => Ok(self.account_id_or_err().await?),
+            (Some(_), Some(_)) => unreachable!("clap rejects conflicting account scope flags"),
+        }
+    }
+
+    pub async fn select_account_or_err(
+        &self,
+        account: AccountScopeArgs,
+    ) -> anyhow::Result<Account> {
+        let clients = self.ctx.golem_clients().await?;
+        match (account.account, account.account_id) {
+            (Some(email), None) => Ok(clients
+                .account
+                .get_account_by_email(&email)
+                .await
+                .map_service_error()?),
+            (None, Some(account_id)) => Ok(clients
+                .account
+                .get_account(&account_id.0)
+                .await
+                .map_service_error()?),
+            (None, None) => Ok(clients
+                .account
+                .get_account(&clients.account_id().0)
+                .await
+                .map_service_error()?),
             (Some(_), Some(_)) => unreachable!("clap rejects conflicting account scope flags"),
         }
     }

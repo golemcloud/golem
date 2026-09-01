@@ -29,6 +29,7 @@ use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::plan::DbPlanRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::DbRegistryChangeRepo;
+use golem_registry_service::repo::retry_policy::DbRetryPolicyRepo;
 use golem_service_base::db;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::migration::{Migrations, MigrationsDir};
@@ -90,6 +91,7 @@ async fn deps(db: &SqliteDb) -> Deps {
             db.pool.clone(),
         )),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(db.pool.clone())),
+        retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(db.pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(db.pool.clone())),
         environment_repo: Box::new(DbEnvironmentRepo::logged(db.pool.clone())),
         plan_repo: Box::new(DbPlanRepo::logged(db.pool.clone())),
@@ -226,6 +228,11 @@ async fn test_environment_default_card_tracks_application_rename(deps: &Deps) {
 #[test]
 async fn test_agent_secret_get_revision_include_deleted(deps: &Deps) {
     crate::repo::common::test_agent_secret_get_revision_include_deleted(deps).await;
+}
+
+#[test]
+async fn test_atomic_retry_policy_and_agent_secret_lookups(deps: &Deps) {
+    crate::repo::common::test_atomic_retry_policy_and_agent_secret_lookups(deps).await;
 }
 
 #[test]

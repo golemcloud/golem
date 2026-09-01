@@ -144,40 +144,30 @@ impl EnvironmentCommandHandler {
         match self.ctx.manifest_environment() {
             Some(env) => match &env.environment.account {
                 Some(account) => {
-                    let env_summary = self
+                    let account = self
                         .ctx
-                        .golem_clients()
-                        .await?
-                        .me
-                        .list_visible_environments(
-                            Some(account),
-                            Some(&env.application_name.0),
-                            Some(&env.environment_name.0),
+                        .account_handler()
+                        .select_account_or_err(crate::command::shared_args::AccountScopeArgs {
+                            account: Some(account.clone()),
+                            account_id: None,
+                        })
+                        .await?;
+                    let application = self
+                        .ctx
+                        .app_handler()
+                        .get_or_create_server_application(&account.id, &env.application_name)
+                        .await?;
+                    let environment = self
+                        .get_or_create_server_environment_by_manifest(
+                            &application.id,
+                            &env.environment_name,
                         )
-                        .await?
-                        .values
-                        .pop();
-
-                    match env_summary {
-                        Some(env_summary) => {
-                            Ok(ResolvedEnvironmentIdentity::from_summary(None, env_summary))
-                        }
-                        None => {
-                            // TODO: atomic: here we should try to create the env
-                            //       (especially that account might be the current one),
-                            //       but we cannot resolve account_id by email currently
-                            log_error(format!(
-                                "Environment {}/{}/{} not found",
-                                account.log_color_highlight(),
-                                env.application_name.0.log_color_highlight(),
-                                env.environment_name.to_string().log_color_highlight()
-                            ));
-
-                            self.show_available_application_environments().await?;
-
-                            bail!(NonSuccessfulExit);
-                        }
-                    }
+                        .await?;
+                    Ok(ResolvedEnvironmentIdentity::from_app_and_env(
+                        None,
+                        application,
+                        environment,
+                    ))
                 }
                 None => {
                     let application = self
@@ -251,37 +241,27 @@ impl EnvironmentCommandHandler {
                 application_name,
                 environment_name,
             } => {
-                let env_summary = self
+                let account = self
                     .ctx
-                    .golem_clients()
-                    .await?
-                    .me
-                    .list_visible_environments(
-                        Some(account_email),
-                        Some(&application_name.0),
-                        Some(&environment_name.0),
-                    )
-                    .await
-                    .map_service_error()?
-                    .values
-                    .pop();
-
-                match env_summary {
-                    Some(env_summary) => Ok(ResolvedEnvironmentIdentity::from_summary(
-                        Some(environment_reference),
-                        env_summary,
-                    )),
-                    None => {
-                        log_error(format!(
-                            "Environment {} not found",
-                            environment_reference.to_string().log_color_highlight()
-                        ));
-
-                        self.show_available_application_environments().await?;
-
-                        bail!(NonSuccessfulExit);
-                    }
-                }
+                    .account_handler()
+                    .select_account_or_err(crate::command::shared_args::AccountScopeArgs {
+                        account: Some(account_email.clone()),
+                        account_id: None,
+                    })
+                    .await?;
+                let application = self
+                    .ctx
+                    .app_handler()
+                    .get_server_application_or_err(&account.id, application_name)
+                    .await?;
+                let environment = self
+                    .get_server_environment_or_err(&application.id, environment_name)
+                    .await?;
+                Ok(ResolvedEnvironmentIdentity::from_app_and_env(
+                    Some(environment_reference),
+                    application,
+                    environment,
+                ))
             }
         }
     }

@@ -2361,25 +2361,34 @@ impl AppCommandHandler {
 
         let account_id = self.ctx.account_id().await?;
 
+        self.get_or_create_server_application(&account_id, application_name)
+            .await
+            .map(Some)
+    }
+
+    pub async fn get_or_create_server_application(
+        &self,
+        account_id: &AccountId,
+        application_name: &ApplicationName,
+    ) -> anyhow::Result<golem_client::model::Application> {
         match self
-            .get_server_application(&account_id, application_name)
+            .get_server_application(account_id, application_name)
             .await?
         {
-            Some(application) => Ok(Some(application)),
-            None => Ok(Some(
-                self.ctx
-                    .golem_clients()
-                    .await?
-                    .application
-                    .create_application(
-                        &account_id.0,
-                        &ApplicationCreation {
-                            name: application_name.clone(),
-                        },
-                    )
-                    .await
-                    .map_service_error()?,
-            )),
+            Some(application) => Ok(application),
+            None => Ok(self
+                .ctx
+                .golem_clients()
+                .await?
+                .application
+                .create_application(
+                    &account_id.0,
+                    &ApplicationCreation {
+                        name: application_name.clone(),
+                    },
+                )
+                .await
+                .map_service_error()?),
         }
     }
 

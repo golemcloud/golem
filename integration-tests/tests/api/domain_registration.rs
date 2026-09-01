@@ -54,6 +54,13 @@ async fn register_and_fetch_domain(deps: &EnvBasedTestDependencies) -> anyhow::R
     }
 
     {
+        let fetched_domain_registration = client
+            .get_environment_domain_registration(&env.id.0, &domain.0)
+            .await?;
+        assert_eq!(fetched_domain_registration, domain_registration);
+    }
+
+    {
         let result = client
             .list_environment_domain_registrations(&env.id.0)
             .await?;

@@ -56,6 +56,13 @@ async fn create_and_fetch_security_scheme(deps: &EnvBasedTestDependencies) -> an
     }
 
     {
+        let fetched_security_scheme = client
+            .get_environment_security_scheme(&env.id.0, &security_scheme.name.0)
+            .await?;
+        assert_eq!(fetched_security_scheme, security_scheme);
+    }
+
+    {
         let result = client.list_environment_security_schemes(&env.id.0).await?;
         assert_eq!(result.values, vec![security_scheme]);
     }
