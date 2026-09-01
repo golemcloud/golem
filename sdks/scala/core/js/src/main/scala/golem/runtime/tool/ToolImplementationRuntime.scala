@@ -56,7 +56,8 @@ final class JsToolOutputStream(val underlying: ToolHostApi.RawToolStdoutWriter) 
   private var terminal: Option[Future[Either[StreamWriteError, Unit]]] = None
 
   override def write(bytes: Array[Byte]): Future[Either[StreamWriteError, Unit]] =
-    call(underlying.write(js.typedarray.Uint8Array.from(bytes.map(_.toShort).toJSArray)))
+    if (bytes.isEmpty) Future.successful(Right(()))
+    else call(underlying.write(js.typedarray.Uint8Array.from(bytes.map(_.toShort).toJSArray)))
   override def finish(): Future[Either[StreamWriteError, Unit]] =
     selectTerminal(underlying.finish())
   override def fail(reason: ByteStreamFailure): Future[Either[StreamWriteError, Unit]] =
@@ -116,6 +117,7 @@ object JsToolOutputStream {
     case "abandoned"          => ByteStreamFailure.Abandoned
     case "resource-exhausted" => ByteStreamFailure.ResourceExhausted
     case "failed"             => ByteStreamFailure.Failed(value.`val`.asInstanceOf[String])
+    case other                => ByteStreamFailure.Failed(s"unknown byte-stream failure: $other")
   }
 }
 
