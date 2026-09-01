@@ -1649,11 +1649,11 @@ pub struct OplogSweepConfig {
     /// the first page that carries it past this and can exceed it by up to `page_size`.
     pub max_archives_per_tick: usize,
     /// Keys one tick may scan before it stops, because a tick asks each scan for no more than what
-    /// is left of the budget. Exact wherever the storage holds a page to the count it was asked
-    /// for, which the SQL and in-memory backends do; Redis treats `COUNT` as a hint and may hand
-    /// back more. Bounds the scan round trips a tick issues against a namespace far larger than the
-    /// work it holds. A tick that stops here resumes where it left off, corrected for whatever it
-    /// archived on the way.
+    /// is left of the budget. A backend is free to hand back more than it was asked for, and two do:
+    /// Redis treats its page count as a hint, and the multi-file SQLite backend takes each of its
+    /// files whole. So this is a close bound rather than an exact one. It bounds the scan round
+    /// trips a tick issues against a namespace far larger than the work it holds. A tick that stops
+    /// here resumes where it left off.
     ///
     /// The sweep pages with `IndexedStorage::scan_stable`, which resumes by seeking to where it
     /// left off rather than by counting past what it has already read, so the cost of a page does

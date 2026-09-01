@@ -218,7 +218,7 @@ impl IndexedStorage for RedisIndexedStorage {
         // present for the whole iteration comes back at least once.
         let cursor = match resume {
             Some(ScanResume::Cursor(cursor)) => cursor,
-            Some(ScanResume::Key(_)) => {
+            Some(ScanResume::Marker(_)) => {
                 return Err(IndexedStorageError::Other(
                     "Redis indexed storage was handed a resume token it did not produce"
                         .to_string(),

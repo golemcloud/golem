@@ -286,7 +286,7 @@ impl IndexedStorage for PostgresIndexedStorage {
         // Every stored key is non-empty, so the empty string is a lower bound below all of them and
         // the first page needs no separate query.
         let after = match resume {
-            Some(ScanResume::Key(key)) => key,
+            Some(ScanResume::Marker(key)) => key,
             Some(ScanResume::Cursor(_)) => {
                 return Err(IndexedStorageError::Other(
                     "Postgres indexed storage was handed a resume token it did not produce"

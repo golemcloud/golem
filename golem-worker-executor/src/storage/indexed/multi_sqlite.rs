@@ -289,10 +289,13 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         // read everything the meta-namespace holds to answer one page, which is both quadratic over
         // a pass and unbounded in memory.
         //
-        // File names are stable, so skipping past one is a seek. Deleting the keys a page handed
-        // back removes whole files, and the files still to come keep their names and their place.
+        // A file is never deleted, only emptied, which is what makes the token a seek: the name a
+        // caller comes back with still sits where it did. It also means a drained meta-namespace is
+        // a long row of empty files, so a call stops once it has opened `count` of them whether or
+        // not it found anything. Otherwise one call would open every file the backend has ever
+        // made, and the caller's page budget would bound round trips while bounding nothing here.
         let after = match resume {
-            Some(ScanResume::Key(file)) => Some(file),
+            Some(ScanResume::Marker(file)) => Some(file),
             Some(ScanResume::Cursor(_)) => {
                 return Err(IndexedStorageError::Other(
                     "Multi-SQLite indexed storage was handed a resume token it did not produce"
@@ -304,6 +307,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
 
         let mut keys = Vec::new();
         let mut last_file = None;
+        let mut opened = 0;
         for file_name in self.namespace_db_files(&namespace)? {
             if after
                 .as_deref()
@@ -311,6 +315,10 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
             {
                 continue;
             }
+            if opened >= count.max(1) {
+                break;
+            }
+            opened += 1;
             let storage = self.storage_by_db_name(file_name.clone()).await?;
 
             // Whole file, however many pages that takes. A file holds one namespace, so this is
@@ -342,9 +350,10 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
 
         // The token is the last file finished, not the last key, so it cannot go through
         // `last_key_resume`. Exhaustion is reaching the end of the file list, which is why a short
-        // page does not end the walk here.
+        // page does not end the walk here: an empty page only means the files it opened were empty.
+        let exhausted = opened < count.max(1) && (keys.len() as u64) < count;
         let next = match last_file {
-            Some(file) if (keys.len() as u64) >= count => Some(ScanResume::Key(file)),
+            Some(file) if !exhausted => Some(ScanResume::Marker(file)),
             _ => None,
         };
         Ok((next, keys))

@@ -72,9 +72,11 @@ impl From<String> for IndexedStorageError {
 /// not interpret it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScanResume {
-    /// The last key handed back, for a backend that pages in key order.
-    Key(String),
-    /// The backend's own iteration cursor, for one that has no key order to seek in.
+    /// The last position a backend reached in whatever ordering it walks. Usually the last key it
+    /// handed back, but a backend that shards its keys may instead name the shard it finished, so
+    /// this is not interchangeable between backends and must not be read as a key.
+    Marker(String),
+    /// The backend's own iteration cursor, for one that has no order to seek in at all.
     Cursor(ScanCursor),
 }
 
@@ -619,22 +621,6 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
     }
 
     /// Gets the last entry in the index of the given key, returning as raw bytes
-    pub async fn last_raw(
-        &self,
-        namespace: IndexedStorageNamespace,
-        key: &str,
-    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
-        self.storage
-            .last(
-                self.svc_name,
-                self.api_name,
-                self.entity_name,
-                namespace,
-                key,
-            )
-            .await
-    }
-
     /// Gets the last entry in the index of the given key, deserializing the value
     pub async fn last<V: BinaryDeserializer>(
         &self,
@@ -768,7 +754,7 @@ pub fn last_key_resume(keys: &[String], count: u64) -> Option<ScanResume> {
     if (keys.len() as u64) < count {
         None
     } else {
-        keys.last().map(|key| ScanResume::Key(key.clone()))
+        keys.last().map(|key| ScanResume::Marker(key.clone()))
     }
 }
 

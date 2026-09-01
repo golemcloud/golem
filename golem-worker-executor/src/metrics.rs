@@ -1020,7 +1020,10 @@ pub mod oplog {
             "oplog_sweep_tick",
             "Time taken by one oplog sweep tick",
             &["route"],
-            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+            // Reaches well past the default minute. A tick is a budgeted walk of a storage
+            // namespace, so slow storage is exactly when its duration is worth reading, and the
+            // shared buckets saturate there.
+            vec![0.01, 0.1, 1.0, 5.0, 15.0, 60.0, 300.0, 900.0, 3600.0]
         )
         .unwrap();
         static ref OPLOG_SWEEP_TRUNCATED_TOTAL: CounterVec = register_counter_vec!(

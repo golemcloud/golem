@@ -192,7 +192,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         count: u64,
     ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
         let after = match resume {
-            Some(ScanResume::Key(key)) => Some(key),
+            Some(ScanResume::Marker(key)) => Some(key),
             Some(ScanResume::Cursor(_)) => {
                 return Err(IndexedStorageError::Other(
                     "In-memory indexed storage was handed a resume token it did not produce"

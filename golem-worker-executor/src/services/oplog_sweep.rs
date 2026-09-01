@@ -40,7 +40,7 @@
 //! many run at once: the teardown drain spawns one task per finishing invocation with nothing
 //! capping it, a tick holds at most `max_concurrency`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -107,8 +107,9 @@ enum Outcome {
     /// The agent's component could not be resolved, so the environment its entries belong to is
     /// unknown.
     Unaddressable,
-    /// Opening the oplog failed.
-    OpenFailed,
+    /// The archive step never ran: the oplog would not open, or nothing recognised it as
+    /// something that can be archived.
+    ArchiveFailed,
     /// One archive step ran. `more` carries the `try_archive` contract: a layer below still holds
     /// entries for this agent, so a later tick has work to do.
     Archived { more: bool },
@@ -126,6 +127,9 @@ enum Verdict {
 /// The most archive steps one agent gets in a single tick. A step moves a whole layer, so the
 /// layer stack bounds this well below the limit; it exists so a miscounting layer cannot spin.
 const MAX_ARCHIVE_STEPS: u32 = 16;
+
+/// The shortest a tick interval is allowed to be. A misconfigured zero would otherwise spin.
+const MIN_INTERVAL: Duration = Duration::from_millis(100);
 
 /// What a read-only probe concluded about one agent.
 enum Decision {
@@ -148,7 +152,7 @@ struct RouteReport {
     moving: u64,
     resident: u64,
     unaddressable: u64,
-    open_failed: u64,
+    archive_failed: u64,
     archived: u64,
     /// Archive steps that reported no further layer to drain. A subset of `archived`.
     drained: u64,
@@ -166,7 +170,7 @@ impl RouteReport {
             ("moving", self.moving),
             ("resident", self.resident),
             ("unaddressable", self.unaddressable),
-            ("open_failed", self.open_failed),
+            ("archive_failed", self.archive_failed),
             ("archived", self.archived),
             ("drained", self.drained),
         ] {
@@ -245,7 +249,7 @@ fn merge(left: RouteReport, right: RouteReport) -> RouteReport {
         moving: left.moving + right.moving,
         resident: left.resident + right.resident,
         unaddressable: left.unaddressable + right.unaddressable,
-        open_failed: left.open_failed + right.open_failed,
+        archive_failed: left.archive_failed + right.archive_failed,
         archived: left.archived + right.archived,
         drained: left.drained + right.drained,
         truncated: left.truncated || right.truncated,
@@ -265,7 +269,7 @@ fn tally(outcomes: impl IntoIterator<Item = Outcome>) -> RouteReport {
                 Outcome::Moving => report.moving += 1,
                 Outcome::Resident => report.resident += 1,
                 Outcome::Unaddressable => report.unaddressable += 1,
-                Outcome::OpenFailed => report.open_failed += 1,
+                Outcome::ArchiveFailed => report.archive_failed += 1,
                 Outcome::Archived { more } => {
                     report.archived += 1;
                     if !more {
@@ -410,7 +414,8 @@ impl OplogSweeper {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
                 // Floored, because a zero interval would spin the loop rather than disable it.
-                _ = tokio::time::sleep(self.config.interval.max(Duration::from_millis(1))) => {}
+                // `enabled` is how the sweep is turned off.
+                _ = tokio::time::sleep(self.config.interval.max(MIN_INTERVAL)) => {}
             }
             let report = self.sweep_once(&shutdown).await;
             if report.unassigned {
@@ -504,8 +509,9 @@ impl OplogSweeper {
                 break;
             }
             pages += 1;
-            // Asking for only what the budget allows is what makes `max_scanned_per_tick` exact.
-            // Trimming a page after the fact would carry the walk past keys nothing examined.
+            // Asking for only what the budget allows is what keeps `max_scanned_per_tick` close.
+            // A backend may still hand back more than it was asked for, but trimming a page after
+            // the fact would carry the walk past keys nothing examined.
             let count = page_size.min(allowance);
 
             let page = self
@@ -552,16 +558,39 @@ impl OplogSweeper {
             }
         }
 
+        // A backend is allowed to hand the same key back twice in one walk, and archiving an agent
+        // twice would race two transfers and count one of them twice.
+        pending.sort();
+        pending.dedup();
+
+        // The layer below addresses its objects by environment and a scanned key does not carry
+        // one, so each agent needs its component resolved. `get_metadata` hands back the whole
+        // component, and ephemeral agents come in crowds that share one, so resolve each component
+        // once rather than once per agent.
+        let components: HashSet<ComponentId> = pending
+            .iter()
+            .map(|agent_id| agent_id.component_id)
+            .collect();
+        let mut environments: HashMap<ComponentId, Option<EnvironmentId>> =
+            HashMap::with_capacity(components.len());
+        for component_id in components {
+            let resolved = self.environment_of(component_id).await;
+            environments.insert(component_id, resolved);
+        }
+
         // Now the deletes. One stream over the whole list rather than fixed batches, because the
         // cost of an agent varies with how much its layers hold and a batch would run at the speed
         // of its slowest member. The cancellation check sits before an agent and never inside one,
         // so a shutdown finishes the agents under way and starts no more.
         let archived: Vec<Option<Outcome>> = stream::iter(pending)
-            .map(|agent_id| async move {
-                if shutdown.is_cancelled() {
-                    return None;
+            .map(|agent_id| {
+                let environment_id = environments.get(&agent_id.component_id).copied().flatten();
+                async move {
+                    if shutdown.is_cancelled() {
+                        return None;
+                    }
+                    Some(self.archive_agent(route, agent_id, environment_id).await)
                 }
-                Some(self.archive_agent(route, agent_id).await)
             })
             .buffer_unordered(self.config.max_concurrency.max(1))
             .collect()
@@ -659,13 +688,13 @@ impl OplogSweeper {
     ///
     /// Runs only after the scan has finished paging, because every step ends in a `drop_prefix`
     /// that removes the key the scan walked.
-    async fn archive_agent(&self, route: &Route, agent_id: AgentId) -> Outcome {
-        // The layer below addresses its objects by environment, and the scanned key does not carry
-        // one. The `Create` entry does, but it is the oplog's first entry and an earlier archive
-        // step will have moved it out of this layer, which is where any agent that outgrew
-        // `entry_count_limit` ends up. The component is the durable source: an agent's environment
-        // is its component's environment.
-        let Some(environment_id) = self.environment_of(&agent_id).await else {
+    async fn archive_agent(
+        &self,
+        route: &Route,
+        agent_id: AgentId,
+        environment_id: Option<EnvironmentId>,
+    ) -> Outcome {
+        let Some(environment_id) = environment_id else {
             return Outcome::Unaddressable;
         };
         let owned_agent_id = OwnedAgentId {
@@ -682,7 +711,7 @@ impl OplogSweeper {
                     agent_id = %agent_id,
                     "Oplog sweep could not open the oplog for archiving: {error}"
                 );
-                return Outcome::OpenFailed;
+                return Outcome::ArchiveFailed;
             }
         };
 
@@ -710,7 +739,7 @@ impl OplogSweeper {
                         agent_id = %agent_id,
                         "Oplog sweep found a layer it cannot archive"
                     );
-                    return Outcome::OpenFailed;
+                    return Outcome::ArchiveFailed;
                 }
             }
             steps += 1;
@@ -730,16 +759,19 @@ impl OplogSweeper {
         Outcome::Archived { more }
     }
 
-    async fn environment_of(&self, agent_id: &AgentId) -> Option<EnvironmentId> {
-        match self
-            .components
-            .get_metadata(agent_id.component_id, None)
-            .await
-        {
+    /// An agent's environment, resolved through its component.
+    ///
+    /// The layer below addresses its objects by environment and a scanned key does not carry one.
+    /// The `Create` entry does, but it is the oplog's first entry and an earlier archive step will
+    /// have moved it out of the layer being scanned, which is where any agent that outgrew
+    /// `entry_count_limit` ends up. The component is the durable source: an agent's environment is
+    /// its component's environment.
+    async fn environment_of(&self, component_id: ComponentId) -> Option<EnvironmentId> {
+        match self.components.get_metadata(component_id, None).await {
             Ok(component) => Some(component.environment_id),
             Err(error) => {
                 warn!(
-                    agent_id = %agent_id,
+                    component_id = %component_id,
                     "Oplog sweep could not resolve the component of a stranded oplog: {error}"
                 );
                 None
@@ -750,7 +782,7 @@ impl OplogSweeper {
     async fn remember(&self, route: RouteId, agent_id: &AgentId, index: OplogIndex, pass: u64) {
         let mut memo = self.memo.lock().await;
         let key = (route, agent_id.clone());
-        if memo.len() >= self.config.max_tracked_agents && !memo.contains_key(&key) {
+        if memo.len() >= self.config.max_tracked_agents.max(1) && !memo.contains_key(&key) {
             // A backstop, not the mechanism: `finish_pass` drops entries whose agents have left the
             // layer, so reaching this means a single pass is tracking more agents than the bound
             // allows.
@@ -939,7 +971,7 @@ mod tests {
             Outcome::Moving,
             Outcome::Resident,
             Outcome::Unaddressable,
-            Outcome::OpenFailed,
+            Outcome::ArchiveFailed,
             Outcome::Archived { more: true },
             Outcome::Archived { more: false },
         ]);
@@ -954,7 +986,7 @@ mod tests {
                 + report.moving
                 + report.resident
                 + report.unaddressable
-                + report.open_failed
+                + report.archive_failed
                 + report.archived,
             report.scanned
         );
@@ -972,7 +1004,7 @@ mod tests {
             moving: 6,
             resident: 7,
             unaddressable: 8,
-            open_failed: 9,
+            archive_failed: 9,
             archived: 10,
             drained: 11,
             truncated: false,
@@ -985,7 +1017,7 @@ mod tests {
             moving: 16,
             resident: 17,
             unaddressable: 18,
-            open_failed: 19,
+            archive_failed: 19,
             archived: 20,
             drained: 21,
             truncated: true,
@@ -999,7 +1031,7 @@ mod tests {
         assert_eq!(merged.moving, 22);
         assert_eq!(merged.resident, 24);
         assert_eq!(merged.unaddressable, 26);
-        assert_eq!(merged.open_failed, 28);
+        assert_eq!(merged.archive_failed, 28);
         assert_eq!(merged.archived, 30);
         assert_eq!(merged.drained, 32);
         assert!(merged.truncated, "truncation is sticky");
