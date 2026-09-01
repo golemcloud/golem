@@ -19,7 +19,7 @@ use crate::storage::indexed::{
 use async_trait::async_trait;
 use golem_common::model::AgentId;
 use regex::Regex;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BinaryHeap};
 use std::ops::Bound::Included;
 use std::time::Duration;
 
@@ -203,22 +203,30 @@ impl IndexedStorage for InMemoryIndexedStorage {
         };
         let matcher = Self::match_key(namespace, prefix);
 
-        // The map has no order of its own, so the whole matching set is collected and sorted. That
-        // is affordable only because this backend is for tests and single-node runs; the SQL ones
-        // let the index do it.
-        let mut matched = Vec::new();
+        // The map has no order of its own, so the page cannot be taken by seeking. Sorting the
+        // whole matching set would hold every key in the namespace at once; a max-heap capped at
+        // `count` keeps the same page for the same walk while holding only the page. The SQL
+        // backends let their index do the same job.
+        let limit = count as usize;
+        let mut page: BinaryHeap<String> = BinaryHeap::new();
         self.data
             .iter_async(|key, _| {
                 if let Some(key) = matcher(key)
                     && after.as_deref().is_none_or(|after| key.as_str() > after)
                 {
-                    matched.push(key);
+                    if page.len() < limit {
+                        page.push(key);
+                    } else if let Some(highest) = page.peek()
+                        && key < *highest
+                    {
+                        page.pop();
+                        page.push(key);
+                    }
                 }
                 true
             })
             .await;
-        matched.sort();
-        matched.truncate(count as usize);
+        let matched = page.into_sorted_vec();
 
         Ok((super::last_key_resume(&matched, count), matched))
     }
