@@ -40,9 +40,11 @@ test "parameter failure rolls back an earlier decoded stream" {
   }
   assert_true(first_source.is_present())
   assert_true(first_owned.is_present())
-  let result : Result[Int, _] = try? decode_param_with_resource_drops(
-    fields, 1, "partial transfer", drops,
-  )
+  let result : Result[Int, _] = try
+    decode_param_with_resource_drops(fields, 1, "partial transfer", drops) |> Ok
+  catch {
+    e => Err(e)
+  }
   guard result is Err(@toolCommon.ToolError::InvalidInput(_)) else {
     fail("decoding the second stream as Int must fail")
   }
@@ -68,12 +70,17 @@ test "canonical field rejection releases undecoded streams" {
       value: @model.SchemaValue::Stream(source),
     },
   ]
-  let result : Result[Int, _] = try? decode_canonical_field_with_resource_drops(
-    fields,
-    "missing",
-    "canonical cleanup",
-    cleanup_drops(),
-  )
+  let result : Result[Int, _] = try
+    decode_canonical_field_with_resource_drops(
+      fields,
+      "missing",
+      "canonical cleanup",
+      cleanup_drops(),
+    )
+    |> Ok
+  catch {
+    e => Err(e)
+  }
   guard result is Err(@toolCommon.ToolError::InvalidInput(_)) else {
     fail("a missing canonical field must fail")
   }

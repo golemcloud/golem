@@ -86,6 +86,32 @@ pub(crate) async fn assert_snapshot_recovery_loaded(events: &mut UnboundedReceiv
     .expect("Timed out waiting for snapshot recovery event");
 }
 
+pub(crate) async fn assert_snapshot_recovery_failed(
+    events: &mut UnboundedReceiver<LogEvent>,
+    expected_error: &str,
+) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = events.recv().await {
+            match AgentEvent::try_from(event) {
+                Ok(AgentEvent::SnapshotRecoveryFailed { error, .. }) => {
+                    assert!(
+                        error.contains(expected_error),
+                        "Snapshot recovery failed with unexpected error: {error}"
+                    );
+                    return;
+                }
+                Ok(AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. }) => {
+                    panic!("Snapshot recovery from {snapshot_index} unexpectedly succeeded");
+                }
+                _ => {}
+            }
+        }
+        panic!("Worker event stream ended before snapshot recovery event");
+    })
+    .await
+    .expect("Timed out waiting for snapshot recovery event");
+}
+
 #[test]
 #[tracing::instrument]
 async fn custom_durability_1(

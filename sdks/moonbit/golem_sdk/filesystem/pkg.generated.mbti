@@ -54,4 +54,3 @@ pub using @types {type PathFlags}
 pub using @types {type PathFlagsFlag}
 
 // Traits
-

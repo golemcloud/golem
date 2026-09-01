@@ -8,6 +8,7 @@
 // and asserts the decoded value (and the schema graph) survive unchanged.
 
 ///|
+#warnings("-unused_field")
 struct StreamThenInt {
   stream : AgentStream[Int]
   value : Int
@@ -20,7 +21,7 @@ impl FromSchema for StreamThenInt with fn from_value(value) {
     record_field(fields, 0, "StreamThenInt"),
   )
   let decoded : Int = from_value_as(record_field(fields, 1, "StreamThenInt"))
-  { stream, value: decoded }
+  { stream, value: decoded, }
 }
 
 ///|
@@ -36,7 +37,7 @@ fn[T : IntoSchema + FromSchema] roundtrip(v : T) -> T raise {
   })
   // The schema graph must survive the WIT round-trip unchanged.
   assert_eq(back.graph, typed.graph)
-  T::from_value(back.value)
+  FromSchema::from_value(back.value)
 }
 
 ///|
@@ -122,9 +123,11 @@ test "structural type has no named definitions" {
 ///|
 test "shape mismatch surfaces a FromSchemaError" {
   let v : @model.SchemaValue = String("nope")
-  let r : Result[Int, FromSchemaError] = try? from_value_as(v)
+  let r : Result[Int, FromSchemaError] = try from_value_as(v) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(ShapeMismatch(expected~, actual~, context~)) else {
-    fail("expected ShapeMismatch, got \{r}")
+    fail("expected ShapeMismatch, got \{repr(r)}")
   }
   assert_eq(expected, "s32")
   assert_eq(actual, "string")
@@ -165,9 +168,11 @@ test "compound conversion rollback retains ownership in the source tree" {
     @model.SchemaValue::Stream(array_handle),
     @model.SchemaValue::S32(1),
   ])
-  let array_result : Result[Array[AgentStream[Int]], FromSchemaError] = try? from_value_as(
-    array_source,
-  )
+  let array_result : Result[Array[AgentStream[Int]], FromSchemaError] = try
+    from_value_as(array_source) |> Ok
+  catch {
+    e => Err(e)
+  }
   guard array_result is Err(_) else {
     fail("the second array element must reject the conversion")
   }
@@ -178,9 +183,11 @@ test "compound conversion rollback retains ownership in the source tree" {
     @model.SchemaValue::Stream(tuple_handle),
     @model.SchemaValue::String("not an int"),
   ])
-  let tuple_result : Result[(AgentStream[Int], Int), FromSchemaError] = try? from_value_as(
-    tuple_source,
-  )
+  let tuple_result : Result[(AgentStream[Int], Int), FromSchemaError] = try
+    from_value_as(tuple_source) |> Ok
+  catch {
+    e => Err(e)
+  }
   guard tuple_result is Err(_) else {
     fail("the second tuple element must reject the conversion")
   }
@@ -191,9 +198,11 @@ test "compound conversion rollback retains ownership in the source tree" {
     @model.SchemaValue::Stream(record_handle),
     @model.SchemaValue::String("not an int"),
   ])
-  let record_result : Result[StreamThenInt, FromSchemaError] = try? from_value_as(
-    record_source,
-  )
+  let record_result : Result[StreamThenInt, FromSchemaError] = try
+    from_value_as(record_source) |> Ok
+  catch {
+    e => Err(e)
+  }
   guard record_result is Err(_) else {
     fail("the second record field must reject the conversion")
   }

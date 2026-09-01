@@ -1,16 +1,16 @@
 ---
 name: modifying-cli-output-schema
-description: "Adding or modifying Golem CLI structured output types, CliOutput implementations, command-output.schema.json, or DTO-backed output schema generators."
+description: "Adding or modifying Golem CLI StructuredOutput implementations, command-output.schema.json, or DTO-backed output schema generators."
 ---
 
 # Modifying CLI Output Schema
 
 Use this skill when changing structured output from `golem-cli`, including:
 
-- adding or modifying a `CliOutput` implementation;
+- adding or modifying a `StructuredOutput` implementation;
 - changing a DTO/view used by structured CLI output;
 - editing `cli/golem-cli/command-output-schema/command-output.schema.json`;
-- changing schema tests or arbitrary generators in `cli/golem-cli/src/model/cli_output.rs`.
+- changing schema tests or arbitrary generators under `cli/golem-cli/src/model/cli_output/`.
 
 This is different from the application manifest schema under
 `cli/schema.golem.cloud/app/golem/`. For manifest schema version changes, use
@@ -19,15 +19,16 @@ This is different from the application manifest schema under
 ## Core Rules
 
 1. Keep the public `$type` discriminator model. Every structured output document
-   must have the right stable `$type` value.
-2. `$type` values are stable semantic output identifiers. Prefer command-like
+   must have the right `$type` value for the current contract.
+2. `$type` values are semantic output identifiers. Prefer command-like
    names when there is a direct command correspondence (for example
    `agent.invoke` or `component.manifest-trace`). For streaming outputs, use
    the command family plus the streamed resource or event type (for example
    `agent.stream` for stream events and `agent.oplog` for oplog entries). Use
    domain/subdocument names when the output is part of a larger command flow
    (for example `deploy.diff`). Do not add redundant `.result` or `.event`
-   suffixes.
+   suffixes. If a contract intentionally changes a `$type`, update every in-tree
+   consumer directly; do not preserve the old value through aliases or duplicate output variants.
 3. Keep machine-readable structured output on stdout and human logs, prompts,
    progress, and diagnostics on stderr.
 4. Prefer typed schema definitions over `JsonValue`. Use generic JSON only when
@@ -51,8 +52,10 @@ This is different from the application manifest schema under
 
 - `cli/golem-cli/command-output-schema/command-output.schema.json` — public
   handwritten CLI output schema.
-- `cli/golem-cli/src/model/cli_output.rs` — `CliOutput` registry checks,
-  schema tests, and DTO-backed arbitrary generators.
+- `cli/golem-cli/src/model/cli_output/mod.rs` — `StructuredOutput`, schema loading, focused-schema
+  support, and serialization helpers.
+- `cli/golem-cli/src/model/cli_output/tests.rs` — registry checks, schema tests, and DTO-backed
+  arbitrary generators.
 - `cli/golem-cli/src/model/text/**` — many structured output view types.
 - `cli/golem-cli/src/model/**` — CLI DTO/view models used by structured output.
 - `golem output-schema` — top-level command that prints the raw schema document
@@ -65,7 +68,8 @@ This is different from the application manifest schema under
 ## Generator Rules
 
 Property-based schema examples should construct real Rust DTO/view values and
-serialize them through `to_cli_output_value`.
+serialize them through `to_structured_output_value` or
+`to_structured_output_value_masked` when the output contains maskable data.
 
 Do not hand-build full output JSON documents in generators. Hand-built JSON is
 acceptable only for:
@@ -96,24 +100,24 @@ These generic areas are intentional unless the task explicitly says otherwise:
 
 `agent.oplog` uses the public oplog DTOs (`PublicOplogEntry` and nested public
 types) from `golem-common`. The CLI output schema models the public oplog entry
-union explicitly, and the output generator builds a single `AgentOplogView`
+union explicitly, and the output generator builds a single `AgentOplogEntryView`
 sample containing all public oplog variants plus nested invocation, snapshot,
 retry policy, span, plugin, and update shapes.
 
 When changing public oplog entries, update both the `PublicOplogEntry` schema
-family and the deterministic oplog sample in `cli_output.rs`. Keep
+family and the deterministic `AgentOplogEntryView` sample in `cli_output/tests.rs`. Keep
 `ValueAndTypeJson.value` and JSON snapshot payload leaves generic unless custom
 relational validation is introduced.
 
 ## Workflow
 
-1. Identify the affected output kind and `CliOutput` type.
+1. Identify the affected output kind and `StructuredOutput` type.
 2. Update the Rust DTO/view model if needed.
 3. Update `command-output.schema.json` to match actual serde output.
 4. Add or update top-level output metadata (`description`,
    `x-golem-output-mode`, `x-golem-command`, and optionally
    `x-golem-commands`) for affected schema definitions.
-5. Add or improve the generator in `cli_output.rs` using real DTO/view values.
+5. Add or improve the generator in `cli_output/tests.rs` using real DTO/view values.
 6. Run focused schema tests and inspect failures as DTO/schema drift.
 7. Check whether user-facing skills under `golem-skills/skills` need updates
    when CLI output field names, `$type` names, or examples change.
@@ -170,8 +174,8 @@ npm test
 Run these for CLI output schema/generator changes:
 
 ```shell
-cargo fmt --package golem-cli
-cargo test -p golem-cli cli_output_schema_ --lib
+cargo fmt --package golem-cli -- --check
+cargo test -p golem-cli cli_output_schema_ --lib -- --report-time
 cargo make check-cli-output-schema
 cargo make update-cli-output-schema-summary
 cargo check -p golem-cli
@@ -189,7 +193,7 @@ If arbitrary generators changed, rerun the generated-example prop test a few
 times:
 
 ```shell
-cargo test -p golem-cli cli_output_schema_accepts_registered_generated_examples --lib
+cargo test -p golem-cli cli_output_schema_accepts_registered_generated_examples --lib -- --report-time
 ```
 
 Remove transient `cli/golem-cli/proptest-regressions/` files created by failing
@@ -210,7 +214,7 @@ regression seed.
 
 ## Checklist
 
-1. `$type` is stable and registered in both source and schema.
+1. `$type` is registered in both source and schema and matches the current contract.
 2. `$type` is suffixless and semantically named; it is command-like when that is
    accurate, but not assumed to be a literal CLI command path.
 3. Schema matches actual `serde_json::to_value` output.

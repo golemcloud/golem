@@ -7,13 +7,13 @@ pub(all) enum DurableFunctionType {
   WriteRemote
   WriteRemoteBatched(UInt64?)
   WriteRemoteTransaction(UInt64?)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Errors detected while replaying a custom durable operation.
 pub suberror DurabilityError {
   ReplayMismatch(String)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 fn DurableFunctionType::to_raw(

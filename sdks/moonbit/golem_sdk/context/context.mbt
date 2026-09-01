@@ -23,7 +23,7 @@ pub fn start_span(name : String, attributes? : Array[(String, String)]) -> Span 
     Some(attrs) => span.set_attributes(to_raw_attrs(attrs))
     None => ()
   }
-  { inner: span }
+  { inner: span, }
 }
 
 ///|
@@ -43,7 +43,7 @@ pub fn[T] with_span(
 ///|
 /// Gets the current invocation context.
 pub fn current_context() -> Context {
-  { inner: @raw.current_context() }
+  { inner: @raw.current_context(), }
 }
 
 ///|
@@ -95,7 +95,7 @@ pub fn Context::span_id(self : Context) -> String {
 ///|
 /// Gets the parent context, if any.
 pub fn Context::parent(self : Context) -> Context? {
-  self.inner.parent().map(fn(p) { { inner: p } })
+  self.inner.parent().map(fn(p) { { inner: p, } })
 }
 
 ///|
@@ -114,7 +114,7 @@ pub fn Context::get_current_attribute(self : Context, key : String) -> String? {
 /// Gets all inherited attributes as a map (merged, latest value wins).
 pub fn Context::attributes(self : Context) -> Map[String, String] {
   let attrs = self.inner.get_attributes(true)
-  let map : Map[String, String] = {}
+  let map : Map[String, String] = Map([])
   for attr in attrs {
     map[attr.key] = unwrap_attribute_value(attr.value)
   }
@@ -125,7 +125,7 @@ pub fn Context::attributes(self : Context) -> Map[String, String] {
 /// Gets attributes from the current span only as a map.
 pub fn Context::current_attributes(self : Context) -> Map[String, String] {
   let attrs = self.inner.get_attributes(false)
-  let map : Map[String, String] = {}
+  let map : Map[String, String] = Map([])
   for attr in attrs {
     map[attr.key] = unwrap_attribute_value(attr.value)
   }
@@ -142,7 +142,7 @@ pub fn Context::attribute_chain(self : Context, key : String) -> Array[String] {
 /// Gets all attribute chains as a map.
 pub fn Context::attribute_chains(self : Context) -> Map[String, Array[String]] {
   let chains = self.inner.get_attribute_chains()
-  let map : Map[String, Array[String]] = {}
+  let map : Map[String, Array[String]] = Map([])
   for chain in chains {
     map[chain.key] = chain.values.map(unwrap_attribute_value)
   }
@@ -167,6 +167,6 @@ fn unwrap_attribute_value(v : @raw.AttributeValue) -> String {
 ///|
 fn to_raw_attrs(attrs : Array[(String, String)]) -> Array[@raw.Attribute] {
   attrs.map(fn(pair) {
-    { key: pair.0, value: @raw.AttributeValue::String(pair.1) }
+    { key: pair.0, value: @raw.AttributeValue::String(pair.1), }
   })
 }

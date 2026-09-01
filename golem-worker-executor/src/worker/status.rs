@@ -285,6 +285,7 @@ pub fn update_status_with_new_entries(
         last_manual_update_snapshot_index,
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
+        last_automatic_snapshot_component_revision,
     ) = calculate_update_fields(
         last_known.pending_updates,
         last_known.failed_updates,
@@ -295,6 +296,7 @@ pub fn update_status_with_new_entries(
         last_known.last_manual_update_snapshot_index,
         last_known.last_automatic_snapshot_index,
         last_known.last_automatic_snapshot_timestamp,
+        last_known.last_automatic_snapshot_component_revision,
         &deleted_regions,
         &new_entries,
     );
@@ -363,6 +365,7 @@ pub fn update_status_with_new_entries(
         last_manual_update_snapshot_index,
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
+        last_automatic_snapshot_component_revision,
         agent_mode,
     };
 
@@ -938,6 +941,7 @@ fn calculate_update_fields(
     initial_last_manual_update_snapshot_index: Option<OplogIndex>,
     initial_last_automatic_snapshot_index: Option<OplogIndex>,
     initial_last_automatic_snapshot_timestamp: Option<Timestamp>,
+    initial_last_automatic_snapshot_component_revision: Option<ComponentRevision>,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
@@ -950,6 +954,7 @@ fn calculate_update_fields(
     Option<OplogIndex>,
     Option<OplogIndex>,
     Option<Timestamp>,
+    Option<ComponentRevision>,
 ) {
     let mut pending_updates = initial_pending_updates;
     let mut failed_updates = initial_failed_updates;
@@ -960,6 +965,8 @@ fn calculate_update_fields(
     let mut last_manual_update_snapshot_index = initial_last_manual_update_snapshot_index;
     let mut last_automatic_snapshot_index = initial_last_automatic_snapshot_index;
     let mut last_automatic_snapshot_timestamp = initial_last_automatic_snapshot_timestamp;
+    let mut last_automatic_snapshot_component_revision =
+        initial_last_automatic_snapshot_component_revision;
 
     for (oplog_idx, entry) in entries {
         // Skipping entries in deleted regions (by revert)
@@ -1018,21 +1025,25 @@ fn calculate_update_fields(
                 revision = *target_revision;
                 size = *new_component_size;
 
+                let applied_update = pending_updates.pop_front();
+                last_automatic_snapshot_index = None;
+                last_automatic_snapshot_timestamp = None;
+                last_automatic_snapshot_component_revision = None;
+
                 if let Some(PendingUpdateRef {
                     kind: PendingUpdateKind::SnapshotBased,
                     oplog_index: applied_update_oplog_index,
                     ..
-                }) = pending_updates.pop_front()
+                }) = applied_update
                 {
                     component_revision_for_replay = *target_revision;
                     last_manual_update_snapshot_index = Some(applied_update_oplog_index);
-                    last_automatic_snapshot_index = None;
-                    last_automatic_snapshot_timestamp = None;
                 }
             }
             OplogEntry::Snapshot { timestamp, .. } => {
                 last_automatic_snapshot_index = Some(*oplog_idx);
                 last_automatic_snapshot_timestamp = Some(*timestamp);
+                last_automatic_snapshot_component_revision = Some(revision);
             }
             _ => {}
         }
@@ -1047,6 +1058,7 @@ fn calculate_update_fields(
         last_manual_update_snapshot_index,
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
+        last_automatic_snapshot_component_revision,
     )
 }
 
@@ -2114,6 +2126,48 @@ mod test {
     }
 
     #[test]
+    async fn successful_auto_update_invalidates_automatic_snapshot() {
+        let update = UpdateDescription::Automatic {
+            target_revision: ComponentRevision::new(2).unwrap(),
+        };
+
+        let test_case = TestCase::builder(1)
+            .snapshot()
+            .pending_update(&update, |_| {})
+            .successful_update(update, 2000, &HashSet::new())
+            .build();
+        let final_status = &test_case.entries.last().unwrap().expected_status;
+
+        assert_eq!(final_status.last_automatic_snapshot_index, None);
+        assert_eq!(final_status.last_automatic_snapshot_timestamp, None);
+        assert_eq!(
+            final_status.last_automatic_snapshot_component_revision,
+            None
+        );
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn failed_auto_update_keeps_automatic_snapshot() {
+        let update = UpdateDescription::Automatic {
+            target_revision: ComponentRevision::new(2).unwrap(),
+        };
+
+        let test_case = TestCase::builder(1)
+            .snapshot()
+            .pending_update(&update, |_| {})
+            .failed_update(update)
+            .build();
+        let final_status = &test_case.entries.last().unwrap().expected_status;
+
+        assert_eq!(
+            final_status.last_automatic_snapshot_component_revision,
+            Some(ComponentRevision::new(1).unwrap())
+        );
+        run_test_case(test_case).await;
+    }
+
+    #[test]
     async fn snapshot_tracking_with_revert() {
         let k1 = IdempotencyKey::fresh();
 
@@ -2473,6 +2527,8 @@ mod test {
                 move |mut status| {
                     status.last_automatic_snapshot_index = Some(oplog_idx);
                     status.last_automatic_snapshot_timestamp = Some(timestamp);
+                    status.last_automatic_snapshot_component_revision =
+                        Some(status.component_revision);
                     status
                 },
             )
@@ -2531,6 +2587,8 @@ mod test {
                 status.last_automatic_snapshot_index = old_status.last_automatic_snapshot_index;
                 status.last_automatic_snapshot_timestamp =
                     old_status.last_automatic_snapshot_timestamp;
+                status.last_automatic_snapshot_component_revision =
+                    old_status.last_automatic_snapshot_component_revision;
 
                 status
             })
@@ -2653,6 +2711,9 @@ mod test {
                 status.component_size = new_component_size;
                 status.component_revision = *update_description.target_revision();
                 status.active_plugins = new_active_plugins.clone();
+                status.last_automatic_snapshot_index = None;
+                status.last_automatic_snapshot_timestamp = None;
+                status.last_automatic_snapshot_component_revision = None;
 
                 if status.skipped_regions.is_overridden() {
                     status.skipped_regions.merge_override();
@@ -2667,8 +2728,6 @@ mod test {
                     status.component_revision_for_replay = target_revision;
                     status.last_manual_update_snapshot_index =
                         applied_update.map(|au| au.oplog_index);
-                    status.last_automatic_snapshot_index = None;
-                    status.last_automatic_snapshot_timestamp = None;
                 };
 
                 status
