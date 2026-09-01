@@ -1640,8 +1640,8 @@ pub struct OplogSweepConfig {
     pub page_size: u64,
     /// Agents archived concurrently within one tick. Shares the executor's indexed-storage
     /// connection budget with the invocation path, so it is deliberately small. It is also the
-    /// memory bound: `BackgroundTransfer::run` moves an agent's whole layer through one `Vec`, so
-    /// peak memory is this many layers, not this many chunks.
+    /// memory bound: an archive step moves an agent's whole layer through one `Vec`, so peak memory
+    /// is this many layers, not this many chunks.
     pub max_concurrency: usize,
     /// Archive steps one tick may run before it stops and keeps its cursor.
     pub max_archives_per_tick: usize,

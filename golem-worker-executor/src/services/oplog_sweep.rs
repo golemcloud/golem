@@ -35,12 +35,15 @@
 //! `max_archives_per_tick` archive steps, keeping its cursor so the next tick resumes rather than
 //! restarting. Work is deferred, never dropped.
 //!
-//! One bound is missing, and it is not the sweeper's to fix. `BackgroundTransfer::run`, which both
-//! archive triggers share, reads an agent's whole layer into one `Vec` before appending it. So the
-//! sweeper's peak memory is `max_concurrency` agents' layers, not `max_concurrency` times a chunk
-//! size. In practice the size trigger at `entry_count_limit` keeps a quiet agent's residue small,
-//! but the ceiling is the layer, not a constant. Chunking `run` fixes it for the size-triggered
-//! path at the same time, and belongs in its own change with its own tests.
+//! One bound is missing, and it is not the sweeper's to fix. Moving a prefix reads the whole source
+//! layer into one `Vec` before appending it, so peak memory per agent is its layer, not a constant.
+//! The same shape is written out twice: `EphemeralOplog::background_transfer` in `ephemeral.rs`
+//! serves ephemeral, and `BackgroundTransfer::run` in `multilayer.rs` serves durable. The sweeper
+//! inherits whichever applies rather than adding a third copy, so an agent costs the sweep exactly
+//! what `archive_ephemeral_oplog` already costs it on teardown today. What the sweeper does add is
+//! a cap on how many run at once: the teardown drain spawns one task per finishing invocation with
+//! no ceiling, while a tick holds at most `max_concurrency`. Bounding the read itself means
+//! chunking both copies, or unifying them first, and belongs in its own change with its own tests.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Display};
