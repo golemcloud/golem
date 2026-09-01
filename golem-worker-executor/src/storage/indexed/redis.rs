@@ -14,7 +14,7 @@
 
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor,
+    ScanCursor, ScanResume,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -203,10 +203,34 @@ impl IndexedStorage for RedisIndexedStorage {
         Ok((cursor, keys))
     }
 
-    fn scan_cursor_after_removals(&self, cursor: ScanCursor, _removed: u64) -> ScanCursor {
-        // A Redis `SCAN` cursor is an opaque token over the hash space, not a position, so deleting
-        // keys does not move it and arithmetic on it is meaningless.
-        cursor
+    async fn scan_stable(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageMetaNamespace,
+        prefix: Option<&str>,
+        resume: Option<ScanResume>,
+        count: u64,
+    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+        // Redis has no key order to seek in, so this is `scan` unchanged. It qualifies anyway:
+        // a `SCAN` cursor is an opaque token over the hash space rather than a position, so
+        // deleting keys behind it moves nothing, and the protocol already guarantees that a key
+        // present for the whole iteration comes back at least once.
+        let cursor = match resume {
+            Some(ScanResume::Cursor(cursor)) => cursor,
+            Some(ScanResume::Key(_)) => {
+                return Err(IndexedStorageError::Other(
+                    "Redis indexed storage was handed a resume token it did not produce"
+                        .to_string(),
+                ));
+            }
+            None => 0,
+        };
+        let (next, keys) = self
+            .scan(svc_name, api_name, namespace, prefix, cursor, count)
+            .await?;
+        let next = (next != 0).then_some(ScanResume::Cursor(next));
+        Ok((next, keys))
     }
 
     async fn append(

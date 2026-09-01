@@ -14,7 +14,7 @@
 
 use super::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor,
+    ScanCursor, ScanResume,
 };
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use async_trait::async_trait;
@@ -90,6 +90,44 @@ impl MultiSqliteIndexedStorage {
     ) -> Result<SqliteIndexedStorage, IndexedStorageError> {
         let db = self.namespace_to_db(namespace).await;
         self.storage_by_db_name(db).await
+    }
+
+    /// The `.db` files a namespace is spread over, in a stable order.
+    fn namespace_db_files(
+        &self,
+        namespace: &IndexedStorageMetaNamespace,
+    ) -> Result<Vec<String>, IndexedStorageError> {
+        use std::fs;
+
+        let db_prefix = match namespace {
+            IndexedStorageMetaNamespace::Oplog { agent_mode } => {
+                let mode = super::agent_mode_prefix(*agent_mode);
+                format!("{mode}-oplog-")
+            }
+            IndexedStorageMetaNamespace::CompressedOplog { agent_mode, level } => {
+                let mode = super::agent_mode_prefix(*agent_mode);
+                format!("{mode}-compressed-oplog-l{}-", level)
+            }
+        };
+
+        let mut matching_files: Vec<_> = fs::read_dir(&self.root_dir)
+            .map_err(|e| {
+                IndexedStorageError::Other(format!("Failed to read root directory: {:?}", e))
+            })?
+            .filter_map(|entry| {
+                entry.ok().and_then(|e| {
+                    let path = e.path();
+                    let file_name = path.file_name()?.to_string_lossy().to_string();
+                    if file_name.starts_with(&db_prefix) && file_name.ends_with(".db") {
+                        Some(file_name)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+        matching_files.sort();
+        Ok(matching_files)
     }
 
     async fn storage_by_db_name(
@@ -196,37 +234,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
-        use std::fs;
-
-        let db_prefix = match namespace {
-            IndexedStorageMetaNamespace::Oplog { agent_mode } => {
-                let mode = super::agent_mode_prefix(agent_mode);
-                format!("{mode}-oplog-")
-            }
-            IndexedStorageMetaNamespace::CompressedOplog { agent_mode, level } => {
-                let mode = super::agent_mode_prefix(agent_mode);
-                format!("{mode}-compressed-oplog-l{}-", level)
-            }
-        };
-
-        // List all .db files matching the namespace prefix, sorted consistently
-        let mut matching_files: Vec<_> = fs::read_dir(&self.root_dir)
-            .map_err(|e| {
-                IndexedStorageError::Other(format!("Failed to read root directory: {:?}", e))
-            })?
-            .filter_map(|entry| {
-                entry.ok().and_then(|e| {
-                    let path = e.path();
-                    let file_name = path.file_name()?.to_string_lossy().to_string();
-                    if file_name.starts_with(&db_prefix) && file_name.ends_with(".db") {
-                        Some(file_name)
-                    } else {
-                        None
-                    }
-                })
-            })
-            .collect();
-        matching_files.sort();
+        let matching_files = self.namespace_db_files(&namespace)?;
 
         // Decode cursor: upper 32 bits = file index, lower 32 bits = scan cursor within file
         let file_index = (cursor >> 32) as usize;
@@ -266,14 +274,45 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         Ok((0, results))
     }
 
-    fn scan_cursor_after_removals(&self, cursor: ScanCursor, removed: u64) -> ScanCursor {
-        // The cursor packs a file index in the upper 32 bits and that file's own offset in the
-        // lower 32. Only the offset is positional, and `removed` counts keys across every file the
-        // scan walked, so subtracting all of it saturates to the start of the current file rather
-        // than stepping into it.
-        let file_index = cursor >> 32;
-        let file_cursor = cursor & 0xFFFF_FFFF;
-        (file_index << 32) | file_cursor.saturating_sub(removed)
+    async fn scan_stable(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageMetaNamespace,
+        prefix: Option<&str>,
+        resume: Option<ScanResume>,
+        count: u64,
+    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+        if matches!(resume, Some(ScanResume::Cursor(_))) {
+            return Err(IndexedStorageError::Other(
+                "Multi-SQLite indexed storage was handed a resume token it did not produce"
+                    .to_string(),
+            ));
+        }
+
+        // A namespace is spread across files and key order does not follow file order, so every
+        // file has to offer its next page and the merge picks the winners. `scan` walks the files
+        // one after another instead, which it can only do because its cursor names a file.
+        let mut merged = Vec::new();
+        for file_name in self.namespace_db_files(&namespace)? {
+            let storage = self.storage_by_db_name(file_name).await?;
+            let (_, keys) = storage
+                .scan_stable(
+                    svc_name,
+                    api_name,
+                    namespace.clone(),
+                    prefix,
+                    resume.clone(),
+                    count,
+                )
+                .await?;
+            merged.extend(keys);
+        }
+        merged.sort();
+        merged.dedup();
+        merged.truncate(count as usize);
+
+        Ok((super::last_key_resume(&merged, count), merged))
     }
 
     async fn append(

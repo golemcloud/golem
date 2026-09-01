@@ -62,10 +62,10 @@ use crate::services::golem_config::OplogSweepConfig;
 use crate::services::oplog::{EphemeralOplog, MultiLayerOplog, OplogArchiveService};
 use crate::services::scheduler::SchedulerWorkerAccess;
 use crate::services::shard::ShardService;
-use crate::storage::indexed::agent_mode_prefix;
 use crate::storage::indexed::{
-    IndexedStorage, IndexedStorageLabelledApi, IndexedStorageMetaNamespace, ScanCursor,
+    IndexedStorage, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
 };
+use crate::storage::indexed::{ScanResume, agent_mode_prefix};
 
 /// One archive step: entries for agents of `agent_mode` move out of the layer at `source_level`
 /// into the layer below it.
@@ -323,8 +323,9 @@ pub struct OplogSweeper {
     /// good, so its entry here would never be visited again. Entries are stamped with the scan
     /// pass that touched them and dropped when a pass completes without seeing them.
     memo: Mutex<HashMap<(RouteId, AgentId), Seen>>,
-    /// Where each route's scan stopped, so a budgeted tick resumes rather than restarting.
-    cursors: Mutex<HashMap<RouteId, ScanCursor>>,
+    /// Where each route's scan stopped, so a budgeted tick resumes rather than restarting. Absent
+    /// means start from the beginning of the namespace.
+    cursors: Mutex<HashMap<RouteId, ScanResume>>,
     /// Which scan pass each route is on. Bumped when a pass reaches the end of the namespace.
     passes: Mutex<HashMap<RouteId, u64>>,
 }
@@ -471,13 +472,7 @@ impl OplogSweeper {
         shutdown: &CancellationToken,
     ) -> RouteReport {
         let started = Instant::now();
-        let mut cursor = self
-            .cursors
-            .lock()
-            .await
-            .get(&route.id)
-            .copied()
-            .unwrap_or(0);
+        let mut resume = self.cursors.lock().await.get(&route.id).cloned();
         // Folded page by page: holding every outcome would make a tick's memory grow with the
         // namespace, which is what the budgets exist to prevent.
         let mut report = RouteReport::default();
@@ -491,12 +486,10 @@ impl OplogSweeper {
             .copied()
             .unwrap_or(0);
 
-        // The scan runs to completion before anything is archived. Where the cursor is positional,
-        // an `OFFSET` in Postgres and SQLite and a count of matching keys in memory, a key deleted
-        // mid-scan shifts the rest left and the next page steps over exactly that many unexamined
-        // keys. Redis hands back an opaque token instead and does not have the problem, but the
-        // sweep cannot tell which it is talking to, so it reads first either way and keeps the
-        // namespace still for as long as the cursor is walking it.
+        // The scan runs to completion before anything is archived. `scan_stable` resumes by seeking
+        // rather than by counting, so deleting a key behind the walk cannot shift the rest of it,
+        // but a tick that archived while paging would still hand the archive phase a list built
+        // from a namespace that changed underneath it. Reading first keeps the two apart.
         let mut pending: Vec<AgentId> = Vec::new();
         let mut walked: u64 = 0;
         let mut pages: u64 = 0;
@@ -526,10 +519,10 @@ impl OplogSweeper {
             let page = self
                 .indexed_storage
                 .with("oplog_sweep", "scan")
-                .scan(route.namespace.clone(), None, cursor, count)
+                .scan_stable(route.namespace.clone(), None, resume.clone(), count)
                 .await;
 
-            let (next_cursor, keys) = match page {
+            let (next, keys) = match page {
                 Ok(page) => page,
                 Err(error) => {
                     warn!(route = %route.id, "Oplog sweep scan failed: {error}");
@@ -554,8 +547,8 @@ impl OplogSweeper {
             }
             report = merge(report, tally(outcomes));
 
-            cursor = next_cursor;
-            if cursor == 0 {
+            resume = next;
+            if resume.is_none() {
                 exhausted = true;
                 break;
             }
@@ -586,20 +579,18 @@ impl OplogSweeper {
         }
         report = merge(report, tally(archived.into_iter().flatten()));
 
-        // The scan above is safe within the tick, but the archives just removed keys the cursor
-        // had already walked past. Restarting from the beginning instead would starve the tail of a
-        // namespace larger than one tick's scan budget: any tick that archived would rewind, so a
-        // key beyond the budget would only ever be reached on a tick that archived nothing.
-        // Only what this tick is known to have taken out of the namespace: the agents it
-        // archived, plus the keys that had already lost their entries by the time it probed them.
-        // A concurrent teardown drain can still remove a key this tick classified some other way,
-        // which no correction here can see; that costs those keys a deferral to a later pass, not
-        // a permanent skip, because a pass always walks to the end and wraps.
-        let removed = report.archived + report.empty;
-        let resume = self
-            .indexed_storage
-            .scan_cursor_after_removals(cursor, removed);
-        self.cursors.lock().await.insert(route.id, resume);
+        // Stored as it came back. The archives below deleted keys the walk had already passed, and
+        // with a positional cursor that would have shifted every key behind it and cost this tick a
+        // correction it could only estimate. A resume token names a place in the key order, so
+        // nothing the archive phase did can move it.
+        match resume {
+            Some(resume) => {
+                self.cursors.lock().await.insert(route.id, resume);
+            }
+            None => {
+                self.cursors.lock().await.remove(&route.id);
+            }
+        }
 
         if exhausted {
             // A pass covered the whole namespace, so anything it did not see has left the layer,
@@ -1883,7 +1874,7 @@ mod tests {
     }
 
     #[test]
-    async fn a_tick_that_archives_resumes_past_what_it_removed() {
+    async fn a_tick_that_archives_resumes_where_it_left_off() {
         let layers = layers();
         let environment_id = EnvironmentId::new();
         let component_id = ComponentId::new();
@@ -1891,16 +1882,15 @@ mod tests {
         for i in 0..6 {
             let agent_id = agent(&format!("counter-{i}"), component_id);
             stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
-            // Two agents that can never be archived, so the tick walks more keys than it removes.
+            // Two agents that can never be archived, so the tick walks more keys than it removes
+            // and something is left behind for a rewind to trip over.
             if i >= 4 {
                 resident.insert(agent_id);
             }
         }
 
         // One page wide enough for the whole namespace, so which keys a page holds does not depend
-        // on the storage's iteration order, and an archive budget low enough to stop the tick. The
-        // asserted cursor also relies on these six being the only keys in the swept namespace,
-        // which is what `layers()` and this fixture leave behind.
+        // on the storage's iteration order, and an archive budget low enough to stop the tick.
         let sweeper = build(
             &layers,
             OplogSweepConfig {
@@ -1915,21 +1905,24 @@ mod tests {
             resident,
         );
 
-        // Two ticks to finish a pass and make the four candidates quiet.
+        // Two ticks to finish the first pass and leave the four candidates quiet.
         sweeper.sweep_once(&CancellationToken::new()).await;
         sweeper.sweep_once(&CancellationToken::new()).await;
 
-        let report = sweeper.sweep_once(&CancellationToken::new()).await;
-        assert_eq!(report.scanned(), 6);
-        assert_eq!(report.archived(), 4);
-        assert!(report.route(EPHEMERAL_L1).truncated);
+        let archiving = sweeper.sweep_once(&CancellationToken::new()).await;
+        assert_eq!(archiving.scanned(), 6);
+        assert_eq!(archiving.archived(), 4);
+        assert!(archiving.route(EPHEMERAL_L1).truncated);
 
-        // Six keys walked, four of them now gone, so the two the tick could not archive sit at the
-        // front and the cursor lands just past them. Rewinding to 0 instead would mean a namespace
-        // larger than one tick's budget never gets swept past its first page.
+        // The tick stopped on its archive budget having walked the whole namespace, so the next one
+        // resumes past the last key it saw and finds nothing. A tick that rewound on archiving
+        // instead would walk the two it cannot archive again, every time, and on a namespace larger
+        // than one tick's budget would never reach the far end at all.
+        let next = sweeper.sweep_once(&CancellationToken::new()).await;
         assert_eq!(
-            sweeper.cursors.lock().await.get(&EPHEMERAL_L1).copied(),
-            Some(2)
+            next.scanned(),
+            0,
+            "the tick restarted the namespace instead of resuming"
         );
     }
 

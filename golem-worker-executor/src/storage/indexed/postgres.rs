@@ -14,7 +14,7 @@
 
 use super::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor,
+    ScanCursor, ScanResume,
 };
 use crate::services::golem_config::IndexedStoragePostgresConfig;
 use async_trait::async_trait;
@@ -272,8 +272,57 @@ impl IndexedStorage for PostgresIndexedStorage {
         Ok((new_cursor, keys))
     }
 
-    fn scan_cursor_after_removals(&self, cursor: ScanCursor, removed: u64) -> ScanCursor {
-        super::positional_cursor_after_removals(cursor, removed)
+    async fn scan_stable(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageMetaNamespace,
+        prefix: Option<&str>,
+        resume: Option<ScanResume>,
+        count: u64,
+    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+        let _permit = self.acquire_permit().await;
+        let count_i64 = Self::to_i64(count, "count")?;
+        // Every stored key is non-empty, so the empty string is a lower bound below all of them and
+        // the first page needs no separate query.
+        let after = match resume {
+            Some(ScanResume::Key(key)) => key,
+            Some(ScanResume::Cursor(_)) => {
+                return Err(IndexedStorageError::Other(
+                    "Postgres indexed storage was handed a resume token it did not produce"
+                        .to_string(),
+                ));
+            }
+            None => String::new(),
+        };
+        let query = match prefix {
+            Some(prefix) => {
+                let like = Self::to_like_prefix(prefix);
+                sqlx::query_as(
+                    "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key > $2 AND key LIKE $3 ESCAPE '\\' ORDER BY key LIMIT $4;",
+                )
+                .bind(Self::meta_namespace(namespace))
+                .bind(after)
+                .bind(like)
+                .bind(count_i64)
+            }
+            None => sqlx::query_as(
+                "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key > $2 ORDER BY key LIMIT $3;",
+            )
+            .bind(Self::meta_namespace(namespace))
+            .bind(after)
+            .bind(count_i64),
+        };
+
+        let keys = self
+            .pool
+            .with_ro(svc_name, api_name)
+            .fetch_all_as::<(String,), _>(query)
+            .await
+            .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())
+            .map_err(Self::classify_repo_error_general)?;
+
+        Ok((super::last_key_resume(&keys, count), keys))
     }
 
     async fn append(

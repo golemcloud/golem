@@ -73,6 +73,18 @@ impl From<String> for IndexedStorageError {
 /// identifiers are unique and monotonically increasing within each index, but not necessarily
 /// contiguous.
 ///
+/// Where a [`IndexedStorage::scan_stable`] walk left off.
+///
+/// Produced and read by one backend only. A caller carries it from one page to the next and must
+/// not interpret it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScanResume {
+    /// The last key handed back, for a backend that pages in key order.
+    Key(String),
+    /// The backend's own iteration cursor, for one that has no key order to seek in.
+    Cursor(ScanCursor),
+}
+
 #[async_trait]
 pub trait IndexedStorage: Debug + Sync {
     /// Gets the number of available replicas in the storage cluster
@@ -113,19 +125,31 @@ pub trait IndexedStorage: Debug + Sync {
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError>;
 
-    /// Corrects a `scan` cursor after `removed` keys it had already walked past were deleted.
+    /// Pages the keys of a namespace in a way that survives the caller deleting what it was
+    /// handed.
     ///
-    /// A caller that deletes what it scanned cannot resume from the cursor `scan` handed back: with
-    /// a positional cursor the keys behind it have shifted down by the number removed. Only the
-    /// backend knows what its cursor means, so it does the correction; one built on an opaque token
-    /// returns it unchanged.
+    /// [`Self::scan`] cannot do that. Its cursor is a position on every backend that has one, so
+    /// deleting a key behind it shifts everything after it down and the next page steps over
+    /// exactly that many keys nothing has looked at. A caller that sweeps, archives, or otherwise
+    /// consumes what it scans wants this instead.
     ///
-    /// `removed` counts only the keys taken out of the namespace, and matching the prefix, that
-    /// `scan` was called with. Deletions elsewhere in the backend must not be counted, even when
-    /// the backend keeps every namespace in one place. Given an accurate `removed` the result may
-    /// repeat a key already seen but never sits past a key nothing has examined, so over-counting
-    /// is the safe direction and under-counting is not.
-    fn scan_cursor_after_removals(&self, cursor: ScanCursor, removed: u64) -> ScanCursor;
+    /// `resume` is `None` for the first page, and afterwards whatever the previous call returned.
+    /// A backend that keeps its keys in order returns the last key it handed back, so resuming is a
+    /// seek rather than an offset and nothing behind it can move. One with no key order returns
+    /// whatever its own iteration protocol needs, and is only fit for this if that protocol already
+    /// tolerates deletion.
+    ///
+    /// The next token is `None` once the namespace is exhausted. A key that is present for the
+    /// whole walk is handed back at least once; a key the caller deletes may or may not be.
+    async fn scan_stable(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageMetaNamespace,
+        prefix: Option<&str>,
+        resume: Option<ScanResume>,
+        count: u64,
+    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError>;
 
     /// Appends an entry to the given key with the given id
     async fn append(
@@ -323,6 +347,25 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
                 namespace,
                 prefix,
                 cursor,
+                count,
+            )
+            .await
+    }
+
+    pub async fn scan_stable(
+        &self,
+        namespace: IndexedStorageMetaNamespace,
+        prefix: Option<&str>,
+        resume: Option<ScanResume>,
+        count: u64,
+    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+        self.storage
+            .scan_stable(
+                self.svc_name,
+                self.api_name,
+                namespace,
+                prefix,
+                resume,
                 count,
             )
             .await
@@ -694,11 +737,14 @@ pub enum IndexedStorageMetaNamespace {
     CompressedOplog { agent_mode: AgentMode, level: usize },
 }
 
-/// Corrects a positional scan cursor, one that counts the matching keys walked so far, after
-/// `removed` of them were deleted from behind it. Shared by every backend whose cursor is a plain
-/// offset; see [`IndexedStorage::scan_cursor_after_removals`].
-pub fn positional_cursor_after_removals(cursor: ScanCursor, removed: u64) -> ScanCursor {
-    cursor.saturating_sub(removed)
+/// The resume token for a page of an ordered walk: the last key handed back, or `None` once a
+/// short page shows the namespace is exhausted. Shared by every backend that pages in key order.
+pub fn last_key_resume(keys: &[String], count: u64) -> Option<ScanResume> {
+    if (keys.len() as u64) < count {
+        None
+    } else {
+        keys.last().map(|key| ScanResume::Key(key.clone()))
+    }
 }
 
 /// Returns the symmetric per-mode prefix used by all indexed-storage backends.
