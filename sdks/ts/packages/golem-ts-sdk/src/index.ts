@@ -569,6 +569,7 @@ function createToolOutputStream(writer: ToolStdoutWriter): ToolOutputStreamAdapt
           if (!(contents instanceof Uint8Array)) {
             throw new TypeError('tool stdout accepts only Uint8Array chunks');
           }
+          if (contents.byteLength === 0) return;
           return writer.write(contents);
         }),
       );
