@@ -42,6 +42,12 @@ pub struct GolemConfig {
     pub tracing: TracingConfig,
     pub tracing_file_name_with_port: bool,
     pub key_value_storage: KeyValueStorageConfig,
+    /// Retry policy applied to every key-value storage operation whose failure is classified as
+    /// transient, whichever backend serves it. Without it a brief backend outage - a connection
+    /// pool acquisition timeout, a dropped connection - surfaces to hot paths such as promise and
+    /// agent status updates as a hard failure.
+    #[serde(default = "default_key_value_storage_retry")]
+    pub key_value_storage_retry: RetryConfig,
     pub scheduler_storage: SchedulerStorageConfig,
     pub indexed_storage: IndexedStorageConfig,
     pub blob_storage: BlobStorageConfig,
@@ -84,6 +90,25 @@ pub struct GolemConfig {
     pub runtime_metrics_sampling_interval: Duration,
 }
 
+pub fn default_key_value_storage_retry() -> RetryConfig {
+    // Sized to outlast an AWS-side switchover rather than a momentary blip, because those are the
+    // outages this policy exists to hide. Aurora promotes a reader to writer in high single-digit
+    // to mid-tens of seconds, worst case around a minute; ElastiCache Multi-AZ promotes a replica
+    // in around thirty. Roughly 93 seconds of backoff across these attempts covers both with
+    // margin, and the delay is capped so the tail stays responsive once the new writer answers.
+    //
+    // The other half of this budget is `DbPostgresConfig::acquire_timeout`: an attempt against an
+    // endpoint that blackholes packets, rather than one that refuses fast, costs that timeout
+    // before the backoff below even starts.
+    RetryConfig {
+        max_attempts: 15,
+        min_delay: Duration::from_millis(200),
+        max_delay: Duration::from_secs(10),
+        multiplier: 2.0,
+        max_jitter_factor: Some(0.15),
+    }
+}
+
 impl SafeDisplay for GolemConfig {
     fn to_safe_string(&self) -> String {
         use std::fmt::Write;
@@ -102,6 +127,12 @@ impl SafeDisplay for GolemConfig {
             &mut result,
             "{}",
             self.key_value_storage.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "key-value storage retry:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.key_value_storage_retry.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "scheduler storage:");
         let _ = writeln!(
@@ -266,6 +297,7 @@ impl Default for GolemConfig {
             tracing: TracingConfig::local_dev("worker-executor"),
             tracing_file_name_with_port: true,
             key_value_storage: KeyValueStorageConfig::default(),
+            key_value_storage_retry: default_key_value_storage_retry(),
             scheduler_storage: SchedulerStorageConfig::default(),
             indexed_storage: IndexedStorageConfig::default(),
             blob_storage: BlobStorageConfig::default(),

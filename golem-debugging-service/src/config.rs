@@ -24,7 +24,7 @@ use golem_worker_executor::services::golem_config::{
     EngineConfig, EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig,
     KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, QuotaServiceConfig, RdbmsConfig,
     ResourceLimitsConfig, SchedulerConfig, SchedulerStorageConfig, SuspendConfig,
-    WorkerServiceGrpcConfig,
+    WorkerServiceGrpcConfig, default_key_value_storage_retry,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
@@ -36,6 +36,8 @@ pub struct DebugConfig {
     pub tracing: TracingConfig,
     pub tracing_file_name_with_port: bool,
     pub key_value_storage: KeyValueStorageConfig,
+    #[serde(default = "default_key_value_storage_retry")]
+    pub key_value_storage_retry: RetryConfig,
     pub indexed_storage: IndexedStorageConfig,
     pub scheduler_storage: SchedulerStorageConfig,
     pub blob_storage: BlobStorageConfig,
@@ -67,6 +69,7 @@ impl DebugConfig {
             tracing: self.tracing,
             tracing_file_name_with_port: self.tracing_file_name_with_port,
             key_value_storage: self.key_value_storage,
+            key_value_storage_retry: self.key_value_storage_retry,
             indexed_storage: self.indexed_storage,
             scheduler_storage: self.scheduler_storage,
             blob_storage: self.blob_storage,
@@ -125,6 +128,7 @@ impl Default for DebugConfig {
             tracing: default_golem_config.tracing,
             tracing_file_name_with_port: default_golem_config.tracing_file_name_with_port,
             key_value_storage: default_golem_config.key_value_storage,
+            key_value_storage_retry: default_golem_config.key_value_storage_retry,
             indexed_storage: default_golem_config.indexed_storage,
             scheduler_storage: default_golem_config.scheduler_storage,
             blob_storage: default_golem_config.blob_storage,

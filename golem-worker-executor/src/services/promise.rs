@@ -135,7 +135,11 @@ impl PromiseHandle {
 #[async_trait]
 pub trait PromiseService: Send + Sync {
     /// poll and complete for a given promise must be called on the same
-    async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId;
+    async fn create(
+        &self,
+        agent_id: &AgentId,
+        oplog_idx: OplogIndex,
+    ) -> Result<PromiseId, WorkerExecutorError>;
 
     async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError>;
 
@@ -171,7 +175,11 @@ impl LazyPromiseService {
 
 #[async_trait]
 impl PromiseService for LazyPromiseService {
-    async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId {
+    async fn create(
+        &self,
+        agent_id: &AgentId,
+        oplog_idx: OplogIndex,
+    ) -> Result<PromiseId, WorkerExecutorError> {
         let lock = self.0.read().await;
         lock.as_ref().unwrap().create(agent_id, oplog_idx).await
     }
@@ -272,42 +280,57 @@ impl DefaultPromiseService {
         }
     }
 
-    async fn exists(&self, promise_id: &PromiseId) -> bool {
+    async fn exists(&self, promise_id: &PromiseId) -> Result<bool, WorkerExecutorError> {
         self.key_value_storage
             .with("promise", "complete")
             .exists(
                 KeyValueStorageNamespace::Promise {
-                    agent_id: promise_id.agent_id.clone(),
+                    agent_id: Arc::new(promise_id.agent_id.clone()),
                 },
                 &get_promise_redis_key(promise_id),
             )
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to check if promise {promise_id} exists in storage: {err}")
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to check if promise {promise_id} exists in storage: {err}"
+                ))
             })
     }
 
-    async fn completed_data(&self, promise_id: &PromiseId) -> Option<Vec<u8>> {
-        self.key_value_storage
+    async fn completed_data(
+        &self,
+        promise_id: &PromiseId,
+    ) -> Result<Option<Vec<u8>>, WorkerExecutorError> {
+        let state = self
+            .key_value_storage
             .with_entity("promise", "get-completed", "promise")
             .get(
                 KeyValueStorageNamespace::Promise {
-                    agent_id: promise_id.agent_id.clone(),
+                    agent_id: Arc::new(promise_id.agent_id.clone()),
                 },
                 &get_promise_result_redis_key(promise_id),
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to get promise {promise_id} from storage: {err}"))
-            .and_then(|state| match state {
-                RedisPromiseState::Complete(data) => Some(data),
-                RedisPromiseState::Pending => None,
-            })
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to get promise {promise_id} from storage: {err}"
+                ))
+            })?;
+
+        Ok(state.and_then(|state| match state {
+            RedisPromiseState::Complete(data) => Some(data),
+            RedisPromiseState::Pending => None,
+        }))
     }
 }
 
 #[async_trait]
 impl PromiseService for DefaultPromiseService {
-    async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId {
+    async fn create(
+        &self,
+        agent_id: &AgentId,
+        oplog_idx: OplogIndex,
+    ) -> Result<PromiseId, WorkerExecutorError> {
         let promise_id = PromiseId {
             agent_id: agent_id.clone(),
             oplog_idx,
@@ -319,24 +342,38 @@ impl PromiseService for DefaultPromiseService {
             .with_entity("promise", "create", "promise")
             .set_if_not_exists(
                 KeyValueStorageNamespace::Promise {
-                    agent_id: agent_id.clone(),
+                    agent_id: Arc::new(agent_id.clone()),
                 },
                 &key,
                 &RedisPromiseState::Pending,
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in storage: {err}"));
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to set promise {promise_id} in storage: {err}"
+                ))
+            })?;
 
         record_promise_created();
         crate::metrics::promises::inc_promise_pending_count();
 
-        // Start tracking the promise locally so poll does not need to go to storage.
+        // Intended to start tracking the promise locally so the first poll does not need to go to
+        // storage. It does not currently achieve that, and the entry is dead before this function
+        // returns: the registry holds `Weak<PromiseHandleInner>`, `get_or_insert` hands back the
+        // only strong reference, and discarding it here drops the strong count to zero - so the
+        // `Weak` can never upgrade and `PromiseRegistry::get` always misses for this promise.
+        //
+        // The effect is limited rather than absent: the first `poll` still pays an `exists()` read
+        // against storage, but it then registers a handle it *keeps*, so later polls hit the fast
+        // path for as long as some caller holds one. Making this pre-registration work would mean
+        // giving the handle an owner with a defined lifetime, which is a design question rather
+        // than a missing line.
         {
             let mut reg = self.registry.lock().await;
             reg.get_or_insert(&promise_id);
         };
 
-        promise_id
+        Ok(promise_id)
     }
 
     async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
@@ -345,7 +382,7 @@ impl PromiseService for DefaultPromiseService {
             return Ok(handle.clone());
         }
 
-        if !self.exists(&promise_id).await {
+        if !self.exists(&promise_id).await? {
             return Err(WorkerExecutorError::PromiseNotFound { promise_id });
         }
 
@@ -355,7 +392,7 @@ impl PromiseService for DefaultPromiseService {
         };
 
         // Check if already completed in storage
-        if let Some(data) = self.completed_data(&promise_id).await {
+        if let Some(data) = self.completed_data(&promise_id).await? {
             let _ = handle.complete(data).await;
         }
 
@@ -369,7 +406,7 @@ impl PromiseService for DefaultPromiseService {
     ) -> Result<bool, WorkerExecutorError> {
         let key = get_promise_result_redis_key(&promise_id);
 
-        if !self.exists(&promise_id).await {
+        if !self.exists(&promise_id).await? {
             return Err(WorkerExecutorError::PromiseNotFound { promise_id });
         };
 
@@ -378,13 +415,17 @@ impl PromiseService for DefaultPromiseService {
             .with_entity("promise", "complete", "promise")
             .set_if_not_exists(
                 KeyValueStorageNamespace::Promise {
-                    agent_id: promise_id.agent_id.clone(),
+                    agent_id: Arc::new(promise_id.agent_id.clone()),
                 },
                 &key,
                 &RedisPromiseState::Complete(data.clone()),
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in storage: {err}"));
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to set promise {promise_id} in storage: {err}"
+                ))
+            })?;
 
         // Also wake any in-memory handle, ensuring that still running workers that wait on the pollable can continue
         let completed_data = if written {
@@ -392,7 +433,7 @@ impl PromiseService for DefaultPromiseService {
         } else {
             // A duplicate must wake waiters with the payload stored by the
             // original completion, not its own payload.
-            self.completed_data(&promise_id).await
+            self.completed_data(&promise_id).await?
         };
         let handle = {
             let mut reg = self.registry.lock().await;
@@ -511,7 +552,7 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
         } else if let Some(worker::GetWorkerMetadataResult {
             mut initial_worker_metadata,
             last_known_status,
-        }) = self.worker_service.get(&owned_agent_id).await
+        }) = self.worker_service.get(&owned_agent_id).await?
         {
             let status_deps = StatusDeps {
                 oplog_service: self.oplog_service.clone(),
@@ -605,7 +646,11 @@ impl PromiseServiceMock {
 #[cfg(test)]
 #[async_trait]
 impl PromiseService for PromiseServiceMock {
-    async fn create(&self, _agent_id: &AgentId, _oplog_idx: OplogIndex) -> PromiseId {
+    async fn create(
+        &self,
+        _agent_id: &AgentId,
+        _oplog_idx: OplogIndex,
+    ) -> Result<PromiseId, WorkerExecutorError> {
         unimplemented!()
     }
 
@@ -689,7 +734,7 @@ mod tests {
             DefaultPromiseService::new(storage.clone(), Arc::new(NoopPromiseWorkerAccess));
         let service_b = DefaultPromiseService::new(storage, Arc::new(NoopPromiseWorkerAccess));
         let id = promise_id();
-        let id = service_a.create(&id.agent_id, id.oplog_idx).await;
+        let id = service_a.create(&id.agent_id, id.oplog_idx).await.unwrap();
         let handle = service_b.poll(id.clone()).await.unwrap();
 
         assert!(service_a.complete(id.clone(), vec![1]).await.unwrap());

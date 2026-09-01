@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
+use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageError, KeyValueStorageNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::sync::Arc;
@@ -54,7 +54,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let backend = self.backend_for_namespace(&namespace);
         if Arc::ptr_eq(backend, &self.cache) {
             crate::metrics::workers::record_worker_kv_cache_value_size(value.len());
@@ -71,7 +71,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &[u8])],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let backend = self.backend_for_namespace(&namespace);
         if Arc::ptr_eq(backend, &self.cache) {
             for (_, value) in pairs {
@@ -91,7 +91,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<bool, String> {
+    ) -> Result<bool, KeyValueStorageError> {
         let backend = self.backend_for_namespace(&namespace);
         if Arc::ptr_eq(backend, &self.cache) {
             crate::metrics::workers::record_worker_kv_cache_value_size(value.len());
@@ -108,7 +108,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Bytes>, KeyValueStorageError> {
         self.backend_for_namespace(&namespace)
             .get(svc_name, api_name, entity_name, namespace, key)
             .await
@@ -120,8 +120,8 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         api_name: &'static str,
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
-    ) -> Result<Vec<Option<Bytes>>, String> {
+        keys: Arc<[String]>,
+    ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
         self.backend_for_namespace(&namespace)
             .get_many(svc_name, api_name, entity_name, namespace, keys)
             .await
@@ -133,7 +133,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         api_name: &'static str,
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
-    ) -> Result<Vec<(String, Bytes)>, String> {
+    ) -> Result<Vec<(String, Bytes)>, KeyValueStorageError> {
         self.backend_for_namespace(&namespace)
             .get_all(svc_name, api_name, entity_name, namespace)
             .await
@@ -145,7 +145,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         self.backend_for_namespace(&namespace)
             .del(svc_name, api_name, namespace, key)
             .await
@@ -156,8 +156,8 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
-    ) -> Result<(), String> {
+        keys: Arc<[String]>,
+    ) -> Result<(), KeyValueStorageError> {
         self.backend_for_namespace(&namespace)
             .del_many(svc_name, api_name, namespace, keys)
             .await
@@ -169,7 +169,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, KeyValueStorageError> {
         self.backend_for_namespace(&namespace)
             .exists(svc_name, api_name, namespace, key)
             .await
@@ -180,7 +180,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<Vec<String>, KeyValueStorageError> {
         self.backend_for_namespace(&namespace)
             .keys(svc_name, api_name, namespace)
             .await
@@ -194,7 +194,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         self.backend_for_namespace(&namespace)
             .add_to_set(svc_name, api_name, entity_name, namespace, key, value)
             .await
@@ -208,7 +208,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         self.backend_for_namespace(&namespace)
             .remove_from_set(svc_name, api_name, entity_name, namespace, key, value)
             .await
@@ -221,7 +221,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Vec<Bytes>, String> {
+    ) -> Result<Vec<Bytes>, KeyValueStorageError> {
         self.backend_for_namespace(&namespace)
             .members_of_set(svc_name, api_name, entity_name, namespace, key)
             .await
@@ -236,7 +236,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         key: &str,
         score: f64,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         self.backend_for_namespace(&namespace)
             .add_to_sorted_set(
                 svc_name,
@@ -258,7 +258,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         self.backend_for_namespace(&namespace)
             .remove_from_sorted_set(svc_name, api_name, entity_name, namespace, key, value)
             .await
@@ -271,7 +271,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Vec<(f64, Bytes)>, String> {
+    ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
         self.backend_for_namespace(&namespace)
             .get_sorted_set(svc_name, api_name, entity_name, namespace, key)
             .await
@@ -286,7 +286,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         key: &str,
         min: f64,
         max: f64,
-    ) -> Result<Vec<(f64, Bytes)>, String> {
+    ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
         self.backend_for_namespace(&namespace)
             .query_sorted_set(svc_name, api_name, entity_name, namespace, key, min, max)
             .await

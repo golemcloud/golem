@@ -224,6 +224,7 @@ impl GetKeyValueStorage for PostgresKeyValueStorageWrapper {
                 .expect("Postgres connection string missing port"),
             max_connections: 10,
             schema: None,
+            acquire_timeout: None,
         };
 
         let config = KeyValueStoragePostgresConfig { postgres };
@@ -299,6 +300,7 @@ impl GetKeyValueStorage for NamespaceRoutedKeyValueStorageWrapper {
                 .expect("Postgres connection string missing port"),
             max_connections: 10,
             schema: None,
+            acquire_timeout: None,
         };
         let postgres_config = KeyValueStoragePostgresConfig { postgres };
         let postgres_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
@@ -339,14 +341,14 @@ struct Namespaces {
 fn ns() -> Namespaces {
     Namespaces {
         ns: KeyValueStorageNamespace::Worker {
-            agent_id: AgentId {
+            agent_id: Arc::new(AgentId {
                 component_id: ComponentId::new(),
                 agent_id: "test".to_string(),
-            },
+            }),
         },
         ns2: KeyValueStorageNamespace::UserDefined {
             environment_id: EnvironmentId(uuid!("296aa41a-ff44-4882-8f34-08b7fe431aa4")),
-            bucket: "test-bucket".to_string(),
+            bucket: "test-bucket".into(),
         },
     }
 }
@@ -356,13 +358,13 @@ fn ns2() -> Namespaces {
     Namespaces {
         ns: KeyValueStorageNamespace::UserDefined {
             environment_id: EnvironmentId(uuid!("296aa41a-ff44-4882-8f34-08b7fe431aa4")),
-            bucket: "test-bucket".to_string(),
+            bucket: "test-bucket".into(),
         },
         ns2: KeyValueStorageNamespace::Worker {
-            agent_id: AgentId {
+            agent_id: Arc::new(AgentId {
                 component_id: ComponentId::new(),
                 agent_id: "test".to_string(),
-            },
+            }),
         },
     }
 }
@@ -373,14 +375,14 @@ fn ns2() -> Namespaces {
 fn ns3() -> Namespaces {
     Namespaces {
         ns: KeyValueStorageNamespace::AgentStatus {
-            agent_id: AgentId {
+            agent_id: Arc::new(AgentId {
                 component_id: ComponentId::new(),
                 agent_id: "test".to_string(),
-            },
+            }),
         },
         ns2: KeyValueStorageNamespace::UserDefined {
             environment_id: EnvironmentId(uuid!("296aa41a-ff44-4882-8f34-08b7fe431aa4")),
-            bucket: "test-bucket-2".to_string(),
+            bucket: "test-bucket-2".into(),
         },
     }
 }
@@ -474,7 +476,7 @@ async fn get_set_get_many(
             "api",
             "entity",
             ns.clone(),
-            vec![key1.to_string(), key2.to_string(), key3.to_string()],
+            [key1.to_string(), key2.to_string(), key3.to_string()].into(),
         )
         .await
         .unwrap();
@@ -493,7 +495,7 @@ async fn get_set_get_many(
             "api",
             "entity",
             ns,
-            vec![key1.to_string(), key2.to_string(), key3.to_string()],
+            [key1.to_string(), key2.to_string(), key3.to_string()].into(),
         )
         .await
         .unwrap();
@@ -519,9 +521,11 @@ async fn get_all_returns_namespace_snapshot(
         component_id: ComponentId::new(),
         agent_id: "other".to_string(),
     };
-    let ns = KeyValueStorageNamespace::AgentStatus { agent_id };
+    let ns = KeyValueStorageNamespace::AgentStatus {
+        agent_id: Arc::new(agent_id),
+    };
     let other_ns = KeyValueStorageNamespace::AgentStatus {
-        agent_id: other_agent_id,
+        agent_id: Arc::new(other_agent_id),
     };
 
     kvs.set_many(
@@ -624,7 +628,7 @@ async fn del_many(
         "test",
         "api",
         ns.clone(),
-        vec![key1.to_string(), key2.to_string()],
+        [key1.to_string(), key2.to_string()].into(),
     )
     .await
     .unwrap(); // deleting non-existing key must succeed
@@ -646,7 +650,7 @@ async fn del_many(
         "test",
         "api",
         ns.clone(),
-        vec![key1.to_string(), key2.to_string()],
+        [key1.to_string(), key2.to_string()].into(),
     )
     .await
     .unwrap();
