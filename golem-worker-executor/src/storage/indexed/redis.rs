@@ -380,6 +380,22 @@ impl IndexedStorage for RedisIndexedStorage {
         Ok(result.into_iter().next())
     }
 
+    async fn last_id(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, IndexedStorageError> {
+        // Streams have no id-only read, so this is `last` and does move the payload. Every other
+        // backend answers without it.
+        Ok(self
+            .last(svc_name, api_name, entity_name, namespace, key)
+            .await?
+            .map(|(id, _)| id))
+    }
+
     async fn closest(
         &self,
         svc_name: &'static str,

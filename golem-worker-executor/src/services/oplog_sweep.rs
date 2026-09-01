@@ -43,7 +43,7 @@
 use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures::stream::{self, StreamExt};
 use golem_common::model::agent::AgentMode;
@@ -409,7 +409,8 @@ impl OplogSweeper {
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
-                _ = tokio::time::sleep(self.config.interval) => {}
+                // Floored, because a zero interval would spin the loop rather than disable it.
+                _ = tokio::time::sleep(self.config.interval.max(Duration::from_millis(1))) => {}
             }
             let report = self.sweep_once(&shutdown).await;
             if report.unassigned {
@@ -448,15 +449,6 @@ impl OplogSweeper {
                 .instrument(info_span!("oplog_sweep", route = %route.id))
                 .await;
             routes.push((route.id, report));
-        }
-
-        // Archiving an agent drains it through every layer below, so one route's work deletes keys
-        // in another route's namespace, and the routes that ran earlier this tick have already
-        // stored cursors that no longer mean what they did. Only a stack deep enough to have more
-        // than one source can hit this; with the shipped two indexed layers there is one route and
-        // this never fires.
-        if self.routes.len() > 1 && routes.iter().any(|(_, report)| report.archived > 0) {
-            self.cursors.lock().await.clear();
         }
 
         SweepReport {
@@ -513,7 +505,7 @@ impl OplogSweeper {
             }
             pages += 1;
             // Asking for only what the budget allows is what makes `max_scanned_per_tick` exact.
-            // Trimming a page after the fact would advance the cursor past keys nothing examined.
+            // Trimming a page after the fact would carry the walk past keys nothing examined.
             let count = page_size.min(allowance);
 
             let page = self
@@ -554,7 +546,7 @@ impl OplogSweeper {
             }
             // Soft by up to a page: a page is probed as a unit, so this stops at the first page
             // that carries the budget past its bound rather than splitting one.
-            if pending.len() >= self.config.max_archives_per_tick {
+            if pending.len() >= self.config.max_archives_per_tick.max(1) {
                 truncated = true;
                 break;
             }
@@ -579,10 +571,10 @@ impl OplogSweeper {
         }
         report = merge(report, tally(archived.into_iter().flatten()));
 
-        // Stored as it came back. The archives below deleted keys the walk had already passed, and
-        // with a positional cursor that would have shifted every key behind it and cost this tick a
-        // correction it could only estimate. A resume token names a place in the key order, so
-        // nothing the archive phase did can move it.
+        // Stored exactly as it came back. The archive phase above deleted keys the walk had
+        // already passed, and with a positional cursor that would have shifted every key behind
+        // them and left this tick a correction it could only estimate. A resume token names a place
+        // in the key order, so nothing the archive phase did can move it.
         match resume {
             Some(resume) => {
                 self.cursors.lock().await.insert(route.id, resume);
@@ -607,8 +599,8 @@ impl OplogSweeper {
 
     /// Decides one agent without touching it.
     ///
-    /// Reads only. A whole page of these can run while the scan cursor is still walking the
-    /// namespace, because nothing here removes a key.
+    /// Reads only. A whole page of these can run while the scan is still walking the namespace,
+    /// because nothing here removes a key.
     ///
     /// The checks run cheapest first. Both the residency probe and the index probe are keyed by
     /// agent and mode alone, so they need no environment.
@@ -704,12 +696,23 @@ impl OplogSweeper {
         let mut more = true;
         let mut steps = 0;
         while more && steps < MAX_ARCHIVE_STEPS {
-            more = match MultiLayerOplog::try_archive_blocking(&oplog).await {
-                Some(more) => more,
-                None => EphemeralOplog::try_archive_blocking(&oplog)
-                    .await
-                    .unwrap_or(false),
+            let stepped = match MultiLayerOplog::try_archive_blocking(&oplog).await {
+                Some(more) => Some(more),
+                None => EphemeralOplog::try_archive_blocking(&oplog).await,
             };
+            match stepped {
+                Some(remaining) => more = remaining,
+                // Neither archive step recognised this oplog, so nothing moved. Reporting it as
+                // archived would drop the tracking entry and leave the key where it is, and the
+                // agent would qualify again every two ticks for as long as the pod lives.
+                None => {
+                    warn!(
+                        agent_id = %agent_id,
+                        "Oplog sweep found a layer it cannot archive"
+                    );
+                    return Outcome::OpenFailed;
+                }
+            }
             steps += 1;
         }
         if more {
@@ -1765,9 +1768,9 @@ mod tests {
             .await;
         }
 
-        // One key per page, so a tick pages four times. Archiving deletes the key it just handled
-        // and a scan cursor is positional, so a tick that archived while it was still paging would
-        // step over the agents that shifted down past the offset it had already reached.
+        // One key per page, so a tick pages four times before it archives anything. Every agent
+        // the scan walked has to be archived, not just the ones on the page the tick happened to
+        // stop on.
         let sweeper = build(
             &layers,
             OplogSweepConfig {

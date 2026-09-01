@@ -283,36 +283,71 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         resume: Option<ScanResume>,
         count: u64,
     ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
-        if matches!(resume, Some(ScanResume::Cursor(_))) {
-            return Err(IndexedStorageError::Other(
-                "Multi-SQLite indexed storage was handed a resume token it did not produce"
-                    .to_string(),
-            ));
-        }
+        // A meta-namespace spans one file per namespace under it, and key order does not follow
+        // file order, so this walks the files rather than the keys: the token names the last file
+        // finished, and a file is always taken whole. Merging a page from every file instead would
+        // read everything the meta-namespace holds to answer one page, which is both quadratic over
+        // a pass and unbounded in memory.
+        //
+        // File names are stable, so skipping past one is a seek. Deleting the keys a page handed
+        // back removes whole files, and the files still to come keep their names and their place.
+        let after = match resume {
+            Some(ScanResume::Key(file)) => Some(file),
+            Some(ScanResume::Cursor(_)) => {
+                return Err(IndexedStorageError::Other(
+                    "Multi-SQLite indexed storage was handed a resume token it did not produce"
+                        .to_string(),
+                ));
+            }
+            None => None,
+        };
 
-        // A namespace is spread across files and key order does not follow file order, so every
-        // file has to offer its next page and the merge picks the winners. `scan` walks the files
-        // one after another instead, which it can only do because its cursor names a file.
-        let mut merged = Vec::new();
+        let mut keys = Vec::new();
+        let mut last_file = None;
         for file_name in self.namespace_db_files(&namespace)? {
-            let storage = self.storage_by_db_name(file_name).await?;
-            let (_, keys) = storage
-                .scan_stable(
-                    svc_name,
-                    api_name,
-                    namespace.clone(),
-                    prefix,
-                    resume.clone(),
-                    count,
-                )
-                .await?;
-            merged.extend(keys);
-        }
-        merged.sort();
-        merged.dedup();
-        merged.truncate(count as usize);
+            if after
+                .as_deref()
+                .is_some_and(|after| file_name.as_str() <= after)
+            {
+                continue;
+            }
+            let storage = self.storage_by_db_name(file_name.clone()).await?;
 
-        Ok((super::last_key_resume(&merged, count), merged))
+            // Whole file, however many pages that takes. A file holds one namespace, so this is
+            // bounded by what that namespace holds rather than by the meta-namespace.
+            let mut within = None;
+            loop {
+                let (next, page) = storage
+                    .scan_stable(
+                        svc_name,
+                        api_name,
+                        namespace.clone(),
+                        prefix,
+                        within,
+                        count.max(1),
+                    )
+                    .await?;
+                keys.extend(page);
+                match next {
+                    Some(next) => within = Some(next),
+                    None => break,
+                }
+            }
+
+            last_file = Some(file_name);
+            if keys.len() as u64 >= count {
+                break;
+            }
+        }
+
+        // The token is the last file finished, not the last key, so it cannot go through
+        // `last_key_resume`. Exhaustion is reaching the end of the file list, which is why a short
+        // page does not end the walk here.
+        let next = match last_file {
+            Some(file) if (keys.len() as u64) >= count => Some(ScanResume::Key(file)),
+            _ => None,
+        };
+        Ok((next, keys))
     }
 
     async fn append(
@@ -406,6 +441,20 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         self.storage_by_namespace(&namespace)
             .await?
             .last(svc_name, api_name, entity_name, namespace, key)
+            .await
+    }
+
+    async fn last_id(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, IndexedStorageError> {
+        self.storage_by_namespace(&namespace)
+            .await?
+            .last_id(svc_name, api_name, entity_name, namespace, key)
             .await
     }
 

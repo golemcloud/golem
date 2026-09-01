@@ -705,11 +705,15 @@ async fn scan_with_no_pattern_paginated(
 /// `scan` cannot be paged by a caller that deletes what it is handed: its cursor is a position on
 /// every backend that has one, so a delete behind the cursor shifts the rest down and the next page
 /// steps over that many keys nothing has looked at. `scan_stable` resumes by seeking instead, and
-/// every backend has to honour that, whether it seeks on a key or falls back to an iteration
-/// protocol that already tolerates deletion.
+/// every backend has to honour that, whether it seeks on a key, walks its files, or falls back to
+/// an iteration protocol that already tolerates deletion.
 ///
-/// The second namespace is what gives this test teeth. It stands for the lower oplog layers an
-/// archive step drains on its way down: the caller deletes keys there too, and none of that may
+/// The keys are spread over six agents rather than one, because the multi-SQLite backend puts each
+/// agent in its own file and walks files rather than keys. With one agent its whole walk is a
+/// single file and none of that is exercised.
+///
+/// A second namespace is deleted from alongside the first. It stands for the lower oplog layers an
+/// archive step drains on its way down: the caller removes keys there too, and none of that may
 /// disturb the walk in progress.
 #[test]
 #[tracing::instrument]
@@ -717,55 +721,126 @@ async fn scan_stable_resumes_past_deleted_keys(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
-    let mut expected: Vec<String> = (0..6).map(|i| format!("swept-{i}")).collect();
-    expected.sort();
-    for key in &expected {
-        is.append("svc", "api", "entity", ns.ns.clone(), key, 1, b"v".to_vec())
+    // One agent per key, so a backend that shards by agent has six shards to walk.
+    let planted: Vec<(IndexedStorageNamespace, IndexedStorageNamespace, String)> = (0..6)
+        .map(|i| {
+            let component_id = ComponentId::new();
+            let swept = IndexedStorageNamespace::OpLog {
+                agent_id: AgentId {
+                    component_id,
+                    agent_id: format!("stable-{i}"),
+                },
+                agent_mode: AgentMode::Durable,
+            };
+            let below = IndexedStorageNamespace::CompressedOpLog {
+                agent_id: AgentId {
+                    component_id,
+                    agent_id: format!("stable-{i}"),
+                },
+                agent_mode: AgentMode::Durable,
+                level: 1,
+            };
+            (swept, below, format!("{}-swept-{i}", Uuid::new_v4()))
+        })
+        .collect();
+
+    for (swept, below, key) in &planted {
+        is.append("svc", "api", "entity", swept.clone(), key, 1, b"v".to_vec())
             .await
             .unwrap();
-        is.append(
-            "svc",
-            "api",
-            "entity",
-            ns2.ns.clone(),
-            key,
-            1,
-            b"v".to_vec(),
-        )
-        .await
-        .unwrap();
+        is.append("svc", "api", "entity", below.clone(), key, 1, b"v".to_vec())
+            .await
+            .unwrap();
     }
 
     // Take a page, delete what it handed back along with that key's entry in the layer below, carry
     // on from the token. The sweep's tick in miniature.
     let mut seen: Vec<String> = Vec::new();
     let mut resume = None;
-    for _ in 0..64 {
+    let mut terminated = false;
+    for _ in 0..256 {
         let (next, chunk) = is
             .scan_stable("svc", "api", ns.meta.clone(), None, resume, 2)
             .await
             .unwrap();
         for key in &chunk {
-            is.delete("svc", "api", ns.ns.clone(), key).await.unwrap();
-            is.delete("svc", "api", ns2.ns.clone(), key).await.unwrap();
+            if let Some((swept, below, _)) = planted.iter().find(|(_, _, k)| k == key) {
+                is.delete("svc", "api", swept.clone(), key).await.unwrap();
+                is.delete("svc", "api", below.clone(), key).await.unwrap();
+            }
         }
         seen.extend(chunk);
         match next {
             Some(next) => resume = Some(next),
-            None => break,
+            None => {
+                terminated = true;
+                break;
+            }
         }
     }
 
-    seen.sort();
-    seen.dedup();
-    assert_eq!(
-        seen, expected,
-        "a key was skipped: the walk moved past something nothing had examined"
+    assert!(
+        terminated,
+        "the walk never reported exhaustion and was cut off by the iteration cap"
     );
+
+    // The meta namespace is shared, so a test running beside this one can put its own keys in the
+    // walk. What matters is that none of these were stepped over.
+    for (_, _, key) in &planted {
+        assert!(
+            seen.contains(key),
+            "key {key} was skipped: the walk moved past something nothing had examined"
+        );
+    }
+}
+
+/// `last_id` must answer without moving the payload, and must agree with `last` when it does.
+#[test]
+#[tracing::instrument]
+async fn last_id_matches_last_without_the_value(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = format!("{}-last-id", Uuid::new_v4());
+
+    assert_eq!(
+        is.last_id("svc", "api", "entity", ns.ns.clone(), &key)
+            .await
+            .unwrap(),
+        None,
+        "an index with no entries has no last id"
+    );
+
+    for id in [1u64, 7, 42] {
+        is.append(
+            "svc",
+            "api",
+            "entity",
+            ns.ns.clone(),
+            &key,
+            id,
+            format!("value-{id}").into_bytes(),
+        )
+        .await
+        .unwrap();
+    }
+
+    let last = is
+        .last("svc", "api", "entity", ns.ns.clone(), &key)
+        .await
+        .unwrap();
+    let last_id = is
+        .last_id("svc", "api", "entity", ns.ns.clone(), &key)
+        .await
+        .unwrap();
+
+    assert_eq!(last_id, Some(42));
+    assert_eq!(last_id, last.map(|(id, _)| id));
 }
 
 #[test]

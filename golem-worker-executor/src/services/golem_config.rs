@@ -1655,13 +1655,10 @@ pub struct OplogSweepConfig {
     /// work it holds. A tick that stops here resumes where it left off, corrected for whatever it
     /// archived on the way.
     ///
-    /// It bounds round trips, not their cost. A scan is an `OFFSET` on the SQL backends, so a page
-    /// taken deep into a namespace reads past every row before it and a whole pass costs roughly
-    /// the square of the namespace size. What keeps that tolerable here is which namespace the
-    /// sweep walks: a compressed archive layer holds one row per transferred chunk, not one per
-    /// oplog entry as the primary does, so the rows it pages past are close to the keys it counts.
-    /// It still only shows up on a real backlog of stranded oplogs, and the sweep is unusual in
-    /// walking a whole namespace with no prefix, over and over, rather than a slice on demand.
+    /// The sweep pages with `IndexedStorage::scan_stable`, which resumes by seeking to where it
+    /// left off rather than by counting past what it has already read, so the cost of a page does
+    /// not grow with how far into the namespace it sits. Raising this raises the work a tick does
+    /// in proportion, and nothing worse.
     pub max_scanned_per_tick: usize,
     /// Upper bound on the table remembering each agent's previous index. Losing an entry costs one
     /// extra tick of latency for that agent and nothing else, because the work list lives in

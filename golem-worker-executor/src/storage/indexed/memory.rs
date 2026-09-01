@@ -336,6 +336,24 @@ impl IndexedStorage for InMemoryIndexedStorage {
             .flatten())
     }
 
+    async fn last_id(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, IndexedStorageError> {
+        let composite_key = Self::composite_key(namespace, key);
+        Ok(self
+            .data
+            .read_async(&composite_key, |_, entry| {
+                entry.last_key_value().map(|(id, _)| *id)
+            })
+            .await
+            .flatten())
+    }
+
     async fn closest(
         &self,
         _svc_name: &'static str,

@@ -393,6 +393,28 @@ impl IndexedStorage for SqliteIndexedStorage {
             .map_err(Self::classify_repo_error)
     }
 
+    async fn last_id(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        _entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, IndexedStorageError> {
+        let query = sqlx::query_as::<_, (i64,)>(
+            "SELECT id FROM index_storage WHERE namespace = ? AND key = ? ORDER BY id DESC LIMIT 1;",
+        )
+        .bind(Self::namespace(namespace))
+        .bind(key);
+
+        self.pool
+            .with_ro(svc_name, api_name)
+            .fetch_optional_as::<(i64,), _>(query)
+            .await
+            .map(|op| op.map(|row| row.0 as u64))
+            .map_err(Self::classify_repo_error)
+    }
+
     async fn closest(
         &self,
         svc_name: &'static str,

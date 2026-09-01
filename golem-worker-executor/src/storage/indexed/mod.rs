@@ -66,13 +66,6 @@ impl From<String> for IndexedStorageError {
     }
 }
 
-/// Generic indexed storage interface
-///
-/// The storage holds indexes identified by keys. Each index is a sequence of entries,
-/// where each entry has a numeric identifier and an arbitrary binary payload. The numeric
-/// identifiers are unique and monotonically increasing within each index, but not necessarily
-/// contiguous.
-///
 /// Where a [`IndexedStorage::scan_stable`] walk left off.
 ///
 /// Produced and read by one backend only. A caller carries it from one page to the next and must
@@ -85,6 +78,12 @@ pub enum ScanResume {
     Cursor(ScanCursor),
 }
 
+/// Generic indexed storage interface
+///
+/// The storage holds indexes identified by keys. Each index is a sequence of entries,
+/// where each entry has a numeric identifier and an arbitrary binary payload. The numeric
+/// identifiers are unique and monotonically increasing within each index, but not necessarily
+/// contiguous.
 #[async_trait]
 pub trait IndexedStorage: Debug + Sync {
     /// Gets the number of available replicas in the storage cluster
@@ -130,8 +129,8 @@ pub trait IndexedStorage: Debug + Sync {
     ///
     /// [`Self::scan`] cannot do that. Its cursor is a position on every backend that has one, so
     /// deleting a key behind it shifts everything after it down and the next page steps over
-    /// exactly that many keys nothing has looked at. A caller that sweeps, archives, or otherwise
-    /// consumes what it scans wants this instead.
+    /// exactly that many keys nothing has looked at. A caller that consumes what it scans wants
+    /// this instead.
     ///
     /// `resume` is `None` for the first page, and afterwards whatever the previous call returned.
     /// A backend that keeps its keys in order returns the last key it handed back, so resuming is a
@@ -139,8 +138,13 @@ pub trait IndexedStorage: Debug + Sync {
     /// whatever its own iteration protocol needs, and is only fit for this if that protocol already
     /// tolerates deletion.
     ///
-    /// The next token is `None` once the namespace is exhausted. A key that is present for the
-    /// whole walk is handed back at least once; a key the caller deletes may or may not be.
+    /// The next token is `None` once the walk is done, but backends learn that differently: one
+    /// that pages in key order only knows it from a short page, so a namespace whose size is an
+    /// exact multiple of `count` costs one more, empty, call, while Redis reports it alongside its
+    /// last keys. A caller that acts on exhaustion should expect the extra call.
+    ///
+    /// A key that is present for the whole walk is handed back at least once; a key the caller
+    /// deletes may or may not be.
     async fn scan_stable(
         &self,
         svc_name: &'static str,
@@ -237,6 +241,19 @@ pub trait IndexedStorage: Debug + Sync {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError>;
+
+    /// Gets the id of the last entry in the index of the given key, without its payload.
+    ///
+    /// Separate from [`Self::last`] because an entry's payload has no size limit, and a caller
+    /// that only wants to know how far an index has got should not pay to move one.
+    async fn last_id(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, IndexedStorageError>;
 
     /// Gets the entry with the closest id to the given id in the index of the given key,
     /// in a way that `id` is less or equal to the id of the returned entry.
@@ -650,7 +667,15 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<u64>, IndexedStorageError> {
-        self.last_raw(namespace, key).await.map(|r| r.map(|p| p.0))
+        self.storage
+            .last_id(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+            )
+            .await
     }
 
     /// Gets the entry with the closest id to the given id in the index of the given key,
