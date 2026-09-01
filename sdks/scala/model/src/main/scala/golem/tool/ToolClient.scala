@@ -392,18 +392,16 @@ object ToolClientRuntime {
   )(decode: ToolInvokeResult => Either[ToolError[E], T]): Either[ToolError[E], ToolInvocation[E, T]] =
     input.left.map(identity[ToolError[E]]).flatMap { record =>
       rpc.start(commandPath, record, stdin, stdout = true).left.map(mapRpcFailure(_, decodeError)).flatMap { started =>
-        started.stdout
-          .toRight {
-            started.cancel()
-            protocolError("tool invocation did not create declared stdout stream")
-          }
-          .map { stream =>
-            ToolInvocation(
-              stream,
-              started.result.map(_.left.map(mapRpcFailure(_, decodeError)).flatMap(decode)),
-              started.cancel
-            )
-          }
+        started.stdout.toRight {
+          started.cancel()
+          protocolError("tool invocation did not create declared stdout stream")
+        }.map { stream =>
+          ToolInvocation(
+            stream,
+            started.result.map(_.left.map(mapRpcFailure(_, decodeError)).flatMap(decode)),
+            started.cancel
+          )
+        }
       }
     }
 

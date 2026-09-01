@@ -124,24 +124,27 @@ pub fn byte_stream(
     Result[FixedArray[Byte], @toolHost.ByteStreamFailure],
   ],
 ) -> @async-core.Stream[Byte] {
-  @async-core.Stream::produce(async fn(sink) {
-    for ;; {
-      match source.read(1) {
-        None => break
-        Some(items) =>
-          for item in items {
-            match item {
-              Ok(chunk) =>
-                if !sink.write_all(chunk) {
-                  source.drop()
-                  return
-                }
-              Err(error) => raise stream_failure(error)
+  @async-core.Stream::produce(
+    async fn(sink) {
+      for ;; {
+        match source.read(1) {
+          None => break
+          Some(items) =>
+            for item in items {
+              match item {
+                Ok(chunk) =>
+                  if !sink.write_all(chunk) {
+                    source.drop()
+                    return
+                  }
+                Err(error) => raise stream_failure(error)
+              }
             }
-          }
+        }
       }
-    }
-  }, on_unstarted_drop=fn() { source.drop_sync() })
+    },
+    on_unstarted_drop=fn() { source.drop_sync() },
+  )
 }
 
 ///|
