@@ -52,7 +52,7 @@ for (const [index, template] of templateMatrix.entries()) {
       '--release',
       '--no-default-features',
       '--features',
-      'full-p3,golem',
+      'full-p3,golem,typescript-transform-runtime',
     ],
     { stdio: 'inherit' },
   );

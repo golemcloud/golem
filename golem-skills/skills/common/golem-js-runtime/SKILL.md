@@ -37,6 +37,7 @@ These Node.js-compatible modules can be imported:
 | Module | Description |
 |--------|-------------|
 | `node:buffer` | Buffer API |
+| `node:child_process` | Constrained in-runtime JavaScript execution; no host processes or general shell |
 | `node:crypto` | Hashes, HMAC, ciphers, key generation, sign/verify, DH, ECDH, X509, etc. |
 | `node:dgram` | UDP sockets |
 | `node:dns` | DNS resolution |
@@ -67,7 +68,6 @@ These Node.js-compatible modules can be imported:
 
 These modules exist for compatibility but will throw or no-op when used:
 
-- `node:child_process`
 - `node:cluster`
 - `node:http2`
 - `node:inspector`
@@ -77,6 +77,22 @@ These modules exist for compatibility but will throw or no-op when used:
 ## npm Package Compatibility
 
 Additional npm packages can be installed with `npm install` (TypeScript) or added as Scala.js-compatible dependencies (Scala). Most packages targeting browsers or using the Node.js APIs listed above will work. Packages that depend on native C/C++ bindings or JVM-specific APIs will **not** work.
+
+The runtime's `node:child_process` adapter can run JavaScript targets, supported Node shebang files,
+and npm's simple `node <script>` command form. It cannot create host processes, run a general shell,
+or execute native binaries. Unsupported commands fail explicitly.
+
+## Fresh JavaScript and TypeScript Execution
+
+`wasm-rquickjs:execution` runs asynchronous jobs in fresh QuickJS runtimes. Use
+`startJavaScript` for live output and cancellation, or `runJavaScript` for collected output. Entry
+files ending in `.ts`, `.mts`, or `.cts` are transformed at runtime; inline source selects
+TypeScript with `language: 'typescript'`. This transpiles syntax but does not type-check or read
+`tsconfig.json`.
+
+Each job receives an explicit environment allowlist and fresh globals, process state, timers, and
+module caches. Jobs still share the component filesystem and host capabilities, so this is not a
+security sandbox. Always provide a positive timeout for untrusted or potentially CPU-bound code.
 
 ## File I/O
 
