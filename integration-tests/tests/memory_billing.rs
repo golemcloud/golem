@@ -78,6 +78,54 @@ mod tests {
         Ok(usage.usage.memory_gb_seconds)
     }
 
+    async fn wait_for_memory_gb_seconds(
+        deps: &EnvBasedTestDependencies,
+        user: &golem_test_framework::config::dsl_impl::TestUserContext<EnvBasedTestDependencies>,
+        minimum: u64,
+    ) -> anyhow::Result<u64> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+
+        loop {
+            let current = memory_gb_seconds(deps, user).await?;
+            if current >= minimum {
+                return Ok(current);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                anyhow::bail!(
+                    "timed out waiting for memory usage to reach {minimum} GiB-seconds; current usage is {current} GiB-seconds"
+                );
+            }
+
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    async fn wait_for_memory_billing_to_settle(
+        deps: &EnvBasedTestDependencies,
+        user: &golem_test_framework::config::dsl_impl::TestUserContext<EnvBasedTestDependencies>,
+    ) -> anyhow::Result<u64> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let mut last = memory_gb_seconds(deps, user).await?;
+        let mut unchanged_since = tokio::time::Instant::now();
+
+        loop {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let current = memory_gb_seconds(deps, user).await?;
+            if current != last {
+                last = current;
+                unchanged_since = tokio::time::Instant::now();
+            }
+            if unchanged_since.elapsed() >= Duration::from_secs(1) {
+                return Ok(current);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                anyhow::bail!(
+                    "memory billing did not settle before timeout; current usage is {current} GiB-seconds"
+                );
+            }
+        }
+    }
+
     #[test]
     #[timeout("2m")]
     async fn permit_ownership_defines_allocated_memory_billing_window() -> anyhow::Result<()> {
@@ -95,8 +143,8 @@ mod tests {
 
         user.invoke_and_await_agent(&component, &agent, "run_with_delay", data_value!(3_000u64))
             .await?;
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        let after_host_wait = memory_gb_seconds(&deps, &user).await?;
+        let after_host_wait =
+            wait_for_memory_gb_seconds(&deps, &user, before.saturating_add(1)).await?;
         assert!(
             after_host_wait.saturating_sub(before) >= 1,
             "allocated memory must accrue while a permit-owning invocation waits in a host sleep: before={before}, after={after_host_wait}"
@@ -106,7 +154,7 @@ mod tests {
             &component,
             &agent,
             "run_with_memory_and_work",
-            data_value!(512u64, 5_000u64),
+            data_value!(512u64, 10_000u64),
         );
         let recovery = async {
             user.wait_for_status(&worker, AgentStatus::Running, Duration::from_secs(10))
@@ -120,8 +168,8 @@ mod tests {
         invocation_result?;
         let before_replay = before_replay?;
 
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        let after_replay = memory_gb_seconds(&deps, &user).await?;
+        let after_replay =
+            wait_for_memory_gb_seconds(&deps, &user, before_replay.saturating_add(2)).await?;
         assert!(
             after_replay.saturating_sub(before_replay) >= 2,
             "recovery of the interrupted 512 MiB workload must accrue memory after the pre-crash baseline: before={before_replay}, after={after_replay}"
@@ -129,10 +177,11 @@ mod tests {
 
         user.wait_for_status(&worker, AgentStatus::Idle, Duration::from_secs(10))
             .await?;
+        let after_permit_release = wait_for_memory_billing_to_settle(&deps, &user).await?;
         tokio::time::sleep(Duration::from_secs(5)).await;
         let after_idle = memory_gb_seconds(&deps, &user).await?;
         assert_eq!(
-            after_idle, after_replay,
+            after_idle, after_permit_release,
             "loaded-idle time after permit release must not accrue memory usage"
         );
 
