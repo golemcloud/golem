@@ -76,6 +76,7 @@ struct TestWorkerExecutors {
     local_assignments: Arc<Mutex<HashMap<Pod, BTreeSet<ShardId>>>>,
     calls: Arc<Mutex<Vec<Call>>>,
     failed_assignments: Arc<Mutex<HashMap<Pod, usize>>>,
+    applied_then_failed_assignments: Arc<Mutex<HashMap<Pod, usize>>>,
     failed_revocations: Arc<Mutex<HashMap<Pod, usize>>>,
     applied_then_failed_revocations: Arc<Mutex<HashMap<Pod, usize>>>,
     failed_reconciliations: Arc<Mutex<HashMap<Pod, usize>>>,
@@ -108,6 +109,13 @@ impl TestWorkerExecutors {
 
     async fn fail_next_assignments(&self, pod: Pod, count: usize) {
         self.failed_assignments.lock().await.insert(pod, count);
+    }
+
+    async fn apply_then_fail_next_assignments(&self, pod: Pod, count: usize) {
+        self.applied_then_failed_assignments
+            .lock()
+            .await
+            .insert(pod, count);
     }
 
     async fn fail_next_revocations(&self, pod: Pod, count: usize) {
@@ -155,6 +163,10 @@ impl WorkerExecutorService for TestWorkerExecutors {
             .entry(*pod)
             .or_default()
             .extend(shard_ids.iter().copied());
+
+        if Self::should_fail(&self.applied_then_failed_assignments, *pod).await {
+            return Err(ShardManagerError::Timeout);
+        }
         Ok(())
     }
 
@@ -741,5 +753,144 @@ async fn unreachable_executor_still_releases_its_revoked_shards() {
     assert!(
         reconciles >= 2,
         "the authoritative assignment must keep being retried: {calls:#?}"
+    );
+}
+
+/// Shared arrange for the failed-assignment ordering tests: three balanced pods, then pod C is
+/// removed so its shards need new owners. The round-robin gives shard 4 to A and shard 5 to B;
+/// B's assign is armed to fail. The failed pod must be non-empty for the ordering bug to be
+/// reachable (empty pods are always re-targeted first by the rebalancer).
+async fn failed_assignment_reproducer(
+    worker_executors: &Arc<TestWorkerExecutors>,
+) -> (
+    ShardManagement,
+    TestPersistence,
+    JoinSet<anyhow::Result<()>>,
+) {
+    let pod_a = pod(1, 9000);
+    let pod_b = pod(2, 9001);
+    let pod_c = pod(3, 9002);
+    worker_executors.set_local_assignment(pod_a, &[0, 1]).await;
+    worker_executors.set_local_assignment(pod_b, &[2, 3]).await;
+    worker_executors.set_local_assignment(pod_c, &[4, 5]).await;
+
+    new_shard_management(
+        routing_table_with_pods(
+            6,
+            vec![
+                (pod_a, "worker-executor-0", &[0, 1]),
+                (pod_b, "worker-executor-1", &[2, 3]),
+                (pod_c, "worker-executor-2", &[4, 5]),
+            ],
+        ),
+        worker_executors.clone(),
+    )
+    .await
+}
+
+#[test]
+// An assignment the executor applied while the response was lost: the pod must get its
+// authoritative assignment (dropping the in-doubt shard) before the shard is assigned to
+// another pod - otherwise both pods own it until the reconcile lands.
+async fn assign_timeout_after_executor_applied_it_is_reconciled_before_reassignment() {
+    let pod_a = pod(1, 9000);
+    let pod_b = pod(2, 9001);
+    let pod_c = pod(3, 9002);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let (shard_management, persistence, mut join_set) =
+        failed_assignment_reproducer(&worker_executors).await;
+
+    // The startup pass reconciles all three pods; only calls after it matter.
+    let baseline = worker_executors.calls().await.len();
+    worker_executors
+        .apply_then_fail_next_assignments(pod_b, 1)
+        .await;
+    shard_management.unregister_pod(pod_c).await;
+
+    wait_for_local_assignment(&worker_executors, pod_a, shard_ids(&[1, 4, 5])).await;
+    wait_for_local_assignment(&worker_executors, pod_b, shard_ids(&[0, 2, 3])).await;
+    join_set.abort_all();
+
+    let routing_table = persistence.latest().await;
+    assert_eq!(routing_table.get_shards(pod_a), Some(shard_ids(&[1, 4, 5])));
+    assert_eq!(routing_table.get_shards(pod_b), Some(shard_ids(&[0, 2, 3])));
+    assert!(routing_table.get_unassigned_shards().is_empty());
+
+    let calls = worker_executors.calls().await[baseline..].to_vec();
+    let failed_assign_idx = calls
+        .iter()
+        .position(|call| *call == Call::Assign(pod_b, shard_ids(&[5])))
+        .unwrap_or_else(|| panic!("pod B was never assigned shard 5: {calls:#?}"));
+    let reconcile_idx = calls
+        .iter()
+        .position(|call| *call == Call::Set(pod_b, shard_ids(&[2, 3])))
+        .unwrap_or_else(|| {
+            panic!(
+                "pod B never got its authoritative assignment after the failed assign: {calls:#?}"
+            )
+        });
+    let reassign_idx = calls
+        .iter()
+        .position(|call| *call == Call::Assign(pod_a, shard_ids(&[5])))
+        .unwrap_or_else(|| panic!("shard 5 was never re-assigned: {calls:#?}"));
+    assert!(
+        failed_assign_idx < reconcile_idx,
+        "the reconcile must come after the failed assign: {calls:#?}"
+    );
+    assert!(
+        reconcile_idx < reassign_idx,
+        "pod B must be reconciled before shard 5 is assigned elsewhere: {calls:#?}"
+    );
+}
+
+#[test]
+// If the same-pass reconcile of a failed assignment also fails, the re-queued authoritative
+// assignment must go out at the START of the next pass - before that pass's rebalance can
+// hand the in-doubt shard to another pod.
+async fn queued_reconcile_is_sent_before_next_pass_reassigns() {
+    let pod_a = pod(1, 9000);
+    let pod_b = pod(2, 9001);
+    let pod_c = pod(3, 9002);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let (shard_management, persistence, mut join_set) =
+        failed_assignment_reproducer(&worker_executors).await;
+
+    let baseline = worker_executors.calls().await.len();
+    worker_executors
+        .apply_then_fail_next_assignments(pod_b, 1)
+        .await;
+    worker_executors.fail_next_reconciliations(pod_b, 1).await;
+    shard_management.unregister_pod(pod_c).await;
+
+    wait_for_local_assignment(&worker_executors, pod_a, shard_ids(&[1, 4, 5])).await;
+    wait_for_local_assignment(&worker_executors, pod_b, shard_ids(&[0, 2, 3])).await;
+    join_set.abort_all();
+
+    let routing_table = persistence.latest().await;
+    assert_eq!(routing_table.get_shards(pod_a), Some(shard_ids(&[1, 4, 5])));
+    assert_eq!(routing_table.get_shards(pod_b), Some(shard_ids(&[0, 2, 3])));
+
+    let calls = worker_executors.calls().await[baseline..].to_vec();
+    let reconcile_indices: Vec<usize> = calls
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, call)| (*call == Call::Set(pod_b, shard_ids(&[2, 3]))).then_some(idx))
+        .collect();
+    assert!(
+        reconcile_indices.len() >= 2,
+        "the failed reconcile must be retried (the failed attempt is recorded too): {calls:#?}"
+    );
+    let last_reconcile_idx = *reconcile_indices.last().unwrap();
+    let revoke_idx = calls
+        .iter()
+        .position(|call| *call == Call::Revoke(pod_a, shard_ids(&[0])))
+        .unwrap_or_else(|| panic!("the next pass never rebalanced: {calls:#?}"));
+    let reassign_idx = calls
+        .iter()
+        .position(|call| *call == Call::Assign(pod_a, shard_ids(&[5])))
+        .unwrap_or_else(|| panic!("shard 5 was never re-assigned: {calls:#?}"));
+    assert!(
+        last_reconcile_idx < revoke_idx && last_reconcile_idx < reassign_idx,
+        "the re-queued reconcile must go out before the next pass's rebalance: {calls:#?}"
     );
 }

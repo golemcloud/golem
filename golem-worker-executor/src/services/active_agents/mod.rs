@@ -43,7 +43,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-use tracing::{Instrument, debug};
+use tracing::{Instrument, Level, debug};
 
 use crate::services::HasAll;
 use crate::services::card_interest::{
@@ -73,6 +73,8 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, OwnedAgentId, Timestamp};
+use golem_common::related_span;
+use golem_common::tracing::TraceOrigin;
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime::Store;
@@ -526,13 +528,27 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         let cache_key = owned_agent_id.clone();
         let deps = deps.clone();
         let invocation_context_stack = invocation_context_stack.clone();
+        let card_interest_index = self.card_interest_index.clone();
+        // Spawned so the creation survives cancellation of the originating call: an
+        // abandoned inline producer would leave the pending entry unresolved forever,
+        // wedging every later get-or-create for this agent and the shard-revoke drain,
+        // which waits on pending entries. The spawned owner outlives this caller, so
+        // it links back to the originating span instead of nesting inside it.
+        let origin = TraceOrigin::capture_current();
+        let span_agent_id = owned_agent_id.agent_id.clone();
         let active_agent = self
             .agents
-            .get_or_insert_simple(&cache_key, || {
-                Box::pin(async move {
+            .get_or_insert_simple_spawned(&cache_key, move || {
+                let span = related_span!(
+                    origin,
+                    Level::INFO,
+                    "agent_creation",
+                    agent_id = %span_agent_id,
+                );
+                async move {
                     let worker = Worker::new(
                         &deps,
-                        self.card_interest_index.clone(),
+                        card_interest_index,
                         owned_agent_id.clone(),
                         worker_env,
                         worker_agent_config,
@@ -542,7 +558,6 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                         principal,
                         freshness_disposition,
                     )
-                    .in_current_span()
                     .await;
 
                     worker.map(|worker| {
@@ -550,7 +565,8 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                         Worker::start_durable_stream_attachment_reconciler(&worker);
                         Arc::new(ActiveAgent::new(worker))
                     })
-                })
+                }
+                .instrument(span)
             })
             .await?;
         Ok(active_agent.primary())
@@ -599,7 +615,12 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 .set_card_interest(worker.owned_agent_id().clone(), &[])
                 .await;
         }
-        self.agents.remove(owned_agent_id).await
+        // Only a resolved entry may be removed. The `get` above settles the entry this
+        // caller saw, but a new creation can insert a fresh pending entry during the
+        // awaits in between; deleting it would hide the in-flight `Worker::new` from the
+        // shard-revoke drain while it is still writing durably, and the finished
+        // creation would re-insert the entry anyway.
+        self.agents.remove_if_cached(owned_agent_id, |_| true).await;
     }
 
     pub async fn tracked_card_ids(&self) -> Vec<CardId> {
@@ -655,6 +676,23 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 (primary.agent_id(), primary)
             })
             .collect()
+    }
+
+    /// Owned ids of agents whose creation is still in flight (pending cache entries).
+    /// These are invisible to `snapshot`, which only sees resolved entries.
+    pub async fn pending_agent_ids(&self) -> Vec<OwnedAgentId> {
+        self.agents.pending_keys().await
+    }
+
+    /// Waits until the entry for `owned_agent_id` is no longer pending. Returns the
+    /// worker if creation succeeded, `None` if it failed or the entry is gone; never
+    /// inserts. All of a creation's durable writes happen before its entry resolves,
+    /// so a failed creation (`None`) is as good a write barrier as a successful one.
+    pub async fn await_settled(&self, owned_agent_id: &OwnedAgentId) -> Option<Arc<Worker<Ctx>>> {
+        self.agents
+            .get(owned_agent_id)
+            .await
+            .map(|active_agent| active_agent.primary())
     }
 
     /// Interrupts and unloads all in-memory workers whose environment matches

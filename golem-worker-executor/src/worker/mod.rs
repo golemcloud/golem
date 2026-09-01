@@ -721,6 +721,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         principal: Principal,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Self, WorkerExecutorError> {
+        deps.shard_service()
+            .check_worker(&owned_agent_id.agent_id)?;
+
         let start = std::time::Instant::now();
         let GetOrCreateWorkerResult {
             initial_worker_metadata,
@@ -1096,6 +1099,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Err(err.clone())
             }
             WorkerInstance::Unloaded { .. } => {
+                // A revoke may have landed after the caller's ownership check (for
+                // example while this worker's creation was in flight and the shard
+                // drain waited it out as unloaded). Loading it now would run an agent
+                // of a lost shard after RevokeShards already returned, so re-check
+                // before committing to a load; the caller re-resolves the owner.
+                this.shard_service()
+                    .check_worker(&this.owned_agent_id.agent_id)?;
+
                 this.mark_as_loading();
                 crate::metrics::workers::inc_worker_waiting_for_memory();
                 *instance_guard = WorkerInstance::WaitingForPermit(WaitingWorker::new(

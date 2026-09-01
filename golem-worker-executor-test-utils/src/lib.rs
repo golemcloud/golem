@@ -830,6 +830,17 @@ impl TestWorkerExecutor {
         self.additional_test_deps.teardown_commit_intervals()
     }
 
+    /// Arms a one-shot gate that parks `agent_id`'s next oplog commit until released.
+    /// Armed before the agent's first creation, the parked commit is the
+    /// initialization enqueue inside `Worker::new`, holding the agent's creation in
+    /// flight (a pending `ActiveAgents` entry). See
+    /// [`AdditionalTestDeps::park_next_oplog_commit`].
+    pub async fn park_next_oplog_commit(&self, agent_id: &AgentId) -> CommitParkHandle {
+        self.additional_test_deps
+            .park_next_oplog_commit(agent_id.clone())
+            .await
+    }
+
     /// Returns the per-worker memory requirement that the executor uses when
     /// reserving from the worker memory semaphore. Lets tests sanity-check that
     /// they have constrained the memory budget tightly enough to force
@@ -2911,6 +2922,31 @@ impl TestOplog {
         permit.forget();
     }
 
+    /// Trips a one-shot [`CommitParkGate`] armed for this agent: signals the test
+    /// that the commit is parked, then blocks until the test releases the gate.
+    /// Fires at most once per gate.
+    async fn park_at_commit_park_gate(&self) {
+        let Some(gate) = self
+            .additional_test_deps
+            .commit_park_gate(&self.owned_agent_id.agent_id)
+            .await
+        else {
+            return;
+        };
+        if !gate.armed.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        if let Some(parked_tx) = gate.parked_tx.lock().unwrap().take() {
+            let _ = parked_tx.send(());
+        }
+        let permit = gate
+            .release
+            .acquire()
+            .await
+            .expect("the commit park gate semaphore was closed");
+        permit.forget();
+    }
+
     fn is_consume_body_scope_start(entry: &OplogEntry) -> bool {
         matches!(entry, OplogEntry::Start {
             function_name: HostFunctionName::Custom(function_name),
@@ -3108,6 +3144,7 @@ impl Oplog for TestOplog {
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
         self.additional_test_deps
             .record_oplog_call(&self.owned_agent_id, "commit");
+        self.park_at_commit_park_gate().await;
         let delay = self
             .additional_test_deps
             .take_teardown_commit_delay(&self.owned_agent_id.agent_id)
@@ -3482,6 +3519,12 @@ pub struct AdditionalTestDeps {
     teardown_commit_delays: Arc<scc::HashMap<AgentId, std::time::Duration>>,
     teardown_commit_intervals:
         Arc<std::sync::Mutex<Vec<(AgentId, std::time::Instant, std::time::Instant)>>>,
+    /// One-shot gates parking an agent's next oplog commit inside the [`TestOplog`]
+    /// wrapper until released. Armed before an agent's first creation, the parked
+    /// commit is the `AgentInitialization` enqueue inside `Worker::new`, holding the
+    /// agent's `ActiveAgents` entry in its `Pending` state — the seam for testing that
+    /// a shard drain waits for in-flight creations.
+    commit_park_gates: Arc<scc::HashMap<AgentId, Arc<CommitParkGate>>>,
     /// Captured once on first call to [`TestWorkerCtx::create`]. Used by the
     /// read-only test helpers (`worker_is_loaded`,
     /// `worker_eviction_class`, `worker_memory_requirement`) to observe
@@ -3512,8 +3555,33 @@ impl AdditionalTestDeps {
             consume_body_reply_defer_gates: Arc::new(scc::HashMap::new()),
             teardown_commit_delays: Arc::new(scc::HashMap::new()),
             teardown_commit_intervals: Arc::new(std::sync::Mutex::new(Vec::new())),
+            commit_park_gates: Arc::new(scc::HashMap::new()),
             active_agents: Arc::new(std::sync::OnceLock::new()),
         }
+    }
+
+    /// Arms a one-shot gate that parks the given agent's next oplog commit until
+    /// released; see the field documentation. Re-arming replaces a previously fired
+    /// gate, so a test can gate one commit per executor run.
+    pub async fn park_next_oplog_commit(&self, agent_id: AgentId) -> CommitParkHandle {
+        let (parked_tx, parked_rx) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(CommitParkGate {
+            armed: AtomicBool::new(true),
+            parked_tx: std::sync::Mutex::new(Some(parked_tx)),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        self.commit_park_gates
+            .entry_async(agent_id)
+            .await
+            .and_modify(|existing| *existing = gate.clone())
+            .or_insert_with(|| gate.clone());
+        CommitParkHandle { parked_rx, gate }
+    }
+
+    async fn commit_park_gate(&self, agent_id: &AgentId) -> Option<Arc<CommitParkGate>> {
+        self.commit_park_gates
+            .read_async(agent_id, |_, gate| gate.clone())
+            .await
     }
 
     /// Arms a one-shot delay on the given agent's next oplog commit; see the field documentation.
@@ -3908,6 +3976,49 @@ impl ConsumeBodyScopeEndGateHandle {
 }
 
 impl Drop for ConsumeBodyScopeEndGateHandle {
+    fn drop(&mut self) {
+        self.gate.release.add_permits(1);
+    }
+}
+
+/// A one-shot pause point at an agent's next oplog commit, shared between
+/// [`AdditionalTestDeps`] (which arms it) and the agent's [`TestOplog`] (which
+/// trips it). The gated commit fires `parked_tx` before the underlying commit
+/// runs and then blocks until a `release` permit arrives, so a test can hold a
+/// `Worker::new` (whose initialization enqueue commits through the wrapper)
+/// parked inside its `ActiveAgents` pending entry.
+struct CommitParkGate {
+    armed: AtomicBool,
+    parked_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: tokio::sync::Semaphore,
+}
+
+/// Test-facing side of a [`CommitParkGate`]: await [`Self::parked`] to learn
+/// that the gated commit is paused, then [`Self::release`] to let it continue.
+pub struct CommitParkHandle {
+    parked_rx: tokio::sync::oneshot::Receiver<()>,
+    gate: Arc<CommitParkGate>,
+}
+
+impl CommitParkHandle {
+    /// Resolves once the gated commit is paused inside `Oplog::commit`.
+    pub async fn parked(&mut self) {
+        (&mut self.parked_rx)
+            .await
+            .expect("the commit park gate was dropped without firing");
+    }
+
+    /// Releases the paused commit.
+    pub fn release(&self) {
+        self.gate.release.add_permits(1);
+    }
+}
+
+impl Drop for CommitParkHandle {
+    /// A handle dropped without [`Self::release`] (e.g. by a failing test) must not
+    /// leave the gated commit blocked forever, so dropping releases the gate. The
+    /// extra permit is harmless after an explicit release because the gate fires at
+    /// most once.
     fn drop(&mut self) {
         self.gate.release.add_permits(1);
     }

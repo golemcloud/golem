@@ -268,6 +268,197 @@ async fn set_shard_assignment_drains_lost_agents_before_returning(
     Ok(())
 }
 
+/// An agent whose creation is in flight when the revoke arrives sits in the agent cache as a
+/// *pending* entry, invisible to the drain's snapshot - but all of its durable writes (oplog
+/// create, cached status, the committed initialization enqueue) happen inside that window.
+/// `revoke_shards` must wait for the creation to settle before returning, or another executor
+/// starts recovering the agent while this one is still writing its state. The parked commit is
+/// the initialization enqueue inside `Worker::new`, so the creation is held mid-flight
+/// deterministically.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn revoke_shards_waits_for_in_flight_agent_creation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    const HOLD: Duration = Duration::from_millis(300);
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let parsed_id = agent_id!("InstantiationGrowthCounter", "pending-creation");
+    let id = AgentId {
+        component_id: component.id,
+        agent_id: parsed_id.to_string(),
+    };
+    let owned_id = OwnedAgentId::new(context.default_environment_id, &id);
+
+    let mut gate = executor.park_next_oplog_commit(&id).await;
+
+    let creation = {
+        let executor = executor.clone();
+        let component_id = component.id;
+        let parsed_id = parsed_id.clone();
+        tokio::spawn(
+            async move { executor.try_start_agent(&component_id, parsed_id).await }
+                .in_current_span(),
+        )
+    };
+    tokio::time::timeout(Duration::from_secs(30), gate.parked())
+        .await
+        .map_err(|_| anyhow::anyhow!("the agent creation never reached its gated commit"))?;
+
+    let revoke = {
+        let executor = executor.clone();
+        tokio::spawn(async move { revoke_shards(&executor, &[SHARD]).await }.in_current_span())
+    };
+    tokio::time::sleep(HOLD).await;
+    assert!(
+        !revoke.is_finished(),
+        "revoke_shards returned while an agent creation in the revoked shard was still in \
+         flight; its durable writes race the next owner's recovery"
+    );
+
+    gate.release();
+    let drain_elapsed = revoke.await??;
+    assert!(
+        drain_elapsed >= HOLD - Duration::from_millis(50),
+        "revoke_shards returned after {drain_elapsed:?}, but the in-flight creation was held \
+         for {HOLD:?}"
+    );
+
+    // The creation itself must fail: by the time the created agent would be started, the shard
+    // is no longer owned, and loading it would run an agent of a lost shard.
+    let creation_result = creation.await??;
+    assert!(
+        matches!(
+            creation_result,
+            Err(
+                golem_service_base::error::worker_executor::WorkerExecutorError::InvalidShardId { .. }
+            )
+        ),
+        "expected the racing creation to fail with InvalidShardId, got {creation_result:?}"
+    );
+    assert!(
+        !executor.worker_is_loaded(&owned_id).await,
+        "the agent created during the revoke must not be loaded"
+    );
+
+    // The durable state written by the creation survived; once the shard is back the agent
+    // replays it and runs normally.
+    assign_shards(&executor, &[SHARD]).await?;
+    let count: u32 = executor
+        .invoke_and_await_agent(&component, &parsed_id, "increment", data_value!())
+        .await?
+        .into_typed()?;
+    assert_eq!(count, 1);
+
+    drop(executor);
+    Ok(())
+}
+
+/// Concurrent revoke RPCs (the shard manager retries after a timeout) must join one logical
+/// drain instead of each spawning its own: the second call returns only once a drain covering
+/// its request completes, and neither call runs the teardowns twice or serializes two whole
+/// drains back to back.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn concurrent_revoke_shards_join_one_drain(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    const TEARDOWN_DELAY: Duration = Duration::from_millis(200);
+    const STAGGER: Duration = Duration::from_millis(50);
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agents = start_busy_agents(&executor, &context, &component, "revoke-join").await?;
+    for agent in &agents {
+        executor
+            .arm_teardown_commit_delay(&agent.id, TEARDOWN_DELAY)
+            .await;
+    }
+
+    let first = {
+        let executor = executor.clone();
+        tokio::spawn(async move { revoke_shards(&executor, &[SHARD]).await }.in_current_span())
+    };
+    tokio::time::sleep(STAGGER).await;
+    let second = {
+        let executor = executor.clone();
+        tokio::spawn(async move { revoke_shards(&executor, &[SHARD]).await }.in_current_span())
+    };
+
+    let first_elapsed = first.await??;
+    let second_elapsed = second.await??;
+
+    assert_all_unloaded(
+        &executor,
+        agents.iter().map(|agent| &agent.owned_id),
+        "revoke_shards",
+        first_elapsed.max(second_elapsed),
+    )
+    .await;
+
+    // The second call must have joined the drain the first one started, which the armed
+    // teardown delays hold open well past the stagger - a joiner that returns early (for
+    // example satisfied by a stale completed generation) comes back in single-digit
+    // milliseconds instead.
+    assert!(
+        second_elapsed >= TEARDOWN_DELAY - STAGGER - Duration::from_millis(50),
+        "the second revoke_shards returned after {second_elapsed:?}, before the drain it must \
+         join could have finished"
+    );
+    // And joining must not mean serializing: two whole drains back to back would double the
+    // duration; a joined drain ends for both calls together.
+    let sequential_bound = TEARDOWN_DELAY * AGENTS as u32;
+    assert!(
+        first_elapsed < sequential_bound * 3 / 4,
+        "the first revoke_shards took {first_elapsed:?}; a single concurrent drain finishes \
+         well under {sequential_bound:?}"
+    );
+    assert!(
+        second_elapsed <= first_elapsed,
+        "the second revoke_shards ({second_elapsed:?}) outlived the first ({first_elapsed:?}), \
+         which points at a second serialized drain instead of a join"
+    );
+
+    // One teardown commit per agent: the joined drain did not tear anything down twice.
+    let intervals = executor.teardown_commit_intervals();
+    assert_eq!(
+        intervals.len(),
+        AGENTS,
+        "every lost agent must have exactly one teardown commit: {intervals:?}"
+    );
+    let depth = max_overlap_depth(&intervals);
+    assert!(
+        depth >= 2,
+        "the teardowns of the lost agents did not overlap (at most {depth} at a time): \
+         {intervals:?}"
+    );
+
+    assign_shards(&executor, &[SHARD]).await?;
+    assert_invocations_completed_once(&executor, agents).await?;
+
+    drop(executor);
+    Ok(())
+}
+
 /// An agent of the `Clocks` type executing its `interruption` invocation: 100 sleeps of 100ms,
 /// each far below the suspend threshold, so the agent stays loaded and busy for about ten
 /// seconds and is interruptible at every sleep.
