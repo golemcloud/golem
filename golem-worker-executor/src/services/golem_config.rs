@@ -1643,14 +1643,19 @@ pub struct OplogSweepConfig {
     /// memory bound: an archive step moves an agent's whole layer through one `Vec`, so peak memory
     /// is this many layers, not this many chunks.
     pub max_concurrency: usize,
-    /// Archive steps one tick may run before it stops and keeps its cursor.
+    /// Agents one tick may archive before it stops and keeps its cursor. A page is probed as a
+    /// unit, so a tick stops at the first page that carries it past this and can exceed it by up to
+    /// `page_size`.
     pub max_archives_per_tick: usize,
-    /// Keys one tick may scan before it stops and keeps its cursor. Bounds the scan round trips a
-    /// tick issues against a namespace far larger than the work it holds.
+    /// Keys one tick may scan before it stops and keeps its cursor. Exact: a tick asks each scan
+    /// for only what is left of the budget. Bounds the scan round trips a tick issues against a
+    /// namespace far larger than the work it holds.
     pub max_scanned_per_tick: usize,
     /// Upper bound on the table remembering each agent's previous index. Losing an entry costs one
     /// extra tick of latency for that agent and nothing else, because the work list lives in
-    /// storage.
+    /// storage. A pass that would exceed it leaves the agents past the bound untracked for that
+    /// pass rather than dropping what the table already holds, so set it above the largest backlog
+    /// of stranded oplogs a single pod is expected to work through.
     pub max_tracked_agents: usize,
 }
 

@@ -19,6 +19,10 @@
 //! that cannot do useful work: `InvocationLoop::archive_ephemeral_oplog` has already drained the
 //! oplog by the time it fires, and the agent it names was removed milliseconds after it was
 //! registered.
+//!
+//! A durable agent in the same component acts as the control. Without it, an empty table would
+//! equally well mean the guard had stopped scheduling for every agent mode, which is the one thing
+//! this change must not do.
 
 use crate::Tracing;
 
@@ -94,6 +98,24 @@ async fn ephemeral_invocations_schedule_no_oplog_archive(
     assert_eq!(
         count, 0,
         "{INVOCATIONS} ephemeral invocations left {count} scheduled actions behind"
+    );
+
+    // The control. `Counter` is durable and lives in the same component, so it reaches the same
+    // `schedule_oplog_archive_if_needed` call by the same route; only the agent mode differs. One
+    // invocation is enough, because the registration happens on the transition into `Idle`.
+    let durable_agent_id = agent_id!("Counter", "archive-schedule-durable");
+    executor
+        .start_agent(&component.id, durable_agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &durable_agent_id, "increment", data_value!())
+        .await?;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let with_durable = scheduled_action_count(deps, &context).await?;
+    assert!(
+        with_durable > 0,
+        "a durable agent must still register its archive, but the table holds {with_durable} rows"
     );
     Ok(())
 }
