@@ -534,7 +534,9 @@ async fn read_nested_sibling_output(
         .await?
         .into_inner();
     let mut root_stream_ids = BTreeSet::new();
+    let mut observed_root_stream_ids = BTreeSet::new();
     let mut labels_by_nested_stream = BTreeMap::new();
+    let mut pending_values_by_nested_stream = BTreeMap::<u64, Vec<u32>>::new();
     let mut durable_stream_ids = BTreeMap::new();
     let mut values = BTreeMap::<String, Vec<u32>>::new();
     let mut terminal_count = 0;
@@ -578,13 +580,11 @@ async fn read_nested_sibling_output(
                 assert_eq!(mapped_stream_ids, root_stream_ids);
             }
             Some(invocation_response::Response::OutputItem(item)) => {
-                if root_stream_ids.contains(&item.transport_stream_id) {
-                    let Some(value) = item.value else {
-                        anyhow::bail!("nested sibling item has no value");
-                    };
-                    let Some(schema_value::Value::RecordValue(record)) = value.value else {
-                        anyhow::bail!("nested sibling item is not a record");
-                    };
+                let Some(value) = item.value.and_then(|value| value.value) else {
+                    anyhow::bail!("nested sibling item has no value");
+                };
+                if let schema_value::Value::RecordValue(record) = value {
+                    observed_root_stream_ids.insert(item.transport_stream_id);
                     let [label, nested] = record.fields.as_slice() else {
                         anyhow::bail!("nested sibling item does not have two fields");
                     };
@@ -619,27 +619,30 @@ async fn read_nested_sibling_output(
                     {
                         anyhow::bail!("nested sibling label was mapped twice");
                     }
-                    values.insert(label.clone(), Vec::new());
+                    values.insert(
+                        label.clone(),
+                        pending_values_by_nested_stream
+                            .remove(&nested.stream_id)
+                            .unwrap_or_default(),
+                    );
                 } else {
-                    let label = labels_by_nested_stream
-                        .get(&item.transport_stream_id)
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "item arrived for unknown nested sibling stream {}",
-                                item.transport_stream_id
-                            )
-                        })?
-                        .clone();
-                    let value = match item.value.and_then(|value| value.value) {
-                        Some(schema_value::Value::U32Value(value)) => value,
+                    let value = match value {
+                        schema_value::Value::U32Value(value) => value,
                         other => {
                             anyhow::bail!("expected a nested sibling u32 item, got {other:?}")
                         }
                     };
-                    values
-                        .get_mut(&label)
-                        .expect("known nested sibling label has a value list")
-                        .push(value);
+                    if let Some(label) = labels_by_nested_stream.get(&item.transport_stream_id) {
+                        values
+                            .get_mut(label)
+                            .expect("known nested sibling label has a value list")
+                            .push(value);
+                    } else {
+                        pending_values_by_nested_stream
+                            .entry(item.transport_stream_id)
+                            .or_default()
+                            .push(value);
+                    }
                 }
             }
             Some(invocation_response::Response::OutputEnd(_)) => terminal_count += 1,
@@ -660,6 +663,8 @@ async fn read_nested_sibling_output(
     assert!(state.is_complete());
     assert!(finished_successfully);
     assert_eq!(terminal_count, 4);
+    assert_eq!(observed_root_stream_ids, root_stream_ids);
+    assert!(pending_values_by_nested_stream.is_empty());
     assert_eq!(durable_stream_ids.len(), 2);
     assert_eq!(values.get("left"), Some(&vec![1, 2]));
     assert_eq!(values.get("right"), Some(&vec![10, 20, 30]));
