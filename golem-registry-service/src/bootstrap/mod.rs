@@ -312,6 +312,7 @@ impl Services {
             environment_service.clone(),
             environment_plugin_grant_service.clone(),
             registry_change_notifier.clone(),
+            config.component_file_upload.max_concurrent_files,
         ));
 
         let login_system = LoginSystem::new(

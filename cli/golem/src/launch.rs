@@ -232,6 +232,7 @@ fn registry_service_config(
                 ..Default::default()
             }),
         ),
+        component_file_upload: Default::default(),
         blob_storage: blob_storage_config(args),
         initial_plans: {
             let mut plans = HashMap::new();

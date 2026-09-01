@@ -36,6 +36,9 @@ type = "Disabled"
 
 [component_compilation.config.tls.config]
 
+[component_file_upload]
+max_concurrent_files = 16
+
 [db]
 type = "Sqlite"
 
@@ -176,4 +179,3 @@ pretty = false
 span_events_active = false
 span_events_full = false
 without_time = false
-

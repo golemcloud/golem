@@ -21,21 +21,21 @@ use anyhow::{Context, anyhow, bail};
 use async_trait::async_trait;
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
+use futures_util::TryStreamExt;
+use futures_util::io::copy;
 use golem_common::model::component::ArchiveFilePath;
 use itertools::Itertools;
-use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tokio::fs::File;
+use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReadDirStream;
+use tokio_util::compat::TokioAsyncReadCompatExt;
+use tokio_util::io::StreamReader;
+use tracing::debug;
 use url::Url;
-
-#[derive(Debug, Clone)]
-struct LoadedFile {
-    content: Vec<u8>,
-    source: Url,
-}
 
 #[derive(Debug, Clone)]
 pub struct HashedFile {
@@ -62,6 +62,7 @@ impl ComponentFilesArchive {
 
 pub struct IfsFileManager {
     client: reqwest::Client,
+    hash_cache: Mutex<HashMap<String, blake3::Hash>>,
 }
 
 fn source_key(source: &Url) -> String {
@@ -223,17 +224,16 @@ async fn expand_local_component_file(
 
 impl IfsFileManager {
     pub fn new(client: reqwest::Client) -> Self {
-        Self { client }
+        Self {
+            client,
+            hash_cache: Mutex::new(HashMap::new()),
+        }
     }
 
     pub async fn build_files_archive(
         &self,
         component_files: &[InitialComponentFile],
     ) -> anyhow::Result<ComponentFilesArchive> {
-        let file_processor = FileLoader {
-            client: self.client.clone(),
-        };
-
         log_action("Creating", "IFS archive");
         let _indent = LogIndent::new();
 
@@ -249,46 +249,71 @@ impl IfsFileManager {
 
         let component_files = expand_component_files(component_files).await?;
 
-        let mut loaded_files = Vec::new();
-        for component_file in &component_files {
-            loaded_files.extend(
-                self.process_component_file(&file_processor, component_file)
-                    .await?,
-            );
-        }
+        let sources = component_files
+            .iter()
+            .map(|file| {
+                let source = file.source.as_url().clone();
+                (source_key(&source), source)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let source_count = sources.len();
+        let archive_path_map = resolve_archive_paths_for_sources(sources.values().cloned())?;
 
-        let archive_path_map =
-            resolve_archive_paths_for_sources(loaded_files.iter().map(|file| file.source.clone()))?;
-
-        let mut seen_archive_paths: HashSet<ArchiveFilePath> = HashSet::new();
-
-        for LoadedFile { content, source } in loaded_files {
-            let key = source_key(&source);
+        for (key, source) in sources {
             let archive_path = archive_path_map
                 .get(&key)
                 .ok_or_else(|| anyhow!("Missing archive path mapping for source {}", source))?;
 
-            if !seen_archive_paths.insert(archive_path.clone()) {
-                continue;
-            }
-
             let zip_entry_name = archive_path.to_rel_string();
             let builder = ZipEntryBuilder::new(zip_entry_name.clone().into(), Compression::Deflate);
 
-            log_action(
-                "Adding",
-                format!(
-                    "entry {} to IFS archive",
-                    zip_entry_name.log_color_highlight()
-                ),
-            );
+            debug!(entry = %zip_entry_name, "Adding entry to IFS archive");
 
-            zip_writer
-                .write_entry_whole(builder, &content)
-                .await
-                .with_context(|| {
-                    anyhow!("Error writing zip entry for IFS archive {}", zip_entry_name)
-                })?;
+            let mut entry_writer =
+                zip_writer
+                    .write_entry_stream(builder)
+                    .await
+                    .with_context(|| {
+                        anyhow!("Error opening zip entry for IFS archive {}", zip_entry_name)
+                    })?;
+
+            match source.scheme() {
+                "file" | "" => {
+                    let path = source.to_file_path().map_err(|_| {
+                        anyhow!("Failed to convert local IFS file URL to path: {source}")
+                    })?;
+                    debug!(path = %path.display(), "Loading local IFS file");
+                    let mut input = File::open(&path)
+                        .await
+                        .with_context(|| {
+                            anyhow!("Error reading local IFS file: {}", path.display())
+                        })?
+                        .compat();
+                    copy(&mut input, &mut entry_writer).await.with_context(|| {
+                        anyhow!("Error writing zip entry for IFS archive {}", zip_entry_name)
+                    })?;
+                }
+                "http" | "https" => {
+                    debug!(url = %source, "Downloading remote IFS file");
+                    let response = self
+                        .client
+                        .get(source.clone())
+                        .send()
+                        .await
+                        .with_context(|| anyhow!("Failed to download remote IFS file: {source}"))?;
+                    let response = check_http_response_success(response).await?;
+                    let stream = response.bytes_stream().map_err(std::io::Error::other);
+                    let mut input = StreamReader::new(stream).compat();
+                    copy(&mut input, &mut entry_writer).await.with_context(|| {
+                        anyhow!("Error writing zip entry for IFS archive {}", zip_entry_name)
+                    })?;
+                }
+                scheme => bail!("Unsupported scheme '{scheme}' for IFS file: {source}"),
+            }
+
+            entry_writer.close().await.with_context(|| {
+                anyhow!("Error closing zip entry for IFS archive {}", zip_entry_name)
+            })?;
         }
 
         zip_writer.close().await.with_context(|| {
@@ -297,6 +322,11 @@ impl IfsFileManager {
                 archive_path.display()
             )
         })?;
+
+        log_action(
+            "Created",
+            format!("IFS archive with {source_count} unique source files"),
+        );
 
         Ok(ComponentFilesArchive {
             _temp_dir: temp_dir,
@@ -315,6 +345,7 @@ impl IfsFileManager {
 
         let file_processor = FileHasher {
             client: self.client.clone(),
+            cache: &self.hash_cache,
         };
 
         log_action(
@@ -447,88 +478,33 @@ trait FileProcessor<R> {
     ) -> anyhow::Result<R>;
 }
 
-struct FileLoader {
+struct FileHasher<'a> {
     client: reqwest::Client,
+    cache: &'a Mutex<HashMap<String, blake3::Hash>>,
 }
 
 #[async_trait]
-impl FileProcessor<LoadedFile> for FileLoader {
+impl FileProcessor<HashedFile> for FileHasher<'_> {
     async fn process_local_file(
         &self,
         path: &Path,
-        _target: &CanonicalFilePathWithPermissions,
-    ) -> anyhow::Result<LoadedFile> {
-        log_action(
-            "Loading",
-            format!(
-                "local IFS file: {}",
-                path.display().to_string().log_color_highlight()
-            ),
-        );
-
-        let content = tokio::fs::read(&path)
-            .await
-            .with_context(|| anyhow!("Error reading local IFS file: {}", path.display()))?;
-
+        target: &CanonicalFilePathWithPermissions,
+    ) -> anyhow::Result<HashedFile> {
         let source = Url::from_file_path(path).map_err(|_| {
             anyhow!(
                 "Failed to convert local IFS file path to URL: {}",
                 path.display()
             )
         })?;
+        let key = source_key(&source);
+        if let Some(hash) = self.cache.lock().await.get(&key).copied() {
+            return Ok(HashedFile {
+                hash,
+                target: target.clone(),
+            });
+        }
 
-        Ok(LoadedFile { content, source })
-    }
-
-    async fn process_remote_file(
-        &self,
-        url: &Url,
-        _target: &CanonicalFilePathWithPermissions,
-    ) -> anyhow::Result<LoadedFile> {
-        log_action(
-            "Downloading",
-            format!("remote IFS file: {}", url.as_str().log_color_highlight()),
-        );
-
-        let response = self
-            .client
-            .get(url.clone())
-            .send()
-            .await
-            .with_context(|| anyhow!("Failed to download remote IFS file: {}", url))?;
-
-        let response = check_http_response_success(response).await?;
-
-        let bytes = response
-            .bytes()
-            .await
-            .with_context(|| anyhow!("Failed to download remote IFS file: {}", url))?;
-
-        Ok(LoadedFile {
-            content: bytes.into(),
-            source: url.clone(),
-        })
-    }
-}
-
-struct FileHasher {
-    client: reqwest::Client,
-}
-
-#[async_trait]
-impl FileProcessor<HashedFile> for FileHasher {
-    async fn process_local_file(
-        &self,
-        path: &Path,
-        target: &CanonicalFilePathWithPermissions,
-    ) -> anyhow::Result<HashedFile> {
-        log_action(
-            "Calculating hash",
-            format!(
-                "for local IFS file: {}",
-                path.display().to_string().log_color_highlight()
-            ),
-        );
+        debug!(path = %path.display(), "Calculating hash for local IFS file");
 
         let mut hasher = blake3::Hasher::new();
         hasher
@@ -538,8 +514,11 @@ impl FileProcessor<HashedFile> for FileHasher {
             )
             .with_context(|| anyhow!("Failed to hash local IFS file: {}", path.display()))?;
 
+        let hash = hasher.finalize();
+        self.cache.lock().await.insert(key, hash);
+
         Ok(HashedFile {
-            hash: hasher.finalize(),
+            hash,
             target: target.clone(),
         })
     }
@@ -549,13 +528,15 @@ impl FileProcessor<HashedFile> for FileHasher {
         url: &Url,
         target: &CanonicalFilePathWithPermissions,
     ) -> anyhow::Result<HashedFile> {
-        log_action(
-            "Calculating hash",
-            format!(
-                "for remote IFS file: {}",
-                url.as_str().log_color_highlight()
-            ),
-        );
+        let key = source_key(url);
+        if let Some(hash) = self.cache.lock().await.get(&key).copied() {
+            return Ok(HashedFile {
+                hash,
+                target: target.clone(),
+            });
+        }
+
+        debug!(url = %url, "Calculating hash for remote IFS file");
         let response = self
             .client
             .get(url.clone())
@@ -573,8 +554,11 @@ impl FileProcessor<HashedFile> for FileHasher {
             hasher.update(&bytes);
         }
 
+        let hash = hasher.finalize();
+        self.cache.lock().await.insert(key, hash);
+
         Ok(HashedFile {
-            hash: hasher.finalize(),
+            hash,
             target: target.clone(),
         })
     }
@@ -605,14 +589,16 @@ fn validate_unique_targets(component_files: &[InitialComponentFile]) -> anyhow::
 
 #[cfg(test)]
 mod tests {
-    use super::{expand_component_files, resolve_archive_paths_for_sources};
+    use super::{IfsFileManager, expand_component_files, resolve_archive_paths_for_sources};
     use crate::model::app::{
         CanonicalFilePathWithPermissions, InitialComponentFile, InitialComponentFileSource,
     };
+    use async_zip::tokio::read::seek::ZipFileReader;
     use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
     use std::collections::BTreeMap;
     use std::path::Path;
     use test_r::test;
+    use tokio::io::BufReader;
     use url::Url;
 
     #[test]
@@ -696,5 +682,57 @@ mod tests {
                 .iter()
                 .all(|file| file.target.permissions == AgentFilePermissions::ReadWrite)
         );
+    }
+
+    fn local_file(source: &Path, target: &str) -> InitialComponentFile {
+        let source = Url::from_file_path(source).unwrap();
+        InitialComponentFile {
+            source: InitialComponentFileSource::new(source.as_str(), Path::new("/golem.yaml"))
+                .unwrap(),
+            target: CanonicalFilePathWithPermissions {
+                path: CanonicalFilePath::from_abs_str(target).unwrap(),
+                permissions: AgentFilePermissions::ReadOnly,
+            },
+        }
+    }
+
+    #[test]
+    async fn duplicate_sources_are_written_to_the_archive_once() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source = temp_dir.path().join("shared.txt");
+        std::fs::write(&source, "shared").unwrap();
+        let files = vec![
+            local_file(&source, "/first.txt"),
+            local_file(&source, "/second.txt"),
+        ];
+
+        let manager = IfsFileManager::new(reqwest::Client::new());
+        let archive = manager.build_files_archive(&files).await.unwrap();
+        let file = tokio::fs::File::open(&archive.archive_path).await.unwrap();
+        let reader = ZipFileReader::with_tokio(BufReader::new(file))
+            .await
+            .unwrap();
+
+        assert_eq!(reader.file().entries().len(), 1);
+    }
+
+    #[test]
+    async fn hashes_are_cached_across_mounts() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source = temp_dir.path().join("shared.txt");
+        std::fs::write(&source, "shared").unwrap();
+        let manager = IfsFileManager::new(reqwest::Client::new());
+
+        let first = manager
+            .collect_file_hashes("first", &[local_file(&source, "/first.txt")])
+            .await
+            .unwrap();
+        std::fs::remove_file(&source).unwrap();
+        let second = manager
+            .collect_file_hashes("second", &[local_file(&source, "/second.txt")])
+            .await
+            .unwrap();
+
+        assert_eq!(first[0].hash, second[0].hash);
     }
 }

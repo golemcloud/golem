@@ -13,74 +13,120 @@
 // limitations under the License.
 
 use super::ComponentError;
-use anyhow::anyhow;
 use async_zip::ZipEntry;
 use async_zip::tokio::read::seek::ZipFileReader;
 use futures::TryStreamExt;
+use golem_common::model::agent::AgentFileContentHash;
 use golem_common::model::component::ArchiveFilePath;
 use golem_service_base::replayable_stream::ReplayableStream;
 use std::sync::Arc;
-use std::vec;
 use tempfile::NamedTempFile;
-use tokio::io::BufReader;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio_stream::Stream;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::io::ReaderStream;
 
-pub async fn prepare_component_files_for_upload(
-    archive: NamedTempFile,
-) -> Result<Vec<(ArchiveFilePath, ZipEntryStream)>, ComponentError> {
-    let archive = Arc::new(archive);
-    let archive_clone = archive.clone();
-    let reopened = tokio::task::spawn_blocking(move || archive_clone.reopen())
-        .await
-        .map_err(anyhow::Error::from)?
-        .map_err(anyhow::Error::from)?;
+pub struct ComponentFilesArchiveReader {
+    _archive: NamedTempFile,
+    reader: ZipFileReader<BufReader<tokio::fs::File>>,
+}
 
-    let mut buf_reader = BufReader::new(tokio::fs::File::from_std(reopened));
-
-    let mut zip_archive = ZipFileReader::with_tokio(&mut buf_reader)
-        .await
-        .map_err(anyhow::Error::from)?;
-
-    let mut result = vec![];
-
-    for i in 0..zip_archive.file().entries().len() {
-        let entry_reader = zip_archive
-            .reader_with_entry(i)
+impl ComponentFilesArchiveReader {
+    pub async fn open(archive: NamedTempFile) -> Result<Self, ComponentError> {
+        let reopened = archive.reopen().map_err(anyhow::Error::from)?;
+        let buf_reader = BufReader::new(tokio::fs::File::from_std(reopened));
+        let reader = ZipFileReader::with_tokio(buf_reader)
             .await
             .map_err(anyhow::Error::from)?;
 
-        let entry = entry_reader.entry();
+        Ok(Self {
+            _archive: archive,
+            reader,
+        })
+    }
 
-        let is_dir = entry.dir().map_err(anyhow::Error::from)?;
+    pub fn len(&self) -> usize {
+        self.reader.file().entries().len()
+    }
 
-        if is_dir {
-            continue;
+    pub fn file_path(&self, index: usize) -> Result<Option<ArchiveFilePath>, ComponentError> {
+        let entry = self.reader.file().entries().get(index).ok_or_else(|| {
+            ComponentError::MalformedComponentArchive {
+                message: format!("Missing ZIP entry at index {index}"),
+            }
+        })?;
+
+        if entry.dir().map_err(anyhow::Error::from)? {
+            Ok(None)
+        } else {
+            initial_component_file_path_from_zip_entry(entry).map(Some)
+        }
+    }
+
+    pub async fn extract(&mut self, index: usize) -> Result<PreparedComponentFile, ComponentError> {
+        let expected_crc = self
+            .reader
+            .file()
+            .entries()
+            .get(index)
+            .ok_or_else(|| ComponentError::MalformedComponentArchive {
+                message: format!("Missing ZIP entry at index {index}"),
+            })?
+            .crc32();
+
+        let mut entry_reader = self
+            .reader
+            .reader_with_entry(index)
+            .await
+            .map_err(anyhow::Error::from)?;
+
+        let file = tokio::task::spawn_blocking(NamedTempFile::new)
+            .await
+            .map_err(anyhow::Error::from)?
+            .map_err(anyhow::Error::from)?;
+        let reopened = file.reopen().map_err(anyhow::Error::from)?;
+        let mut output = tokio::fs::File::from_std(reopened);
+        let mut input = (&mut entry_reader).compat();
+        let mut hasher = blake3::Hasher::new();
+        let mut size = 0u64;
+        let mut buffer = vec![0u8; 64 * 1024];
+
+        loop {
+            let read = input.read(&mut buffer).await.map_err(anyhow::Error::from)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+            output
+                .write_all(&buffer[..read])
+                .await
+                .map_err(anyhow::Error::from)?;
+            size += read as u64;
+        }
+        output.flush().await.map_err(anyhow::Error::from)?;
+        drop(input);
+
+        if entry_reader.compute_hash() != expected_crc {
+            return Err(ComponentError::MalformedComponentArchive {
+                message: format!("CRC32 check failed for ZIP entry at index {index}"),
+            });
         }
 
-        let path = initial_component_file_path_from_zip_entry(entry)?;
-
-        let stream = ZipEntryStream::from_zip_file_and_index(archive.clone(), i);
-
-        result.push((path, stream));
+        Ok(PreparedComponentFile {
+            file: Arc::new(file),
+            hash: AgentFileContentHash(hasher.finalize().into()),
+            size,
+        })
     }
-
-    Ok(result)
 }
 
-pub struct ZipEntryStream {
+pub struct PreparedComponentFile {
     file: Arc<NamedTempFile>,
-    index: usize,
+    pub hash: AgentFileContentHash,
+    pub size: u64,
 }
 
-impl ZipEntryStream {
-    pub fn from_zip_file_and_index(file: Arc<NamedTempFile>, index: usize) -> Self {
-        Self { file, index }
-    }
-}
-
-impl ReplayableStream for ZipEntryStream {
+impl ReplayableStream for PreparedComponentFile {
     type Item = Result<Vec<u8>, anyhow::Error>;
     type Error = anyhow::Error;
 
@@ -89,26 +135,13 @@ impl ReplayableStream for ZipEntryStream {
     ) -> Result<impl Stream<Item = Self::Item> + Send + 'static, Self::Error> {
         let file = self.file.clone();
         let reopened = tokio::task::spawn_blocking(move || file.reopen()).await??;
-        let buf_reader = BufReader::new(tokio::fs::File::from_std(reopened));
-        let zip_archive = ZipFileReader::with_tokio(buf_reader).await?;
-        let entry_reader = zip_archive.into_entry(self.index).await?;
-        let stream = ReaderStream::new(entry_reader.compat());
+        let stream = ReaderStream::new(tokio::fs::File::from_std(reopened));
         let mapped_stream = stream.map_ok(|b| b.to_vec()).map_err(|e| e.into());
         Ok(Box::pin(mapped_stream))
     }
 
     async fn length(&self) -> Result<u64, Self::Error> {
-        let file = self.file.clone();
-        let reopened = tokio::task::spawn_blocking(move || file.reopen()).await??;
-        let buf_reader = BufReader::new(tokio::fs::File::from_std(reopened));
-        let zip_archive = ZipFileReader::with_tokio(buf_reader).await?;
-
-        Ok(zip_archive
-            .file()
-            .entries()
-            .get(self.index)
-            .ok_or(anyhow!("Entry with not found in archive"))?
-            .uncompressed_size())
+        Ok(self.size)
     }
 }
 
@@ -136,4 +169,51 @@ fn initial_component_file_path_from_zip_entry(
             message: format!("Failed to convert path to ArchiveFilePath: {e}"),
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_zip::tokio::write::ZipFileWriter;
+    use async_zip::{Compression, ZipEntryBuilder};
+    use futures::{StreamExt, pin_mut};
+    use test_r::test;
+
+    async fn test_archive(entries: &[(&str, &[u8])]) -> NamedTempFile {
+        let archive = NamedTempFile::new().unwrap();
+        let file = tokio::fs::File::from_std(archive.reopen().unwrap());
+        let mut writer = ZipFileWriter::with_tokio(file);
+
+        for (path, contents) in entries {
+            let entry = ZipEntryBuilder::new((*path).into(), Compression::Deflate);
+            writer.write_entry_whole(entry, contents).await.unwrap();
+        }
+        writer.close().await.unwrap();
+        archive
+    }
+
+    #[test]
+    async fn archive_is_parsed_once_and_entries_are_prepared_with_hash_and_size() {
+        let archive =
+            test_archive(&[("first.txt", b"first"), ("nested/second.txt", b"second")]).await;
+        let mut reader = ComponentFilesArchiveReader::open(archive).await.unwrap();
+
+        assert_eq!(reader.len(), 2);
+        assert_eq!(
+            reader.file_path(1).unwrap().unwrap().to_abs_string(),
+            "/nested/second.txt"
+        );
+
+        let prepared = reader.extract(1).await.unwrap();
+        assert_eq!(prepared.size, 6);
+        assert_eq!(prepared.hash.0, blake3::hash(b"second").into());
+
+        let stream = prepared.make_stream().await.unwrap();
+        pin_mut!(stream);
+        let mut contents = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            contents.extend(chunk.unwrap());
+        }
+        assert_eq!(contents, b"second");
+    }
 }
