@@ -10,11 +10,16 @@ import {
   "moonbitlang/async/semaphore",
 }
 
+import {
+  "moonbitlang/async",
+} for "wbtest"
+
 options(
   targets: {
     "client.mbt": [ "native" ],
     "client_wbtest.mbt": [ "native" ],
     "conn.mbt": [ "native" ],
+    "conn_wbtest.mbt": [ "native" ],
     "types.mbt": [ "native" ],
     "utils.mbt": [ "native" ],
   },

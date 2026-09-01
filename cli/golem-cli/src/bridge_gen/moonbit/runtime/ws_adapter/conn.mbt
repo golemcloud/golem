@@ -533,6 +533,9 @@ pub impl @io.Reader for Message with fn _direct_read(
   if conn.closed is Some(err) {
     raise err
   }
+  if max_len == 0 {
+    return 0
+  }
   while conn.curr_frame_remaining == 0 {
     // if we are not in the last frame of a message,
     // the end of this frame is the end of the whole message

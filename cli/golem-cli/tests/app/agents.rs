@@ -1316,6 +1316,23 @@ async fn test_generated_streaming_bridges_end_to_end() {
     assert_generated_driver(scala_output, "Scala", "SCALA_STREAMING_BRIDGE_E2E_OK");
 
     let moonbit_client = ctx.cwd_path_join("moonbit-streaming-bridge/streaming-rpc-target-client");
+    let mut moonbit_test_command = std::process::Command::new("moon");
+    moonbit_test_command
+        .args([
+            "test",
+            "--target",
+            "native",
+            "--deny-warn",
+            "runtime/ws_adapter",
+        ])
+        .current_dir(&moonbit_client);
+    let moonbit_test_output = run_generated_driver(moonbit_test_command).await;
+    assert!(
+        moonbit_test_output.status.success(),
+        "MoonBit WebSocket runtime tests failed\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        String::from_utf8_lossy(&moonbit_test_output.stdout),
+        String::from_utf8_lossy(&moonbit_test_output.stderr),
+    );
     // Cut the accepted WebSocket frame during its payload to cover EOF after header parsing.
     let (moonbit_proxy, moonbit_interrupted, moonbit_proxy_task) =
         start_interrupting_websocket_proxy(&worker_service_url, true).await;

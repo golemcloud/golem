@@ -723,10 +723,12 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         let cancellation_requests =
             cancel_open_streams(input_channel, &output_streams, failure.reason);
         for request in cancellation_requests {
-            send_request(&sender, &request, &interrupt).await?;
+            if send_request(&sender, &request, &interrupt).await.is_err() {
+                break;
+            }
         }
         if let Some(channel) = input_channel {
-            await_input_cancellation(&mut session, channel, &interrupt).await?;
+            let _ = await_input_cancellation(&mut session, channel, &interrupt).await;
         }
         let _ = tokio::time::timeout(Duration::from_secs(3), sender.close()).await;
         return Err(failure.error);
