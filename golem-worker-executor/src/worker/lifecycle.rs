@@ -146,6 +146,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     {
         Self::existing_metadata(deps, owned_agent_id).await?;
         let worker = Self::get_existing_suspended(deps, owned_agent_id, None, principal).await?;
+        let deletion_guard = worker.deletion_lock.lock().await;
+
+        // Another request may have completed deletion while this request was waiting for the
+        // resident worker's deletion lock. Revalidate before reading or mutating its oplog.
+        Self::existing_metadata(deps, owned_agent_id).await?;
 
         info!("Interrupting worker before deletion");
         worker
@@ -158,6 +163,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker.remove_from_active_agents().await;
 
         // Keep the worker alive until durable metadata and cache cleanup has completed.
+        drop(deletion_guard);
         drop(worker);
         Ok(())
     }

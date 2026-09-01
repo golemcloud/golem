@@ -34,7 +34,8 @@ use golem_common::model::{
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, Weak};
+use tokio::sync::RwLock;
 use tracing::debug;
 
 /// Hash field holding the bounded part of the cached `AgentStatusRecord` (everything except the
@@ -369,6 +370,51 @@ pub struct DefaultWorkerService {
     oplog_service: Arc<dyn OplogService>,
     component_service: Arc<dyn ComponentService>,
     config: Arc<GolemConfig>,
+    lifecycle_gates: Arc<AgentLifecycleGates>,
+}
+
+#[derive(Default)]
+struct AgentLifecycleGates {
+    gates: StdMutex<HashMap<OwnedAgentId, Weak<RwLock<()>>>>,
+}
+
+struct AgentLifecycleGate {
+    owned_agent_id: OwnedAgentId,
+    gate: Arc<RwLock<()>>,
+    registry: Arc<AgentLifecycleGates>,
+}
+
+impl Drop for AgentLifecycleGate {
+    fn drop(&mut self) {
+        let mut gates = self.registry.gates.lock().unwrap();
+        if Arc::strong_count(&self.gate) == 1
+            && gates
+                .get(&self.owned_agent_id)
+                .is_some_and(|registered| registered.ptr_eq(&Arc::downgrade(&self.gate)))
+        {
+            gates.remove(&self.owned_agent_id);
+        }
+    }
+}
+
+impl AgentLifecycleGates {
+    fn acquire(self: &Arc<Self>, owned_agent_id: &OwnedAgentId) -> AgentLifecycleGate {
+        let mut gates = self.gates.lock().unwrap();
+        let gate = gates
+            .get(owned_agent_id)
+            .and_then(Weak::upgrade)
+            .unwrap_or_else(|| {
+                let gate = Arc::new(RwLock::new(()));
+                gates.insert(owned_agent_id.clone(), Arc::downgrade(&gate));
+                gate
+            });
+
+        AgentLifecycleGate {
+            owned_agent_id: owned_agent_id.clone(),
+            gate,
+            registry: self.clone(),
+        }
+    }
 }
 
 impl DefaultWorkerService {
@@ -385,7 +431,12 @@ impl DefaultWorkerService {
             oplog_service,
             component_service,
             config,
+            lifecycle_gates: Arc::new(AgentLifecycleGates::default()),
         }
+    }
+
+    fn lifecycle_gate(&self, owned_agent_id: &OwnedAgentId) -> AgentLifecycleGate {
+        self.lifecycle_gates.acquire(owned_agent_id)
     }
 
     async fn enum_workers_at_key(&self, key: &str) -> Vec<GetWorkerMetadataResult> {
@@ -681,6 +732,8 @@ impl DefaultWorkerService {
 #[async_trait]
 impl WorkerService for DefaultWorkerService {
     async fn get(&self, owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
+        let lifecycle_gate = self.lifecycle_gate(owned_agent_id);
+        let _lifecycle_guard = lifecycle_gate.gate.read().await;
         record_worker_call("get");
 
         let agent_mode = self.get_agent_mode(owned_agent_id).await?;
@@ -820,6 +873,8 @@ impl WorkerService for DefaultWorkerService {
     }
 
     async fn remove(&self, owned_agent_id: &OwnedAgentId) {
+        let lifecycle_gate = self.lifecycle_gate(owned_agent_id);
+        let _lifecycle_guard = lifecycle_gate.gate.write().await;
         record_worker_call("remove");
 
         if let Some(agent_mode) = self.get_agent_mode(owned_agent_id).await {
@@ -1037,11 +1092,14 @@ mod tests {
     use bytes::Bytes;
     use golem_common::model::Timestamp;
     use golem_common::model::card::{Card, CardId, StoredCard};
-    use golem_common::model::component::ComponentRevision;
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::model::environment::EnvironmentId;
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{PendingInvocationRef, PendingUpdateKind, PendingUpdateRef};
     use std::collections::VecDeque;
+    use std::time::Duration;
     use test_r::test;
+    use tokio::sync::oneshot;
 
     fn idempotency_key(value: &str) -> IdempotencyKey {
         IdempotencyKey::new(value.to_string())
@@ -1049,6 +1107,71 @@ mod tests {
 
     fn transfer_id(value: u128) -> uuid::Uuid {
         uuid::Uuid::from_u128(value)
+    }
+
+    fn lifecycle_agent(name: &str) -> OwnedAgentId {
+        let agent_id = AgentId {
+            component_id: ComponentId(uuid::Uuid::new_v4()),
+            agent_id: name.to_string(),
+        };
+        OwnedAgentId::new(EnvironmentId::new(), &agent_id)
+    }
+
+    #[test]
+    async fn lifecycle_gate_linearizes_metadata_reads_and_deletion() {
+        let gates = Arc::new(AgentLifecycleGates::default());
+        let owned_agent_id = lifecycle_agent("linearized");
+
+        let reader = gates.acquire(&owned_agent_id);
+        let reader_guard = reader.gate.read().await;
+
+        // Other metadata readers remain concurrent.
+        let second_reader = gates.acquire(&owned_agent_id);
+        let second_reader_guard =
+            tokio::time::timeout(Duration::from_millis(100), second_reader.gate.read())
+                .await
+                .expect("a metadata read should not block another metadata read");
+
+        let deletion = gates.acquire(&owned_agent_id);
+        assert!(
+            deletion.gate.try_write().is_err(),
+            "deletion passed an in-flight metadata read"
+        );
+
+        let (writer_acquired_tx, writer_acquired_rx) = oneshot::channel();
+        let writer = {
+            tokio::spawn(async move {
+                let _deletion_guard = deletion.gate.write().await;
+                let _ = writer_acquired_tx.send(());
+            })
+        };
+
+        drop(second_reader_guard);
+        drop(second_reader);
+        drop(reader_guard);
+        drop(reader);
+
+        tokio::time::timeout(Duration::from_secs(1), writer_acquired_rx)
+            .await
+            .expect("deletion did not proceed after metadata reads completed")
+            .expect("deletion task dropped its completion signal");
+        writer.await.unwrap();
+
+        assert!(gates.gates.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    async fn lifecycle_gate_does_not_serialize_unrelated_agents() {
+        let gates = Arc::new(AgentLifecycleGates::default());
+        let first_id = lifecycle_agent("first");
+        let second_id = lifecycle_agent("second");
+
+        let first = gates.acquire(&first_id);
+        let _first_guard = first.gate.write().await;
+        let second = gates.acquire(&second_id);
+        let _second_guard = tokio::time::timeout(Duration::from_millis(100), second.gate.write())
+            .await
+            .expect("deletion of one agent blocked an unrelated agent");
     }
 
     fn stored_card(card_id: CardId) -> StoredCard {

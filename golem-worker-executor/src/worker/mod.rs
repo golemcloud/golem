@@ -394,6 +394,10 @@ pub struct Worker<Ctx: WorkerCtx> {
 
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
     instance: Arc<Mutex<WorkerInstance>>,
+    /// Serializes complete deletion attempts for this resident worker. The instance lock protects
+    /// state transitions, but deletion also performs oplog scans and persistent cleanup after the
+    /// transition; those steps must not overlap another deletion of the same worker.
+    deletion_lock: Mutex<()>,
     linear_memory_grant: StdMutex<Option<Arc<StdMutex<MemoryGrant>>>>,
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
     /// until the worker stops so permit reacquisition cannot lose it between `RunningWorker`s.
@@ -877,6 +881,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 EphemeralInvocationState::Available
             }),
             instance,
+            deletion_lock: Mutex::new(()),
             linear_memory_grant: StdMutex::new(None),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
             execution_status,
