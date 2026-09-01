@@ -398,7 +398,9 @@ impl IndexedStorage for InMemoryIndexedStorage {
 mod tests {
     use test_r::test;
 
-    use crate::storage::indexed::{IndexedStorageLabelledApi, IndexedStorageNamespace};
+    use crate::storage::indexed::{
+        IndexedStorageLabelledApi, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+    };
     use assert2::check;
     use golem_common::model::AgentId;
     use golem_common::model::component::ComponentId;
@@ -413,6 +415,56 @@ mod tests {
                 agent_id: "worker".to_string(),
             })
             .clone()
+    }
+
+    #[test]
+    async fn scan_stable_pages_in_order_and_hands_a_key_back_once() {
+        let storage = super::InMemoryIndexedStorage::new();
+        let api = storage.with_entity("test", "test", "test");
+        let agent_mode = golem_common::model::agent::AgentMode::Durable;
+
+        for key in ["k1", "k2", "k3", "k4", "k5"] {
+            api.append(
+                IndexedStorageNamespace::OpLog {
+                    agent_id: test_agent_id(),
+                    agent_mode,
+                },
+                key,
+                1,
+                &100,
+            )
+            .await
+            .unwrap();
+        }
+
+        let mut pages: Vec<Vec<String>> = Vec::new();
+        let mut resume = None;
+        for _ in 0..8 {
+            let (next, page) = storage
+                .with("test", "test")
+                .scan_stable(
+                    IndexedStorageMetaNamespace::Oplog { agent_mode },
+                    None,
+                    resume,
+                    2,
+                )
+                .await
+                .unwrap();
+            pages.push(page);
+            match next {
+                Some(next) => resume = Some(next),
+                None => break,
+            }
+        }
+
+        // The short page is what ends the walk, so five keys cost three pages and not a fourth,
+        // and no key appears in two of them.
+        let expected: Vec<Vec<String>> = vec![
+            vec!["k1".to_string(), "k2".to_string()],
+            vec!["k3".to_string(), "k4".to_string()],
+            vec!["k5".to_string()],
+        ];
+        check!(pages == expected);
     }
 
     #[test]
