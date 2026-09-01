@@ -134,9 +134,12 @@ enum Verdict {
 
 /// The agent modes the sweep covers. Fixed on purpose: neither entry is a setting.
 ///
-/// Ephemeral is not optional. `Worker::schedule_oplog_archive_if_needed` returns early for
-/// ephemeral agents, so nothing registers `ScheduledAction::ArchiveOplog` for them any more and
-/// this sweep is the only thing left that moves an ephemeral oplog a crashed pod stranded.
+/// Ephemeral is not optional. While the sweep is enabled
+/// `Worker::schedule_oplog_archive_if_needed` returns early for ephemeral agents, so nothing
+/// registers `ScheduledAction::ArchiveOplog` for them and this sweep is the only thing left that
+/// moves an ephemeral oplog a crashed pod stranded. Dropping the mode from this list would strand
+/// those oplogs outright, because that guard reads `OplogSweepConfig::enabled` and knows nothing
+/// about this list.
 ///
 /// Durable is absent rather than off, because adding it would not be safe today.
 /// `IndexedStorage::append` is a plain `INSERT` against a table with
@@ -440,8 +443,13 @@ impl OplogSweeper {
     /// for the step in flight; a tick stops at the next boundary rather than running to
     /// completion.
     ///
-    /// Returns immediately when the sweep is disabled or the layer stack offers no route, leaving
-    /// `ScheduledAction::ArchiveOplog` as the only archiving mechanism.
+    /// Returns immediately on either of two conditions, which differ in what is left behind.
+    /// Disabled by config leaves `ScheduledAction::ArchiveOplog` as the only archiving mechanism,
+    /// and `Worker::schedule_oplog_archive_if_needed` reads the same flag so that the ephemeral
+    /// registration comes back with it. A layer stack that offers no route leaves nothing, and
+    /// needs nothing: `CreateOplogConstructor` only builds the lower layers an archive step moves
+    /// between when the stack has them, so with none configured neither mechanism has anything to
+    /// move.
     pub async fn run(self: Arc<Self>, shutdown: CancellationToken) {
         if !self.config.enabled || self.routes.is_empty() {
             return;

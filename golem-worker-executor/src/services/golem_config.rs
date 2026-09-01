@@ -1656,8 +1656,12 @@ impl Default for OplogConfig {
 /// [`SWEPT_MODES`](crate::services::oplog_sweep::SWEPT_MODES).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OplogSweepConfig {
-    /// Whether the sweep runs at all. When false `ScheduledAction::ArchiveOplog` stays the only
-    /// archiving mechanism, which is the rollback lever.
+    /// Whether the sweep runs at all, and the rollback lever: false restores exactly the
+    /// behaviour that preceded the sweep. It is read in two places, because the sweep and the
+    /// registration it replaces are one switch. Here it stops the background loop, and in
+    /// `Worker::schedule_oplog_archive_if_needed` it decides whether an ephemeral agent still
+    /// registers `ScheduledAction::ArchiveOplog` on its way to `Idle`. Gating only the loop would
+    /// leave an ephemeral oplog with no mechanism at all behind a pod that died mid-invocation.
     pub enabled: bool,
     /// How long a tick waits after the previous one finished. Sets the pace of the quiet gate,
     /// which an agent clears when its last oplog index is unchanged between the two scans that saw
