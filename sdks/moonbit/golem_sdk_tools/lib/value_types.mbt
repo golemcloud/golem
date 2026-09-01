@@ -74,7 +74,7 @@ pub fn parse_multimodal_enums(
                       )
                   }
                 }
-                results.push({ name, variants })
+                results.push({ name, variants, })
               }
               _ =>
                 raise AgentParseError(
@@ -114,7 +114,7 @@ pub fn parse_value_types(
             let name = type_decl.tycon
             let kind = parse_type_desc(name, type_decl.components)
             validate_no_multimodal_in_value_kind(name, kind)
-            results.push({ name, kind })
+            results.push({ name, kind, })
           }
         }
         _ => ()

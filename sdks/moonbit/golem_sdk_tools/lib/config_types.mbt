@@ -44,7 +44,7 @@ pub fn parse_config_types(
                   let field_type = syntax_type_to_param_type(field.ty)
                   result.push((field_name, field_type))
                 }
-                results.push({ name, package, fields: result })
+                results.push({ name, package, fields: result, })
               }
               _ =>
                 raise AgentParseError(

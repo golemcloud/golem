@@ -452,7 +452,7 @@ fn append_projected_params(
           Hidden(OutputStream) | LabelledHidden(OutputStream) =>
             abort("output streams are not middleware handler parameters")
         }
-        result.push({ source_name: pair.0, type_, identities, source })
+        result.push({ source_name: pair.0, type_, identities, source, })
         for identity in identities {
           inherited_identities[identity] = ()
         }
@@ -1058,7 +1058,7 @@ pub fn parse_tool_middlewares(
                 name,
                 aliases,
                 description: tool_doc(fun_decl.doc),
-                scope: Universal({ handler_name: fun_decl.name.name }),
+                scope: Universal({ handler_name: fun_decl.name.name, }),
               })
             }
             _ => ()
@@ -1088,7 +1088,7 @@ pub fn parse_tool_middlewares(
       name: middleware.name,
       aliases: middleware.aliases,
       description: middleware.description,
-      scope: Monomorphic({ presented, expected, handlers, underlying_methods }),
+      scope: Monomorphic({ presented, expected, handlers, underlying_methods, }),
     })
   }
   validate_middleware_name_collisions(result)

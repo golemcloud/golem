@@ -362,8 +362,8 @@ fn derive_props(
   name : String,
 ) -> Array[@attribute.Prop]? {
   match attr.parsed {
-    Some(Ident({ qual: Some("derive"), name: n })) if n == name => Some([])
-    Some(Apply({ qual: Some("derive"), name: n }, props)) if n == name =>
+    Some(Ident({ qual: Some("derive"), name: n, })) if n == name => Some([])
+    Some(Apply({ qual: Some("derive"), name: n, }, props)) if n == name =>
       Some(props.to_array())
     _ => None
   }
@@ -542,7 +542,7 @@ fn parse_examples(
           tool_fail("#derive.example on " + owner + " requires a body")
           continue
         }
-        result.push({ body, title })
+        result.push({ body, title, })
       }
       None => ()
     }
@@ -1231,7 +1231,7 @@ fn parse_command(
         for formatter in formatters {
           require_tool_identifier(formatter, "result formatter", owner)
         }
-        result = Some({ formatters, options, defaults })
+        result = Some({ formatters, options, defaults, })
       }
       Some((Some("derive"), "example")) | None => ()
       Some((Some("derive"), n)) if n == "prompt_hint" ||

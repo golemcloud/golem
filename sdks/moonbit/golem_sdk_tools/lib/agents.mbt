@@ -232,7 +232,7 @@ fn extract_agent_mode(
   let mut result = Durable
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "agent" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "agent", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Expr(String(s)) =>
@@ -260,7 +260,7 @@ fn extract_agent_snapshotting(
   let mut result = Disabled
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "agent" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "agent", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Labeled("snapshotting", String(s)) => {
@@ -471,9 +471,9 @@ fn extract_read_only(
   let mut result : ReadOnlyInfo? = None
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Ident({ qual: Some("derive"), name: "read_only" })) =>
-        result = Some({ cache_policy: UntilWrite })
-      Some(Apply({ qual: Some("derive"), name: "read_only" }, props)) => {
+      Some(Ident({ qual: Some("derive"), name: "read_only", })) =>
+        result = Some({ cache_policy: UntilWrite, })
+      Some(Apply({ qual: Some("derive"), name: "read_only", }, props)) => {
         let mut explicit_cache : ReadOnlyCachePolicy? = None
         let mut explicit_ttl : UInt64? = None
         props.each(fn(prop) {
@@ -523,7 +523,7 @@ fn extract_read_only(
           (None, Some(n)) => Ttl(n)
           (None, None) => UntilWrite
         }
-        result = Some({ cache_policy: policy })
+        result = Some({ cache_policy: policy, })
       }
       _ => ()
     }
@@ -555,7 +555,7 @@ fn extract_prompt_hint(attrs : @list.List[@attribute.Attribute]) -> String? {
   let mut result : String? = None
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "prompt_hint" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "prompt_hint", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Expr(String(s)) => result = Some(s)
@@ -740,7 +740,7 @@ fn extract_mount_path(attrs : @list.List[@attribute.Attribute]) -> String? {
   let mut result : String? = None
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "mount" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "mount", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Expr(String(s)) => result = Some(s)
@@ -759,7 +759,7 @@ fn extract_mount_auth(attrs : @list.List[@attribute.Attribute]) -> Bool? {
   let mut result : Bool? = None
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "mount_auth" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "mount_auth", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Expr(Bool(b)) => result = Some(b)
@@ -780,7 +780,7 @@ fn extract_mount_cors(
   let result : Array[String] = []
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "mount_cors" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "mount_cors", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Expr(String(s)) => result.push(s)
@@ -799,7 +799,7 @@ fn extract_mount_webhook(attrs : @list.List[@attribute.Attribute]) -> String? {
   let mut result : String? = None
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "mount_webhook" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "mount_webhook", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Expr(String(s)) => result = Some(s)
@@ -818,7 +818,7 @@ fn extract_mount_phantom(attrs : @list.List[@attribute.Attribute]) -> Bool {
   let mut result = false
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "mount_phantom" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "mount_phantom", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Expr(Bool(b)) => result = b
@@ -844,7 +844,7 @@ fn extract_endpoint(
   let mut result : HttpEndpointInfo? = None
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "endpoint" }, props)) => {
+      Some(Apply({ qual: Some("derive"), name: "endpoint", }, props)) => {
         let found : Array[(String, String)] = []
         props.each(fn(prop) {
           match prop {
@@ -866,7 +866,7 @@ fn extract_endpoint(
           )
         } else {
           let (method, path) = found[0]
-          result = Some({ method, path, headers: [], auth: None, cors: [] })
+          result = Some({ method, path, headers: [], auth: None, cors: [], })
         }
       }
       _ => ()
@@ -883,7 +883,7 @@ fn extract_endpoint_headers(
   let result : Array[(String, String)] = []
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "endpoint_header" }, props)) => {
+      Some(Apply({ qual: Some("derive"), name: "endpoint_header", }, props)) => {
         let strings : Array[String] = []
         props.each(fn(prop) {
           match prop {
@@ -907,7 +907,7 @@ fn extract_endpoint_auth(attrs : @list.List[@attribute.Attribute]) -> Bool? {
   let mut result : Bool? = None
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "endpoint_auth" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "endpoint_auth", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Expr(Bool(b)) => result = Some(b)
@@ -928,7 +928,7 @@ fn extract_endpoint_cors(
   let result : Array[String] = []
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "endpoint_cors" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "endpoint_cors", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Expr(String(s)) => result.push(s)
@@ -952,7 +952,7 @@ fn build_endpoint_info(
       let headers = extract_endpoint_headers(attrs)
       let auth = extract_endpoint_auth(attrs)
       let cors = extract_endpoint_cors(attrs)
-      Some({ ..ep, headers, auth, cors })
+      Some({ ..ep, headers, auth, cors, })
     }
     None => None
   }

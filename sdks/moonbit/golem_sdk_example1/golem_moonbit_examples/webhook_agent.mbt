@@ -17,7 +17,7 @@ struct WebhookAgent {
 ///|
 /// Creates a new webhook agent
 fn WebhookAgent::new(name : String) -> WebhookAgent {
-  { name, last_payload: "" }
+  { name, last_payload: "", }
 }
 
 ///|

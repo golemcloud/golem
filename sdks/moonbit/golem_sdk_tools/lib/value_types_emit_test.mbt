@@ -19,7 +19,7 @@ test "generate impls for simple struct" {
 ///|
 test "generate impls for simple enum" {
   let types : Array[ValueTypeInfo] = [
-    { name: "Priority", kind: SimpleEnum(["Low", "Medium", "High"]) },
+    { name: "Priority", kind: SimpleEnum(["Low", "Medium", "High"]), },
   ]
   let impls = generate_value_type_impls(types)
   let output = @formatter.impls_to_string(impls)

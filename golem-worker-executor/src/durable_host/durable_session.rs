@@ -1861,34 +1861,29 @@ impl DurableSessionStreams {
 
         let _session_guard = self.session_lock.lock().await;
         self.recover_session_mappings().await?;
+        validate_forwarded_durable_input_schemas(
+            value,
+            graph,
+            root,
+            "forwarded durable input handle does not match the invocation stream schema",
+        )?;
         let mut pending = Vec::new();
         let encoded =
             encode_recursive_stream_value_with_schema(value, graph, root, |stream, path| {
                 let element = stream_element_schema(graph, root, path)?;
                 let element_schema_fingerprint =
                     schema_fingerprint_v1(graph, element).map_err(|error| error.to_string())?;
-                let forwarded_handle = stream
-                    .with_host_endpoint::<ForwardedDurableInput, _>(|forwarded| {
-                        forwarded.handle.clone()
-                    })
-                    .ok();
-                if let Some(handle) = &forwarded_handle
-                    && (handle.format_version != DURABLE_STREAM_FORMAT_VERSION
-                        || handle.element_schema_fingerprint != element_schema_fingerprint)
-                {
-                    return Err(
-                    "forwarded durable input handle does not match the invocation stream schema"
-                        .to_string(),
-                );
-                }
+                let forwarded = forwarded_durable_input_reference(stream)?;
+                let (endpoint, forwarded_handle) = match forwarded {
+                    Some(forwarded) => (None, Some(forwarded.take(stream)?.handle)),
+                    None => (
+                        Some(stream.take_host_endpoint::<LiveStreamEndpoint>()?),
+                        None,
+                    ),
+                };
                 pending.push(PendingInput {
                     path: path.to_vec(),
-                    endpoint: if forwarded_handle.is_none() {
-                        Some(stream.take_host_endpoint::<LiveStreamEndpoint>()?)
-                    } else {
-                        stream.take_host_endpoint::<ForwardedDurableInput>()?;
-                        None
-                    },
+                    endpoint,
                     forwarded_handle,
                     element_type: element.cloned().unwrap_or_else(SchemaType::u8),
                     element_schema_fingerprint,
@@ -2022,31 +2017,25 @@ impl DurableSessionStreams {
             element_schema_fingerprint: SchemaFingerprintV1,
         }
 
+        validate_forwarded_durable_input_schemas(
+            &value,
+            graph,
+            root,
+            "forwarded durable output handle does not match the result stream schema",
+        )?;
         let mut pending = Vec::new();
         let encoded =
             encode_recursive_stream_value_with_schema(&value, graph, root, |stream, path| {
                 let element = stream_element_schema(graph, root, path)?;
                 let element_schema_fingerprint =
                     schema_fingerprint_v1(graph, element).map_err(|error| error.to_string())?;
-                let forwarded_handle = stream
-                    .with_host_endpoint::<ForwardedDurableInput, _>(|forwarded| {
-                        forwarded.handle.clone()
-                    })
-                    .ok();
-                if let Some(handle) = &forwarded_handle
-                    && (handle.format_version != DURABLE_STREAM_FORMAT_VERSION
-                        || handle.element_schema_fingerprint != element_schema_fingerprint)
-                {
-                    return Err(
-                        "forwarded durable output handle does not match the result stream schema"
-                            .to_string(),
-                    );
-                }
-                let endpoint = if forwarded_handle.is_none() {
-                    Some(stream.take_host_endpoint::<LiveStreamEndpoint>()?)
-                } else {
-                    stream.take_host_endpoint::<ForwardedDurableInput>()?;
-                    None
+                let forwarded = forwarded_durable_input_reference(stream)?;
+                let (endpoint, forwarded_handle) = match forwarded {
+                    Some(forwarded) => (None, Some(forwarded.take(stream)?.handle)),
+                    None => (
+                        Some(stream.take_host_endpoint::<LiveStreamEndpoint>()?),
+                        None,
+                    ),
                 };
                 let canonical_handle_index = u64::try_from(pending.len())
                     .map_err(|_| "durable output handle index overflow".to_string())?;
@@ -2526,7 +2515,14 @@ impl DurableSessionStreams {
                         registration: ProducerRegistrationRequestV1,
                     }
 
-                    if let Err(error) = preflight_recursive_stream_value(&value) {
+                    if let Err(error) = preflight_recursive_stream_value(&value).and_then(|_| {
+                        validate_forwarded_durable_input_schemas(
+                            &value,
+                            &graph,
+                            &element_type,
+                            "forwarded nested durable handle does not match the stream item schema",
+                        )
+                    }) {
                         let _ = self
                             .producer
                             .end(
@@ -2548,27 +2544,13 @@ impl DurableSessionStreams {
                             let element_schema_fingerprint =
                                 schema_fingerprint_v1(&graph, nested_element.as_ref())
                                     .map_err(|error| error.to_string())?;
-                            let forwarded_handle = stream
-                                .with_host_endpoint::<ForwardedDurableInput, _>(|forwarded| {
-                                    forwarded.handle.clone()
-                                })
-                                .ok();
-                            if let Some(forwarded_handle) = &forwarded_handle
-                                && (forwarded_handle.format_version
-                                    != DURABLE_STREAM_FORMAT_VERSION
-                                    || forwarded_handle.element_schema_fingerprint
-                                        != element_schema_fingerprint)
-                            {
-                                return Err(
-                                "forwarded nested durable handle does not match the stream item schema"
-                                    .to_string(),
-                            );
-                            }
-                            let endpoint = if forwarded_handle.is_none() {
-                                Some(stream.take_host_endpoint::<LiveStreamEndpoint>()?)
-                            } else {
-                                stream.take_host_endpoint::<ForwardedDurableInput>()?;
-                                None
+                            let forwarded = forwarded_durable_input_reference(stream)?;
+                            let (endpoint, forwarded_handle) = match forwarded {
+                                Some(forwarded) => (None, Some(forwarded.take(stream)?.handle)),
+                                None => (
+                                    Some(stream.take_host_endpoint::<LiveStreamEndpoint>()?),
+                                    None,
+                                ),
                             };
                             let canonical_handle_index = u64::try_from(nested_outputs.len())
                                 .map_err(|_| "durable nested handle index overflow".to_string())?;
@@ -3614,6 +3596,100 @@ pub(crate) struct DurableInputEndpoint {
 
 pub(crate) struct ForwardedDurableInput {
     pub(crate) handle: DurableStreamHandleV1,
+}
+
+impl DurableInputEndpoint {
+    fn forwarded_handle(&self) -> Result<DurableStreamHandleV1, String> {
+        if self.consumer_read_ordinal != 0 || !self.journal.is_empty() {
+            return Err("cannot forward a durable input stream after reading from it".to_string());
+        }
+        Ok(self.handle.clone())
+    }
+
+    fn into_forwarded(self) -> Result<ForwardedDurableInput, String> {
+        self.forwarded_handle()?;
+        Ok(ForwardedDurableInput {
+            handle: self.handle,
+        })
+    }
+}
+
+enum ForwardedDurableInputReference {
+    Forwarded(DurableStreamHandleV1),
+    Endpoint(DurableStreamHandleV1),
+}
+
+impl ForwardedDurableInputReference {
+    fn handle(&self) -> &DurableStreamHandleV1 {
+        match self {
+            Self::Forwarded(handle) | Self::Endpoint(handle) => handle,
+        }
+    }
+
+    fn take(self, stream: &SchemaValueStream) -> Result<ForwardedDurableInput, String> {
+        match self {
+            Self::Forwarded(_) => stream.take_host_endpoint::<ForwardedDurableInput>(),
+            Self::Endpoint(_) => stream
+                .take_host_endpoint::<DurableInputEndpoint>()?
+                .into_forwarded(),
+        }
+    }
+}
+
+fn forwarded_durable_input_reference(
+    stream: &SchemaValueStream,
+) -> Result<Option<ForwardedDurableInputReference>, String> {
+    if stream
+        .with_host_endpoint::<ForwardedDurableInput, _>(|_| ())
+        .is_ok()
+    {
+        return stream
+            .with_host_endpoint::<ForwardedDurableInput, _>(|forwarded| forwarded.handle.clone())
+            .map(ForwardedDurableInputReference::Forwarded)
+            .map(Some);
+    }
+    if stream
+        .with_host_endpoint::<DurableInputEndpoint, _>(|_| ())
+        .is_ok()
+    {
+        return stream
+            .with_host_endpoint::<DurableInputEndpoint, _>(DurableInputEndpoint::forwarded_handle)?
+            .map(ForwardedDurableInputReference::Endpoint)
+            .map(Some);
+    }
+    Ok(None)
+}
+
+fn validate_forwarded_durable_input_schemas(
+    value: &SchemaValue,
+    graph: &SchemaGraph,
+    root: &SchemaType,
+    mismatch_error: &str,
+) -> Result<(), String> {
+    let mut seen_streams = HashSet::new();
+    encode_recursive_stream_value_with_schema(value, graph, root, |stream, path| {
+        if !seen_streams.insert(stream.cell_id()) {
+            return Err(
+                "the same affine stream appeared more than once in one value tree".to_string(),
+            );
+        }
+        let element = stream_element_schema(graph, root, path)?;
+        let element_schema_fingerprint =
+            schema_fingerprint_v1(graph, element).map_err(|error| error.to_string())?;
+        match forwarded_durable_input_reference(stream)? {
+            Some(forwarded)
+                if forwarded.handle().format_version != DURABLE_STREAM_FORMAT_VERSION
+                    || forwarded.handle().element_schema_fingerprint
+                        != element_schema_fingerprint =>
+            {
+                return Err(mismatch_error.to_string());
+            }
+            Some(_) => {}
+            None => stream.with_host_endpoint::<LiveStreamEndpoint, _>(|_| ())?,
+        }
+        Ok(0)
+    })?;
+    Ok(())
 }
 
 enum DurableStreamReader {
@@ -6413,7 +6489,7 @@ mod tests {
             producer.clone(),
             oplog.clone(),
             identity.invocation.clone(),
-            [],
+            [(0, original.clone(), SessionStreamRoleV1::Input)],
         )
         .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())));
         let root_type = SchemaType::stream(Some(element_type));
@@ -6446,9 +6522,10 @@ mod tests {
         );
 
         let result = SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
-            ForwardedDurableInput {
-                handle: original.clone(),
-            },
+            streams
+                .endpoint(original.clone(), 0, SessionStreamRoleV1::Input)
+                .await
+                .unwrap(),
         ));
         streams
             .materialize_result(
@@ -6462,6 +6539,231 @@ mod tests {
         let persisted = streams.remote_result_record().await.unwrap().unwrap();
         assert_eq!(persisted.output_streams, vec![original.clone()]);
         assert_eq!(persisted.stream_mappings[0].handle, original);
+
+        assert!(
+            producer
+                .handle_for_coordinate(&StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodResult,
+                    recursive_value_path: Vec::new(),
+                })
+                .await
+                .is_none()
+        );
+
+        let read_endpoint = streams
+            .endpoint(original.clone(), 1, SessionStreamRoleV1::Input)
+            .await
+            .unwrap();
+        assert_eq!(
+            read_endpoint.into_forwarded().err().unwrap(),
+            "cannot forward a durable input stream after reading from it"
+        );
+
+        let mut journaled_endpoint = streams
+            .endpoint(original.clone(), 0, SessionStreamRoleV1::Input)
+            .await
+            .unwrap();
+        journaled_endpoint
+            .journal
+            .push_back(CommittedProducerStreamEventV1 {
+                stream_id: original.stream_id,
+                producer_sequence: 0,
+                offset: golem_common::model::durable_stream::StreamOffsetV1::new(
+                    OplogIndex::INITIAL,
+                    0,
+                ),
+                terminal_author: None,
+                nested_handles: Vec::new(),
+                payload: CommittedProducerStreamEventPayloadV1::PackedU8(0),
+            });
+        assert_eq!(
+            journaled_endpoint.into_forwarded().err().unwrap(),
+            "cannot forward a durable input stream after reading from it"
+        );
+    }
+
+    #[test]
+    async fn schema_mismatch_does_not_consume_forwarded_stream() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let source_element_type = SchemaType::u32();
+        let source_graph = SchemaGraph::anonymous(source_element_type.clone());
+        let mut request = registration(
+            &identity,
+            StreamRegistrationCoordinateV1::Root {
+                invocation_id: identity.invocation.clone(),
+                root_kind: StreamRootKindV1::MethodResult,
+                recursive_value_path: Vec::new(),
+            },
+            StreamSourceKindV1::InvocationOutput,
+        );
+        request.element_schema_fingerprint =
+            schema_fingerprint_v1(&source_graph, Some(&source_element_type)).unwrap();
+        let handle = producer.register(request).await.unwrap().value;
+        let mut second_request = registration(
+            &identity,
+            StreamRegistrationCoordinateV1::Root {
+                invocation_id: identity.invocation.clone(),
+                root_kind: StreamRootKindV1::MethodResult,
+                recursive_value_path: vec![StreamValuePathStepV1::TupleElement(1)],
+            },
+            StreamSourceKindV1::InvocationOutput,
+        );
+        second_request.element_schema_fingerprint =
+            schema_fingerprint_v1(&source_graph, Some(&source_element_type)).unwrap();
+        let second_handle = producer.register(second_request).await.unwrap().value;
+        let streams = DurableSessionStreams::new(
+            producer,
+            oplog.clone(),
+            identity.invocation,
+            [
+                (0, handle.clone(), SessionStreamRoleV1::Input),
+                (1, second_handle.clone(), SessionStreamRoleV1::Input),
+            ],
+        )
+        .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)));
+        let stream = SchemaValueStream::from_host_endpoint(ForwardedDurableInput {
+            handle: handle.clone(),
+        });
+        let mismatched_element_type = SchemaType::string();
+        let mismatched_graph = SchemaGraph::anonymous(mismatched_element_type.clone());
+
+        let error = streams
+            .materialize_result(
+                SchemaValue::Stream(stream.clone()),
+                &mismatched_graph,
+                &SchemaType::stream(Some(mismatched_element_type.clone())),
+                golem_common::model::component::ComponentRevision::INITIAL,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.contains("does not match the result stream schema"));
+        assert!(
+            stream
+                .with_host_endpoint::<ForwardedDurableInput, _>(|_| ())
+                .is_ok()
+        );
+
+        let endpoint_stream = SchemaValueStream::from_host_endpoint(
+            streams
+                .endpoint(handle, 0, SessionStreamRoleV1::Input)
+                .await
+                .unwrap(),
+        );
+        let error = streams
+            .materialize_result(
+                SchemaValue::Stream(endpoint_stream.clone()),
+                &mismatched_graph,
+                &SchemaType::stream(Some(mismatched_element_type)),
+                golem_common::model::component::ComponentRevision::INITIAL,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.contains("does not match the result stream schema"));
+        assert!(
+            endpoint_stream
+                .with_host_endpoint::<DurableInputEndpoint, _>(|_| ())
+                .is_ok()
+        );
+
+        let second_stream = SchemaValueStream::from_host_endpoint(ForwardedDurableInput {
+            handle: second_handle,
+        });
+        let tuple_root = SchemaType::tuple(vec![
+            SchemaType::stream(Some(source_element_type.clone())),
+            SchemaType::stream(Some(SchemaType::string())),
+        ]);
+        let tuple_graph = SchemaGraph::anonymous(tuple_root.clone());
+        let error = streams
+            .materialize_result(
+                SchemaValue::Tuple {
+                    elements: vec![
+                        SchemaValue::Stream(endpoint_stream.clone()),
+                        SchemaValue::Stream(second_stream.clone()),
+                    ],
+                },
+                &tuple_graph,
+                &tuple_root,
+                golem_common::model::component::ComponentRevision::INITIAL,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.contains("does not match the result stream schema"));
+        assert!(
+            endpoint_stream
+                .with_host_endpoint::<DurableInputEndpoint, _>(|_| ())
+                .is_ok()
+        );
+        assert!(
+            second_stream
+                .with_host_endpoint::<ForwardedDurableInput, _>(|_| ())
+                .is_ok()
+        );
+
+        let consumed = SchemaValueStream::from_host_endpoint(());
+        consumed.take_host_endpoint::<()>().unwrap();
+        let valid_tuple_root = SchemaType::tuple(vec![
+            SchemaType::stream(Some(source_element_type.clone())),
+            SchemaType::stream(Some(source_element_type)),
+        ]);
+        let valid_tuple_graph = SchemaGraph::anonymous(valid_tuple_root.clone());
+
+        let error = streams
+            .materialize_result(
+                SchemaValue::Tuple {
+                    elements: vec![
+                        SchemaValue::Stream(second_stream.clone()),
+                        SchemaValue::Stream(consumed),
+                    ],
+                },
+                &valid_tuple_graph,
+                &valid_tuple_root,
+                golem_common::model::component::ComponentRevision::INITIAL,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.contains("schema value stream was already transferred"));
+        assert!(
+            second_stream
+                .with_host_endpoint::<ForwardedDurableInput, _>(|_| ())
+                .is_ok()
+        );
+
+        let error = streams
+            .materialize_result(
+                SchemaValue::Tuple {
+                    elements: vec![
+                        SchemaValue::Stream(second_stream.clone()),
+                        SchemaValue::Stream(second_stream.clone()),
+                    ],
+                },
+                &valid_tuple_graph,
+                &valid_tuple_root,
+                golem_common::model::component::ComponentRevision::INITIAL,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.contains("the same affine stream appeared more than once"));
+        assert!(
+            second_stream
+                .with_host_endpoint::<ForwardedDurableInput, _>(|_| ())
+                .is_ok()
+        );
     }
 
     #[test]

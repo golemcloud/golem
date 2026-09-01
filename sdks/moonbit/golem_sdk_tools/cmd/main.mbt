@@ -56,7 +56,7 @@ priv struct GeneratedFilePlan {
 
 ///|
 fn GeneratedFilePlan::new() -> GeneratedFilePlan {
-  { writes: [], removals: [] }
+  { writes: [], removals: [], }
 }
 
 ///|
@@ -66,7 +66,7 @@ fn GeneratedFilePlan::stage_write(
   content : String,
   message : String,
 ) -> Unit {
-  self.writes.push({ path, content, message })
+  self.writes.push({ path, content, message, })
 }
 
 ///|

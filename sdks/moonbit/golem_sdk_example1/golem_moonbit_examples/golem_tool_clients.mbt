@@ -7,7 +7,7 @@ pub(all) struct CanonicalGrepClient {
 
 ///|
 pub fn CanonicalGrepClient::new() -> CanonicalGrepClient {
-  { client: @tool.ToolClient::new("canonical-grep") }
+  { client: @tool.ToolClient::new("canonical-grep"), }
 }
 
 ///|
@@ -104,7 +104,7 @@ pub(all) struct CanonicalGitClient {
 
 ///|
 pub fn CanonicalGitClient::new() -> CanonicalGitClient {
-  { client: @tool.ToolClient::new("canonical-git") }
+  { client: @tool.ToolClient::new("canonical-git"), }
 }
 
 ///|
@@ -184,7 +184,7 @@ pub fn CanonicalGitClient::remote(
   __golem_prefix.push(("git-dir", @schema.to_value_as(git_dir)))
   __golem_prefix.push(("paginate", @schema.to_value_as(paginate)))
   __golem_prefix.push(("config", @schema.to_value_as(config)))
-  { client: self.client, prefix: __golem_prefix }
+  { client: self.client, prefix: __golem_prefix, }
 }
 
 ///|
@@ -332,7 +332,7 @@ pub fn CanonicalGitClient::stash(
   let __golem_prefix = []
   __golem_prefix.push(("verbose", @schema.to_value_as(verbose)))
   __golem_prefix.push(("git-dir", @schema.to_value_as(git_dir)))
-  { client: self.client, prefix: __golem_prefix }
+  { client: self.client, prefix: __golem_prefix, }
 }
 
 ///|
@@ -495,7 +495,7 @@ pub(all) struct CanonicalBigBoundClient {
 
 ///|
 pub fn CanonicalBigBoundClient::new() -> CanonicalBigBoundClient {
-  { client: @tool.ToolClient::new("canonical-big-bound") }
+  { client: @tool.ToolClient::new("canonical-big-bound"), }
 }
 
 ///|

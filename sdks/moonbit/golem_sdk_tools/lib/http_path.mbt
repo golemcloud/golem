@@ -114,10 +114,10 @@ fn parse_single_segment(
       raise HttpPathParseError("empty variable name in path segment: {}")
     }
     if inner == "agent-type" {
-      return { kind: SystemVariable(AgentType) }
+      return { kind: SystemVariable(AgentType), }
     }
     if inner == "agent-version" {
-      return { kind: SystemVariable(AgentVersion) }
+      return { kind: SystemVariable(AgentVersion), }
     }
     if inner.has_prefix("*") {
       let name = inner.unsafe_substring(start=1, end=inner.length())
@@ -126,11 +126,11 @@ fn parse_single_segment(
           "empty variable name in remaining path variable: {*}",
         )
       }
-      return { kind: RemainingPathVariable(name) }
+      return { kind: RemainingPathVariable(name), }
     }
-    return { kind: PathVariable(inner) }
+    return { kind: PathVariable(inner), }
   }
-  { kind: Literal(segment) }
+  { kind: Literal(segment), }
 }
 
 ///|
@@ -168,7 +168,7 @@ fn parse_query_vars(
     if var_name == "" {
       raise HttpPathParseError("empty variable name in query value: \{entry}")
     }
-    vars.push({ query_param_name: key, variable_name: var_name })
+    vars.push({ query_param_name: key, variable_name: var_name, })
   }
   vars
 }

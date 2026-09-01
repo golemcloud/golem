@@ -14,13 +14,13 @@ pub impl @tool.ToolErrorSchema for CanonicalGrepError with fn error_cases() {
       exit_code: 2,
       payload: Some(
         @schema.into_schema_graph(
-          (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
         ),
       ),
     },
     {
       name: "no-match",
-      doc: { summary: "No line matched.", description: "", examples: [] },
+      doc: { summary: "No line matched.", description: "", examples: [], },
       kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
       exit_code: 1,
       payload: None,
@@ -73,26 +73,26 @@ pub impl @tool.ToolErrorSchema for CanonicalCommitError with fn error_cases() {
   Ok([
     {
       name: "nothing-staged",
-      doc: { summary: "", description: "", examples: [] },
+      doc: { summary: "", description: "", examples: [], },
       kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
       exit_code: 1,
       payload: None,
     },
     {
       name: "dirty-merge",
-      doc: { summary: "", description: "", examples: [] },
+      doc: { summary: "", description: "", examples: [], },
       kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
       exit_code: 128,
       payload: None,
     },
     {
       name: "bad-author-format",
-      doc: { summary: "", description: "", examples: [] },
+      doc: { summary: "", description: "", examples: [], },
       kind: @toolCommon.ErrorKind::USAGE_ERROR,
       exit_code: 129,
       payload: Some(
         @schema.into_schema_graph(
-          (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
         ),
       ),
     },
@@ -154,14 +154,14 @@ pub impl @tool.ToolErrorSchema for CanonicalLogError with fn error_cases() {
   Ok([
     {
       name: "bad-revision",
-      doc: { summary: "", description: "", examples: [] },
+      doc: { summary: "", description: "", examples: [], },
       kind: @toolCommon.ErrorKind::USAGE_ERROR,
       exit_code: 128,
       payload: None,
     },
     {
       name: "not-a-repository",
-      doc: { summary: "", description: "", examples: [] },
+      doc: { summary: "", description: "", examples: [], },
       kind: @toolCommon.ErrorKind::USAGE_ERROR,
       exit_code: 129,
       payload: None,
@@ -212,12 +212,12 @@ pub impl @tool.ToolErrorSchema for CanonicalRemoteError with fn error_cases() {
   Ok([
     {
       name: "no-such-remote",
-      doc: { summary: "", description: "", examples: [] },
+      doc: { summary: "", description: "", examples: [], },
       kind: @toolCommon.ErrorKind::USAGE_ERROR,
       exit_code: 128,
       payload: Some(
         @schema.into_schema_graph(
-          (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
         ),
       ),
     },
@@ -259,12 +259,12 @@ pub impl @tool.ToolErrorSchema for CanonicalSetUrlError with fn error_cases() {
   Ok([
     {
       name: "failed",
-      doc: { summary: "", description: "", examples: [] },
+      doc: { summary: "", description: "", examples: [], },
       kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
       exit_code: 1,
       payload: Some(
         @schema.into_schema_graph(
-          (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
         ),
       ),
     },
@@ -306,12 +306,12 @@ pub impl @tool.ToolErrorSchema for CanonicalStashError with fn error_cases() {
   Ok([
     {
       name: "no-such-stash",
-      doc: { summary: "", description: "", examples: [] },
+      doc: { summary: "", description: "", examples: [], },
       kind: @toolCommon.ErrorKind::USAGE_ERROR,
       exit_code: 128,
       payload: Some(
         @schema.into_schema_graph(
-          (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
         ),
       ),
     },
@@ -410,7 +410,7 @@ fn __golem_tool_append_prepared(
   for node in child.commands {
     commands.push(__golem_tool_rebase_node(node, offset))
   }
-  { version: def.version, commands }
+  { version: def.version, commands, }
 }
 
 ///|
@@ -442,7 +442,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                 shape: @tool.OptionShapeDef::Scalar(
                   @schema.into_schema_graph(
                     (
-                      @schema.TypeTag::{  } :
+                      @schema.TypeTag::{ } :
                       @schema.TypeTag[CanonicalGrepColorMode]),
                   ),
                 ),
@@ -450,7 +450,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                   @tool.literal_to_schema_value(
                     @schema.into_schema_graph(
                       (
-                        @schema.TypeTag::{  } :
+                        @schema.TypeTag::{ } :
                         @schema.TypeTag[CanonicalGrepColorMode]),
                     ),
                     @tool.ToolLiteral::Scalar("Auto"),
@@ -492,7 +492,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                   value_name: None,
                   type_: @tool.refine_text(
                     @schema.into_schema_graph(
-                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                      (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                     ),
                     Some("^.+$"),
                     None,
@@ -513,7 +513,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                 value_name: None,
                 item_type: @tool.refine_path(
                   @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
                   ),
                   Some(@types.PathDirection::INPUT),
                   Some(@types.PathKind::FILE),
@@ -531,12 +531,12 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                 long: "extra-patterns",
                 short: Some('\u{65}'),
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::RepeatableList({
                   repetition: @toolCommon.Repetition::Either('\u{2c}'),
                   item_type: @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                 }),
                 default: None,
@@ -547,12 +547,12 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                 long: "max-count",
                 short: Some('\u{6e}'),
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @tool.refine_numeric(
                     @schema.into_schema_graph(
-                      (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
+                      (@schema.TypeTag::{ } : @schema.TypeTag[UInt]),
                     ),
                     Some("1"),
                     None,
@@ -567,20 +567,18 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
             flags: [],
             constraints: [],
             stdin: Some({
-              doc: { summary: "", description: "", examples: [] },
+              doc: { summary: "", description: "", examples: [], },
               mime: [],
               required: true,
             }),
             stdout: Some({
-              doc: { summary: "", description: "", examples: [] },
+              doc: { summary: "", description: "", examples: [], },
               mime: [],
               required: true,
             }),
             result: Some({
               type_: @schema.into_schema_graph(
-                (
-                  @schema.TypeTag::{  } :
-                  @schema.TypeTag[Array[CanonicalGrepHit]]),
+                (@schema.TypeTag::{ } : @schema.TypeTag[Array[CanonicalGrepHit]]),
               ),
               doc: {
                 summary: "Search files for a regular expression. Bare `canonical-grep` runs this body.",
@@ -590,7 +588,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
               formatters: [
                 {
                   name: "default",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                 },
               ],
               default_formatter: "default",
@@ -621,12 +619,12 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                 long: "color",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @schema.into_schema_graph(
                     (
-                      @schema.TypeTag::{  } :
+                      @schema.TypeTag::{ } :
                       @schema.TypeTag[CanonicalGrepColorMode]),
                   ),
                 ),
@@ -634,7 +632,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                   @tool.literal_to_schema_value(
                     @schema.into_schema_graph(
                       (
-                        @schema.TypeTag::{  } :
+                        @schema.TypeTag::{ } :
                         @schema.TypeTag[CanonicalGrepColorMode]),
                     ),
                     @tool.ToolLiteral::Scalar("Auto"),
@@ -649,7 +647,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                 long: "case-sensitive",
                 short: Some('\u{69}'),
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 shape: @toolCommon.FlagShape::BoolFlag({
                   default: false,
                   negatable: false,
@@ -664,10 +662,10 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
               fixed: [
                 {
                   name: "pattern",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                   value_name: None,
                   type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                   default: None,
                   required: true,
@@ -675,10 +673,10 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                 },
                 {
                   name: "replacement",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                   value_name: None,
                   type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                   default: None,
                   required: true,
@@ -687,11 +685,11 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
               ],
               tail: Some({
                 name: "files",
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 item_type: @tool.refine_path(
                   @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
                   ),
                   Some(@types.PathDirection::IN_OUT),
                   Some(@types.PathKind::FILE),
@@ -711,7 +709,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
             stdout: None,
             result: Some({
               type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+                (@schema.TypeTag::{ } : @schema.TypeTag[UInt64]),
               ),
               doc: {
                 summary: "Replace matching text in place.",
@@ -721,7 +719,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
               formatters: [
                 {
                   name: "default",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                 },
               ],
               default_formatter: "default",
@@ -761,7 +759,7 @@ fn __golem_tool_def_prepare_CanonicalGrep(
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
+          doc: { summary: "", description: "", examples: [], },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -788,8 +786,8 @@ fn __golem_tool_def_prepare_CanonicalGrep(
 ///|
 fn __golem_tool_def_CanonicalGrep() -> @tool.ToolDef {
   __golem_tool_def_prepare_CanonicalGrep(
-    { options: [], flags: [] },
-    { options: [], flags: [] },
+    { options: [], flags: [], },
+    { options: [], flags: [], },
     None,
     None,
     None,
@@ -1017,7 +1015,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [] },
+          globals: { options: [], flags: [], },
           subcommands: [1, 2],
           body: None,
         },
@@ -1035,12 +1033,12 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "git-dir",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @tool.refine_path(
                     @schema.into_schema_graph(
-                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                      (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
                     ),
                     None,
                     Some(@types.PathKind::DIRECTORY),
@@ -1051,7 +1049,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                   @tool.literal_to_schema_value(
                     @tool.refine_path(
                       @schema.into_schema_graph(
-                        (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                        (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
                       ),
                       None,
                       Some(@types.PathKind::DIRECTORY),
@@ -1067,14 +1065,12 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "config",
                 short: Some('\u{63}'),
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::RepeatableMap({
                   repetition: @toolCommon.Repetition::Repeated,
                   map_type: @schema.into_schema_graph(
-                    (
-                      @schema.TypeTag::{  } :
-                      @schema.TypeTag[Map[String, String]]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[Map[String, String]]),
                   ),
                   duplicate_key_policy: @toolCommon.DuplicateKeyPolicy::REJECT,
                 }),
@@ -1088,7 +1084,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "verbose",
                 short: Some('\u{76}'),
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 shape: @toolCommon.FlagShape::CountFlag(Some(3U)),
                 env_var: None,
               },
@@ -1096,7 +1092,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "paginate",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 shape: @toolCommon.FlagShape::BoolFlag({
                   default: true,
                   negatable: true,
@@ -1107,17 +1103,17 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
           },
           subcommands: [],
           body: Some({
-            positionals: { fixed: [], tail: None },
+            positionals: { fixed: [], tail: None, },
             options: [
               {
                 long: "message",
                 short: Some('\u{6d}'),
                 aliases: ["msg"],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                 ),
                 default: None,
@@ -1128,12 +1124,12 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "author",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @tool.refine_text(
                     @schema.into_schema_graph(
-                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                      (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                     ),
                     Some("^.+ <.+@.+>$"),
                     None,
@@ -1148,12 +1144,12 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "output",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @schema.into_schema_graph(
                     (
-                      @schema.TypeTag::{  } :
+                      @schema.TypeTag::{ } :
                       @schema.TypeTag[CanonicalGitOutputMode]),
                   ),
                 ),
@@ -1161,7 +1157,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                   @tool.literal_to_schema_value(
                     @schema.into_schema_graph(
                       (
-                        @schema.TypeTag::{  } :
+                        @schema.TypeTag::{ } :
                         @schema.TypeTag[CanonicalGitOutputMode]),
                     ),
                     @tool.ToolLiteral::Scalar("Human"),
@@ -1176,7 +1172,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "amend",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 shape: @toolCommon.FlagShape::BoolFlag({
                   default: false,
                   negatable: true,
@@ -1187,7 +1183,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "signoff",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 shape: @toolCommon.FlagShape::BoolFlag({
                   default: false,
                   negatable: true,
@@ -1198,7 +1194,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "reset-author",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 shape: @toolCommon.FlagShape::BoolFlag({
                   default: false,
                   negatable: false,
@@ -1226,7 +1222,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
             stdout: None,
             result: Some({
               type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{  } : @schema.TypeTag[CanonicalCommitResult]),
+                (@schema.TypeTag::{ } : @schema.TypeTag[CanonicalCommitResult]),
               ),
               doc: {
                 summary: "Record changes to the repository.",
@@ -1236,15 +1232,15 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
               formatters: [
                 {
                   name: "human",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                 },
                 {
                   name: "porcelain",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                 },
                 {
                   name: "json",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                 },
               ],
               default_formatter: "human",
@@ -1264,19 +1260,19 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
         {
           name: "log",
           aliases: [],
-          doc: { summary: "Show commit logs.", description: "", examples: [] },
-          globals: { options: [], flags: [] },
+          doc: { summary: "Show commit logs.", description: "", examples: [], },
+          globals: { options: [], flags: [], },
           subcommands: [],
           body: Some({
             positionals: {
               fixed: [],
               tail: Some({
                 name: "paths",
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 item_type: @tool.refine_path(
                   @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
                   ),
                   Some(@types.PathDirection::INPUT),
                   Some(@types.PathKind::FILE),
@@ -1294,12 +1290,12 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "max-count",
                 short: Some('\u{6e}'),
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @tool.refine_numeric(
                     @schema.into_schema_graph(
-                      (@schema.TypeTag::{  } : @schema.TypeTag[Int64]),
+                      (@schema.TypeTag::{ } : @schema.TypeTag[Int64]),
                     ),
                     Some("0"),
                     Some("9223372036854775807"),
@@ -1314,11 +1310,11 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "since",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[@types.Datetime]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[@types.Datetime]),
                   ),
                 ),
                 default: None,
@@ -1329,11 +1325,11 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "until",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[@types.Datetime]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[@types.Datetime]),
                   ),
                 ),
                 default: None,
@@ -1344,12 +1340,12 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "author",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::RepeatableList({
                   repetition: @toolCommon.Repetition::Delimited('\u{2c}'),
                   item_type: @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                 }),
                 default: None,
@@ -1360,12 +1356,12 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "grep",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::RepeatableList({
                   repetition: @toolCommon.Repetition::Either('\u{2c}'),
                   item_type: @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                 }),
                 default: None,
@@ -1378,7 +1374,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "all-match",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 shape: @toolCommon.FlagShape::BoolFlag({
                   default: false,
                   negatable: false,
@@ -1389,7 +1385,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "invert-grep",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 shape: @toolCommon.FlagShape::BoolFlag({
                   default: false,
                   negatable: false,
@@ -1400,7 +1396,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "oneline",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 shape: @toolCommon.FlagShape::BoolFlag({
                   default: false,
                   negatable: false,
@@ -1411,7 +1407,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "graph",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 shape: @toolCommon.FlagShape::BoolFlag({
                   default: false,
                   negatable: false,
@@ -1430,7 +1426,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
             result: Some({
               type_: @schema.into_schema_graph(
                 (
-                  @schema.TypeTag::{  } :
+                  @schema.TypeTag::{ } :
                   @schema.TypeTag[Array[CanonicalLogEntry]]),
               ),
               doc: {
@@ -1441,19 +1437,19 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
               formatters: [
                 {
                   name: "oneline",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                 },
                 {
                   name: "short",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                 },
                 {
                   name: "medium",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                 },
                 {
                   name: "full",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                 },
               ],
               default_formatter: "medium",
@@ -1493,7 +1489,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
+          doc: { summary: "", description: "", examples: [], },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -1523,12 +1519,12 @@ fn __golem_tool_def_prepare_CanonicalGit(
             long: "git-dir",
             short: None,
             aliases: [],
-            doc: { summary: "", description: "", examples: [] },
+            doc: { summary: "", description: "", examples: [], },
             value_name: None,
             shape: @tool.OptionShapeDef::Scalar(
               @tool.refine_path(
                 @schema.into_schema_graph(
-                  (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                  (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
                 ),
                 None,
                 Some(@types.PathKind::DIRECTORY),
@@ -1539,7 +1535,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
               @tool.literal_to_schema_value(
                 @tool.refine_path(
                   @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
                   ),
                   None,
                   Some(@types.PathKind::DIRECTORY),
@@ -1555,12 +1551,12 @@ fn __golem_tool_def_prepare_CanonicalGit(
             long: "config",
             short: Some('\u{63}'),
             aliases: [],
-            doc: { summary: "", description: "", examples: [] },
+            doc: { summary: "", description: "", examples: [], },
             value_name: None,
             shape: @tool.OptionShapeDef::RepeatableMap({
               repetition: @toolCommon.Repetition::Repeated,
               map_type: @schema.into_schema_graph(
-                (@schema.TypeTag::{  } : @schema.TypeTag[Map[String, String]]),
+                (@schema.TypeTag::{ } : @schema.TypeTag[Map[String, String]]),
               ),
               duplicate_key_policy: @toolCommon.DuplicateKeyPolicy::REJECT,
             }),
@@ -1574,7 +1570,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
             long: "verbose",
             short: Some('\u{76}'),
             aliases: [],
-            doc: { summary: "", description: "", examples: [] },
+            doc: { summary: "", description: "", examples: [], },
             shape: @toolCommon.FlagShape::CountFlag(Some(3U)),
             env_var: None,
           },
@@ -1582,7 +1578,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
             long: "paginate",
             short: None,
             aliases: [],
-            doc: { summary: "", description: "", examples: [] },
+            doc: { summary: "", description: "", examples: [], },
             shape: @toolCommon.FlagShape::BoolFlag({
               default: true,
               negatable: true,
@@ -1608,12 +1604,12 @@ fn __golem_tool_def_prepare_CanonicalGit(
             long: "git-dir",
             short: None,
             aliases: [],
-            doc: { summary: "", description: "", examples: [] },
+            doc: { summary: "", description: "", examples: [], },
             value_name: None,
             shape: @tool.OptionShapeDef::Scalar(
               @tool.refine_path(
                 @schema.into_schema_graph(
-                  (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                  (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
                 ),
                 None,
                 Some(@types.PathKind::DIRECTORY),
@@ -1624,7 +1620,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
               @tool.literal_to_schema_value(
                 @tool.refine_path(
                   @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
                   ),
                   None,
                   Some(@types.PathKind::DIRECTORY),
@@ -1642,7 +1638,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
             long: "verbose",
             short: Some('\u{76}'),
             aliases: [],
-            doc: { summary: "", description: "", examples: [] },
+            doc: { summary: "", description: "", examples: [], },
             shape: @toolCommon.FlagShape::CountFlag(Some(3U)),
             env_var: None,
           },
@@ -1666,8 +1662,8 @@ fn __golem_tool_def_prepare_CanonicalGit(
 ///|
 fn __golem_tool_def_CanonicalGit() -> @tool.ToolDef {
   __golem_tool_def_prepare_CanonicalGit(
-    { options: [], flags: [] },
-    { options: [], flags: [] },
+    { options: [], flags: [], },
+    { options: [], flags: [], },
     None,
     None,
     None,
@@ -1981,14 +1977,14 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [] },
+          globals: { options: [], flags: [], },
           subcommands: [1, 2, 3],
           body: None,
         },
         {
           name: "add",
           aliases: [],
-          doc: { summary: "Add a remote.", description: "", examples: [] },
+          doc: { summary: "Add a remote.", description: "", examples: [], },
           globals: {
             options: [],
             flags: [
@@ -1996,7 +1992,7 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
                 long: "verbose",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 shape: @toolCommon.FlagShape::CountFlag(Some(3U)),
                 env_var: None,
               },
@@ -2008,11 +2004,11 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
               fixed: [
                 {
                   name: "name",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                   value_name: None,
                   type_: @tool.refine_text(
                     @schema.into_schema_graph(
-                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                      (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                     ),
                     Some("^[a-zA-Z][a-zA-Z0-9_-]*$"),
                     None,
@@ -2024,11 +2020,11 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
                 },
                 {
                   name: "url",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                   value_name: None,
                   type_: @tool.refine_url(
                     @schema.into_schema_graph(
-                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Url]),
+                      (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Url]),
                     ),
                     Some(["https"]),
                   ),
@@ -2044,12 +2040,12 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
                 long: "track",
                 short: Some('\u{74}'),
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::RepeatableList({
                   repetition: @toolCommon.Repetition::Repeated,
                   item_type: @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                 }),
                 default: None,
@@ -2060,11 +2056,11 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
                 long: "master",
                 short: Some('\u{6d}'),
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                 ),
                 default: None,
@@ -2077,7 +2073,7 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
                 long: "tags",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 shape: @toolCommon.FlagShape::BoolFlag({
                   default: true,
                   negatable: true,
@@ -2088,7 +2084,7 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
                 long: "fetch",
                 short: Some('\u{66}'),
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 shape: @toolCommon.FlagShape::BoolFlag({
                   default: false,
                   negatable: false,
@@ -2115,19 +2111,19 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
         {
           name: "remove",
           aliases: ["rm"],
-          doc: { summary: "Remove a remote.", description: "", examples: [] },
-          globals: { options: [], flags: [] },
+          doc: { summary: "Remove a remote.", description: "", examples: [], },
+          globals: { options: [], flags: [], },
           subcommands: [],
           body: Some({
             positionals: {
               fixed: [
                 {
                   name: "name",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                   value_name: None,
                   type_: @tool.refine_text(
                     @schema.into_schema_graph(
-                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                      (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                     ),
                     Some("^[a-zA-Z][a-zA-Z0-9_-]*$"),
                     None,
@@ -2166,17 +2162,17 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [] },
+          globals: { options: [], flags: [], },
           subcommands: [],
           body: Some({
             positionals: {
               fixed: [
                 {
                   name: "name",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                   value_name: None,
                   type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                   default: None,
                   required: true,
@@ -2184,11 +2180,11 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
                 },
                 {
                   name: "newurl",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                   value_name: None,
                   type_: @tool.refine_url(
                     @schema.into_schema_graph(
-                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Url]),
+                      (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Url]),
                     ),
                     Some(["https"]),
                   ),
@@ -2198,11 +2194,11 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
                 },
                 {
                   name: "oldurl",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                   value_name: None,
                   type_: @tool.refine_url(
                     @schema.into_schema_graph(
-                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Url]),
+                      (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Url]),
                     ),
                     Some(["https"]),
                   ),
@@ -2219,7 +2215,7 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
                 long: "push",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 shape: @toolCommon.FlagShape::BoolFlag({
                   default: false,
                   negatable: false,
@@ -2230,7 +2226,7 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
                 long: "add",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 shape: @toolCommon.FlagShape::BoolFlag({
                   default: false,
                   negatable: false,
@@ -2241,7 +2237,7 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
                 long: "delete",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 shape: @toolCommon.FlagShape::BoolFlag({
                   default: false,
                   negatable: false,
@@ -2251,8 +2247,8 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
             ],
             constraints: [
               @tool.ConstraintDef::MutexGroups([
-                { refs: [@tool.RefDef::Present("add")] },
-                { refs: [@tool.RefDef::Present("delete")] },
+                { refs: [@tool.RefDef::Present("add")], },
+                { refs: [@tool.RefDef::Present("delete")], },
               ]),
             ],
             stdin: None,
@@ -2293,7 +2289,7 @@ fn __golem_tool_def_prepare_CanonicalRemote(
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
+          doc: { summary: "", description: "", examples: [], },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -2320,8 +2316,8 @@ fn __golem_tool_def_prepare_CanonicalRemote(
 ///|
 fn __golem_tool_def_CanonicalRemote() -> @tool.ToolDef {
   __golem_tool_def_prepare_CanonicalRemote(
-    { options: [], flags: [] },
-    { options: [], flags: [] },
+    { options: [], flags: [], },
+    { options: [], flags: [], },
     None,
     None,
     None,
@@ -2588,7 +2584,7 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
                 long: "verbose",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 shape: @toolCommon.FlagShape::CountFlag(Some(3U)),
                 env_var: None,
               },
@@ -2596,17 +2592,17 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
           },
           subcommands: [1, 2],
           body: Some({
-            positionals: { fixed: [], tail: None },
+            positionals: { fixed: [], tail: None, },
             options: [
               {
                 long: "message",
                 short: Some('\u{6d}'),
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                 ),
                 default: None,
@@ -2619,7 +2615,7 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
                 long: "keep-index",
                 short: Some('\u{6b}'),
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 shape: @toolCommon.FlagShape::BoolFlag({
                   default: false,
                   negatable: false,
@@ -2651,17 +2647,17 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [] },
+          globals: { options: [], flags: [], },
           subcommands: [],
           body: Some({
             positionals: {
               fixed: [
                 {
                   name: "name",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                   value_name: None,
                   type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                   default: None,
                   required: false,
@@ -2675,11 +2671,11 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
                 long: "index",
                 short: Some('\u{69}'),
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[UInt]),
                   ),
                 ),
                 default: None,
@@ -2712,17 +2708,17 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [] },
+          globals: { options: [], flags: [], },
           subcommands: [],
           body: Some({
             positionals: {
               fixed: [
                 {
                   name: "name",
-                  doc: { summary: "", description: "", examples: [] },
+                  doc: { summary: "", description: "", examples: [], },
                   value_name: None,
                   type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
                   ),
                   default: None,
                   required: false,
@@ -2736,11 +2732,11 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
                 long: "index",
                 short: Some('\u{69}'),
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @schema.into_schema_graph(
-                    (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
+                    (@schema.TypeTag::{ } : @schema.TypeTag[UInt]),
                   ),
                 ),
                 default: None,
@@ -2788,7 +2784,7 @@ fn __golem_tool_def_prepare_CanonicalStash(
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
+          doc: { summary: "", description: "", examples: [], },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -2815,8 +2811,8 @@ fn __golem_tool_def_prepare_CanonicalStash(
 ///|
 fn __golem_tool_def_CanonicalStash() -> @tool.ToolDef {
   __golem_tool_def_prepare_CanonicalStash(
-    { options: [], flags: [] },
-    { options: [], flags: [] },
+    { options: [], flags: [], },
+    { options: [], flags: [], },
     None,
     None,
     None,
@@ -3019,21 +3015,21 @@ fn __golem_tool_def_raw_CanonicalBigBound() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [] },
+          globals: { options: [], flags: [], },
           subcommands: [],
           body: Some({
-            positionals: { fixed: [], tail: None },
+            positionals: { fixed: [], tail: None, },
             options: [
               {
                 long: "count",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [] },
+                doc: { summary: "", description: "", examples: [], },
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @tool.refine_numeric(
                     @schema.into_schema_graph(
-                      (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+                      (@schema.TypeTag::{ } : @schema.TypeTag[UInt64]),
                     ),
                     Some("0"),
                     Some("18446744073709551615"),
@@ -3085,7 +3081,7 @@ fn __golem_tool_def_prepare_CanonicalBigBound(
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [] },
+          doc: { summary: "", description: "", examples: [], },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -3112,8 +3108,8 @@ fn __golem_tool_def_prepare_CanonicalBigBound(
 ///|
 fn __golem_tool_def_CanonicalBigBound() -> @tool.ToolDef {
   __golem_tool_def_prepare_CanonicalBigBound(
-    { options: [], flags: [] },
-    { options: [], flags: [] },
+    { options: [], flags: [], },
+    { options: [], flags: [], },
     None,
     None,
     None,

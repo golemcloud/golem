@@ -41,7 +41,7 @@ pub fn parse_mbt_source(content : String) -> Array[FnSignature] {
           Some(stripped) => stripped.to_string()
           None => gen_name
         }
-        fns.push({ gen_name, user_name, params, return_type })
+        fns.push({ gen_name, user_name, params, return_type, })
       }
       _ => ()
     }

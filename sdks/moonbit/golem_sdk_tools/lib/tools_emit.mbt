@@ -926,7 +926,7 @@ fn emit_option(arg : ProjectedToolArg) -> String {
     "@tool.OptionShapeDef::RepeatableList({ repetition: " +
     emit_repetition(arg.info) +
     ", item_type: " +
-    refined_graph({ ..arg, value_type: Some(item) }) +
+    refined_graph({ ..arg, value_type: Some(item), }) +
     " })"
   } else if arg.info.flat_map(i => i.optional_scalar) == Some(true) {
     "@tool.OptionShapeDef::OptionalScalar(" + refined_graph(arg) + ")"
@@ -1014,7 +1014,7 @@ fn emit_tail(arg : ProjectedToolArg) -> String {
     None => "None"
   }
   let item_arg = match arg.info {
-    Some(info) => { ..arg, info: Some({ ..info, min: None, max: None }) }
+    Some(info) => { ..arg, info: Some({ ..info, min: None, max: None, }), }
     None => arg
   }
   "Some({ name: \"" +
@@ -1520,7 +1520,7 @@ fn validate_inherited_surfaces(
   let subtree_sources = subtree_tool_sources(tools)
   for tool in tools {
     if !subtree_sources.contains(tool.source_name) {
-      validate_tool_inherited_surfaces(tools, tool, { names: [], shorts: [] })
+      validate_tool_inherited_surfaces(tools, tool, { names: [], shorts: [], })
     }
   }
 }

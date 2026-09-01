@@ -185,7 +185,7 @@ pub fn CanonicalGit::commit(
   ignore(signoff)
   ignore(reset_author)
   ignore(output)
-  Ok({ hash: "", files_changed: 0, insertions: 0, deletions: 0 })
+  Ok({ hash: "", files_changed: 0, insertions: 0, deletions: 0, })
 }
 
 ///|

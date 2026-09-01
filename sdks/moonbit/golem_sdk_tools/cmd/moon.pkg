@@ -9,7 +9,8 @@ import {
   "golemcloud/golem_sdk_tools/lib",
 }
 
+pkgtype(kind: "executable")
+
 options(
   "bin-name": "golem-sdk-tools",
-  "is-main": true,
 )

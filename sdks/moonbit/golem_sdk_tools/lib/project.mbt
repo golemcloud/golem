@@ -98,7 +98,7 @@ fn walk_dir(
     } else {
       dir[rel_base.length() + 1:].to_string()
     }
-    packages.push(PackageInfo::{ rel_path, dir })
+    packages.push(PackageInfo::{ rel_path, dir, })
   }
   let entries = @fs.read_dir(dir)
   entries.sort_by((left, right) => left.compare(right))
@@ -126,7 +126,7 @@ pub fn scan_package(pkg : PackageInfo) -> PackageScanResult raise {
       files.push((entry, content))
     }
   }
-  PackageScanResult::{ pkg, files }
+  PackageScanResult::{ pkg, files, }
 }
 
 ///|
