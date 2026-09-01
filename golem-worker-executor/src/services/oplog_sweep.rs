@@ -1547,7 +1547,12 @@ mod tests {
                 .then(AgentFingerprint::new)
         }
 
-        async fn activate_worker(&self, _owned_agent_id: &OwnedAgentId) {}
+        async fn activate_worker(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<(), WorkerExecutorError> {
+            unreachable!("the sweep never activates an agent")
+        }
 
         async fn open_oplog(
             &self,
