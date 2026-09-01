@@ -85,8 +85,8 @@ impl Display for RouteId {
 }
 
 /// What the sweep decided about one scanned key. A key the tick reached produces exactly one,
-/// which is what makes [`tally`] a total fold over what it reached. A shutdown between archive
-/// batches is the one case that leaves scanned keys with no outcome, so `scanned` counts what the
+/// which is what makes [`tally`] a total fold over what it reached. A shutdown during the archive
+/// phase is the one case that leaves scanned keys with no outcome, so `scanned` counts what the
 /// tick decided rather than what it walked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Outcome {
@@ -132,8 +132,9 @@ enum Decision {
 }
 
 /// Per-route counters. Every field counts scanned keys except `drained` and `truncated`, and the
-/// counted fields sum to `scanned`. A shutdown between archive batches is the one case that leaves
-/// a scanned key with no outcome, so under it `scanned` counts fewer keys than the scan walked.
+/// counted fields sum to `scanned`. A shutdown during the archive phase is the one case that
+/// leaves a scanned key with no outcome, so under it `scanned` counts fewer keys than the scan
+/// walked.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RouteReport {
     scanned: u64,
@@ -387,9 +388,9 @@ impl OplogSweeper {
 
     /// Runs ticks until `shutdown` is cancelled, then returns.
     ///
-    /// Cancellation is observed between routes, between scan pages, and between archive batches,
-    /// but never inside an archive step, so shutting down never interrupts one between its append
-    /// to the layer below and its drop from the layer above. Spawn this into the executor's
+    /// Cancellation is observed between routes, between scan pages, and before each archive step,
+    /// but never inside one, so shutting down never interrupts a step between its append to the
+    /// layer below and its drop from the layer above. Spawn this into the executor's
     /// `JoinSet` so that shutdown waits for the step in flight; a tick stops at the next boundary
     /// rather than running to completion.
     ///
@@ -562,9 +563,15 @@ impl OplogSweeper {
         // had already walked past. Restarting from the beginning instead would starve the tail of a
         // namespace larger than one tick's scan budget: any tick that archived would rewind, so a
         // key beyond the budget would only ever be reached on a tick that archived nothing.
+        // Only what this tick is known to have taken out of the namespace: the agents it
+        // archived, plus the keys that had already lost their entries by the time it probed them.
+        // A concurrent teardown drain can still remove a key this tick classified some other way,
+        // which no correction here can see; that costs those keys a deferral to a later pass, not
+        // a permanent skip, because a pass always walks to the end and wraps.
+        let removed = report.archived + report.empty;
         let resume = self
             .indexed_storage
-            .scan_cursor_after_removals(cursor, report.archived);
+            .scan_cursor_after_removals(cursor, removed);
         self.cursors.lock().await.insert(route.id, resume);
 
         if exhausted {
@@ -1788,7 +1795,9 @@ mod tests {
         }
 
         // One page wide enough for the whole namespace, so which keys a page holds does not depend
-        // on the storage's iteration order, and an archive budget low enough to stop the tick.
+        // on the storage's iteration order, and an archive budget low enough to stop the tick. The
+        // asserted cursor also relies on these six being the only keys in the swept namespace,
+        // which is what `layers()` and this fixture leave behind.
         let sweeper = build(
             &layers,
             OplogSweepConfig {

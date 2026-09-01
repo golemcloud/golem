@@ -153,25 +153,23 @@ impl IndexedStorage for InMemoryIndexedStorage {
         let mut idx = 0;
         let mut has_more = false;
 
+        // One map holds every namespace, so only a matching key advances the cursor. Counting
+        // every key instead would make the cursor a position in the whole store, which no other
+        // backend's is: the SQL ones offset into a single namespace.
         self.data
             .iter_async(|key, _| {
+                let Some(matched) = matcher(key) else {
+                    return true;
+                };
                 idx += 1;
                 if idx > cursor {
-                    if let Some(matched) = matcher(key) {
-                        result.push(matched);
-
-                        if (result.len() as u64) == count {
-                            has_more = true;
-                            false
-                        } else {
-                            true
-                        }
-                    } else {
-                        true
+                    result.push(matched);
+                    if (result.len() as u64) == count {
+                        has_more = true;
+                        return false;
                     }
-                } else {
-                    true
                 }
+                true
             })
             .await;
 
@@ -183,8 +181,8 @@ impl IndexedStorage for InMemoryIndexedStorage {
     }
 
     fn scan_cursor_after_removals(&self, cursor: ScanCursor, removed: u64) -> ScanCursor {
-        // The cursor is an offset into the key order, so removing keys below it shifts the rest
-        // down by exactly that many places.
+        // The cursor counts the matching keys walked so far, so removing keys below it shifts the
+        // rest down by exactly that many places.
         cursor.saturating_sub(removed)
     }
 
@@ -778,6 +776,69 @@ mod tests {
             .unwrap();
 
         check!(result == Some((20, 200)));
+    }
+
+    #[test]
+    async fn scan_cursor_counts_only_the_namespace_it_scans() {
+        use crate::storage::indexed::IndexedStorageMetaNamespace;
+        use golem_common::model::agent::AgentMode;
+
+        let storage = super::InMemoryIndexedStorage::new();
+        let api = storage.with_entity("test", "test", "test");
+
+        // Every namespace shares one map here, so stack the one under test with keys that must not
+        // count towards its cursor. The SQL backends offset into a single namespace, and a caller
+        // correcting a cursor for deleted keys can only be right if this one means the same thing.
+        for i in 0..8 {
+            api.append(
+                IndexedStorageNamespace::OpLog {
+                    agent_id: test_agent_id(),
+                    agent_mode: AgentMode::Durable,
+                },
+                &format!("durable-{i}"),
+                1,
+                &100,
+            )
+            .await
+            .unwrap();
+        }
+        for i in 0..2 {
+            api.append(
+                IndexedStorageNamespace::OpLog {
+                    agent_id: test_agent_id(),
+                    agent_mode: AgentMode::Ephemeral,
+                },
+                &format!("ephemeral-{i}"),
+                1,
+                &100,
+            )
+            .await
+            .unwrap();
+        }
+
+        // One key per page, so each cursor is the count of matching keys walked so far. Counting
+        // every key in the store would put these at the two ephemeral keys' positions among all
+        // ten, which iteration order decides.
+        let mut cursor = 0;
+        let mut cursors = Vec::new();
+        for _ in 0..3 {
+            let (next, _keys) = storage
+                .with("test", "test")
+                .scan(
+                    IndexedStorageMetaNamespace::Oplog {
+                        agent_mode: AgentMode::Ephemeral,
+                    },
+                    None,
+                    cursor,
+                    1,
+                )
+                .await
+                .unwrap();
+            cursors.push(next);
+            cursor = next;
+        }
+
+        check!(cursors == vec![1, 2, 0]);
     }
 
     #[test]
