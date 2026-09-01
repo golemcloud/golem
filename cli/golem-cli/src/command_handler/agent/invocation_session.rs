@@ -2575,7 +2575,9 @@ fn proto_value_to_json(
 fn is_connection_closed(error: &tungstenite::Error) -> bool {
     matches!(
         error,
-        tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed
+        tungstenite::Error::ConnectionClosed
+            | tungstenite::Error::AlreadyClosed
+            | tungstenite::Error::Protocol(tungstenite::error::ProtocolError::SendAfterClosing)
     ) || matches!(error, tungstenite::Error::Io(error) if error.kind() == ErrorKind::BrokenPipe)
 }
 
@@ -3130,6 +3132,43 @@ mod tests {
         };
         assert!(response_cancels_input(&response, Some(1)));
         assert!(!response_cancels_input(&response, Some(3)));
+    }
+
+    #[test]
+    async fn peer_close_racing_with_a_send_is_connection_closed() {
+        let (client_io, server_io) = tokio::io::duplex(1024);
+        let client = tokio_tungstenite::WebSocketStream::from_raw_socket(
+            client_io,
+            tungstenite::protocol::Role::Client,
+            None,
+        )
+        .await;
+        let mut server = tokio_tungstenite::WebSocketStream::from_raw_socket(
+            server_io,
+            tungstenite::protocol::Role::Server,
+            None,
+        )
+        .await;
+        let (mut client_sink, mut client_stream) = client.split();
+
+        server.send(Message::Close(None)).await.unwrap();
+        assert!(matches!(
+            client_stream.next().await,
+            Some(Ok(Message::Close(_)))
+        ));
+
+        let error = client_sink
+            .send(Message::Binary(Vec::new().into()))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            &error,
+            tungstenite::Error::Protocol(tungstenite::error::ProtocolError::SendAfterClosing)
+        ));
+        assert!(is_connection_closed(&error));
+        assert!(!is_connection_closed(&tungstenite::Error::Protocol(
+            tungstenite::error::ProtocolError::ReceivedAfterClosing,
+        )));
     }
 
     #[test]
