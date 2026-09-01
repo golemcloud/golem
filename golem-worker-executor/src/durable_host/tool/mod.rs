@@ -2664,6 +2664,9 @@ where
                             let _ = operation.begin_cancel();
                             operation.resolve_cancel(true).await;
                             operation.settle().await;
+                            if let Some(stdout) = &stdout_controller {
+                                stdout.publish_completion();
+                            }
                             return decode_tool_terminal(*response).map_err(Into::into);
                         }
                         Err(error) => {
