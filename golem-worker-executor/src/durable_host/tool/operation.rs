@@ -648,6 +648,7 @@ impl Drop for ProvisionalOwnerToolOperation {
         let mut state = operation.owner.state.lock().unwrap();
         if state.operations[&operation.id].invocation_id.is_none() {
             state.operations.remove(&operation.id);
+            operation.owner.changed.notify_waiters();
             tracing::debug!(
                 operation_id = operation.id,
                 "Removed unaccepted tool operation"
