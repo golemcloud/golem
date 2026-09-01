@@ -145,6 +145,7 @@ async fn connect_start_exact_retry(
     } catch {
       @websocket.HandshakeRejected(message, _) => raise BridgeError(message)
       @websocket.ConnectionClosed(_, _) => @async.sleep(50)
+      @io.ReaderClosed => @async.sleep(50)
       @os_error.OSError(_) => @async.sleep(50)
       error => raise error
     }
@@ -206,6 +207,7 @@ async fn resume_session(session : LiveStreamSession) -> Unit {
       }
     } catch {
       @websocket.ConnectionClosed(_, _) => @async.sleep(50)
+      @io.ReaderClosed => @async.sleep(50)
       @os_error.OSError(_) => @async.sleep(50)
       error => raise error
     }
@@ -1568,8 +1570,18 @@ async fn receive_actor(
   resolved : ResolvedAgent,
 ) -> Unit {
   for ;; {
-    let raw = session.socket.recv() catch {
+    let (kind, bytes) = try {
+      let raw = session.socket.recv()
+      (raw.kind, raw.read_all().binary())
+    } catch {
       @websocket.ConnectionClosed(_, _) => {
+        if session.finished {
+          return
+        }
+        resume_session(session)
+        continue
+      }
+      @io.ReaderClosed => {
         if session.finished {
           return
         }
@@ -1585,10 +1597,9 @@ async fn receive_actor(
       }
       error => raise error
     }
-    match raw.kind {
-      @websocket.Binary => queue_binary_output(session, raw.read_all().binary())
+    match kind {
+      @websocket.Binary => queue_binary_output(session, bytes)
       @websocket.Text => {
-        let bytes = raw.read_all().binary()
         if bytes.length() > MAX_MESSAGE_BYTES {
           raise BridgeError(
             "resource-exhausted: WebSocket message exceeds 32 MiB",

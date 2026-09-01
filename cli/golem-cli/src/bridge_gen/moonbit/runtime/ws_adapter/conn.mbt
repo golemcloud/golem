@@ -578,6 +578,10 @@ pub impl @io.Reader for Message with fn _direct_read(
       raise err
     }
   }
+  if n == 0 {
+    self.state = Error(@io.ReaderClosed)
+    raise @io.ReaderClosed
+  }
   conn.curr_frame_remaining -= n.to_int64()
   if conn.read_mask is Some(mask) {
     mask_payload(buf, mask, offset~, len=n, mask_offset=conn.mask_offset)

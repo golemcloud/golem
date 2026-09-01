@@ -103,6 +103,7 @@ fn streaming_agent(name: &str) -> String {
 
 async fn start_interrupting_websocket_proxy(
     upstream: &str,
+    truncate_accepted_frame: bool,
 ) -> (
     String,
     std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -168,15 +169,25 @@ async fn start_interrupting_websocket_proxy(
                         if read == 0 {
                             return;
                         }
-                        downstream_write.write_all(&buffer[..read]).await.unwrap();
+                        let previous_len = seen.len();
                         seen.extend_from_slice(&buffer[..read]);
-                        if seen
+                        if let Some(accepted_offset) = seen
                             .windows(b"invocationAccepted".len())
-                            .any(|window| window == b"invocationAccepted")
+                            .position(|window| window == b"invocationAccepted")
                         {
+                            let write_len = if truncate_accepted_frame {
+                                accepted_offset + b"invocationAccepted".len() - previous_len
+                            } else {
+                                read
+                            };
+                            downstream_write
+                                .write_all(&buffer[..write_len])
+                                .await
+                                .unwrap();
                             interruption_observed.store(true, Ordering::SeqCst);
                             return;
                         }
+                        downstream_write.write_all(&buffer[..read]).await.unwrap();
                         if seen.len() > 64 * 1024 {
                             seen.drain(..seen.len() - 4096);
                         }
@@ -1038,7 +1049,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
     )
     .unwrap();
     let (rust_proxy, rust_interrupted, rust_proxy_task) =
-        start_interrupting_websocket_proxy(&worker_service_url).await;
+        start_interrupting_websocket_proxy(&worker_service_url, false).await;
     let rust_driver = formatdoc! {r#"
         use futures_util::{{stream, StreamExt, TryStreamExt}};
         use golem_client::invocation_session::{{AgentBinary, AgentStream}};
@@ -1133,7 +1144,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
     let typescript_client =
         ctx.cwd_path_join("typescript-streaming-bridge/streaming-rpc-target-client");
     let (typescript_proxy, typescript_interrupted, typescript_proxy_task) =
-        start_interrupting_websocket_proxy(&worker_service_url).await;
+        start_interrupting_websocket_proxy(&worker_service_url, false).await;
     let typescript_driver = formatdoc! {r#"
         import assert from 'node:assert/strict'
         import {{ agentStream }} from '@golemcloud/golem-ts-bridge'
@@ -1218,7 +1229,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
 
     let scala_client = ctx.cwd_path_join("scala-streaming-bridge/streaming-rpc-target-client");
     let (scala_proxy, scala_interrupted, scala_proxy_task) =
-        start_interrupting_websocket_proxy(&worker_service_url).await;
+        start_interrupting_websocket_proxy(&worker_service_url, false).await;
     let scala_driver = formatdoc! {r#"
         import golem.bridge.client.streaming_rpc_target.{{NestedStreamInput, StreamingRpcTargetClient}}
         import golem.bridge.runtime.{{AgentBinary, AgentStream, AgentStreamStep, GolemServer, UInt}}
@@ -1305,8 +1316,9 @@ async fn test_generated_streaming_bridges_end_to_end() {
     assert_generated_driver(scala_output, "Scala", "SCALA_STREAMING_BRIDGE_E2E_OK");
 
     let moonbit_client = ctx.cwd_path_join("moonbit-streaming-bridge/streaming-rpc-target-client");
+    // Cut the accepted WebSocket frame during its payload to cover EOF after header parsing.
     let (moonbit_proxy, moonbit_interrupted, moonbit_proxy_task) =
-        start_interrupting_websocket_proxy(&worker_service_url).await;
+        start_interrupting_websocket_proxy(&worker_service_url, true).await;
     let moonbit_manifest: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(moonbit_client.join("moon.mod.json")).unwrap(),
     )
@@ -1314,7 +1326,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
     let moonbit_module = moonbit_manifest["name"].as_str().unwrap();
     let moonbit_main_pkg = formatdoc! {r#"
         import {{
-          "moonbitlang/async" @async,
+          "moonbitlang/async",
           "{moonbit_module}/client" @client,
           "{moonbit_module}/runtime" @runtime,
         }}
@@ -1325,19 +1337,19 @@ async fn test_generated_streaming_bridges_end_to_end() {
         "#};
     let moonbit_driver = formatdoc! {r#"
         fn uint_input(values : Array[UInt]) -> @runtime.AgentStream[UInt] {{
-          @runtime.AgentStream::from_next(async fn() {{
+          @runtime.AgentStream::from_next(fn() {{
             if values.is_empty() {{ None }} else {{ Some(values.remove(0)) }}
           }})
         }}
 
         fn string_input(values : Array[String]) -> @runtime.AgentStream[String] {{
-          @runtime.AgentStream::from_next(async fn() {{
+          @runtime.AgentStream::from_next(fn() {{
             if values.is_empty() {{ None }} else {{ Some(values.remove(0)) }}
           }})
         }}
 
         fn binary_input(values : Array[@runtime.AgentBinary]) -> @runtime.AgentStream[@runtime.AgentBinary] {{
-          @runtime.AgentStream::from_next(async fn() {{
+          @runtime.AgentStream::from_next(fn() {{
             if values.is_empty() {{ None }} else {{ Some(values.remove(0)) }}
           }})
         }}
@@ -1388,7 +1400,11 @@ async fn test_generated_streaming_bridges_end_to_end() {
           let affine = agent.produce([8, 9])
           assert_eq(affine.next(), Some(8))
           affine.drop()
-          assert_true((try? affine.next()) is Err(_))
+          try affine.next() catch {{
+            _ => ()
+          }} noraise {{
+            _ => abort("expected the dropped stream to reject another read")
+          }}
 
           let cancelled = agent.produce_byte_then_wait()
           assert_eq(cancelled.next(), Some(1))
@@ -1402,15 +1418,15 @@ async fn test_generated_streaming_bridges_end_to_end() {
     std::fs::write(moonbit_main_dir.join("main.mbt"), moonbit_driver).unwrap();
     let mut moonbit_command = std::process::Command::new("moon");
     moonbit_command
-        .args(["run", "--target", "native", "main"])
+        .args(["run", "--target", "native", "--deny-warn", "main"])
         .current_dir(&moonbit_client);
     let moonbit_output = run_generated_driver(moonbit_command).await;
     moonbit_proxy_task.abort();
+    assert_generated_driver(moonbit_output, "MoonBit", "MOONBIT_STREAMING_BRIDGE_E2E_OK");
     assert!(
         moonbit_interrupted.load(std::sync::atomic::Ordering::SeqCst),
         "MoonBit driver did not reach post-acceptance reconnect coverage"
     );
-    assert_generated_driver(moonbit_output, "MoonBit", "MOONBIT_STREAMING_BRIDGE_E2E_OK");
 }
 
 #[test]
