@@ -1575,10 +1575,12 @@ impl ComponentLayerApplyContext {
 
         // Subpath, relative to `_build/wasm/<profile>/build/`, where `moon build`
         // emits the .wasm artifact for this component. `moon build` writes either
-        // `<root_pkg>.wasm` for a root-level package or `<dir>/<dir>.wasm` for a
-        // sub-package. By convention the moon module name equals the application
-        // name, which equals the part of `componentName` before `:`. Pre-computing
-        // this here lets the moonbit template avoid embedding that branching.
+        // `<root_pkg>.wasm` for a root-level package or `<dir>/<last-segment>.wasm`
+        // for a sub-package, where the package name is the last segment of the
+        // package directory, not the whole directory path. By convention the moon
+        // module name equals the application name, which equals the part of
+        // `componentName` before `:`. Pre-computing this here lets the moonbit
+        // template avoid embedding that branching.
         let moonbit_build_package_path = match (
             component_dir_rel.as_deref(),
             component_name.as_ref().map(|n| n.0.as_str()),
@@ -1587,7 +1589,11 @@ impl ComponentLayerApplyContext {
                 let root_pkg = name.split(':').next().unwrap_or(name);
                 Some(format!("{root_pkg}.wasm"))
             }
-            (Some(rel), _) if !rel.is_empty() => Some(format!("{rel}/{rel}.wasm")),
+            (Some(rel), _) if !rel.is_empty() => {
+                // `component_dir_rel` is always unix-separated, see above.
+                let package_name = rel.rsplit('/').next().unwrap_or(rel);
+                Some(format!("{rel}/{package_name}.wasm"))
+            }
             _ => None,
         };
 
@@ -4780,8 +4786,8 @@ mod test {
     use crate::bridge_gen::{BridgeMode, bridge_client_directory_name};
     use crate::fs;
     use crate::model::app::{
-        Application, ApplicationPreload, ComponentDependency, ComponentPresetSelector, ToolName,
-        includes_from_yaml_file,
+        Application, ApplicationPreload, ComponentDependency, ComponentLayerApplyContext,
+        ComponentPresetSelector, ToolName, includes_from_yaml_file,
     };
     use crate::model::app_raw;
     use golem_common::model::agent::AgentTypeName;
@@ -4792,6 +4798,7 @@ mod test {
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
     use tempfile::TempDir;
     use test_r::test;
 
@@ -7185,6 +7192,57 @@ mod test {
         assert_eq!(
             includes_from_yaml_file(&golem_yaml_path),
             vec!["./shared/*.yaml".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_moonbit_build_package_path() {
+        fn package_path(component_name: &str, component_dir_rel: &str) -> Option<String> {
+            let app_root_dir = PathBuf::from("app-root");
+            let component_dir = component_dir_rel
+                .split('/')
+                .filter(|segment| !segment.is_empty())
+                .fold(app_root_dir.clone(), |dir, segment| dir.join(segment));
+
+            ComponentLayerApplyContext::new(
+                Some(ComponentName::try_from(component_name).unwrap()),
+                Some(fs::path_to_str(&app_root_dir).unwrap().to_string()),
+                Some(
+                    fs::path_to_str(&app_root_dir.join("golem-temp"))
+                        .unwrap()
+                        .to_string(),
+                ),
+                Some(fs::path_to_str(&component_dir).unwrap().to_string()),
+                None,
+            )
+            .template_context()
+            .get_attr("moonbitBuildPackagePath")
+            .unwrap()
+            .as_str()
+            .map(str::to_string)
+        }
+
+        // Root-level package: moon names the artifact after the module.
+        assert_eq!(
+            package_path("app-root:moonbit-main", ""),
+            Some("app-root.wasm".to_string())
+        );
+
+        // Sub-package: moon names the artifact after the last directory segment,
+        // so a single-segment directory repeats it...
+        assert_eq!(
+            package_path("app-root:moonbit-main", "moonbit-main"),
+            Some("moonbit-main/moonbit-main.wasm".to_string())
+        );
+
+        // ...but a nested directory must not.
+        assert_eq!(
+            package_path("app-root:second", "nested/second"),
+            Some("nested/second/second.wasm".to_string())
+        );
+        assert_eq!(
+            package_path("app-root:third", "a/b/c/third"),
+            Some("a/b/c/third/third.wasm".to_string())
         );
     }
 }
