@@ -101,20 +101,19 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
         val resp = p.response.map(summarizeTyped).getOrElse("void")
         s"COMPLETED @ $ts response=$resp fuel=${p.consumedFuel}"
 
-      case OplogApi.OplogEntry.Suspend(t)                      => s"SUSPEND @ ${t.seconds}s"
-      case OplogApi.OplogEntry.Error(p)                        => s"ERROR @ $ts '${p.error}' retryFrom=${p.retryFrom}"
-      case OplogApi.OplogEntry.NoOp(t)                         => s"NOOP @ ${t.seconds}s"
-      case OplogApi.OplogEntry.Jump(p)                         => s"JUMP @ $ts range=[${p.jump.start},${p.jump.end}]"
-      case OplogApi.OplogEntry.Interrupted(t)                  => s"INTERRUPTED @ ${t.seconds}s"
-      case OplogApi.OplogEntry.Exited(t)                       => s"EXITED @ ${t.seconds}s"
-      case OplogApi.OplogEntry.SetRetryPolicy(p)               => s"SET_RETRY_POLICY @ $ts name=${p.name}"
-      case OplogApi.OplogEntry.RemoveRetryPolicy(p)            => s"REMOVE_RETRY_POLICY @ $ts name=${p.name}"
-      case OplogApi.OplogEntry.FilesystemStorageUsageUpdate(p) => s"FS_USAGE @ $ts delta=${p.delta}"
-      case OplogApi.OplogEntry.BeginAtomicRegion(t)            => s"BEGIN_ATOMIC @ ${t.seconds}s"
-      case OplogApi.OplogEntry.EndAtomicRegion(p)              => s"END_ATOMIC @ $ts begin=${p.beginIndex}"
-      case OplogApi.OplogEntry.BeginRemoteWrite(t)             => s"BEGIN_REMOTE_WRITE @ ${t.seconds}s"
-      case OplogApi.OplogEntry.EndRemoteWrite(p)               => s"END_REMOTE_WRITE @ $ts begin=${p.beginIndex}"
-      case OplogApi.OplogEntry.PendingAgentInvocation(p)       =>
+      case OplogApi.OplogEntry.Suspend(t)                => s"SUSPEND @ ${t.seconds}s"
+      case OplogApi.OplogEntry.Error(p)                  => s"ERROR @ $ts '${p.error}' retryFrom=${p.retryFrom}"
+      case OplogApi.OplogEntry.NoOp(t)                   => s"NOOP @ ${t.seconds}s"
+      case OplogApi.OplogEntry.Jump(p)                   => s"JUMP @ $ts range=[${p.jump.start},${p.jump.end}]"
+      case OplogApi.OplogEntry.Interrupted(t)            => s"INTERRUPTED @ ${t.seconds}s"
+      case OplogApi.OplogEntry.Exited(t)                 => s"EXITED @ ${t.seconds}s"
+      case OplogApi.OplogEntry.SetRetryPolicy(p)         => s"SET_RETRY_POLICY @ $ts name=${p.name}"
+      case OplogApi.OplogEntry.RemoveRetryPolicy(p)      => s"REMOVE_RETRY_POLICY @ $ts name=${p.name}"
+      case OplogApi.OplogEntry.BeginAtomicRegion(t)      => s"BEGIN_ATOMIC @ ${t.seconds}s"
+      case OplogApi.OplogEntry.EndAtomicRegion(p)        => s"END_ATOMIC @ $ts begin=${p.beginIndex}"
+      case OplogApi.OplogEntry.BeginRemoteWrite(t)       => s"BEGIN_REMOTE_WRITE @ ${t.seconds}s"
+      case OplogApi.OplogEntry.EndRemoteWrite(p)         => s"END_REMOTE_WRITE @ $ts begin=${p.beginIndex}"
+      case OplogApi.OplogEntry.PendingAgentInvocation(p) =>
         val invDesc = p.invocation match {
           case OplogApi.AgentInvocation.ExportedFunction(params) => s"func(${params.functionName})"
           case OplogApi.AgentInvocation.AgentInitialization(key) => s"agent-init(key=$key)"

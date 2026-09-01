@@ -54,7 +54,6 @@ pub mod revert;
 pub mod rpc;
 pub mod scalability;
 pub mod scope_cards;
-pub mod storage_quota;
 pub mod tool_discovery;
 pub mod transactions;
 pub mod wasi;
@@ -101,7 +100,6 @@ tag_suite!(instance_layer, group2);
 tag_suite!(transactions, group2);
 tag_suite!(observability, group2);
 tag_suite!(retry_policies, group2);
-tag_suite!(storage_quota, storage_quota);
 
 tag_suite!(rpc, group3);
 tag_suite!(wasi, group3);

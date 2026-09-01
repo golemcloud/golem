@@ -144,6 +144,7 @@ async fn account_usage_reports_sparse_allocated_memory(_tracing: &Tracing) {
     const BILLING_REPORT_TIMEOUT: Duration = Duration::from_secs(120);
 
     let mut ctx = TestContext::new();
+    ctx.add_env_var("GOLEM__RESOURCE_USAGE_METERING__MEMORY", "true");
     ctx.start_server().await;
 
     let app_name = "memory-billing";
