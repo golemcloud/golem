@@ -23,7 +23,9 @@ use self::grpc::ShardManagerServiceImpl;
 #[cfg(feature = "kubernetes")]
 use crate::config::HealthCheckK8sConfig;
 use crate::config::{HealthCheckMode, PersistenceConfig};
-use crate::quota::{DbQuotaRepo, GrpcResourceDefinitionFetcher, InMemoryQuotaRepo, QuotaService};
+use crate::quota::{
+    DbQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService, UnavailableQuotaRepo,
+};
 use crate::registry_event_subscriber::ShardManagerRegistryInvalidationHandler;
 use crate::sharding::healthcheck::GrpcHealthCheck;
 use crate::sharding::worker_executor::WorkerExecutorServiceDefault;
@@ -145,10 +147,9 @@ pub async fn run(
                 )
             }
             PersistenceConfig::Etcd(etcd) => {
-                // Distributed mode. Quota state has no durable store in this mode: it lives in
-                // the quota service's memory and is rebuilt as executors re-acquire their leases
-                // after a restart.
-                // InMemoryQuotaRepo is a placeholder for now
+                // Distributed mode. The shard lease state is durable in etcd, but the quota
+                // tables have not moved there and there is no SQL pool here to hold them, so
+                // quota operations fail rather than silently succeeding against nothing.
                 (
                     Arc::new(
                         EtcdRoutingTablePersistence::new(
@@ -157,7 +158,7 @@ pub async fn run(
                         )
                         .await?,
                     ),
-                    Arc::new(InMemoryQuotaRepo),
+                    Arc::new(UnavailableQuotaRepo),
                 )
             }
         }

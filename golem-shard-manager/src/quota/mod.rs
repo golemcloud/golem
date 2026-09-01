@@ -20,6 +20,6 @@ mod quota_service_tests;
 mod quota_state;
 pub mod resource_definition_fetcher;
 
-pub use quota_repo::{DbQuotaRepo, InMemoryQuotaRepo, QuotaRepo};
+pub use quota_repo::{DbQuotaRepo, QuotaRepo, UnavailableQuotaRepo};
 pub use quota_service::{QuotaError, QuotaService};
 pub use resource_definition_fetcher::{GrpcResourceDefinitionFetcher, ResourceDefinitionFetcher};
