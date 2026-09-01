@@ -3,6 +3,7 @@ http_port = 8081
 number_of_shards = 1024
 rebalance_threshold = 0.1
 runtime_metrics_sampling_interval = "5s"
+shard_lease_duration = "1m"
 
 [db]
 type = "Sqlite"
@@ -144,6 +145,7 @@ type = "Disabled"
 # number_of_shards = 1024
 # rebalance_threshold = 0.1
 # runtime_metrics_sampling_interval = "5s"
+# shard_lease_duration = "1m"
 #
 # [db]
 # type = "Sqlite"

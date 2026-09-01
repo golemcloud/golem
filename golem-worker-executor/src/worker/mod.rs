@@ -142,6 +142,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Mutex, MutexGuard, OnceCell, OwnedMutexGuard, RwLock};
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Level, debug, info, span, warn};
 use uuid::Uuid;
 use wasmtime::Store;
@@ -491,6 +492,44 @@ pub struct Worker<Ctx: WorkerCtx> {
     /// are invalidated lazily on the next lookup.
     read_only_cache_epoch: Arc<AtomicU64>,
     durable_stream_producer: OnceCell<Arc<DurableStreamProducer>>,
+    durable_stream_attachment_reconciler: DurableStreamAttachmentReconciler,
+}
+
+/// Owns the periodic task so worker deletion can join it before removing oplog storage.
+#[derive(Default)]
+struct DurableStreamAttachmentReconciler {
+    shutdown: CancellationToken,
+    handle: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl DurableStreamAttachmentReconciler {
+    fn start(&self, handle: JoinHandle<()>) {
+        let mut stored = self
+            .handle
+            .try_lock()
+            .expect("durable stream reconciler started while stopping");
+        assert!(
+            stored.is_none(),
+            "durable stream reconciler already started"
+        );
+        *stored = Some(handle);
+    }
+
+    async fn stop(&self) {
+        self.shutdown.cancel();
+        let mut stored = self.handle.lock().await;
+        if let Some(handle) = stored.as_mut() {
+            let _ = handle.await;
+        }
+        stored.take();
+    }
+}
+
+impl Drop for DurableStreamAttachmentReconciler {
+    fn drop(&mut self) {
+        self.shutdown.cancel();
+        self.handle.get_mut().take();
+    }
 }
 
 struct WorkerDurableStreamConsumerJournal<Ctx: WorkerCtx> {
@@ -962,6 +1001,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             read_only_cache,
             read_only_cache_epoch: Arc::new(AtomicU64::new(0)),
             durable_stream_producer: OnceCell::new(),
+            durable_stream_attachment_reconciler: DurableStreamAttachmentReconciler::default(),
         };
 
         // Wire the worker event service into the forwarding oplog so plugin errors
@@ -1350,6 +1390,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             PendingLiveInvocationDisposition::Fail,
         )
         .await;
+        self.durable_stream_attachment_reconciler.stop().await;
         if let WorkerInstance::CleanupFailed(error) = &*self.instance.lock().await {
             return Err(error.clone());
         }
@@ -4827,17 +4868,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub(crate) fn start_durable_stream_attachment_reconciler(this: &Arc<Self>) {
         let worker = Arc::downgrade(this);
+        let shutdown = this.durable_stream_attachment_reconciler.shutdown.clone();
         let interval_duration = this
             .deps
             .config()
             .durable_stream
             .renewal_interval
             .min(this.deps.config().durable_stream.reconciliation_interval);
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             tokio::task::yield_now().await;
             let mut interval = tokio::time::interval(interval_duration);
             loop {
-                interval.tick().await;
+                tokio::select! {
+                    biased;
+                    _ = shutdown.cancelled() => break,
+                    _ = interval.tick() => {}
+                }
+                if shutdown.is_cancelled() {
+                    break;
+                }
                 let Some(worker) = worker.upgrade() else {
                     break;
                 };
@@ -4857,6 +4906,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
             }
         });
+        this.durable_stream_attachment_reconciler.start(handle);
     }
 
     /// Appends an oplog entry without forcing a durable commit. Callers that
@@ -7786,6 +7836,94 @@ mod tests {
         assert!(
             matches!(completion.join().unwrap(), Err(actual) if actual.to_string() == error.to_string())
         );
+    }
+
+    #[test]
+    async fn stopping_durable_stream_reconciler_waits_for_in_flight_pass() {
+        let reconciler = Arc::new(DurableStreamAttachmentReconciler::default());
+        let shutdown = reconciler.shutdown.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+        let (completed_tx, completed_rx) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(async move {
+            started_tx.send(()).unwrap();
+            finish_rx.await.unwrap();
+            completed_tx.send(()).unwrap();
+            shutdown.cancelled().await;
+        });
+        reconciler.start(handle);
+        started_rx.await.unwrap();
+
+        let mut stopping = tokio::spawn({
+            let reconciler = reconciler.clone();
+            async move { reconciler.stop().await }
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut stopping)
+                .await
+                .is_err(),
+            "stop returned before the in-flight pass completed"
+        );
+        finish_tx.send(()).unwrap();
+
+        completed_rx
+            .await
+            .expect("in-flight reconciliation pass did not complete");
+        tokio::time::timeout(Duration::from_secs(1), stopping)
+            .await
+            .expect("stop did not return after the in-flight pass completed")
+            .expect("stop task failed");
+        assert!(reconciler.handle.lock().await.is_none());
+    }
+
+    #[test]
+    async fn cancelled_reconciler_stop_retains_the_in_flight_pass_barrier() {
+        let reconciler = Arc::new(DurableStreamAttachmentReconciler::default());
+        let shutdown = reconciler.shutdown.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(async move {
+            started_tx.send(()).unwrap();
+            finish_rx.await.unwrap();
+            shutdown.cancelled().await;
+        });
+        reconciler.start(handle);
+        started_rx.await.unwrap();
+
+        let first_stop = tokio::spawn({
+            let reconciler = reconciler.clone();
+            async move { reconciler.stop().await }
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if reconciler.handle.try_lock().is_err() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("first stop did not acquire the handle barrier");
+        first_stop.abort();
+        first_stop.await.expect_err("first stop was not cancelled");
+
+        let mut second_stop = tokio::spawn({
+            let reconciler = reconciler.clone();
+            async move { reconciler.stop().await }
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut second_stop)
+                .await
+                .is_err(),
+            "retrying stop lost the in-flight pass barrier"
+        );
+        finish_tx.send(()).unwrap();
+
+        tokio::time::timeout(Duration::from_secs(1), second_stop)
+            .await
+            .expect("retrying stop did not return after the in-flight pass completed")
+            .expect("retrying stop task failed");
+        assert!(reconciler.handle.lock().await.is_none());
     }
 
     #[test]
