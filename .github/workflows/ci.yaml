@@ -762,6 +762,7 @@ jobs:
     needs:
       - build-and-store
       - build-golem-ts
+      - build-golem-scala
       - list-test-component-groups
     strategy:
       fail-fast: false
@@ -804,6 +805,55 @@ jobs:
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
           wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
 
+      - name: Setup WASM build tools for Scala components
+        if: matrix.chunk.needs-scala
+        uses: ./.github/actions/setup-wasm-component-tools
+        with:
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+
+      - name: Install wasm-tools for MoonBit components
+        if: matrix.chunk.needs-moonbit
+        run: cargo binstall --force --locked wasm-tools@1.248.0
+
+      - name: Setup Java for Scala components
+        if: matrix.chunk.needs-scala
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup SBT for Scala components
+        if: matrix.chunk.needs-scala
+        uses: sbt/setup-sbt@v1
+
+      - name: Cache Scala dependencies
+        if: matrix.chunk.needs-scala
+        uses: coursier/cache-action@v8
+
+      - name: Restore Scala SDK ivy local repo
+        if: matrix.chunk.needs-scala
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/.ivy2/local
+          key: scala-sdk-ivy-local-${{ github.run_id }}
+          fail-on-cache-miss: true
+
+      - name: Setup MoonBit
+        if: matrix.chunk.needs-moonbit
+        uses: hustcer/setup-moonbit@v1
+        with:
+          version: ${{ env.MOONBIT_INSTALL_VERSION }}
+          core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update MoonBit fixture dependencies
+        if: matrix.chunk.needs-moonbit
+        working-directory: test-components/tool-streaming-moonbit
+        run: moon update
+
       - name: Install TS SDK dependencies
         if: matrix.chunk.needs-node
         working-directory: sdks/ts
@@ -819,9 +869,16 @@ jobs:
         run: ./build-components.sh ${{ matrix.chunk.name }}
 
       - name: Collect built WASMs
+        env:
+          EXPECTED_ARTIFACT: ${{ matrix.chunk.expected-artifact }}
         run: |
           mkdir -p tmp/test-components-wasm
-          cp test-components/*.wasm tmp/test-components-wasm/ 2>/dev/null || true
+          if [[ -n "$EXPECTED_ARTIFACT" ]]; then
+            test -s "test-components/$EXPECTED_ARTIFACT"
+            cp "test-components/$EXPECTED_ARTIFACT" tmp/test-components-wasm/
+          else
+            cp test-components/*.wasm tmp/test-components-wasm/ 2>/dev/null || true
+          fi
           count=$(find tmp/test-components-wasm -maxdepth 1 -name '*.wasm' | wc -l)
           echo "Built $count WASM files in chunk ${{ matrix.chunk.name }}"
           test "$count" -gt 0

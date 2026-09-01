@@ -2413,7 +2413,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.linear_memory.clone()
     }
 
-    async fn switch_to_live(&self) -> Result<(), WorkerExecutorError> {
+    async fn switch_to_live(&mut self) -> Result<(), WorkerExecutorError> {
         let role = if self.runtime == OwnerRuntime::Agent {
             ReplayToLiveRole::PrimaryAgent
         } else {
@@ -2431,6 +2431,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
         if role == ReplayToLiveRole::NonPrimary {
             self.state.local_live_tail.store(true, Ordering::Release);
+        } else {
+            self.process_pending_replay_events().await?;
         }
         Ok(())
     }
@@ -4624,6 +4626,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .into_iter()
             .filter_map(|(card_id, state)| (state == CardState::Revoked).then_some(card_id))
             .collect::<Vec<_>>();
+        if !revoked_card_ids.is_empty() {
+            self.state.authority_initialized = false;
+        }
         self.public_state
             .worker()
             .queue_card_revocations_locked(&revoked_card_ids)
@@ -5665,12 +5670,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 match oplog_entry {
                     Err(error) => break Err(error),
                     Ok(None) => {
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .process_pending_replay_events()
-                            .await?;
+                        let mut store_context = store.as_context_mut();
+                        let durable_ctx = store_context.data_mut().durable_ctx_mut();
+                        durable_ctx.switch_to_live().await?;
                         break Ok(None);
                     }
                     Ok(Some(replay_state::AgentInvocationStartedEntry {

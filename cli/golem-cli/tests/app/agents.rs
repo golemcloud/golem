@@ -1400,13 +1400,8 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 /// generated crate. The deployment covers registering a tool-only component
 /// (the provider exports no agents).
 ///
-/// The invocation currently asserts the worker executor's `golem:tool/host`
-/// sidecar-backend error: through a real deployed invocation, the generated
-/// client is proven to reach the executor's tool invocation host function.
-/// Once the tool runtime is implemented in the worker executor, the invocation
-/// is expected to succeed and return `ok:echo:hello`; flip the trailing
-/// assertions accordingly — only then does this test validate the generated
-/// command path and input encoding against the provider.
+/// The invocation validates the generated command path and input encoding by
+/// calling the deployed provider and asserting its echo result.
 #[test]
 #[timeout("15 minutes")]
 async fn test_rust_tool_guest_bridge_e2e() {
@@ -1592,21 +1587,10 @@ async fn test_rust_tool_guest_bridge_e2e() {
         ])
         .await;
 
-    // The worker executor's `golem:tool/host` invocation requires a sidecar
-    // backend that this test server does not configure, so the agent method must
-    // return that error, proving the generated client reaches the executor's tool
-    // host. Once the tool runtime lands, replace
-    // this with:
-    //     assert!(outputs.success_or_dump());
-    //     assert!(outputs.stdout_contains("ok:echo:hello"));
-    let invocation_reached_tool_host_stub = outputs
-        .stdout_contains("golem:tool/host tool invocation requires the sidecar invocation backend");
-    if !invocation_reached_tool_host_stub {
-        outputs.dump();
-    }
+    assert!(outputs.success_or_dump());
     assert!(
-        invocation_reached_tool_host_stub,
-        "expected the tool invocation to fail with the executor's golem:tool/host stub error"
+        outputs.stdout_contains("ok:echo:hello"),
+        "expected the Rust consumer to return the provider's echo result"
     );
 }
 
@@ -2161,14 +2145,10 @@ async fn test_ts_tool_guest_bridge_e2e() {
             "\"hello\"",
         ])
         .await;
-    let reached_tool_host_stub = outputs
-        .stdout_contains("golem:tool/host tool invocation requires the sidecar invocation backend");
-    if !reached_tool_host_stub {
-        outputs.dump();
-    }
+    assert!(outputs.success_or_dump());
     assert!(
-        reached_tool_host_stub,
-        "expected the TypeScript tool client to reach the executor's golem:tool/host stub"
+        outputs.stdout_contains("ok:echo:hello"),
+        "expected the TypeScript consumer to return the provider's echo result"
     );
 }
 
@@ -2488,16 +2468,10 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
             "\"hello\"",
         ])
         .await;
-    let reached_tool_host_stub = outputs.success()
-        && outputs.stdout_contains(
-            "golem:tool/host tool invocation requires the sidecar invocation backend",
-        );
-    if !reached_tool_host_stub {
-        outputs.dump();
-    }
+    assert!(outputs.success_or_dump());
     assert!(
-        reached_tool_host_stub,
-        "expected the MoonBit tool invocation to reach the executor's tool-host stub"
+        outputs.stdout_contains("ok:echo:hello"),
+        "expected the MoonBit consumer to return the provider's echo result"
     );
 }
 

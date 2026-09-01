@@ -1857,7 +1857,9 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                 }
             }
         }
-        Ok(Err(error)) | Err(GuestCallSettlementError::Interrupted(error)) => {
+        Ok(Err(error))
+        | Err(GuestCallSettlementError::Interrupted(error))
+        | Err(GuestCallSettlementError::Trap(error)) => {
             let error: anyhow::Error = error.into();
             let trap = InvokeResult::from_error::<Ctx>(
                 0,

@@ -644,6 +644,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             oplog_index
         };
         self.owner_execution.mark_reached_oplog_marker(marker);
+        if !self.state.is_live() && self.state.replay_state.is_live() {
+            self.switch_to_live().await?;
+        }
         Ok(marker.into())
     }
 

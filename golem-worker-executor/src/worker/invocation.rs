@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::durability::{
+    ClassifiedHostError, DurableCallTrapContextMarker, SemanticTrapRetryOverrideMarker,
+};
 use crate::durable_host::schema_value_stream::{StoreValueResolver, contains_stream};
 use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
@@ -37,7 +40,9 @@ use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::validation::value::validate_value;
 use golem_schema::schema::wit::wire as core_wire;
 use golem_schema::schema::wit::{decode_value_with, encode_value_with, encode_value_with_streams};
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::{
+    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
+};
 use tracing::{Instrument, Level, debug, span};
 use wasmtime::component::Accessor;
 use wasmtime::{AsContextMut, StoreContextMut};
@@ -320,7 +325,44 @@ fn tail_work_settled(active_spawned_tasks: usize) -> bool {
 #[derive(Debug)]
 pub(crate) enum GuestCallSettlementError {
     Interrupted(wasmtime::Error),
+    Trap(wasmtime::Error),
     Infrastructure(WorkerExecutorError),
+}
+
+fn is_guest_semantic_trap(error: &wasmtime::Error) -> bool {
+    let chain_contains = |predicate: &dyn Fn(&(dyn std::error::Error + 'static)) -> bool| {
+        error.chain().any(predicate)
+    };
+
+    if let Some(trap) = error.root_cause().downcast_ref::<wasmtime::Trap>() {
+        return !matches!(trap, wasmtime::Trap::AsyncDeadlock);
+    }
+    if chain_contains(&|cause| {
+        cause.is::<GolemSpecificWasmTrap>()
+            || cause.is::<ClassifiedHostError>()
+            || cause.is::<SemanticTrapRetryOverrideMarker>()
+            || cause.is::<DurableCallTrapContextMarker>()
+            || cause.is::<wasmtime_wasi::I32Exit>()
+            || matches!(
+                cause.downcast_ref::<WorkerExecutorError>(),
+                Some(
+                    WorkerExecutorError::InvalidRequest { .. }
+                        | WorkerExecutorError::UnexpectedOplogEntry { .. }
+                        | WorkerExecutorError::ParamTypeMismatch { .. }
+                        | WorkerExecutorError::ValueMismatch { .. }
+                        | WorkerExecutorError::InvocationFailed { .. }
+                        | WorkerExecutorError::ReadOnlyViolation { .. }
+                        | WorkerExecutorError::PermissionDenied { .. }
+                )
+            )
+    }) {
+        return true;
+    }
+    if chain_contains(&|cause| cause.is::<WorkerExecutorError>()) {
+        return false;
+    }
+
+    error.downcast_ref::<wasmtime::WasmBacktrace>().is_some()
 }
 
 fn classify_guest_call_settlement<R>(
@@ -338,6 +380,8 @@ fn classify_guest_call_settlement<R>(
     result.map_err(|error| {
         if interrupted || error.root_cause().downcast_ref::<InterruptKind>().is_some() {
             GuestCallSettlementError::Interrupted(error)
+        } else if is_guest_semantic_trap(&error) {
+            GuestCallSettlementError::Trap(error)
         } else {
             GuestCallSettlementError::Infrastructure(WorkerExecutorError::runtime(format!(
                 "guest call settlement task failed: {error}"
@@ -457,7 +501,9 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Ok(Ok(Err(wire_err))) => {
                     invoke_result_from_agent_error(store, consumed_fuel, wire_err)
                 }
-                Ok(Err(err)) | Err(GuestCallSettlementError::Interrupted(err)) => {
+                Ok(Err(err))
+                | Err(GuestCallSettlementError::Interrupted(err))
+                | Err(GuestCallSettlementError::Trap(err)) => {
                     Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
@@ -505,7 +551,9 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Ok(Ok(Err(wire_err))) => {
                     invoke_result_from_agent_error(store, consumed_fuel, wire_err)
                 }
-                Ok(Err(err)) | Err(GuestCallSettlementError::Interrupted(err)) => {
+                Ok(Err(err))
+                | Err(GuestCallSettlementError::Interrupted(err))
+                | Err(GuestCallSettlementError::Trap(err)) => {
                     Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
@@ -526,7 +574,9 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                         snapshot: snapshot.into(),
                     },
                 }),
-                Ok(Err(err)) | Err(GuestCallSettlementError::Interrupted(err)) => {
+                Ok(Err(err))
+                | Err(GuestCallSettlementError::Interrupted(err))
+                | Err(GuestCallSettlementError::Trap(err)) => {
                     Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
@@ -546,7 +596,9 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                     consumed_fuel,
                     result: AgentInvocationResult::LoadSnapshot { error: inner.err() },
                 }),
-                Ok(Err(err)) | Err(GuestCallSettlementError::Interrupted(err)) => {
+                Ok(Err(err))
+                | Err(GuestCallSettlementError::Interrupted(err))
+                | Err(GuestCallSettlementError::Trap(err)) => {
                     Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
@@ -585,7 +637,9 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                     consumed_fuel,
                     result: AgentInvocationResult::ProcessOplogEntries { error: inner.err() },
                 }),
-                Ok(Err(err)) | Err(GuestCallSettlementError::Interrupted(err)) => {
+                Ok(Err(err))
+                | Err(GuestCallSettlementError::Interrupted(err))
+                | Err(GuestCallSettlementError::Trap(err)) => {
                     Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
                 }
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
@@ -1724,6 +1778,36 @@ mod tests {
 
         assert!(matches!(
             classify_guest_call_settlement::<()>(
+                Err(wasmtime::Error::from_anyhow(
+                    wasmtime::Trap::UnreachableCodeReached.into(),
+                )),
+                None,
+                false,
+            ),
+            Err(GuestCallSettlementError::Trap(_))
+        ));
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                Err(wasmtime::Error::from_anyhow(
+                    GolemSpecificWasmTrap::WorkerOutOfMemory.into(),
+                )),
+                None,
+                false,
+            ),
+            Err(GuestCallSettlementError::Trap(_))
+        ));
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                Err(wasmtime::Error::from_anyhow(
+                    wasmtime::Trap::AsyncDeadlock.into(),
+                )),
+                None,
+                false,
+            ),
+            Err(GuestCallSettlementError::Infrastructure(_))
+        ));
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
                 Err(wasmtime::Error::msg("host task failed")),
                 None,
                 false,
@@ -1747,6 +1831,44 @@ mod tests {
                 false,
             ),
             Err(GuestCallSettlementError::Interrupted(_))
+        ));
+    }
+
+    #[test]
+    fn host_infrastructure_error_with_wasm_backtrace_stays_infrastructure() {
+        let engine = wasmtime::Engine::default();
+        let module = wasmtime::Module::new(
+            &engine,
+            r#"
+                (module
+                    (import "host" "fail" (func $fail))
+                    (func (export "run")
+                        call $fail))
+            "#,
+        )
+        .unwrap();
+        let mut linker = wasmtime::Linker::new(&engine);
+        linker
+            .func_wrap("host", "fail", || -> wasmtime::Result<()> {
+                Err(wasmtime::Error::from_anyhow(
+                    WorkerExecutorError::runtime("registry unavailable").into(),
+                ))
+            })
+            .unwrap();
+        let mut store = wasmtime::Store::new(&engine, ());
+        let instance = linker.instantiate(&mut store, &module).unwrap();
+        let run = instance
+            .get_typed_func::<(), ()>(&mut store, "run")
+            .unwrap();
+        let error = run.call(&mut store, ()).unwrap_err();
+
+        assert!(
+            error.downcast_ref::<wasmtime::WasmBacktrace>().is_some(),
+            "the reproducer must exercise Wasmtime's attached backtrace context"
+        );
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(Err(error), None, false),
+            Err(GuestCallSettlementError::Infrastructure(_))
         ));
     }
 

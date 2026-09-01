@@ -352,6 +352,42 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
     }
 }
 
+async fn publish_incomplete_replay_tail_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let (replay_state, linear_memory, role, local_live_tail) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        (
+            ctx.state.replay_state.clone(),
+            ctx.linear_memory.clone(),
+            if ctx.runtime == OwnerRuntime::Agent {
+                ReplayToLiveRole::PrimaryAgent
+            } else {
+                ReplayToLiveRole::NonPrimary
+            },
+            ctx.state.local_live_tail(),
+        )
+    });
+    let outcome = replay_state.switch_to_live(&linear_memory, role).await?;
+    if outcome == ReplayToLiveOutcome::ReplayResumed {
+        return Err(WorkerExecutorError::runtime(
+            "replay target grew while an incomplete durable call was settling",
+        ));
+    }
+    if role == ReplayToLiveRole::NonPrimary {
+        local_live_tail.store(true, Ordering::Release);
+    } else {
+        process_pending_replay_events_access(store, get_ctx).await?;
+    }
+    Ok(())
+}
+
 /// Options that make the durable records of a concurrent accessor call claim-safe on replay.
 ///
 /// Accessor host calls run concurrently, so their oplog `Start` entries are appended in
@@ -3046,6 +3082,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 Err(terminal.direct_divergence_error())
             }
             ReplayedResolution::Incomplete => {
+                if let Err(error) = ctx.switch_to_live().await {
+                    self.finished = true;
+                    return Err(error);
+                }
                 self.prepare_incomplete_live_repair(
                     Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
                     || ctx.state.live_host_call_counter(),
@@ -3139,6 +3179,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 park_undelivered_forever().await
             }
             ReplayedResolution::Incomplete => {
+                if let Err(error) = publish_incomplete_replay_tail_access(store, get_ctx).await {
+                    self.finished = true;
+                    return Err(error);
+                }
                 self.prepare_incomplete_live_repair(
                     Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
                     || {
@@ -3236,6 +3280,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 Err(terminal.direct_divergence_error())
             }
             ReplayedResolution::Incomplete => {
+                if let Err(error) = publish_incomplete_replay_tail_access(store, get_ctx).await {
+                    self.finished = true;
+                    return Err(error);
+                }
                 self.prepare_incomplete_live_repair(
                     Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
                     || {
@@ -3395,6 +3443,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 park_undelivered_forever().await
             }
             ReplayedResolution::Incomplete => {
+                if let Err(error) = publish_incomplete_replay_tail_access(store, get_ctx).await {
+                    self.finished = true;
+                    return Err(error);
+                }
                 self.prepare_incomplete_live_repair(
                     Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
                     || {
