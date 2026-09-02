@@ -45,6 +45,7 @@ bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
+cap-fs-ext = { workspace = true }
 cap-std = { workspace = true }
 cap-time-ext = { workspace = true }                              # keep in sync with wasmtime
 chrono = { workspace = true }
@@ -111,7 +112,12 @@ wasmtime-wasi-http = { workspace = true }
 zstd = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true }
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+linux-raw-sys = { workspace = true }
+rustix = { workspace = true }
 
 [[bench]]
 name = "invocation_lowering"
@@ -134,6 +140,7 @@ aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 criterion = { workspace = true }
 axum = { workspace = true }
+figment = { workspace = true, features = ["test"] }
 futures-concurrency = { workspace = true }
 goldenfile = { workspace = true }
 pretty_assertions = { workspace = true, features = [ "unstable" ] }

@@ -41,7 +41,7 @@ pub fn decode_qualified(name : String) -> (String, String)? {
 ///|
 /// HTTP endpoint information parsed from `#derive.endpoint` annotations on methods.
 pub(all) struct HttpEndpointInfo {
-  method : String
+  http_method : String
   path : String
   headers : Array[(String, String)]
   auth : Bool?
@@ -211,7 +211,7 @@ pub fn syntax_type_to_param_type(
 ///|
 /// Extracts the content of a doc comment as a trimmed string.
 fn extract_doc_string(doc : @syntax.DocString) -> String {
-  let sb = StringBuilder::new()
+  let sb = StringBuilder()
   let mut first = true
   doc.content.each(fn(line) {
     if first {
@@ -221,14 +221,12 @@ fn extract_doc_string(doc : @syntax.DocString) -> String {
     }
     sb.write_string(line)
   })
-  sb.to_string().trim().to_string()
+  sb.to_string().trim().to_owned()
 }
 
 ///|
 /// Extracts the agent mode (durable or ephemeral) from `#derive.agent` attributes.
-fn extract_agent_mode(
-  attrs : @list.List[@attribute.Attribute],
-) -> AgentMode raise AgentParseError {
+fn extract_agent_mode(attrs : @list.List[@attribute.Attribute]) -> AgentMode {
   let mut result = Durable
   attrs.each(fn(attr) {
     match attr.parsed {
@@ -256,7 +254,7 @@ fn extract_agent_mode(
 /// `snapshotting="periodic(N)"`, `snapshotting="every_n(N)"`.
 fn extract_agent_snapshotting(
   attrs : @list.List[@attribute.Attribute],
-) -> AgentSnapshotting raise AgentParseError {
+) -> AgentSnapshotting {
   let mut result = Disabled
   attrs.each(fn(attr) {
     match attr.parsed {
@@ -330,7 +328,7 @@ fn parse_snapshotting_value(
 /// `h`, `hr`, `hrs`, `hour`, `hours`,
 /// `d`, `day`, `days`.
 pub fn parse_duration_seconds(s : String) -> UInt64 raise AgentParseError {
-  let trimmed = s.trim().to_string()
+  let trimmed = s.trim().to_owned()
   // Try plain number first
   match parse_uint64(trimmed) {
     Some(n) => return n
@@ -401,7 +399,7 @@ fn duration_unit_to_seconds(unit : String) -> UInt64 raise AgentParseError {
 /// Splits a string by whitespace into non-empty tokens.
 fn split_whitespace(s : String) -> Array[String] {
   let tokens : Array[String] = []
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for ch in s {
     if ch == ' ' || ch == '\t' {
       if buf.to_string().length() > 0 {
@@ -465,9 +463,7 @@ fn parse_uint(s : String) -> UInt? {
 ///
 /// Note: `uses_principal` is never accepted as user input — it is derived from the
 /// method signature (presence of a `Principal` parameter).
-fn extract_read_only(
-  attrs : @list.List[@attribute.Attribute],
-) -> ReadOnlyInfo? raise AgentParseError {
+fn extract_read_only(attrs : @list.List[@attribute.Attribute]) -> ReadOnlyInfo? {
   let mut result : ReadOnlyInfo? = None
   attrs.each(fn(attr) {
     match attr.parsed {
@@ -598,9 +594,7 @@ pub fn is_principal_type(pt : ParamType) -> Bool {
 pub fn visible_params(
   params : Array[(String, ParamType)],
 ) -> Array[(String, ParamType)] {
-  params.filter(fn(p) {
-    not(is_principal_type(p.1)) && not(is_config_type(p.1))
-  })
+  params.filter(fn(p) { !is_principal_type(p.1) && !is_config_type(p.1) })
 }
 
 ///|
@@ -842,7 +836,7 @@ fn extract_endpoint(
   attrs : @list.List[@attribute.Attribute],
 ) -> HttpEndpointInfo? raise AgentParseError {
   let mut result : HttpEndpointInfo? = None
-  attrs.each(fn(attr) {
+  attrs.each(attr => {
     match attr.parsed {
       Some(Apply({ qual: Some("derive"), name: "endpoint", }, props)) => {
         let found : Array[(String, String)] = []
@@ -865,8 +859,14 @@ fn extract_endpoint(
             "#derive.endpoint requires exactly one HTTP method (e.g. get=\"/path\")",
           )
         } else {
-          let (method, path) = found[0]
-          result = Some({ method, path, headers: [], auth: None, cors: [], })
+          let (http_method, path) = found[0]
+          result = Some({
+            http_method,
+            path,
+            headers: [],
+            auth: None,
+            cors: [],
+          })
         }
       }
       _ => ()
@@ -962,7 +962,7 @@ fn build_endpoint_info(
 /// Extracts method parameter names and types from a function declaration AST.
 fn extract_method_params(
   fun_decl : @syntax.FunDecl,
-) -> Array[(String, ParamType)] raise AgentParseError {
+) -> Array[(String, ParamType)] {
   let params : Array[(String, ParamType)] = []
   match fun_decl.decl_params {
     Some(ps) =>
@@ -1007,18 +1007,18 @@ fn extract_return_type(
 pub fn parse_agents(
   files : Array[(String, String)],
 ) -> Array[AgentInfo] raise AgentParseError {
-  let agent_names : Map[String, String] = {}
-  let agent_modes : Map[String, AgentMode] = {}
-  let agent_snapshotting : Map[String, AgentSnapshotting] = {}
+  let agent_names : Map[String, String] = Map([])
+  let agent_modes : Map[String, AgentMode] = Map([])
+  let agent_snapshotting : Map[String, AgentSnapshotting] = Map([])
   let agent_constructors : Map[
     String,
     (Array[(String, ParamType)], String, String?),
-  ] = {}
-  let agent_methods : Map[String, Array[MethodInfo]] = {}
-  let agent_snapshottable : Map[String, Bool] = {}
-  let agent_json_derives : Map[String, Bool] = {}
-  let agent_fields : Map[String, Array[(String, Bool)]] = {}
-  let agent_mounts : Map[String, HttpMountInfo?] = {}
+  ] = Map([])
+  let agent_methods : Map[String, Array[MethodInfo]] = Map([])
+  let agent_snapshottable : Map[String, Bool] = Map([])
+  let agent_json_derives : Map[String, Bool] = Map([])
+  let agent_fields : Map[String, Array[(String, Bool)]] = Map([])
+  let agent_mounts : Map[String, HttpMountInfo?] = Map([])
   let mut has_init = false
   // Parse all files first, then run passes over all AST nodes
   // to avoid file-ordering dependencies
@@ -1043,10 +1043,8 @@ pub fn parse_agents(
           let name = type_decl.tycon
           let description = extract_doc_string(type_decl.doc)
           let desc = if description == "" { name } else { description }
-          let mode = extract_agent_mode(type_decl.attrs) catch { _ => Durable }
-          let snapshotting = extract_agent_snapshotting(type_decl.attrs) catch {
-            _ => Disabled
-          }
+          let mode = extract_agent_mode(type_decl.attrs)
+          let snapshotting = extract_agent_snapshotting(type_decl.attrs)
           agent_names[name] = desc
           agent_modes[name] = mode
           agent_snapshotting[name] = snapshotting
@@ -1074,7 +1072,7 @@ pub fn parse_agents(
           // Extract struct field names and mutability
           let field_info : Array[(String, Bool)] = []
           match type_decl.components {
-            Record(fields~, ..) =>
+            Record(fields~) =>
               fields.each(fn(field) {
                 field_info.push((field.name.label, field.mut_))
               })
@@ -1101,7 +1099,7 @@ pub fn parse_agents(
     }
   })
   // Second pass: find ::new constructors, public methods, and fn init
-  all_impls.each(fn(impl_) {
+  all_impls.each(impl_ => {
     match impl_ {
       TopFuncDef(fun_decl~, ..) => {
         // Check for fn init
@@ -1113,7 +1111,7 @@ pub fn parse_agents(
             if agent_names.contains(name) {
               if fun_decl.name.name == "new" {
                 // Constructor
-                let params = extract_method_params(fun_decl) catch { _ => [] }
+                let params = extract_method_params(fun_decl)
                 let doc = extract_doc_string(fun_decl.doc)
                 let desc = if doc == "" { "Creates a new \{name}" } else { doc }
                 let hint = extract_prompt_hint(fun_decl.attrs)
@@ -1145,9 +1143,7 @@ pub fn parse_agents(
                 }
                 if is_method {
                   // Extract params (skip self)
-                  let all_params = extract_method_params(fun_decl) catch {
-                    _ => []
-                  }
+                  let all_params = extract_method_params(fun_decl)
                   // Remove the first param (self : Self)
                   let params : Array[(String, ParamType)] = []
                   for i in 1..<all_params.length() {

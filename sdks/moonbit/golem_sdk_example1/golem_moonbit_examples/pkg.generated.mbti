@@ -480,4 +480,3 @@ pub async fn WebhookAgentClient::wait_for_webhook(Self) -> String
 // Type aliases
 
 // Traits
-

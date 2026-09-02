@@ -148,6 +148,9 @@ runs:
     - name: Setup MoonBit
       if: inputs.language == 'moonbit'
       uses: hustcer/setup-moonbit@v1
+      with:
+        version: 0.10.11+6ff76a5f9
+        core-version: 0.10.11+6ff76a5f9
 
     - name: Install wasm-tools
       if: inputs.language == 'moonbit'

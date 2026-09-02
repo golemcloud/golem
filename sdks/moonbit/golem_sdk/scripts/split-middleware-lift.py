@@ -24,27 +24,36 @@ def main() -> None:
     signature = "pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int {"
     if lines.count(signature) != 1:
         raise SystemExit("expected exactly one invoke-tool-middleware binding")
-    if len(lines) <= 19346:
+    signature_index = lines.index(signature)
+    raw_start = signature_index - 1
+    task_return_prefix = "fn wasmExportAsyncInvokeToolMiddlewareTaskReturn("
+    task_return_indices = [
+        index for index, line in enumerate(lines) if line.startswith(task_return_prefix)
+    ]
+    if len(task_return_indices) != 1:
+        raise SystemExit("expected exactly one invoke-tool-middleware task return")
+    task_return_index = task_return_indices[0]
+    raw_end = task_return_index - 1
+    if raw_start < 0 or lines[raw_start] != "#doc(hidden)":
         raise SystemExit("unexpected truncated invoke-tool-middleware binding")
-    if lines[11739] != "pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int {":
-        raise SystemExit("unexpected invoke-tool-middleware binding shape")
-    if not lines[19346].startswith(
-        "fn wasmExportAsyncInvokeToolMiddlewareTaskReturn("
-    ):
+    if raw_end <= raw_start or lines[raw_end] != "///|":
         raise SystemExit("unexpected invoke-tool-middleware binding end")
-    raw_lift = "\n".join(lines[11738:19346]) + "\n"
+    raw_lift = "\n".join(lines[raw_start:raw_end]) + "\n"
     digest = hashlib.sha256(raw_lift.encode()).hexdigest()
     if digest != EXPECTED_INVOKE_LIFT_SHA256:
         raise SystemExit(
             "unexpected invoke-tool-middleware lift digest: "
             f"expected {EXPECTED_INVOKE_LIFT_SHA256}, got {digest}"
         )
-    output = lines[:11738]
+    output = lines[:raw_start]
+
+    def source_line(original_line: int) -> int:
+        return raw_start + (original_line - 11739)
 
     def block(start: int, end: int) -> list[str]:
         return [
             line[12:] if line.startswith("            ") else line
-            for line in lines[start - 1 : end]
+            for line in lines[source_line(start) : source_line(end + 1)]
         ]
 
     def helper(signature: str, start: int, end: int, result: str) -> None:
@@ -95,7 +104,8 @@ def main() -> None:
         "lifted1008",
     )
     output.extend(
-        """#doc(hidden)
+        """///|
+#doc(hidden)
 pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int {
       @async-core.with_waitableset(async fn() {
             @async-core.with_task_group(async fn(background_group) {
@@ -129,7 +139,7 @@ pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int {
 }
 """.splitlines()
     )
-    output.extend(lines[19346:])
+    output.extend(lines[raw_end:])
     path.write_text("\n".join(output) + "\n")
 
 

@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use golem_common::model::{Pod, ShardId};
 use golem_shard_manager::{
-    HealthCheck, HealthCheckError, PodState, RoutingTable, RoutingTablePersistence,
-    ShardManagement, ShardManagerError, WorkerExecutorService,
+    ExecutorAddr, ExecutorId, HealthCheck, HealthCheckError, RoutingTablePersistence, ShardEpoch,
+    ShardLeaseState, ShardManagement, ShardManagerError, WorkerExecutorService,
 };
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,36 +27,39 @@ use test_r::test;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
+use uuid::Uuid;
+
+const LEASE_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug)]
 struct TestPersistence {
-    state: Arc<Mutex<RoutingTable>>,
-    writes: Arc<Mutex<Vec<RoutingTable>>>,
+    shard_state: Arc<Mutex<ShardLeaseState>>,
+    writes: Arc<Mutex<Vec<ShardLeaseState>>>,
 }
 
 impl TestPersistence {
-    fn new(initial: RoutingTable) -> Self {
+    fn new(initial: ShardLeaseState) -> Self {
         Self {
-            state: Arc::new(Mutex::new(initial)),
+            shard_state: Arc::new(Mutex::new(initial)),
             writes: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    async fn latest(&self) -> RoutingTable {
-        self.state.lock().await.clone()
+    async fn latest(&self) -> ShardLeaseState {
+        self.shard_state.lock().await.clone()
     }
 }
 
 #[async_trait]
 impl RoutingTablePersistence for TestPersistence {
-    async fn write(&self, routing_table: &RoutingTable) -> Result<(), ShardManagerError> {
-        *self.state.lock().await = routing_table.clone();
-        self.writes.lock().await.push(routing_table.clone());
+    async fn write(&self, shard_state: &ShardLeaseState) -> Result<(), ShardManagerError> {
+        *self.shard_state.lock().await = shard_state.clone();
+        self.writes.lock().await.push(shard_state.clone());
         Ok(())
     }
 
-    async fn read(&self) -> Result<RoutingTable, ShardManagerError> {
-        Ok(self.state.lock().await.clone())
+    async fn read(&self) -> Result<ShardLeaseState, ShardManagerError> {
+        Ok(self.shard_state.lock().await.clone())
     }
 }
 
@@ -192,25 +196,42 @@ fn pod(last_octet: u8, port: u16) -> Pod {
     }
 }
 
-fn routing_table_with_pods(
-    number_of_shards: usize,
-    pods: Vec<(Pod, &str, &[i64])>,
-) -> RoutingTable {
-    let mut pod_states = BTreeMap::new();
-    for (pod, pod_name, shard_ids) in pods {
-        pod_states.insert(
-            pod,
-            PodState {
-                pod_name: Some(pod_name.to_string()),
-                assigned_shards: shard_ids.iter().copied().map(ShardId::new).collect(),
-            },
-        );
-    }
+fn executor(idx: u128) -> ExecutorId {
+    ExecutorId(Uuid::from_u128(idx))
+}
 
-    RoutingTable {
-        number_of_shards,
-        pod_states,
+fn granted_at() -> DateTime<Utc> {
+    DateTime::from_timestamp(1_700_000_000, 0).expect("valid timestamp")
+}
+
+fn shard_state_with_executors(
+    number_of_shards: usize,
+    pods: Vec<(ExecutorId, Pod, &str, &[i64])>,
+) -> ShardLeaseState {
+    let mut shard_state = ShardLeaseState::new(number_of_shards);
+    for (executor_id, pod, pod_name, shard_ids) in pods {
+        shard_state.add_executor(
+            executor_id,
+            ExecutorAddr::from(pod),
+            Some(pod_name.to_string()),
+            granted_at(),
+            LEASE_TTL,
+        );
+        for shard_id in shard_ids {
+            shard_state.assign_shard(executor_id, ShardId::new(*shard_id));
+        }
     }
+    shard_state
+}
+
+/// Shards of the executor registered at `pod` in the persisted state (there is exactly one).
+fn shards_at(shard_state: &ShardLeaseState, pod: Pod) -> BTreeSet<ShardId> {
+    let executor_id = shard_state
+        .executor_for_addr(ExecutorAddr::from(pod))
+        .unwrap_or_else(|| panic!("no executor registered at {pod}"));
+    shard_state
+        .shards_for_executor(executor_id)
+        .expect("executor should hold a lease")
 }
 
 fn shard_ids(ids: &[i64]) -> BTreeSet<ShardId> {
@@ -238,14 +259,14 @@ async fn wait_for_local_assignment(
 }
 
 async fn new_shard_management(
-    routing_table: RoutingTable,
+    shard_state: ShardLeaseState,
     worker_executors: Arc<TestWorkerExecutors>,
 ) -> (
     ShardManagement,
     TestPersistence,
     JoinSet<anyhow::Result<()>>,
 ) {
-    let persistence = TestPersistence::new(routing_table);
+    let persistence = TestPersistence::new(shard_state);
     let health_check = Arc::new(TestHealthCheck::all_healthy());
     let mut join_set = JoinSet::new();
 
@@ -254,6 +275,7 @@ async fn new_shard_management(
         worker_executors,
         health_check,
         0.0,
+        LEASE_TTL,
         &mut join_set,
     )
     .await
@@ -273,11 +295,11 @@ async fn shard_manager_restart_clears_stale_executor_shards() {
     worker_executors.set_local_assignment(stale_pod, &[0]).await;
 
     let (_shard_management, _persistence, mut join_set) = new_shard_management(
-        routing_table_with_pods(
+        shard_state_with_executors(
             1,
             vec![
-                (authoritative_pod, "worker-executor-0", &[0]),
-                (stale_pod, "worker-executor-1", &[]),
+                (executor(1), authoritative_pod, "worker-executor-0", &[0]),
+                (executor(2), stale_pod, "worker-executor-1", &[]),
             ],
         ),
         worker_executors.clone(),
@@ -308,34 +330,23 @@ async fn shard_manager_restart_recovers_from_partially_applied_rebalance() {
         .await;
 
     let (_shard_management, persistence, mut join_set) = new_shard_management(
-        routing_table_with_pods(
+        shard_state_with_executors(
             1,
             vec![
-                (persisted_owner, "worker-executor-0", &[0]),
-                (stale_new_owner, "worker-executor-1", &[]),
+                (executor(1), persisted_owner, "worker-executor-0", &[0]),
+                (executor(2), stale_new_owner, "worker-executor-1", &[]),
             ],
         ),
         worker_executors.clone(),
     )
     .await;
 
-    let routing_table = persistence.latest().await;
+    let shard_state = persistence.latest().await;
     assert_eq!(
-        routing_table
-            .pod_states
-            .get(&persisted_owner)
-            .expect("persisted owner missing")
-            .assigned_shards,
+        shards_at(&shard_state, persisted_owner),
         [0].into_iter().map(ShardId::new).collect()
     );
-    assert!(
-        routing_table
-            .pod_states
-            .get(&stale_new_owner)
-            .expect("stale new owner missing")
-            .assigned_shards
-            .is_empty()
-    );
+    assert!(shards_at(&shard_state, stale_new_owner).is_empty());
     assert_eq!(
         worker_executors.local_assignment(persisted_owner).await,
         [0].into_iter().map(ShardId::new).collect()
@@ -358,11 +369,11 @@ async fn reconnecting_pod_clears_stale_local_shards() {
         .await;
 
     let (shard_management, persistence, mut join_set) = new_shard_management(
-        routing_table_with_pods(
+        shard_state_with_executors(
             1,
             vec![
-                (existing_pod, "worker-executor-0", &[]),
-                (pod(2, 9001), "worker-executor-1", &[0]),
+                (executor(1), existing_pod, "worker-executor-0", &[]),
+                (executor(2), pod(2, 9001), "worker-executor-1", &[0]),
             ],
         ),
         worker_executors.clone(),
@@ -378,8 +389,8 @@ async fn reconnecting_pod_clears_stale_local_shards() {
         [0].into_iter().map(ShardId::new).collect()
     );
 
-    shard_management
-        .register_pod(existing_pod, Some("worker-executor-0".to_string()))
+    let new_executor_id = shard_management
+        .register_executor(existing_pod.into(), Some("worker-executor-0".to_string()))
         .await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -388,15 +399,16 @@ async fn reconnecting_pod_clears_stale_local_shards() {
         BTreeSet::new()
     );
 
-    let routing_table = persistence.latest().await;
-    assert!(
-        routing_table
-            .pod_states
-            .get(&existing_pod)
-            .expect("existing pod missing")
-            .assigned_shards
-            .is_empty()
+    let shard_state = persistence.latest().await;
+    assert!(shards_at(&shard_state, existing_pod).is_empty());
+    // the re-registered instance replaced the previous lease at the same address
+    assert_ne!(new_executor_id, executor(1));
+    assert!(!shard_state.has_executor(executor(1)));
+    assert_eq!(
+        shard_state.executor_for_addr(existing_pod.into()),
+        Some(new_executor_id)
     );
+    assert_eq!(shard_state.executor_count(), 2);
 
     join_set.abort_all();
 }
@@ -410,34 +422,23 @@ async fn reconciliation_clears_duplicate_local_shard_owner() {
     worker_executors.set_local_assignment(stale_pod, &[0]).await;
 
     let (_shard_management, persistence, mut join_set) = new_shard_management(
-        routing_table_with_pods(
+        shard_state_with_executors(
             1,
             vec![
-                (authoritative_pod, "worker-executor-0", &[0]),
-                (stale_pod, "worker-executor-1", &[]),
+                (executor(1), authoritative_pod, "worker-executor-0", &[0]),
+                (executor(2), stale_pod, "worker-executor-1", &[]),
             ],
         ),
         worker_executors.clone(),
     )
     .await;
 
-    let routing_table = persistence.latest().await;
+    let shard_state = persistence.latest().await;
     assert_eq!(
-        routing_table
-            .pod_states
-            .get(&authoritative_pod)
-            .expect("authoritative pod missing")
-            .assigned_shards,
+        shards_at(&shard_state, authoritative_pod),
         [0].into_iter().map(ShardId::new).collect()
     );
-    assert!(
-        routing_table
-            .pod_states
-            .get(&stale_pod)
-            .expect("stale pod missing")
-            .assigned_shards
-            .is_empty()
-    );
+    assert!(shards_at(&shard_state, stale_pod).is_empty());
     assert_eq!(
         worker_executors.local_assignment(authoritative_pod).await,
         [0].into_iter().map(ShardId::new).collect()
@@ -463,35 +464,24 @@ async fn failed_assignment_is_retried_from_unassigned_shards() {
     worker_executors.fail_next_assignments(new_pod, 1).await;
 
     let (shard_management, persistence, mut join_set) = new_shard_management(
-        routing_table_with_pods(4, vec![(old_pod, "worker-executor-0", &[0, 1, 2, 3])]),
+        shard_state_with_executors(
+            4,
+            vec![(executor(1), old_pod, "worker-executor-0", &[0, 1, 2, 3])],
+        ),
         worker_executors.clone(),
     )
     .await;
 
     shard_management
-        .register_pod(new_pod, Some("worker-executor-1".to_string()))
+        .register_executor(new_pod.into(), Some("worker-executor-1".to_string()))
         .await;
 
     wait_for_local_assignment(&worker_executors, old_pod, shard_ids(&[2, 3])).await;
     wait_for_local_assignment(&worker_executors, new_pod, shard_ids(&[0, 1])).await;
 
-    let routing_table = persistence.latest().await;
-    assert_eq!(
-        routing_table
-            .pod_states
-            .get(&old_pod)
-            .expect("old pod missing")
-            .assigned_shards,
-        shard_ids(&[2, 3])
-    );
-    assert_eq!(
-        routing_table
-            .pod_states
-            .get(&new_pod)
-            .expect("new pod missing")
-            .assigned_shards,
-        shard_ids(&[0, 1])
-    );
+    let shard_state = persistence.latest().await;
+    assert_eq!(shards_at(&shard_state, old_pod), shard_ids(&[2, 3]));
+    assert_eq!(shards_at(&shard_state, new_pod), shard_ids(&[0, 1]));
 
     join_set.abort_all();
 }
@@ -509,13 +499,16 @@ async fn failed_revoke_is_retried_without_assigning_to_new_executor_first() {
     worker_executors.fail_next_revocations(old_pod, 1).await;
 
     let (shard_management, persistence, mut join_set) = new_shard_management(
-        routing_table_with_pods(4, vec![(old_pod, "worker-executor-0", &[0, 1, 2, 3])]),
+        shard_state_with_executors(
+            4,
+            vec![(executor(1), old_pod, "worker-executor-0", &[0, 1, 2, 3])],
+        ),
         worker_executors.clone(),
     )
     .await;
 
     shard_management
-        .register_pod(new_pod, Some("worker-executor-1".to_string()))
+        .register_executor(new_pod.into(), Some("worker-executor-1".to_string()))
         .await;
 
     wait_for_local_assignment(&worker_executors, old_pod, shard_ids(&[2, 3])).await;
@@ -530,23 +523,9 @@ async fn failed_revoke_is_retried_without_assigning_to_new_executor_first() {
         shard_ids(&[0, 1])
     );
 
-    let routing_table = persistence.latest().await;
-    assert_eq!(
-        routing_table
-            .pod_states
-            .get(&old_pod)
-            .expect("old pod missing")
-            .assigned_shards,
-        shard_ids(&[2, 3])
-    );
-    assert_eq!(
-        routing_table
-            .pod_states
-            .get(&new_pod)
-            .expect("new pod missing")
-            .assigned_shards,
-        shard_ids(&[0, 1])
-    );
+    let shard_state = persistence.latest().await;
+    assert_eq!(shards_at(&shard_state, old_pod), shard_ids(&[2, 3]));
+    assert_eq!(shards_at(&shard_state, new_pod), shard_ids(&[0, 1]));
 
     join_set.abort_all();
 }
@@ -558,11 +537,11 @@ async fn failed_reconnect_reconciliation_is_retried() {
     let worker_executors = Arc::new(TestWorkerExecutors::default());
 
     let (shard_management, _persistence, mut join_set) = new_shard_management(
-        routing_table_with_pods(
+        shard_state_with_executors(
             1,
             vec![
-                (existing_pod, "worker-executor-0", &[]),
-                (pod(2, 9001), "worker-executor-1", &[0]),
+                (executor(1), existing_pod, "worker-executor-0", &[]),
+                (executor(2), pod(2, 9001), "worker-executor-1", &[0]),
             ],
         ),
         worker_executors.clone(),
@@ -577,10 +556,88 @@ async fn failed_reconnect_reconciliation_is_retried() {
         .await;
 
     shard_management
-        .register_pod(existing_pod, Some("worker-executor-0".to_string()))
+        .register_executor(existing_pod.into(), Some("worker-executor-0".to_string()))
         .await;
 
     wait_for_local_assignment(&worker_executors, existing_pod, BTreeSet::new()).await;
+
+    join_set.abort_all();
+}
+
+#[test]
+// A new executor instance registering at an address that already holds a lease replaces the
+// previous lease, inherits its shards with advanced epochs and receives the authoritative
+// assignment; shards never become unassigned and no other executor is disturbed.
+async fn same_address_reregistration_transfers_shards_and_reconciles() {
+    let restarted_pod = pod(1, 9000);
+    let other_pod = pod(2, 9001);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    worker_executors
+        .set_local_assignment(restarted_pod, &[0, 1])
+        .await;
+    worker_executors
+        .set_local_assignment(other_pod, &[2, 3])
+        .await;
+
+    let (shard_management, persistence, mut join_set) = new_shard_management(
+        shard_state_with_executors(
+            4,
+            vec![
+                (executor(1), restarted_pod, "worker-executor-0", &[0, 1]),
+                (executor(2), other_pod, "worker-executor-1", &[2, 3]),
+            ],
+        ),
+        worker_executors.clone(),
+    )
+    .await;
+
+    // the restarted process comes up with an empty local assignment
+    worker_executors
+        .set_local_assignment(restarted_pod, &[])
+        .await;
+
+    let new_executor_id = shard_management
+        .register_executor(restarted_pod.into(), Some("worker-executor-0".to_string()))
+        .await;
+
+    wait_for_local_assignment(&worker_executors, restarted_pod, shard_ids(&[0, 1])).await;
+    assert_eq!(
+        worker_executors.local_assignment(other_pod).await,
+        shard_ids(&[2, 3])
+    );
+
+    let shard_state = persistence.latest().await;
+    assert!(!shard_state.has_executor(executor(1)));
+    assert_eq!(
+        shard_state.executor_for_addr(restarted_pod.into()),
+        Some(new_executor_id)
+    );
+    assert_eq!(
+        shard_state.shards_for_executor(new_executor_id),
+        Some(shard_ids(&[0, 1]))
+    );
+    assert_eq!(
+        shard_state.shards_for_executor(executor(2)),
+        Some(shard_ids(&[2, 3]))
+    );
+    assert_eq!(
+        shard_state.epoch_for_shard(ShardId::new(0)),
+        Some(ShardEpoch(1))
+    );
+    assert_eq!(
+        shard_state.epoch_for_shard(ShardId::new(2)),
+        Some(ShardEpoch(0))
+    );
+    assert!(shard_state.pending_rebalance.is_empty());
+    assert!(shard_state.get_unassigned_shards().is_empty());
+
+    // every persisted state along the way kept all four shards routable
+    for written in persistence.writes.lock().await.iter() {
+        assert!(
+            written.get_unassigned_shards().is_empty(),
+            "shards became unassigned during re-registration: {written}"
+        );
+    }
 
     join_set.abort_all();
 }

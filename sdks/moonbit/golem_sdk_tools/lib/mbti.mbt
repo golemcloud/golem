@@ -38,7 +38,7 @@ pub fn parse_mbt_source(content : String) -> Array[FnSignature] {
           None => "Unit"
         }
         let user_name = match gen_name.strip_prefix("mbt_ffi_") {
-          Some(stripped) => stripped.to_string()
+          Some(stripped) => stripped.to_owned()
           None => gen_name
         }
         fns.push({ gen_name, user_name, params, return_type, })
@@ -61,12 +61,12 @@ fn type_to_string(ty : @syntax.Type) -> String {
       if tys.is_empty() {
         base
       } else {
-        let sb = StringBuilder::new()
+        let sb = StringBuilder()
         sb.write_string(base)
         sb.write_char('[')
         let mut first = true
         tys.each(fn(t) {
-          if not(first) {
+          if !first {
             sb.write_string(", ")
           }
           first = false
@@ -78,11 +78,11 @@ fn type_to_string(ty : @syntax.Type) -> String {
     }
     Option(ty~, ..) => "\{type_to_string(ty)}?"
     Tuple(tys~, ..) => {
-      let sb = StringBuilder::new()
+      let sb = StringBuilder()
       sb.write_char('(')
       let mut first = true
       tys.each(fn(t) {
-        if not(first) {
+        if !first {
           sb.write_string(", ")
         }
         first = false

@@ -39,6 +39,8 @@ pub enum ShardManagerError {
     MigrationError(#[from] anyhow::Error),
     #[error("IO error {0}")]
     IoError(#[from] std::io::Error),
+    #[error("Internal error: {0}")]
+    Internal(String),
 }
 
 impl IsRetriableError for ShardManagerError {
@@ -54,6 +56,7 @@ impl IsRetriableError for ShardManagerError {
             ShardManagerError::RepoError(_) => false,
             ShardManagerError::MigrationError(_) => false,
             ShardManagerError::IoError(_) => false,
+            ShardManagerError::Internal(_) => false,
         }
     }
 

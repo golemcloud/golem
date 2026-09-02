@@ -20,4 +20,3 @@ pub async fn invoke_tool_middleware(String, String, @golemcloud/golem_sdk/interf
 // Type aliases
 
 // Traits
-

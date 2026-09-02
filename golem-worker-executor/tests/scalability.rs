@@ -311,7 +311,6 @@ async fn initial_large_memory_allocation(
         None,
         None,
         None,
-        None,
     )
     .await?;
     let component = executor
@@ -373,7 +372,6 @@ async fn dynamic_large_memory_allocation(
         None,
         None,
         None,
-        None,
     )
     .await?;
     let component = executor
@@ -431,17 +429,8 @@ async fn interrupt_wins_over_dynamic_memory_permit_reacquisition(
         (MEMORY_LIMIT as f64 * MemoryConfig::default().worker_memory_ratio) as u64;
 
     let context = TestContext::new(last_unique_id);
-    let executor = start_customized(
-        deps,
-        &context,
-        Some(MEMORY_LIMIT),
-        None,
-        None,
-        None,
-        None,
-        None,
-    )
-    .await?;
+    let executor =
+        start_customized(deps, &context, Some(MEMORY_LIMIT), None, None, None, None).await?;
     let component = executor
         .component_dep(&context.default_environment_id, large_dynamic_memory)
         .store()
@@ -574,7 +563,6 @@ async fn eviction_prefers_idle_workers_over_warm_runnable(
         deps,
         &context,
         Some(768 * 1024 * 1024),
-        None,
         None,
         None,
         None,

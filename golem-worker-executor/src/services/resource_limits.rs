@@ -17,9 +17,9 @@ use crate::metrics::resources::{
     record_memory_gb_seconds, record_resource_usage_batch_update_failure,
     record_storage_byte_seconds,
 };
-use crate::services::agent_memory_meter::{AgentMemoryMeter, BYTE_NANOSECONDS_PER_GB_SECOND};
-use crate::services::agent_storage_meter::AgentStorageMeter;
-use crate::services::golem_config::ResourceLimitsConfig;
+use crate::services::agent_memory_meter::BYTE_NANOSECONDS_PER_GB_SECOND;
+use crate::services::byte_time_accumulator::ByteTimeSettlement;
+use crate::services::golem_config::{ResourceLimitsConfig, ResourceUsageMeteringConfig};
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::SafeDisplay;
@@ -29,40 +29,39 @@ use golem_common::model::agent::AgentMode;
 use golem_service_base::clients::registry::{RegistryService, ResourceUsageUpdate};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use tokio::sync::OnceCell;
+use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
+use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::{Instrument, error, info_span};
 
 #[derive(Debug)]
 pub struct AtomicResourceEntry {
+    metering: ResourceUsageMeteringConfig,
     // Current (cached) value of the account level fuel limits
     fuel: AtomicU64,
     // any local fuel consumption that was not yet sent to the server
     delta: AtomicI64,
     // any fuel consumption that is currently in flight to the server
     in_flight_delta: AtomicI64,
-    durable_byte_seconds_delta: AtomicI64,
-    ephemeral_byte_seconds_delta: AtomicI64,
-    storage_meters: Arc<scc::HashMap<OwnedAgentId, AgentStorageMeter>>,
-    memory_gb_seconds_delta: AtomicI64,
     in_flight_memory_gb_seconds_delta: AtomicI64,
-    durable_memory_gb_seconds_delta: AtomicI64,
-    ephemeral_memory_gb_seconds_delta: AtomicI64,
     in_flight_durable_memory_gb_seconds_delta: AtomicI64,
     in_flight_ephemeral_memory_gb_seconds_delta: AtomicI64,
-    memory_usage_transition: Mutex<()>,
-    memory_remainder: Mutex<u128>,
-    memory_meters: Arc<scc::HashMap<OwnedAgentId, AgentMemoryMeter>>,
+    account_usage_accumulator: Option<Mutex<AccountUsageAccumulator>>,
+    resource_usage_flushers: Mutex<Vec<Weak<dyn ResourceUsageFlusher>>>,
+    agent_memory_limit_targets: Mutex<Vec<Weak<dyn AgentMemoryLimitTarget>>>,
     // Current (cached) value of the account level worker memory limits
     max_memory: AtomicUsize,
     // Current (cached) value of the account level worker function table element limits
     max_table_elements: AtomicUsize,
     // Current (cached) value of the account level per-worker disk space limit
     max_disk_space: AtomicU64,
+    filesystem_limit_update: AsyncMutex<()>,
+    agent_filesystem_limit_targets: scc::HashMap<OwnedAgentId, Weak<AgentFilesystemLimitTarget>>,
     // Unix timestamp (seconds) of the last time fuel/memory were refreshed from
     // the server. Used by the background loop to detect idle accounts whose
     // cached limits have grown stale (e.g. after a plan change or monthly reset).
@@ -97,10 +96,203 @@ pub struct AtomicResourceEntry {
     oplog_writes_per_second: AtomicU64,
 }
 
+pub(crate) trait ResourceUsageFlusher: Send + Sync + std::fmt::Debug {
+    fn flush_usage(&self);
+}
+
+pub(crate) trait AgentMemoryLimitTarget: Send + Sync + std::fmt::Debug {
+    fn enforce_limit(&self, limit: u64);
+}
+
+type AgentFilesystemLimitUpdate =
+    Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send + 'static>>;
+
+struct AgentFilesystemLimitTarget {
+    update: Arc<dyn Fn(u64) -> AgentFilesystemLimitUpdate + Send + Sync>,
+}
+
+impl std::fmt::Debug for AgentFilesystemLimitTarget {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AgentFilesystemLimitTarget")
+            .finish_non_exhaustive()
+    }
+}
+
+pub(crate) struct AgentFilesystemLimitRegistration {
+    resource_limits: Arc<AtomicResourceEntry>,
+    owned_agent_id: OwnedAgentId,
+    target: Arc<AgentFilesystemLimitTarget>,
+}
+
+impl Drop for AgentFilesystemLimitRegistration {
+    fn drop(&mut self) {
+        self.resource_limits
+            .agent_filesystem_limit_targets
+            .remove_if_sync(&self.owned_agent_id, |registered| {
+                registered
+                    .upgrade()
+                    .is_none_or(|registered| Arc::ptr_eq(&registered, &self.target))
+            });
+    }
+}
+
 struct CapturedUsageUpdate {
     update: ResourceUsageUpdate,
     durable_memory_gb_seconds_delta: i64,
     ephemeral_memory_gb_seconds_delta: i64,
+}
+
+#[derive(Debug)]
+/// Account-local consumption settled by resident meters but not yet captured for registry delivery.
+///
+/// These values are usage, not reservations. Whole units remain as `u128` until `capture` removes
+/// a wire-sized batch; sub-unit byte-nanosecond remainders carry across short-lived agent windows.
+struct AccountUsageAccumulator {
+    memory: Option<MemoryUsageAccumulator>,
+    storage: Option<StorageUsageAccumulator>,
+}
+
+#[derive(Debug, Default)]
+struct MemoryUsageAccumulator {
+    durable_memory_gb_seconds: u128,
+    ephemeral_memory_gb_seconds: u128,
+    remainder: u128,
+}
+
+#[derive(Debug, Default)]
+struct StorageUsageAccumulator {
+    durable_storage_byte_seconds: u128,
+    ephemeral_storage_byte_seconds: u128,
+    durable_storage_remainder: u128,
+    ephemeral_storage_remainder: u128,
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct CapturedAccountUsage {
+    memory_gb_seconds: i64,
+    durable_memory_gb_seconds: i64,
+    ephemeral_memory_gb_seconds: i64,
+    durable_storage_byte_seconds: i64,
+    ephemeral_storage_byte_seconds: i64,
+}
+
+impl AccountUsageAccumulator {
+    fn new(config: ResourceUsageMeteringConfig) -> Self {
+        Self {
+            memory: config.memory.then(MemoryUsageAccumulator::default),
+            storage: config.filesystem.then(StorageUsageAccumulator::default),
+        }
+    }
+
+    fn add_memory(&mut self, mode: AgentMode, units: u128) {
+        let Some(memory) = &mut self.memory else {
+            return;
+        };
+        let pending = match mode {
+            AgentMode::Durable => &mut memory.durable_memory_gb_seconds,
+            AgentMode::Ephemeral => &mut memory.ephemeral_memory_gb_seconds,
+        };
+        *pending = pending.saturating_add(units);
+    }
+
+    fn add_storage(&mut self, mode: AgentMode, units: u128) {
+        let Some(storage) = &mut self.storage else {
+            return;
+        };
+        let pending = match mode {
+            AgentMode::Durable => &mut storage.durable_storage_byte_seconds,
+            AgentMode::Ephemeral => &mut storage.ephemeral_storage_byte_seconds,
+        };
+        *pending = pending.saturating_add(units);
+    }
+
+    fn add_memory_settlement(&mut self, mode: AgentMode, settlement: ByteTimeSettlement) {
+        let Some(memory) = &mut self.memory else {
+            return;
+        };
+        memory.remainder = memory.remainder.saturating_add(settlement.remainder);
+        let remainder_units = memory.remainder / BYTE_NANOSECONDS_PER_GB_SECOND;
+        memory.remainder %= BYTE_NANOSECONDS_PER_GB_SECOND;
+        self.add_memory(mode, settlement.units.saturating_add(remainder_units));
+    }
+
+    fn add_storage_settlement(&mut self, mode: AgentMode, settlement: ByteTimeSettlement) {
+        let Some(storage) = &mut self.storage else {
+            return;
+        };
+        let remainder = match mode {
+            AgentMode::Durable => &mut storage.durable_storage_remainder,
+            AgentMode::Ephemeral => &mut storage.ephemeral_storage_remainder,
+        };
+        *remainder = remainder.saturating_add(settlement.remainder);
+        let remainder_units = *remainder / 1_000_000_000;
+        *remainder %= 1_000_000_000;
+        self.add_storage(mode, settlement.units.saturating_add(remainder_units));
+    }
+
+    fn is_active(&self) -> bool {
+        self.memory.as_ref().is_some_and(|memory| {
+            memory.durable_memory_gb_seconds != 0 || memory.ephemeral_memory_gb_seconds != 0
+        }) || self.storage.as_ref().is_some_and(|storage| {
+            storage.durable_storage_byte_seconds != 0 || storage.ephemeral_storage_byte_seconds != 0
+        })
+    }
+
+    #[cfg(test)]
+    fn memory(&self, mode: AgentMode) -> u128 {
+        self.memory.as_ref().map_or(0, |memory| match mode {
+            AgentMode::Durable => memory.durable_memory_gb_seconds,
+            AgentMode::Ephemeral => memory.ephemeral_memory_gb_seconds,
+        })
+    }
+
+    fn storage(&self, mode: AgentMode) -> u128 {
+        self.storage.as_ref().map_or(0, |storage| match mode {
+            AgentMode::Durable => storage.durable_storage_byte_seconds,
+            AgentMode::Ephemeral => storage.ephemeral_storage_byte_seconds,
+        })
+    }
+
+    fn capture(&mut self) -> CapturedAccountUsage {
+        let (durable_memory, ephemeral_memory) = self.memory.as_mut().map_or((0, 0), |memory| {
+            let durable = take_bounded(&mut memory.durable_memory_gb_seconds, i64::MAX as u128);
+            let ephemeral = take_bounded(
+                &mut memory.ephemeral_memory_gb_seconds,
+                i64::MAX as u128 - durable,
+            );
+            (durable, ephemeral)
+        });
+        let (durable_storage, ephemeral_storage) =
+            self.storage.as_mut().map_or((0, 0), |storage| {
+                (
+                    take_bounded(&mut storage.durable_storage_byte_seconds, i64::MAX as u128),
+                    take_bounded(
+                        &mut storage.ephemeral_storage_byte_seconds,
+                        i64::MAX as u128,
+                    ),
+                )
+            });
+        CapturedAccountUsage {
+            memory_gb_seconds: (durable_memory + ephemeral_memory) as i64,
+            durable_memory_gb_seconds: durable_memory as i64,
+            ephemeral_memory_gb_seconds: ephemeral_memory as i64,
+            durable_storage_byte_seconds: durable_storage as i64,
+            ephemeral_storage_byte_seconds: ephemeral_storage as i64,
+        }
+    }
+}
+
+impl Default for AccountUsageAccumulator {
+    fn default() -> Self {
+        Self::new(ResourceUsageMeteringConfig::all_enabled())
+    }
+}
+
+fn take_bounded(pending: &mut u128, maximum: u128) -> u128 {
+    let captured = (*pending).min(maximum);
+    *pending -= captured;
+    captured
 }
 
 impl AtomicResourceEntry {
@@ -115,6 +307,8 @@ impl AtomicResourceEntry {
     /// Same 10^18 value — fits in i64 (TOML max), safe for SQLite REAL,
     /// consistent with other unlimited sentinels in this codebase.
     pub const UNLIMITED_OPLOG_WRITES_PER_SECOND: u64 = 1_000_000_000_000_000_000;
+    // This matches the existing registry plan sentinel and fits every supported database backend.
+    pub(crate) const EFFECTIVELY_UNLIMITED_DISK_SPACE: u64 = 10_000_000_000_000_000;
 
     pub fn new(
         fuel: u64,
@@ -173,25 +367,53 @@ impl AtomicResourceEntry {
         max_concurrent_agents_per_executor: u64,
         oplog_writes_per_second: u64,
     ) -> Self {
+        Self::new_with_all_limits_and_metering(
+            fuel,
+            max_memory,
+            max_table_elements,
+            max_disk_space,
+            per_invocation_http_call_limit,
+            per_invocation_rpc_call_limit,
+            available_http_calls,
+            available_rpc_calls,
+            max_concurrent_agents_per_executor,
+            oplog_writes_per_second,
+            ResourceUsageMeteringConfig::all_enabled(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_all_limits_and_metering(
+        fuel: u64,
+        max_memory: usize,
+        max_table_elements: usize,
+        max_disk_space: u64,
+        per_invocation_http_call_limit: u64,
+        per_invocation_rpc_call_limit: u64,
+        available_http_calls: u64,
+        available_rpc_calls: u64,
+        max_concurrent_agents_per_executor: u64,
+        oplog_writes_per_second: u64,
+        metering: ResourceUsageMeteringConfig,
+    ) -> Self {
         Self {
-            fuel: AtomicU64::new(fuel),
+            metering,
+            fuel: AtomicU64::new(if metering.compute { fuel } else { u64::MAX }),
             delta: AtomicI64::new(0),
             in_flight_delta: AtomicI64::new(0),
-            durable_byte_seconds_delta: AtomicI64::new(0),
-            ephemeral_byte_seconds_delta: AtomicI64::new(0),
-            storage_meters: Arc::new(scc::HashMap::new()),
-            memory_gb_seconds_delta: AtomicI64::new(0),
             in_flight_memory_gb_seconds_delta: AtomicI64::new(0),
-            durable_memory_gb_seconds_delta: AtomicI64::new(0),
-            ephemeral_memory_gb_seconds_delta: AtomicI64::new(0),
             in_flight_durable_memory_gb_seconds_delta: AtomicI64::new(0),
             in_flight_ephemeral_memory_gb_seconds_delta: AtomicI64::new(0),
-            memory_usage_transition: Mutex::new(()),
-            memory_remainder: Mutex::new(0),
-            memory_meters: Arc::new(scc::HashMap::new()),
+            account_usage_accumulator: metering
+                .any_byte_time_enabled()
+                .then(|| Mutex::new(AccountUsageAccumulator::new(metering))),
+            resource_usage_flushers: Mutex::new(Vec::new()),
+            agent_memory_limit_targets: Mutex::new(Vec::new()),
             max_memory: AtomicUsize::new(max_memory),
             max_table_elements: AtomicUsize::new(max_table_elements),
             max_disk_space: AtomicU64::new(max_disk_space),
+            filesystem_limit_update: AsyncMutex::new(()),
+            agent_filesystem_limit_targets: scc::HashMap::new(),
             last_refresh_secs: AtomicI64::new(Utc::now().timestamp()),
             per_invocation_http_call_limit: AtomicU64::new(per_invocation_http_call_limit),
             per_invocation_rpc_call_limit: AtomicU64::new(per_invocation_rpc_call_limit),
@@ -230,6 +452,9 @@ impl AtomicResourceEntry {
     }
 
     fn effective_fuel(&self) -> u64 {
+        if !self.metering.compute {
+            return u64::MAX;
+        }
         let fuel = self.fuel.load(Ordering::Acquire);
         let delta = self.delta.load(Ordering::Acquire);
         let in_flight = self.in_flight_delta.load(Ordering::Acquire);
@@ -246,6 +471,9 @@ impl AtomicResourceEntry {
     }
 
     pub fn borrow_fuel(&self, amount: u64) -> bool {
+        if !self.metering.compute {
+            return true;
+        }
         let available = self.effective_fuel();
 
         if amount == 0 {
@@ -271,6 +499,9 @@ impl AtomicResourceEntry {
     }
 
     pub fn return_fuel(&self, amount: u64) {
+        if !self.metering.compute {
+            return;
+        }
         let amt_i64 = amount.min(i64::MAX as u64) as i64;
         self.delta
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| {
@@ -281,7 +512,7 @@ impl AtomicResourceEntry {
     }
 
     pub fn record_overdraft_debt(&self, amount: u64) {
-        if amount == 0 {
+        if !self.metering.compute || amount == 0 {
             return;
         }
 
@@ -298,6 +529,35 @@ impl AtomicResourceEntry {
         self.max_memory.load(Ordering::Acquire)
     }
 
+    pub(crate) fn register_agent_memory_limit_target(
+        &self,
+        target: Weak<dyn AgentMemoryLimitTarget>,
+    ) {
+        self.agent_memory_limit_targets.lock().unwrap().push(target);
+    }
+
+    pub(crate) fn update_memory_limit(&self, limit: u64) {
+        let previous = self.max_memory.swap(limit as usize, Ordering::AcqRel) as u64;
+        if limit >= previous {
+            return;
+        }
+
+        let targets = {
+            let mut registered = self.agent_memory_limit_targets.lock().unwrap();
+            let mut targets = Vec::with_capacity(registered.len());
+            registered.retain(|target| {
+                target.upgrade().is_some_and(|target| {
+                    targets.push(target);
+                    true
+                })
+            });
+            targets
+        };
+        for target in targets {
+            target.enforce_limit(limit);
+        }
+    }
+
     pub fn max_table_elements_limit(&self) -> usize {
         self.max_table_elements.load(Ordering::Acquire)
     }
@@ -306,73 +566,160 @@ impl AtomicResourceEntry {
         self.max_disk_space.load(Ordering::Acquire)
     }
 
-    pub(crate) fn register_storage_meter(
-        &self,
+    pub(crate) fn register_agent_filesystem_limit_target(
+        self: &Arc<Self>,
         owned_agent_id: OwnedAgentId,
-        meter: AgentStorageMeter,
-    ) {
-        self.storage_meters.upsert_sync(owned_agent_id, meter);
-    }
-
-    pub(crate) fn unregister_storage_meter(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        meter: &AgentStorageMeter,
-    ) {
-        self.storage_meters
-            .remove_if_sync(owned_agent_id, |registered| registered.is_same_meter(meter));
-    }
-
-    pub fn flush_storage_meters(&self, now: Instant) {
-        self.storage_meters.iter_sync(|_, meter| {
-            meter.flush(now);
-            true
+        update: impl Fn(u64) -> AgentFilesystemLimitUpdate + Send + Sync + 'static,
+    ) -> AgentFilesystemLimitRegistration {
+        let target = Arc::new(AgentFilesystemLimitTarget {
+            update: Arc::new(update),
         });
+        self.agent_filesystem_limit_targets
+            .upsert_sync(owned_agent_id.clone(), Arc::downgrade(&target));
+        AgentFilesystemLimitRegistration {
+            resource_limits: Arc::clone(self),
+            owned_agent_id,
+            target,
+        }
+    }
+
+    #[doc(hidden)]
+    pub async fn apply_agent_filesystem_limit(
+        &self,
+        allocated_bytes: u64,
+    ) -> Result<(), (OwnedAgentId, WorkerExecutorError)> {
+        let _update = self.filesystem_limit_update.lock().await;
+        self.max_disk_space
+            .store(allocated_bytes, Ordering::Release);
+        let mut targets = Vec::new();
+        self.agent_filesystem_limit_targets
+            .iter_sync(|owned_agent_id, target| {
+                if let Some(target) = target.upgrade() {
+                    targets.push((owned_agent_id.clone(), target));
+                }
+                true
+            });
+        let mut first_error = None;
+        for (owned_agent_id, target) in targets {
+            if let Err(error) = (target.update)(allocated_bytes).await
+                && first_error.is_none()
+            {
+                first_error = Some((owned_agent_id, error));
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     pub fn record_storage_byte_seconds(&self, mode: AgentMode, amount: i64) {
-        let delta = match mode {
-            AgentMode::Durable => &self.durable_byte_seconds_delta,
-            AgentMode::Ephemeral => &self.ephemeral_byte_seconds_delta,
+        if self.metering.filesystem
+            && amount > 0
+            && let Some(accumulator) = &self.account_usage_accumulator
+        {
+            accumulator
+                .lock()
+                .unwrap()
+                .add_storage(mode, amount as u128);
+        }
+    }
+
+    pub(crate) fn record_resource_usage(
+        &self,
+        mode: AgentMode,
+        memory_gb_seconds: i64,
+        storage_byte_seconds: i64,
+    ) {
+        let Some(accumulator) = &self.account_usage_accumulator else {
+            return;
         };
-        delta.fetch_add(amount, Ordering::Relaxed);
+        let mut accumulator = accumulator.lock().unwrap();
+        if self.metering.memory && memory_gb_seconds > 0 {
+            accumulator.add_memory(mode, memory_gb_seconds as u128);
+        }
+        if self.metering.filesystem && storage_byte_seconds > 0 {
+            accumulator.add_storage(mode, storage_byte_seconds as u128);
+        }
     }
 
-    pub(crate) fn register_memory_meter(
+    pub(crate) fn record_resource_settlement(
         &self,
-        owned_agent_id: OwnedAgentId,
-        meter: AgentMemoryMeter,
+        mode: AgentMode,
+        memory: ByteTimeSettlement,
+        storage: ByteTimeSettlement,
     ) {
-        self.memory_meters.upsert_sync(owned_agent_id, meter);
+        let Some(accumulator) = &self.account_usage_accumulator else {
+            return;
+        };
+        let mut accumulator = accumulator.lock().unwrap();
+        if self.metering.memory {
+            accumulator.add_memory_settlement(mode, memory);
+        }
+        if self.metering.filesystem {
+            accumulator.add_storage_settlement(mode, storage);
+        }
     }
 
-    pub(crate) fn unregister_memory_meter(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        meter: &AgentMemoryMeter,
-    ) {
-        self.memory_meters
-            .remove_if_sync(owned_agent_id, |registered| registered.is_same_meter(meter));
+    pub(crate) fn register_resource_usage_flusher(&self, flusher: Weak<dyn ResourceUsageFlusher>) {
+        self.resource_usage_flushers.lock().unwrap().push(flusher);
     }
 
-    fn flush_memory_meters(&self, now: Instant) {
-        self.memory_meters.iter_sync(|_, meter| {
-            meter.flush(now);
-            true
-        });
+    fn flush_active_resource_usage(&self) {
+        let flushers = {
+            let mut registered = self.resource_usage_flushers.lock().unwrap();
+            let mut flushers = Vec::with_capacity(registered.len());
+            registered.retain(|flusher| match flusher.upgrade() {
+                Some(flusher) => {
+                    flushers.push(flusher);
+                    true
+                }
+                None => false,
+            });
+            flushers
+        };
+        for flusher in flushers {
+            flusher.flush_usage();
+        }
     }
 
-    fn enforce_memory_limit(&self, limit: u64) {
-        self.memory_meters.iter_sync(|_, meter| {
-            meter.enforce_limit(limit);
-            true
-        });
+    #[cfg(test)]
+    pub(crate) fn record_storage_remainder(&self, mode: AgentMode, remainder: u128) {
+        if !self.metering.filesystem || remainder == 0 {
+            return;
+        }
+        self.account_usage_accumulator
+            .as_ref()
+            .expect("filesystem metering is enabled")
+            .lock()
+            .unwrap()
+            .add_storage_settlement(
+                mode,
+                ByteTimeSettlement {
+                    units: 0,
+                    remainder,
+                },
+            );
+    }
+
+    /// Returns the local durable storage delta for production-context executor tests.
+    #[doc(hidden)]
+    pub fn flush_durable_storage_byte_seconds_for_test(&self) -> i64 {
+        self.account_usage_accumulator
+            .as_ref()
+            .map_or(0, |accumulator| {
+                accumulator
+                    .lock()
+                    .unwrap()
+                    .storage(AgentMode::Durable)
+                    .min(i64::MAX as u128) as i64
+            })
     }
 
     fn capture_usage_update(&self, refresh_threshold_secs: i64) -> Option<CapturedUsageUpdate> {
-        self.flush_memory_meters(Instant::now());
-        let active = self.delta.load(Ordering::Acquire) != 0
-            || self.memory_gb_seconds_delta.load(Ordering::Acquire) != 0
+        self.flush_active_resource_usage();
+        let active = (self.metering.compute && self.delta.load(Ordering::Acquire) != 0)
+            || self
+                .account_usage_accumulator
+                .as_ref()
+                .is_some_and(|accumulator| accumulator.lock().unwrap().is_active())
             || self.unsynced_http_calls.load(Ordering::Acquire) > 0
             || self.unsynced_rpc_calls.load(Ordering::Acquire) > 0;
         let stale = self.secs_since_last_refresh() >= refresh_threshold_secs;
@@ -381,28 +728,24 @@ impl AtomicResourceEntry {
             return None;
         }
 
-        self.flush_storage_meters(Instant::now());
-        let fuel_delta = self.delta.swap(0, Ordering::AcqRel);
-        let (
-            memory_gb_seconds_delta,
-            durable_memory_gb_seconds_delta,
-            ephemeral_memory_gb_seconds_delta,
-        ) = {
-            let _transition = self.memory_usage_transition.lock().unwrap();
-            (
-                self.memory_gb_seconds_delta.swap(0, Ordering::AcqRel),
-                self.durable_memory_gb_seconds_delta
-                    .swap(0, Ordering::AcqRel),
-                self.ephemeral_memory_gb_seconds_delta
-                    .swap(0, Ordering::AcqRel),
-            )
+        let fuel_delta = if self.metering.compute {
+            self.delta.swap(0, Ordering::AcqRel)
+        } else {
+            0
         };
+        let captured_usage = self
+            .account_usage_accumulator
+            .as_ref()
+            .map_or_else(CapturedAccountUsage::default, |accumulator| {
+                accumulator.lock().unwrap().capture()
+            });
+        let memory_gb_seconds_delta = captured_usage.memory_gb_seconds;
+        let durable_memory_gb_seconds_delta = captured_usage.durable_memory_gb_seconds;
+        let ephemeral_memory_gb_seconds_delta = captured_usage.ephemeral_memory_gb_seconds;
+        let durable_storage_byte_seconds_delta = captured_usage.durable_storage_byte_seconds;
+        let ephemeral_storage_byte_seconds_delta = captured_usage.ephemeral_storage_byte_seconds;
         let http_count = self.unsynced_http_calls.swap(0, Ordering::AcqRel);
         let rpc_count = self.unsynced_rpc_calls.swap(0, Ordering::AcqRel);
-        let durable_storage_byte_seconds_delta =
-            self.durable_byte_seconds_delta.swap(0, Ordering::AcqRel);
-        let ephemeral_storage_byte_seconds_delta =
-            self.ephemeral_byte_seconds_delta.swap(0, Ordering::AcqRel);
         if http_count > 0 {
             self.syncing_http_calls
                 .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
@@ -417,26 +760,34 @@ impl AtomicResourceEntry {
                 })
                 .ok();
         }
-        self.in_flight_delta
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
-                Some(delta.saturating_add(fuel_delta))
-            })
-            .ok();
-        self.in_flight_memory_gb_seconds_delta
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
-                Some(delta.saturating_add(memory_gb_seconds_delta))
-            })
-            .ok();
-        self.in_flight_durable_memory_gb_seconds_delta
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
-                Some(delta.saturating_add(durable_memory_gb_seconds_delta))
-            })
-            .ok();
-        self.in_flight_ephemeral_memory_gb_seconds_delta
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
-                Some(delta.saturating_add(ephemeral_memory_gb_seconds_delta))
-            })
-            .ok();
+        if fuel_delta != 0 {
+            self.in_flight_delta
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
+                    Some(delta.saturating_add(fuel_delta))
+                })
+                .ok();
+        }
+        if memory_gb_seconds_delta != 0 {
+            self.in_flight_memory_gb_seconds_delta
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
+                    Some(delta.saturating_add(memory_gb_seconds_delta))
+                })
+                .ok();
+        }
+        if durable_memory_gb_seconds_delta != 0 {
+            self.in_flight_durable_memory_gb_seconds_delta
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
+                    Some(delta.saturating_add(durable_memory_gb_seconds_delta))
+                })
+                .ok();
+        }
+        if ephemeral_memory_gb_seconds_delta != 0 {
+            self.in_flight_ephemeral_memory_gb_seconds_delta
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
+                    Some(delta.saturating_add(ephemeral_memory_gb_seconds_delta))
+                })
+                .ok();
+        }
         Some(CapturedUsageUpdate {
             update: ResourceUsageUpdate {
                 fuel_delta,
@@ -451,63 +802,74 @@ impl AtomicResourceEntry {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn capture_byte_time_usage_for_test(&self) -> (i64, i64) {
+        let captured = self
+            .capture_usage_update(i64::MAX)
+            .expect("active byte-time usage was not captured");
+        (
+            captured.update.memory_gb_seconds_delta,
+            captured.update.durable_storage_byte_seconds_delta,
+        )
+    }
+
     pub fn record_memory_gb_seconds(&self, mode: AgentMode, amount: i64) {
-        if amount == 0 {
-            return;
+        if self.metering.memory
+            && amount > 0
+            && let Some(accumulator) = &self.account_usage_accumulator
+        {
+            accumulator.lock().unwrap().add_memory(mode, amount as u128);
         }
-        let _transition = self.memory_usage_transition.lock().unwrap();
-        self.record_memory_gb_seconds_locked(mode, amount);
     }
 
-    fn record_memory_gb_seconds_locked(&self, mode: AgentMode, amount: i64) {
-        self.memory_gb_seconds_delta
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
-                Some(delta.saturating_add(amount))
-            })
-            .ok();
-        let mode_delta = self.memory_delta_for_mode(mode);
-        mode_delta
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
-                Some(delta.saturating_add(amount))
-            })
-            .ok();
-    }
-
-    pub fn record_memory_remainder(&self, mode: AgentMode, remainder: u128) {
-        if remainder == 0 {
-            return;
+    pub(crate) fn record_memory_settlement(&self, mode: AgentMode, settlement: ByteTimeSettlement) {
+        if self.metering.memory
+            && let Some(accumulator) = &self.account_usage_accumulator
+        {
+            accumulator
+                .lock()
+                .unwrap()
+                .add_memory_settlement(mode, settlement);
         }
-        let _transition = self.memory_usage_transition.lock().unwrap();
-        let units = {
-            let mut account_remainder = self.memory_remainder.lock().unwrap();
-            *account_remainder = account_remainder.saturating_add(remainder);
-            let units = *account_remainder / BYTE_NANOSECONDS_PER_GB_SECOND;
-            *account_remainder %= BYTE_NANOSECONDS_PER_GB_SECOND;
-            units.min(i64::MAX as u128) as i64
-        };
-        self.record_memory_gb_seconds_locked(mode, units);
     }
 
     #[cfg(test)]
     pub(crate) fn memory_gb_seconds_delta(&self, mode: AgentMode) -> i64 {
-        self.memory_delta_for_mode(mode).load(Ordering::Acquire)
-    }
-
-    fn memory_delta_for_mode(&self, mode: AgentMode) -> &AtomicI64 {
-        match mode {
-            AgentMode::Durable => &self.durable_memory_gb_seconds_delta,
-            AgentMode::Ephemeral => &self.ephemeral_memory_gb_seconds_delta,
-        }
+        self.account_usage_accumulator
+            .as_ref()
+            .map_or(0, |accumulator| {
+                accumulator
+                    .lock()
+                    .unwrap()
+                    .memory(mode)
+                    .min(i64::MAX as u128) as i64
+            })
     }
 
     #[cfg(test)]
     pub(crate) fn durable_byte_seconds_delta(&self) -> i64 {
-        self.durable_byte_seconds_delta.load(Ordering::Acquire)
+        self.account_usage_accumulator
+            .as_ref()
+            .map_or(0, |accumulator| {
+                accumulator
+                    .lock()
+                    .unwrap()
+                    .storage(AgentMode::Durable)
+                    .min(i64::MAX as u128) as i64
+            })
     }
 
     #[cfg(test)]
     pub(crate) fn ephemeral_byte_seconds_delta(&self) -> i64 {
-        self.ephemeral_byte_seconds_delta.load(Ordering::Acquire)
+        self.account_usage_accumulator
+            .as_ref()
+            .map_or(0, |accumulator| {
+                accumulator
+                    .lock()
+                    .unwrap()
+                    .storage(AgentMode::Ephemeral)
+                    .min(i64::MAX as u128) as i64
+            })
     }
 
     /// Returns the number of HTTP calls remaining in this billing period from the
@@ -588,6 +950,7 @@ pub trait ResourceLimits: Send + Sync {
 
 pub fn configured(
     config: &ResourceLimitsConfig,
+    metering: ResourceUsageMeteringConfig,
     registry_service: Arc<dyn RegistryService>,
     shutdown_token: CancellationToken,
 ) -> Arc<dyn ResourceLimits> {
@@ -596,9 +959,12 @@ pub fn configured(
             registry_service,
             config.batch_update_interval,
             config.limit_refresh_interval,
+            metering,
             shutdown_token,
         ),
-        ResourceLimitsConfig::Disabled(_) => Arc::new(ResourceLimitsDisabled),
+        ResourceLimitsConfig::Disabled(_) => {
+            Arc::new(ConfiguredResourceLimitsDisabled { metering })
+        }
     }
 }
 
@@ -609,6 +975,7 @@ pub fn configured(
 pub struct ResourceLimitsGrpc {
     client: Arc<dyn RegistryService>,
     entries: scc::HashMap<AccountId, Arc<OnceCell<Arc<AtomicResourceEntry>>>>,
+    metering: ResourceUsageMeteringConfig,
 }
 
 impl ResourceLimitsGrpc {
@@ -616,11 +983,13 @@ impl ResourceLimitsGrpc {
         registry_service: Arc<dyn RegistryService>,
         batch_update_interval: Duration,
         limit_refresh_interval: Duration,
+        metering: ResourceUsageMeteringConfig,
         shutdown_token: CancellationToken,
     ) -> Arc<Self> {
         let svc = Self {
             client: registry_service,
             entries: scc::HashMap::new(),
+            metering,
         };
         let svc = Arc::new(svc);
         let svc_weak = Arc::downgrade(&svc);
@@ -673,12 +1042,12 @@ impl ResourceLimitsGrpc {
     }
 
     /// Builds and sends a single batch to the registry covering:
-    /// - active accounts with non-zero fuel, HTTP call, or RPC call deltas
-    /// - stale accounts, including storage-only accounts, past the refresh threshold
+    /// - active accounts with non-zero fuel, memory, storage, HTTP, or RPC deltas
+    /// - otherwise-idle accounts past the refresh threshold
     ///
     /// On success, updates all entries via `update_last_known_limits`. On
-    /// failure, resets in-flight deltas for active accounts so they are not
-    /// double-counted next cycle; stale idle accounts are retried next tick.
+    /// failure, drops the captured batch under the accepted bounded-loss semantics and
+    /// resets in-flight quota tracking; stale idle accounts are retried next tick.
     async fn send_batch(&self, refresh_threshold_secs: i64) {
         async {
             let mut entries = Vec::new();
@@ -861,33 +1230,44 @@ impl ResourceLimitsGrpc {
         if let Some(cell) = self.entries.read_async(&account_id, |_, e| e.clone()).await
             && let Some(entry) = cell.get()
         {
-            entry.in_flight_delta.store(0, Ordering::Release);
-            entry
-                .in_flight_memory_gb_seconds_delta
-                .store(0, Ordering::Release);
-            entry
-                .in_flight_durable_memory_gb_seconds_delta
-                .store(0, Ordering::Release);
-            entry
-                .in_flight_ephemeral_memory_gb_seconds_delta
-                .store(0, Ordering::Release);
-            entry
-                .fuel
-                .store(updated_limits.available_fuel, Ordering::Release);
-            let previous_max_memory = entry.max_memory.swap(
-                updated_limits.max_memory_per_worker as usize,
-                Ordering::AcqRel,
-            );
-            if updated_limits.max_memory_per_worker < previous_max_memory as u64 {
-                entry.enforce_memory_limit(updated_limits.max_memory_per_worker);
+            if self.metering.compute {
+                entry.in_flight_delta.store(0, Ordering::Release);
+                entry
+                    .fuel
+                    .store(updated_limits.available_fuel, Ordering::Release);
             }
+            if self.metering.memory {
+                entry
+                    .in_flight_memory_gb_seconds_delta
+                    .store(0, Ordering::Release);
+                entry
+                    .in_flight_durable_memory_gb_seconds_delta
+                    .store(0, Ordering::Release);
+                entry
+                    .in_flight_ephemeral_memory_gb_seconds_delta
+                    .store(0, Ordering::Release);
+            }
+            entry.update_memory_limit(updated_limits.max_memory_per_worker);
             entry.max_table_elements.store(
                 updated_limits.max_table_elements_per_worker as usize,
                 Ordering::Release,
             );
-            entry
-                .max_disk_space
-                .store(updated_limits.max_disk_space_per_worker, Ordering::Release);
+            let filesystem_limit_updated = match entry
+                .apply_agent_filesystem_limit(updated_limits.max_disk_space_per_worker)
+                .await
+            {
+                Ok(()) => true,
+                Err((owned_agent_id, error)) => {
+                    error!(
+                        account_id = %account_id,
+                        agent_id = %owned_agent_id,
+                        limit = updated_limits.max_disk_space_per_worker,
+                        error = %error,
+                        "Failed to apply managed agent filesystem limit"
+                    );
+                    false
+                }
+            };
             entry.per_invocation_http_call_limit.store(
                 updated_limits.per_invocation_http_call_limit,
                 Ordering::Release,
@@ -911,9 +1291,11 @@ impl ResourceLimitsGrpc {
             entry
                 .oplog_writes_per_second
                 .store(updated_limits.oplog_writes_per_second, Ordering::Release);
-            entry
-                .last_refresh_secs
-                .store(Utc::now().timestamp(), Ordering::Release);
+            if filesystem_limit_updated {
+                entry
+                    .last_refresh_secs
+                    .store(Utc::now().timestamp(), Ordering::Release);
+            }
         }
     }
 
@@ -921,16 +1303,20 @@ impl ResourceLimitsGrpc {
         if let Some(cell) = self.entries.read_async(&account_id, |_, e| e.clone()).await
             && let Some(entry) = cell.get()
         {
-            entry.in_flight_delta.swap(0, Ordering::AcqRel);
-            entry
-                .in_flight_memory_gb_seconds_delta
-                .swap(0, Ordering::AcqRel);
-            entry
-                .in_flight_durable_memory_gb_seconds_delta
-                .swap(0, Ordering::AcqRel);
-            entry
-                .in_flight_ephemeral_memory_gb_seconds_delta
-                .swap(0, Ordering::AcqRel);
+            if self.metering.compute {
+                entry.in_flight_delta.swap(0, Ordering::AcqRel);
+            }
+            if self.metering.memory {
+                entry
+                    .in_flight_memory_gb_seconds_delta
+                    .swap(0, Ordering::AcqRel);
+                entry
+                    .in_flight_durable_memory_gb_seconds_delta
+                    .swap(0, Ordering::AcqRel);
+                entry
+                    .in_flight_ephemeral_memory_gb_seconds_delta
+                    .swap(0, Ordering::AcqRel);
+            }
             entry.syncing_http_calls.store(0, Ordering::Release);
             entry.syncing_rpc_calls.store(0, Ordering::Release);
         }
@@ -953,7 +1339,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
             .get_or_try_init(|| async {
                 let fetched = self.fetch_resource_limits(account_id).await?;
                 Ok::<Arc<AtomicResourceEntry>, WorkerExecutorError>(Arc::new(
-                    AtomicResourceEntry::new_with_all_limits(
+                    AtomicResourceEntry::new_with_all_limits_and_metering(
                         fetched.available_fuel,
                         fetched.max_memory_per_worker as usize,
                         fetched.max_table_elements_per_worker as usize,
@@ -964,6 +1350,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
                         fetched.available_rpc_calls,
                         fetched.max_concurrent_agents_per_executor,
                         fetched.oplog_writes_per_second,
+                        self.metering,
                     ),
                 ))
             })
@@ -975,6 +1362,34 @@ impl ResourceLimits for ResourceLimitsGrpc {
 
 pub struct ResourceLimitsDisabled;
 
+struct ConfiguredResourceLimitsDisabled {
+    metering: ResourceUsageMeteringConfig,
+}
+
+#[async_trait]
+impl ResourceLimits for ConfiguredResourceLimitsDisabled {
+    async fn initialize_account(
+        &self,
+        _account_id: AccountId,
+    ) -> Result<Arc<AtomicResourceEntry>, WorkerExecutorError> {
+        Ok(Arc::new(
+            AtomicResourceEntry::new_with_all_limits_and_metering(
+                u64::MAX,
+                usize::MAX,
+                usize::MAX,
+                AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+                AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                self.metering,
+            ),
+        ))
+    }
+}
+
 #[async_trait]
 impl ResourceLimits for ResourceLimitsDisabled {
     async fn initialize_account(
@@ -985,7 +1400,7 @@ impl ResourceLimits for ResourceLimitsDisabled {
             u64::MAX,
             usize::MAX,
             usize::MAX,
-            u64::MAX,
+            AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE,
             AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
         )))
     }
@@ -1019,102 +1434,212 @@ mod tests {
     test_r::enable!();
 
     #[test]
-    fn stale_storage_meter_unregister_preserves_reloaded_meter() {
-        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+    async fn filesystem_limit_update_is_delivered_to_registered_target() {
+        let entry = Arc::new(AtomicResourceEntry::new(
+            0,
+            0,
+            0,
+            AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE,
+            1,
+        ));
         let owned_agent_id = OwnedAgentId::new(
             EnvironmentId(Uuid::new_v4()),
             &AgentId {
                 component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "storage-meter-race".to_string(),
+                agent_id: "live-filesystem-limit".to_string(),
             },
         );
-        let now = Instant::now();
-        let old = AgentStorageMeter::new(AgentMode::Durable, 1, entry.clone(), now);
-        let reloaded = AgentStorageMeter::new(AgentMode::Durable, 1, entry.clone(), now);
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let _registration = entry.register_agent_filesystem_limit_target(owned_agent_id, {
+            let observed = Arc::clone(&observed);
+            move |allocated_bytes| {
+                let observed = Arc::clone(&observed);
+                Box::pin(async move {
+                    observed.lock().unwrap().push(allocated_bytes);
+                    Ok(())
+                })
+            }
+        });
 
-        entry.register_storage_meter(owned_agent_id.clone(), old.clone());
-        entry.register_storage_meter(owned_agent_id.clone(), reloaded.clone());
-        entry.unregister_storage_meter(&owned_agent_id, &old);
+        entry.apply_agent_filesystem_limit(4096).await.unwrap();
 
-        let registered = entry.storage_meters.get_sync(&owned_agent_id).unwrap();
-        assert!(registered.get().is_same_meter(&reloaded));
+        assert_eq!(entry.max_disk_space_limit(), 4096);
+        assert_eq!(*observed.lock().unwrap(), vec![4096]);
     }
 
     #[test]
-    fn flush_storage_meters_integrates_inline() {
-        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+    async fn dropped_filesystem_limit_registration_detaches_target() {
+        let entry = Arc::new(AtomicResourceEntry::new(
+            0,
+            0,
+            0,
+            AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE,
+            1,
+        ));
         let owned_agent_id = OwnedAgentId::new(
             EnvironmentId(Uuid::new_v4()),
             &AgentId {
                 component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "inline-storage-meter-flush".to_string(),
+                agent_id: "detached-filesystem-limit".to_string(),
             },
         );
-        let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
-        entry.register_storage_meter(owned_agent_id, meter);
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let registration = entry.register_agent_filesystem_limit_target(owned_agent_id, {
+            let observed = Arc::clone(&observed);
+            move |allocated_bytes| {
+                let observed = Arc::clone(&observed);
+                Box::pin(async move {
+                    observed.lock().unwrap().push(allocated_bytes);
+                    Ok(())
+                })
+            }
+        });
+        drop(registration);
 
-        entry.flush_storage_meters(now + Duration::from_secs(3));
+        entry.apply_agent_filesystem_limit(2048).await.unwrap();
 
-        assert_eq!(entry.durable_byte_seconds_delta(), 30);
-    }
-
-    /// `send_batch` only integrates the meters on ticks that actually ship an update,
-    /// so a meter routinely goes several ticks without being flushed. Time spanned by
-    /// those skipped ticks must still be billed, exactly once.
-    #[test]
-    fn skipped_flushes_are_billed_once_when_the_next_flush_happens() {
-        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let owned_agent_id = OwnedAgentId::new(
-            EnvironmentId(Uuid::new_v4()),
-            &AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "deferred-storage-meter-flush".to_string(),
-            },
-        );
-        let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
-        entry.register_storage_meter(owned_agent_id, meter);
-
-        // A tick that ships integrates the first second.
-        entry.flush_storage_meters(now + Duration::from_secs(1));
-        assert_eq!(entry.durable_byte_seconds_delta(), 10);
-
-        // The next two ticks are skipped because the account is idle and its limits are
-        // still fresh. The following flush must bill both of those seconds, and neither
-        // re-bill the first nor drop anything.
-        entry.flush_storage_meters(now + Duration::from_secs(3));
-        assert_eq!(entry.durable_byte_seconds_delta(), 30);
+        assert_eq!(entry.max_disk_space_limit(), 2048);
+        assert!(observed.lock().unwrap().is_empty());
     }
 
     #[test]
-    fn fresh_tick_flushes_memory_meter_before_activity_check() {
-        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let owned_agent_id = OwnedAgentId::new(
-            EnvironmentId(Uuid::new_v4()),
-            &AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "deferred-memory-meter-flush".to_string(),
-            },
-        );
-        let now = Instant::now();
-        let meter = AgentMemoryMeter::new(
+    fn account_usage_accumulator_emits_oversized_settlements_in_bounded_batches() {
+        let mut accumulator = AccountUsageAccumulator::default();
+        let oversized = i64::MAX as u128 + 7;
+        accumulator.add_memory_settlement(
             AgentMode::Durable,
-            1024 * 1024 * 1024,
-            true,
-            entry.clone(),
-            now,
+            ByteTimeSettlement {
+                units: oversized,
+                remainder: 0,
+            },
         );
-        entry.register_memory_meter(owned_agent_id, meter.clone());
-        meter.pause(now + Duration::from_secs(3));
+        accumulator.add_storage_settlement(
+            AgentMode::Durable,
+            ByteTimeSettlement {
+                units: oversized,
+                remainder: 0,
+            },
+        );
 
-        let captured = entry.capture_usage_update(i64::MAX).unwrap();
-        assert_eq!(captured.update.memory_gb_seconds_delta, 3);
+        assert_eq!(
+            accumulator.capture(),
+            CapturedAccountUsage {
+                memory_gb_seconds: i64::MAX,
+                durable_memory_gb_seconds: i64::MAX,
+                ephemeral_memory_gb_seconds: 0,
+                durable_storage_byte_seconds: i64::MAX,
+                ephemeral_storage_byte_seconds: 0,
+            }
+        );
+        assert_eq!(
+            accumulator.capture(),
+            CapturedAccountUsage {
+                memory_gb_seconds: 7,
+                durable_memory_gb_seconds: 7,
+                ephemeral_memory_gb_seconds: 0,
+                durable_storage_byte_seconds: 7,
+                ephemeral_storage_byte_seconds: 0,
+            }
+        );
+        assert!(!accumulator.is_active());
     }
 
     // -------------------------------------------------------------------------
     // AtomicResourceEntry
     // -------------------------------------------------------------------------
+
+    #[test]
+    fn disabled_usage_dimensions_accumulate_and_export_zero() {
+        let entry = AtomicResourceEntry::new_with_all_limits_and_metering(
+            10,
+            20,
+            30,
+            40,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            ResourceUsageMeteringConfig::default(),
+        );
+        assert!(entry.account_usage_accumulator.is_none());
+        entry.delta.store(17, Ordering::Release);
+        entry.in_flight_delta.store(19, Ordering::Release);
+        entry
+            .in_flight_memory_gb_seconds_delta
+            .store(23, Ordering::Release);
+        assert!(entry.borrow_fuel(7));
+        entry.return_fuel(3);
+        entry.record_overdraft_debt(5);
+        entry.record_memory_gb_seconds(AgentMode::Durable, 11);
+        entry.record_storage_byte_seconds(AgentMode::Durable, 13);
+
+        let captured = entry
+            .capture_usage_update(0)
+            .expect("stale limit refresh still produces an update");
+
+        assert_eq!(entry.effective_fuel(), u64::MAX);
+        assert_eq!(entry.delta.load(Ordering::Acquire), 17);
+        assert_eq!(entry.in_flight_delta.load(Ordering::Acquire), 19);
+        assert_eq!(
+            entry
+                .in_flight_memory_gb_seconds_delta
+                .load(Ordering::Acquire),
+            23
+        );
+        assert_eq!(captured.update.fuel_delta, 0);
+        assert_eq!(captured.update.memory_gb_seconds_delta, 0);
+        assert_eq!(captured.update.durable_storage_byte_seconds_delta, 0);
+        assert_eq!(captured.update.ephemeral_storage_byte_seconds_delta, 0);
+    }
+
+    #[test]
+    fn usage_accumulation_respects_each_enabled_dimension() {
+        for memory in [false, true] {
+            for filesystem in [false, true] {
+                let entry = AtomicResourceEntry::new_with_all_limits_and_metering(
+                    u64::MAX,
+                    usize::MAX,
+                    usize::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+                    AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                    ResourceUsageMeteringConfig {
+                        compute: false,
+                        memory,
+                        filesystem,
+                    },
+                );
+                entry.record_memory_gb_seconds(AgentMode::Durable, 11);
+                entry.record_storage_byte_seconds(AgentMode::Durable, 13);
+
+                let (has_accumulator, has_memory, has_storage) = entry
+                    .account_usage_accumulator
+                    .as_ref()
+                    .map_or((false, false, false), |accumulator| {
+                        let usage = accumulator.lock().unwrap();
+                        (true, usage.memory.is_some(), usage.storage.is_some())
+                    });
+                assert_eq!(has_accumulator, memory || filesystem);
+                assert_eq!(has_memory, memory);
+                assert_eq!(has_storage, filesystem);
+
+                assert_eq!(
+                    entry.memory_gb_seconds_delta(AgentMode::Durable),
+                    if memory { 11 } else { 0 }
+                );
+                assert_eq!(
+                    entry.durable_byte_seconds_delta(),
+                    if filesystem { 13 } else { 0 }
+                );
+            }
+        }
+    }
 
     #[test]
     fn effective_fuel_with_zero_delta() {
@@ -2003,6 +2528,7 @@ mod tests {
             mock,
             Duration::from_secs(3600),
             Duration::from_secs(300),
+            ResourceUsageMeteringConfig::all_enabled(),
             token,
         )
     }
@@ -2099,7 +2625,7 @@ mod tests {
     }
 
     #[test]
-    async fn send_batch_keeps_storage_only_delta_until_refresh_interval() {
+    async fn send_batch_treats_storage_only_delta_as_activity() {
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         let svc = make_grpc(mock.clone());
         let id = account_id();
@@ -2108,8 +2634,29 @@ mod tests {
 
         svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
 
-        assert_eq!(entry.durable_byte_seconds_delta(), 100);
-        assert!(mock.last_batch_updates.lock().unwrap().is_empty());
+        assert_eq!(entry.durable_byte_seconds_delta(), 0);
+        assert_eq!(
+            mock.last_batch_update(id)
+                .durable_storage_byte_seconds_delta,
+            100
+        );
+    }
+
+    #[test]
+    fn storage_remainders_do_not_cross_agent_modes() {
+        let entry = AtomicResourceEntry::new(0, 0, 0, 0, 0);
+
+        entry.record_storage_remainder(AgentMode::Durable, 600_000_000);
+        entry.record_storage_remainder(AgentMode::Ephemeral, 600_000_000);
+
+        assert_eq!(entry.durable_byte_seconds_delta(), 0);
+        assert_eq!(entry.ephemeral_byte_seconds_delta(), 0);
+
+        entry.record_storage_remainder(AgentMode::Durable, 400_000_000);
+        entry.record_storage_remainder(AgentMode::Ephemeral, 400_000_000);
+
+        assert_eq!(entry.durable_byte_seconds_delta(), 1);
+        assert_eq!(entry.ephemeral_byte_seconds_delta(), 1);
     }
 
     #[test]
@@ -2304,6 +2851,8 @@ mod tests {
 
         assert_eq!(entry.in_flight_delta.load(Ordering::Acquire), 0);
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 0);
+        assert_eq!(entry.durable_byte_seconds_delta(), 0);
+        assert_eq!(entry.ephemeral_byte_seconds_delta(), 0);
         assert_eq!(
             entry
                 .in_flight_memory_gb_seconds_delta

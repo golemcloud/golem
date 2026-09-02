@@ -21,6 +21,8 @@ import {
 
 pkgtype(kind: "executable")
 
+supported_targets = "+wasm"
+
 options(
   link: {
     "wasm": {

@@ -9,6 +9,7 @@ let webhook_logger : @logging.Logger = @logging.with_name("webhook-agent")
 #derive.mount("/webhook/{name}")
 #derive.mount_auth(false)
 #derive.mount_webhook("/events")
+#warnings("-unused_field")
 struct WebhookAgent {
   name : String
   mut last_payload : String

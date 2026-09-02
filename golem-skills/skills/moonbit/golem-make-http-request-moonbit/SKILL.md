@@ -308,7 +308,7 @@ fn read_full_body(incoming_body : @types.IncomingBody) -> FixedArray[Byte] {
   let stream = incoming_body.stream().unwrap()
   let chunks : Array[FixedArray[Byte]] = []
   let mut done = false
-  while not(done) {
+  while !done {
     match stream.blocking_read(65536UL) {
       Ok(chunk) =>
         if chunk.length() == 0 {

@@ -1,6 +1,7 @@
 ///|
 /// An agent that tracks actions with principal-based access control
 #derive.agent
+#warnings("-unused_field")
 struct AuditLog {
   name : String
   created_by : String

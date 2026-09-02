@@ -32,7 +32,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-readonly WIT_BINDGEN_COMMIT="e759a320fdd1ecad92dc484af59cfc0c5fff38c6"
+readonly WIT_BINDGEN_COMMIT="ca14d9bbd6c6474dfbcdb68806fb4e30f1ee2efb"
 readonly WIT_BINDGEN_SHORT_COMMIT="${WIT_BINDGEN_COMMIT:0:9}"
 
 wit_bindgen_version="$(wit-bindgen --version)"
@@ -86,7 +86,7 @@ generate_world() {
   wit-bindgen moonbit "$PWD/wit" \
     --world "$world_name" \
     --gen-dir "$gen_dir" \
-    --derive-show --derive-eq --derive-error \
+    --derive-debug --derive-eq --derive-error \
     --project-name golemcloud/golem_sdk \
     --out-dir "$output_dir"
 }
@@ -157,6 +157,7 @@ echo "==> Fixing s8/s16 double sign-extension"
 find "${GENERATED_ROOTS[@]}" -name '*.mbt' -type f -print0 |
   while IFS= read -r -d '' f; do
   perl -i -pe 's/(mbt_ffi_load16\b[^\n]*?\)) - 0x10000\b/$1/g; s/(mbt_ffi_load8\b[^\n]*?\)) - 0x100\b/$1/g' "$f"
+  perl -i -0pe 's/\n+\z/\n/' "$f"
 done
 
 echo "==> Removing generated package descriptors shadowed by hand-maintained moon.pkg files"

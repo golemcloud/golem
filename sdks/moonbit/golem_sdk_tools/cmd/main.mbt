@@ -8,10 +8,10 @@ fn fix_broken_strings(input : String) -> String {
   let mut in_broken = false
   let mut acc = ""
   for line in lines {
-    let s = line.trim_end(chars=" ").to_string()
+    let s = line.trim_end(chars=" ").to_owned()
     if in_broken {
-      acc = acc + " " + s.trim_start(chars=" ").to_string()
-      let trimmed = s.trim_end(chars=" ").to_string()
+      acc = acc + " " + s.trim_start(chars=" ").to_owned()
+      let trimmed = s.trim_end(chars=" ").to_owned()
       if trimmed.has_suffix("\"") || trimmed.has_suffix("\",") {
         result.push(acc)
         in_broken = false
@@ -35,7 +35,7 @@ fn fix_broken_strings(input : String) -> String {
   if in_broken {
     result.push(acc)
   }
-  result.join("\n").trim_end(chars="\n").to_string() + "\n"
+  result.join("\n").trim_end(chars="\n").to_owned() + "\n"
 }
 
 ///|
@@ -177,7 +177,7 @@ fn run_agents(
   for scan in scans {
     let config_types = @lib.parse_config_types(
       scan.files,
-      package=scan.pkg.rel_path,
+      package_path=scan.pkg.rel_path,
     )
     for ct in config_types {
       all_config_types.push(ct)
@@ -192,7 +192,10 @@ fn run_agents(
     // Parse annotations from this package
     let value_types = @lib.parse_value_types(files)
     let multimodal_enums = @lib.parse_multimodal_enums(files)
-    let config_types = @lib.parse_config_types(files, package=scan.pkg.rel_path)
+    let config_types = @lib.parse_config_types(
+      files,
+      package_path=scan.pkg.rel_path,
+    )
     let agents = @lib.parse_agents(files)
     let tools = @lib.parse_tools(files)
     let has_middleware_annotations = @lib.has_middleware_annotations(files)
@@ -251,14 +254,13 @@ fn run_agents(
         required_pkg_imports.push(
           ("golemcloud/golem_sdk/schema_model", "@model"),
         )
-        required_pkg_imports.push(
-          ("golemcloud/golem_sdk/interface/golem/core/types", "@types"),
-        )
+        if middleware_formatted.contains("@types.") {
+          required_pkg_imports.push(
+            ("golemcloud/golem_sdk/interface/golem/core/types", "@types"),
+          )
+        }
         required_pkg_imports.push(
           ("golemcloud/golem_sdk/interface/golem/tool/common", "@toolCommon"),
-        )
-        required_pkg_imports.push(
-          ("golemcloud/golem_sdk/async-core", "@asyncCore"),
         )
       }
     } else {
@@ -382,7 +384,7 @@ fn run_agents(
       // JSON snapshot helpers are emitted for agents deriving ToJson/FromJson.
       let needs_json = agents
         .iter()
-        .any(fn(a) { a.has_json_derives && not(a.has_snapshottable) })
+        .any(fn(a) { a.has_json_derives && !a.has_snapshottable })
       if needs_json {
         required_pkg_imports.push(("moonbitlang/core/json", "@json"))
         required_pkg_imports.push(("moonbitlang/core/encoding/utf8", "@utf8"))
@@ -436,11 +438,11 @@ fn run_agents(
       }
     }
     // Clean up stale files for categories not present in this package
-    if not(has_agents) {
+    if !has_agents {
       file_plan.stage_removal("\{pkg_dir}/golem_agents.mbt")
       file_plan.stage_removal("\{pkg_dir}/golem_clients.mbt")
     }
-    if not(has_derive) && not(has_agents) {
+    if !has_derive && !has_agents {
       file_plan.stage_removal("\{pkg_dir}/golem_derive.mbt")
     }
     let pkg_path = "\{pkg_dir}/moon.pkg"
@@ -465,7 +467,7 @@ fn run_agents(
 fn dotted_pkg(rel_path : String) -> String {
   let parts : Array[String] = []
   for p in rel_path.split("/") {
-    parts.push(p.to_string())
+    parts.push(p.to_owned())
   }
   parts.join(".")
 }
@@ -480,7 +482,7 @@ fn generate_derive_file(
   config_types : Array[@lib.ConfigTypeInfo],
   all_config_types? : Array[@lib.ConfigTypeInfo] = [],
   type_id_prefix? : String = "",
-) -> String raise {
+) -> String {
   let all_impls : Array[@syntax.Impl] = []
   if value_types.length() > 0 {
     @lib.generate_value_type_impls(value_types, type_id_prefix~).each(fn(i) {
@@ -507,9 +509,7 @@ fn generate_derive_file(
       all_impls.push(i)
     })
   }
-  let derive_formatted = @formatter.impls_to_string(
-    @list.List::from_array(all_impls),
-  )
+  let derive_formatted = @formatter.impls_to_string(@list.List(all_impls))
   generated_file_banner + "\n\n" + derive_formatted
 }
 
@@ -577,7 +577,7 @@ fn commit_component_role_marker(
 ) -> Unit raise {
   validate_component_role_marker(component_dir, role)
   let marker_path = "\{component_dir}/.golem-sdk-role"
-  if not(@fs.path_exists(marker_path)) {
+  if !@fs.path_exists(marker_path) {
     @fs.write_string_to_file(marker_path, @lib.component_role_marker(role))
     println("Generated \{marker_path} for role \{role.name()}")
   }

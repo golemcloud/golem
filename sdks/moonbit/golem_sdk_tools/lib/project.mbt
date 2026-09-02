@@ -37,13 +37,13 @@ let generated_files : Array[String] = [
 /// or at a single package dir (`agents <module>/pkg`).
 pub fn discover_packages(project_root : String) -> Array[PackageInfo] raise {
   let root = if project_root.has_suffix("/") {
-    project_root[:project_root.length() - 1].to_string()
+    project_root[:project_root.length() - 1].to_owned()
   } else {
     project_root
   }
   let rel_base = find_module_root(root)
   let packages : Array[PackageInfo] = []
-  let visited : Map[String, Bool] = {}
+  let visited : Map[String, Bool] = Map([])
   walk_dir(rel_base, root, packages, visited)
   packages
 }
@@ -63,7 +63,7 @@ fn parent_dir(dir : String) -> String {
 /// Finds the MoonBit module root for `start`: the nearest ancestor directory
 /// (including `start`) that contains a `moon.mod.json`. Falls back to `start`
 /// when no module file is found up to the filesystem root.
-fn find_module_root(start : String) -> String raise {
+fn find_module_root(start : String) -> String {
   let mut dir = start
   for ;; {
     if @fs.path_exists("\{dir}/moon.mod.json") {
@@ -96,7 +96,7 @@ fn walk_dir(
     let rel_path = if dir == rel_base {
       ""
     } else {
-      dir[rel_base.length() + 1:].to_string()
+      dir[rel_base.length() + 1:].to_owned()
     }
     packages.push(PackageInfo::{ rel_path, dir, })
   }
@@ -120,7 +120,7 @@ pub fn scan_package(pkg : PackageInfo) -> PackageScanResult raise {
   let entries = @fs.read_dir(pkg.dir)
   entries.sort_by((left, right) => left.compare(right))
   for entry in entries {
-    if entry.has_suffix(".mbt") && not(generated_files.contains(entry)) {
+    if entry.has_suffix(".mbt") && !generated_files.contains(entry) {
       let path = "\{pkg.dir}/\{entry}"
       let content = @fs.read_file_to_string(path)
       files.push((entry, content))
