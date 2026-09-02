@@ -5390,10 +5390,23 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                 {
                                     break Err(err);
                                 }
+                                // An invocation that was interrupted by a crash reaches its end
+                                // here, in live mode, instead of in the invocation loop, so its
+                                // durable Stream Session must be finished here as well;
+                                // otherwise resumed session clients never observe completion.
+                                if store.as_context().data().durable_ctx().is_live()
+                                    && let Err(error) = worker
+                                        .complete_durable_streaming_session(&idempotency_key)
+                                        .await
+                                {
+                                    error!(%error, "Failed to complete durable streaming session");
+                                    break Err(error);
+                                }
                                 number_of_replayed_functions += 1;
                                 continue;
                             }
                             _ => {
+                                let details = format!("{invoke_result:?}");
                                 let trap_type = match invoke_result {
                                     Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
                                     Err(error) => {
@@ -5415,6 +5428,17 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                             .await;
 
                                         if decision == RetryDecision::None {
+                                            // Like the invocation loop, permanently fail the
+                                            // durable Stream Session of an invocation that was
+                                            // interrupted by a crash and cannot be retried.
+                                            if store.as_context().data().durable_ctx().is_live() {
+                                                let _ = worker
+                                                    .fail_durable_streaming_session(
+                                                        &idempotency_key,
+                                                        details,
+                                                    )
+                                                    .await;
+                                            }
                                             // Cannot retry so we need to fail
                                             match trap_type {
                                                 TrapType::Interrupt(_interrupt_kind) => {

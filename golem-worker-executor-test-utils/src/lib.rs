@@ -94,8 +94,8 @@ use golem_worker_executor::preview2::golem::agent::host::{
     RpcError, ScheduledInvocationReceipt, WasmRpc,
 };
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
-use golem_worker_executor::services::active_agents::ActiveAgents;
 use golem_worker_executor::services::active_agents::memory_probe::FixedProbe;
+use golem_worker_executor::services::active_agents::{ActiveAgents, InvocationLoops};
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::{
@@ -168,7 +168,7 @@ use tokio::task::JoinSet;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tower::ServiceBuilder;
-use tracing::{Level, debug, info};
+use tracing::{Level, debug, info, warn};
 use uuid::{Uuid, uuid};
 use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{Engine, MemoryKind, ResourceLimiterAsync, Store};
@@ -1012,6 +1012,11 @@ pub struct TestContext {
     pub application_id: ApplicationId,
     // default environment id to use during tests
     pub default_environment_id: EnvironmentId,
+    /// Invocation loops of every executor started on this context. All of them share the
+    /// context's storage, so before a further executor is started, the loops of the already
+    /// shut-down ones must have exited: an in-process executor is not a process, and dropping it
+    /// does not by itself stop its workers from writing to their oplogs.
+    executor_invocation_loops: Arc<std::sync::Mutex<Vec<InvocationLoops>>>,
 }
 
 impl TestContext {
@@ -1035,11 +1040,45 @@ impl TestContext {
             account_token,
             application_id,
             default_environment_id,
+            executor_invocation_loops: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
     pub fn redis_prefix(&self) -> String {
         format!("test-{}-{}:", self.base_prefix, self.unique_id)
+    }
+
+    /// Waits until the workers of every shut-down executor previously started on this context
+    /// stopped executing. Executors that are still running are left alone.
+    async fn wait_for_shut_down_executors(&self) {
+        let previous = std::mem::take(&mut *self.executor_invocation_loops.lock().unwrap());
+        let mut still_running = Vec::new();
+        for loops in previous {
+            if !loops.is_shut_down() {
+                still_running.push(loops);
+                continue;
+            }
+            if tokio::time::timeout(Duration::from_secs(10), loops.wait_for_exit())
+                .await
+                .is_err()
+            {
+                warn!(
+                    "Invocation loops of a previous executor did not exit within 10s; \
+                     starting the next executor over the same storage anyway"
+                );
+            }
+        }
+        self.executor_invocation_loops
+            .lock()
+            .unwrap()
+            .extend(still_running);
+    }
+
+    fn register_executor(&self, invocation_loops: InvocationLoops) {
+        self.executor_invocation_loops
+            .lock()
+            .unwrap()
+            .push(invocation_loops);
     }
 }
 
@@ -1247,6 +1286,7 @@ async fn start_executor_with_config(
     // mutate per-worker test-only state, e.g. eviction).
     let additional_test_deps = AdditionalTestDeps::new();
 
+    context.wait_for_shut_down_executors().await;
     let details = run(
         config,
         prometheus.clone(),
@@ -1257,6 +1297,7 @@ async fn start_executor_with_config(
         &mut join_set,
     )
     .await?;
+    context.register_executor(details.invocation_loops.clone());
     let grpc_port = details.grpc_port;
     let leak_detector = details.leak_detector.clone();
     let details = Arc::new(details);

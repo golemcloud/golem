@@ -266,7 +266,7 @@ tokio-postgres = "0.7.13"
 tokio-rustls = { version = "0.26.2" }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-tungstenite = { version = "0.27.0", features = ["rustls-tls-webpki-roots"] }
-tokio-util = "0.7.13"
+tokio-util = { version = "0.7.13", features = ["rt"] }
 toml = "0.9.5"
 toml_edit = "0.23.3"
 tonic = { version = "0.14.2", features = ["gzip"] }
