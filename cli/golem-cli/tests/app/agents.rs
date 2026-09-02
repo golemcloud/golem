@@ -793,6 +793,52 @@ async fn test_rust_counter() {
     }
 }
 
+/// Builds a real Scala component whose caller exercises input, output, mixed,
+/// nested, and sibling streams over native same-component agent RPC. The only
+/// externally invoked method returns a plain string report, so this does not
+/// depend on generated cross-component bridges or public streaming clients.
+#[test]
+#[timeout("15 minutes")]
+async fn test_scala_streaming_rpc_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "scala-streaming-rpc";
+    let package_name = "scala_streaming_rpc";
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "scala"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    let fixture = workspace_path().join(
+        "sdks/scala/test-agents/src/main/scala/example/integrationtests/StreamingRpcExample.scala",
+    );
+    let source = fs::read_to_string(&fixture).unwrap().replace(
+        "package example.streamingrpc",
+        &format!("package {package_name}"),
+    );
+    let destination = ctx
+        .cwd_path_join("src/main/scala")
+        .join(package_name)
+        .join("StreamingRpcExample.scala");
+    fs::write_str(destination, source).unwrap();
+
+    ctx.start_server().await;
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let id = Uuid::new_v4().to_string();
+    let caller = format!(r#"ScalaStreamingCaller("{id}")"#);
+    let outputs = ctx.cli([cmd::AGENT, cmd::INVOKE, &caller, "run"]).await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains(
+        "input=1,2,3;output=4,5,6;mixed=mapped:70,80,90;\
+         nested-input=left,right|10,11;nested-output=first:1,2|second:3,4,5;\
+         siblings=a,b|20,21,22;ping=42"
+    ));
+}
+
 /// End-to-end test for the Scala bridge generator: deploys the Rust counter
 /// agent, generates a Scala bridge SDK for it, then compiles and runs a small
 /// Scala program that invokes the live agent through the generated, future-based

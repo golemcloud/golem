@@ -24,8 +24,9 @@ import scala.collection.mutable
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
 import scala.scalajs.js.typedarray.Uint8Array
-import scala.concurrent.Future
+import scala.concurrent.{Future, Promise}
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import scala.util.{Failure, Success, Try}
 import golem.FutureInterop
 
 /**
@@ -68,8 +69,8 @@ object SchemaWireInterop {
       WitSchemaValueTree(converted.toVector, j.root)
     } catch {
       case error: Throwable =>
-        drainWitQuotaAndPermissionCardHandles(converted)
-        drainJsQuotaAndPermissionCardHandles(j.valueNodes)
+        drainWitCapabilityHandles(converted)
+        drainJsCapabilityHandles(j.valueNodes)
         throw error
     }
   }
@@ -78,9 +79,41 @@ object SchemaWireInterop {
    * Async stream-aware lowering. No reader is advanced while constructing the
    * tree.
    */
-  def valueTreeToJsAsync(v: WitSchemaValueTree): Future[JsSchemaValueTree] = {
+  def valueTreeToJsAsync(v: WitSchemaValueTree): Future[JsSchemaValueTree] =
+    prepareValueTreeToJsAsync(v).map(_.commit())
+
+  private def prepareValueTreeToJsAsync(v: WitSchemaValueTree): Future[PreparedValueTree] = {
     preflightValueTree(v)
-    Future.sequence(v.valueNodes.map(valueNodeToJsAsync)).map(nodes => JsSchemaValueTree(nodes.toJSArray, v.root))
+    val transferred = mutable.ListBuffer.empty[PreparedStream]
+    val prepared    = Array.fill[Option[JsSchemaValueNode]](v.valueNodes.length)(None)
+
+    val preparation = v.valueNodes.indices.foldLeft(Future.successful(())) { (ready, index) =>
+      v.valueNodes(index) match {
+        case WitSchemaValueNode.StreamValue(handle) =>
+          ready.flatMap { _ =>
+            valueStreamNodeToJsAsync(handle, transferred).map { node =>
+              prepared(index) = Some(node)
+            }
+          }
+        case _ => ready
+      }
+    }
+
+    preparation.transformWith {
+      case Success(_) =>
+        Try {
+          preflightValueTree(v, includeStreams = false)
+          val nodes = v.valueNodes.zipWithIndex.map {
+            case (WitSchemaValueNode.StreamValue(_), index) => prepared(index).get
+            case (node, _)                                  => valueNodeToJs(node)
+          }
+          JsSchemaValueTree(nodes.toJSArray, v.root)
+        } match {
+          case Success(tree)  => Future.successful(new PreparedValueTree(tree, transferred.toList))
+          case Failure(error) => rollbackStreams(transferred, error)
+        }
+      case Failure(error) => rollbackStreams(transferred, error)
+    }
   }
 
   def typedToJs(t: WitTypedSchemaValue): JsTypedSchemaValue =
@@ -91,7 +124,7 @@ object SchemaWireInterop {
       try graphFromJs(j.graph)
       catch {
         case error: Throwable =>
-          drainJsQuotaAndPermissionCardHandles(j.value.valueNodes)
+          drainJsCapabilityHandles(j.value.valueNodes)
           throw error
       }
     WitTypedSchemaValue(graph, valueTreeFromJs(j.value))
@@ -124,16 +157,31 @@ object SchemaWireInterop {
     raw.asInstanceOf[js.Any]
   }
 
-  private def drainJsQuotaAndPermissionCardHandles(nodes: js.Array[JsSchemaValueNode]): Unit =
-    nodes.foreach { node =>
-      if (node.tag == "quota-token-handle" || node.tag == "permission-card-handle") {
-        node.asInstanceOf[js.Dynamic].updateDynamic("val")(js.undefined)
+  private def drainJsCapabilityHandles(nodes: js.Array[JsSchemaValueNode]): Unit =
+    for (index <- nodes.indices) {
+      try {
+        val node = nodes(index)
+        if (node.tag == "quota-token-handle" || node.tag == "permission-card-handle") {
+          node.asInstanceOf[js.Dynamic].updateDynamic("val")(js.undefined)
+        } else if (node.tag == "stream-value") {
+          val dynamic = node.asInstanceOf[js.Dynamic]
+          val raw     = dynamic.selectDynamic("val")
+          if (!js.isUndefined(raw)) {
+            dynamic.updateDynamic("val")(js.undefined)
+            val handle = wrappedStreamHandle(raw.asInstanceOf[JsSchemaValueStream])
+            handle.take().foreach(stream => AgentStreamOwnership.cleanup(stream.dispose()))
+          }
+        }
+      } catch {
+        case _: Throwable => ()
       }
     }
 
-  private def drainWitQuotaAndPermissionCardHandles(nodes: Iterable[WitSchemaValueNode]): Unit =
+  private def drainWitCapabilityHandles(nodes: Iterable[WitSchemaValueNode]): Unit =
     nodes.foreach {
-      case WitSchemaValueNode.QuotaTokenHandle(handle)     => handle.take()
+      case WitSchemaValueNode.QuotaTokenHandle(handle) => handle.take()
+      case WitSchemaValueNode.StreamValue(handle)      =>
+        handle.take().foreach(stream => AgentStreamOwnership.cleanup(stream.dispose()))
       case WitSchemaValueNode.PermissionCardHandle(handle) => handle.take()
       case _                                               => ()
     }
@@ -545,7 +593,7 @@ object SchemaWireInterop {
    * holders wrapping the same raw `quota-token` are rejected too, not only the
    * same holder used twice.
    */
-  private def preflightValueTree(v: WitSchemaValueTree): Unit = {
+  private def preflightValueTree(v: WitSchemaValueTree, includeStreams: Boolean = true): Unit = {
     import WitSchemaValueNode._
     val seenRaw       = mutable.Set.empty[Any]
     val seenRawStream = mutable.Set.empty[Any]
@@ -589,7 +637,7 @@ object SchemaWireInterop {
           )
         if (!seenRaw.add(raw))
           throw SchemaEncodeError("the same quota-token handle appeared more than once in one value tree")
-      case StreamValue(h) =>
+      case StreamValue(h) if includeStreams =>
         val ownershipKey = h.ownershipKey
           .getOrElse(throw SchemaEncodeError("schema value stream was already transferred"))
         if (!seenRawStream.add(ownershipKey))
@@ -676,32 +724,220 @@ object SchemaWireInterop {
     }
   }
 
-  private def valueNodeToJsAsync(n: WitSchemaValueNode): Future[JsSchemaValueNode] = n match {
-    case WitSchemaValueNode.StreamValue(h) =>
-      h.take() match {
-        case Some(GuestSchemaValueStream.Wrapped(raw, _)) =>
-          Future.successful(JsSchemaValueNode.streamValue(raw.asInstanceOf[js.Any]))
-        case Some(GuestSchemaValueStream.Native(stream)) =>
-          val iterator = new js.Object {
-            def next(): js.Promise[js.Object] = FutureInterop.toPromise(
-              stream.pull().flatMap {
-                case None        => Future.successful(js.Dynamic.literal("done" -> true).asInstanceOf[js.Object])
-                case Some(value) =>
-                  valueTreeToJsAsync(SchemaWire.schemaValueToWit(value))
-                    .map(tree => js.Dynamic.literal("done" -> false, "value" -> tree).asInstanceOf[js.Object])
-              }
-            )
+  private def valueStreamNodeToJsAsync(
+    handle: GuestSchemaValueStreamHandle,
+    transferred: mutable.ListBuffer[PreparedStream]
+  ): Future[JsSchemaValueNode] =
+    handle.take() match {
+      case Some(stream: GuestSchemaValueStream.Wrapped) =>
+        transferred += new PreparedStream(stream)
+        Future.successful(JsSchemaValueNode.streamValue(stream.raw.asInstanceOf[js.Any]))
+      case Some(stream: GuestSchemaValueStream.Native) =>
+        val source   = stream.value
+        val prepared = new PreparedStream(stream)
+        transferred += prepared
+        val lifecycle = new NativeSchemaValueIteratorLifecycle(stream)
+        val iterator  = new js.Object {
+          private def doneResult: js.Object =
+            js.Dynamic.literal("done" -> true).asInstanceOf[js.Object]
+
+          def next(): js.Promise[js.Object] = {
+            val ownership = stream.activeOwnership
+            lifecycle.begin() match {
+              case Left(error) => FutureInterop.toPromise(Future.failed(error))
+              case Right(_)    =>
+                val pulling = AgentStreamOwnership.capture(ownership)(source.pull()).flatMap {
+                  case None        => lifecycle.close().map(_ => doneResult)
+                  case Some(value) =>
+                    AgentStreamOwnership
+                      .capture(ownership) {
+                        prepareValueTreeToJsAsync(SchemaWire.schemaValueToWit(value))
+                      }
+                      .flatMap(lifecycle.accept)
+                      .map(tree => js.Dynamic.literal("done" -> false, "value" -> tree).asInstanceOf[js.Object])
+                }
+
+                FutureInterop.toPromise(
+                  pulling.transformWith {
+                    case success @ Success(_) => Future.fromTry(success)
+                    case Failure(error)       =>
+                      AgentStreamOwnership.cleanup(lifecycle.close()).flatMap(_ => Future.failed(error))
+                  }
+                )
+            }
           }
-          val iterable = new js.Object {
-            @scala.scalajs.js.annotation.JSName(js.Symbol.asyncIterator)
-            def asyncIterator(): js.Object = iterator
+
+          @scala.scalajs.js.annotation.JSName("return")
+          def close(): js.Promise[js.Object] =
+            FutureInterop.toPromise(lifecycle.close().map(_ => doneResult))
+        }
+        val iterable = new js.Object {
+          @scala.scalajs.js.annotation.JSName(js.Symbol.asyncIterator)
+          def asyncIterator(): js.Object = iterator
+        }
+        FutureInterop
+          .fromPromise(JsSchemaValueStreamWrap.wrap(iterable.asInstanceOf[JsSchemaValueIterable]))
+          .map { raw =>
+            prepared.setWrappedRaw(raw)
+            JsSchemaValueNode.streamValue(raw)
           }
-          FutureInterop
-            .fromPromise(JsSchemaValueStreamWrap.wrap(iterable.asInstanceOf[JsSchemaValueIterable]))
-            .map(raw => JsSchemaValueNode.streamValue(raw))
-        case None => Future.failed(SchemaEncodeError("schema value stream was already transferred"))
+      case None => Future.failed(SchemaEncodeError("schema value stream was already transferred"))
+    }
+
+  private def rollbackStreams[A](streams: Iterable[PreparedStream], error: Throwable): Future[A] =
+    Future
+      .sequence(streams.toList.reverse.map(_.rollback()))
+      .flatMap(_ => Future.failed(error))
+
+  private final class PreparedValueTree(val value: JsSchemaValueTree, streams: List[PreparedStream]) {
+    private var settled = false
+
+    def commit(): JsSchemaValueTree = synchronized {
+      if (!settled) {
+        streams.foreach(_.commit())
+        settled = true
       }
-    case other => Future.successful(valueNodeToJs(other))
+      value
+    }
+
+    def rollback(): Future[Unit] = synchronized {
+      if (settled) Future.successful(())
+      else {
+        settled = true
+        Future.sequence(streams.reverse.map(_.rollback())).map(_ => ())
+      }
+    }
+  }
+
+  private final class NativeSchemaValueIteratorLifecycle(endpoint: GuestSchemaValueStream.Native) {
+    private var closed: Option[Future[Unit]] = None
+    private var active                       = false
+
+    def begin(): Either[Throwable, Unit] = synchronized {
+      if (closed.isDefined) Left(new IllegalStateException("schema value stream iterator was closed"))
+      else if (active) Left(new IllegalStateException("schema value stream iterator already has an active pull"))
+      else {
+        active = true
+        Right(())
+      }
+    }
+
+    def accept(prepared: PreparedValueTree): Future[JsSchemaValueTree] = synchronized {
+      if (closed.isDefined)
+        prepared
+          .rollback()
+          .flatMap(_ => Future.failed(new IllegalStateException("schema value stream iterator was closed")))
+      else {
+        active = false
+        Future.successful(prepared.commit())
+      }
+    }
+
+    def close(): Future[Unit] = synchronized {
+      closed.getOrElse {
+        active = false
+        val result =
+          try endpoint.dispose()
+          catch {
+            case error: Throwable => Future.failed(error)
+          }
+        closed = Some(result)
+        result
+      }
+    }
+  }
+
+  private final class PreparedStream(endpoint: GuestSchemaValueStream) {
+    private var wrappedRaw: Option[JsSchemaValueStream] = None
+    private lazy val rollbackResult: Future[Unit]       = {
+      val releaseRaw = synchronized(wrappedRaw) match {
+        case Some(raw) =>
+          AgentStreamOwnership.cleanup(FutureInterop.fromPromise(JsSchemaValueStreamUnwrap.unwrap(raw)).map(_ => ()))
+        case None => Future.successful(())
+      }
+      releaseRaw.flatMap(_ => AgentStreamOwnership.cleanup(endpoint.dispose()))
+    }
+
+    def setWrappedRaw(raw: JsSchemaValueStream): Unit = synchronized {
+      wrappedRaw = Some(raw)
+    }
+
+    def commit(): Unit = endpoint.commitTransfer()
+
+    def rollback(): Future[Unit] = rollbackResult
+  }
+
+  private def wrappedStreamHandle(raw: JsSchemaValueStream): GuestSchemaValueStreamHandle = {
+    lazy val endpoint: GuestSchemaValueStream.Wrapped = GuestSchemaValueStream.Wrapped(
+      raw,
+      () =>
+        FutureInterop.fromPromise(JsSchemaValueStreamUnwrap.unwrap(raw)).map { iterable =>
+          val lifecycle = new JsSchemaValueIteratorLifecycle(iterable.iterator())
+          AgentStream.fromPull(
+            () =>
+              FutureInterop
+                .fromPromise(lifecycle.iterator.next())
+                .map { result =>
+                  if (result.done) {
+                    lifecycle.complete()
+                    None
+                  } else if (lifecycle.acceptItem())
+                    Some(
+                      AgentStreamOwnership.capture(endpoint.activeOwnership) {
+                        SchemaWire.schemaValueFromWit(valueTreeFromJs(result.value))
+                      }
+                    )
+                  else {
+                    drainJsCapabilityHandles(result.value.valueNodes)
+                    throw new IllegalStateException("schema value stream iterator was closed")
+                  }
+                }
+                .transformWith {
+                  case success @ Success(_) => Future.fromTry(success)
+                  case Failure(error)       =>
+                    AgentStreamOwnership.cleanup(lifecycle.close()).flatMap(_ => Future.failed(error))
+                },
+            () => lifecycle.close().flatMap(_ => endpoint.closeTransferredOwnership())
+          )
+        }
+    )
+    GuestSchemaValueStreamHandle.endpoint(endpoint)
+  }
+
+  private final class JsSchemaValueIteratorLifecycle(val iterator: JsSchemaValueIterator) {
+    private var finalization: Option[Future[Unit]] = None
+
+    def acceptItem(): Boolean = synchronized(finalization.isEmpty)
+
+    def complete(): Unit = synchronized {
+      if (finalization.isEmpty) finalization = Some(Future.successful(()))
+    }
+
+    def close(): Future[Unit] = synchronized {
+      finalization.getOrElse {
+        val done = Promise[Unit]()
+        finalization = Some(done.future)
+        val result =
+          try {
+            val raw      = iterator.asInstanceOf[js.Dynamic]
+            val returnFn = raw.selectDynamic("return")
+            if (js.typeOf(returnFn) == "function")
+              FutureInterop
+                .fromPromise(
+                  returnFn
+                    .applyDynamic("call")(raw)
+                    .asInstanceOf[js.Promise[js.Any]]
+                )
+                .map(_ => ())
+                .recover { case _ => () }
+            else Future.successful(())
+          } catch {
+            case _: Throwable => Future.successful(())
+          }
+        result.onComplete(done.tryComplete)
+        done.future
+      }
+    }
   }
 
   private def valueNodeFromJs(j: JsSchemaValueNode): WitSchemaValueNode = {
@@ -757,22 +993,8 @@ object SchemaWireInterop {
         // Wrap the owned `quota-token` resource in a fresh take-once handle.
         QuotaTokenHandle(GuestQuotaTokenHandle.fromRaw(takeOwnedVal(j, "quota-token")))
       case "stream-value" =>
-        val raw = valOf(j).asInstanceOf[JsSchemaValueStream]
-        StreamValue(
-          GuestSchemaValueStreamHandle.wrapped(
-            raw,
-            () =>
-              FutureInterop.fromPromise(JsSchemaValueStreamUnwrap.unwrap(raw)).map { iterable =>
-                val iterator = iterable.iterator()
-                AgentStream.fromPull(() =>
-                  FutureInterop.fromPromise(iterator.next()).map { result =>
-                    if (result.done) None
-                    else Some(SchemaWire.schemaValueFromWit(valueTreeFromJs(result.value)))
-                  }
-                )
-              }
-          )
-        )
+        val raw = takeOwnedVal(j, "schema value stream").asInstanceOf[JsSchemaValueStream]
+        StreamValue(wrappedStreamHandle(raw))
       case "permission-card-handle" =>
         PermissionCardHandle(GuestPermissionCardHandle.fromRaw(takeOwnedVal(j, "permission-card")))
       case other => throw new IllegalArgumentException(s"Unknown schema-value-node tag: $other")
