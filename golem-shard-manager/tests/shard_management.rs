@@ -1008,3 +1008,59 @@ async fn the_first_write_uses_the_revision_read_at_startup() {
 
     join_set.abort_all();
 }
+
+#[test]
+// The rollback arm is not specific to a revision conflict. A backend failure that says nothing
+// about revisions leaves the store in an unknown state - the write may or may not have landed -
+// so it is rolled back and stops the loop exactly like a conflict does, and the loop surfaces the
+// backend's own error rather than a generic one.
+async fn a_non_conflict_persistence_error_is_rolled_back_the_same_way() {
+    let existing_pod = pod(1, 9000);
+    let new_pod = pod(2, 9001);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+
+    let (shard_management, persistence, mut join_set) = new_shard_management(
+        shard_state_with_executors(
+            4,
+            vec![(
+                executor(1),
+                existing_pod,
+                "worker-executor-0",
+                &[0, 1, 2, 3],
+            )],
+        ),
+        worker_executors.clone(),
+    )
+    .await;
+    let before = shard_management.current_snapshot().await;
+    let persisted_before = persistence.latest().await;
+
+    persistence
+        .fail_writes(vec![Some(ShardManagerError::Internal(
+            "injected backend failure".into(),
+        ))])
+        .await;
+    let new_executor = shard_management
+        .register_executor(
+            ExecutorAddr::from(new_pod),
+            Some("worker-executor-1".into()),
+        )
+        .await;
+
+    let outcome = tokio::time::timeout(Duration::from_secs(5), join_set.join_next())
+        .await
+        .expect("the shard management loop should have stopped")
+        .expect("the loop task should exist")
+        .expect("the loop task should not panic");
+    let err = outcome.expect_err("the loop must end with the persistence error");
+    assert!(
+        err.to_string().contains("injected backend failure"),
+        "the loop should surface the backend's own error, got: {err:#}"
+    );
+
+    let after = shard_management.current_snapshot().await;
+    assert!(!after.has_executor(new_executor));
+    assert_eq!(after, before);
+    assert_eq!(persistence.latest().await, persisted_before);
+    assert!(worker_executors.local_assignment(new_pod).await.is_empty());
+}

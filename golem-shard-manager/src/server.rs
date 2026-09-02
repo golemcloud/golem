@@ -22,6 +22,10 @@ use tokio::task::JoinSet;
 use tracing::info;
 
 fn main() -> Result<(), anyhow::Error> {
+    // Before the configuration is loaded at all, so that `--dump-config` cannot print a config
+    // that silently ignores a deployment's legacy settings.
+    reject_legacy_db_env_vars().map_err(|err| anyhow::anyhow!(err))?;
+
     match make_config_loader().load_or_dump_config() {
         Some(config) => {
             rustls::crypto::ring::default_provider()
@@ -30,8 +34,6 @@ fn main() -> Result<(), anyhow::Error> {
 
             init_tracing_with_default_env_filter(&config.tracing);
             info!("Using configuration:\n{}", config.to_safe_string_indented());
-
-            reject_legacy_db_env_vars().map_err(|err| anyhow::anyhow!(err))?;
 
             let registry = default_registry().clone();
 

@@ -59,11 +59,13 @@ impl EtcdRoutingTablePersistence {
             .with_connect_timeout(config.connect_timeout)
             .with_timeout(config.request_timeout);
 
+        // The client connects lazily, on its first request, so nothing is known about the
+        // endpoints' reachability yet; the startup read is what first finds out.
         let client = Client::connect(&config.endpoints, Some(options)).await?;
         info!(
             endpoints = config.endpoints.join(", "),
             state_key = STATE_KEY,
-            "Connected to etcd for shard lease state persistence"
+            "Configured the etcd client for shard lease state persistence"
         );
 
         Ok(Self {
