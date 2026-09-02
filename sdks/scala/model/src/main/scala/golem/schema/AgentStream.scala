@@ -11,7 +11,33 @@ import scala.collection.mutable
 import scala.util.{DynamicVariable, Failure, Success, Try}
 import scala.util.control.NonFatal
 
-/** A demand-driven, single-reader stream used by schema-native agent calls. */
+/**
+ * A lazy, pull-based, single-reader stream used by schema-native agent calls.
+ * The producer is asked for a value only when [[pull]] is called, and only one
+ * pull may be active at a time.
+ *
+ * An `AgentStream` is affine. Passing it through schema conversion, returning
+ * it from an agent method, or calling [[map]] transfers the stream; the
+ * original stream can no longer be pulled, closed, or transferred again.
+ *
+ * For a stream connected through the component protocol, closing the consumer
+ * drops its readable endpoint. Producer cancellation is cooperative: the
+ * producer observes the drop when a subsequent write is rejected, then closes
+ * its source. It cannot interrupt an arbitrary pending source pull, and remote
+ * cleanup is not guaranteed to finish before a later invocation. On the
+ * producer side, the next source pull starts only after the previous write is
+ * accepted, providing backpressure. Acceptance does not guarantee that the
+ * value becomes externally observable before an immediately following producer
+ * failure.
+ *
+ * A bare protocol stream has no recoverable terminal error or error reason. At
+ * that protocol boundary, producer and cleanup failures fail the active
+ * invocation. Applications that need recoverable failures must represent them
+ * explicitly in the element type.
+ *
+ * @tparam A
+ *   the type of values produced by this stream
+ */
 final class AgentStream[+A] private[golem] (
   private[golem] val pullValue: () => Future[Option[A]],
   private[golem] val finalizeValue: () => Future[Unit],
@@ -31,6 +57,14 @@ final class AgentStream[+A] private[golem] (
   private var activePull: Option[Promise[Option[Any]]] = None
   private var finalization: Option[Promise[Unit]]      = None
 
+  /**
+   * Requests the next value from the producer.
+   *
+   * The returned future completes with `Some(value)` for an item and `None`
+   * after clean completion. A producer or decoding failure fails the future and
+   * is returned by later pulls as well. Calling `pull` while another pull is
+   * active returns a failed future.
+   */
   def pull(): Future[Option[A]] = {
     val result = lock.synchronized {
       state match {
@@ -63,8 +97,12 @@ final class AgentStream[+A] private[golem] (
   }
 
   /**
-   * Stops this stream and releases its producer. Closing is idempotent. An
-   * active pull fails immediately; a later source result is ignored.
+   * Stops this stream and releases its producer. Closing is idempotent and
+   * waits for the finalizer. An active pull fails immediately; its underlying
+   * producer operation may continue, but any later result is ignored.
+   *
+   * Closing a transferred stream returns a failed future because ownership has
+   * moved to another stream or schema value.
    */
   def close(): Future[Unit] = {
     val (pending, result, finalizer) = lock.synchronized {
@@ -90,8 +128,9 @@ final class AgentStream[+A] private[golem] (
   }
 
   /**
-   * Transfers this stream into a mapped stream. The original can no longer be
-   * pulled or transferred.
+   * Lazily transforms each produced value and transfers ownership into the
+   * returned stream. The original can no longer be pulled, closed, or
+   * transferred.
    */
   def map[B](f: A => B)(implicit ec: ExecutionContext): AgentStream[B] =
     lock.synchronized {
@@ -230,6 +269,20 @@ final class AgentStream[+A] private[golem] (
 }
 
 object AgentStream {
+
+  /**
+   * Creates a lazy stream backed by a pull function.
+   *
+   * `pull` is invoked only in response to demand and must return `Some(value)`
+   * or `None` for clean completion. `onFinalize` is invoked exactly once after
+   * clean completion, producer failure, or explicit close;
+   * [[AgentStream.close]] waits for it.
+   *
+   * @param pull
+   *   obtains the next value or clean end of stream
+   * @param onFinalize
+   *   releases resources owned by the producer
+   */
   def fromPull[A](
     pull: () => Future[Option[A]],
     onFinalize: () => Future[Unit] = () => Future.successful(())

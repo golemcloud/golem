@@ -793,10 +793,9 @@ async fn test_rust_counter() {
     }
 }
 
-/// Builds a real Scala component whose caller exercises input, output, mixed,
-/// nested, and sibling streams over native same-component agent RPC. The only
-/// externally invoked method returns a plain string report, so this does not
-/// depend on generated cross-component bridges or public streaming clients.
+/// Builds a real Scala component and exercises streaming through both the
+/// direct guest ABI and native same-component agent RPC. This does not depend
+/// on generated cross-component bridges or public streaming bridge clients.
 #[test]
 #[timeout("15 minutes")]
 async fn test_scala_streaming_rpc_e2e() {
@@ -829,14 +828,128 @@ async fn test_scala_streaming_rpc_e2e() {
     assert!(outputs.success_or_dump());
 
     let id = Uuid::new_v4().to_string();
+    let target = format!(r#"ScalaStreamingTarget("{id}-direct")"#);
+
+    let direct_input = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &target,
+                "consume",
+                "-",
+                "--no-stream",
+            ],
+            b"1\n2\n3\n",
+        )
+        .await;
+    assert!(
+        direct_input.success(),
+        "direct Scala stream input failed: {}",
+        direct_input.stderr_text()
+    );
+    assert!(
+        direct_input.stdout_text().contains("List(1, 2, 3)"),
+        "direct Scala stream input output: {}",
+        direct_input.stdout_text()
+    );
+
+    let direct_output = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &target,
+                "produce",
+                "[4, 5, 6]",
+                "--no-stream",
+            ],
+            b"",
+        )
+        .await;
+    assert!(
+        direct_output.success(),
+        "direct Scala stream output failed: {}",
+        direct_output.stderr_text()
+    );
+    assert!(direct_output.stdout_text().contains("4\n5\n6\n"));
+
+    let direct_input_close = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &target,
+                "consumeFirst",
+                "-",
+                "--no-stream",
+            ],
+            "30\n".repeat(64).as_bytes(),
+        )
+        .await;
+    assert!(
+        direct_input_close.success(),
+        "direct Scala input cancellation failed: {}",
+        direct_input_close.stderr_text()
+    );
+    assert!(direct_input_close.stdout_text().contains("30"));
+
+    let direct_producer_error = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &target,
+                "produceError",
+                "--no-stream",
+            ],
+            b"",
+        )
+        .await;
+    assert!(!direct_producer_error.success());
+    let direct_producer_error_stderr = direct_producer_error.stderr_text();
+    assert!(
+        direct_producer_error_stderr.contains("Invocation failed")
+            || direct_producer_error_stderr.contains("Output stream"),
+        "direct Scala producer failure was not reported: {}",
+        direct_producer_error_stderr
+    );
+
     let caller = format!(r#"ScalaStreamingCaller("{id}")"#);
     let outputs = ctx.cli([cmd::AGENT, cmd::INVOKE, &caller, "run"]).await;
     assert!(outputs.success_or_dump());
     assert!(outputs.stdout_contains(
         "input=1,2,3;output=4,5,6;mixed=mapped:70,80,90;\
+         forwarded=12,13,14;\
          nested-input=left,right|10,11;nested-output=first:1,2|second:3,4,5;\
-         siblings=a,b|20,21,22;ping=42"
+         siblings=a,b|0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63;\
+         input-first=30;output-first=100;after-close=42"
     ));
+
+    let producer_error = ctx
+        .cli([cmd::AGENT, cmd::INVOKE, &caller, "callProducerError"])
+        .await;
+    assert!(!producer_error.success());
+    assert!(
+        producer_error.stderr_contains("Invocation Failed")
+            || producer_error.stderr_contains("scala-producer-failed")
+    );
+
+    let recovery_caller = format!(
+        r#"ScalaStreamingCaller("{}-stream-free-after-error")"#,
+        Uuid::new_v4()
+    );
+    let first = ctx
+        .cli([cmd::AGENT, cmd::INVOKE, &recovery_caller, "callStreamFree"])
+        .await;
+    assert!(first.success_or_dump());
+    assert!(first.stdout_contains("1"));
+
+    let second = ctx
+        .cli([cmd::AGENT, cmd::INVOKE, &recovery_caller, "callStreamFree"])
+        .await;
+    assert!(second.success_or_dump());
+    assert!(second.stdout_contains("2"));
 }
 
 /// End-to-end test for the Scala bridge generator: deploys the Rust counter
