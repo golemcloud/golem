@@ -70,8 +70,24 @@ cache_eviction_interval = "1m"
 nanos = 0
 secs = 300
 
-[filesystem_storage]
-acquire_retry_delay = "500ms"
+[filesystem_storage.cleanup_retry]
+max_attempts = 4
+max_delay = "250ms"
+min_delay = "25ms"
+multiplier = 4.0
+
+[filesystem_storage.filesystem_object_limit_policy]
+maximum_objects = 131072
+minimum_objects = 8192
+objects_per_gib = 32768
+
+[filesystem_storage.pressure]
+minimum_available_bytes = 67108864
+minimum_available_filesystem_objects = 8192
+reclamation_observation_attempts = 4
+reclamation_observation_delay = "25ms"
+target_available_bytes = 134217728
+target_available_filesystem_objects = 16384
 
 [grpc]
 max_message_size = 33554432
@@ -257,6 +273,11 @@ type = "Grpc"
 batch_update_interval = "1m"
 limit_refresh_interval = "5m"
 
+[resource_usage_metering]
+compute = false
+filesystem = false
+memory = false
+
 [retry]
 max_attempts = 3
 max_delay = "1s"
@@ -376,33 +397,33 @@ without_time = false
 # max_websocket_connections = 100
 # runtime_metrics_sampling_interval = "5s"
 # tracing_file_name_with_port = true
-# 
+#
 # [active_agents]
 # drop_when_full = 0.25
 # ttl = "8h"
-# 
+#
 # [agent_status_checkpoint]
 # enabled = true
 # min_oplog_delta = 1000
-# 
+#
 # [agent_status_flush]
 # enabled = true
 # interval = "1s"
 # max_concurrency = 128
-# 
+#
 # [agent_types_service]
 # type = "Grpc"
-# 
+#
 # [agent_types_service.config]
 # cache_time_to_idle = "1m"
-# 
+#
 # [agent_webhooks_service]
 # hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
 # use_https_for_webhook_url = true
-# 
+#
 # [blob_storage]
 # type = "S3"
-# 
+#
 # [blob_storage.config]
 # compilation_cache_bucket = "golem-compiled-components"
 # components_bucket = "component-store"
@@ -412,64 +433,80 @@ without_time = false
 # object_prefix = ""
 # oplog_payload_bucket = "oplog-payload"
 # region = "us-east-1"
-# 
+#
 # [blob_storage.config.retries]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
-# 
+#
 # [compiled_component_service]
 # type = "Enabled"
-# 
+#
 # [compiled_component_service.config]
-# 
+#
 # [component_cache]
 # max_capacity = 32
 # max_concurrent_compilations = 16
 # max_metadata_capacity = 16384
 # max_resolved_component_capacity = 1024
 # time_to_idle = "12h"
-# 
+#
 # [direct_invocation_auth_cache]
 # cache_capacity = 1024
 # cache_eviction_interval = "1m"
 # cache_ttl = "5m"
-# 
+#
 # [durable_stream]
 # abandoned_prepare_after = "5m"
 # lease_ttl = "1m"
 # reconciliation_batch_size = 256
 # reconciliation_interval = "30s"
 # renewal_interval = "20s"
-# 
+#
 # [engine]
 # enable_fs_cache = false
-# 
+#
 # [environment_state_service]
 # cache_capacity = 1000
 # cache_eviction_interval = "1m"
-# 
+#
 # [environment_state_service.cache_ttl]
 # nanos = 0
 # secs = 300
-# 
-# [filesystem_storage]
-# acquire_retry_delay = "500ms"
-# 
+#
+# [filesystem_storage.cleanup_retry]
+# max_attempts = 4
+# max_delay = "250ms"
+# min_delay = "25ms"
+# multiplier = 4.0
+#
+# [filesystem_storage.filesystem_object_limit_policy]
+# maximum_objects = 131072
+# minimum_objects = 8192
+# objects_per_gib = 32768
+#
+# [filesystem_storage.pressure]
+# minimum_available_bytes = 67108864
+# minimum_available_filesystem_objects = 8192
+# reclamation_observation_attempts = 4
+# reclamation_observation_delay = "25ms"
+# target_available_bytes = 134217728
+# target_available_filesystem_objects = 16384
+#
 # [grpc]
 # max_message_size = 33554432
 # port = 9093
-# 
+#
 # [grpc.tls]
 # type = "Disabled"
-# 
+#
 # [grpc.tls.config]
-# 
+#
 # [http_client]
 # type = "Enabled"
-# 
+#
 # [http_client.config]
 # connect_timeout = "30s"
 # idle_timeout = "1m 30s"
@@ -477,10 +514,10 @@ without_time = false
 # max_host_entries = 1024
 # max_idle_per_host = 8
 # max_total_connections = 200
-# 
+#
 # [indexed_storage]
 # type = "Redis"
-# 
+#
 # [indexed_storage.config]
 # database = 0
 # host = "localhost"
@@ -489,33 +526,33 @@ without_time = false
 # port = 6380
 # tls = false
 # tracing = false
-# 
+#
 # [indexed_storage.config.retries]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
-# 
+#
 # [indexed_storage_retry]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
-# 
+#
 # [key_value_storage]
 # type = "InMemory"
-# 
+#
 # [key_value_storage.config]
-# 
+#
 # [key_value_storage_retry]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
-# 
+#
 # [limits]
 # ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"
@@ -530,19 +567,19 @@ without_time = false
 # max_invocation_context_stack_depth = 1024
 # max_oplog_query_pages_size = 100
 # tail_work_settle_timeout = "30s"
-# 
+#
 # [memory]
 # acquire_retry_delay = "500ms"
 # component_size_coefficient = 2.0
 # enable_measured_admission = true
 # worker_memory_ratio = 0.8
-# 
+#
 # [memory.oom_retry_config]
 # max_attempts = 4294967295
 # max_delay = "5s"
 # min_delay = "100ms"
 # multiplier = 2.0
-# 
+#
 # [oplog]
 # archive_interval = "1day"
 # blob_storage_layers = 1
@@ -554,149 +591,154 @@ without_time = false
 # oplog_rate_limit_enabled = false
 # plugin_max_commit_count = 3
 # plugin_max_elapsed_time = "5s"
-# 
+#
 # [oplog.default_snapshotting]
 # type = "Disabled"
-# 
+#
 # [oplog.oplog_processor_snapshotting]
 # type = "EveryNInvocation"
-# 
+#
 # [oplog.oplog_processor_snapshotting.config]
 # count = 10
-# 
+#
 # [public_worker_api]
 # connect_timeout = "10s"
 # host = "localhost"
 # max_message_size = 33554432
 # port = 9007
-# 
+#
 # [public_worker_api.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
-# 
+#
 # [public_worker_api.tls]
 # type = "Disabled"
-# 
+#
 # [public_worker_api.tls.config]
-# 
+#
 # [quota_service]
 # inline_wait_threshold = "1m"
 # renewal_interval = "10s"
 # renewal_threshold = "20s"
-# 
+#
 # [rdbms.pool]
 # acquire_timeout = "3s"
 # eviction_period = "2m"
 # eviction_ttl = "10m"
 # max_connections = 20
-# 
+#
 # [rdbms.query]
 # query_batch = 50
-# 
+#
 # [read_only_cache]
 # cache_capacity = 256
 # cache_eviction_interval = "1m"
 # max_entry_age = "2h"
-# 
+#
 # [registry_service]
 # connect_timeout = "10s"
 # host = "localhost"
 # max_message_size = 52428800
 # port = 8080
 # request_timeout = "30s"
-# 
+#
 # [registry_service.invalidation_event_subscriber]
 # initial_backoff = "100ms"
 # max_backoff = "30s"
-# 
+#
 # [registry_service.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
-# 
+#
 # [registry_service.tls]
 # type = "Disabled"
-# 
+#
 # [registry_service.tls.config]
-# 
+#
 # [resource_limits]
 # type = "Grpc"
-# 
+#
 # [resource_limits.config]
 # batch_update_interval = "1m"
 # limit_refresh_interval = "5m"
-# 
+#
+# [resource_usage_metering]
+# compute = false
+# filesystem = false
+# memory = false
+#
 # [retry]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
-# 
+#
 # [scheduler]
 # claim_batch_size = 100
 # lease_ttl = "30s"
 # max_batches_per_tick = 10
 # max_concurrent_action_processing = 64
 # refresh_interval = "2s"
-# 
+#
 # [scheduler_storage]
 # type = "Sqlite"
-# 
+#
 # [scheduler_storage.config]
 # database = "../data/worker-executor-scheduler-storage.db"
 # foreign_keys = false
 # max_connections = 10
-# 
+#
 # [scheduler_storage_retry]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
-# 
+#
 # [shard_manager]
 # connect_timeout = "10s"
 # host = "localhost"
 # max_message_size = 33554432
 # port = 9002
-# 
+#
 # [shard_manager.retries]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
-# 
+#
 # [shard_manager.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
-# 
+#
 # [shard_manager.tls]
 # type = "Disabled"
-# 
+#
 # [shard_manager.tls.config]
-# 
+#
 # [suspend]
 # ephemeral_max_sleep = "1m"
 # suspend_after = "10s"
 # wait_suspend_check_interval = "10s"
 # wait_suspend_grace = "1s"
-# 
+#
 # [tracing]
 # console = false
 # dtor_friendly = false
 # file_name = "worker-executor.log"
 # file_truncate = true
-# 
+#
 # [tracing.file]
 # ansi = false
 # compact = false
@@ -709,13 +751,13 @@ without_time = false
 # span_events_active = false
 # span_events_full = false
 # without_time = false
-# 
+#
 # [tracing.otlp]
 # enabled = false
 # host = "localhost"
 # port = 4318
 # service_name = "golem"
-# 
+#
 # [tracing.stderr]
 # ansi = false
 # compact = false
@@ -728,7 +770,7 @@ without_time = false
 # span_events_active = false
 # span_events_full = false
 # without_time = false
-# 
+#
 # [tracing.stdout]
 # ansi = true
 # compact = false
@@ -749,85 +791,101 @@ without_time = false
 # max_websocket_connections = 100
 # runtime_metrics_sampling_interval = "5s"
 # tracing_file_name_with_port = true
-# 
+#
 # [active_agents]
 # drop_when_full = 0.25
 # ttl = "8h"
-# 
+#
 # [agent_status_checkpoint]
 # enabled = true
 # min_oplog_delta = 1000
-# 
+#
 # [agent_status_flush]
 # enabled = true
 # interval = "1s"
 # max_concurrency = 128
-# 
+#
 # [agent_types_service]
 # type = "Grpc"
-# 
+#
 # [agent_types_service.config]
 # cache_time_to_idle = "1m"
-# 
+#
 # [agent_webhooks_service]
 # hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
 # use_https_for_webhook_url = true
-# 
+#
 # [blob_storage]
 # type = "InMemory"
-# 
+#
 # [blob_storage.config]
-# 
+#
 # [compiled_component_service]
 # type = "Enabled"
-# 
+#
 # [compiled_component_service.config]
-# 
+#
 # [component_cache]
 # max_capacity = 32
 # max_concurrent_compilations = 16
 # max_metadata_capacity = 16384
 # max_resolved_component_capacity = 1024
 # time_to_idle = "12h"
-# 
+#
 # [direct_invocation_auth_cache]
 # cache_capacity = 1024
 # cache_eviction_interval = "1m"
 # cache_ttl = "5m"
-# 
+#
 # [durable_stream]
 # abandoned_prepare_after = "5m"
 # lease_ttl = "1m"
 # reconciliation_batch_size = 256
 # reconciliation_interval = "30s"
 # renewal_interval = "20s"
-# 
+#
 # [engine]
 # enable_fs_cache = false
-# 
+#
 # [environment_state_service]
 # cache_capacity = 1000
 # cache_eviction_interval = "1m"
-# 
+#
 # [environment_state_service.cache_ttl]
 # nanos = 0
 # secs = 300
-# 
-# [filesystem_storage]
-# acquire_retry_delay = "500ms"
-# 
+#
+# [filesystem_storage.cleanup_retry]
+# max_attempts = 4
+# max_delay = "250ms"
+# min_delay = "25ms"
+# multiplier = 4.0
+#
+# [filesystem_storage.filesystem_object_limit_policy]
+# maximum_objects = 131072
+# minimum_objects = 8192
+# objects_per_gib = 32768
+#
+# [filesystem_storage.pressure]
+# minimum_available_bytes = 67108864
+# minimum_available_filesystem_objects = 8192
+# reclamation_observation_attempts = 4
+# reclamation_observation_delay = "25ms"
+# target_available_bytes = 134217728
+# target_available_filesystem_objects = 16384
+#
 # [grpc]
 # max_message_size = 33554432
 # port = 9093
-# 
+#
 # [grpc.tls]
 # type = "Disabled"
-# 
+#
 # [grpc.tls.config]
-# 
+#
 # [http_client]
 # type = "Enabled"
-# 
+#
 # [http_client.config]
 # connect_timeout = "30s"
 # idle_timeout = "1m 30s"
@@ -835,31 +893,31 @@ without_time = false
 # max_host_entries = 1024
 # max_idle_per_host = 8
 # max_total_connections = 200
-# 
+#
 # [indexed_storage]
 # type = "InMemory"
-# 
+#
 # [indexed_storage.config]
-# 
+#
 # [indexed_storage_retry]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
-# 
+#
 # [key_value_storage]
 # type = "InMemory"
-# 
+#
 # [key_value_storage.config]
-# 
+#
 # [key_value_storage_retry]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
-# 
+#
 # [limits]
 # ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"
@@ -874,19 +932,19 @@ without_time = false
 # max_invocation_context_stack_depth = 1024
 # max_oplog_query_pages_size = 100
 # tail_work_settle_timeout = "30s"
-# 
+#
 # [memory]
 # acquire_retry_delay = "500ms"
 # component_size_coefficient = 2.0
 # enable_measured_admission = true
 # worker_memory_ratio = 0.8
-# 
+#
 # [memory.oom_retry_config]
 # max_attempts = 4294967295
 # max_delay = "5s"
 # min_delay = "100ms"
 # multiplier = 2.0
-# 
+#
 # [oplog]
 # archive_interval = "1day"
 # blob_storage_layers = 1
@@ -898,149 +956,154 @@ without_time = false
 # oplog_rate_limit_enabled = false
 # plugin_max_commit_count = 3
 # plugin_max_elapsed_time = "5s"
-# 
+#
 # [oplog.default_snapshotting]
 # type = "Disabled"
-# 
+#
 # [oplog.oplog_processor_snapshotting]
 # type = "EveryNInvocation"
-# 
+#
 # [oplog.oplog_processor_snapshotting.config]
 # count = 10
-# 
+#
 # [public_worker_api]
 # connect_timeout = "10s"
 # host = "localhost"
 # max_message_size = 33554432
 # port = 9007
-# 
+#
 # [public_worker_api.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
-# 
+#
 # [public_worker_api.tls]
 # type = "Disabled"
-# 
+#
 # [public_worker_api.tls.config]
-# 
+#
 # [quota_service]
 # inline_wait_threshold = "1m"
 # renewal_interval = "10s"
 # renewal_threshold = "20s"
-# 
+#
 # [rdbms.pool]
 # acquire_timeout = "3s"
 # eviction_period = "2m"
 # eviction_ttl = "10m"
 # max_connections = 20
-# 
+#
 # [rdbms.query]
 # query_batch = 50
-# 
+#
 # [read_only_cache]
 # cache_capacity = 256
 # cache_eviction_interval = "1m"
 # max_entry_age = "2h"
-# 
+#
 # [registry_service]
 # connect_timeout = "10s"
 # host = "localhost"
 # max_message_size = 52428800
 # port = 8080
 # request_timeout = "30s"
-# 
+#
 # [registry_service.invalidation_event_subscriber]
 # initial_backoff = "100ms"
 # max_backoff = "30s"
-# 
+#
 # [registry_service.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
-# 
+#
 # [registry_service.tls]
 # type = "Disabled"
-# 
+#
 # [registry_service.tls.config]
-# 
+#
 # [resource_limits]
 # type = "Grpc"
-# 
+#
 # [resource_limits.config]
 # batch_update_interval = "1m"
 # limit_refresh_interval = "5m"
-# 
+#
+# [resource_usage_metering]
+# compute = false
+# filesystem = false
+# memory = false
+#
 # [retry]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
-# 
+#
 # [scheduler]
 # claim_batch_size = 100
 # lease_ttl = "30s"
 # max_batches_per_tick = 10
 # max_concurrent_action_processing = 64
 # refresh_interval = "2s"
-# 
+#
 # [scheduler_storage]
 # type = "Sqlite"
-# 
+#
 # [scheduler_storage.config]
 # database = "../data/worker-executor-scheduler-storage.db"
 # foreign_keys = false
 # max_connections = 10
-# 
+#
 # [scheduler_storage_retry]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
-# 
+#
 # [shard_manager]
 # connect_timeout = "10s"
 # host = "localhost"
 # max_message_size = 33554432
 # port = 9002
-# 
+#
 # [shard_manager.retries]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
-# 
+#
 # [shard_manager.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
-# 
+#
 # [shard_manager.tls]
 # type = "Disabled"
-# 
+#
 # [shard_manager.tls.config]
-# 
+#
 # [suspend]
 # ephemeral_max_sleep = "1m"
 # suspend_after = "10s"
 # wait_suspend_check_interval = "10s"
 # wait_suspend_grace = "1s"
-# 
+#
 # [tracing]
 # console = false
 # dtor_friendly = false
 # file_name = "worker-executor.log"
 # file_truncate = true
-# 
+#
 # [tracing.file]
 # ansi = false
 # compact = false
@@ -1053,13 +1116,13 @@ without_time = false
 # span_events_active = false
 # span_events_full = false
 # without_time = false
-# 
+#
 # [tracing.otlp]
 # enabled = false
 # host = "localhost"
 # port = 4318
 # service_name = "golem"
-# 
+#
 # [tracing.stderr]
 # ansi = false
 # compact = false
@@ -1072,7 +1135,7 @@ without_time = false
 # span_events_active = false
 # span_events_full = false
 # without_time = false
-# 
+#
 # [tracing.stdout]
 # ansi = true
 # compact = false
