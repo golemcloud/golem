@@ -138,6 +138,14 @@ export interface InitContext<Id extends IdRecord, Config extends ConfigSpec = {}
   readonly config: ConfigView<Config>;
 }
 
+/** Context supplied when constructing an agent from a snapshot. */
+export interface SnapshotRestoreContext<
+  Id extends IdRecord,
+  Config extends ConfigSpec = {},
+> extends InitContext<Id, Config> {
+  readonly agentId: ParsedAgentId;
+}
+
 export interface AgentImplementation<
   Id extends IdRecord,
   Methods extends MethodsRecord,
@@ -150,16 +158,17 @@ export interface AgentImplementation<
     State & AgentContext<Config>
   >;
   /**
-   * Optional custom snapshot serializer — overrides the default (reflective or
-   * typed-`state`) serialization entirely. `this` is the agent instance. `save`
-   * returns the raw snapshot bytes; `load` restores from them. Use for state the
-   * default JSON path can't represent (mirrors the decorator SDK's
-   * `BaseAgent.save/loadSnapshot` and effect's `Snapshot.custom`).
+   * Optional custom snapshot serializer and restoration factory. Restoration is
+   * an alternative to `init`: it must return a complete fresh state object.
    */
   snapshot?: {
-    save: () => Uint8Array | Promise<Uint8Array>;
-    load: (bytes: Uint8Array) => void | Promise<void>;
-  } & ThisType<State & AgentContext<Config>>;
+    save: (this: State & AgentContext<Config>) => Uint8Array | Promise<Uint8Array>;
+    load: (
+      this: void,
+      bytes: Uint8Array,
+      ctx: SnapshotRestoreContext<Id, Config>,
+    ) => State | Promise<State>;
+  };
 }
 
 export interface AgentImpl {
@@ -199,11 +208,9 @@ export type SnapshotPolicy =
   | { everyNInvocations: number };
 
 /**
- * Snapshotting configuration. Either a bare {@link SnapshotPolicy} (the SDK
- * snapshots all of `this` by reflection — back-compat default), or `{ policy,
- * state }` where `state` is a Standard Schema: only the schema-declared fields of
- * `this` are serialized (typed + scoped), fixing over-broad snapshots. For fully
- * custom serialization supply `snapshot: { save, load }` on `implement(...)`.
+ * Snapshotting configuration. Use `{ policy, state }` for automatic schema-driven
+ * save and restoration. A bare {@link SnapshotPolicy} requires a custom
+ * `snapshot: { save, load }` implementation when enabled.
  */
 export type SnapshottingSpec<StateSchema extends StandardSchemaV1 = StandardSchemaV1> =
   | SnapshotPolicy
@@ -348,6 +355,21 @@ export function defineAgent<
       implemented = true;
       if (registered) {
         try {
+          const policy = spec.snapshotting;
+          const enabled = policy !== undefined && policy !== 'disabled';
+          const hasStateSchema = typeof policy === 'object' && policy !== null && 'state' in policy;
+          const hasCustomSnapshot = impl.snapshot !== undefined;
+          if (
+            hasCustomSnapshot &&
+            (typeof impl.snapshot?.save !== 'function' || typeof impl.snapshot.load !== 'function')
+          ) {
+            throw new Error('custom snapshotting requires both snapshot.save and snapshot.load');
+          }
+          if (enabled && !hasStateSchema && !hasCustomSnapshot) {
+            throw new Error(
+              'snapshotting without a state schema requires snapshot.save and snapshot.load',
+            );
+          }
           registerAgentInitiator(
             registered,
             impl as AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object>,

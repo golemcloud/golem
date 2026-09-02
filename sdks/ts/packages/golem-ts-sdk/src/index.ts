@@ -74,6 +74,7 @@ export type {
   AgentContext,
   IdRecord,
   InitContext,
+  SnapshotRestoreContext,
   MethodsRecord,
 } from './defineAgent';
 export { Secret } from './secret';
@@ -177,8 +178,7 @@ export * from './rdbms';
 export * as http from './http';
 export * as bridge from './bridge';
 
-let resolvedAgent: ResolvedAgent | undefined = undefined;
-let initializationPrincipal: Principal | undefined = undefined;
+let initializedAgent: { agent: ResolvedAgent; principal: Principal } | undefined;
 
 interface GolemAgentGuest {
   initialize(agentTypeName: string, input: SchemaValueTree, principal: Principal): Promise<void>;
@@ -219,7 +219,7 @@ async function initialize(
   // There shouldn't be a need to re-initialize an agent in a container.
   // If the input differs in a re-initialization, then that shouldn't be routed
   // to this already-initialized container either.
-  if (resolvedAgent) {
+  if (initializedAgent) {
     throw createCustomError(`Agent is already initialized in this container`);
   }
 
@@ -243,8 +243,7 @@ async function initialize(
     : initiator.initiate(schemaValueFromWit(input), principal));
 
   if (initiateResult.tag === 'ok') {
-    resolvedAgent = initiateResult.val;
-    initializationPrincipal = principal;
+    initializedAgent = { agent: initiateResult.val, principal };
   } else {
     throw initiateResult.val;
   }
@@ -255,10 +254,10 @@ async function invokeAgent(
   input: SchemaValueTree,
   principal: Principal,
 ): Promise<SchemaValueTree | undefined> {
-  if (!resolvedAgent) {
+  if (!initializedAgent) {
     throw createCustomError(`Failed to invoke method ${methodName}: agent is not initialized`);
   }
-  const result = await resolvedAgent.invoke(methodName, input, principal);
+  const result = await initializedAgent.agent.invoke(methodName, input, principal);
 
   if (result.tag === 'ok') {
     return result.val;
@@ -635,11 +634,11 @@ function formatAgentRegistrationError(agentTypeName: string, messages: readonly 
 }
 
 function getDefinition(): AgentType {
-  if (!resolvedAgent) {
+  if (!initializedAgent) {
     throw new Error('Failed to get agent definition: agent is not initialized');
   }
 
-  return resolvedAgent.getAgentType();
+  return initializedAgent.agent.getAgentType();
 }
 
 function serializePrincipal(p: Principal): object {
@@ -728,12 +727,12 @@ function deserializePrincipal(obj: any): Principal {
 }
 
 async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
-  if (!resolvedAgent) {
+  if (!initializedAgent) {
     throw new Error('Failed to save agent snapshot: agent is not initialized');
   }
 
-  const { data: agentSnapshot, mimeType } = await resolvedAgent.saveSnapshot();
-  const principal = initializationPrincipal ?? { tag: 'anonymous' };
+  const { data: agentSnapshot, mimeType } = await initializedAgent.agent.saveSnapshot();
+  const principal = initializedAgent.principal;
   const serializedPrincipal = serializePrincipal(principal);
 
   if (mimeType.startsWith('multipart/mixed')) {
@@ -791,7 +790,7 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
 async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promise<void> {
   const bytes = snapshot.payload;
 
-  if (resolvedAgent) {
+  if (initializedAgent) {
     throw `Agent is already initialized in this container`;
   }
 
@@ -805,6 +804,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   let agentSnapshot: Uint8Array;
   let agentSnapshotMimeType: string | undefined;
   let principal: Principal;
+  let databases: Array<{ name: string; bytes: Uint8Array }> = [];
 
   if (snapshot.mimeType.startsWith('multipart/mixed')) {
     // Multipart snapshot: extract principal from the state JSON part
@@ -823,28 +823,23 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     const envelope = JSON.parse(new TextDecoder().decode(parts[stateIdx].body));
     principal = envelope.principal
       ? deserializePrincipal(envelope.principal)
-      : (initializationPrincipal ?? { tag: 'anonymous' });
+      : { tag: 'anonymous' };
 
     if (envelope.state === undefined) {
       throw `multipart state part missing 'state' field`;
     }
 
-    // Replace the state part body with just the agent properties (strip version/principal)
-    parts[stateIdx] = {
-      ...parts[stateIdx],
-      body: new TextEncoder().encode(JSON.stringify(envelope.state)),
-    };
-
-    // Re-encode the parts for loadSnapshot
-    const { data: reencoded, boundary: newBoundary } = encodeMultipart(parts);
-    agentSnapshot = reencoded;
-    agentSnapshotMimeType = `multipart/mixed; boundary=${newBoundary}`;
+    agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
+    agentSnapshotMimeType = 'application/json';
+    databases = parts
+      .filter((part) => part.name.startsWith('db:'))
+      .map((part) => ({ name: part.name.slice(3), bytes: part.body }));
   } else if (snapshot.mimeType === 'application/json') {
     // JSON snapshot: unwrap envelope { version, principal, state }
     const envelope = JSON.parse(new TextDecoder().decode(bytes));
     principal = envelope.principal
       ? deserializePrincipal(envelope.principal)
-      : (initializationPrincipal ?? { tag: 'anonymous' });
+      : { tag: 'anonymous' };
     if (envelope.state === undefined) {
       throw `JSON snapshot missing 'state' field`;
     }
@@ -857,7 +852,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
 
     if (version === 1) {
       agentSnapshot = bytes.slice(1);
-      principal = initializationPrincipal ?? { tag: 'anonymous' };
+      principal = { tag: 'anonymous' };
     } else if (version === 2) {
       const principalLen = view.getUint32(1, false); // big-endian
       const principalBytes = bytes.slice(5, 5 + principalLen);
@@ -868,21 +863,22 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     }
   }
 
-  initializationPrincipal = principal;
-
   const initiator = AgentInitiatorRegistry.lookup(agentTypeName);
 
   if (!initiator) {
     throw `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`;
   }
 
-  const initiateResult = await initiator.initiate(agentParameters, principal);
+  const initiateResult = await initiator.loadSnapshot(
+    agentParameters,
+    principal,
+    agentSnapshot,
+    agentSnapshotMimeType,
+    databases,
+  );
 
   if (initiateResult.tag === 'ok') {
-    const agent = initiateResult.val;
-    await agent.loadSnapshot(agentSnapshot, agentSnapshotMimeType);
-
-    resolvedAgent = agent;
+    initializedAgent = { agent: initiateResult.val, principal };
   } else {
     // Throwing a String because the load WIT function returns result<_, string>
     let errorString = 'Failed to construct agent';
