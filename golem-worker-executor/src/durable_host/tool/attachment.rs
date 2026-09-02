@@ -976,8 +976,6 @@ impl<D> StreamProducer<D> for AttachmentStreamProducer {
             .clone();
         let remaining = dst.remaining(store.as_context_mut());
         if finish {
-            attachment.consumer_cancel();
-            self.finished = true;
             return Poll::Ready(Ok(StreamResult::Cancelled));
         }
         if remaining == Some(0) {
@@ -1084,8 +1082,6 @@ impl<D> StreamProducer<D> for RawAttachmentStreamProducer {
             .clone();
         let remaining = dst.remaining(store.as_context_mut());
         if finish {
-            attachment.consumer_cancel();
-            self.finished = true;
             return Poll::Ready(Ok(StreamResult::Cancelled));
         }
         if remaining == Some(0) {
@@ -1217,7 +1213,7 @@ mod tests {
     use super::*;
     use test_r::test;
     use tokio::sync::mpsc;
-    use wasmtime::component::{Source, StreamConsumer, StreamReader};
+    use wasmtime::component::{Component, Linker, Source, StreamConsumer, StreamReader};
     use wasmtime::{Config, Engine, Store, StoreContextMut};
 
     fn pair(limit: usize) -> (AttachmentProducer, AttachmentConsumer, AttachmentObserver) {
@@ -1715,6 +1711,134 @@ mod tests {
         let engine = Engine::new(&config).unwrap();
         let mut store = Store::new(&engine, ());
         let mut reader = StreamReader::new(&mut store, consumer.into_stream_producer()).unwrap();
+        reader.close(store.as_context_mut()).unwrap();
+
+        assert!(matches!(
+            observer.wait_terminal().await,
+            ByteStreamCloseCause::ConsumerCancelled
+        ));
+        assert!(matches!(
+            producer.write(vec![1]).await,
+            Err(StreamWriteError::Closed(
+                ByteStreamCloseCause::ConsumerCancelled
+            ))
+        ));
+    }
+
+    #[test]
+    async fn cancelling_raw_wasmtime_read_operation_preserves_and_resumes_the_attachment() {
+        let (producer, consumer, observer) = pair(4);
+        assert!(producer.configure_live());
+        let mut config = Config::new();
+        config.concurrency_support(true);
+        config.wasm_component_model_more_async_builtins(true);
+        let engine = Engine::new(&config).unwrap();
+        let component = Component::new(
+            &engine,
+            r#"
+(component
+  (import "cancelled" (func $cancelled))
+  (core func $cancelled (canon lower (func $cancelled)))
+  (core module $memory (memory (export "mem") 1))
+  (core instance $memory (instantiate $memory))
+  (core module $core
+    (import "" "mem" (memory 1))
+    (import "" "stream.read-async" (func $stream.read-async (param i32 i32 i32) (result i32)))
+    (import "" "stream.read-sync" (func $stream.read-sync (param i32 i32 i32) (result i32)))
+    (import "" "stream.cancel-read" (func $stream.cancel-read (param i32) (result i32)))
+    (import "" "stream.drop-readable" (func $stream.drop-readable (param i32)))
+    (import "" "cancelled" (func $cancelled))
+    (func (export "run") (param $stream i32)
+      (local $result i32)
+      (local.set $result (call $stream.read-async (local.get $stream) (i32.const 8) (i32.const 3)))
+      (if (i32.ne (local.get $result) (i32.const -1)) (then unreachable))
+      (local.set $result (call $stream.cancel-read (local.get $stream)))
+      (if (i32.ne (local.get $result) (i32.const 2)) (then unreachable))
+      (call $cancelled)
+      (local.set $result (call $stream.read-sync (local.get $stream) (i32.const 8) (i32.const 3)))
+      (if (i32.ne (local.get $result) (i32.const 48)) (then unreachable))
+      (if (i32.ne (i32.load8_u (i32.const 8)) (i32.const 4)) (then unreachable))
+      (if (i32.ne (i32.load8_u (i32.const 9)) (i32.const 5)) (then unreachable))
+      (if (i32.ne (i32.load8_u (i32.const 10)) (i32.const 6)) (then unreachable))
+      (call $stream.drop-readable (local.get $stream))
+    )
+  )
+  (type $stream (stream u8))
+  (core func $stream.read-async (canon stream.read $stream async (memory $memory "mem")))
+  (core func $stream.read-sync (canon stream.read $stream (memory $memory "mem")))
+  (core func $stream.cancel-read (canon stream.cancel-read $stream))
+  (core func $stream.drop-readable (canon stream.drop-readable $stream))
+  (core instance $core (instantiate $core (with "" (instance
+    (export "mem" (memory $memory "mem"))
+    (export "stream.read-async" (func $stream.read-async))
+    (export "stream.read-sync" (func $stream.read-sync))
+    (export "stream.cancel-read" (func $stream.cancel-read))
+    (export "stream.drop-readable" (func $stream.drop-readable))
+    (export "cancelled" (func $cancelled))
+  ))))
+  (func (export "run") async (param "stream" (stream u8))
+    (canon lift (core func $core "run") (memory $memory "mem")))
+)
+            "#,
+        )
+        .unwrap();
+        let (cancelled, mut cancellation) = mpsc::unbounded_channel();
+        let mut linker = Linker::new(&engine);
+        linker
+            .root()
+            .func_wrap("cancelled", move |_, (): ()| {
+                cancelled.send(()).unwrap();
+                Ok(())
+            })
+            .unwrap();
+        let mut store = Store::new(&engine, ());
+        let instance = linker
+            .instantiate_async(&mut store, &component)
+            .await
+            .unwrap();
+        let run = instance
+            .get_typed_func::<(StreamReader<u8>,), ()>(&mut store, "run")
+            .unwrap();
+        let reader = StreamReader::new(&mut store, consumer.into_raw_stream_producer()).unwrap();
+        let observer_during_cancellation = observer.clone();
+
+        store
+            .run_concurrent(async move |accessor| -> wasmtime::Result<()> {
+                tokio::try_join!(
+                    async {
+                        run.call_concurrent(accessor, (reader,)).await?;
+                        wasmtime::error::Ok(())
+                    },
+                    async {
+                        cancellation.recv().await.unwrap();
+                        assert!(observer_during_cancellation.terminal().is_none());
+                        producer.write(vec![4, 5, 6]).await.unwrap();
+                        producer.finish().unwrap();
+                        wasmtime::error::Ok(())
+                    }
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(matches!(
+            observer.terminal(),
+            Some(ByteStreamCloseCause::Finished)
+        ));
+    }
+
+    #[test]
+    async fn closing_raw_wasmtime_reader_still_cancels_the_consumer() {
+        let (producer, consumer, observer) = pair(4);
+        assert!(producer.configure_live());
+        let mut config = Config::new();
+        config.concurrency_support(true);
+        let engine = Engine::new(&config).unwrap();
+        let mut store = Store::new(&engine, ());
+        let mut reader =
+            StreamReader::new(&mut store, consumer.into_raw_stream_producer()).unwrap();
         reader.close(store.as_context_mut()).unwrap();
 
         assert!(matches!(

@@ -222,7 +222,6 @@ impl<D> StreamConsumer<D> for ToolStdinStreamConsumer {
         }
 
         if finish {
-            self.items.take();
             return Poll::Ready(Ok(StreamResult::Cancelled));
         }
 
@@ -301,7 +300,6 @@ impl<D> StreamConsumer<D> for UnderlyingToolStdinStreamConsumer {
         }
 
         if finish {
-            self.items.take();
             return Poll::Ready(Ok(StreamResult::Cancelled));
         }
 
@@ -4174,10 +4172,11 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ResolvedToolCommand, SkippedToolAttachmentEndpoints, ToolStdinEntry, ToolStdoutWriterEntry,
-        UnderlyingToolStdinStreamConsumer, WitRegisteredTool, classify_tool_discovery_error,
-        cleanup_tool_endpoints, recorded_tool_body_is_skipped, resolve_tool_command,
-        stdout_limit_error, terminal_tool_discovery_error, validate_stream_attachments,
+        ResolvedToolCommand, SkippedToolAttachmentEndpoints, ToolStdinEntry,
+        ToolStdinStreamConsumer, ToolStdoutWriterEntry, UnderlyingToolStdinStreamConsumer,
+        WitRegisteredTool, classify_tool_discovery_error, cleanup_tool_endpoints,
+        recorded_tool_body_is_skipped, resolve_tool_command, stdout_limit_error,
+        terminal_tool_discovery_error, validate_stream_attachments,
     };
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use crate::durable_host::entity::RecordedEntityTerminal;
@@ -4207,7 +4206,9 @@ mod tests {
     use std::task::{Context, Poll};
     use test_r::test;
     use tokio::sync::mpsc;
-    use wasmtime::component::{Destination, StreamProducer, StreamReader, StreamResult};
+    use wasmtime::component::{
+        Component, Destination, Linker, StreamProducer, StreamReader, StreamResult,
+    };
     use wasmtime::{Config, Engine, Store, StoreContextMut};
 
     struct OneBufferProducer {
@@ -4252,6 +4253,398 @@ mod tests {
             SerializableToolRpcError::ResourceExhausted(_)
         ));
         assert!(stdout_limit_error(false).is_none());
+    }
+
+    fn raw_wasmtime_writer_component(engine: &Engine) -> Component {
+        Component::new(
+            engine,
+            r#"
+(component
+  (import "attach" (func $attach))
+  (core func $attach (canon lower (func $attach)))
+  (core module $memory (memory (export "mem") 1))
+  (core instance $memory (instantiate $memory))
+  (core module $core
+    (import "" "mem" (memory 1))
+    (import "" "stream.new" (func $stream.new (result i64)))
+    (import "" "stream.write-async" (func $stream.write-async (param i32 i32 i32) (result i32)))
+    (import "" "stream.write-sync" (func $stream.write-sync (param i32 i32 i32) (result i32)))
+    (import "" "stream.cancel-write" (func $stream.cancel-write (param i32) (result i32)))
+    (import "" "stream.drop-writable" (func $stream.drop-writable (param i32)))
+    (import "" "attach" (func $attach))
+    (global $writer (mut i32) (i32.const 0))
+    (data (i32.const 0) "\01\02\03\04\05\06\07\08\09\0a\0b\0c")
+    (func (export "start") (result i32)
+      (local $pair i64)
+      (local.set $pair (call $stream.new))
+      (global.set $writer (i32.wrap_i64 (i64.shr_u (local.get $pair) (i64.const 32))))
+      (i32.wrap_i64 (local.get $pair))
+    )
+    (func (export "cancel-without-acknowledgement")
+      (local $result i32)
+      (local.set $result (call $stream.write-async (global.get $writer) (i32.const 9) (i32.const 3)))
+      (if (i32.ne (local.get $result) (i32.const -1)) (then unreachable))
+      (call $attach)
+      (local.set $result (call $stream.cancel-write (global.get $writer)))
+      (if (i32.ne (local.get $result) (i32.const 2)) (then unreachable))
+    )
+    (func (export "attach") (call $attach))
+    (func (export "write-first")
+      (local $result i32)
+      (local.set $result (call $stream.write-sync (global.get $writer) (i32.const 0) (i32.const 3)))
+      (if (i32.ne (local.get $result) (i32.const 48)) (then unreachable))
+    )
+    (func (export "cancel-with-pending-acknowledgement")
+      (local $result i32)
+      (local.set $result (call $stream.write-async (global.get $writer) (i32.const 3) (i32.const 3)))
+      (if (i32.ne (local.get $result) (i32.const -1)) (then unreachable))
+      (local.set $result (call $stream.cancel-write (global.get $writer)))
+      (if (i32.ne (local.get $result) (i32.const 2)) (then unreachable))
+    )
+    (func (export "resume-and-close")
+      (local $result i32)
+      (local.set $result (call $stream.write-sync (global.get $writer) (i32.const 6) (i32.const 3)))
+      (if (i32.ne (local.get $result) (i32.const 48)) (then unreachable))
+      (call $stream.drop-writable (global.get $writer))
+    )
+  )
+  (type $stream (stream u8))
+  (core func $stream.new (canon stream.new $stream))
+  (core func $stream.write-async (canon stream.write $stream async (memory $memory "mem")))
+  (core func $stream.write-sync (canon stream.write $stream (memory $memory "mem")))
+  (core func $stream.cancel-write (canon stream.cancel-write $stream))
+  (core func $stream.drop-writable (canon stream.drop-writable $stream))
+  (core instance $core (instantiate $core (with "" (instance
+    (export "mem" (memory $memory "mem"))
+    (export "stream.new" (func $stream.new))
+    (export "stream.write-async" (func $stream.write-async))
+    (export "stream.write-sync" (func $stream.write-sync))
+    (export "stream.cancel-write" (func $stream.cancel-write))
+    (export "stream.drop-writable" (func $stream.drop-writable))
+    (export "attach" (func $attach))
+  ))))
+  (func (export "start") async (result (stream u8))
+    (canon lift (core func $core "start")))
+  (func (export "cancel-without-acknowledgement") async
+    (canon lift (core func $core "cancel-without-acknowledgement")))
+  (func (export "attach") async
+    (canon lift (core func $core "attach")))
+  (func (export "write-first") async
+    (canon lift (core func $core "write-first")))
+  (func (export "cancel-with-pending-acknowledgement") async
+    (canon lift (core func $core "cancel-with-pending-acknowledgement")))
+  (func (export "resume-and-close") async
+    (canon lift (core func $core "resume-and-close")))
+)
+            "#,
+        )
+        .unwrap()
+    }
+
+    fn typed_wasmtime_writer_component(engine: &Engine) -> Component {
+        Component::new(
+            engine,
+            r#"
+(component
+  (import "attach" (func $attach))
+  (core func $attach (canon lower (func $attach)))
+  (core module $memory
+    (memory (export "mem") 1)
+    (data (i32.const 128) "\01\02\03\00\04\05\06\00\07\08\09\00\0a\0b\0c")
+  )
+  (core instance $memory (instantiate $memory))
+  (core module $core
+    (import "" "mem" (memory 1))
+    (import "" "stream.new" (func $stream.new (result i64)))
+    (import "" "stream.write-async" (func $stream.write-async (param i32 i32 i32) (result i32)))
+    (import "" "stream.write-sync" (func $stream.write-sync (param i32 i32 i32) (result i32)))
+    (import "" "stream.cancel-write" (func $stream.cancel-write (param i32) (result i32)))
+    (import "" "stream.drop-writable" (func $stream.drop-writable (param i32)))
+    (import "" "attach" (func $attach))
+    (global $writer (mut i32) (i32.const 0))
+    (func $set-item (param $item i32) (param $bytes i32)
+      (i32.store8 (local.get $item) (i32.const 0))
+      (i32.store (i32.add (local.get $item) (i32.const 4)) (local.get $bytes))
+      (i32.store (i32.add (local.get $item) (i32.const 8)) (i32.const 3))
+    )
+    (func (export "start") (result i32)
+      (local $pair i64)
+      (call $set-item (i32.const 0) (i32.const 128))
+      (call $set-item (i32.const 16) (i32.const 132))
+      (call $set-item (i32.const 32) (i32.const 136))
+      (call $set-item (i32.const 48) (i32.const 140))
+      (local.set $pair (call $stream.new))
+      (global.set $writer (i32.wrap_i64 (i64.shr_u (local.get $pair) (i64.const 32))))
+      (i32.wrap_i64 (local.get $pair))
+    )
+    (func (export "cancel-without-acknowledgement")
+      (local $result i32)
+      (local.set $result (call $stream.write-async (global.get $writer) (i32.const 48) (i32.const 1)))
+      (if (i32.ne (local.get $result) (i32.const -1)) (then unreachable))
+      (call $attach)
+      (local.set $result (call $stream.cancel-write (global.get $writer)))
+      (if (i32.ne (local.get $result) (i32.const 2)) (then unreachable))
+    )
+    (func (export "attach") (call $attach))
+    (func (export "write-first")
+      (local $result i32)
+      (local.set $result (call $stream.write-sync (global.get $writer) (i32.const 0) (i32.const 1)))
+      (if (i32.ne (local.get $result) (i32.const 16)) (then unreachable))
+    )
+    (func (export "cancel-with-pending-acknowledgement")
+      (local $result i32)
+      (local.set $result (call $stream.write-async (global.get $writer) (i32.const 16) (i32.const 1)))
+      (if (i32.ne (local.get $result) (i32.const -1)) (then unreachable))
+      (local.set $result (call $stream.cancel-write (global.get $writer)))
+      (if (i32.ne (local.get $result) (i32.const 2)) (then unreachable))
+    )
+    (func (export "resume-and-close")
+      (local $result i32)
+      (local.set $result (call $stream.write-sync (global.get $writer) (i32.const 32) (i32.const 1)))
+      (if (i32.ne (local.get $result) (i32.const 16)) (then unreachable))
+      (call $stream.drop-writable (global.get $writer))
+    )
+  )
+  (type $failure (variant
+    (case "cancelled")
+    (case "abandoned")
+    (case "resource-exhausted")
+    (case "failed" string)
+  ))
+  (export $failure-export "byte-stream-failure" (type $failure))
+  (type $item (result (list u8) (error $failure-export)))
+  (export $item-export "byte-stream-item" (type $item))
+  (type $stream (stream $item-export))
+  (core func $stream.new (canon stream.new $stream))
+  (core func $stream.write-async (canon stream.write $stream async (memory $memory "mem")))
+  (core func $stream.write-sync (canon stream.write $stream (memory $memory "mem")))
+  (core func $stream.cancel-write (canon stream.cancel-write $stream))
+  (core func $stream.drop-writable (canon stream.drop-writable $stream))
+  (core instance $core (instantiate $core (with "" (instance
+    (export "mem" (memory $memory "mem"))
+    (export "stream.new" (func $stream.new))
+    (export "stream.write-async" (func $stream.write-async))
+    (export "stream.write-sync" (func $stream.write-sync))
+    (export "stream.cancel-write" (func $stream.cancel-write))
+    (export "stream.drop-writable" (func $stream.drop-writable))
+    (export "attach" (func $attach))
+  ))))
+  (func (export "start") async (result (stream $item-export))
+    (canon lift (core func $core "start")))
+  (func (export "cancel-without-acknowledgement") async
+    (canon lift (core func $core "cancel-without-acknowledgement")))
+  (func (export "attach") async
+    (canon lift (core func $core "attach")))
+  (func (export "write-first") async
+    (canon lift (core func $core "write-first")))
+  (func (export "cancel-with-pending-acknowledgement") async
+    (canon lift (core func $core "cancel-with-pending-acknowledgement")))
+  (func (export "resume-and-close") async
+    (canon lift (core func $core "resume-and-close")))
+)
+            "#,
+        )
+        .unwrap()
+    }
+
+    async fn assert_raw_stdin_operation_cancellation(pending_acknowledgement: bool) {
+        let (_attachment_producer, _attachment_consumer, observer) =
+            attachment_pair(3, AttachmentMemory::inert());
+        let (items, mut received) = mpsc::unbounded_channel();
+        let mut config = Config::new();
+        config.concurrency_support(true);
+        config.wasm_component_model_more_async_builtins(true);
+        let engine = Engine::new(&config).unwrap();
+        let component = raw_wasmtime_writer_component(&engine);
+        let mut store = Store::new(&engine, ());
+        let reader_slot = std::sync::Arc::new(std::sync::Mutex::new(None::<StreamReader<u8>>));
+        let reader_slot_for_attach = reader_slot.clone();
+        let observer_during_cancellation = observer.clone();
+        let mut linker = Linker::new(&engine);
+        linker
+            .root()
+            .func_wrap("attach", move |mut store, (): ()| {
+                reader_slot_for_attach
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("raw stream reader was not ready to attach")
+                    .pipe(
+                        &mut store,
+                        UnderlyingToolStdinStreamConsumer::new(items.clone(), observer.clone(), 3),
+                    )?;
+                Ok(())
+            })
+            .unwrap();
+        let instance = linker
+            .instantiate_async(&mut store, &component)
+            .await
+            .unwrap();
+        let start = instance
+            .get_typed_func::<(), (StreamReader<u8>,)>(&mut store, "start")
+            .unwrap();
+        let write_first = instance
+            .get_typed_func::<(), ()>(&mut store, "write-first")
+            .unwrap();
+        let attach = instance
+            .get_typed_func::<(), ()>(&mut store, "attach")
+            .unwrap();
+        let cancel = instance
+            .get_typed_func::<(), ()>(
+                &mut store,
+                if pending_acknowledgement {
+                    "cancel-with-pending-acknowledgement"
+                } else {
+                    "cancel-without-acknowledgement"
+                },
+            )
+            .unwrap();
+        let resume = instance
+            .get_typed_func::<(), ()>(&mut store, "resume-and-close")
+            .unwrap();
+
+        store
+            .run_concurrent(async move |accessor| -> wasmtime::Result<()> {
+                let (reader,) = start.call_concurrent(accessor, ()).await?;
+                *reader_slot.lock().unwrap() = Some(reader);
+                let first = if pending_acknowledgement {
+                    attach.call_concurrent(accessor, ()).await?;
+                    write_first.call_concurrent(accessor, ()).await?;
+                    let first = received.recv().await.unwrap();
+                    assert_eq!(first.item.as_ref().unwrap(), &vec![1, 2, 3]);
+                    Some(first)
+                } else {
+                    None
+                };
+                cancel.call_concurrent(accessor, ()).await?;
+                assert!(received.try_recv().is_err());
+                assert!(observer_during_cancellation.terminal_snapshot().is_none());
+                if let Some(first) = first {
+                    first.acknowledged.send(()).unwrap();
+                }
+
+                resume.call_concurrent(accessor, ()).await?;
+                let resumed = received.recv().await.unwrap();
+                assert_eq!(resumed.item.unwrap(), vec![7, 8, 9]);
+                let _ = resumed.acknowledged.send(());
+                assert!(received.try_recv().is_err());
+                Ok(())
+            })
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    async fn assert_typed_stdin_operation_cancellation(pending_acknowledgement: bool) {
+        let (_attachment_producer, _attachment_consumer, observer) =
+            attachment_pair(3, AttachmentMemory::inert());
+        let (items, mut received) = mpsc::unbounded_channel();
+        let mut config = Config::new();
+        config.concurrency_support(true);
+        config.wasm_component_model_more_async_builtins(true);
+        let engine = Engine::new(&config).unwrap();
+        let component = typed_wasmtime_writer_component(&engine);
+        let mut store = Store::new(&engine, ());
+        let reader_slot = std::sync::Arc::new(std::sync::Mutex::new(
+            None::<StreamReader<Result<Vec<u8>, ByteStreamFailure>>>,
+        ));
+        let reader_slot_for_attach = reader_slot.clone();
+        let observer_during_cancellation = observer.clone();
+        let mut linker = Linker::new(&engine);
+        linker
+            .root()
+            .func_wrap("attach", move |mut store, (): ()| {
+                reader_slot_for_attach
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("typed stream reader was not ready to attach")
+                    .pipe(
+                        &mut store,
+                        ToolStdinStreamConsumer::new(items.clone(), observer.clone()),
+                    )?;
+                Ok(())
+            })
+            .unwrap();
+        let instance = linker
+            .instantiate_async(&mut store, &component)
+            .await
+            .unwrap();
+        let start = instance
+            .get_typed_func::<(), (StreamReader<Result<Vec<u8>, ByteStreamFailure>>,)>(
+                &mut store, "start",
+            )
+            .unwrap();
+        let attach = instance
+            .get_typed_func::<(), ()>(&mut store, "attach")
+            .unwrap();
+        let write_first = instance
+            .get_typed_func::<(), ()>(&mut store, "write-first")
+            .unwrap();
+        let cancel = instance
+            .get_typed_func::<(), ()>(
+                &mut store,
+                if pending_acknowledgement {
+                    "cancel-with-pending-acknowledgement"
+                } else {
+                    "cancel-without-acknowledgement"
+                },
+            )
+            .unwrap();
+        let resume = instance
+            .get_typed_func::<(), ()>(&mut store, "resume-and-close")
+            .unwrap();
+
+        store
+            .run_concurrent(async move |accessor| -> wasmtime::Result<()> {
+                let (reader,) = start.call_concurrent(accessor, ()).await?;
+                *reader_slot.lock().unwrap() = Some(reader);
+                let first = if pending_acknowledgement {
+                    attach.call_concurrent(accessor, ()).await?;
+                    write_first.call_concurrent(accessor, ()).await?;
+                    let first = received.recv().await.unwrap();
+                    assert_eq!(first.item.as_ref().unwrap(), &vec![1, 2, 3]);
+                    Some(first)
+                } else {
+                    None
+                };
+                cancel.call_concurrent(accessor, ()).await?;
+                assert!(received.try_recv().is_err());
+                assert!(observer_during_cancellation.terminal_snapshot().is_none());
+                if let Some(first) = first {
+                    first.acknowledged.send(()).unwrap();
+                }
+
+                resume.call_concurrent(accessor, ()).await?;
+                let resumed = received.recv().await.unwrap();
+                assert_eq!(resumed.item.unwrap(), vec![7, 8, 9]);
+                let _ = resumed.acknowledged.send(());
+                assert!(received.try_recv().is_err());
+                Ok(())
+            })
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    async fn cancelling_raw_stdin_without_acknowledgement_resumes_without_false_eof() {
+        assert_raw_stdin_operation_cancellation(false).await;
+    }
+
+    #[test]
+    async fn cancelling_raw_stdin_with_pending_acknowledgement_preserves_it_and_resumes() {
+        assert_raw_stdin_operation_cancellation(true).await;
+    }
+
+    #[test]
+    async fn cancelling_typed_stdin_without_acknowledgement_resumes_without_false_eof() {
+        assert_typed_stdin_operation_cancellation(false).await;
+    }
+
+    #[test]
+    async fn cancelling_typed_stdin_with_pending_acknowledgement_preserves_it_and_resumes() {
+        assert_typed_stdin_operation_cancellation(true).await;
     }
 
     #[test]

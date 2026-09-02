@@ -1,6 +1,6 @@
 # PR 3787 Review Fix Plan
 
-Last updated: 2026-09-01
+Last updated: 2026-09-02
 
 This plan covers every review finding validated as true or partially true for
 [PR 3787](https://github.com/golemcloud/golem/pull/3787), together with the additional validated
@@ -39,7 +39,7 @@ documented verification commands are all complete.
 | ID | Workstream | Status | Findings | Dependency |
 |---|---|---|---|---|
 | P0 | Establish the integration base | **Complete** | 24–28 | None |
-| P1 | Correct Wasmtime operation-cancellation handling | Not started | 1, 2 | P0 |
+| P1 | Correct Wasmtime operation-cancellation handling | **Complete** | 1, 2 | P0 |
 | P2 | Introduce typed replay-claim outcomes | Not started | 18 | P0 |
 | P3 | Add replay-stable tool-attempt identity | Not started | 6 | P2 |
 | P4 | Replace operation strong-count cleanup with explicit leases | Not started | 17, 27 | P0 |
@@ -53,6 +53,15 @@ documented verification commands are all complete.
 | P9b | Add MoonBit provider failure and cleanup support | Not started | 20–22, 26 | P0, P5 |
 | P9c | Preserve typed TypeScript tool-stream failures | Not started | 20 | P0, P5 |
 | P10 | Finish contract and integration conformance | Not started | 8, 19, 23, 25 | Owning workstreams; GOL-95 coordination |
+
+## Execution progress log
+
+- **P0 — Complete (2026-09-01):** integration base established, focused cross-language and executor
+  verification passed, and Oracle approved the phase. Recorded in local commit `ce9df5208`.
+- **P1 — Complete (2026-09-02):** operation cancellation is non-terminal for typed/raw attachment
+  adapters, all focused unit and executor checks passed, and Oracle approved the revised real-
+  Wasmtime coverage after rejecting the earlier synthetic test approach.
+- **Next:** P2 — typed replay-claim outcomes.
 
 ## Invariants that govern every fix
 
@@ -139,24 +148,43 @@ contracts:
 
 ### Implementation
 
-- [ ] In both attachment producers, handle `finish=true` by returning the operation-cancelled status
+- [x] In both attachment producers, handle `finish=true` by returning the operation-cancelled status
       without setting the attachment producer to finished and without selecting consumer
       cancellation.
-- [ ] In both stdin consumers, preserve supplied items and pending acknowledgement state when the
+- [x] In both stdin consumers, preserve supplied items and pending acknowledgement state when the
       current operation is cancelled.
-- [ ] Preserve endpoint-drop behavior: actually closing or dropping a reader still selects
+- [x] Preserve endpoint-drop behavior: actually closing or dropping a reader still selects
       `ConsumerCancelled` where the contract requires it.
-- [ ] Do not change Wasmtime, add a writer-drop observer, or add the generic teardown fallback that
+- [x] Do not change Wasmtime, add a writer-drop observer, or add the generic teardown fallback that
       GOL-95 intentionally rejected.
 
 ### Verification
 
-- [ ] Cancel typed and raw producer operations, then resume and consume the remaining attachment.
-- [ ] Cancel stdin reads with and without pending acknowledgement, then resume without false EOF or
+- [x] Cancel typed and raw producer operations, then resume and consume the remaining attachment.
+- [x] Cancel stdin reads with and without pending acknowledgement, then resume without false EOF or
       item loss.
-- [ ] Verify actual endpoint drop still terminalizes the peer.
-- [ ] Run the relevant GOL-95 early-consumer-drop/subsequent-invocation regression as a semantic
+- [x] Verify actual endpoint drop still terminalizes the peer.
+- [x] Run the relevant GOL-95 early-consumer-drop/subsequent-invocation regression as a semantic
       guard, without changing its P3 contract.
+
+### Progress evidence
+
+- Final post-refactor unit rerun: 11 passed, covering five real Wasmtime operation-cancellation
+  paths, typed/raw endpoint close, stdin chunking and pending-acknowledgement cancellation, and two
+  host-cancellation paths. Log: `.amp/pr-3787-tests/p1-tool-operation-cancellation-unit.log`.
+- Rebuilt and copied the Rust tool-streaming caller component with the Golem CLI.
+- `rust_generated_client_streams_live_and_handles_edges`: passed, including a real pending stdout
+  read cancellation followed by a resumed read on the same attachment. Log:
+  `.amp/pr-3787-tests/p1-rust-tool-streaming-integration.log`.
+- `output_consumer_cancel_after_result_remains_a_valid_terminal_session`: passed as the available
+  language-neutral GOL-95 contract guard. The TypeScript-specific
+  `typescript_client_streaming_rpc_e2e` guard belongs to unlanded GOL-95 commit `4ac70d6995` and is
+  intentionally not imported into this branch. Log:
+  `.amp/pr-3787-tests/p1-gol95-language-neutral-guard.log`.
+- Rust formatting checks and `cargo clippy -p golem-worker-executor --lib --tests -- -D warnings`
+  passed. Clippy log: `.amp/pr-3787-tests/p1-clippy.log`.
+- Oracle completion gate: approved on 2026-09-02 after reviewing the final implementation, real
+  Wasmtime callback coverage, executor guards, formatting, and clippy results.
 
 ## P2 — Introduce typed replay-claim outcomes
 

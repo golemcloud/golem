@@ -802,6 +802,7 @@ async fn rust_generated_client_streams_live_and_handles_edges(
             "explicit-cancel",
             "result-detach",
             "stdout-detach",
+            "stdout-operation-resume",
         ]
     );
 

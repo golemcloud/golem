@@ -648,6 +648,9 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn raw_handle_lifecycles(&self) -> Vec<String> {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
         let rpc = ToolRpc::new("streaming");
         let path = ["run".to_string()];
 
@@ -722,11 +725,44 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .map_err(|error| tool_protocol_error::<StreamingRunError>(format!("{error:?}")))
             .expect("dropping stdout reader must not cancel the result observer");
 
+        let (mut resumed_source, resumed_stdin) =
+            golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
+        let (resumed_target, mut resumed_stdout) = tool_host::create_stdout();
+        let resumed_result = rpc.async_invoke_and_await(
+            &path,
+            raw_input("marker-echo"),
+            Some(pump_tool_stdin(resumed_stdin)),
+            Some(resumed_target),
+        );
+        assert_eq!(raw_chunk(&mut resumed_stdout).await, b"marker:");
+        let mut pending_read = Box::pin(resumed_stdout.read(Vec::with_capacity(1)));
+        poll_fn(|cx| match pending_read.as_mut().poll(cx) {
+            Poll::Pending => Poll::Ready(()),
+            Poll::Ready(result) => panic!("stdout read completed before cancellation: {result:?}"),
+        })
+        .await;
+        let (cancelled, buffer) = pending_read.as_mut().cancel();
+        assert_eq!(format!("{cancelled:?}"), "Cancelled");
+        assert!(buffer.is_empty());
+        drop(pending_read);
+        assert!(
+            resumed_source
+                .write_all(vec![Ok(b"resumed".to_vec())])
+                .await
+                .is_empty()
+        );
+        drop(resumed_source);
+        assert_eq!(read_all(resumed_stdout).await, b"resumed");
+        raw_result(&resumed_result)
+            .await
+            .expect("result after resuming a cancelled stdout read");
+
         vec![
             "out-of-order-get".to_string(),
             "explicit-cancel".to_string(),
             "result-detach".to_string(),
             "stdout-detach".to_string(),
+            "stdout-operation-resume".to_string(),
         ]
     }
 
