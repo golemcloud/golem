@@ -27,7 +27,7 @@ use golem_common::model::oplog::payload::types::SerializableToolOperationTermina
 use golem_common::schema::TypedSchemaValue;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{Notify, watch};
 
@@ -171,7 +171,7 @@ pub(crate) struct OwnerToolOperationContext {
 
 struct RegisteredOperation {
     context: Arc<OwnerToolOperationContext>,
-    lease: Arc<()>,
+    lease: Arc<OperationLease>,
     invocation_id: Option<EntityInvocationId>,
     winner: ToolOperationWinner,
     winner_tx: watch::Sender<ToolOperationWinner>,
@@ -180,6 +180,10 @@ struct RegisteredOperation {
     acquisition_error: Option<String>,
     stdin: Option<AttachmentController>,
     stdout: Option<AttachmentController>,
+}
+
+struct OperationLease {
+    handles: AtomicUsize,
 }
 
 enum LaneOwnership {
@@ -241,6 +245,8 @@ pub(crate) struct OwnerToolOperations {
     next_id: AtomicU64,
     state: Mutex<OwnerToolOperationsState>,
     changed: Notify,
+    #[cfg(test)]
+    operation_removals: AtomicU64,
 }
 
 impl std::fmt::Debug for OwnerToolOperations {
@@ -260,6 +266,8 @@ impl OwnerToolOperations {
                 operations: HashMap::new(),
             }),
             changed: Notify::new(),
+            #[cfg(test)]
+            operation_removals: AtomicU64::new(0),
         })
     }
 
@@ -275,7 +283,9 @@ impl OwnerToolOperations {
             filesystem = ?context.activation.filesystem(),
             "Registered tool operation"
         );
-        let lease = Arc::new(());
+        let lease = Arc::new(OperationLease {
+            handles: AtomicUsize::new(1),
+        });
         let winner_tx = {
             let mut state = self.state.lock().unwrap();
             let winner = if state.owner_winner.is_some() {
@@ -386,16 +396,20 @@ impl OwnerToolOperations {
                 .collect()
         };
         drain_lane_ownerships(lanes).await;
-        self.state
-            .lock()
-            .unwrap()
-            .operations
-            .retain(|_, operation| {
+        let _removed = {
+            let mut state = self.state.lock().unwrap();
+            let previous_count = state.operations.len();
+            state.operations.retain(|_, operation| {
                 !matches!(
                     operation.winner,
                     ToolOperationWinner::Trap | ToolOperationWinner::FencedByOwner
-                ) || Arc::strong_count(&operation.lease) != 1
+                ) || operation.lease.handles.load(Ordering::Acquire) != 0
             });
+            previous_count - state.operations.len()
+        };
+        #[cfg(test)]
+        self.operation_removals
+            .fetch_add(_removed as u64, Ordering::Relaxed);
         self.changed.notify_waiters();
     }
 
@@ -611,6 +625,11 @@ impl OwnerToolOperations {
     fn operation_count(&self) -> usize {
         self.state.lock().unwrap().operations.len()
     }
+
+    #[cfg(test)]
+    fn operation_removal_count(&self) -> u64 {
+        self.operation_removals.load(Ordering::Relaxed)
+    }
 }
 
 pub(crate) struct ProvisionalOwnerToolOperation {
@@ -648,6 +667,12 @@ impl Drop for ProvisionalOwnerToolOperation {
         let mut state = operation.owner.state.lock().unwrap();
         if state.operations[&operation.id].invocation_id.is_none() {
             state.operations.remove(&operation.id);
+            drop(state);
+            #[cfg(test)]
+            operation
+                .owner
+                .operation_removals
+                .fetch_add(1, Ordering::Relaxed);
             operation.owner.changed.notify_waiters();
             tracing::debug!(
                 operation_id = operation.id,
@@ -657,28 +682,47 @@ impl Drop for ProvisionalOwnerToolOperation {
     }
 }
 
-#[derive(Clone)]
 pub(crate) struct OwnerToolOperation {
     id: u64,
     context: Arc<OwnerToolOperationContext>,
     owner: Arc<OwnerToolOperations>,
     _winner: watch::Sender<ToolOperationWinner>,
-    lease: Arc<()>,
+    lease: Arc<OperationLease>,
+}
+
+impl Clone for OwnerToolOperation {
+    fn clone(&self) -> Self {
+        self.lease.handles.fetch_add(1, Ordering::Relaxed);
+        Self {
+            id: self.id,
+            context: self.context.clone(),
+            owner: self.owner.clone(),
+            _winner: self._winner.clone(),
+            lease: self.lease.clone(),
+        }
+    }
 }
 
 impl Drop for OwnerToolOperation {
     fn drop(&mut self) {
-        if Arc::strong_count(&self.lease) != 2 {
+        let previous_handles = self.lease.handles.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous_handles > 0, "tool operation lease underflow");
+        if previous_handles != 1 {
             return;
         }
         let mut state = self.owner.state.lock().unwrap();
         let removable = state.operations.get(&self.id).is_some_and(|operation| {
             operation.winner.is_terminal()
                 && matches!(operation.lane, LaneOwnership::None)
-                && Arc::strong_count(&operation.lease) == 2
+                && operation.lease.handles.load(Ordering::Acquire) == 0
         });
         if removable {
             state.operations.remove(&self.id);
+            drop(state);
+            #[cfg(test)]
+            self.owner
+                .operation_removals
+                .fetch_add(1, Ordering::Relaxed);
             self.owner.changed.notify_waiters();
         }
     }
@@ -1186,11 +1230,15 @@ impl OwnerToolOperation {
                 operation.winner.is_terminal(),
                 "an owner tool operation can only settle after terminal selection"
             );
+            #[cfg(test)]
+            self.owner
+                .operation_removals
+                .fetch_add(1, Ordering::Relaxed);
             operation.lane
         };
+        self.owner.changed.notify_waiters();
         drain_lane_ownerships(vec![lane]).await;
         tracing::debug!(operation_id = self.id, "Settled tool operation resources");
-        self.owner.changed.notify_waiters();
     }
 
     #[cfg(test)]
@@ -1540,7 +1588,7 @@ mod tests {
         ToolSource,
     };
     use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
-    use test_r::test;
+    use test_r::{test, timeout};
 
     fn parent() -> OwnerInvocationId {
         OwnerInvocationId::Agent(OplogIndex::from_u64(1))
@@ -1711,23 +1759,101 @@ mod tests {
     }
 
     #[test]
-    fn dropping_a_provisional_operation_unregisters_it() {
+    #[timeout("30s")]
+    async fn dropping_a_provisional_operation_unregisters_it_and_wakes_parent_waiters() {
         let owner = OwnerToolOperations::new();
         let operation = owner.create(context());
+        let waiting_owner = owner.clone();
+        let waiting =
+            tokio::spawn(async move { waiting_owner.wait_parent_settled(&parent()).await });
+        tokio::task::yield_now().await;
 
         assert_eq!(owner.operation_count(), 1);
+        assert!(!waiting.is_finished());
         drop(operation);
+        waiting.await.unwrap();
         assert_eq!(owner.operation_count(), 0);
+        assert_eq!(owner.operation_removal_count(), 1);
     }
 
     #[test]
     fn dropping_an_accepted_observer_does_not_drop_the_owner_operation() {
         let owner = OwnerToolOperations::new();
         let operation = accept_provisional(owner.create(context()), 2);
+        let lease = operation.lease.clone();
 
         assert_eq!(owner.operation_count(), 1);
         drop(operation);
         assert_eq!(owner.operation_count(), 1);
+        assert_eq!(lease.handles.load(Ordering::Acquire), 0);
+        assert_eq!(owner.operation_removal_count(), 0);
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn owner_failure_drain_removes_a_handleless_operation_and_wakes_parent_waiters() {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(context()), 2);
+        let lease = operation.lease.clone();
+        drop(operation);
+        assert_eq!(lease.handles.load(Ordering::Acquire), 0);
+        assert_eq!(owner.operation_count(), 1);
+
+        let waiting_owner = owner.clone();
+        let waiting =
+            tokio::spawn(async move { waiting_owner.wait_parent_settled(&parent()).await });
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
+
+        assert!(
+            owner
+                .select_owner_failure(OwnerFailureWinner::Infrastructure(
+                    WorkerExecutorError::runtime("owner failed"),
+                ))
+                .await
+        );
+        owner.drain_owner_failure_lanes().await;
+
+        waiting.await.unwrap();
+        assert_eq!(owner.operation_count(), 0);
+        assert_eq!(owner.operation_removal_count(), 1);
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn concurrent_final_handle_drops_remove_once_and_wake_parent_waiters() {
+        let owner = OwnerToolOperations::new();
+        let first = accept_provisional(owner.create(context()), 2);
+        let second = first.clone();
+        let lease = first.lease.clone();
+        assert!(first.begin_cancel());
+        first.resolve_cancel(true).await;
+
+        let waiting_owner = owner.clone();
+        let waiting =
+            tokio::spawn(async move { waiting_owner.wait_parent_settled(&parent()).await });
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
+
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let first_barrier = barrier.clone();
+        let first_drop = tokio::spawn(async move {
+            first_barrier.wait().await;
+            drop(first);
+        });
+        let second_barrier = barrier.clone();
+        let second_drop = tokio::spawn(async move {
+            second_barrier.wait().await;
+            drop(second);
+        });
+        barrier.wait().await;
+        first_drop.await.unwrap();
+        second_drop.await.unwrap();
+
+        waiting.await.unwrap();
+        assert_eq!(lease.handles.load(Ordering::Acquire), 0);
+        assert_eq!(owner.operation_count(), 0);
+        assert_eq!(owner.operation_removal_count(), 1);
     }
 
     #[test]
@@ -1798,6 +1924,52 @@ mod tests {
         operation.settle().await;
 
         waiting.await.unwrap();
+        assert_eq!(owner.operation_count(), 0);
+        assert_eq!(owner.operation_removal_count(), 1);
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn settlement_wakes_parent_waiters_before_cancellable_lane_drain() {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(context()), 2);
+        let acquisition = tokio::spawn(std::future::pending::<()>());
+        {
+            let mut state = owner.state.lock().unwrap();
+            state.operations.get_mut(&operation.id).unwrap().lane =
+                LaneOwnership::Acquiring(AcquisitionControl {
+                    abort: acquisition.abort_handle(),
+                    drained: Arc::new(AcquisitionDrain::default()),
+                });
+        }
+        assert!(
+            owner
+                .select_owner_failure(OwnerFailureWinner::Infrastructure(
+                    WorkerExecutorError::runtime("owner failed"),
+                ))
+                .await
+        );
+
+        let waiting_owner = owner.clone();
+        let waiting =
+            tokio::spawn(async move { waiting_owner.wait_parent_settled(&parent()).await });
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
+
+        let settlement = tokio::spawn(operation.settle());
+        while owner.operation_count() != 0 {
+            tokio::task::yield_now().await;
+        }
+        assert!(!settlement.is_finished());
+        tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+
+        settlement.abort();
+        assert!(settlement.await.unwrap_err().is_cancelled());
+        assert!(acquisition.await.unwrap_err().is_cancelled());
+        assert_eq!(owner.operation_removal_count(), 1);
     }
 
     #[test]

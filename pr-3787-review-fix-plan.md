@@ -42,7 +42,7 @@ documented verification commands are all complete.
 | P1 | Correct Wasmtime operation-cancellation handling | **Complete** | 1, 2 | P0 |
 | P2 | Introduce typed replay-claim outcomes | **Complete** | 18 | P0 |
 | P3 | Add replay-stable tool-attempt identity | **Complete** | 6 | P2 |
-| P4 | Replace operation strong-count cleanup with explicit leases | Not started | 17, 27 | P0 |
+| P4 | Replace operation strong-count cleanup with explicit leases | **Complete** | 17, 27 | P0 |
 | P5 | Centralize no-body attachment publication | Not started | 4, 16, 27 | P1, P4 |
 | P6 | Make execution mode and attachment admission replay-deterministic | Not started | 3, 5 | P1, P5 |
 | P7a | Fix the Rust started-invocation caller contract | Not started | 7–9 | P1, P5 |
@@ -60,15 +60,18 @@ documented verification commands are all complete.
   verification passed, and Oracle approved the phase. Recorded in local commit `ce9df5208`.
 - **P1 — Complete (2026-09-02):** operation cancellation is non-terminal for typed/raw attachment
   adapters, all focused unit and executor checks passed, and Oracle approved the revised real-
-  Wasmtime coverage after rejecting the earlier synthetic test approach.
+  Wasmtime coverage after rejecting the earlier synthetic test approach. Recorded in local commit
+  `7c6500479`.
 - **P2 — Complete (2026-09-02):** typed missing/blocked/claimed outcomes now preserve payload
   loading and decoding errors; 122 replay-state tests and clippy pass, and Oracle approved the
-  phase.
+  phase. Recorded in local commit `49ceaec22`.
 - **P3 — Complete (2026-09-02):** accepted and rejected tool attempts now carry a per-durable-
   parent initiation ordinal captured before admission awaits. All model, payload, replay-state,
   repeated-Wasmtime, reordered-admission crash/replay, regression, formatting, and clippy checks
-  pass, and Oracle approved the phase.
-- **Next:** P4 — explicit operation leases.
+  pass, and Oracle approved the phase. Recorded in local commit `778dcbab8`.
+- **P4 — Complete (2026-09-02):** explicit operation lease accounting replaced strong-count
+  inference. All focused unit, broader tool-module, integration, formatting, and clippy checks
+  pass, and Oracle approved the corrected notification ordering.
 
 ## Invariants that govern every fix
 
@@ -284,18 +287,39 @@ replay.
 
 ### Implementation
 
-- [ ] Replace `Arc::strong_count` as the cleanup decision with explicit clone/drop lease accounting.
-- [ ] Make the final decrement uniquely observable before the handle's ordinary field destruction.
-- [ ] Serialize map removal with `OwnerToolOperationsState`.
-- [ ] Notify the operation `changed` waiter on every removal path: provisional drop, normal settle,
+- [x] Replace `Arc::strong_count` as the cleanup decision with explicit clone/drop lease accounting.
+- [x] Make the final decrement uniquely observable before the handle's ordinary field destruction.
+- [x] Serialize map removal with `OwnerToolOperationsState`.
+- [x] Notify the operation `changed` waiter on every removal path: provisional drop, normal settle,
       owner-failure drain, unaccepted removal, and final lease drop.
-- [ ] Retain explicit settlement as the normal removal path.
+- [x] Retain explicit settlement as the normal removal path.
 
 ### Verification
 
-- [ ] Drop two final handles concurrently behind a barrier.
-- [ ] Assert exactly one removal and no map-only lease remains.
-- [ ] Pre-park a parent-settled waiter and verify it wakes on every removal path.
+- [x] Drop two final handles concurrently behind a barrier.
+- [x] Assert exactly one removal and no map-only lease remains.
+- [x] Pre-park a parent-settled waiter and verify it wakes on every removal path.
+
+### Progress evidence
+
+- Six focused lease/removal tests passed, including concurrent final drops, exact removal counts,
+  zero surviving handle leases, owner-failure drain, explicit settlement, cancellation during lane
+  drainage, and pre-parked parent waiters. Log:
+  `.amp/pr-3787-tests/p4-operation-leases-unit.log`.
+- All 37 operation-module tests and all 81 durable tool-host unit tests passed. Logs:
+  `.amp/pr-3787-tests/p4-operation-module-unit.log` and
+  `.amp/pr-3787-tests/p4-tool-unit.log`.
+- `rust_generated_client_streams_live_and_handles_edges` passed as the executor integration
+  regression. Log: `.amp/pr-3787-tests/p4-rust-tool-streaming-integration.log`.
+- Root Rust formatting, diff whitespace, and
+  `cargo clippy -p golem-worker-executor --lib --tests -- -D warnings` pass. Clippy log:
+  `.amp/pr-3787-tests/p4-clippy.log`.
+- Oracle's first completion review identified that explicit settlement notified only after an
+  awaitable lane drain. Notification now occurs immediately after map removal, and a deterministic
+  regression holds lane drainage open, proves the pre-parked waiter wakes, and then cancels the
+  settlement future.
+- Oracle completion gate: approved on 2026-09-02 after its requested notification-order correction
+  and regression test.
 
 ## P5 — Centralize no-body attachment publication
 
@@ -590,6 +614,13 @@ Append an entry whenever a workstream changes status or a design gate is resolve
 | 2026-09-01 | Coordination | Complete | Checked active GOL-95 and GOL-96 plans, changes, settled contracts, and sequencing constraints |
 | 2026-09-01 | P0 | In progress | Fast-forwarded `tool-invoke` to the reviewed PR 3787 revision; importing validated PR 3805 commits next |
 | 2026-09-01 | P0 | Complete | Cherry-picked all 12 functional PR 3805 commits without a merge. Rust macro: 121 tests plus fmt/clippy passed. TypeScript SDK: 702 passed, 20 skipped, build/typecheck/lint/Prettier passed. Scala focused JVM/JS tests: 6 each; scoped scalafmt passed. MoonBit SDK: 257 tests plus check/info/fmt passed. Executor tool unit tests: 72 passed. Rebuilt fresh Rust, TypeScript, Scala, and MoonBit fixtures; five worker-executor integration tests passed, including all nine deterministic crash checkpoints. Oracle explicitly approved P0. The bug-finder service failed internally twice and tripped its failure breaker without returning a code finding; no override was used. The Scala aggregate local-publish command published every fixture dependency before an unrelated cross-version resolver failure; a clean Scala fixture rebuild against those artifacts passed. The unmodified MoonBit fixture retains pre-existing generated-source formatting drift. |
+| 2026-09-02 | P1 | Complete | Commit `7c6500479`. Eleven real Wasmtime/attachment cancellation tests, the Rust tool-streaming integration regression, the language-neutral GOL-95 guard, formatting, and executor clippy passed. Oracle approved the final implementation and coverage. |
+| 2026-09-02 | P2 | Complete | Commit `49ceaec22`. Seven claim-outcome tests and all 122 replay-state unit tests passed; formatting and executor clippy passed. Oracle approved without corrections. |
+| 2026-09-02 | P3 | Complete | Commit `778dcbab8`. Seven identity/serialization tests, 124 replay-state tests, repeated Wasmtime initiation-order coverage, rebuilt/validated Rust fixtures, reordered-admission crash/replay integration, regression coverage, formatting, and clippy passed. Oracle approved without corrections. |
+| 2026-09-02 | P4 | In progress | Replacing map-plus-handle `Arc::strong_count` inference with explicit per-operation handle lease accounting; focused concurrent final-drop and pre-parked waiter tests are next. |
+| 2026-09-02 | P4 | Awaiting Oracle approval | Five focused lease/removal tests, all 36 operation tests, all 80 tool-host unit tests, the Rust generated-client executor integration regression, formatting, diff whitespace, and executor clippy pass. |
+| 2026-09-02 | P4 | Oracle correction applied | Moved explicit-settlement notification before awaitable lane drainage and added a deterministic cancellation-window regression. Six focused tests, all 81 tool-host tests, the integration regression, formatting, and clippy pass after the correction. |
+| 2026-09-02 | P4 | Complete | Oracle approved the explicit lease accounting, all removal paths, final-drop concurrency, owner-failure cleanup, and corrected pre-drain notification ordering. |
 
 ## Definition of done
 
