@@ -118,6 +118,13 @@ async fn create_and_get_retry_policy(deps: &EnvBasedTestDependencies) -> anyhow:
     }
 
     {
+        let fetched = client
+            .get_environment_retry_policy(&env.id.0, &created.name)
+            .await?;
+        assert_eq!(fetched, created);
+    }
+
+    {
         let all = client.list_environment_retry_policies(&env.id.0).await?;
         assert!(all.values.contains(&created));
     }

@@ -35,6 +35,11 @@ async fn get_account(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
         assert_eq!(account.email, user.account_email);
         assert_eq!(account.revision, AccountRevision::INITIAL);
         assert_eq!(account.roles, Vec::new());
+
+        let account_by_email = client
+            .get_account_by_email(user.account_email.as_str())
+            .await?;
+        assert_eq!(account_by_email, account);
     }
 
     // get account plan

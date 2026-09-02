@@ -78,6 +78,36 @@ Path|Method|Protected
 }
 ```
 
+## Get an account plugin by name and version.
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/plugins/{plugin_name}/{plugin_version}`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "name": "string",
+  "version": "string",
+  "description": "string",
+  "icon": "string",
+  "homepage": "string",
+  "spec": {
+    "type": "OplogProcessor",
+    "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+    "componentRevision": 0
+  }
+}
+```
+
 ## Get a plugin by id
 Path|Method|Protected
 ---|---|---

@@ -16,6 +16,7 @@ use crate::command::account::{
     AccountLimitsSubcommand, AccountSubcommand, AccountUsageSubcommand, PermissionShareGrantArgs,
     PermissionShareSubcommand,
 };
+use crate::command::shared_args::AccountScopeArgs;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
@@ -49,18 +50,16 @@ impl AccountCommandHandler {
 
     pub async fn handle_command(&self, subcommand: AccountSubcommand) -> anyhow::Result<()> {
         match subcommand {
-            AccountSubcommand::Get { account_id } => self.cmd_get(account_id.account_id).await,
+            AccountSubcommand::Get { account } => self.cmd_get(account).await,
             AccountSubcommand::Update {
-                account_id,
+                account,
                 account_name,
-            } => self.cmd_update(account_id.account_id, account_name).await,
+            } => self.cmd_update(account, account_name).await,
             AccountSubcommand::New {
                 account_name,
                 account_email,
             } => self.cmd_new(account_name, account_email).await,
-            AccountSubcommand::Delete { account_id } => {
-                self.cmd_delete(account_id.account_id).await
-            }
+            AccountSubcommand::Delete { account } => self.cmd_delete(account).await,
             AccountSubcommand::Usage { subcommand } => self.handle_usage_command(subcommand).await,
             AccountSubcommand::Limits { subcommand } => {
                 self.handle_limits_command(subcommand).await
@@ -73,11 +72,11 @@ impl AccountCommandHandler {
 
     async fn handle_usage_command(&self, subcommand: AccountUsageSubcommand) -> anyhow::Result<()> {
         match subcommand {
-            AccountUsageSubcommand::Show { account_id, period } => {
-                self.cmd_usage_show(account_id.account_id, period).await
+            AccountUsageSubcommand::Show { account, period } => {
+                self.cmd_usage_show(account, period).await
             }
-            AccountUsageSubcommand::History { account_id, last } => {
-                self.cmd_usage_history(account_id.account_id, last).await
+            AccountUsageSubcommand::History { account, last } => {
+                self.cmd_usage_history(account, last).await
             }
         }
     }
@@ -87,17 +86,15 @@ impl AccountCommandHandler {
         subcommand: AccountLimitsSubcommand,
     ) -> anyhow::Result<()> {
         match subcommand {
-            AccountLimitsSubcommand::Show { account_id } => {
-                self.cmd_limits_show(account_id.account_id).await
-            }
+            AccountLimitsSubcommand::Show { account } => self.cmd_limits_show(account).await,
             AccountLimitsSubcommand::Set {
-                account_id,
+                account,
                 max_storage_per_agent,
                 max_memory_per_agent,
                 monthly_memory_gb_seconds,
             } => {
                 self.cmd_limits_set(
-                    account_id.account_id,
+                    account,
                     max_storage_per_agent,
                     max_memory_per_agent,
                     monthly_memory_gb_seconds,
@@ -105,13 +102,13 @@ impl AccountCommandHandler {
                 .await
             }
             AccountLimitsSubcommand::Unset {
-                account_id,
+                account,
                 storage,
                 max_memory_per_agent,
                 monthly_memory_gb_seconds,
             } => {
                 self.cmd_limits_unset(
-                    account_id.account_id,
+                    account,
                     storage,
                     max_memory_per_agent,
                     monthly_memory_gb_seconds,
@@ -126,33 +123,23 @@ impl AccountCommandHandler {
         subcommand: PermissionShareSubcommand,
     ) -> anyhow::Result<()> {
         match subcommand {
-            PermissionShareSubcommand::List {
-                account_id,
-                received,
-            } => {
-                self.cmd_permission_share_list(account_id.account_id, received)
-                    .await
+            PermissionShareSubcommand::List { account, received } => {
+                self.cmd_permission_share_list(account, received).await
             }
             PermissionShareSubcommand::Get {
                 permission_share_id,
             } => self.cmd_permission_share_get(permission_share_id).await,
-            PermissionShareSubcommand::GetByName { account_id, name } => {
-                self.cmd_permission_share_get_by_name(account_id.account_id, name)
-                    .await
+            PermissionShareSubcommand::GetByName { account, name } => {
+                self.cmd_permission_share_get_by_name(account, name).await
             }
             PermissionShareSubcommand::New {
-                account_id,
+                account,
                 target_account_email,
                 name,
                 grants,
             } => {
-                self.cmd_permission_share_new(
-                    account_id.account_id,
-                    target_account_email,
-                    name,
-                    grants,
-                )
-                .await
+                self.cmd_permission_share_new(account, target_account_email, name, grants)
+                    .await
             }
             PermissionShareSubcommand::Update {
                 permission_share_id,
@@ -168,8 +155,8 @@ impl AccountCommandHandler {
         }
     }
 
-    async fn cmd_get(&self, account_id: Option<AccountId>) -> anyhow::Result<()> {
-        let account = self.get(account_id).await?;
+    async fn cmd_get(&self, account: AccountScopeArgs) -> anyhow::Result<()> {
+        let account = self.get(account).await?;
         self.ctx.log_handler().log_output(AccountGetView(account))?;
 
         Ok(())
@@ -177,10 +164,10 @@ impl AccountCommandHandler {
 
     async fn cmd_update(
         &self,
-        account_id: Option<AccountId>,
+        account: AccountScopeArgs,
         account_name: String,
     ) -> anyhow::Result<()> {
-        let account = self.get(account_id).await?;
+        let account = self.get(account).await?;
         let account = self
             .ctx
             .golem_clients()
@@ -222,8 +209,8 @@ impl AccountCommandHandler {
         Ok(())
     }
 
-    async fn cmd_delete(&self, account_id: Option<AccountId>) -> anyhow::Result<()> {
-        let account = self.get(account_id).await?;
+    async fn cmd_delete(&self, account: AccountScopeArgs) -> anyhow::Result<()> {
+        let account = self.get(account).await?;
         if !self
             .ctx
             .interactive_handler()
@@ -250,10 +237,10 @@ impl AccountCommandHandler {
 
     async fn cmd_usage_show(
         &self,
-        account_id: Option<AccountId>,
+        account: AccountScopeArgs,
         period: Option<StorageUsagePeriod>,
     ) -> anyhow::Result<()> {
-        let account_id = self.select_account_id_or_err(account_id).await?;
+        let account_id = self.select_account_id_or_err(account).await?;
         let period = period.map(|period| period.to_string());
         let usage = self
             .ctx
@@ -271,10 +258,10 @@ impl AccountCommandHandler {
 
     async fn cmd_usage_history(
         &self,
-        account_id: Option<AccountId>,
+        account: AccountScopeArgs,
         last: usize,
     ) -> anyhow::Result<()> {
-        let account_id = self.select_account_id_or_err(account_id).await?;
+        let account_id = self.select_account_id_or_err(account).await?;
         let last = last.try_into()?;
         let usage = self
             .ctx
@@ -293,8 +280,8 @@ impl AccountCommandHandler {
         Ok(())
     }
 
-    async fn cmd_limits_show(&self, account_id: Option<AccountId>) -> anyhow::Result<()> {
-        let account_id = self.select_account_id_or_err(account_id).await?;
+    async fn cmd_limits_show(&self, account: AccountScopeArgs) -> anyhow::Result<()> {
+        let account_id = self.select_account_id_or_err(account).await?;
         let clients = self.ctx.golem_clients().await?;
         let storage = clients
             .account
@@ -321,7 +308,7 @@ impl AccountCommandHandler {
 
     async fn cmd_limits_set(
         &self,
-        account_id: Option<AccountId>,
+        account: AccountScopeArgs,
         storage: Option<u64>,
         max_memory: Option<u64>,
         monthly_memory: Option<u64>,
@@ -333,7 +320,7 @@ impl AccountCommandHandler {
         {
             bail!("only one limit can be changed per command");
         }
-        let account_id = self.select_account_id_or_err(account_id).await?;
+        let account_id = self.select_account_id_or_err(account).await?;
         let clients = self.ctx.golem_clients().await?;
         if let Some(value) = storage {
             clients
@@ -374,12 +361,16 @@ impl AccountCommandHandler {
                 .await
                 .map_service_error()?;
         }
-        self.cmd_limits_show(Some(account_id)).await
+        self.cmd_limits_show(AccountScopeArgs {
+            account: None,
+            account_id: Some(account_id),
+        })
+        .await
     }
 
     async fn cmd_limits_unset(
         &self,
-        account_id: Option<AccountId>,
+        account: AccountScopeArgs,
         storage: bool,
         max_memory: bool,
         monthly_memory: bool,
@@ -387,7 +378,7 @@ impl AccountCommandHandler {
         if storage as u8 + max_memory as u8 + monthly_memory as u8 > 1 {
             bail!("only one limit can be changed per command");
         }
-        let account_id = self.select_account_id_or_err(account_id).await?;
+        let account_id = self.select_account_id_or_err(account).await?;
         let clients = self.ctx.golem_clients().await?;
         if storage || (!max_memory && !monthly_memory) {
             clients
@@ -410,15 +401,19 @@ impl AccountCommandHandler {
                 .await
                 .map_service_error()?;
         }
-        self.cmd_limits_show(Some(account_id)).await
+        self.cmd_limits_show(AccountScopeArgs {
+            account: None,
+            account_id: Some(account_id),
+        })
+        .await
     }
 
     async fn cmd_permission_share_list(
         &self,
-        account_id: Option<AccountId>,
+        account: AccountScopeArgs,
         received: bool,
     ) -> anyhow::Result<()> {
-        let account_id = self.select_account_id_or_err(account_id).await?;
+        let account_id = self.select_account_id_or_err(account).await?;
         let shares = if received {
             self.ctx
                 .golem_clients()
@@ -460,10 +455,10 @@ impl AccountCommandHandler {
 
     async fn cmd_permission_share_get_by_name(
         &self,
-        account_id: Option<AccountId>,
+        account: AccountScopeArgs,
         name: String,
     ) -> anyhow::Result<()> {
-        let account_id = self.select_account_id_or_err(account_id).await?;
+        let account_id = self.select_account_id_or_err(account).await?;
         let share = self
             .ctx
             .golem_clients()
@@ -482,12 +477,12 @@ impl AccountCommandHandler {
 
     async fn cmd_permission_share_new(
         &self,
-        account_id: Option<AccountId>,
+        account: AccountScopeArgs,
         target_account_email: String,
         name: String,
         grants: PermissionShareGrantArgs,
     ) -> anyhow::Result<()> {
-        let account_id = self.select_account_id_or_err(account_id).await?;
+        let account_id = self.select_account_id_or_err(account).await?;
         let share = self
             .ctx
             .golem_clients()
@@ -565,15 +560,8 @@ impl AccountCommandHandler {
         Ok(())
     }
 
-    async fn get(&self, account_id: Option<AccountId>) -> anyhow::Result<Account> {
-        Ok(self
-            .ctx
-            .golem_clients()
-            .await?
-            .account
-            .get_account(&self.select_account_id_or_err(account_id).await?.0)
-            .await
-            .map_service_error()?)
+    async fn get(&self, account: AccountScopeArgs) -> anyhow::Result<Account> {
+        self.select_account_or_err(account).await
     }
 
     async fn get_permission_share(
@@ -596,11 +584,46 @@ impl AccountCommandHandler {
 
     pub async fn select_account_id_or_err(
         &self,
-        account_id: Option<AccountId>,
+        account: AccountScopeArgs,
     ) -> anyhow::Result<AccountId> {
-        match account_id {
-            Some(account_id) => Ok(account_id),
-            None => Ok(self.account_id_or_err().await?),
+        match (account.account, account.account_id) {
+            (Some(email), None) => Ok(self
+                .ctx
+                .golem_clients()
+                .await?
+                .account
+                .get_account_by_email(&email)
+                .await
+                .map_service_error()?
+                .id),
+            (None, Some(account_id)) => Ok(account_id),
+            (None, None) => Ok(self.account_id_or_err().await?),
+            (Some(_), Some(_)) => unreachable!("clap rejects conflicting account scope flags"),
+        }
+    }
+
+    pub async fn select_account_or_err(
+        &self,
+        account: AccountScopeArgs,
+    ) -> anyhow::Result<Account> {
+        let clients = self.ctx.golem_clients().await?;
+        match (account.account, account.account_id) {
+            (Some(email), None) => Ok(clients
+                .account
+                .get_account_by_email(&email)
+                .await
+                .map_service_error()?),
+            (None, Some(account_id)) => Ok(clients
+                .account
+                .get_account(&account_id.0)
+                .await
+                .map_service_error()?),
+            (None, None) => Ok(clients
+                .account
+                .get_account(&clients.account_id().0)
+                .await
+                .map_service_error()?),
+            (Some(_), Some(_)) => unreachable!("clap rejects conflicting account scope flags"),
         }
     }
 }

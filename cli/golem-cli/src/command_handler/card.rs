@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::command::card::CardSubcommand;
+use crate::command::shared_args::AccountScopeArgs;
 use crate::command_handler::Handlers;
 use crate::command_handler::agent::AgentCommandHandler;
 use crate::context::Context;
@@ -22,7 +23,6 @@ use crate::model::agent::RawAgentId;
 use crate::model::card::{CardGetView, CardListView, CardRevokeView};
 use anyhow::bail;
 use golem_client::api::{CardClient, WorkerClient};
-use golem_common::model::account::AccountId;
 use golem_common::model::card::CardId;
 use std::sync::Arc;
 
@@ -78,7 +78,7 @@ impl CardCommandHandler {
     pub async fn handle_command(&self, subcommand: CardSubcommand) -> anyhow::Result<()> {
         match subcommand {
             CardSubcommand::List {
-                account_id,
+                account,
                 agent,
                 include_root,
                 include_permission_shares,
@@ -86,7 +86,7 @@ impl CardCommandHandler {
                 include_agent_initials,
             } => {
                 self.cmd_list(
-                    account_id.account_id,
+                    account,
                     agent,
                     CardListFilter::from_flags(
                         include_root,
@@ -104,7 +104,7 @@ impl CardCommandHandler {
 
     async fn cmd_list(
         &self,
-        account_id: Option<AccountId>,
+        account: AccountScopeArgs,
         agent: Option<RawAgentId>,
         filter: CardListFilter,
     ) -> anyhow::Result<()> {
@@ -115,7 +115,11 @@ impl CardCommandHandler {
             return self.cmd_list_agent_wallet(agent).await;
         }
 
-        let account_id = account_id.unwrap_or(*self.ctx.golem_clients().await?.account_id());
+        let account_id = self
+            .ctx
+            .account_handler()
+            .select_account_id_or_err(account)
+            .await?;
         let cards = self
             .ctx
             .golem_clients()

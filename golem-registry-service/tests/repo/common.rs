@@ -1735,6 +1735,133 @@ pub async fn test_agent_secret_get_revision_include_deleted(deps: &Deps) {
     check!(get_agent_secret_initial_revision(deps, &secret, true).await);
 }
 
+pub async fn test_atomic_retry_policy_and_agent_secret_lookups(deps: &Deps) {
+    use golem_common::model::retry_policy::{RetryPolicyId, RetryPolicyRevision};
+    use golem_registry_service::repo::model::retry_policy::{
+        RetryPolicyCreationRecord, RetryPolicyRepoError,
+    };
+
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let environment_id = EnvironmentId(env.revision.environment_id);
+    let actor = AccountId(owner.revision.account_id);
+
+    let retry_id = RetryPolicyId::new();
+    let retry = RetryPolicyCreationRecord::new(
+        retry_id,
+        environment_id,
+        "retry.with.dots".to_string(),
+        10,
+        "true".to_string(),
+        "{}".to_string(),
+        actor,
+    );
+    let _ = deps.retry_policy_repo.create(retry.clone()).await.unwrap();
+    let found = deps
+        .retry_policy_repo
+        .get_for_environment_and_name(environment_id.0, &retry.name)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(found.revision.retry_policy_id == retry_id.0);
+    check!(
+        deps.retry_policy_repo
+            .get_for_environment_and_name(environment_id.0, "missing")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    check!(matches!(
+        deps.retry_policy_repo.create(retry.clone()).await,
+        Err(RetryPolicyRepoError::NameViolatesUniqueness)
+    ));
+    let mut deleted_retry = retry.revision;
+    deleted_retry.revision_id = RetryPolicyRevision::INITIAL.next().unwrap().into();
+    deleted_retry.audit = DeletableRevisionAuditFields::deletion(actor.0);
+    let _ = deps.retry_policy_repo.delete(deleted_retry).await.unwrap();
+    check!(
+        deps.retry_policy_repo
+            .get_for_environment_and_name(environment_id.0, &retry.name)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    for path in [
+        vec!["single".to_string()],
+        vec!["segment.with.dots".to_string()],
+        vec![
+            "multi".to_string(),
+            "segment".to_string(),
+            "path".to_string(),
+        ],
+    ] {
+        let secret_id = AgentSecretId::new();
+        let creation = AgentSecretCreationRecord::new(
+            secret_id,
+            environment_id,
+            CanonicalAgentSecretPath(path.clone()),
+            SchemaGraph::empty(),
+            None,
+            actor,
+        );
+        let _ = deps
+            .agent_secret_repo
+            .create(creation.clone())
+            .await
+            .unwrap();
+        let found = deps
+            .agent_secret_repo
+            .get_for_environment_and_path(environment_id.0, path.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        check!(found.revision.agent_secret_id == secret_id.0);
+        check!(matches!(
+            deps.agent_secret_repo.create(creation).await,
+            Err(golem_registry_service::repo::model::agent_secrets::AgentSecretRepoError::SecretViolatesUniqueness)
+        ));
+    }
+
+    let deleted_path = vec!["deleted".to_string(), "secret".to_string()];
+    let deleted_id = AgentSecretId::new();
+    let _ = deps
+        .agent_secret_repo
+        .create(AgentSecretCreationRecord::new(
+            deleted_id,
+            environment_id,
+            CanonicalAgentSecretPath(deleted_path.clone()),
+            SchemaGraph::empty(),
+            None,
+            actor,
+        ))
+        .await
+        .unwrap();
+    let _ = deps
+        .agent_secret_repo
+        .delete(
+            AgentSecretRevisionRecord::delete(deleted_id, AgentSecretRevision::INITIAL, actor)
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    check!(
+        deps.agent_secret_repo
+            .get_for_environment_and_path(environment_id.0, deleted_path)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    check!(
+        deps.agent_secret_repo
+            .get_for_environment_and_path(environment_id.0, vec!["missing".to_string()])
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
 pub async fn test_environment_create_concurrently(deps: &Deps) {
     let user = deps.create_account().await;
     let app = deps.create_application(user.revision.account_id).await;

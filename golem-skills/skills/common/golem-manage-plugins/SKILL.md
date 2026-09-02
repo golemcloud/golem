@@ -150,56 +150,36 @@ environments:
 ### Listing Available Plugins
 
 ```shell
-golem plugin list                     # List all registered plugins
+golem plugin list
+golem plugin list --account owner@example.com
+golem plugin list --account-id 2f6b30d9-bac2-4c67-9d4f-12ea89ba2211
 ```
 
-### Installing a Plugin on a Component (imperative)
+With no account option, the list includes plugins owned by the authenticated account and plugins granted to the selected environment. An explicit account lists plugins owned by that account. `--account` and `--account-id` conflict.
+
+### Inspecting and unregistering registry plugins
 
 ```shell
-golem component plugin install \
-  --component-name my-app:service \
-  --plugin-name golem-otlp-exporter \
-  --plugin-version "1.1.5" \
-  --priority 0 \
-  --param endpoint=http://localhost:4318 \
-  --param signals=traces,logs
+golem plugin get my-plugin 1.0.0
+golem plugin get --id 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890
+golem plugin unregister my-plugin 1.0.0
+golem plugin unregister --id 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890
 ```
 
-### Viewing Installed Plugins
+The name and version form requires both positional values and accepts `--account` or `--account-id`. The `--id` form conflicts with the positional identity and account scope. A positional UUID is a name, not an ID; use `--id` explicitly.
+
+Register a plugin from a JSON manifest, optionally for an explicit account:
 
 ```shell
-golem component plugin get \
-  --component-name my-app:service
+golem plugin register ./my-plugin.json
+golem plugin register ./my-plugin.json --account owner@example.com
 ```
 
-### Updating a Plugin
-
-```shell
-golem component plugin update \
-  --component-name my-app:service \
-  --plugin-to-update 0 \
-  --priority 1 \
-  --param endpoint=https://new-endpoint:4318
-```
-
-### Uninstalling a Plugin
-
-```shell
-golem component plugin uninstall \
-  --component-name my-app:service \
-  --plugin-to-update 0
-```
-
-## Declarative vs Imperative
-
-- **Declarative (golem.yaml)**: Preferred for repeatable setups. Plugins are installed/updated on `golem deploy`. Configuration lives in version control.
-- **Imperative (CLI)**: Useful for quick one-off installations, debugging, or environments where the manifest is not available.
-
-When using `golem deploy`, the manifest is the source of truth — any plugins defined in `golem.yaml` are reconciled with the deployed state.
+Plugin installation is declarative. The retired `component plugin` and `project plugin` workflows are not available. Define installations in `golem.yaml`; `golem deploy` reconciles the manifest with deployed state.
 
 ## Plugin Priority
 
-When multiple plugins are installed, `priority` determines their execution order. Plugins with **higher priority values are applied first**. Priority is set explicitly via the CLI's `--priority` flag; in `golem.yaml`, the order in the `plugins` list determines priority (first entry = highest priority).
+When multiple plugins are installed, the order in the manifest's `plugins` list determines priority (first entry = highest priority).
 
 ## Documentation
 

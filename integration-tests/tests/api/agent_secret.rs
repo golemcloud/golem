@@ -60,6 +60,13 @@ async fn create_agent_secret_with_value(deps: &EnvBasedTestDependencies) -> anyh
     }
 
     {
+        let fetched_secret = client
+            .get_environment_agent_secret(&env.id.0, &result.path.0)
+            .await?;
+        assert_eq!(fetched_secret, result);
+    }
+
+    {
         let all_environment_secrets = client.list_environment_agent_secrets(&env.id.0).await?;
         assert!(all_environment_secrets.values.contains(&result));
     }
