@@ -85,6 +85,11 @@ impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
                 err.to_string(),
                 api::error_code::INTERNAL_FILESYSTEM_ERROR,
             ),
+            ShardManagerError::Internal(details) => error(
+                shard_manager_error::Error::Unknown,
+                details,
+                api::error_code::INTERNAL_UNKNOWN,
+            ),
         }
     }
 }
