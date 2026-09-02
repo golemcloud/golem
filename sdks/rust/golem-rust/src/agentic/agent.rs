@@ -26,6 +26,14 @@ pub struct SnapshotData {
     pub mime_type: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct SnapshotRestoreContext {
+    pub principal: Principal,
+    pub agent_type: String,
+    pub parameters: SchemaValue,
+    pub phantom_id: Option<crate::Uuid>,
+}
+
 #[async_trait::async_trait(?Send)]
 pub trait BaseAgent {
     /// Gets the agent ID string of this agent.
@@ -50,8 +58,6 @@ pub trait BaseAgent {
         let (_, _, phantom_id) = parse_agent_id(&self.get_agent_id()).unwrap(); // Not user-provided string so we can assume it's always correct
         phantom_id.map(|id| id.into())
     }
-
-    async fn load_snapshot_base(&mut self, bytes: Vec<u8>) -> Result<(), String>;
 
     async fn save_snapshot_base(&self) -> Result<SnapshotData, String>;
 }

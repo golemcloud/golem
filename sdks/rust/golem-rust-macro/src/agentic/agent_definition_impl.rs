@@ -44,6 +44,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
         agent_is_durable,
         http_mount,
         snapshotting,
+        snapshotting_enabled,
     } = match parse_agent_definition_attributes(attrs) {
         Ok(v) => v,
         Err(err) => return err.to_compile_error().into(),
@@ -106,12 +107,14 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
 
             let load_snapshot_item = get_load_snapshot_item();
             let save_snapshot_item = get_save_snapshot_item();
+            let auto_snapshot_item = get_auto_snapshot_item(snapshotting_enabled);
             let agent_type_name_item =
                 get_agent_type_name_item(&agent_definition_trait.ident.to_string());
             let agent_implementation_annotation_item = get_agent_implementation_annotation_item();
 
             agent_definition_trait.items.push(load_snapshot_item);
             agent_definition_trait.items.push(save_snapshot_item);
+            agent_definition_trait.items.push(auto_snapshot_item);
             agent_definition_trait.items.push(registration_function);
             agent_definition_trait.items.push(agent_type_name_item);
             agent_definition_trait
@@ -135,8 +138,32 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
 
 fn get_load_snapshot_item() -> syn::TraitItem {
     syn::parse_quote! {
-        async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
+        async fn load_snapshot(
+            _bytes: Vec<u8>,
+            _context: golem_rust::agentic::SnapshotRestoreContext,
+        ) -> Result<Self, String> where Self: Sized {
             Err("load_snapshot not implemented".to_string())
+        }
+    }
+}
+
+fn get_auto_snapshot_item(enabled: bool) -> syn::TraitItem {
+    if enabled {
+        syn::parse_quote! {
+            #[doc(hidden)]
+            fn __golem_auto_load_snapshot(bytes: &[u8]) -> Result<Self, String>
+            where Self: Sized + golem_rust::serde::Serialize + golem_rust::serde::de::DeserializeOwned {
+                golem_rust::serde_json::from_slice::<Self>(bytes)
+                    .map_err(|e| format!("Failed to deserialize agent snapshot: {}", e))
+            }
+
+        }
+    } else {
+        syn::parse_quote! {
+            #[doc(hidden)]
+            fn __golem_auto_load_snapshot(_bytes: &[u8]) -> Result<Self, String> where Self: Sized {
+                Err("snapshotting is disabled".to_string())
+            }
         }
     }
 }
