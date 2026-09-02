@@ -18,7 +18,13 @@ package golem.runtime.autowire
 
 import golem.Principal
 import golem.config.{ConfigHolder, ConfigLoader}
-import golem.runtime.{AgentImplementationType, AsyncImplementationMethod, SyncImplementationMethod}
+import golem.runtime.{
+  AgentImplementationType,
+  AsyncImplementationMethod,
+  SnapshotRestoreContext,
+  SyncImplementationMethod
+}
+import golem.FutureInterop
 
 private[autowire] object AgentImplementationRuntime {
   def register[Trait, Ctor](
@@ -52,7 +58,28 @@ private[autowire] object AgentImplementationRuntime {
       constructor = constructor,
       bindings = bindings,
       mode = mode,
-      snapshotHandlers = implType.snapshotHandlers
+      snapshotHandlers = implType.snapshotHandlers,
+      restoreInstance = implType.snapshotHandlers.map {
+        handlers => (bytes, agentId, identityInput, phantomId, principal) =>
+          SchemaPayload.decode[Ctor](identityInput)(implType.ctorCodec) match {
+            case Left(error)     => scala.scalajs.js.Promise.reject(new IllegalArgumentException(error.toString))
+            case Right(identity) =>
+              val fields = identity match {
+                case ()                => Vector.empty
+                case values: Vector[?] => values.asInstanceOf[Vector[Any]]
+                case value             => Vector(value)
+              }
+              val freshConfig = implType.configBuilder.map(builder => ConfigLoader.createLazyConfig(builder))
+              val context     = SnapshotRestoreContext(fields, agentId, phantomId, principal, freshConfig)
+              FutureInterop.toPromise(
+                handlers
+                  .load(bytes, context)
+                  .map(instance => RestoredInstance(instance, freshConfig))(
+                    scala.concurrent.ExecutionContext.parasitic
+                  )
+              )
+          }
+      }
     )
 
     AgentRegistry.register(definition)

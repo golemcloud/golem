@@ -20,8 +20,10 @@ import golem.host.{SchemaWireInterop, ToolWireInterop}
 import golem.host.js.{JsSnapshot, PrincipalConverter}
 import golem.host.js.schema.{JsAgentError, JsSchemaValueTree, JsTypedSchemaValue}
 import golem.host.js.tool.{JsInvocationResult, JsTool, JsWasiInputStream}
+import golem.config.ConfigHolder
 import golem.runtime.autowire.AgentRegistry
 import golem.runtime.rpc.SchemaRpcCodec
+import golem.runtime.rpc.host.AgentHostApi
 import golem.runtime.tool.ToolRegistry
 import golem.tool.wire.WitToolError
 import golem.FutureInterop
@@ -46,6 +48,15 @@ object Guest {
   private var resolved: js.UndefOr[Resolved]                   = js.undefined
   private var initializationPrincipal: Option[golem.Principal] = None
   private final case class Resolved(defn: golem.runtime.autowire.AgentDefinition[Any], instance: Any)
+
+  private[runtime] def resetForTesting(): Unit = {
+    resolved = js.undefined
+    initializationPrincipal = None
+    ConfigHolder.clear()
+  }
+
+  private[runtime] def stateForTesting: (Boolean, Option[golem.Principal]) =
+    (!js.isUndefined(resolved), initializationPrincipal)
 
   private def invalidType(message: String): JsAgentError =
     JsAgentError.invalidType(message)
@@ -322,72 +333,100 @@ object Guest {
       }
   }
 
+  private[runtime] def decodeSnapshotPayload(
+    bytes: Array[Byte],
+    mimeType: String
+  ): Either[String, (golem.Principal, Array[Byte])] =
+    if (mimeType == "application/json") {
+      Json.parse(bytes) match {
+        case Left(error)     => Left(s"Failed to parse JSON snapshot envelope: $error")
+        case Right(envelope) =>
+          envelope.get("version").one.toOption match {
+            case None                                  => Left("JSON snapshot envelope is missing 'version'")
+            case Some(version) if version.print != "1" =>
+              Left(s"Unsupported JSON snapshot version: ${version.print}")
+            case Some(_) =>
+              envelope.get("principal").one.toOption match {
+                case None                => Left("JSON snapshot envelope is missing 'principal'")
+                case Some(principalJson) =>
+                  PrincipalConverter.fromJson(principalJson.printBytes) match {
+                    case Left(error)      => Left(s"Failed to deserialize snapshot principal: $error")
+                    case Right(principal) =>
+                      envelope.get("state").one.toOption match {
+                        case None        => Left("JSON snapshot envelope is missing 'state'")
+                        case Some(state) => Right((principal, state.printBytes))
+                      }
+                  }
+              }
+          }
+      }
+    } else if (bytes.isEmpty) {
+      Left("Binary snapshot envelope is empty")
+    } else {
+      val version = bytes(0) & 0xff
+      version match {
+        case 1 => Right((golem.Principal.Anonymous, bytes.drop(1)))
+        case 2 =>
+          if (bytes.length < 5) Left("Version 2 snapshot too short for principal length")
+          else {
+            val principalLen =
+              ((bytes(1) & 0xff) << 24) | ((bytes(2) & 0xff) << 16) |
+                ((bytes(3) & 0xff) << 8) | (bytes(4) & 0xff)
+            if (principalLen < 0 || principalLen > bytes.length - 5)
+              Left("Version 2 snapshot too short for principal data")
+            else {
+              val principalEnd   = 5 + principalLen
+              val principalBytes = java.util.Arrays.copyOfRange(bytes, 5, principalEnd)
+              PrincipalConverter.fromJson(principalBytes) match {
+                case Left(error)      => Left(s"Failed to deserialize snapshot principal: $error")
+                case Right(principal) => Right((principal, bytes.drop(principalEnd)))
+              }
+            }
+          }
+        case other => Left(s"Unsupported snapshot version: $other")
+      }
+    }
+
   @JSExportTopLevel("loadSnapshot")
   object LoadSnapshot {
     @JSExport
     def load(snapshot: JsSnapshot): js.Promise[Unit] =
-      if (js.isUndefined(resolved)) {
-        FutureInterop.toPromise(Future.successful(()))
+      if (!js.isUndefined(resolved)) {
+        js.Promise.reject(customError("Agent is already initialized in this container"))
       } else {
-        val r = resolved.asInstanceOf[Resolved]
-        r.defn.snapshotHandlers match {
-          case Some(handlers) =>
-            val bytes                   = fromUint8Array(snapshot.payload)
-            val (principal, agentState) =
-              if (snapshot.mimeType == "application/json") {
-                Json.parse(bytes) match {
-                  case Right(envelope) =>
-                    val p = envelope
-                      .get("principal")
-                      .one
-                      .toOption
-                      .flatMap(pJson => PrincipalConverter.fromJson(pJson.printBytes).toOption)
-                      .getOrElse(initializationPrincipal.getOrElse(golem.Principal.Anonymous))
-                    val stateBytes = envelope
-                      .get("state")
-                      .one
-                      .toOption
-                      .map(_.printBytes)
-                      .getOrElse(bytes)
-                    (p, stateBytes)
-                  case Left(_) =>
-                    (initializationPrincipal.getOrElse(golem.Principal.Anonymous), bytes)
+        val ambientAgentId = AgentHostApi.getSelfMetadata().agentId.agentId
+        AgentHostApi.parseAgentId(ambientAgentId) match {
+          case Left(error)         => js.Promise.reject(invalidAgentId(error))
+          case Right(agentIdParts) =>
+            AgentRegistry.get(agentIdParts.agentTypeName) match {
+              case None                                        => js.Promise.reject(invalidType(s"Invalid agent '${agentIdParts.agentTypeName}'"))
+              case Some(defn) if defn.snapshotHandlers.isEmpty =>
+                js.Promise.reject(customError(s"Agent '${agentIdParts.agentTypeName}' has no snapshot handlers"))
+              case Some(defn) =>
+                decodeSnapshotPayload(fromUint8Array(snapshot.payload), snapshot.mimeType) match {
+                  case Left(error)                    => js.Promise.reject(error)
+                  case Right((principal, agentState)) =>
+                    FutureInterop.toPromise(
+                      FutureInterop
+                        .fromPromise(
+                          defn.restoreAny(
+                            agentState,
+                            ambientAgentId,
+                            agentIdParts.payload.value,
+                            agentIdParts.phantom,
+                            principal
+                          )
+                        )
+                        .map { restored =>
+                          val newResolved = Resolved(defn, restored.instance)
+                          restored.config.foreach(ConfigHolder.set)
+                          initializationPrincipal = Some(principal)
+                          resolved = newResolved
+                          ()
+                        }
+                    )
                 }
-              } else if (bytes.nonEmpty) {
-                val version = bytes(0) & 0xff
-                version match {
-                  case 1 =>
-                    val p = initializationPrincipal.getOrElse(golem.Principal.Anonymous)
-                    (p, bytes.drop(1))
-                  case 2 =>
-                    if (bytes.length < 5)
-                      throw new RuntimeException("Version 2 snapshot too short for principal length")
-                    val principalLen =
-                      ((bytes(1) & 0xff) << 24) | ((bytes(2) & 0xff) << 16) |
-                        ((bytes(3) & 0xff) << 8) | (bytes(4) & 0xff)
-                    val principalEnd = 5 + principalLen
-                    if (bytes.length < principalEnd)
-                      throw new RuntimeException("Version 2 snapshot too short for principal data")
-                    val principalBytes = java.util.Arrays.copyOfRange(bytes, 5, principalEnd)
-                    val p              = PrincipalConverter.fromJson(principalBytes) match {
-                      case Right(v)  => v
-                      case Left(err) => throw new RuntimeException(s"Failed to deserialize principal: $err")
-                    }
-                    (p, bytes.drop(principalEnd))
-                  case other =>
-                    throw new RuntimeException(s"Unsupported snapshot version: $other")
-                }
-              } else {
-                (initializationPrincipal.getOrElse(golem.Principal.Anonymous), bytes)
-              }
-            initializationPrincipal = Some(principal)
-            FutureInterop.toPromise(
-              handlers.load(r.instance, agentState).map { newInstance =>
-                resolved = Resolved(r.defn, newInstance)
-              }
-            )
-          case None =>
-            FutureInterop.toPromise(Future.successful(()))
+            }
         }
       }
   }
