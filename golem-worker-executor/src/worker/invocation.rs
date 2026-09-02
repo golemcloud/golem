@@ -893,9 +893,10 @@ pub struct LoweredInvocation {
     /// (e.g., the agent method name "do-something")
     pub display_name: String,
     /// `Some(method_name)` when the invocation targets an `AgentMethod` whose
-    /// `read_only` metadata is set. The worker-executor uses this to enable the
-    /// read-only invocation strictness mode for the duration of the call, trapping
-    /// outgoing HTTP / RPC host calls with `AgentError::ReadOnlyViolation`.
+    /// `read_only` metadata is set, or `Some("load-snapshot")` for the specially
+    /// restricted snapshot-loading lifecycle call. The worker-executor uses this
+    /// to enable read-only invocation strictness for the duration of the call,
+    /// trapping outgoing HTTP / RPC host calls with `AgentError::ReadOnlyViolation`.
     pub read_only_method: Option<String>,
     /// The typed export call to perform.
     call: LoweredCall,
@@ -1119,7 +1120,7 @@ pub fn lower_invocation(
         }),
         AgentInvocation::LoadSnapshot { snapshot, .. } => Ok(LoweredInvocation {
             display_name: "load-snapshot".to_string(),
-            read_only_method: None,
+            read_only_method: Some("load-snapshot".to_string()),
             call: LoweredCall::LoadSnapshot {
                 snapshot: snapshot.into(),
             },
@@ -1248,6 +1249,7 @@ mod tests {
     use golem_common::model::IdempotencyKey;
     use golem_common::model::agent::{AgentTypeName, Principal};
     use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::oplog::RawSnapshotData;
     use golem_common::schema::TypedSchemaValue;
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, NamedField, OutputSchema,
@@ -1351,6 +1353,40 @@ mod tests {
         let lowered = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
             .expect("valid input should lower");
         assert_eq!(lowered.display_name, METHOD_NAME);
+        assert!(lowered.read_only_method.is_none());
+    }
+
+    #[test]
+    fn load_snapshot_uses_read_only_strictness() {
+        let lowered = lower_invocation(
+            AgentInvocation::LoadSnapshot {
+                idempotency_key: IdempotencyKey::new("snapshot-load".to_string()),
+                snapshot: RawSnapshotData {
+                    data: vec![1, 2, 3],
+                    mime_type: "application/octet-stream".to_string(),
+                },
+            },
+            &metadata(),
+            Some(&agent_id()),
+        )
+        .expect("snapshot load should lower");
+
+        assert_eq!(lowered.display_name, "load-snapshot");
+        assert_eq!(lowered.read_only_method.as_deref(), Some("load-snapshot"));
+    }
+
+    #[test]
+    fn save_snapshot_does_not_use_read_only_strictness() {
+        let lowered = lower_invocation(
+            AgentInvocation::SaveSnapshot {
+                idempotency_key: IdempotencyKey::new("snapshot-save".to_string()),
+            },
+            &metadata(),
+            Some(&agent_id()),
+        )
+        .expect("snapshot save should lower");
+
+        assert_eq!(lowered.display_name, "save-snapshot");
         assert!(lowered.read_only_method.is_none());
     }
 
