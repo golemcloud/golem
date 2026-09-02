@@ -458,6 +458,12 @@ pub mod oplog_processor {
 ))]
 pub mod agentic;
 
+#[cfg(any(
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
+pub use agentic::reflection::*;
+
 #[cfg(feature = "durability")]
 pub mod durability;
 
