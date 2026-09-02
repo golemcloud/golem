@@ -607,6 +607,7 @@ async fn run_chaos(
                 ChaosScenarioArg::S15A => chaos::ScenarioCode::S15A,
                 ChaosScenarioArg::S15B => chaos::ScenarioCode::S15B,
                 ChaosScenarioArg::S15C => chaos::ScenarioCode::S15C,
+                ChaosScenarioArg::S23 => chaos::ScenarioCode::S23,
             };
             let config = suite
                 .scenario(code, allow_disabled)
@@ -664,7 +665,8 @@ async fn run_chaos(
                 | chaos::ScenarioCode::S16
                 | chaos::ScenarioCode::S17
                 | chaos::ScenarioCode::S18
-                | chaos::ScenarioCode::S22) => {
+                | chaos::ScenarioCode::S22
+                | chaos::ScenarioCode::S23) => {
                     chaos::scenarios::storage_fault::run(
                         code, &config, &manifest, &deps, &signals, &outputs,
                     )

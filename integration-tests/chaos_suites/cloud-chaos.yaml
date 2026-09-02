@@ -1889,3 +1889,177 @@ scenarios:
       delaySecs: 5
 
     signalTimeoutSecs: 1800
+
+  # ---------------------------------------------------------------------------
+  # S23 — indexed-oplog PostgreSQL latency degradation (GOL-525)
+  #
+  # S14 with the cut replaced by a delay, and the last empty cell of the storage
+  # matrix: outage and latency are now both covered on the key-value cluster
+  # (S16/S22 and S15), on the Redis cache (S18 and S17), and here on the
+  # indexed-oplog cluster (S14 and this).
+  #
+  # The fault shape, the phase lengths, the workload and the thresholds are
+  # S15's, unchanged, so the two reports differ only in which store was slowed.
+  #
+  # ── Why this one has no control stream ─────────────────────────────────────
+  #
+  # S15 and S17 each keep one stream on the far side of the delay, and that
+  # stream holding its pace is what proves the fault reached only what it aimed
+  # at. Nothing here can play that part, because every agent commits its oplog
+  # to this cluster:
+  #
+  #   * durable — `PrimaryOplogService` *is* the indexed storage, so every
+  #     commit is an `append_many` against `index_storage`.
+  #   * ephemeral — never opens the primary, but `EphemeralOplogState::commit`
+  #     appends to `lower.first()`, and with `indexed_storage_layers: 2` that
+  #     first lower layer is a `CompressedOplogArchiveService` on the same
+  #     indexed storage. So it pays an indexed write too, one layer down.
+  #   * promise — its keys are on the key-value cluster, which this leaves
+  #     alone. What it pays is the oplog commit of the durable agent underneath
+  #     it, twice per operation.
+  #   * scheduled — the scheduler's schema is also on the key-value cluster, so
+  #     claims and acknowledgements are outside this delay. What is inside it is
+  #     the fired invocation's own commit.
+  #
+  # And the write is on the caller's path in all four, not merely somewhere in
+  # the lifecycle: `InvocationHooks::on_agent_invocation_started` commits with
+  # `CommitLevel::Always` *before* the invocation body runs, for every agent
+  # mode.
+  #
+  # So `steady` is empty and the run asserts nothing about routing. The evidence
+  # that the delay reached only this cluster has to come from metrics instead,
+  # and the runbook says which: `db_*{svc="oplog"}` and `svc="compressed_oplog"`
+  # are this cluster, while `svc="worker"`, `"key_value"`, `"promise"` and
+  # `"scheduler_storage"` are the one that should stay flat. That `svc` names
+  # the caller rather than the pool is the correction S14 shipped.
+  #
+  # ── The arithmetic, and the gate S15 does not have ─────────────────────────
+  #
+  # golem-dev sets `GOLEM__INDEXED_STORAGE__CONFIG__MAX_CONCURRENT_OPS` to 64 in
+  # front of a 96-connection pool, and `PostgresIndexedStorage::configured`
+  # turns that setting into a `Semaphore`. The gate is therefore tighter than
+  # the pool, and it is the gate that binds: under a 500ms one-way delay it
+  # clears about 128 indexed operations per second per pod where the pool alone
+  # would clear 192. No other store in the suite has such a gate, which makes
+  # this the one run that can measure what it costs.
+  #
+  # Nothing here predicts a multiple from that. S15 counted round trips, said
+  # 17x, and measured 644x, because counting round trips gives the cost of one
+  # operation running alone and queueing was the whole answer. The same applies
+  # with more force here, since this cluster carries the heaviest write traffic
+  # the platform produces.
+  #
+  # ── What could break, which is not what S15 could break ────────────────────
+  #
+  # A delay produces no errors, so the indexed retry budget — 200 attempts with
+  # a 10s cap on golem-dev — should never be entered at all. The way in is
+  # queueing rather than failure: an acquire that waits past sqlx's default 30s
+  # yields `PoolTimedOut`, `RepoError::is_transient` classifies it transient, and
+  # `retry_storage_op` retries. That path re-serializes the whole commit batch
+  # per attempt (GOL-480), so a run that enters it turns a code reading into a
+  # measurement. A run that does not enter it says the gate held.
+  #
+  # This is also the first scenario to put the on-executor oplog sweep under a
+  # degraded indexed store: its scan and its archive reads both cross this
+  # cluster and take permits from the same semaphore. Recorded, not asserted.
+  # ---------------------------------------------------------------------------
+  - code: S23
+    name: indexed-oplog-postgres-latency
+    enabled: true
+
+    fault:
+      # As S15 and S17. Recorded for the archive rather than acted on: the
+      # workflow picks the manifest by scenario code and reads the Chaos Mesh
+      # kind out of the manifest itself.
+      kind: network-delay
+      target: worker-executor
+      # Every executor. A store that is slow for only some of them is a routing
+      # fault wearing a database's clothes.
+      mode: all
+      # Must equal phases.faultSecs; see the note on S16.
+      durationSecs: 300
+
+    phases:
+      # S15's, unchanged, so the pair is readable. Long enough for a memory
+      # series with a slope, for a steady state rather than a transient, and for
+      # a pool that is going to saturate to actually fill.
+      baselineSecs: 300
+      faultSecs: 300
+      recoverySecs: 420
+
+    workload:
+      # Identical to the other six. Comparability is the whole reason the
+      # storage runs share a workload, and this one is half of a matched pair
+      # with S15.
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 0
+      promiseAgents: 50
+      ratePerSec: 100
+
+    scheduled:
+      targets: 100
+      intervalMillis: 2000
+      leadSecs: 10
+      # As the others. Unlike S15 the scheduler is *outside* this delay, so a
+      # claim costs what it always did and 240s is not a number this run can
+      # approach. A lease expiry here would be a real finding rather than a
+      # threshold set too tight — and it would mean the delay reached a cluster
+      # it does not name.
+      leaseBudgetSecs: 240
+
+    storage:
+      # The indexed Aurora cluster's writer endpoint, carrying the oplog and
+      # nothing else. The same endpoint S14 cuts. Neither the key-value cluster
+      # nor Redis is touched: slowing a second store would leave every finding
+      # unattributable.
+      endpoint: golem-postgres-dev-indexed.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+
+      expect:
+        # As S15 and S17. Under a delay nothing is supposed to fall silent, so
+        # silence is not available as evidence that the fault landed and time
+        # has to stand in for it.
+        kind: latency-degradation
+
+        # All four, per the walk-through above. This is the only entry in the
+        # suite that names every stream, and it is not a hedge: each one has a
+        # named synchronous write to this cluster on its caller's path.
+        slowed: [durable, ephemeral, promise, scheduled]
+
+        # 2.0, as S15 and S17. The floor exists to fail a run where the netem
+        # rule never applied, which leaves every stream near 1.0x. Setting it
+        # near a predicted figure would instead assert that the prediction is
+        # right, and the prediction is the thing under test.
+        slowdownFloor: 2.0
+
+        # Deliberately empty, and the one field of this entry that is a loss
+        # rather than a copy. See the walk-through: there is no stream on the
+        # far side of this delay to hold up as evidence, so the routing check
+        # S15 and S17 get for free has to be done by hand against the `svc`
+        # series named above.
+        steady: []
+
+        # A delay should cost time, not work. Held at 50 for comparability with
+        # S15, and read with S15's lesson attached: throughput is concurrency
+        # over latency, so once a stream's in-flight budget saturates a stream
+        # slowed by three orders of magnitude *must* fall below any serving
+        # floor. `outage.rs` suppresses the finding when the stream's own
+        # slowdown accounts for the shortfall, which is the case this run is
+        # most likely to produce on every stream at once.
+        servingFloorPercent: 50
+
+      # Recorded, not asserted. Expected to be near zero: nothing was ever
+      # unreachable, so there is no reconnect to wait for and no backlog to
+      # drain, only the last few in-flight commits finishing at their slower
+      # pace. If an executor was lost to the pool timeout this is the number
+      # that shows it, as the replacement has to reload its agents first.
+      recoveryBudgetSecs: 60
+
+    retryPolicy:
+      # Identical to the other six. Nothing should time out and so nothing
+      # should retry; a retry count above zero is itself a finding.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800

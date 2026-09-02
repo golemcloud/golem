@@ -116,6 +116,14 @@ pub enum ScenarioCode {
     S15B,
     /// S15B plus `promise`. The remaining step, `scheduled`, is S15 itself.
     S15C,
+    /// The indexed-oplog PostgreSQL cluster still reachable but slowed. S14's
+    /// mirror, and the last empty cell of the storage matrix.
+    ///
+    /// The one delay in the suite with no control stream. Every agent commits
+    /// its oplog to this cluster, `ephemeral` included: it never opens the
+    /// primary, but the first layer of the stack it does open is a compressed
+    /// archive on the same indexed storage.
+    S23,
 }
 
 impl ScenarioCode {
@@ -141,13 +149,14 @@ impl ScenarioCode {
             ScenarioCode::S15A => "S15A",
             ScenarioCode::S15B => "S15B",
             ScenarioCode::S15C => "S15C",
+            ScenarioCode::S23 => "S23",
         }
     }
 
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 20] = [
+    pub const ALL: [ScenarioCode; 21] = [
         ScenarioCode::S1,
         ScenarioCode::S3,
         ScenarioCode::S5,
@@ -168,6 +177,7 @@ impl ScenarioCode {
         ScenarioCode::S17,
         ScenarioCode::S18,
         ScenarioCode::S22,
+        ScenarioCode::S23,
     ];
 
     pub fn parse(s: &str) -> Option<Self> {
@@ -1924,6 +1934,7 @@ mod tests {
         assert_eq!(ScenarioCode::parse("s15"), Some(ScenarioCode::S15));
         assert_eq!(ScenarioCode::parse("s15a"), Some(ScenarioCode::S15A));
         assert_eq!(ScenarioCode::parse("s15c"), Some(ScenarioCode::S15C));
+        assert_eq!(ScenarioCode::parse("s23"), Some(ScenarioCode::S23));
         assert_eq!(ScenarioCode::parse("S99"), None);
     }
 
@@ -1977,7 +1988,8 @@ mod tests {
                 | ScenarioCode::S16
                 | ScenarioCode::S17
                 | ScenarioCode::S18
-                | ScenarioCode::S22 => {
+                | ScenarioCode::S22
+                | ScenarioCode::S23 => {
                     entry.require_workload().unwrap();
                     entry.require_scheduled().unwrap();
                     entry.require_storage().unwrap();

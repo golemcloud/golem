@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Storage fault: the shared choreography behind S14, S15, S16, S17, S18 and
-//! S22.
+//! Storage fault: the shared choreography behind S14, S15, S16, S17, S18, S22
+//! and S23.
 //!
-//! All six codes run this module. They differ in which store the fault is
+//! All seven codes run this module. They differ in which store the fault is
 //! aimed at, what it does to that store and for how long, all of which are
 //! suite settings, and in what a reader should expect of the result:
 //!
@@ -48,10 +48,19 @@
 //!   opposite set of streams, and it carries a risk the Redis delay does not:
 //!   this side's connection pools are bounded and its failure path is a panic.
 //!   See the suite entry for the arithmetic.
+//! * **S23** (GOL-525) slows the indexed cluster instead of cutting it, so it
+//!   is to S14 what S15 is to S16, and it fills the last empty cell of the
+//!   matrix. It is the only delay here with no control stream, because every
+//!   agent commits its oplog to the store being slowed — `ephemeral` included,
+//!   one layer down. That costs the run the routing check the other two delays
+//!   get for free, and the evidence has to come from the `svc`-labelled storage
+//!   series instead. It also meets the one concurrency gate the suite has:
+//!   `GOLEM__INDEXED_STORAGE__CONFIG__MAX_CONCURRENT_OPS`, a semaphore tighter
+//!   than the pool behind it.
 //!
-//! The driver is the same in all six because the difference is one of
+//! The driver is the same in all seven because the difference is one of
 //! expectation, not of choreography. Nothing below asserts on which outcome
-//! happened: the account it produces answers all five questions, and the
+//! happened: the account it produces answers all seven questions, and the
 //! oracles that fail the build — the scheduled-fire account and the
 //! exactly-once account — are the ones every one of them shares.
 //!
@@ -81,11 +90,12 @@
 //! keeps the ability to *record* what it did and loses the ability to know
 //! *what it is doing*.
 //!
-//! The **indexed** cluster that S14 cuts carries the oplog and nothing else.
-//! Promises still resolve, the scheduler still claims and acknowledges on time,
-//! the running-workers set is still writable. What goes is the ability to
-//! commit anything durable at all, which is the opposite arrangement: the
-//! platform knows exactly what it is doing and cannot record any of it.
+//! The **indexed** cluster that S14 cuts and S23 slows carries the oplog and
+//! nothing else. Promises still resolve, the scheduler still claims and
+//! acknowledges on time, the running-workers set is still writable. What goes
+//! is the ability to commit anything durable at all, which is the opposite
+//! arrangement: the platform knows exactly what it is doing and cannot record
+//! any of it.
 //!
 //! The **Redis cache** that S18 and S17 aim at is not a cluster at all but the
 //! front half of the key-value layer. `NamespaceRoutedKeyValueStorage` sends the `Worker`,
@@ -110,6 +120,14 @@
 //! deliberately so: there the streams that keep working — or keep their pace —
 //! are evidence rather than noise, which is why they are judged by their own
 //! expectations. See [`crate::chaos::OutageExpectation`].
+//!
+//! S23 is neither, and it is worth being explicit about which of the two it
+//! resembles. It aims at one store rather than at half of a split layer, but
+//! every stream reaches that store, so it has the *cuts'* problem of having
+//! nowhere to look for a control while making the *delays'* claim about
+//! degradation. Its `steady` list is therefore empty and the routing check is
+//! left to the reader with the storage series to do it against, which the
+//! runbook names. See the suite entry for which write each stream makes.
 //!
 //! ## The control is the baseline, not another pod
 //!

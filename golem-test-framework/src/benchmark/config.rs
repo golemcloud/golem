@@ -276,6 +276,10 @@ pub enum ChaosScenarioArg {
     S15B,
     /// S15B plus `promise`.
     S15C,
+    /// The indexed-oplog PostgreSQL cluster slowed rather than removed. S14's
+    /// mirror, and the one delay with no control stream: every agent commits
+    /// its oplog to that cluster.
+    S23,
 }
 
 /// Density subcommand action.
