@@ -46,6 +46,9 @@ use golem_worker_executor::durable_host::tool::{
     ToolOperationLaneMetadata, ToolOperationMetadata, ToolOperationWinnerMetadata,
     ToolOwnerFailureMetadata,
 };
+use golem_worker_executor::services::environment_state::{
+    EnvironmentStateService, ToolActivationSnapshot, ToolDiscoveryError,
+};
 use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::{
@@ -55,6 +58,7 @@ use golem_worker_executor_test_utils::{
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -179,6 +183,131 @@ fn deployment_state(
         deployment_revision,
         registered_tools,
         agent_tool_bindings: BTreeMap::from([(agent_type, bindings)]),
+    }
+}
+
+struct ReorderedToolActivationService {
+    inner: TestEnvironmentStateService,
+    activation_calls: AtomicUsize,
+    first_call_blocked: tokio::sync::Notify,
+    release_first_call: tokio::sync::Notify,
+}
+
+impl Default for ReorderedToolActivationService {
+    fn default() -> Self {
+        Self {
+            inner: TestEnvironmentStateService::default(),
+            activation_calls: AtomicUsize::new(0),
+            first_call_blocked: tokio::sync::Notify::new(),
+            release_first_call: tokio::sync::Notify::new(),
+        }
+    }
+}
+
+impl ReorderedToolActivationService {
+    fn set_tool_deployment(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+        component_id: golem_common::model::component::ComponentId,
+        component_revision: ComponentRevision,
+        deployment: Option<ToolDeploymentState>,
+    ) {
+        self.inner.set_tool_deployment(
+            environment_id,
+            component_id,
+            component_revision,
+            deployment,
+        );
+    }
+
+    fn activation_calls(&self) -> usize {
+        self.activation_calls.load(Ordering::SeqCst)
+    }
+
+    async fn wait_for_first_call_to_block(&self) {
+        self.first_call_blocked.notified().await;
+    }
+
+    fn release_first_call(&self) {
+        self.release_first_call.notify_one();
+    }
+}
+
+#[async_trait::async_trait]
+impl EnvironmentStateService for ReorderedToolActivationService {
+    async fn get_agent_deployment(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+        agent_type: &AgentTypeName,
+    ) -> Result<
+        Option<golem_service_base::model::AgentDeploymentDetails>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        self.inner
+            .get_agent_deployment(environment_id, agent_type)
+            .await
+    }
+
+    async fn get_agent_secrets(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+    ) -> Result<
+        HashMap<
+            golem_common::model::agent_secret::CanonicalAgentSecretPath,
+            golem_service_base::model::agent_secret::AgentSecret,
+        >,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        self.inner.get_agent_secrets(environment_id).await
+    }
+
+    async fn get_agent_secret_revision(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+        agent_secret_id: golem_common::model::agent_secret::AgentSecretId,
+        path: golem_common::model::agent_secret::CanonicalAgentSecretPath,
+        revision: golem_common::model::agent_secret::AgentSecretRevision,
+    ) -> Result<
+        Option<golem_service_base::model::agent_secret::AgentSecret>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        self.inner
+            .get_agent_secret_revision(environment_id, agent_secret_id, path, revision)
+            .await
+    }
+
+    async fn get_retry_policies(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+    ) -> Result<
+        Vec<golem_common::model::retry_policy::NamedRetryPolicy>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        self.inner.get_retry_policies(environment_id).await
+    }
+
+    async fn get_tool_activation(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+        agent_type: &AgentTypeName,
+        tool_name: &ToolName,
+    ) -> Result<Option<ToolActivationSnapshot>, ToolDiscoveryError> {
+        match self.activation_calls.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                self.first_call_blocked.notify_one();
+                self.release_first_call.notified().await;
+                Ok(None)
+            }
+            1 => {
+                self.inner
+                    .get_tool_activation(environment_id, agent_type, tool_name)
+                    .await
+            }
+            ordinal => panic!(
+                "replay unexpectedly performed tool activation lookup number {}",
+                ordinal + 1
+            ),
+        }
     }
 }
 
@@ -502,6 +631,187 @@ async fn next_crash_checkpoint(
         .ok_or_else(|| anyhow::anyhow!("checkpoint server stopped before `{expected}`"))?;
     assert_eq!(arrival.name, expected);
     Ok(arrival)
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(ReorderedToolActivationService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let (
+        provider_checkpoint_port,
+        provider_checkpoint_gate_port,
+        provider_checkpoint_server,
+        mut provider_checkpoint_arrivals,
+    ) = start_crash_checkpoint_server().await;
+    let (
+        caller_checkpoint_port,
+        caller_checkpoint_gate_port,
+        caller_checkpoint_server,
+        mut caller_checkpoint_arrivals,
+    ) = start_crash_checkpoint_server().await;
+
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", "attempt-identity-replay");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
+                    provider_checkpoint_port.to_string(),
+                ),
+                (
+                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    provider_checkpoint_gate_port.to_string(),
+                ),
+                (
+                    "CALLER_CRASH_CHECKPOINT_PORT".to_string(),
+                    caller_checkpoint_port.to_string(),
+                ),
+                (
+                    "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    caller_checkpoint_gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    let call = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent_id,
+        "concurrent_attempt_identity_replay",
+        data_value!(),
+    );
+    let crash_and_replay = async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            environment_state.wait_for_first_call_to_block(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("first activation lookup did not block"))?;
+        let original_provider = next_crash_checkpoint(
+            &mut provider_checkpoint_arrivals,
+            "attempt-identity-accepted",
+        )
+        .await?;
+        original_provider
+            .release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("original accepted tool checkpoint was dropped"))?;
+        wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
+        environment_state.release_first_call();
+
+        let original = next_crash_checkpoint(
+            &mut caller_checkpoint_arrivals,
+            "concurrent-attempt-identities",
+        )
+        .await?;
+        assert_eq!(environment_state.activation_calls(), 2);
+
+        executor.simulated_crash(&worker_id).await?;
+        drop(original.release);
+
+        assert_eq!(
+            environment_state.activation_calls(),
+            2,
+            "replay must claim both attempts without repeating admission"
+        );
+        let replayed = next_crash_checkpoint(
+            &mut caller_checkpoint_arrivals,
+            "concurrent-attempt-identities",
+        )
+        .await?;
+        replayed
+            .release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("replayed attempt-identity checkpoint was dropped"))?;
+        Ok::<_, anyhow::Error>(())
+    };
+    let (result, ()) = tokio::try_join!(call, crash_and_replay)?;
+    let outcomes: Vec<String> = result.into_typed()?;
+    assert_eq!(outcomes, ["rejected", "accepted"]);
+    assert_eq!(environment_state.activation_calls(), 2);
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let accepted_start = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params) if params.function_name == "golem::entity::invoke" => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("second attempt retained its accepted Start");
+    let rejected_start = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params)
+                if params.function_name == "golem::tool::internal::invocation-rejected" =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("first attempt retained its rejected Start");
+    assert!(
+        accepted_start < rejected_start,
+        "the later accepted attempt must be durably ordered before the earlier rejected attempt"
+    );
+    assert!(
+        executor
+            .active_entity_metadata(&owned_agent_id)
+            .await
+            .is_none_or(|active| active.tool_operations.operations.is_empty())
+    );
+
+    executor.delete_worker(&worker_id).await?;
+    provider_checkpoint_server.abort();
+    caller_checkpoint_server.abort();
+    Ok(())
 }
 
 #[test]

@@ -44,6 +44,7 @@ struct RawCapableInput {
 pub trait ToolStreamingCaller {
     fn new(name: String) -> Self;
 
+    async fn concurrent_attempt_identity_replay(&self) -> Vec<String>;
     async fn marker_before_eof(&self, first: Vec<u8>, rest: Vec<u8>) -> StreamEvidence;
     async fn alternating_echo(&self, chunk_count: u32, chunk_size: u32) -> StreamEvidence;
     async fn collect(&self, mode: String, input: Vec<u8>, fragment_size: u32) -> StreamEvidence;
@@ -310,6 +311,39 @@ async fn wait_at_crash_checkpoint(name: &str) {
 impl ToolStreamingCaller for ToolStreamingCallerImpl {
     fn new(_name: String) -> Self {
         Self
+    }
+
+    async fn concurrent_attempt_identity_replay(&self) -> Vec<String> {
+        let rpc = ToolRpc::new("streaming");
+        let first = rpc.invoke_and_await(
+            vec!["no-stream".to_string()],
+            raw_no_stream_input("hold-attempt-identity"),
+            None,
+            None,
+        );
+        let second = rpc.invoke_and_await(
+            vec!["no-stream".to_string()],
+            raw_no_stream_input("hold-attempt-identity"),
+            None,
+            None,
+        );
+        let (first, second) = (first, second).join().await;
+        let outcomes = vec![
+            if first.is_ok() {
+                "accepted"
+            } else {
+                "rejected"
+            }
+            .to_string(),
+            if second.is_ok() {
+                "accepted"
+            } else {
+                "rejected"
+            }
+            .to_string(),
+        ];
+        wait_at_crash_checkpoint("concurrent-attempt-identities").await;
+        outcomes
     }
 
     async fn marker_before_eof(&self, first: Vec<u8>, rest: Vec<u8>) -> StreamEvidence {

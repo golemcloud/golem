@@ -1624,6 +1624,7 @@ mod tests {
                 agent_id: owner.agent_id.clone(),
             }),
             descriptor: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+                attempt_ordinal: 0,
                 command_path: Vec::new(),
                 args: Vec::new(),
                 has_stdin: false,

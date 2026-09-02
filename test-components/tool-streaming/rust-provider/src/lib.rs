@@ -696,6 +696,9 @@ impl Streaming for StreamingImpl {
     }
 
     async fn no_stream(&self, value: String) -> Result<String, StreamingError> {
+        if value == "hold-attempt-identity" {
+            wait_at_crash_checkpoint(&value, "attempt-identity-accepted").await;
+        }
         Ok(format!("no-stream:{value}"))
     }
 

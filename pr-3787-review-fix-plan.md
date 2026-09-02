@@ -41,7 +41,7 @@ documented verification commands are all complete.
 | P0 | Establish the integration base | **Complete** | 24–28 | None |
 | P1 | Correct Wasmtime operation-cancellation handling | **Complete** | 1, 2 | P0 |
 | P2 | Introduce typed replay-claim outcomes | **Complete** | 18 | P0 |
-| P3 | Add replay-stable tool-attempt identity | Not started | 6 | P2 |
+| P3 | Add replay-stable tool-attempt identity | **Complete** | 6 | P2 |
 | P4 | Replace operation strong-count cleanup with explicit leases | Not started | 17, 27 | P0 |
 | P5 | Centralize no-body attachment publication | Not started | 4, 16, 27 | P1, P4 |
 | P6 | Make execution mode and attachment admission replay-deterministic | Not started | 3, 5 | P1, P5 |
@@ -64,7 +64,11 @@ documented verification commands are all complete.
 - **P2 — Complete (2026-09-02):** typed missing/blocked/claimed outcomes now preserve payload
   loading and decoding errors; 122 replay-state tests and clippy pass, and Oracle approved the
   phase.
-- **Next:** P3 — replay-stable tool-attempt identity.
+- **P3 — Complete (2026-09-02):** accepted and rejected tool attempts now carry a per-durable-
+  parent initiation ordinal captured before admission awaits. All model, payload, replay-state,
+  repeated-Wasmtime, reordered-admission crash/replay, regression, formatting, and clippy checks
+  pass, and Oracle approved the phase.
+- **Next:** P4 — explicit operation leases.
 
 ## Invariants that govern every fix
 
@@ -227,27 +231,52 @@ replay.
 
 ### Implementation
 
-- [ ] Capture an attempt ordinal synchronously at tool-host-call initiation, before activation,
+- [x] Capture an attempt ordinal synchronously at tool-host-call initiation, before activation,
       authorization, or any other await.
-- [ ] Persist the discriminator in both accepted and rejected records.
-- [ ] Require it in accepted and rejected claim identities.
-- [ ] Derive it from durable parent lineage and initiation position, never completion order.
-- [ ] Remove the old ambiguous identity directly; do not add fallback matching or compatibility
+- [x] Persist the discriminator in both accepted and rejected records.
+- [x] Require it in accepted and rejected claim identities.
+- [x] Derive it from durable parent lineage and initiation position, never completion order.
+- [x] Remove the old ambiguous identity directly; do not add fallback matching or compatibility
       fields.
 
 ### Design checkpoint
 
-- [ ] Prove with an executor/Wasmtime test that replay reproduces host-call initiation order within
+- [x] Prove with an executor/Wasmtime test that replay reproduces host-call initiation order within
       one durable parent.
-- [ ] If genuinely parallel guest tasks can reorder initiation, stop this workstream and design a
+- [x] If genuinely parallel guest tasks can reorder initiation, stop this workstream and design a
       breaking WIT contract carrying an explicit caller attempt token. Do not ship an executor-
-      assigned ordinal under an unproven ordering assumption.
+      assigned ordinal under an unproven ordering assumption. The repeated Wasmtime test proved
+      stable source-order initiation, so the alternate WIT design was not needed.
 
 ### Verification
 
-- [ ] Initiate two identical calls concurrently, accept one and reject the other, and reverse their
+- [x] Initiate two identical calls concurrently, accept one and reject the other, and reverse their
       completion order between live execution and replay.
-- [ ] Assert that each original future receives its own recorded outcome.
+- [x] Assert that each original future receives its own recorded outcome.
+
+### Progress evidence
+
+- Seven entity identity/serialization tests passed, including ordinal-sensitive accepted matching.
+  Log: `.amp/pr-3787-tests/p3-entity-identity-unit.log`.
+- Rejected request payload roundtrip and ordinal-sensitive rejection matching passed; all 124
+  replay-state tests passed. Logs: `.amp/pr-3787-tests/p3-rejection-payload-unit.log` and
+  `.amp/pr-3787-tests/p3-replay-state-unit.log`.
+- The real component-model-async Wasmtime fixture initiated calls in source order on repeated runs
+  while completions were forced in reverse. Log:
+  `.amp/pr-3787-tests/p3-runtime-initiation-order.log`.
+- The Rust caller/provider fixtures were rebuilt and copied with the Golem CLI, and both copied
+  WASMs validate with `wasm-tools`. Log:
+  `.amp/pr-3787-tests/p3-tool-streaming-component-rebuild.log`.
+- `concurrent_tool_attempt_identity_survives_reordered_admission_and_replay` forced the second
+  identical attempt to complete successfully before the first attempt was rejected, crashed the
+  caller, and verified replay returned `[rejected, accepted]` without repeating either activation
+  lookup. Log: `.amp/pr-3787-tests/p3-reordered-admission-replay-integration.log`.
+- `rust_generated_client_streams_live_and_handles_edges` passed after the contract change. Log:
+  `.amp/pr-3787-tests/p3-rust-tool-streaming-regression.log`.
+- Root/package formatting, fixture formatting, diff whitespace, and
+  `cargo clippy -p golem-common -p golem-worker-executor --lib --tests -- -D warnings` pass. Clippy
+  log: `.amp/pr-3787-tests/p3-clippy.log`.
+- Oracle completion gate: approved on 2026-09-02 with no required corrections.
 
 ## P4 — Replace operation strong-count cleanup with explicit leases
 

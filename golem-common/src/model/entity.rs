@@ -535,8 +535,8 @@ pub enum EntityInvocationDescriptor {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
-#[desert(evolution(FieldAdded("declares_stdout", false)))]
 pub struct ToolInvocationDescriptor {
+    pub attempt_ordinal: u64,
     pub command_path: Vec<String>,
     pub args: Vec<String>,
     pub has_stdin: bool,
@@ -563,6 +563,7 @@ pub enum EntityInvocationDescriptorIdentity {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ToolInvocationDescriptorIdentity {
+    pub attempt_ordinal: u64,
     pub command_path: Vec<String>,
     pub has_stdin: bool,
     pub has_stdout: bool,
@@ -593,6 +594,7 @@ pub enum ToolInputDecodeFailure {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolInvocationRejectedIdentity {
+    pub attempt_ordinal: u64,
     pub tool_name: ToolName,
     pub command_path: Vec<String>,
     pub input: Option<TypedSchemaValue>,
@@ -623,6 +625,7 @@ impl From<&EntityInvocationDescriptor> for EntityInvocationDescriptorIdentity {
 impl From<&ToolInvocationDescriptor> for ToolInvocationDescriptorIdentity {
     fn from(value: &ToolInvocationDescriptor) -> Self {
         Self {
+            attempt_ordinal: value.attempt_ordinal,
             command_path: value.command_path.clone(),
             has_stdin: value.has_stdin,
             has_stdout: value.has_stdout,
@@ -1296,6 +1299,7 @@ mod tests {
             }),
             call_mode: EntityCallMode::Asynchronous,
             operation: Some(EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+                attempt_ordinal: 7,
                 command_path: vec!["files".to_string(), "search".to_string()],
                 args: vec!["--ignore-case".to_string(), "needle".to_string()],
                 has_stdin: true,
@@ -1330,6 +1334,7 @@ mod tests {
             }),
             call_mode: EntityCallMode::Asynchronous,
             operation: Some(EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+                attempt_ordinal: 7,
                 command_path: vec!["files".to_string(), "search".to_string()],
                 args: vec!["--recorded-rendering".to_string()],
                 has_stdin: true,
@@ -1355,6 +1360,18 @@ mod tests {
         }
 
         assert!(identity.matches(&differently_pinned, &input));
+
+        if let Some(EntityInvocationDescriptor::Tool(descriptor)) =
+            differently_pinned.operation.as_mut()
+        {
+            descriptor.attempt_ordinal = 8;
+        }
+        assert!(!identity.matches(&differently_pinned, &input));
+        if let Some(EntityInvocationDescriptor::Tool(descriptor)) =
+            differently_pinned.operation.as_mut()
+        {
+            descriptor.attempt_ordinal = 7;
+        }
 
         if let Some(EntityInvocationDescriptor::Tool(descriptor)) =
             differently_pinned.operation.as_mut()

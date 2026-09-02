@@ -270,6 +270,7 @@ fn rejected_tool_reconstruction_start(
     let identity = ToolInvocationClaimIdentity {
         accepted: None,
         rejected: ToolInvocationRejectedIdentity {
+            attempt_ordinal: 0,
             tool_name: tool_name.clone(),
             command_path: vec!["run".to_string()],
             input: None,
@@ -281,6 +282,7 @@ fn rejected_tool_reconstruction_start(
     };
     let request =
         HostRequest::GolemToolInvocationRejected(HostRequestGolemToolInvocationRejected {
+            attempt_ordinal: 0,
             tool_name: tool_name.into_inner(),
             command_path: vec!["run".to_string()],
             input: None,

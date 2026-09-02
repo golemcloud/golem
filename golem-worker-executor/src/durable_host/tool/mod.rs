@@ -1264,6 +1264,7 @@ struct ToolInvocationAttempt {
     rpc: ToolRpcEntry,
     input: Result<ModelTypedSchemaValue, ToolInputDecodeFailure>,
     parent: crate::worker::owner_lane::OwnerInvocationId,
+    attempt_ordinal: u64,
 }
 
 impl ToolInvocationAttempt {
@@ -1285,6 +1286,7 @@ impl ToolInvocationAttempt {
                 call_mode,
                 operation: Some(EntityInvocationDescriptorIdentity::Tool(
                     ToolInvocationDescriptorIdentity {
+                        attempt_ordinal: self.attempt_ordinal,
                         command_path: command_path.to_vec(),
                         has_stdin,
                         has_stdout,
@@ -1293,6 +1295,7 @@ impl ToolInvocationAttempt {
                 input,
             }),
             rejected: ToolInvocationRejectedIdentity {
+                attempt_ordinal: self.attempt_ordinal,
                 tool_name: self.rpc.tool_name.clone(),
                 command_path: command_path.to_vec(),
                 input,
@@ -1349,16 +1352,28 @@ where
                 "tool RPC resource belongs to a different owner runtime"
             ));
         }
+        let parent = ctx.owner_invocation_id()?;
+        let next_ordinal = ctx
+            .state
+            .tool_invocation_attempt_ordinals
+            .entry(parent.clone())
+            .or_default();
+        let attempt_ordinal = *next_ordinal;
+        *next_ordinal = next_ordinal
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("tool invocation attempt ordinal overflow"))?;
         Ok(ToolInvocationAttempt {
             rpc,
             input: decode_typed_tool_value(input, ctx),
-            parent: ctx.owner_invocation_id()?,
+            parent,
+            attempt_ordinal,
         })
     })
 }
 
 fn rejected_tool_call(
     rpc: &ToolRpcEntry,
+    attempt_ordinal: u64,
     command_path: &[String],
     input: Option<ModelTypedSchemaValue>,
     input_decode_failure: Option<ToolInputDecodeFailure>,
@@ -1370,6 +1385,7 @@ fn rejected_tool_call(
 ) -> ToolCallPreparation {
     ToolCallPreparation::Rejected {
         request: Box::new(HostRequestGolemToolInvocationRejected {
+            attempt_ordinal,
             tool_name: rpc.tool_name.to_string(),
             command_path: command_path.to_vec(),
             input,
@@ -1396,7 +1412,12 @@ where
     Ctx: WorkerCtx,
 {
     let has_stdin = stdin.is_some();
-    let ToolInvocationAttempt { rpc, input, parent } = attempt;
+    let ToolInvocationAttempt {
+        rpc,
+        input,
+        parent,
+        attempt_ordinal,
+    } = attempt;
     let environment_state_service =
         accessor.with(|mut access| access.get().state.environment_state_service.clone());
     let input = match input {
@@ -1404,6 +1425,7 @@ where
         Err(error) => {
             return Ok(rejected_tool_call(
                 &rpc,
+                attempt_ordinal,
                 &command_path,
                 None,
                 Some(error),
@@ -1437,6 +1459,7 @@ where
         Ok(None) => {
             return Ok(rejected_tool_call(
                 &rpc,
+                attempt_ordinal,
                 &command_path,
                 Some(input),
                 None,
@@ -1465,6 +1488,7 @@ where
         Err(error) => {
             return Ok(rejected_tool_call(
                 &rpc,
+                attempt_ordinal,
                 &command_path,
                 Some(input),
                 None,
@@ -1485,6 +1509,7 @@ where
     ) {
         return Ok(rejected_tool_call(
             &rpc,
+            attempt_ordinal,
             &command_path,
             Some(input),
             None,
@@ -1509,6 +1534,7 @@ where
         Err(error) => {
             return Ok(rejected_tool_call(
                 &rpc,
+                attempt_ordinal,
                 &command_path,
                 Some(input),
                 None,
@@ -1531,6 +1557,7 @@ where
         Err(error) => {
             return Ok(rejected_tool_call(
                 &rpc,
+                attempt_ordinal,
                 &command_path,
                 Some(input),
                 None,
@@ -1554,6 +1581,7 @@ where
             })?,
     );
     let descriptor = EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+        attempt_ordinal,
         command_path,
         args,
         has_stdin,

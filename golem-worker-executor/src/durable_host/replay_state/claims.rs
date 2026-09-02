@@ -1137,8 +1137,9 @@ fn request_claim_identity_matches(
                         })?;
                 Ok(expected.matches(&metadata, &request.input))
             }
-            HostRequest::GolemToolInvocationRejected(request) => Ok(request.tool_name
-                == expected.rejected.tool_name.as_str()
+            HostRequest::GolemToolInvocationRejected(request) => Ok(request.attempt_ordinal
+                == expected.rejected.attempt_ordinal
+                && request.tool_name == expected.rejected.tool_name.as_str()
                 && request.command_path == expected.rejected.command_path
                 && request.input == expected.rejected.input
                 && request.input_decode_failure == expected.rejected.input_decode_failure
@@ -1176,6 +1177,7 @@ mod tests {
             RequestClaimIdentity::ToolInvocation(Box::new(ToolInvocationClaimIdentity {
                 accepted: None,
                 rejected: ToolInvocationRejectedIdentity {
+                    attempt_ordinal: 3,
                     tool_name: tool_name.clone(),
                     command_path: vec!["search".to_string()],
                     input: Some(input("needle")),
@@ -1187,6 +1189,7 @@ mod tests {
             }));
         let request =
             HostRequest::GolemToolInvocationRejected(HostRequestGolemToolInvocationRejected {
+                attempt_ordinal: 3,
                 tool_name: tool_name.into_inner(),
                 command_path: vec!["search".to_string()],
                 input: Some(input("needle")),
@@ -1198,6 +1201,19 @@ mod tests {
             });
 
         assert!(request_claim_identity_matches(&request, &expected).unwrap());
+
+        let HostRequest::GolemToolInvocationRejected(mut mismatched_ordinal) = request.clone()
+        else {
+            unreachable!();
+        };
+        mismatched_ordinal.attempt_ordinal = 4;
+        assert!(
+            !request_claim_identity_matches(
+                &HostRequest::GolemToolInvocationRejected(mismatched_ordinal),
+                &expected,
+            )
+            .unwrap()
+        );
 
         let HostRequest::GolemToolInvocationRejected(mut mismatched) = request else {
             unreachable!();
@@ -1218,6 +1234,7 @@ mod tests {
             RequestClaimIdentity::ToolInvocation(Box::new(ToolInvocationClaimIdentity {
                 accepted: None,
                 rejected: ToolInvocationRejectedIdentity {
+                    attempt_ordinal: 0,
                     tool_name: ToolName::try_from("grep").unwrap(),
                     command_path: Vec::new(),
                     input: None,
@@ -1229,6 +1246,7 @@ mod tests {
             }));
         let request =
             HostRequest::GolemToolInvocationRejected(HostRequestGolemToolInvocationRejected {
+                attempt_ordinal: 0,
                 tool_name: "grep".to_string(),
                 command_path: Vec::new(),
                 input: None,

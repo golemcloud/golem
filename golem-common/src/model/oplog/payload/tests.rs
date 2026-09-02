@@ -1259,6 +1259,7 @@ fn tool_predispatch_rejection_payload_roundtrips_with_selected_error() {
         result: Err(error.clone()),
     };
     let request = HostRequestGolemToolInvocationRejected {
+        attempt_ordinal: 11,
         tool_name: "grep".to_string(),
         command_path: vec!["files".to_string(), "search".to_string()],
         input: None,
