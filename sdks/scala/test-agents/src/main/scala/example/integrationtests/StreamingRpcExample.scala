@@ -100,12 +100,16 @@ trait ScalaStreamingTarget extends BaseAgent {
   class Id(val name: String)
 
   def consume(input: golem.schema.AgentStream[Int]): Future[List[Int]]
+  def consumeFirst(input: golem.schema.AgentStream[Int]): Future[Int]
   def produce(values: List[Int]): Future[golem.schema.AgentStream[Int]]
   def transform(label: String, input: golem.schema.AgentStream[Int]): Future[MixedStreamOutput]
+  def forward(input: golem.schema.AgentStream[Int]): Future[golem.schema.AgentStream[Int]]
   def consumeNested(input: NestedStreams): Future[String]
   def produceNested(): Future[golem.schema.AgentStream[NestedStreamItem]]
   def produceSiblings(): Future[SiblingStreams]
+  def produceError(): Future[golem.schema.AgentStream[Int]]
   def ping(): Future[Int]
+  def incrementScalar(): Future[Int]
 }
 
 @agentDefinition()
@@ -113,6 +117,8 @@ trait ScalaStreamingCaller extends BaseAgent {
   class Id(val name: String)
 
   def run(): Future[String]
+  def callProducerError(): Future[List[Int]]
+  def callStreamFree(): Future[Int]
 }
 
 private object StreamingFixture {
@@ -168,14 +174,25 @@ private object StreamingFixture {
 final class ScalaStreamingTargetImpl(@unused private val name: String) extends ScalaStreamingTarget {
   import StreamingFixture._
 
+  private var scalar = 0
+
   override def consume(input: AgentStream[Int]): Future[List[Int]] =
     collect(input)
+
+  override def consumeFirst(input: AgentStream[Int]): Future[Int] =
+    input.pull().flatMap {
+      case Some(value) => input.close().map(_ => value)
+      case None        => Future.failed(new IllegalStateException("expected at least one input stream value"))
+    }
 
   override def produce(values: List[Int]): Future[AgentStream[Int]] =
     Future.successful(streamOf(values))
 
   override def transform(label: String, input: AgentStream[Int]): Future[MixedStreamOutput] =
     Future.successful(MixedStreamOutput(label, input.map(_ * 10)))
+
+  override def forward(input: AgentStream[Int]): Future[AgentStream[Int]] =
+    Future.successful(input)
 
   override def consumeNested(input: NestedStreams): Future[String] =
     for {
@@ -187,10 +204,28 @@ final class ScalaStreamingTargetImpl(@unused private val name: String) extends S
     Future.successful(nestedItems())
 
   override def produceSiblings(): Future[SiblingStreams] =
-    Future.successful(SiblingStreams(streamOf(List("a", "b")), streamOf(List(20, 21, 22))))
+    Future.successful(SiblingStreams(streamOf(List("a", "b")), streamOf(List.range(0, 64))))
+
+  override def produceError(): Future[AgentStream[Int]] = {
+    var emitted = false
+    Future.successful(
+      AgentStream.fromPull(() =>
+        if (emitted) Future.failed(new RuntimeException("scala-producer-failed"))
+        else {
+          emitted = true
+          Future.successful(Some(1))
+        }
+      )
+    )
+  }
 
   override def ping(): Future[Int] =
     Future.successful(42)
+
+  override def incrementScalar(): Future[Int] = {
+    scalar += 1
+    Future.successful(scalar)
+  }
 }
 
 @agentImplementation()
@@ -201,12 +236,14 @@ final class ScalaStreamingCallerImpl(private val name: String) extends ScalaStre
     val target = ScalaStreamingTargetClient.get(name)
 
     for {
-      inputOnly    <- target.consume(streamOf(List(1, 2, 3)))
-      outputStream <- target.produce(List(4, 5, 6))
-      outputOnly   <- collect(outputStream)
-      mixed        <- target.transform("mapped", streamOf(List(7, 8, 9)))
-      mixedValues  <- collect(mixed.values)
-      nestedInput  <- target.consumeNested(
+      inputOnly       <- target.consume(streamOf(List(1, 2, 3)))
+      outputStream    <- target.produce(List(4, 5, 6))
+      outputOnly      <- collect(outputStream)
+      mixed           <- target.transform("mapped", streamOf(List(7, 8, 9)))
+      mixedValues     <- collect(mixed.values)
+      forwarded       <- target.forward(streamOf(List(12, 13, 14)))
+      forwardedValues <- collect(forwarded)
+      nestedInput     <- target.consumeNested(
                        NestedStreams(streamOf(List("left", "right")), streamOf(List(10, 11)))
                      )
       nestedStream   <- target.produceNested()
@@ -214,15 +251,31 @@ final class ScalaStreamingCallerImpl(private val name: String) extends ScalaStre
       siblings       <- target.produceSiblings()
       siblingStrings <- collect(siblings.strings)
       siblingNumbers <- collect(siblings.numbers)
-      ping           <- target.ping()
+      inputFirst     <- target.consumeFirst(streamOf(List.range(30, 94)))
+      cancellable    <- target.produce(List.range(100, 164))
+      outputFirst    <- cancellable.pull().flatMap {
+                       case Some(value) => Future.successful(value)
+                       case None        => Future.failed(new IllegalStateException("expected an output stream value"))
+                     }
+      _          <- cancellable.close()
+      afterClose <- target.ping()
     } yield List(
       s"input=${inputOnly.mkString(",")}",
       s"output=${outputOnly.mkString(",")}",
       s"mixed=${mixed.label}:${mixedValues.mkString(",")}",
+      s"forwarded=${forwardedValues.mkString(",")}",
       s"nested-input=$nestedInput",
       s"nested-output=${nestedOutput.mkString("|")}",
       s"siblings=${siblingStrings.mkString(",")}|${siblingNumbers.mkString(",")}",
-      s"ping=$ping"
+      s"input-first=$inputFirst",
+      s"output-first=$outputFirst",
+      s"after-close=$afterClose"
     ).mkString(";")
   }
+
+  override def callProducerError(): Future[List[Int]] =
+    ScalaStreamingTargetClient.get(name).produceError().flatMap(collect)
+
+  override def callStreamFree(): Future[Int] =
+    ScalaStreamingTargetClient.get(name).incrementScalar()
 }
