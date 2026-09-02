@@ -810,11 +810,9 @@ async fn test_scala_streaming_rpc_e2e() {
 
     ctx.cd(app_name);
 
-    let fixture = workspace_path().join(
-        "sdks/scala/test-agents/src/main/scala/example/integrationtests/StreamingRpcExample.scala",
-    );
+    let fixture = ctx.test_data_path_join("scala-streaming-rpc/StreamingRpcExample.scala");
     let source = fs::read_to_string(&fixture).unwrap().replace(
-        "package example.streamingrpc",
+        "package fixture.streamingrpc",
         &format!("package {package_name}"),
     );
     let destination = ctx

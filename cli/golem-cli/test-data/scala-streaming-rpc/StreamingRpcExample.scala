@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package example.streamingrpc
+package fixture.streamingrpc
 
 import golem.BaseAgent
 import golem.runtime.annotations.{agentDefinition, agentImplementation}
