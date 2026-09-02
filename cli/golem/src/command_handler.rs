@@ -52,9 +52,24 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     clean_data_dir(&ctx, &data_dir).await?;
                 };
 
-                let mut join_set = launch_golem_services(&launch_args)
-                    .await
-                    .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
+                // A single pinned signal future is shared by both phases below, so the
+                // handlers are installed once and a signal arriving between the two
+                // select! blocks is not lost.
+                let shutdown = shutdown_signal();
+                tokio::pin!(shutdown);
+
+                let launch_result = tokio::select! {
+                    res = launch_golem_services(&launch_args) => Some(res),
+                    _ = &mut shutdown => None,
+                };
+
+                let Some(launch_result) = launch_result else {
+                    info!("Received shutdown signal during startup, stopping Golem server");
+                    return Ok(());
+                };
+
+                let mut join_set =
+                    launch_result.map_err(|err| map_local_server_startup_error(err, &data_dir))?;
 
                 let run_result = tokio::select! {
                     res = async {
@@ -63,7 +78,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
                         }
                         Ok::<(), anyhow::Error>(())
                     } => Some(res),
-                    _ = shutdown_signal() => None,
+                    _ = &mut shutdown => None,
                 };
 
                 match run_result {
