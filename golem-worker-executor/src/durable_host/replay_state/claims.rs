@@ -477,12 +477,26 @@ impl ReplayState {
                 .run_owned_cursor_op(move |state| async move {
                     state
                         .with_tx(async |tx| match tx.claim_start(&owned_claim).await {
-                            Ok(claimed) => {
-                                Ok((claimed, tx.blocked_on_completion_delivery, false, false))
+                            Ok(StartClaimAttempt::Claimed(handle, entry)) => {
+                                Ok((Some((handle, entry)), false, false, false))
                             }
-                            Err(_) if tx.cursor.is_live() => Ok((None, false, true, false)),
-                            Err(_) if tx.deleted_region_contains_start(&owned_claim).await? => {
+                            Ok(StartClaimAttempt::Blocked) => {
+                                Ok((None, tx.blocked_on_completion_delivery, false, false))
+                            }
+                            Ok(StartClaimAttempt::Missing) if tx.cursor.is_live() => {
+                                Ok((None, false, true, false))
+                            }
+                            Ok(StartClaimAttempt::Missing)
+                                if tx.deleted_region_contains_start(&owned_claim).await? =>
+                            {
                                 Ok((None, false, false, true))
+                            }
+                            Ok(StartClaimAttempt::Missing) => {
+                                Err(WorkerExecutorError::unexpected_oplog_entry(
+                                    owned_claim.expected_description(),
+                                    "no matching Start between the replay cursor and the replay target"
+                                        .to_string(),
+                                ))
                             }
                             Err(error) => Err(error),
                         })

@@ -40,7 +40,7 @@ documented verification commands are all complete.
 |---|---|---|---|---|
 | P0 | Establish the integration base | **Complete** | 24–28 | None |
 | P1 | Correct Wasmtime operation-cancellation handling | **Complete** | 1, 2 | P0 |
-| P2 | Introduce typed replay-claim outcomes | Not started | 18 | P0 |
+| P2 | Introduce typed replay-claim outcomes | **Complete** | 18 | P0 |
 | P3 | Add replay-stable tool-attempt identity | Not started | 6 | P2 |
 | P4 | Replace operation strong-count cleanup with explicit leases | Not started | 17, 27 | P0 |
 | P5 | Centralize no-body attachment publication | Not started | 4, 16, 27 | P1, P4 |
@@ -61,7 +61,10 @@ documented verification commands are all complete.
 - **P1 — Complete (2026-09-02):** operation cancellation is non-terminal for typed/raw attachment
   adapters, all focused unit and executor checks passed, and Oracle approved the revised real-
   Wasmtime coverage after rejecting the earlier synthetic test approach.
-- **Next:** P2 — typed replay-claim outcomes.
+- **P2 — Complete (2026-09-02):** typed missing/blocked/claimed outcomes now preserve payload
+  loading and decoding errors; 122 replay-state tests and clippy pass, and Oracle approved the
+  phase.
+- **Next:** P3 — replay-stable tool-attempt identity.
 
 ## Invariants that govern every fix
 
@@ -192,18 +195,30 @@ contracts:
 
 ### Implementation
 
-- [ ] Replace the untyped request-payload match result with an internal typed outcome such as
+- [x] Replace the untyped request-payload match result with an internal typed outcome such as
       `Matched`, `NoMatch`, or `PayloadFailure`.
-- [ ] Permit replay-ended and deleted-region handling only for `NoMatch`.
-- [ ] Propagate payload download, storage, and decode failures without advancing or switching the
+- [x] Permit replay-ended and deleted-region handling only for `NoMatch`.
+- [x] Propagate payload download, storage, and decode failures without advancing or switching the
       replay cursor.
-- [ ] Preserve existing genuine mismatch behavior.
+- [x] Preserve existing genuine mismatch behavior.
 
 ### Verification
 
-- [ ] Inject payload download failure while the candidate start lies in a deleted region.
-- [ ] Assert that the original failure propagates and replay cursor state is unchanged.
-- [ ] Assert that a genuine no-match still follows deleted-region handling.
+- [x] Inject payload download failure while a matching start also lies in a deleted region.
+- [x] Assert that external payload and inline decode failures propagate and replay cursor state is
+      unchanged.
+- [x] Assert that a genuine no-match still follows deleted-region handling.
+
+### Progress evidence
+
+- Seven focused claim-outcome tests passed, including external storage failure, inline payload
+  decode failure, genuine deleted-region mismatch, replay-ended, and ordinary matching behavior.
+  Log: `.amp/pr-3787-tests/p2-replay-claim-outcomes-unit.log`.
+- All 122 replay-state unit tests passed. Log:
+  `.amp/pr-3787-tests/p2-replay-state-unit.log`.
+- Rust formatting and `cargo clippy -p golem-worker-executor --lib --tests -- -D warnings` passed.
+  Clippy log: `.amp/pr-3787-tests/p2-clippy.log`.
+- Oracle completion gate: approved on 2026-09-02 with no required corrections.
 
 ## P3 — Add replay-stable tool-attempt identity
 

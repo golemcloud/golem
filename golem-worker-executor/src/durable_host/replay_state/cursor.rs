@@ -1277,18 +1277,18 @@ impl CursorTx<'_> {
     /// Request-matching counterpart of [`Self::claim_start_matching`]. It scans identity-matching
     /// candidates in oplog order and resolves each recorded payload to a value before claiming it.
     /// Payload resolution is deliberately outside the synchronous scan predicate because an
-    /// external payload may require blob I/O.
+    /// external payload may require blob I/O. A completed scan returns `Missing`; payload loading
+    /// or decoding failure remains an error.
     pub(super) async fn claim_start_matching_request(
         &mut self,
         matches_identity: impl Fn(&OplogEntry) -> bool,
         expected_request: &RequestClaimIdentity,
-        expected: impl FnOnce() -> String,
-    ) -> Result<Option<(ReplayCallHandle, Box<OplogEntry>)>, WorkerExecutorError> {
+    ) -> Result<StartClaimAttempt, WorkerExecutorError> {
         // Drain any awaited terminals at the head and detect a delivery marker before the
         // request-payload scan. The false predicate leaves an ordinary candidate untouched.
         self.try_get_oplog_entry(|_| false).await?;
         if self.blocked_on_completion_delivery {
-            return Ok(None);
+            return Ok(StartClaimAttempt::Blocked);
         }
 
         let already_claimed = self.st.claimed_starts.clone();
@@ -1324,7 +1324,7 @@ impl CursorTx<'_> {
             };
             if matches!(entry.as_ref(), OplogEntry::CompletionDelivered { .. }) {
                 self.blocked_on_completion_delivery = true;
-                return Ok(None);
+                return Ok(StartClaimAttempt::Blocked);
             }
             let OplogEntry::Start {
                 request: Some(recorded_request),
@@ -1348,16 +1348,13 @@ impl CursorTx<'_> {
             if payload_matches {
                 self.st.claimed_starts.insert(index);
                 let handle = self.register_claimed_start(index).await?;
-                return Ok(Some((handle, entry)));
+                return Ok(StartClaimAttempt::Claimed(handle, entry));
             }
 
             scan_start = index.next();
         }
 
-        Err(WorkerExecutorError::unexpected_oplog_entry(
-            expected(),
-            "no matching Start between the replay cursor and the replay target".to_string(),
-        ))
+        Ok(StartClaimAttempt::Missing)
     }
 
     /// Checks whether a `Start` matching this claim belongs to a jump-deleted region. An incomplete
@@ -1430,35 +1427,24 @@ impl CursorTx<'_> {
     /// Claims the `Start` entry described by `claim`: builds the identity predicate from the
     /// typed descriptor and drives the shared claim core ([`Self::claim_start_matching`], or its
     /// request-matching counterpart [`Self::claim_start_matching_request`] when the descriptor
-    /// pins the recorded request payload). Returns the registered replay handle together with the
-    /// claimed `Start` entry.
+    /// pins the recorded request payload). Returns the typed claim attempt so callers can handle a
+    /// genuine missing match separately from storage or payload failures.
     pub(super) async fn claim_start(
         &mut self,
         claim: &StartClaim,
-    ) -> Result<Option<(ReplayCallHandle, Box<OplogEntry>)>, WorkerExecutorError> {
+    ) -> Result<StartClaimAttempt, WorkerExecutorError> {
         let matches_identity = |entry: &OplogEntry| claim.matches_start_identity(entry);
-        let expected = || claim.expected_description();
-        let claimed = match claim.matching_request() {
+        let attempt = match claim.matching_request() {
             Some(expected_request) => {
-                self.claim_start_matching_request(matches_identity, expected_request, expected)
+                self.claim_start_matching_request(matches_identity, expected_request)
                     .await?
             }
-            None => match self.claim_start_matching(matches_identity).await? {
-                StartClaimAttempt::Claimed(handle, entry) => Some((handle, entry)),
-                StartClaimAttempt::Blocked => None,
-                StartClaimAttempt::Missing => {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        expected(),
-                        "no matching Start between the replay cursor and the replay target"
-                            .to_string(),
-                    ));
-                }
-            },
+            None => self.claim_start_matching(matches_identity).await?,
         };
-        let Some((handle, entry)) = claimed else {
-            return Ok(None);
+        let (mut handle, entry) = match attempt {
+            StartClaimAttempt::Claimed(handle, entry) => (handle, entry),
+            other => return Ok(other),
         };
-        let mut handle = handle;
         if claim.is_reconstruction_claim() {
             let reconstruction = self
                 .st
@@ -1476,7 +1462,7 @@ impl CursorTx<'_> {
             "Start claim at {} must leave a registered awaiter",
             handle.start_idx()
         );
-        Ok(Some((handle, entry)))
+        Ok(StartClaimAttempt::Claimed(handle, entry))
     }
 
     /// Claims an exact scope `Start`. When `recover_missing` is set, a missing scope switches to

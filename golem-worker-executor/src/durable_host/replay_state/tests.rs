@@ -254,6 +254,15 @@ fn start_now() -> OplogEntry {
     }
 }
 
+fn start_now_with_request_payload(payload: OplogPayload<HostRequest>) -> OplogEntry {
+    let mut entry = start_now();
+    let OplogEntry::Start { request, .. } = &mut entry else {
+        unreachable!();
+    };
+    *request = Some(payload);
+    entry
+}
+
 fn rejected_tool_reconstruction_start(
     parent_start_index: OplogIndex,
 ) -> (OplogEntry, ToolInvocationClaimIdentity) {
@@ -1652,6 +1661,100 @@ async fn start_claim_reports_matching_deleted_region_while_replay_continues() {
         .claim_start_or_replay_end(StartClaim::unowned(
             &HostFunctionName::MonotonicClockNow,
             &DurableFunctionType::ReadLocal,
+        ))
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, ReplayStartClaimOutcome::DeletedRegion));
+}
+
+async fn assert_request_payload_failure_is_not_reclassified_as_deleted_region(
+    failing_payload: OplogPayload<HostRequest>,
+    expected_error: &str,
+) {
+    let oplog = Arc::new(InMemoryOplog::new());
+    let expected_request: HostRequest = HostRequestPollCount { count: 1 }.into();
+    for entry in [
+        noop(),
+        start_now_with_request_payload(OplogPayload::Inline(Box::new(expected_request.clone()))),
+        start_now_with_request_payload(failing_payload),
+    ] {
+        oplog.add(entry).await;
+    }
+    let oplog: Arc<dyn Oplog> = oplog;
+    let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
+    let rs = test_replay_state(test_agent_id(), oplog, skipped, None)
+        .await
+        .unwrap();
+    let replayed_before_claim = rs.last_replayed_index();
+
+    let result = rs
+        .claim_start_or_replay_end(StartClaim::unowned_matching_request(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            &expected_request,
+        ))
+        .await;
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("payload failure must not be reclassified as a deleted-region match"),
+    };
+
+    assert!(
+        format!("{error}").contains(expected_error),
+        "original payload failure must propagate: {error}"
+    );
+    assert_eq!(rs.last_replayed_index(), replayed_before_claim);
+}
+
+#[test]
+async fn external_request_payload_failure_is_not_reclassified_as_deleted_region() {
+    assert_request_payload_failure_is_not_reclassified_as_deleted_region(
+        OplogPayload::External {
+            payload_id: PayloadId::new(),
+            md5_hash: vec![42],
+            cached: None,
+        },
+        "missing test payload",
+    )
+    .await;
+}
+
+#[test]
+async fn inline_request_payload_decode_failure_is_not_reclassified_as_deleted_region() {
+    assert_request_payload_failure_is_not_reclassified_as_deleted_region(
+        OplogPayload::SerializedInline {
+            bytes: vec![golem_common::serialization::SERIALIZATION_VERSION_V3],
+            cached: None,
+        },
+        "failed to deserialize inline request payload",
+    )
+    .await;
+}
+
+#[test]
+async fn genuine_request_mismatch_still_reports_matching_deleted_region() {
+    let oplog = Arc::new(InMemoryOplog::new());
+    let expected_request: HostRequest = HostRequestPollCount { count: 1 }.into();
+    let different_request: HostRequest = HostRequestPollCount { count: 2 }.into();
+    for entry in [
+        noop(),
+        start_now_with_request_payload(OplogPayload::Inline(Box::new(expected_request.clone()))),
+        start_now_with_request_payload(OplogPayload::Inline(Box::new(different_request))),
+    ] {
+        oplog.add(entry).await;
+    }
+    let oplog: Arc<dyn Oplog> = oplog;
+    let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
+    let rs = test_replay_state(test_agent_id(), oplog, skipped, None)
+        .await
+        .unwrap();
+
+    let outcome = rs
+        .claim_start_or_replay_end(StartClaim::unowned_matching_request(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            &expected_request,
         ))
         .await
         .unwrap();
