@@ -237,7 +237,7 @@ private[golem] object WasmRpcApi {
 
   @js.native
   @JSImport("golem:agent/host@2.0.0", "FutureInvokeResult")
-  private[rpc] class RawFutureInvokeResult extends js.Object {
+  private[golem] class RawFutureInvokeResult extends js.Object {
     def get(): js.Promise[js.UndefOr[JsSchemaValueTree]] = js.native
     def cancel(): Unit                                   = js.native
   }
