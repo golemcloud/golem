@@ -33,8 +33,12 @@ pub enum ShardManagerError {
     WorkerExecutionError(WorkerExecutorError),
     #[error("Persistence serialization error {0}")]
     SerializationError(String),
-    #[error("Postgres error {0}")]
+    #[error("Concurrent modification: the persisted shard state was changed by another writer")]
+    ConcurrentModification,
+    #[error("DB error {0}")]
     RepoError(#[from] RepoError),
+    #[error("etcd error {0}")]
+    EtcdError(#[from] etcd_client::Error),
     #[error("Migration error {0}")]
     MigrationError(#[from] anyhow::Error),
     #[error("IO error {0}")]
@@ -53,7 +57,21 @@ impl IsRetriableError for ShardManagerError {
             ShardManagerError::NoResult => true,
             ShardManagerError::WorkerExecutionError(_) => true, // TODO: can we define which ones are retryable?
             ShardManagerError::SerializationError(_) => false,
+            // Retrying a compare-and-swap with the same, now stale, previous revision can never
+            // succeed: recovery is a re-read followed by re-deriving the change, which is a
+            // different operation. Reporting this as retriable would turn a conflict into a spin.
+            ShardManagerError::ConcurrentModification => false,
             ShardManagerError::RepoError(_) => false,
+            ShardManagerError::EtcdError(err) => match err {
+                etcd_client::Error::GRpcStatus(status) => status.is_retriable(),
+                etcd_client::Error::TransportError(_)
+                | etcd_client::Error::IoError(_)
+                | etcd_client::Error::EndpointError(_) => true,
+                // A catch-all is required regardless: `etcd_client::Error` has a
+                // `#[cfg(feature = "tls-openssl")]` variant. Everything else - bad URI, bad
+                // arguments, bad metadata - is a configuration bug, not a transient failure.
+                _ => false,
+            },
             ShardManagerError::MigrationError(_) => false,
             ShardManagerError::IoError(_) => false,
             ShardManagerError::Internal(_) => false,

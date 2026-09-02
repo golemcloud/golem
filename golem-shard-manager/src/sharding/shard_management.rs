@@ -15,7 +15,7 @@
 use super::error::ShardManagerError;
 use super::healthcheck::{HealthCheck, get_unhealthy_executors};
 use super::model::{Assignments, ExecutorAddr, ExecutorAddrs, ExecutorId, ShardLeaseState};
-use super::persistence::RoutingTablePersistence;
+use super::persistence::{ExternalRevision, RoutingTablePersistence};
 use super::rebalancing::Rebalance;
 use super::worker_executor::{
     WorkerExecutorService, assign_shards, revoke_shards, set_shard_assignments,
@@ -29,13 +29,22 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinSet;
-use tracing::{Instrument, debug, info, warn};
+use tokio::time::timeout;
+use tracing::{Instrument, debug, error, info, warn};
+
+/// Bounds a persistence round-trip, so a wedged backend cannot hold the shard state lock forever,
+/// leaving every [`ShardManagement::current_snapshot`] reader waiting while the fail-stop that
+/// should end the process never runs.
+const PERSISTENCE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct ShardManagement {
     shard_state: Arc<RwLock<ShardLeaseState>>,
     change: Arc<Notify>,
     updates: Arc<Mutex<ShardManagementChanges>>,
+    persistence: Arc<dyn RoutingTablePersistence>,
+    /// Compare-and-swap token of the persisted state; see [`Self::mutate_and_persist`].
+    external_revision: Arc<Mutex<ExternalRevision>>,
 }
 
 impl ShardManagement {
@@ -52,7 +61,15 @@ impl ShardManagement {
         lease_ttl: Duration,
         join_set: &mut JoinSet<anyhow::Result<()>>,
     ) -> Result<Self, ShardManagerError> {
-        let shard_state = persistence_service.read().await?;
+        let (shard_state, external_revision) =
+            match timeout(PERSISTENCE_TIMEOUT, persistence_service.read()).await {
+                Ok(read) => read?,
+                Err(_) => {
+                    return Err(ShardManagerError::Internal(format!(
+                        "reading the shard lease state timed out after {PERSISTENCE_TIMEOUT:?}"
+                    )));
+                }
+            };
 
         info!("Initial healthcheck started");
 
@@ -66,43 +83,33 @@ impl ShardManagement {
 
         info!("Initial healthcheck finished");
 
-        let change = Arc::new(Notify::new());
-        let updates = Arc::new(Mutex::new(ShardManagementChanges::new(
-            healthy_executors,
-            unhealthy_executors,
-        )));
-        let shard_state = Arc::new(RwLock::new(shard_state));
+        let shard_management = ShardManagement {
+            shard_state: Arc::new(RwLock::new(shard_state)),
+            change: Arc::new(Notify::new()),
+            updates: Arc::new(Mutex::new(ShardManagementChanges::new(
+                healthy_executors,
+                unhealthy_executors,
+            ))),
+            persistence: persistence_service,
+            external_revision: Arc::new(Mutex::new(external_revision)),
+        };
 
         {
-            let change = change.clone();
-            let updates = updates.clone();
-            let shard_state = shard_state.clone();
-
+            let shard_management = shard_management.clone();
             join_set.spawn(
                 async move {
-                    Self::worker(
-                        shard_state,
-                        change,
-                        updates,
-                        persistence_service,
-                        worker_executors,
-                        threshold,
-                        lease_ttl,
-                    )
-                    .await;
-                    Ok(())
+                    shard_management
+                        .worker(worker_executors, threshold, lease_ttl)
+                        .await
+                        .map_err(anyhow::Error::from)
                 }
                 .in_current_span(),
             );
-        };
+        }
 
-        change.notify_one();
+        shard_management.change.notify_one();
 
-        Ok(ShardManagement {
-            shard_state,
-            change,
-            updates,
-        })
+        Ok(shard_management)
     }
 
     /// Registers a new executor instance listening at `addr`.
@@ -138,20 +145,17 @@ impl ShardManagement {
     }
 
     async fn worker(
-        shard_state: Arc<RwLock<ShardLeaseState>>,
-        change: Arc<Notify>,
-        updates: Arc<Mutex<ShardManagementChanges>>,
-        persistence_service: Arc<dyn RoutingTablePersistence>,
+        self,
         worker_executors: Arc<dyn WorkerExecutorService>,
         threshold: f64,
         lease_ttl: Duration,
-    ) {
+    ) -> Result<(), ShardManagerError> {
         loop {
             debug!("Shard management loop awaiting changes");
-            change.notified().await;
+            self.change.notified().await;
 
             let (new_executors, removed_executors, full_assignment_requests) =
-                updates.lock().await.reset();
+                self.updates.lock().await.reset();
             debug!(
                 new_executors = new_executors
                     .values()
@@ -161,44 +165,36 @@ impl ShardManagement {
                 full_assignment_requests = full_assignment_requests.iter().join(", "),
                 "Shard management loop woken up",
             );
-            // Getting a write lock while
+            // The write lock is held while
             //   - registrations and removals are applied to the state and got persisted,
             //   - the rebalance plan is calculated,
             // but the rebalance plan is NOT applied yet. The lock is then released for apply.
-            let (mut rebalance, full_assignment_executors, addrs) = {
-                let mut current_shard_state = shard_state.write().await;
+            let (mut rebalance, full_assignment_executors, addrs) = self
+                .mutate_and_persist(|current_shard_state| {
+                    // Shards orphaned by lease removals since the last pass. The rebalance plan
+                    // below recomputes all unassigned shards from scratch, so this is only logged.
+                    let pending = current_shard_state.take_pending_rebalance();
+                    if !pending.is_empty() {
+                        debug!(
+                            shards = pending.iter().join(", "),
+                            "Redistributing shards orphaned since the last pass"
+                        );
+                    }
 
-                // Shards orphaned by lease removals since the last pass. The rebalance plan
-                // below recomputes all unassigned shards from scratch, so this is only logged.
-                let pending = current_shard_state.take_pending_rebalance();
-                if !pending.is_empty() {
-                    debug!(
-                        shards = pending.iter().join(", "),
-                        "Redistributing shards orphaned since the last pass"
+                    let full_assignment_executors = apply_executor_changes(
+                        current_shard_state,
+                        new_executors,
+                        removed_executors,
+                        full_assignment_requests,
+                        lease_ttl,
                     );
-                }
 
-                let full_assignment_executors = apply_executor_changes(
-                    &mut current_shard_state,
-                    new_executors,
-                    removed_executors,
-                    full_assignment_requests,
-                    lease_ttl,
-                );
+                    let rebalance = Rebalance::from_shard_state(current_shard_state, threshold);
+                    let addrs = current_shard_state.executor_addrs();
 
-                let rebalance = Rebalance::from_shard_state(&current_shard_state, threshold);
-                let addrs = current_shard_state.executor_addrs();
-
-                current_shard_state
-                    .bump_revision()
-                    .expect("Failed to bump shard lease state revision");
-                persistence_service
-                    .write(&current_shard_state)
-                    .await
-                    .expect("Failed to persist shard lease state after executor changes");
-
-                (rebalance, full_assignment_executors, addrs)
-            };
+                    (rebalance, full_assignment_executors, addrs)
+                })
+                .await?;
 
             debug!(rebalance=%rebalance, "Applying rebalance plan");
             let rebalance_failures =
@@ -219,7 +215,7 @@ impl ShardManagement {
                 );
 
                 {
-                    let mut updates_guard = updates.lock().await;
+                    let mut updates_guard = self.updates.lock().await;
                     for (executor_id, _) in &rebalance_failures.failed_assignments {
                         if full_assignment_executors.contains(executor_id) {
                             updates_guard.retry_full_assignment(*executor_id);
@@ -241,18 +237,14 @@ impl ShardManagement {
                 needs_retry = true;
             }
 
-            let shard_state_snapshot = {
-                let mut current_shard_state = shard_state.write().await;
-                current_shard_state.apply_rebalance(&rebalance);
-                current_shard_state
-                    .bump_revision()
-                    .expect("Failed to bump shard lease state revision");
-                current_shard_state.clone()
-            };
-            persistence_service
-                .write(&shard_state_snapshot)
-                .await
-                .expect("Failed to persist shard lease state after rebalance");
+            self.mutate_and_persist(|current_shard_state| {
+                current_shard_state.apply_rebalance(&rebalance)
+            })
+            .await?;
+
+            // Read after the persist rather than out of the closure, so the snapshot's
+            // `revision` field is consistent with what was stored.
+            let shard_state_snapshot = self.shard_state.read().await.clone();
 
             let mut full_assignments = Assignments::new();
             for executor_id in &full_assignment_executors {
@@ -288,7 +280,7 @@ impl ShardManagement {
                 );
 
                 {
-                    let mut updates_guard = updates.lock().await;
+                    let mut updates_guard = self.updates.lock().await;
                     for (executor_id, _) in &failed_full_assignments {
                         updates_guard.retry_full_assignment(*executor_id);
                     }
@@ -297,7 +289,71 @@ impl ShardManagement {
             }
 
             if needs_retry {
-                change.notify_one();
+                self.change.notify_one();
+            }
+        }
+    }
+
+    /// Applies `mutate` to the shard lease state and persists the result compare-and-swap style:
+    /// snapshot, mutate, bump the revision, write guarded on the cached external revision. On any
+    /// failure the in-memory state is rolled back to the snapshot and the error is returned - the
+    /// same pattern as the quota service's lease mutations.
+    ///
+    /// The write lock is held across the persistence round-trip so that readers of
+    /// [`Self::current_snapshot`] can never observe a state that was not durably stored and then
+    /// watch it go backwards. Lock order is `shard_state`, then `external_revision`. Every writer
+    /// of the persisted state must go through here, which is what makes in-process conflicts
+    /// impossible.
+    ///
+    /// A [`ShardManagerError::ConcurrentModification`] therefore means another shard manager
+    /// *process* wrote the state. The cached revision is deliberately not refreshed on failure: it
+    /// is the fencing token, and a writer that lost it must stop, not adopt the winner's and go on.
+    async fn mutate_and_persist<T, F>(&self, mutate: F) -> Result<T, ShardManagerError>
+    where
+        F: FnOnce(&mut ShardLeaseState) -> T,
+    {
+        let mut current_shard_state = self.shard_state.write().await;
+        let mut external_revision = self.external_revision.lock().await;
+
+        let snapshot = current_shard_state.clone();
+        let prev_external_revision = *external_revision;
+        let outcome = mutate(&mut current_shard_state);
+
+        let written = match current_shard_state.bump_revision() {
+            Ok(_) => {
+                let write = self
+                    .persistence
+                    .write(&current_shard_state, prev_external_revision);
+
+                match timeout(PERSISTENCE_TIMEOUT, write).await {
+                    Ok(written) => written,
+                    Err(_) => Err(ShardManagerError::Internal(format!(
+                        "persisting the shard lease state timed out after {PERSISTENCE_TIMEOUT:?}"
+                    ))),
+                }
+            }
+            Err(err) => Err(err),
+        };
+
+        match written {
+            Ok(new_external_revision) => {
+                *external_revision = new_external_revision;
+                Ok(outcome)
+            }
+            Err(err) => {
+                match &err {
+                    ShardManagerError::ConcurrentModification => error!(
+                        prev_external_revision,
+                        "Revision conflict: another shard manager wrote the shard lease state. \
+                         Rolling back"
+                    ),
+                    other => error!(
+                        error = %other,
+                        "Persisting the shard lease state failed, rolling back"
+                    ),
+                }
+                *current_shard_state = snapshot;
+                Err(err)
             }
         }
     }
