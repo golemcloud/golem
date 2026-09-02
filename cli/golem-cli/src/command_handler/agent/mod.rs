@@ -70,7 +70,7 @@ use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::{ParsedFunctionName, ParsedFunctionSite};
 use golem_common::model::environment::EnvironmentName;
-use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
+use golem_common::model::oplog::{OplogCursor, PublicOplogEntryWithIndex};
 use golem_common::model::worker::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
@@ -783,7 +783,7 @@ impl AgentCommandHandler {
         let mut cursor = Option::<OplogCursor>::None;
         let mut had_entries = false;
         loop {
-            let mut entries = Vec::<(u64, PublicOplogEntry)>::new();
+            let mut entries = Vec::<PublicOplogEntryWithIndex>::new();
             cursor = {
                 let clients = self.ctx.golem_clients().await?;
 
@@ -800,21 +800,18 @@ impl AgentCommandHandler {
                     .await
                     .map_service_error()?;
 
-                entries.extend(
-                    result
-                        .entries
-                        .into_iter()
-                        .map(|entry| (entry.oplog_index.as_u64(), entry.entry)),
-                );
+                entries.extend(result.entries);
                 result.next
             };
 
             if !entries.is_empty() {
                 had_entries = true;
-                for (index, entry) in entries {
-                    self.ctx
-                        .log_handler()
-                        .log_output(AgentOplogEntryView { index, entry })?;
+                for entry in entries {
+                    self.ctx.log_handler().log_output(AgentOplogEntryView {
+                        index: entry.oplog_index.as_u64(),
+                        attribution: entry.attribution,
+                        entry: entry.entry,
+                    })?;
                 }
             }
 

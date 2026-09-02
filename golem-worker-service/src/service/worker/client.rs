@@ -49,7 +49,7 @@ use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
+use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
@@ -1132,7 +1132,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             },
                         )),
                 } => {
-                    let entries: Vec<PublicOplogEntry> = entries
+                    let entries: Vec<PublicOplogEntryWithIndex> = entries
                         .into_iter()
                         .map(|e| e.try_into())
                         .collect::<Result<Vec<_>, _>>()
@@ -1142,16 +1142,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             ))
                         })?;
                     Ok(GetOplogResponse {
-                        entries: entries
-                            .into_iter()
-                            .enumerate()
-                            .map(|(idx, entry)| PublicOplogEntryWithIndex {
-                                oplog_index: OplogIndex::from_u64(
-                                    (first_index_in_chunk) + idx as u64,
-                                ),
-                                entry,
-                            })
-                            .collect(),
+                        entries,
                         next: next.map(|c| c.into()),
                         first_index_in_chunk,
                         last_index,

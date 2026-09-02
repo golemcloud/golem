@@ -17,6 +17,7 @@ import "google/protobuf/timestamp.proto";
 // An oplog entry in its raw/internal representation.
 message RawOplogEntry {
   google.protobuf.Timestamp timestamp = 1;
+  optional uint64 entity_parent_start_index = 3;
   oneof entry {
     RawCreateParameters create = 2;
     RawAgentInvocationStartedParameters agent_invocation_started = 4;

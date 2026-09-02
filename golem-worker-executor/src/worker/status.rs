@@ -781,10 +781,15 @@ pub(crate) fn calculate_pending_card_events(
 
     for (oplog_idx, entry) in entries {
         match entry {
-            OplogEntry::CardEventQueued { timestamp, event } => {
+            OplogEntry::CardEventQueued {
+                timestamp,
+                entity_parent_start_index,
+                event,
+            } => {
                 result.push(PendingCardEventRef {
                     timestamp: *timestamp,
                     oplog_index: *oplog_idx,
+                    entity_parent_start_index: *entity_parent_start_index,
                     event: event.clone(),
                 });
             }
@@ -1212,6 +1217,7 @@ fn collect_resources(
                 id,
                 timestamp,
                 resource_type_id,
+                ..
             } => {
                 result.insert(
                     *id,
@@ -1510,6 +1516,7 @@ mod test {
             .agent_invocation_started("a", vec![], idempotency_key.clone())
             .add(
                 OplogEntry::error(
+                    None,
                     AgentError::TransientError("transient".to_string()),
                     retry_from,
                     false,
@@ -1542,6 +1549,7 @@ mod test {
             .agent_invocation_started("a", vec![], idempotency_key.clone())
             .add(
                 OplogEntry::error(
+                    None,
                     AgentError::TransientError("transient".to_string()),
                     retry_from,
                     false,
@@ -2501,6 +2509,7 @@ mod test {
             self.add(
                 OplogEntry::FilesystemStorageUsageUpdate {
                     timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
                     delta,
                 },
                 |mut status| {
@@ -2543,7 +2552,7 @@ mod test {
             let old_status = self.entries[u64::from(target) as usize - 1]
                 .expected_status
                 .clone();
-            self.add(OplogEntry::jump(region.clone()), move |mut status| {
+            self.add(OplogEntry::jump(None, region.clone()), move |mut status| {
                 status.status = old_status.status;
                 status.component_revision = old_status.component_revision;
                 status.current_idempotency_key = old_status.current_idempotency_key;
@@ -2635,6 +2644,7 @@ mod test {
         pub fn permission_denied_pending_invocation(self, idempotency_key: IdempotencyKey) -> Self {
             self.cancel_pending_invocation(idempotency_key.clone()).add(
                 OplogEntry::error(
+                    None,
                     AgentError::PermissionDenied("permission denied".to_string()),
                     OplogIndex::INITIAL,
                     false,
@@ -3447,6 +3457,7 @@ mod test {
             OplogIndex::from_u64(idx),
             OplogEntry::FilesystemStorageUsageUpdate {
                 timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
                 delta,
             },
         )
@@ -3546,6 +3557,7 @@ mod test {
             OplogIndex::from_u64(1),
             OplogEntry::CardRevoked {
                 timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
                 queued_event_index: OplogIndex::from_u64(1),
                 card_id,
                 wallet_generation: None,
@@ -3583,7 +3595,7 @@ mod test {
         let card_id = golem_common::model::card::CardId::new();
         let entries = BTreeMap::from([(
             OplogIndex::from_u64(1),
-            OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
+            OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(card_id)),
         )]);
 
         let status = super::update_status_with_new_entries(
@@ -3611,11 +3623,11 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
+                OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(card_id)),
             ),
             (
                 OplogIndex::from_u64(2),
-                OplogEntry::card_revoked(OplogIndex::from_u64(1), card_id, None),
+                OplogEntry::card_revoked(None, OplogIndex::from_u64(1), card_id, None),
             ),
         ]);
 
@@ -3639,6 +3651,7 @@ mod test {
             OplogIndex::from_u64(1),
             OplogEntry::CardRevokedCascade {
                 timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
                 revoked_card_ids: vec![first_card_id, second_card_id],
                 affected_wallets: Vec::new(),
                 local_wallet_generation: None,
@@ -3664,6 +3677,7 @@ mod test {
             OplogIndex::from_u64(1),
             OplogEntry::CardRevokedCascade {
                 timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
                 revoked_card_ids: vec![card_id],
                 affected_wallets: Vec::new(),
                 local_wallet_generation: Some(1),
@@ -3680,7 +3694,7 @@ mod test {
 
         let installed = BTreeMap::from([(
             OplogIndex::from_u64(2),
-            OplogEntry::card_installed(None, test_card(card_id).into(), Some(2)),
+            OplogEntry::card_installed(None, None, test_card(card_id).into(), Some(2)),
         )]);
         let status_after_install = super::update_status_with_new_entries(
             AgentMode::Durable,
@@ -3704,20 +3718,21 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::revoke(first_card_id)),
+                OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(first_card_id)),
             ),
             (
                 OplogIndex::from_u64(2),
-                OplogEntry::card_event_queued(QueuedCardEvent::revoke(second_card_id)),
+                OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(second_card_id)),
             ),
             (
                 OplogIndex::from_u64(3),
-                OplogEntry::card_event_queued(QueuedCardEvent::revoke(unrelated_card_id)),
+                OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(unrelated_card_id)),
             ),
             (
                 OplogIndex::from_u64(4),
                 OplogEntry::CardRevokedCascade {
                     timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
                     revoked_card_ids: vec![first_card_id, second_card_id],
                     affected_wallets: Vec::new(),
                     local_wallet_generation: Some(1),
@@ -3750,6 +3765,7 @@ mod test {
                 OplogIndex::from_u64(1),
                 OplogEntry::CardRevokedCascade {
                     timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
                     revoked_card_ids: vec![card_id],
                     affected_wallets: Vec::new(),
                     local_wallet_generation: None,
@@ -3792,23 +3808,30 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_started(
-                    completed_transfer_id,
-                    transferred_card.clone(),
-                    target_holder.clone(),
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_started(
+                        completed_transfer_id,
+                        transferred_card.clone(),
+                        target_holder.clone(),
+                    ),
+                ),
             ),
             (
                 OplogIndex::from_u64(2),
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_started(
-                    pending_transfer_id,
-                    pending_card.clone(),
-                    target_holder.clone(),
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_started(
+                        pending_transfer_id,
+                        pending_card.clone(),
+                        target_holder.clone(),
+                    ),
+                ),
             ),
             (
                 OplogIndex::from_u64(3),
                 OplogEntry::card_transfer_confirmed(
+                    None,
                     completed_transfer_id,
                     transferred_card.card_id,
                     transferred_card.card_id,
@@ -3856,16 +3879,20 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
-                    transfer_id,
-                    source_card_id,
-                    installed_child.clone(),
-                    target_holder.clone(),
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_started_with_source(
+                        transfer_id,
+                        source_card_id,
+                        installed_child.clone(),
+                        target_holder.clone(),
+                    ),
+                ),
             ),
             (
                 OplogIndex::from_u64(2),
                 OplogEntry::card_transfer_confirmed(
+                    None,
                     transfer_id,
                     source_card_id,
                     installed_child.card_id,
@@ -3901,16 +3928,20 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
-                    transfer_id,
-                    source_card_id,
-                    installed_child.clone(),
-                    target_holder.clone(),
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_started_with_source(
+                        transfer_id,
+                        source_card_id,
+                        installed_child.clone(),
+                        target_holder.clone(),
+                    ),
+                ),
             ),
             (
                 OplogIndex::from_u64(2),
                 OplogEntry::card_transfer_confirmed(
+                    None,
                     transfer_id,
                     golem_common::model::card::CardId::new(),
                     installed_child.card_id,
@@ -3938,11 +3969,10 @@ mod test {
         let source_card_id = golem_common::model::card::CardId::new();
         let entries = BTreeMap::from([(
             OplogIndex::from_u64(1),
-            OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
-                transfer_id,
-                source_card_id,
-                card.clone(),
-            )),
+            OplogEntry::card_event_queued(
+                None,
+                QueuedCardEvent::transfer_received(transfer_id, source_card_id, card.clone()),
+            ),
         )]);
 
         let status = super::update_status_with_new_entries(
@@ -3991,7 +4021,7 @@ mod test {
             AgentStatusRecord::default(),
             BTreeMap::from([(
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(legacy_receipt),
+                OplogEntry::card_event_queued(None, legacy_receipt),
             )]),
             &RetryConfig::default(),
         )
@@ -4009,11 +4039,14 @@ mod test {
             status,
             BTreeMap::from([(
                 OplogIndex::from_u64(2),
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
-                    transfer_id,
-                    source_card_id,
-                    stored_card.clone(),
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_received(
+                        transfer_id,
+                        source_card_id,
+                        stored_card.clone(),
+                    ),
+                ),
             )]),
             &RetryConfig::default(),
         )
@@ -4031,11 +4064,14 @@ mod test {
             status,
             BTreeMap::from([(
                 OplogIndex::from_u64(3),
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
-                    transfer_id,
-                    golem_common::model::card::CardId::new(),
-                    stored_card,
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_received(
+                        transfer_id,
+                        golem_common::model::card::CardId::new(),
+                        stored_card,
+                    ),
+                ),
             )]),
             &RetryConfig::default(),
         )
@@ -4055,26 +4091,35 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
-                    skipped_transfer_id,
-                    source_card_id,
-                    card.clone(),
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_received(
+                        skipped_transfer_id,
+                        source_card_id,
+                        card.clone(),
+                    ),
+                ),
             ),
             (
                 OplogIndex::from_u64(2),
-                OplogEntry::jump(OplogRegion {
-                    start: OplogIndex::from_u64(1),
-                    end: OplogIndex::from_u64(1),
-                }),
+                OplogEntry::jump(
+                    None,
+                    OplogRegion {
+                        start: OplogIndex::from_u64(1),
+                        end: OplogIndex::from_u64(1),
+                    },
+                ),
             ),
             (
                 OplogIndex::from_u64(3),
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
-                    deleted_transfer_id,
-                    source_card_id,
-                    card.clone(),
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_received(
+                        deleted_transfer_id,
+                        source_card_id,
+                        card.clone(),
+                    ),
+                ),
             ),
             (
                 OplogIndex::from_u64(4),
@@ -4121,15 +4166,15 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
-                    transfer_id,
-                    source_card_id,
-                    card.clone(),
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_received(transfer_id, source_card_id, card.clone()),
+                ),
             ),
             (
                 OplogIndex::from_u64(2),
                 OplogEntry::card_transferred(
+                    None,
                     transfer_id,
                     Some(source_card_id),
                     card.card_id,
@@ -4167,15 +4212,15 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
-                    transfer_id,
-                    source_card_id,
-                    card.clone(),
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_received(transfer_id, source_card_id, card.clone()),
+                ),
             ),
             (
                 OplogIndex::from_u64(2),
                 OplogEntry::card_transferred(
+                    None,
                     transfer_id,
                     None,
                     card.card_id,
@@ -4213,15 +4258,15 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
-                    transfer_id,
-                    source_card_id,
-                    card.clone(),
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_received(transfer_id, source_card_id, card.clone()),
+                ),
             ),
             (
                 OplogIndex::from_u64(2),
                 OplogEntry::card_transferred(
+                    None,
                     transfer_id,
                     Some(golem_common::model::card::CardId::new()),
                     card.card_id,
@@ -4266,15 +4311,19 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_started(
-                    transfer_id,
-                    pending_card.clone(),
-                    target_holder.clone(),
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_started(
+                        transfer_id,
+                        pending_card.clone(),
+                        target_holder.clone(),
+                    ),
+                ),
             ),
             (
                 OplogIndex::from_u64(2),
                 OplogEntry::card_transfer_confirmed(
+                    None,
                     transfer_id,
                     conflicting_card.card_id,
                     conflicting_card.card_id,
@@ -4316,15 +4365,19 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_started(
-                    transfer_id,
-                    card.clone(),
-                    target_holder.clone(),
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_started(
+                        transfer_id,
+                        card.clone(),
+                        target_holder.clone(),
+                    ),
+                ),
             ),
             (
                 OplogIndex::from_u64(2),
                 OplogEntry::card_install_failed(
+                    None,
                     OplogIndex::from_u64(1),
                     card.card_id,
                     golem_common::base_model::oplog::CardInstallFailure::NotFound,
@@ -4370,15 +4423,19 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_started(
-                    transfer_id,
-                    card.clone(),
-                    target_holder.clone(),
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_started(
+                        transfer_id,
+                        card.clone(),
+                        target_holder.clone(),
+                    ),
+                ),
             ),
             (
                 OplogIndex::from_u64(2),
                 OplogEntry::card_transferred(
+                    None,
                     transfer_id,
                     Some(card.card_id),
                     card.card_id,
@@ -4422,15 +4479,19 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_started(
-                    transfer_id,
-                    card.clone(),
-                    target_holder.clone(),
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_started(
+                        transfer_id,
+                        card.clone(),
+                        target_holder.clone(),
+                    ),
+                ),
             ),
             (
                 OplogIndex::from_u64(2),
                 OplogEntry::card_transfer_confirmed(
+                    None,
                     transfer_id,
                     card.card_id,
                     card.card_id,
@@ -4463,15 +4524,15 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
+                OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(card_id)),
             ),
             (
                 OplogIndex::from_u64(2),
-                OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
+                OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(card_id)),
             ),
             (
                 OplogIndex::from_u64(3),
-                OplogEntry::card_revoked(OplogIndex::from_u64(1), card_id, None),
+                OplogEntry::card_revoked(None, OplogIndex::from_u64(1), card_id, None),
             ),
         ]);
 
@@ -4497,7 +4558,10 @@ mod test {
         let card = test_card(card_id);
         let entries = BTreeMap::from([(
             OplogIndex::from_u64(1),
-            OplogEntry::card_event_queued(QueuedCardEvent::install(card.clone())),
+            OplogEntry::card_event_queued(
+                Some(OplogIndex::from_u64(42)),
+                QueuedCardEvent::install(card.clone()),
+            ),
         )]);
 
         let status = super::update_status_with_new_entries(
@@ -4509,6 +4573,10 @@ mod test {
         .unwrap();
 
         assert_eq!(status.pending_card_events.len(), 1);
+        assert_eq!(
+            status.pending_card_events[0].entity_parent_start_index,
+            Some(OplogIndex::from_u64(42))
+        );
         assert_eq!(
             status.pending_card_events[0].event,
             QueuedCardEvent::install(card)
@@ -4522,11 +4590,11 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::install(card.clone())),
+                OplogEntry::card_event_queued(None, QueuedCardEvent::install(card.clone())),
             ),
             (
                 OplogIndex::from_u64(2),
-                OplogEntry::card_installed(Some(OplogIndex::from_u64(1)), card.into(), None),
+                OplogEntry::card_installed(None, Some(OplogIndex::from_u64(1)), card.into(), None),
             ),
         ]);
 
@@ -4548,11 +4616,12 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::install(card)),
+                OplogEntry::card_event_queued(None, QueuedCardEvent::install(card)),
             ),
             (
                 OplogIndex::from_u64(2),
                 OplogEntry::card_install_failed(
+                    None,
                     OplogIndex::from_u64(1),
                     card_id,
                     CardInstallFailure::CardRevoked,
@@ -4577,7 +4646,7 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(2),
-                OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
+                OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(card_id)),
             ),
             (
                 OplogIndex::from_u64(3),
@@ -4606,11 +4675,11 @@ mod test {
         let entries = BTreeMap::from([
             (
                 OplogIndex::from_u64(1),
-                OplogEntry::card_event_queued(QueuedCardEvent::install(card.clone())),
+                OplogEntry::card_event_queued(None, QueuedCardEvent::install(card.clone())),
             ),
             (
                 OplogIndex::from_u64(2),
-                OplogEntry::card_installed(Some(OplogIndex::from_u64(1)), card.into(), None),
+                OplogEntry::card_installed(None, Some(OplogIndex::from_u64(1)), card.into(), None),
             ),
             (
                 OplogIndex::from_u64(3),
@@ -4640,6 +4709,7 @@ mod test {
                 OplogIndex::from_u64(2),
                 OplogEntry::CardRevoked {
                     timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
                     queued_event_index: OplogIndex::from_u64(1),
                     card_id,
                     wallet_generation: None,

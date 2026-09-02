@@ -1334,6 +1334,7 @@ impl PendingInvocationRef {
 pub struct PendingCardEventRef {
     pub timestamp: Timestamp,
     pub oplog_index: OplogIndex,
+    pub entity_parent_start_index: Option<OplogIndex>,
     pub event: QueuedCardEvent,
 }
 

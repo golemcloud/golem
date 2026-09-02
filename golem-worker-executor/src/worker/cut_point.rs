@@ -276,7 +276,7 @@ mod tests {
                 let entry = entries
                     .get(&u64::from(i))
                     .cloned()
-                    .unwrap_or_else(OplogEntry::no_op);
+                    .unwrap_or_else(|| OplogEntry::no_op(None));
                 async move { entry }
             },
             idx(cut),
@@ -296,7 +296,7 @@ mod tests {
                 let entry = entries
                     .get(&u64::from(i))
                     .cloned()
-                    .unwrap_or_else(OplogEntry::no_op);
+                    .unwrap_or_else(|| OplogEntry::no_op(None));
                 async move { entry }
             },
             idx(start),
@@ -306,18 +306,21 @@ mod tests {
     }
 
     fn stream_entry() -> OplogEntry {
-        OplogEntry::stream_session(OplogPayload::Inline(Box::new(
-            StreamSessionRecordV1::ConsumerDeleting(StreamConsumerDeletingRecordV1 {
-                format_version: DURABLE_STREAM_FORMAT_VERSION,
-                consumer_environment_id: EnvironmentId(Uuid::from_u128(1)),
-                consumer: AgentId {
-                    component_id: ComponentId(Uuid::from_u128(2)),
-                    agent_id: "consumer".to_string(),
+        OplogEntry::stream_session(
+            None,
+            OplogPayload::Inline(Box::new(StreamSessionRecordV1::ConsumerDeleting(
+                StreamConsumerDeletingRecordV1 {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    consumer_environment_id: EnvironmentId(Uuid::from_u128(1)),
+                    consumer: AgentId {
+                        component_id: ComponentId(Uuid::from_u128(2)),
+                        agent_id: "consumer".to_string(),
+                    },
+                    consumer_fingerprint: AgentFingerprint(Uuid::from_u128(3)),
+                    deleting_at_millis: 100,
                 },
-                consumer_fingerprint: AgentFingerprint(Uuid::from_u128(3)),
-                deleting_at_millis: 100,
-            }),
-        )))
+            ))),
+        )
     }
 
     #[test]
@@ -417,7 +420,7 @@ mod tests {
 
     #[test]
     async fn end_atomic_region_after_cut_is_rejected() {
-        let entries = HashMap::from([(6, OplogEntry::end_atomic_region(idx(2)))]);
+        let entries = HashMap::from([(6, OplogEntry::end_atomic_region(None, idx(2)))]);
         assert_eq!(
             scan(&entries, 4, 6, &deleted(vec![])).await,
             Some(SpanningConstruct::AtomicRegion {
@@ -488,6 +491,7 @@ mod tests {
                 3,
                 OplogEntry::CardTransferStarted {
                     timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
                     transfer_id,
                     card_id: source_card_id,
                     source_holder: None,
@@ -499,6 +503,7 @@ mod tests {
                 5,
                 OplogEntry::CardTransferConfirmed {
                     timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
                     transfer_id,
                     source_card_id,
                     installed_card_id,
@@ -533,7 +538,7 @@ mod tests {
     #[test]
     async fn first_spanning_construct_is_reported() {
         let entries = HashMap::from([
-            (5, OplogEntry::end_atomic_region(idx(2))),
+            (5, OplogEntry::end_atomic_region(None, idx(2))),
             (6, OplogEntry::end(idx(3), None, false)),
         ]);
         assert_eq!(

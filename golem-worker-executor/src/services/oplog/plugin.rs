@@ -2753,10 +2753,12 @@ mod tests {
 
         let first = oplog.enqueue_add(OplogEntry::NoOp {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
         });
         let second = oplog
             .add(OplogEntry::NoOp {
                 timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
             })
             .await;
 

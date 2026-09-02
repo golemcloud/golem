@@ -1958,8 +1958,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             };
             match &pending_event.event {
                 QueuedCardEvent::Revoke(_) => {
+                    let entity_parent_start_index = pending_event.entity_parent_start_index;
                     let card_ids = pending_events
                         .into_iter()
+                        .filter(|pending_event| {
+                            pending_event.entity_parent_start_index == entity_parent_start_index
+                        })
                         .filter_map(|pending_event| match pending_event.event {
                             QueuedCardEvent::Revoke(event) => Some(event.card_id),
                             QueuedCardEvent::Install(_)
@@ -1967,7 +1971,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             | QueuedCardEvent::TransferReceived(_) => None,
                         })
                         .collect::<Vec<_>>();
-                    self.apply_card_revoked_cascade(&card_ids, true).await?;
+                    self.apply_card_revoked_cascade(entity_parent_start_index, &card_ids, true)
+                        .await?;
                 }
                 QueuedCardEvent::Install(event) => {
                     let Some(card) = event.card.clone() else {
@@ -1976,7 +1981,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         ));
                     };
                     let _ = self
-                        .apply_card_install(Some(pending_event.oplog_index), card)
+                        .apply_card_install(
+                            pending_event.entity_parent_start_index,
+                            Some(pending_event.oplog_index),
+                            card,
+                        )
                         .await?;
                 }
                 QueuedCardEvent::TransferReceived(event) => {
@@ -1987,6 +1996,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     };
                     let _ = self
                         .apply_received_card_transfer(
+                            pending_event.entity_parent_start_index,
                             pending_event.oplog_index,
                             event.transfer_id,
                             event.source_card_id,
@@ -2009,8 +2019,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let expired_root_ids =
             expired_wallet_card_ids_at(&self.state.invocation_scope_root_cards, Utc::now());
         if !expired_root_ids.is_empty() {
-            self.apply_card_revoked_cascade(&expired_root_ids, true)
-                .await?;
+            self.apply_card_revoked_cascade(
+                self.entity_parent_start_index(),
+                &expired_root_ids,
+                true,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -2108,6 +2122,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub(crate) async fn apply_card_install(
         &mut self,
+        entity_parent_start_index: Option<OplogIndex>,
         queued_event_index: Option<OplogIndex>,
         card: StoredCard,
     ) -> Result<Result<(), CardInstallFailure>, WorkerExecutorError> {
@@ -2117,6 +2132,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 self.public_state
                     .worker()
                     .add_and_commit_oplog(OplogEntry::card_install_failed(
+                        entity_parent_start_index,
                         queued_event_index,
                         card_id,
                         reason,
@@ -2128,6 +2144,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.public_state
                 .worker()
                 .add_and_commit_oplog(OplogEntry::card_installed(
+                    entity_parent_start_index,
                     queued_event_index,
                     card,
                     Some(self.state.wallet_generation),
@@ -2139,6 +2156,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     async fn apply_received_card_transfer(
         &mut self,
+        entity_parent_start_index: Option<OplogIndex>,
         queued_event_index: OplogIndex,
         transfer_id: uuid::Uuid,
         source_card_id: Option<CardId>,
@@ -2149,6 +2167,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.public_state
                 .worker()
                 .add_and_commit_oplog(OplogEntry::card_install_failed(
+                    entity_parent_start_index,
                     queued_event_index,
                     card_id,
                     reason,
@@ -2160,6 +2179,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.public_state
             .worker()
             .add_and_commit_oplog(OplogEntry::card_transferred(
+                entity_parent_start_index,
                 transfer_id,
                 source_card_id,
                 card_id,
@@ -2196,6 +2216,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.public_state
                 .worker()
                 .add_and_commit_oplog(OplogEntry::card_revoked(
+                    self.entity_parent_start_index(),
                     queued_event_index,
                     card_id,
                     Some(self.state.wallet_generation),
@@ -2208,6 +2229,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub(crate) async fn apply_card_revoked_cascade(
         &mut self,
+        entity_parent_start_index: Option<OplogIndex>,
         card_ids: &[CardId],
         commit_immediately: bool,
     ) -> Result<(), WorkerExecutorError> {
@@ -2239,6 +2261,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
         let entry = OplogEntry::CardRevokedCascade {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index,
             revoked_card_ids: card_ids,
             affected_wallets,
             local_wallet_generation: Some(self.state.wallet_generation),
@@ -2280,7 +2303,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         for (card_id, wallet_generation) in expired_card_generations {
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::card_expired(card_id, Some(wallet_generation)))
+                .add_and_commit_oplog(OplogEntry::card_expired(
+                    self.entity_parent_start_index(),
+                    card_id,
+                    Some(wallet_generation),
+                ))
                 .await;
         }
         Ok(())
@@ -2508,6 +2535,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.public_state
             .worker()
             .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
+                self.entity_parent_start_index(),
                 new_bytes as i64,
             ))
             .await;
@@ -2539,6 +2567,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.public_state
             .worker()
             .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
+                self.entity_parent_start_index(),
                 -(freed_bytes as i64),
             ))
             .await;
@@ -3106,7 +3135,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
                             self.public_state
                                 .worker()
-                                .add_and_commit_oplog(OplogEntry::jump(deleted_region))
+                                .add_and_commit_oplog(OplogEntry::jump(
+                                    self.entity_parent_start_index(),
+                                    deleted_region,
+                                ))
                                 .await;
 
                             // TODO: this recomputation should not be necessary.
@@ -3496,7 +3528,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
                     self.public_state
                         .worker()
-                        .add_and_commit_oplog(OplogEntry::jump(deleted_region))
+                        .add_and_commit_oplog(OplogEntry::jump(
+                            self.entity_parent_start_index(),
+                            deleted_region,
+                        ))
                         .await;
 
                     // TODO: this recomputation should not be necessary.
@@ -5033,6 +5068,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             )
             .await;
 
+        let entity_parent_start_index = self.entity_parent_start_index();
         let permission_denial_persisted = if let (
             Some(idempotency_key),
             TrapType::Error {
@@ -5054,6 +5090,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         let inside_atomic_region = *atomic_region_had_side_effects;
                         move |_| {
                             OplogEntry::error(
+                                entity_parent_start_index,
                                 AgentError::PermissionDenied(error),
                                 retry_from,
                                 inside_atomic_region,
@@ -5091,6 +5128,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 atomic_region_had_side_effects,
                 ..
             } => Some(OplogEntry::error(
+                entity_parent_start_index,
                 error.clone(),
                 *retry_from,
                 *atomic_region_had_side_effects,
@@ -5348,7 +5386,11 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         let id = self.state.add(resource, name.clone()).await;
         let resource_id = AgentResourceId(id);
         if self.state.is_live() {
-            let entry = OplogEntry::create_resource(resource_id, name.clone());
+            let entry = OplogEntry::create_resource(
+                self.entity_parent_start_index(),
+                resource_id,
+                name.clone(),
+            );
             self.public_state.worker().add_to_oplog(entry).await;
         }
         id
@@ -5359,7 +5401,11 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         if let Some((resource_type_id, _)) = &result {
             let id = AgentResourceId(resource_id);
             if self.state.is_live() {
-                let entry = OplogEntry::drop_resource(id, resource_type_id.clone());
+                let entry = OplogEntry::drop_resource(
+                    self.entity_parent_start_index(),
+                    id,
+                    resource_type_id.clone(),
+                );
                 self.public_state.worker().add_to_oplog(entry).await;
             }
         }
@@ -7915,6 +7961,7 @@ mod tests {
         let pending_transfer = PendingCardEventRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(1),
+            entity_parent_start_index: None,
             event: QueuedCardEvent::transfer_started(Uuid::new_v4(), transfer_card, target_holder),
         };
         assert!(next_drainable_card_events(vec![pending_transfer.clone()]).is_empty());
@@ -7924,6 +7971,7 @@ mod tests {
             PendingCardEventRef {
                 timestamp: Timestamp::now_utc(),
                 oplog_index: OplogIndex::from_u64(2),
+                entity_parent_start_index: None,
                 event: QueuedCardEvent::revoke(revoked_card_id),
             },
         ];
@@ -7944,6 +7992,7 @@ mod tests {
         let receipt = PendingCardEventRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(1),
+            entity_parent_start_index: None,
             event: QueuedCardEvent::transfer_received(Uuid::new_v4(), source_card_id, card.clone()),
         };
 
@@ -7969,21 +8018,25 @@ mod tests {
             PendingCardEventRef {
                 timestamp: Timestamp::now_utc(),
                 oplog_index: OplogIndex::from_u64(1),
+                entity_parent_start_index: None,
                 event: QueuedCardEvent::revoke(first),
             },
             PendingCardEventRef {
                 timestamp: Timestamp::now_utc(),
                 oplog_index: OplogIndex::from_u64(2),
+                entity_parent_start_index: None,
                 event: QueuedCardEvent::revoke(second),
             },
             PendingCardEventRef {
                 timestamp: Timestamp::now_utc(),
                 oplog_index: OplogIndex::from_u64(3),
+                entity_parent_start_index: None,
                 event: QueuedCardEvent::install(install),
             },
             PendingCardEventRef {
                 timestamp: Timestamp::now_utc(),
                 oplog_index: OplogIndex::from_u64(4),
+                entity_parent_start_index: None,
                 event: QueuedCardEvent::revoke(after_install),
             },
         ];
@@ -8013,8 +8066,8 @@ mod tests {
             assert_eq!(count, 2);
 
             let entries = BTreeMap::from([
-                (start, OplogEntry::no_op()),
-                (current_idx, OplogEntry::no_op()),
+                (start, OplogEntry::no_op(None)),
+                (current_idx, OplogEntry::no_op(None)),
             ]);
             scanned_entries += entries.len();
             scan.fold_through(current_idx, &entries);
@@ -8036,7 +8089,7 @@ mod tests {
             queued_idx,
             &BTreeMap::from([(
                 queued_idx,
-                OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
+                OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(card_id)),
             )]),
         );
 
@@ -8047,7 +8100,7 @@ mod tests {
             terminal_idx,
             &BTreeMap::from([(
                 terminal_idx,
-                OplogEntry::card_revoked(queued_idx, card_id, None),
+                OplogEntry::card_revoked(None, queued_idx, card_id, None),
             )]),
         );
 
@@ -8062,11 +8115,13 @@ mod tests {
         let cached_pending = PendingCardEventRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(9),
+            entity_parent_start_index: None,
             event: QueuedCardEvent::revoke(cached_card_id),
         };
         let status_pending = PendingCardEventRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(10),
+            entity_parent_start_index: None,
             event: QueuedCardEvent::revoke(status_card_id),
         };
         let mut scan =
@@ -8096,11 +8151,13 @@ mod tests {
         let cached_pending = PendingCardEventRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(20),
+            entity_parent_start_index: None,
             event: QueuedCardEvent::revoke(CardId::new()),
         };
         let status_pending = PendingCardEventRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(5),
+            entity_parent_start_index: None,
             event: QueuedCardEvent::revoke(CardId::new()),
         };
         let mut scan = CardEventBoundaryScan::new(OplogIndex::from_u64(20), vec![cached_pending]);

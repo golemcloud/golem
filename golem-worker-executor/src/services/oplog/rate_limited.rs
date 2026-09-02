@@ -660,10 +660,13 @@ mod tests {
     }
 
     fn dummy_entry() -> OplogEntry {
-        OplogEntry::jump(OplogRegion {
-            start: OplogIndex::from_u64(1),
-            end: OplogIndex::from_u64(1),
-        })
+        OplogEntry::jump(
+            None,
+            OplogRegion {
+                start: OplogIndex::from_u64(1),
+                end: OplogIndex::from_u64(1),
+            },
+        )
     }
 
     // When writes exceed the configured rate, subsequent adds are delayed.

@@ -13465,6 +13465,22 @@ components:
       properties:
         error:
           type: string
+    PublicAgentEntity:
+      title: PublicAgentEntity
+      type: object
+      properties:
+        kind:
+          $ref: '#/components/schemas/PublicAgentEntityKind'
+        name:
+          type: string
+      required:
+      - kind
+      - name
+    PublicAgentEntityKind:
+      type: string
+      enum:
+      - tool
+      - toolMiddleware
     PublicAgentInvocation:
       discriminator:
         propertyName: type
@@ -13718,6 +13734,66 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/WriteRemoteTransactionParameters'
+    PublicEntityCallMode:
+      type: string
+      enum:
+      - synchronous
+      - asynchronous
+      - fireAndForget
+    PublicEntityInvocation:
+      title: PublicEntityInvocation
+      description: One entity invocation in an owner-oplog execution chain.
+      type: object
+      properties:
+        entity:
+          $ref: '#/components/schemas/PublicAgentEntity'
+        startIndex:
+          type: integer
+          format: uint64
+        callMode:
+          $ref: '#/components/schemas/PublicEntityCallMode'
+        operation:
+          $ref: '#/components/schemas/PublicEntityInvocationOperation'
+      required:
+      - entity
+      - startIndex
+      - callMode
+    PublicEntityInvocationContext:
+      title: PublicEntityInvocationContext
+      description: |-
+        Attribution for an entry executed by an entity. Ancestors are ordered from the root entity
+        invocation to the immediate parent of `invocation`.
+      type: object
+      properties:
+        invocation:
+          $ref: '#/components/schemas/PublicEntityInvocation'
+        ancestors:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicEntityInvocation'
+      required:
+      - invocation
+      - ancestors
+    PublicEntityInvocationOperation:
+      discriminator:
+        propertyName: type
+        mapping:
+          Tool: '#/components/schemas/PublicEntityInvocationOperation_PublicToolInvocationOperation'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicEntityInvocationOperation_PublicToolInvocationOperation'
+    PublicEntityInvocationOperation_PublicToolInvocationOperation:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Tool
+            type: string
+            enum:
+            - Tool
+        required:
+        - type
+      - $ref: '#/components/schemas/PublicToolInvocationOperation'
     PublicExternalSpanData:
       title: PublicExternalSpanData
       type: object
@@ -13911,6 +13987,40 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
+    PublicOplogEntryAttribution:
+      discriminator:
+        propertyName: type
+        mapping:
+          Agent: '#/components/schemas/PublicOplogEntryAttribution_Empty'
+          Entity: '#/components/schemas/PublicOplogEntryAttribution_PublicEntityInvocationContext'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicOplogEntryAttribution_Empty'
+      - $ref: '#/components/schemas/PublicOplogEntryAttribution_PublicEntityInvocationContext'
+    PublicOplogEntryAttribution_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Agent
+            type: string
+            enum:
+            - Agent
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
+    PublicOplogEntryAttribution_PublicEntityInvocationContext:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Entity
+            type: string
+            enum:
+            - Entity
+        required:
+        - type
+      - $ref: '#/components/schemas/PublicEntityInvocationContext'
     PublicOplogEntryWithIndex:
       title: PublicOplogEntryWithIndex
       type: object
@@ -13918,10 +14028,13 @@ components:
         oplogIndex:
           type: integer
           format: uint64
+        attribution:
+          $ref: '#/components/schemas/PublicOplogEntryAttribution'
         entry:
           $ref: '#/components/schemas/PublicOplogEntry'
       required:
       - oplogIndex
+      - attribution
       - entry
     PublicOplogEntry_r#ActivatePluginParams:
       allOf:
@@ -14980,6 +15093,30 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/PublicLocalSpanData'
+    PublicToolInvocationOperation:
+      title: PublicToolInvocationOperation
+      type: object
+      properties:
+        commandPath:
+          type: array
+          items:
+            type: string
+        hasStdin:
+          description: Whether a live stdin attachment was requested.
+          type: boolean
+        hasStdout:
+          description: |-
+            Whether a live stdout attachment was requested. Stdout bytes are not recorded in the
+            oplog.
+          type: boolean
+        declaresStdout:
+          description: Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog.
+          type: boolean
+      required:
+      - commandPath
+      - hasStdin
+      - hasStdout
+      - declaresStdout
     PublicTypedAgentConfigEntry:
       title: PublicTypedAgentConfigEntry
       description: |-

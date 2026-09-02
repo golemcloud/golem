@@ -1863,6 +1863,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
 
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
+            self.entity_parent_start_index(),
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
             inside_atomic_region,
@@ -2305,6 +2306,8 @@ pub async fn count_oplog_errors_for(
 pub struct TaskRetryContext<Ctx: WorkerCtx> {
     /// The oplog index that error entries reference as their `retry_from` point.
     pub retry_point: OplogIndex,
+    /// Entity invocation that initiated this task, if any.
+    pub entity_parent_start_index: Option<OplogIndex>,
     /// Environment state service for lazy policy fetching
     pub environment_state_service: Arc<dyn EnvironmentStateService>,
     /// Environment ID for policy lookup
@@ -2375,6 +2378,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
     ) {
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
+            self.entity_parent_start_index,
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
             inside_atomic_region,

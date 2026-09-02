@@ -1401,14 +1401,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         entries: chunk
                             .entries
                             .into_iter()
-                            .map(|(idx, entry)| {
-                                entry.try_into().map(|entry: golem::worker::OplogEntry| {
-                                    golem::worker::OplogEntryWithIndex {
-                                        oplog_index: idx.into(),
-                                        entry: Some(entry),
-                                    }
-                                })
-                            })
+                            .map(|entry| entry.try_into())
                             .collect::<Result<Vec<_>, _>>()
                             .map_err(WorkerExecutorError::unknown)?,
                         next,

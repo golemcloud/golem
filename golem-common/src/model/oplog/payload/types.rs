@@ -2322,7 +2322,6 @@ pub struct SerializableToolOperationTerminal {
 #[desert(evolution())]
 pub struct SerializableToolInvocationResult {
     pub result: Option<TypedSchemaValue>,
-    pub stdout: Option<Vec<u8>>,
 }
 
 #[derive(

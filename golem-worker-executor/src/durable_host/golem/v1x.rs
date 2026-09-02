@@ -619,7 +619,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // tip would nondeterministically point past the `NoOp` entry. Debugging sessions
             // discard writes and return `NONE` from `add`; fall back to the session's replay
             // target there so the guest never observes an invalid index.
-            let marker = match self.state.oplog.add(OplogEntry::no_op()).await {
+            let marker = match self
+                .state
+                .oplog
+                .add(OplogEntry::no_op(self.entity_parent_start_index()))
+                .await
+            {
                 OplogIndex::NONE => self.state.current_oplog_index().await,
                 index => index,
             };
@@ -700,7 +705,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // Write an oplog entry with the new jump and then restart the worker
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::jump(jump))
+                .add_and_commit_oplog(OplogEntry::jump(self.entity_parent_start_index(), jump))
                 .await;
 
             debug!("Interrupting live execution for jumping from {jump_source} to {jump_target}",);
@@ -755,7 +760,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let begin_index = match self
                 .state
                 .oplog
-                .add(OplogEntry::begin_atomic_region())
+                .add(OplogEntry::begin_atomic_region(
+                    self.entity_parent_start_index(),
+                ))
                 .await
             {
                 OplogIndex::NONE => self.state.current_oplog_index().await,
@@ -805,7 +812,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
                     self.public_state
                         .worker()
-                        .add_and_commit_oplog(OplogEntry::jump(deleted_region))
+                        .add_and_commit_oplog(OplogEntry::jump(
+                            self.entity_parent_start_index(),
+                            deleted_region,
+                        ))
                         .await;
 
                     // TODO: this recomputation should not be necessary.
@@ -864,7 +874,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // append leaves the region uncommitted and replay retries it as a whole.
             self.state
                 .oplog
-                .add(OplogEntry::end_atomic_region(begin_index))
+                .add(OplogEntry::end_atomic_region(
+                    self.entity_parent_start_index(),
+                    begin_index,
+                ))
                 .await;
         } else {
             let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::EndAtomicRegion)?;
@@ -1701,8 +1714,13 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
             let result = get_oplog_chunk(self, &entry).await;
             let response = match result {
                 Ok(chunk) if chunk.next_oplog_index != entry.next_oplog_index => {
+                    let entries = chunk
+                        .entries
+                        .into_iter()
+                        .map(|entry| entry.entry)
+                        .collect::<Vec<_>>();
                     HostResponseGolemApiOplogChunk {
-                        result: serde_json::to_vec(&chunk.entries)
+                        result: serde_json::to_vec(&entries)
                             .map(Some)
                             .map_err(|error| error.to_string()),
                         next_oplog_index: chunk.next_oplog_index,
@@ -2057,8 +2075,13 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             let result = get_search_oplog_chunk(self, &entry).await;
             let response = match result {
                 Ok(chunk) if chunk.next_oplog_index != entry.next_oplog_index => {
+                    let entries = chunk
+                        .entries
+                        .into_iter()
+                        .map(|entry| (entry.oplog_index, entry.entry))
+                        .collect::<Vec<_>>();
                     HostResponseGolemApiOplogChunk {
-                        result: serde_json::to_vec(&chunk.entries)
+                        result: serde_json::to_vec(&entries)
                             .map(Some)
                             .map_err(|error| error.to_string()),
                         next_oplog_index: chunk.next_oplog_index,

@@ -305,7 +305,7 @@ message GetOplogResponse {
 }
 
 message GetOplogSuccessResponse {
-  repeated golem.worker.OplogEntry entries = 1;
+  repeated golem.worker.OplogEntryWithIndex entries = 1;
   optional golem.worker.OplogCursor next = 2;
   uint64 first_index_in_chunk = 3;
   uint64 last_index = 5;

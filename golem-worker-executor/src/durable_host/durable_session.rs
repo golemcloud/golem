@@ -54,6 +54,7 @@ use golem_common::base_model::durable_stream::{
 };
 use golem_common::base_model::oplog::OplogEntry;
 use golem_common::model::Timestamp;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::payload::OplogPayload;
 use golem_schema::schema::wit::{encode_value_with_streams, wire};
 use golem_schema::schema::{SchemaFingerprintV1, SchemaGraph, SchemaType, schema_fingerprint_v1};
@@ -99,6 +100,7 @@ pub(crate) struct DurableSessionStreams {
     session_lock: Arc<Mutex<()>>,
     attachment_epoch: u64,
     attachment_attempt_id: Option<AttemptId>,
+    entity_parent_start_index: Option<OplogIndex>,
 }
 
 struct DurableInputSchema {
@@ -294,6 +296,7 @@ impl DurableSessionStreams {
             session_lock,
             attachment_epoch: 1,
             attachment_attempt_id: None,
+            entity_parent_start_index: None,
         }
     }
 
@@ -308,6 +311,14 @@ impl DurableSessionStreams {
         consumer_invocation: StreamInvocationIdV1,
     ) -> Self {
         self.consumer_invocation = consumer_invocation;
+        self
+    }
+
+    pub(crate) fn with_entity_parent_start_index(
+        mut self,
+        entity_parent_start_index: Option<OplogIndex>,
+    ) -> Self {
+        self.entity_parent_start_index = entity_parent_start_index;
         self
     }
 
@@ -587,7 +598,10 @@ impl DurableSessionStreams {
         }
         let result = self
             .producer
-            .append_session_record(StreamSessionRecordV1::ResumeAttempt(record))
+            .append_session_record_attributed(
+                self.entity_parent_start_index,
+                StreamSessionRecordV1::ResumeAttempt(record),
+            )
             .await
             .map_err(|error| error.to_string());
         if result.is_ok() {
@@ -631,14 +645,14 @@ impl DurableSessionStreams {
 
     pub(crate) async fn append_record(&self, record: StreamSessionRecordV1) {
         self.producer
-            .append_session_record(record)
+            .append_session_record_attributed(self.entity_parent_start_index, record)
             .await
             .expect("internally generated durable session record is valid");
     }
 
     async fn try_append_record(&self, record: StreamSessionRecordV1) -> Result<(), String> {
         self.producer
-            .append_session_record(record)
+            .append_session_record_attributed(self.entity_parent_start_index, record)
             .await
             .map_err(|error| error.to_string())
     }
@@ -1573,6 +1587,7 @@ impl DurableSessionStreams {
                     nested_element_types
                         .push((nested_transport_id, element.unwrap_or_else(SchemaType::u8)));
                     nested_requests.push(ProducerRegistrationRequestV1 {
+                        entity_parent_start_index: self.entity_parent_start_index,
                         coordinate,
                         source_invocation: self.session_key.clone(),
                         component_revision: input_schema.component_revision,
@@ -1920,6 +1935,7 @@ impl DurableSessionStreams {
                 handle
             } else {
                 let request = ProducerRegistrationRequestV1 {
+                    entity_parent_start_index: self.entity_parent_start_index,
                     coordinate: StreamRegistrationCoordinateV1::Root {
                         invocation_id: self.session_key.clone(),
                         root_kind: StreamRootKindV1::MethodInput,
@@ -2074,6 +2090,7 @@ impl DurableSessionStreams {
             .iter()
             .filter(|pending| pending.forwarded_handle.is_none())
             .map(|pending| ProducerRegistrationRequestV1 {
+                entity_parent_start_index: self.entity_parent_start_index,
                 coordinate: StreamRegistrationCoordinateV1::Root {
                     invocation_id: self.session_key.clone(),
                     root_kind: StreamRootKindV1::MethodResult,
@@ -2143,37 +2160,43 @@ impl DurableSessionStreams {
             .collect::<Vec<_>>();
         let (owned_handles, _) = self
             .producer
-            .register_result_streams(requests, move |owned_handles| {
-                let mut owned_handles = owned_handles.into_iter();
-                let handles = forwarded_handles_for_record
-                    .into_iter()
-                    .map(|forwarded_handle| {
-                        forwarded_handle.unwrap_or_else(|| {
-                            owned_handles
-                                .next()
-                                .expect("result registration returned too few durable handles")
+            .register_result_streams(
+                requests,
+                self.entity_parent_start_index,
+                move |owned_handles| {
+                    let mut owned_handles = owned_handles.into_iter();
+                    let handles = forwarded_handles_for_record
+                        .into_iter()
+                        .map(|forwarded_handle| {
+                            forwarded_handle.unwrap_or_else(|| {
+                                owned_handles
+                                    .next()
+                                    .expect("result registration returned too few durable handles")
+                            })
                         })
-                    })
-                    .collect::<Vec<_>>();
-                let stream_mappings = transport_stream_ids_for_record
-                    .into_iter()
-                    .zip(handles.iter().cloned())
-                    .map(
-                        |(transport_stream_id, handle)| StreamSessionMappingRecordV1 {
-                            transport_stream_id,
-                            handle,
-                            role: golem_common::model::durable_stream::SessionStreamRoleV1::Output,
+                        .collect::<Vec<_>>();
+                    let stream_mappings = transport_stream_ids_for_record
+                        .into_iter()
+                        .zip(handles.iter().cloned())
+                        .map(
+                            |(transport_stream_id, handle)| StreamSessionMappingRecordV1 {
+                                transport_stream_id,
+                                handle,
+                                role: golem_common::model::durable_stream::SessionStreamRoleV1::Output,
+                            },
+                        )
+                        .collect();
+                    StreamSessionRecordV1::InvocationResult(
+                        StreamSessionInvocationResultRecordV1 {
+                            format_version: DURABLE_STREAM_FORMAT_VERSION,
+                            session_key: result_session_key,
+                            result: result_bytes,
+                            output_streams: handles,
+                            stream_mappings,
                         },
                     )
-                    .collect();
-                StreamSessionRecordV1::InvocationResult(StreamSessionInvocationResultRecordV1 {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    session_key: result_session_key,
-                    result: result_bytes,
-                    output_streams: handles,
-                    stream_mappings,
-                })
-            })
+                },
+            )
             .await
             .map_err(|error| error.to_string())?;
         self.producer.notify_session_records_changed();
@@ -2577,6 +2600,7 @@ impl DurableSessionStreams {
                                 forwarded_handle,
                                 element_type: nested_element.unwrap_or_else(SchemaType::u8),
                                 registration: ProducerRegistrationRequestV1 {
+                                    entity_parent_start_index: self.entity_parent_start_index,
                                     coordinate: StreamRegistrationCoordinateV1::Nested {
                                         parent_stream_id: handle.stream_id,
                                         parent_producer_sequence: event.offset,
@@ -2760,7 +2784,12 @@ impl DurableSessionStreams {
         self.validate_topology_complete().await?;
         drop(session_guard);
         self.producer
-            .finish_session(self.session_key.clone(), result, input_cancel_reason)
+            .finish_session(
+                self.session_key.clone(),
+                self.entity_parent_start_index,
+                result,
+                input_cancel_reason,
+            )
             .await
             .map_err(|error| error.to_string())
     }

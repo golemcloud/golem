@@ -652,6 +652,10 @@ where
         return Ok(());
     }
 
+    let entity_parent_start_index = accessor.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut()).entity_parent_start_index()
+    });
+
     if let Some((worker, capacity_bytes)) = accessor
         .with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut())
@@ -673,7 +677,10 @@ where
             }
         }
         worker
-            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(bytes as i64))
+            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
+                entity_parent_start_index,
+                bytes as i64,
+            ))
             .await;
         accessor.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut())
@@ -696,11 +703,18 @@ where
         return Ok(());
     }
 
+    let entity_parent_start_index = accessor.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut()).entity_parent_start_index()
+    });
+
     if let Some((worker, bytes)) = accessor.with(|mut access| {
         durable_worker_ctx::<Ctx, U>(access.data_mut()).prepare_filesystem_storage_release(bytes)
     }) {
         worker
-            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(-(bytes as i64)))
+            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
+                entity_parent_start_index,
+                -(bytes as i64),
+            ))
             .await;
         worker.release_filesystem_storage_space(bytes).await;
         accessor.with(|mut access| {

@@ -656,6 +656,7 @@ async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_confli
         .commit_oplog_entry_bypassing_worker_status(
             &target_agent_id,
             golem_common::model::oplog::OplogEntry::card_event_queued(
+                None,
                 QueuedCardEvent::transfer_received(
                     detached_status_transfer_id,
                     source_card_id,
@@ -1099,12 +1100,15 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
     executor
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
-            OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
-                pending_transfer_id,
-                card.card_id(),
-                card.clone(),
-                target_holder.clone(),
-            )),
+            OplogEntry::card_event_queued(
+                None,
+                QueuedCardEvent::transfer_started_with_source(
+                    pending_transfer_id,
+                    card.card_id(),
+                    card.clone(),
+                    target_holder.clone(),
+                ),
+            ),
         )
         .await?;
     assert_eq!(
@@ -1115,29 +1119,36 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
     executor
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
-            OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
-                completed_transfer_id,
-                card.card_id(),
-                card.clone(),
-                target_holder.clone(),
-            )),
+            OplogEntry::card_event_queued(
+                None,
+                QueuedCardEvent::transfer_started_with_source(
+                    completed_transfer_id,
+                    card.card_id(),
+                    card.clone(),
+                    target_holder.clone(),
+                ),
+            ),
         )
         .await?;
     executor
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
-            OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
-                started_transfer_id,
-                card.card_id(),
-                card.clone(),
-                target_holder.clone(),
-            )),
+            OplogEntry::card_event_queued(
+                None,
+                QueuedCardEvent::transfer_started_with_source(
+                    started_transfer_id,
+                    card.card_id(),
+                    card.clone(),
+                    target_holder.clone(),
+                ),
+            ),
         )
         .await?;
     executor
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
             OplogEntry::card_transfer_started(
+                None,
                 started_transfer_id,
                 card.card_id(),
                 Some(source_holder.clone()),
@@ -1150,6 +1161,7 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
             OplogEntry::card_transfer_started(
+                None,
                 completed_transfer_id,
                 card.card_id(),
                 Some(source_holder),
@@ -1162,6 +1174,7 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
             OplogEntry::card_transfer_confirmed(
+                None,
                 completed_transfer_id,
                 card.card_id(),
                 card.card_id(),
@@ -1330,12 +1343,15 @@ async fn pending_self_card_transfer_recovery_does_not_deadlock(
     executor
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
-            OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
-                transfer_id,
-                card.card_id(),
-                card.clone(),
-                self_holder,
-            )),
+            OplogEntry::card_event_queued(
+                None,
+                QueuedCardEvent::transfer_started_with_source(
+                    transfer_id,
+                    card.card_id(),
+                    card.clone(),
+                    self_holder,
+                ),
+            ),
         )
         .await?;
 
@@ -1461,18 +1477,22 @@ async fn lost_card_transfer_response_converges_after_source_and_target_restart(
     executor
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
-            OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
-                transfer_id,
-                card.card_id(),
-                card.clone(),
-                target_holder.clone(),
-            )),
+            OplogEntry::card_event_queued(
+                None,
+                QueuedCardEvent::transfer_started_with_source(
+                    transfer_id,
+                    card.card_id(),
+                    card.clone(),
+                    target_holder.clone(),
+                ),
+            ),
         )
         .await?;
     executor
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
             OplogEntry::card_transfer_started(
+                None,
                 transfer_id,
                 card.card_id(),
                 Some(source_holder),

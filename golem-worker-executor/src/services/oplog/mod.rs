@@ -391,41 +391,48 @@ pub struct OrderedOplogStart {
 }
 
 pub enum DurableStreamOplogRecord {
-    Registered(StreamRegisteredRecordV1),
-    Items(StreamItemsRecordV1),
-    End(StreamEndRecordV1),
-    Cancel(StreamCancelRecordV1),
-    Session(Box<StreamSessionRecordV1>),
+    Registered(Option<OplogIndex>, StreamRegisteredRecordV1),
+    Items(Option<OplogIndex>, StreamItemsRecordV1),
+    End(Option<OplogIndex>, StreamEndRecordV1),
+    Cancel(Option<OplogIndex>, StreamCancelRecordV1),
+    Session(Option<OplogIndex>, Box<StreamSessionRecordV1>),
     InlineEntry(OplogEntry),
 }
 
 impl DurableStreamOplogRecord {
     fn serialize(&self) -> Result<Vec<u8>, String> {
         match self {
-            Self::Registered(record) => serialize(record),
-            Self::Items(record) => serialize(record),
-            Self::End(record) => serialize(record),
-            Self::Cancel(record) => serialize(record),
-            Self::Session(record) => serialize(record),
+            Self::Registered(_, record) => serialize(record),
+            Self::Items(_, record) => serialize(record),
+            Self::End(_, record) => serialize(record),
+            Self::Cancel(_, record) => serialize(record),
+            Self::Session(_, record) => serialize(record),
             Self::InlineEntry(_) => Ok(Vec::new()),
         }
     }
 
     fn into_entry(self, raw: RawOplogPayload) -> Result<OplogEntry, String> {
         match self {
-            Self::Registered(record) => Ok(OplogEntry::stream_registered(
+            Self::Registered(entity_parent_start_index, record) => {
+                Ok(OplogEntry::stream_registered(
+                    entity_parent_start_index,
+                    raw.into_payload_with_cache(Arc::new(record))?,
+                ))
+            }
+            Self::Items(entity_parent_start_index, record) => Ok(OplogEntry::stream_items(
+                entity_parent_start_index,
                 raw.into_payload_with_cache(Arc::new(record))?,
             )),
-            Self::Items(record) => Ok(OplogEntry::stream_items(
+            Self::End(entity_parent_start_index, record) => Ok(OplogEntry::stream_end(
+                entity_parent_start_index,
                 raw.into_payload_with_cache(Arc::new(record))?,
             )),
-            Self::End(record) => Ok(OplogEntry::stream_end(
+            Self::Cancel(entity_parent_start_index, record) => Ok(OplogEntry::stream_cancel(
+                entity_parent_start_index,
                 raw.into_payload_with_cache(Arc::new(record))?,
             )),
-            Self::Cancel(record) => Ok(OplogEntry::stream_cancel(
-                raw.into_payload_with_cache(Arc::new(record))?,
-            )),
-            Self::Session(record) => Ok(OplogEntry::stream_session(
+            Self::Session(entity_parent_start_index, record) => Ok(OplogEntry::stream_session(
+                entity_parent_start_index,
                 raw.into_payload_with_cache(Arc::from(record))?,
             )),
             Self::InlineEntry(entry) => Ok(entry),
@@ -434,15 +441,25 @@ impl DurableStreamOplogRecord {
 
     pub fn into_inline_entry(self) -> OplogEntry {
         match self {
-            Self::Registered(record) => {
-                OplogEntry::stream_registered(OplogPayload::Inline(Box::new(record)))
+            Self::Registered(entity_parent_start_index, record) => OplogEntry::stream_registered(
+                entity_parent_start_index,
+                OplogPayload::Inline(Box::new(record)),
+            ),
+            Self::Items(entity_parent_start_index, record) => OplogEntry::stream_items(
+                entity_parent_start_index,
+                OplogPayload::Inline(Box::new(record)),
+            ),
+            Self::End(entity_parent_start_index, record) => OplogEntry::stream_end(
+                entity_parent_start_index,
+                OplogPayload::Inline(Box::new(record)),
+            ),
+            Self::Cancel(entity_parent_start_index, record) => OplogEntry::stream_cancel(
+                entity_parent_start_index,
+                OplogPayload::Inline(Box::new(record)),
+            ),
+            Self::Session(entity_parent_start_index, record) => {
+                OplogEntry::stream_session(entity_parent_start_index, OplogPayload::Inline(record))
             }
-            Self::Items(record) => OplogEntry::stream_items(OplogPayload::Inline(Box::new(record))),
-            Self::End(record) => OplogEntry::stream_end(OplogPayload::Inline(Box::new(record))),
-            Self::Cancel(record) => {
-                OplogEntry::stream_cancel(OplogPayload::Inline(Box::new(record)))
-            }
-            Self::Session(record) => OplogEntry::stream_session(OplogPayload::Inline(record)),
             Self::InlineEntry(entry) => entry,
         }
     }

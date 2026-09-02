@@ -3467,16 +3467,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .add_pair(
                     pending,
                     Box::new(move |pending_invocation_oplog_index| {
-                        OplogEntry::stream_session(OplogPayload::Inline(Box::new(
-                            StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
-                                format_version: 1,
-                                session_key: attached_attempt.session_key,
-                                attachment_id: attached_attempt.attachment_id,
-                                attempt_id: attached_attempt.attempt_id,
-                                epoch: 1,
-                                pending_invocation_oplog_index,
-                            }),
-                        )))
+                        OplogEntry::stream_session(
+                            None,
+                            OplogPayload::Inline(Box::new(StreamSessionRecordV1::Attached(
+                                StreamSessionAttachedRecordV1 {
+                                    format_version: 1,
+                                    session_key: attached_attempt.session_key,
+                                    attachment_id: attached_attempt.attachment_id,
+                                    attempt_id: attached_attempt.attempt_id,
+                                    epoch: 1,
+                                    pending_invocation_oplog_index,
+                                },
+                            ))),
+                        )
                     }),
                 )
                 .await;
@@ -4789,9 +4792,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut queued_event_indices = Vec::with_capacity(card_ids.len());
         for card_id in card_ids {
             queued_event_indices.push(
-                self.add_to_oplog(OplogEntry::card_event_queued(QueuedCardEvent::revoke(
-                    card_id,
-                )))
+                self.add_to_oplog(OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::revoke(card_id),
+                ))
                 .await,
             );
         }
@@ -4851,11 +4855,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let boundary_guard = self.card_event_boundary_lock.clone().lock_owned().await;
         self.state_actor
             .append_and_commit_attached(
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
-                    transfer_id,
-                    source_card_id,
-                    card,
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_received(transfer_id, source_card_id, card),
+                ),
                 self.clone(),
                 instance_guard,
                 boundary_guard,

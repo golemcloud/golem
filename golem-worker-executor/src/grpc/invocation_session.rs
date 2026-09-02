@@ -1828,6 +1828,7 @@ pub(crate) fn build_durable_streaming_request(
             registrations.push((
                 transport_stream_id,
                 ProducerRegistrationRequestV1 {
+                    entity_parent_start_index: None,
                     coordinate: StreamRegistrationCoordinateV1::Root {
                         invocation_id: session_key.clone(),
                         root_kind: StreamRootKindV1::MethodInput,

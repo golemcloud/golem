@@ -584,6 +584,8 @@ fn cli_output_schema_focus_prunes_unrelated_definitions() {
 
     assert!(definitions.contains_key("agent.oplog"));
     assert!(definitions.contains_key("PublicOplogEntry"));
+    assert!(definitions.contains_key("PublicOplogEntryAttribution"));
+    assert!(definitions.contains_key("PublicEntityInvocation"));
     assert!(!definitions.contains_key("agent.list"));
     assert!(!definitions.contains_key("component.list"));
 
@@ -1138,6 +1140,88 @@ fn cli_output_schema_validates_schema_native_secret_outputs() {
 }
 
 #[test]
+fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() {
+    use golem_common::model::oplog::public_oplog_entry::StartParams;
+    use golem_common::model::oplog::{
+        PublicAgentEntity, PublicAgentEntityKind, PublicDurableFunctionType, PublicEntityCallMode,
+        PublicEntityInvocation, PublicEntityInvocationContext, PublicEntityInvocationOperation,
+        PublicOplogEntry, PublicOplogEntryAttribution, PublicToolInvocationOperation,
+    };
+    use golem_common::model::{Empty, OplogIndex, Timestamp};
+    use golem_common::schema::schema_type::SecretSpec;
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, SecretValuePayload};
+
+    let secret_id = uuid::Uuid::from_u128(1);
+    let request = golem_common::schema::TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::secret(SecretSpec::default())),
+        SchemaValue::Secret(SecretValuePayload {
+            secret_id,
+            config_key: Some(vec!["database".to_string(), "password".to_string()]),
+            version: 7,
+            resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            category: Some("api-key".to_string()),
+        }),
+    );
+    let output = to_structured_output_value(crate::model::agent::oplog::AgentOplogEntryView {
+        index: 12,
+        attribution: PublicOplogEntryAttribution::entity(PublicEntityInvocationContext {
+            invocation: PublicEntityInvocation {
+                entity: PublicAgentEntity {
+                    kind: PublicAgentEntityKind::Tool,
+                    name: "filesystem".to_string(),
+                },
+                start_index: OplogIndex::from_u64(11),
+                call_mode: PublicEntityCallMode::Synchronous,
+                operation: Some(PublicEntityInvocationOperation::Tool(
+                    PublicToolInvocationOperation {
+                        command_path: vec!["files".to_string(), "lookup".to_string()],
+                        has_stdin: false,
+                        has_stdout: true,
+                        declares_stdout: true,
+                    },
+                )),
+            },
+            ancestors: Vec::new(),
+        }),
+        entry: PublicOplogEntry::Start(StartParams {
+            timestamp: Timestamp::from(0),
+            parent_start_index: None,
+            function_name: "golem::entity::invoke".to_string(),
+            invocation_id: None,
+            observational_owner: None,
+            request: Some(request),
+            durable_function_type: PublicDurableFunctionType::WriteLocal(Empty {}),
+        }),
+    })
+    .expect("agent.oplog should serialize");
+
+    let validator = jsonschema::options()
+        .build(&load_command_output_schema())
+        .expect("command output schema must be valid");
+    assert!(
+        validator.is_valid(&output),
+        "schema rejected agent.oplog secret metadata: {:?}",
+        validator
+            .iter_errors(&output)
+            .map(|error| error.to_string())
+            .collect::<Vec<_>>()
+    );
+
+    let metadata = &output["entry"]["request"]["value"]["value"];
+    assert_eq!(metadata["secretId"], json!(secret_id));
+    assert_eq!(metadata["configKey"], json!(["database", "password"]));
+    assert_eq!(metadata["version"], json!(7));
+    assert_eq!(metadata["resolvedAt"], json!("2023-11-14T22:13:20Z"));
+    assert_eq!(metadata["category"], json!("api-key"));
+    assert!(metadata.get("secretValue").is_none());
+
+    let operation = &output["attribution"]["invocation"]["operation"];
+    assert_eq!(operation["hasStdout"], json!(true));
+    assert_eq!(operation["declaresStdout"], json!(true));
+    assert!(operation.get("stdout").is_none());
+}
+
+#[test]
 fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
     let schema = load_command_output_schema();
     let validator = jsonschema::options()
@@ -1167,6 +1251,7 @@ fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
         .expect("agent-type.list should serialize"),
         to_structured_output_value(crate::model::agent::oplog::AgentOplogEntryView {
             index: 0,
+            attribution: golem_common::model::oplog::PublicOplogEntryAttribution::agent(),
             entry: sample_public_oplog_entries()
                 .into_iter()
                 .next()
@@ -2758,15 +2843,84 @@ fn arb_agent_oplog_result() -> OutputDocumentStrategy {
     serialized_output(
         (
             arb_small_u64(),
+            arb_public_oplog_entry_attribution(),
             prop_oneof![
                 proptest::sample::select(sample_public_oplog_entries()),
                 arb_typed_value_oplog_entry(),
             ],
         )
-            .prop_map(
-                |(index, entry)| crate::model::agent::oplog::AgentOplogEntryView { index, entry },
-            ),
+            .prop_map(|(index, attribution, entry)| {
+                crate::model::agent::oplog::AgentOplogEntryView {
+                    index,
+                    attribution,
+                    entry,
+                }
+            }),
     )
+}
+
+fn arb_public_oplog_entry_attribution()
+-> BoxedStrategy<golem_common::model::oplog::PublicOplogEntryAttribution> {
+    use golem_common::model::oplog::{
+        PublicAgentEntity, PublicAgentEntityKind, PublicEntityCallMode, PublicEntityInvocation,
+        PublicEntityInvocationContext, PublicEntityInvocationOperation,
+        PublicOplogEntryAttribution, PublicToolInvocationOperation,
+    };
+
+    let invocation = || {
+        (
+            prop_oneof![
+                Just(PublicAgentEntityKind::Tool),
+                Just(PublicAgentEntityKind::ToolMiddleware),
+            ],
+            arb_small_string(),
+            1u64..1000,
+            prop_oneof![
+                Just(PublicEntityCallMode::Synchronous),
+                Just(PublicEntityCallMode::Asynchronous),
+                Just(PublicEntityCallMode::FireAndForget),
+            ],
+            proptest::option::of(
+                (
+                    proptest::collection::vec(arb_small_string(), 0..4),
+                    any::<bool>(),
+                    any::<bool>(),
+                    any::<bool>(),
+                )
+                    .prop_map(
+                        |(command_path, has_stdin, has_stdout, declares_stdout)| {
+                            PublicEntityInvocationOperation::Tool(PublicToolInvocationOperation {
+                                command_path,
+                                has_stdin,
+                                has_stdout,
+                                declares_stdout,
+                            })
+                        },
+                    ),
+            ),
+        )
+            .prop_map(|(kind, name, start_index, call_mode, operation)| {
+                PublicEntityInvocation {
+                    entity: PublicAgentEntity { kind, name },
+                    start_index: golem_common::model::OplogIndex::from_u64(start_index),
+                    call_mode,
+                    operation,
+                }
+            })
+    };
+
+    prop_oneof![
+        Just(PublicOplogEntryAttribution::agent()),
+        (invocation(), proptest::collection::vec(invocation(), 0..4)).prop_map(
+            |(invocation, ancestors)| PublicOplogEntryAttribution::entity(
+                PublicEntityInvocationContext {
+                    invocation,
+                    ancestors,
+                }
+            )
+        ),
+    ]
+    .boxed()
 }
 
 /// Oplog entry carrying a structurally-comprehensive [`TypedSchemaValue`]
