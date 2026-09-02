@@ -1739,7 +1739,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                 let outcome = replay_state
                     .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
                     .await?;
-                if outcome == ReplayToLiveOutcome::ReplayResumed {
+                if matches!(outcome, ReplayToLiveOutcome::ReplayResumed) {
                     return Err(WorkerExecutorError::runtime(
                         "replay target grew while an incomplete custom invocation was settling",
                     )

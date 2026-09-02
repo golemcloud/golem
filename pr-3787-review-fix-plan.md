@@ -44,7 +44,7 @@ documented verification commands are all complete.
 | P3 | Add replay-stable tool-attempt identity | **Complete** | 6 | P2 |
 | P4 | Replace operation strong-count cleanup with explicit leases | **Complete** | 17, 27 | P0 |
 | P5 | Centralize no-body attachment publication | **Complete** | 4, 16, 27 | P1, P4 |
-| P6 | Make execution mode and attachment admission replay-deterministic | Not started | 3, 5 | P1, P5 |
+| P6 | Make execution mode and attachment admission replay-deterministic | **Complete** | 3, 5 | P1, P5 |
 | P7a | Fix the Rust started-invocation caller contract | Not started | 7–9 | P1, P5 |
 | P7b | Fix the TypeScript started-invocation caller contract | Not started | 11 | P1, P5 |
 | P7c | Fix the Scala started-invocation caller contract | **Blocked** | 13 | Stable GOL-96 integration base |
@@ -79,7 +79,29 @@ documented verification commands are all complete.
   Added mode-matrix, buffered-memory release, waiter wake-up, and failed-attach regression tests.
   All 84 attachment/operation/tool-host unit tests, the two affected executor integration tests,
   formatting, diff checks, and package clippy pass. Owner-fence trap semantics remain separate;
-  Oracle approved the phase without corrections.
+  Oracle approved the phase without corrections. Recorded in local commit `001fe8248`.
+- **P6 — Complete (2026-09-02):** entity Stores now receive their
+  invocation's execution mode before construction. Completed replay stays historical even after
+  shared live publication; historical entity linear memory and every queued, locally pending, or
+  Wasmtime in-flight attachment charge use inert reservations. Incomplete replay atomically closes
+  historical registration and upgrades reconstructed memory before local live publication.
+  Per-attachment and operation-wide rollback guards make cancelled preparation retry-safe; failed
+  live attachment admission preselects the ordinary terminal lane before installing a durable
+  skipped/no-body resource-exhausted result. Replay-to-live is a fail-closed fixed-target
+  transaction: settlement classifies incomplete reconstruction claims against one exact target,
+  retains completed claims through reconstructed-body validation, and publishes live only while
+  the target and active fences still match. Operation-owned live attachment admission now also
+  distinguishes cancellation from owner fencing, including when a pending memory reservation
+  reports insufficient capacity after cancellation wins. Both successful and failed asynchronous
+  upgrades roll the prepared batch back and follow the durable cancellation path instead of
+  failing the owner. A cancelled successful upgrade is propagated as a typed reconstruction
+  outcome: it aborts and drains the reconstructed nested body, leaves that nested call incomplete,
+  and records one skipped-body cancellation on the outer entity invocation before publishing
+  no-body attachment terminals. The enlarged reconstruction future is boxed at the tool execution
+  boundary, keeping nested generated-client calls within the default Tokio worker stack. Focused
+  unit, deterministic crash/replay, memory-pressure, generated-client, formatting, and clippy
+  checks are green. Oracle's final holistic review approved the full phase and accepted the typed,
+  deterministic compositional coverage as sufficient.
 
 ## Invariants that govern every fix
 
@@ -380,28 +402,118 @@ weakening owner fencing.
 
 ### Implementation
 
-- [ ] Pass `InvocationExecutionMode` into entity Store, private state, and linear-memory construction
+- [x] Pass `InvocationExecutionMode` into entity Store, private state, and linear-memory construction
       before the entity scope is installed.
-- [ ] Derive entity liveness from execution mode:
+- [x] Derive entity liveness from execution mode:
   - `Live` is live;
   - `ReplayingCompleted` stays historical for the whole reconstruction;
   - `ReplayingIncomplete` stays historical until its explicit local live transition.
-- [ ] Add historical attachment staging that does not call current-node measured admission.
-- [ ] Continue enforcing deterministic per-attachment byte limits during replay.
-- [ ] During incomplete-to-live repair, acquire or upgrade live memory accounting before admitting
+- [x] Add historical attachment staging that does not call current-node measured admission.
+- [x] Continue enforcing deterministic per-attachment byte limits during replay.
+- [x] During incomplete-to-live repair, acquire or upgrade live memory accounting before admitting
       the new body; a failure may then produce a new durable live resource-exhausted outcome.
-- [ ] Keep completed body reexecution and recorded-response authority/equality checks.
-- [ ] Ensure completed replay cannot lose input bytes before the body because current admission
+- [x] Keep completed body reexecution and recorded-response authority/equality checks.
+- [x] Ensure completed replay cannot lose input bytes before the body because current admission
       rejected staging.
 
 ### Verification
 
-- [ ] Execute successfully with capacity, then replay under zero current capacity; assert the body
+- [x] Execute successfully with capacity, then replay under zero current attachment capacity;
+      assert the body
       reexecutes, filesystem state reconstructs, and the recorded success remains authoritative.
-- [ ] Record live resource exhaustion, then replay with ample capacity; assert it remains skipped.
-- [ ] Exercise incomplete replay's transition to live and its memory-accounting upgrade.
+- [x] Record live resource exhaustion, then replay with ample capacity; assert it remains skipped.
+- [x] Exercise incomplete replay's transition to live and its memory-accounting upgrade.
 - [ ] Rerun GOL-95's pristine direct-forwarding regression and TypeScript streaming E2Es because its
       active work introduces a durable-session endpoint representation conversion.
+
+### Progress evidence
+
+- All 125 replay-state, 53 concurrent, 33 attachment, 44 operation, 15 linear-memory, and 13 entity
+  focused unit tests pass. This includes target-growth revocation, fixed-target incomplete-claim
+  classification, atomic claim and historical-charge registration, reconstruction body/marker
+  retention, historical growth during blocked activation, failed-growth grant shrinkage,
+  cancellation-safe multi-attachment retry, cancellation racing an in-progress attachment upgrade,
+  real Wasmtime in-flight charge accounting, ordinary terminal preselection on admission failure,
+  Store-scoped liveness, and fail-closed pending transition guards. Final logs:
+  `.amp/pr-3787-tests/p6-oracle2-replay-state-unit.log`,
+  `.amp/pr-3787-tests/p6-final4-concurrent-unit.log`,
+  `.amp/pr-3787-tests/p6-final4-attachment-unit.log`,
+  `.amp/pr-3787-tests/p6-oracle5-final-operation-unit.log`,
+  `.amp/pr-3787-tests/p6-final4-linear-memory-unit.log`, and
+  `.amp/pr-3787-tests/p6-oracle5-final-entity-unit.log`. The complete 53-test concurrent and
+  93-test tool-module reruns are in
+  `.amp/pr-3787-tests/p6-oracle5-final-concurrent-unit.log` and
+  `.amp/pr-3787-tests/p6-oracle5-final-tool-all-unit.log`.
+- `completed_tool_replay_bypasses_current_attachment_memory_pressure` passes with measured
+  admission enabled, reconstructing a 2 MiB completed stream under insufficient current attachment
+  headroom. `incomplete_tool_replay_persists_attachment_upgrade_rejection` also passes with an
+  8 MiB reconstructed stream: the rejected upgrade produces one durable skipped/no-body
+  `ResourceExhausted` terminal, no provider body, and remains stable through another crash/replay.
+  Logs: `.amp/pr-3787-tests/p6-oracle3-completed-replay-pressure.log` and
+  `.amp/pr-3787-tests/p6-oracle3-incomplete-upgrade-rejection.log`.
+- The deterministic crash/replay matrix and focused regressions pass for capable limits, active
+  stream crash, delayed terminal-lane publication, a backpressured settling accessor, and the
+  primary replay barrier. The fixed-target settlement tests prove that an incomplete claim can be
+  released without self-deadlock, target growth resumes replay rather than misclassifying a newly
+  completable operation, and a completed claim blocks publication through body validation and
+  replay-at-marker terminal consumption. Logs:
+  `.amp/pr-3787-tests/p6-oracle3-crash-matrix.log`,
+  `.amp/pr-3787-tests/p6-oracle3-completed-reconstruction-claim.log`,
+  `.amp/pr-3787-tests/p6-oracle3-completion-limits.log`,
+  `.amp/pr-3787-tests/p6-oracle3-active-stream-crash.log`,
+  `.amp/pr-3787-tests/p6-oracle3-capable-terminal-crash.log`, and
+  `.amp/pr-3787-tests/p6-oracle3-settling-backpressure.log`.
+- `rust_generated_client_streams_live_and_handles_edges` and
+  `output_consumer_cancel_after_result_remains_a_valid_terminal_session` pass. The latter is the
+  available language-neutral GOL-95 lifecycle guard. Logs:
+  `.amp/pr-3787-tests/p6-oracle5-rust-generated-boxed-drive-only.log` and
+  `.amp/pr-3787-tests/p6-oracle5-final-cancel-after-result.log`. The durable live-upgrade rejection
+  guard also passes after the final correction; its log is
+  `.amp/pr-3787-tests/p6-oracle5-final-incomplete-upgrade-rejection.log`.
+- The TypeScript-specific GOL-95 test `typescript_client_streaming_rpc_e2e` remains unavailable on
+  this branch because GOL-95 commit `4ac70d6995` is local and unpublished. It will be rerun at the
+  final coordination gate once that integration base is available.
+- The Rust and scalability fixtures required by these tests were rebuilt and copied with the Golem
+  CLI; the resulting scalability lockfiles are intentional generated outputs. Rust formatting,
+  diff whitespace, and
+  `cargo clippy -p golem-worker-executor --lib --tests -- -D warnings` pass. Fixture and clippy
+  logs: `.amp/pr-3787-tests/p6-tool-streaming-rebuild-8m.log`,
+  `.amp/pr-3787-tests/p6-tool-streaming-copy-8m.log`, and
+  `.amp/pr-3787-tests/p6-oracle5-final-clippy.log`. Final format and whitespace logs are
+  `.amp/pr-3787-tests/p6-oracle5-final-fmt.log` and
+  `.amp/pr-3787-tests/p6-oracle5-final-diff-check.log`.
+- Oracle completion gate: design checkpoints first identified and drove fixes for pre-activation
+  linear-memory growth, nested incomplete tool attachments, and fail-closed settlement. The first
+  final review then rejected three blockers: admission rejection left the operation winner open,
+  cancelled attachment preparation could poison pending/grant accounting, and upgrades omitted
+  Wasmtime producer in-flight charges. All three were corrected and regression-tested. The crash
+  matrix subsequently exposed a self-deadlock between an incomplete reconstruction body and its
+  publication fence. Oracle rejected failing claims before waiting because target growth could
+  misclassify a newly completable operation; the current fixed-target atomic classifier implements
+  its recommended design. The next holistic review rejected two further blockers: capable
+  post-attach execution bypassed operation-owned admission, and owner failure could win during
+  terminal classification before primary live publication. Admission is now one operation-owned
+  rollback transaction through final commit, and final replay publication now linearizes under the
+  owner arbitration lock. The generated Rust client regression then exposed cancellation racing
+  that transaction; a distinct cancellation outcome now rolls back prepared grants and enters the
+  existing no-body cancellation path. The following review found that the reservation-failure
+  branch still mislabeled cancellation as fencing. That branch now arbitrates cancellation before
+  classifying resource exhaustion, and a deterministic two-attachment test proves whole-batch
+  rollback and cancellation settlement when the blocked reservation returns no grant. Oracle then
+  found that a successful attachment reservation followed by cancellation was rolled back but still
+  published live, allowing the deferred nested action to run. `FinishReplayToLive::Cancelled` now
+  remains typed through reconstruction, aborts and drains the nested body, and is converted by the
+  tool layer into the outer skipped-body durable cancellation before no-body publication. A
+  deterministic reservation race proves the transition remains fail-closed with no owner-failure
+  winner, while entity coordination coverage proves the nested body is drained. This correction
+  initially enlarged the recursive tool future enough to overflow the default Tokio worker stack;
+  boxing `EntityInvocationDurability::drive_access` at the tool execution boundary fixes the
+  generated nested-client regression without changing runtime stack configuration. The focused
+  entity, operation, and tool suites, generated-client regression, durable upgrade-rejection
+  regression, language-neutral cancellation guard, formatting, whitespace checks, and clippy pass
+  after this correction. Oracle's final holistic review found no remaining blocker and explicitly
+  approved the phase; it accepted the exhaustive typed transition coverage as sufficient without a
+  separate full-oplog race test.
 
 ## P7 — Started-invocation caller contracts
 
@@ -549,14 +661,16 @@ Coordination checklist:
 ### GOL-96
 
 GOL-96 owns Scala `AgentStream` lifecycle/state, affine transfer, schema/wire interop, invocation
-ownership for agent methods, Scala target/caller fixtures, and their E2Es. Its current uncommitted
-work spans Scala model, core, codegen, test agents, and CLI tests and has an unresolved generated-
-import design checkpoint.
+ownership for agent methods, Scala target/caller fixtures, and their E2Es. It is stable in local
+commits `164acf0d63c1660e182f6407347f094a0deb4078` and
+`aa6ff73e2ceb4994583f0d281ce1ab333ed49cca`, but those commits are not published and are not
+directly visible from this checkout. A patch transfer has been requested from the owning thread.
 
 Coordination checklist:
 
 - [ ] Allow P0–P7b and P9b/P9c to proceed independently.
-- [ ] Defer P7c, P8, and P9a until GOL-96 is stable or landed.
+- [x] Defer P7c, P8, and P9a until GOL-96 is stable.
+- [ ] Import the stable GOL-96 base through the requested local patch before starting P7c/P8/P9a.
 - [ ] Reuse GOL-96's ownership principles, not its P3 stream types or terminal semantics.
 - [ ] Keep tool conformance tests separate from the GOL-95/GOL-96 agent-stream lifecycle matrix.
 
@@ -619,7 +733,7 @@ Coordination checklist:
 | Risk | Consequence | Gate or mitigation | Status |
 |---|---|---|---|
 | Parallel guest initiation order is not replay-stable | Attempt ordinals still swap identical calls | P3 executor proof; otherwise explicit WIT attempt token | Open |
-| Replay stages bytes through live admission | Completed replay can diverge before body execution | P6 historical staging and live-repair upgrade tests | Open |
+| Replay stages bytes through live admission | Completed replay can diverge before body execution | P6 historical staging and live-repair upgrade tests | Closed |
 | Generic no-body helper absorbs fencing | Buffered bytes leak through or readers see cancellation instead of trap | Separate `fence_owner()` path and mode-matrix tests | Open |
 | Eager TS rejecting promise remains public | Stdout-only use still raises `unhandledrejection` | Lazy public rejection from settled envelope | Open |
 | P3 and tool stream errors are unified | GOL-95 contract regression or invented host API | Tool-only typed failures and conformance tests | Open |
@@ -645,6 +759,13 @@ Append an entry whenever a workstream changes status or a design gate is resolve
 | 2026-09-02 | P4 | Oracle correction applied | Moved explicit-settlement notification before awaitable lane drainage and added a deterministic cancellation-window regression. Six focused tests, all 81 tool-host tests, the integration regression, formatting, and clippy pass after the correction. |
 | 2026-09-02 | P4 | Complete | Commit `24cafcf69`. Oracle approved the explicit lease accounting, all removal paths, final-drop concurrency, owner-failure cleanup, and corrected pre-drain notification ordering. |
 | 2026-09-02 | P5 | In progress | Centralizing durable no-body attachment terminal publication while preserving owner-fence trap semantics. |
+| 2026-09-02 | P5 | Complete | Commit `001fe8248`. All 84 attachment/operation/tool-host unit tests, two executor integrations, formatting, diff checks, and clippy passed. Oracle approved without corrections. |
+| 2026-09-02 | P6 | In progress | Implemented execution-mode-scoped Store liveness, historical memory staging, incomplete-replay live upgrades, operation-owned admission, fixed-target reconstruction settlement, and owner-linearized live publication. |
+| 2026-09-02 | P6 | Oracle corrections applied | Oracle reviews drove ordinary terminal preselection, cancellation-safe admission rollback, Wasmtime in-flight charge tracking, fixed-target incomplete classification, operation-owned capable post-attach admission, and owner-linearized final publication. |
+| 2026-09-02 | P6 | Awaiting revised Oracle approval | The generated Rust client regression found cancellation racing live attachment admission was misclassified as owner fencing. Added a distinct cancellation outcome, atomic rollback coverage, and a boxed cancellation arm to keep recursive entity-call futures within worker stack limits. All focused unit tests, ten executor integration checks, formatting, diff checks, and clippy now pass. |
+| 2026-09-02 | P6 | Final Oracle correction applied | Oracle found that cancellation winning while a pending attachment reservation returned no grant was still mislabeled as owner fencing. The failed-reservation branch now returns cancellation with whole-batch rollback, covered by a deterministic two-attachment race test. All 44 operation tests, the generated-client, durable upgrade-rejection, and cancellation integration guards, formatting, whitespace checks, and clippy pass. |
+| 2026-09-02 | P6 | Awaiting final Oracle approval | Oracle found that successful-reservation cancellation rolled back attachments but still published live. Cancellation now propagates through replay transition and entity reconstruction as a typed no-body outcome: the reconstructed nested body is aborted and drained, its call remains incomplete, and the outer entity invocation commits one skipped-body cancellation before attachment publication. The generated nested-client regression exposed oversized recursive async state; boxing the entity durability driver at the tool boundary restores default-stack execution. All 13 entity, 53 concurrent, 44 operation, and 93 tool tests pass, as do the generated-client, durable-upgrade rejection, and cancellation integration guards plus formatting, whitespace, and clippy. |
+| 2026-09-02 | P6 | Complete | Oracle's final holistic review found no P6 blockers and returned `APPROVED`. It explicitly accepted the deterministic compositional coverage because every cross-layer cancellation transition is represented by an exhaustively matched typed outcome. |
 
 ## Definition of done
 

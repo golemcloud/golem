@@ -128,7 +128,9 @@ pub(crate) enum ScopeStartClaimOutcome {
         handle: ReplayCallHandle,
     },
     Missing,
-    MissingSwitchedToLive,
+    MissingSettling {
+        replay_target: OplogIndex,
+    },
 }
 
 /// Internal claim result. `Missing` is a completed semantic search with no matching `Start`;
@@ -137,6 +139,7 @@ enum StartClaimAttempt {
     Claimed(ReplayCallHandle, Box<OplogEntry>),
     Blocked,
     Missing,
+    MissingSettling { replay_target: OplogIndex },
 }
 
 mod abandoned;
@@ -160,7 +163,7 @@ pub(crate) enum ReplayToLiveRole {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReplayToLiveOutcome {
-    Live,
+    Live { replay_target: OplogIndex },
     ReplayResumed,
 }
 
@@ -168,6 +171,8 @@ pub(crate) enum ReplayToLiveOutcome {
 enum LivePublicationOutcome {
     Published,
     AlreadyLiveAtSameTarget,
+    ReconstructionClaimsActive,
+    OwnerFailed,
     ReplayResumed,
 }
 
@@ -265,6 +270,9 @@ struct ReplayCursor {
     /// re-drive the cursor. Resolver delivery is the primary wakeup; this covers the "another
     /// consumer advanced the cursor past my blocker" case that a oneshot alone cannot.
     progress: Notify,
+    #[cfg(test)]
+    primary_publication_gate:
+        std::sync::Mutex<Option<(Arc<tokio::sync::Barrier>, Arc<tokio::sync::Barrier>)>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

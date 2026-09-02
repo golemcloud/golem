@@ -37,8 +37,8 @@ use crate::durable_host::concurrent::{
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::entity::{
-    EntityInvocationDurability, RecordedEntityTerminal, ToolInvocationReplayOutcome,
-    encode_tool_terminal, record_tool_rejection_access,
+    EntityInvocationDurability, IncompleteLiveRepairBeforeBody, RecordedEntityTerminal,
+    ToolInvocationReplayOutcome, encode_tool_terminal, record_tool_rejection_access,
 };
 use crate::durable_host::secrets::secret_hold_targets_for_value;
 use crate::durable_host::tool::attachment::{
@@ -71,8 +71,9 @@ use golem_common::model::agent::{AgentPrincipal, AgentTypeName, Principal};
 use golem_common::model::card::owner::ToolOwnerPattern;
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationDescriptorIdentity,
-    EntityInvocationRequestIdentity, ToolInputDecodeFailure, ToolInvocationClaimIdentity,
-    ToolInvocationDescriptor, ToolInvocationDescriptorIdentity, ToolInvocationRejectedIdentity,
+    EntityInvocationRequestIdentity, InvocationExecutionMode, ToolInputDecodeFailure,
+    ToolInvocationClaimIdentity, ToolInvocationDescriptor, ToolInvocationDescriptorIdentity,
+    ToolInvocationRejectedIdentity,
 };
 use golem_common::model::oplog::host_functions::{GolemToolGetAllTools, GolemToolGetTool};
 use golem_common::model::oplog::payload::types::{
@@ -1761,6 +1762,10 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         principal,
     } = invocation;
     let mut store = store.as_context_mut();
+    store
+        .data_mut()
+        .durable_ctx_mut()
+        .set_entity_tool_operation(operation.clone())?;
     let cancellation_for_arbitration = cancellation.clone();
     let cancellation_epoch = if let Some(cancellation) = cancellation {
         store
@@ -1832,6 +1837,9 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     let finish = finish_invocation_and_get_fuel_consumption(&mut store, &display_name).await;
     let parent_end = prepare_tool_parent_end(&mut store, parent).await;
     drop(cancellation_epoch);
+    if operation.has_pending_live_admission_rejection().await {
+        return Err(crate::durable_host::tool_attachment_live_admission_rejected_error());
+    }
     finish?;
     if let Err(error) = parent_end
         && matches!(&result, Ok(Ok(_)))
@@ -1930,15 +1938,19 @@ async fn guest_trap_stdout_failure(
     }
 }
 
+fn resource_exhausted_terminal() -> SerializableToolOperationTerminal {
+    SerializableToolOperationTerminal {
+        body_execution: SerializableEntityBodyExecution::Skipped,
+        result: Err(SerializableToolRpcError::ResourceExhausted(
+            "tool stdin exceeded the attachment byte limit".to_string(),
+        )),
+    }
+}
+
 async fn resource_exhausted_without_body()
 -> Result<HostResponseEntityInvocation, WorkerExecutorError> {
     encode_tool_terminal(
-        SerializableToolOperationTerminal {
-            body_execution: SerializableEntityBodyExecution::Skipped,
-            result: Err(SerializableToolRpcError::ResourceExhausted(
-                "tool stdin exceeded the attachment byte limit".to_string(),
-            )),
-        },
+        resource_exhausted_terminal(),
         "failed to encode resource-exhausted tool terminal",
     )
     .await
@@ -2007,6 +2019,132 @@ fn publish_no_body_terminals(
 ) {
     for controller in stdin.into_iter().chain(stdout) {
         controller.publish_no_body_terminal();
+    }
+}
+
+fn settle_resource_exhausted_admission(
+    operation: &operation::OwnerToolOperation,
+    filesystem: golem_common::model::entity::FilesystemCapability,
+    deferred_admission: &Arc<operation::DeferredAdmissionTable>,
+    deferred_cleanup: &mut Option<DeferredAdmissionCleanup>,
+    parent: &crate::worker::owner_lane::OwnerInvocationId,
+    start: golem_common::model::oplog::OplogIndex,
+    call_mode: EntityCallMode,
+) -> anyhow::Result<()> {
+    if !operation.transition_admission(
+        operation::BodyAdmissionState::Staging,
+        operation::BodyAdmissionState::SettledWithoutBody,
+    ) {
+        return Err(anyhow!(
+            "tool invocation was fenced before resource-exhausted no-body admission"
+        ));
+    }
+    if filesystem == golem_common::model::entity::FilesystemCapability::Incapable {
+        return Ok(());
+    }
+    if !deferred_admission.settle_staging(
+        parent,
+        start,
+        operation::DeferredAdmissionReadiness::SettledWithoutBody,
+    ) {
+        return Err(anyhow!(
+            "tool invocation lost its deferred no-body admission"
+        ));
+    }
+    if call_mode == EntityCallMode::Synchronous
+        && !deferred_admission.remove_settled_without_body(parent, start)
+    {
+        return Err(anyhow!(
+            "synchronous tool invocation lost its no-body admission"
+        ));
+    }
+    deferred_cleanup
+        .as_mut()
+        .expect("capable call must own deferred admission")
+        .disarm();
+    Ok(())
+}
+
+async fn complete_resource_exhausted_without_body<U, Ctx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    durability: EntityInvocationDurability,
+    operation: operation::OwnerToolOperation,
+    stdin: Option<&AttachmentController>,
+    stdout: Option<&AttachmentController>,
+) -> anyhow::Result<ToolInvokeResponse>
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+{
+    let admission_rejection_preselected = operation
+        .take_live_attachment_admission_rejection()
+        .await
+        .is_some();
+    if !admission_rejection_preselected && !operation.begin_ordinary() {
+        return Err(anyhow!(
+            "tool invocation was fenced before no-body completion"
+        ));
+    }
+    let fallback_terminal = Arc::new(resource_exhausted_terminal());
+    let response = match resource_exhausted_without_body().await {
+        Ok(response) => response,
+        Err(error) => {
+            operation.resolve_ordinary(fallback_terminal, false).await;
+            let _ = operation.select_infrastructure(error.clone()).await;
+            return Err(error.into());
+        }
+    };
+    let terminal = match terminal_from_response(&response) {
+        Ok(terminal) => terminal,
+        Err(error) => {
+            operation.resolve_ordinary(fallback_terminal, false).await;
+            let _ = operation.select_infrastructure(error.clone()).await;
+            return Err(error.into());
+        }
+    };
+    let outcome = durability
+        .complete_without_body_access(accessor, accessor.getter(), response)
+        .await;
+    match outcome {
+        Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(
+            response,
+            _,
+        )) => {
+            operation.resolve_ordinary(terminal, true).await;
+            operation.settle().await;
+            let terminal = terminal_from_response(&response)?;
+            let failure = skipped_attachment_failure(&terminal);
+            for controller in stdin.into_iter().chain(stdout) {
+                if matches!(failure, ByteStreamFailure::ResourceExhausted) {
+                    controller.complete_rejected_live_memory_accounting();
+                } else {
+                    let _ = controller.host_fail(failure.clone());
+                }
+            }
+            publish_no_body_terminals(stdin, stdout);
+            decode_tool_terminal(*response).map_err(Into::into)
+        }
+        Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(
+            response,
+            _,
+        )) => {
+            operation.resolve_ordinary(terminal, false).await;
+            let _ = operation.begin_cancel();
+            operation.resolve_cancel(true).await;
+            operation.settle().await;
+            let terminal = terminal_from_response(&response)?;
+            let failure = skipped_attachment_failure(&terminal);
+            for controller in stdin.into_iter().chain(stdout) {
+                let _ = controller.host_fail(failure.clone());
+            }
+            publish_no_body_terminals(stdin, stdout);
+            decode_tool_terminal(*response).map_err(Into::into)
+        }
+        Err(error) => {
+            operation.resolve_ordinary(terminal, false).await;
+            let _ = operation.select_infrastructure(error.clone()).await;
+            Err(error.into())
+        }
     }
 }
 
@@ -2452,12 +2590,26 @@ where
         .await;
     }
     let filesystem = durability.scope().activation().filesystem();
-    if filesystem == golem_common::model::entity::FilesystemCapability::Capable {
-        durability = durability
-            .enter_incomplete_live_repair_before_body_access(accessor, accessor.getter())
-            .await?;
-    }
+    let pre_body_live_admission_cancelled =
+        if filesystem == golem_common::model::entity::FilesystemCapability::Capable {
+            match durability
+                .enter_incomplete_live_repair_before_body_access(accessor, accessor.getter())
+                .await?
+            {
+                IncompleteLiveRepairBeforeBody::Ready(ready) => {
+                    durability = ready;
+                    false
+                }
+                IncompleteLiveRepairBeforeBody::Cancelled(cancelled) => {
+                    durability = cancelled;
+                    true
+                }
+            }
+        } else {
+            false
+        };
     let call_mode = durability.call_mode();
+    let execution_mode = durability.scope().mode();
     let discard_stdout = call_mode == EntityCallMode::FireAndForget
         && matches!(
             durability.operation(),
@@ -2480,8 +2632,9 @@ where
             .map(|stdout| ctx.table().delete(stdout).map(ToolStdoutEntry::into_writer))
             .transpose()?;
         let stdout = if stdout.is_none() && discard_stdout {
-            Some(ToolStdoutWriterEntry::discard(AttachmentMemory::tracked(
+            Some(ToolStdoutWriterEntry::discard(AttachmentMemory::for_store(
                 ctx.public_state.worker().active_agents(),
+                execution_mode == InvocationExecutionMode::Live,
             )))
         } else {
             stdout
@@ -2524,6 +2677,22 @@ where
             None
         };
 
+    if pre_body_live_admission_cancelled {
+        return Box::pin(cancel_tool_before_body(
+            accessor,
+            durability,
+            operation,
+            &deferred_admission,
+            &mut deferred_cleanup,
+            &parent,
+            start,
+            operation::BodyAdmissionState::Staging,
+            stdin_controller.as_ref(),
+            stdout_controller.as_ref(),
+        ))
+        .await;
+    }
+
     if filesystem == golem_common::model::entity::FilesystemCapability::Incapable
         && execution.is_some_and(ToolExecution::is_cancelled)
     {
@@ -2543,6 +2712,69 @@ where
             stdout_controller.as_ref(),
         )
         .await;
+    }
+
+    if execution_mode == InvocationExecutionMode::Live {
+        match operation.activate_live_attachment_memory_accounting().await {
+            operation::ToolLiveAdmissionOutcome::Admitted => {}
+            operation::ToolLiveAdmissionOutcome::ResourceExhausted => {
+                settle_resource_exhausted_admission(
+                    &operation,
+                    filesystem,
+                    &deferred_admission,
+                    &mut deferred_cleanup,
+                    &parent,
+                    start,
+                    call_mode,
+                )?;
+                return complete_resource_exhausted_without_body(
+                    accessor,
+                    durability,
+                    operation,
+                    stdin_controller.as_ref(),
+                    stdout_controller.as_ref(),
+                )
+                .await;
+            }
+            operation::ToolLiveAdmissionOutcome::Cancelled => {
+                if filesystem == golem_common::model::entity::FilesystemCapability::Capable {
+                    return Box::pin(cancel_tool_before_body(
+                        accessor,
+                        durability,
+                        operation,
+                        &deferred_admission,
+                        &mut deferred_cleanup,
+                        &parent,
+                        start,
+                        operation::BodyAdmissionState::Staging,
+                        stdin_controller.as_ref(),
+                        stdout_controller.as_ref(),
+                    ))
+                    .await;
+                }
+                if !operation.transition_admission(
+                    operation::BodyAdmissionState::Staging,
+                    operation::BodyAdmissionState::SettledWithoutBody,
+                ) {
+                    return Err(anyhow!(
+                        "tool invocation was fenced before pre-dispatch cancellation"
+                    ));
+                }
+                return Box::pin(cancel_registered_tool_before_body(
+                    accessor,
+                    durability,
+                    operation,
+                    stdin_controller.as_ref(),
+                    stdout_controller.as_ref(),
+                ))
+                .await;
+            }
+            operation::ToolLiveAdmissionOutcome::Fenced => {
+                return Err(anyhow!(
+                    "tool invocation was fenced during live-memory admission"
+                ));
+            }
+        }
     }
 
     match filesystem {
@@ -2630,76 +2862,23 @@ where
                     .terminal_snapshot()
                     .is_some_and(|terminal| terminal.host_resource_exhausted);
                 if host_resource_exhausted {
-                    operation.transition_admission(
-                        operation::BodyAdmissionState::Staging,
-                        operation::BodyAdmissionState::SettledWithoutBody,
-                    );
-                    if !deferred_admission.settle_staging(
+                    settle_resource_exhausted_admission(
+                        &operation,
+                        filesystem,
+                        &deferred_admission,
+                        &mut deferred_cleanup,
                         &parent,
                         start,
-                        operation::DeferredAdmissionReadiness::SettledWithoutBody,
-                    ) {
-                        return Err(anyhow!(
-                            "tool invocation lost its deferred no-body admission"
-                        ));
-                    }
-                    if call_mode == EntityCallMode::Synchronous
-                        && !deferred_admission.remove_settled_without_body(&parent, start)
-                    {
-                        return Err(anyhow!(
-                            "synchronous tool invocation lost its no-body admission"
-                        ));
-                    }
-                    deferred_cleanup
-                        .as_mut()
-                        .expect("capable call must own deferred admission")
-                        .disarm();
-                    let response = resource_exhausted_without_body().await?;
-                    let terminal = terminal_from_response(&response)?;
-                    if !operation.begin_ordinary() {
-                        return Err(anyhow!(
-                            "tool invocation was fenced before no-body completion"
-                        ));
-                    }
-                    let outcome = durability
-                        .complete_without_body_access(accessor, accessor.getter(), response)
-                        .await;
-                    match outcome {
-                        Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(
-                            response,
-                            _,
-                        )) => {
-                            operation.resolve_ordinary(terminal, true).await;
-                            operation.settle().await;
-                            if let Some(stdout) = &stdout_controller {
-                                let _ = stdout.host_fail(ByteStreamFailure::ResourceExhausted);
-                            }
-                            publish_no_body_terminals(
-                                stdin_controller.as_ref(),
-                                stdout_controller.as_ref(),
-                            );
-                            return decode_tool_terminal(*response).map_err(Into::into);
-                        }
-                        Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(
-                            response,
-                            _,
-                        )) => {
-                            operation.resolve_ordinary(terminal, false).await;
-                            let _ = operation.begin_cancel();
-                            operation.resolve_cancel(true).await;
-                            operation.settle().await;
-                            publish_no_body_terminals(
-                                stdin_controller.as_ref(),
-                                stdout_controller.as_ref(),
-                            );
-                            return decode_tool_terminal(*response).map_err(Into::into);
-                        }
-                        Err(error) => {
-                            operation.resolve_ordinary(terminal, false).await;
-                            let _ = operation.select_infrastructure(error.clone()).await;
-                            return Err(error.into());
-                        }
-                    }
+                        call_mode,
+                    )?;
+                    return complete_resource_exhausted_without_body(
+                        accessor,
+                        durability,
+                        operation,
+                        stdin_controller.as_ref(),
+                        stdout_controller.as_ref(),
+                    )
+                    .await;
                 }
                 tracing::debug!(
                     terminal = ?attachment::terminal_metadata(&terminal),
@@ -2852,10 +3031,45 @@ where
     let finalize = move |result: Result<HostResponseEntityInvocation, WorkerExecutorError>| {
         let operation = operation_for_finalize;
         async move {
+            let (result, admission_rejection_preselected) = match result {
+                Err(error)
+                    if crate::durable_host::is_tool_attachment_live_admission_rejection(&error) =>
+                {
+                    operation
+                        .take_live_attachment_admission_rejection()
+                        .await
+                        .ok_or_else(|| {
+                            WorkerExecutorError::runtime(
+                                "tool attachment admission rejection lost its operation marker",
+                            )
+                        })?;
+                    let result = resource_exhausted_without_body().await;
+                    if result.is_err() {
+                        operation
+                            .resolve_ordinary(Arc::new(resource_exhausted_terminal()), false)
+                            .await;
+                    }
+                    (result, true)
+                }
+                result => (result, false),
+            };
             match &result {
                 Ok(response) => {
-                    let selected = terminal_from_response(response)?;
-                    if !operation.begin_ordinary() {
+                    let selected = match terminal_from_response(response) {
+                        Ok(selected) => selected,
+                        Err(error) => {
+                            if admission_rejection_preselected {
+                                operation
+                                    .resolve_ordinary(
+                                        Arc::new(resource_exhausted_terminal()),
+                                        false,
+                                    )
+                                    .await;
+                            }
+                            return Err(error);
+                        }
+                    };
+                    if !admission_rejection_preselected && !operation.begin_ordinary() {
                         return Err(WorkerExecutorError::runtime(
                             "tool operation terminal lost owner arbitration",
                         ));
@@ -2902,8 +3116,8 @@ where
             return Err(error.into());
         }
     };
-    let outcome = durability
-        .drive_access(
+    let outcome = Box::pin(
+        durability.drive_access(
             accessor,
             accessor.getter(),
             body,
@@ -2926,16 +3140,21 @@ where
                     .select_infrastructure(error)
                     .await;
             },
-        )
-        .await;
+        ),
+    )
+    .await;
     match outcome {
         Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(
             response,
             resources,
         )) => {
+            let live_admission_rejected = operation.live_attachment_admission_was_rejected().await;
             let terminal = terminal.lock().unwrap().take().ok_or_else(|| {
                 anyhow!("completed tool body did not select an operation terminal")
             })?;
+            if live_admission_rejected {
+                operation.complete_rejected_live_attachment_memory_accounting();
+            }
             let resources = match resources {
                 Some(mut retained) => {
                     if let Err(error) = retained.prepare_parent_end().await {
@@ -2967,6 +3186,10 @@ where
             response,
             resources,
         )) => {
+            let live_admission_rejected = operation.live_attachment_admission_was_rejected().await;
+            let response_terminal = terminal_from_response(&response)?;
+            let no_body =
+                response_terminal.body_execution == SerializableEntityBodyExecution::Skipped;
             let selected_terminal = terminal.lock().unwrap().take();
             if let Some(terminal) = selected_terminal {
                 operation.resolve_ordinary(terminal, false).await;
@@ -2989,8 +3212,16 @@ where
             if let Some(resources) = resources {
                 resources.settle_after_parent_end().await?;
             }
+            if live_admission_rejected {
+                let failure = skipped_attachment_failure(&response_terminal);
+                for controller in stdin_controller.iter().chain(stdout_controller.iter()) {
+                    let _ = controller.host_fail(failure.clone());
+                }
+            }
             operation.settle().await;
-            if (filesystem == golem_common::model::entity::FilesystemCapability::Capable
+            if no_body {
+                publish_no_body_terminals(stdin_controller.as_ref(), stdout_controller.as_ref());
+            } else if (filesystem == golem_common::model::entity::FilesystemCapability::Capable
                 || stdout_completion_only)
                 && let Some(stdout) = &stdout_controller
             {
@@ -3438,7 +3669,10 @@ where
 {
     accessor.with(|mut access| {
         let ctx = access.get();
-        let memory = AttachmentMemory::tracked(ctx.public_state.worker().active_agents());
+        let memory = AttachmentMemory::for_store(
+            ctx.public_state.worker().active_agents(),
+            ctx.state.is_live(),
+        );
         let max_attachment_bytes = ctx.state.config.limits.max_tool_attachment_bytes;
         let (producer, consumer, observer) = attachment_pair(max_attachment_bytes, memory);
         let stdin = ctx.table().push(ToolStdinEntry { consumer })?;
@@ -3474,7 +3708,10 @@ where
 {
     accessor.with(|mut access| {
         let ctx = access.get();
-        let memory = AttachmentMemory::tracked(ctx.public_state.worker().active_agents());
+        let memory = AttachmentMemory::for_store(
+            ctx.public_state.worker().active_agents(),
+            ctx.state.is_live(),
+        );
         let (producer, consumer, _) =
             attachment_pair(ctx.state.config.limits.max_tool_attachment_bytes, memory);
         let target = ctx.table().push(ToolStdoutEntry {
@@ -3887,7 +4124,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Resource<ToolStdinEntry>,
         Resource<ToolStdinClosedEntry>,
     )> {
-        let memory = AttachmentMemory::tracked(self.public_state.worker().active_agents());
+        let memory = AttachmentMemory::for_store(
+            self.public_state.worker().active_agents(),
+            self.state.is_live(),
+        );
         let (producer, consumer, observer) =
             attachment_pair(self.state.config.limits.max_tool_attachment_bytes, memory);
         let writer = self.table().push(ToolStdinWriterEntry { producer })?;
@@ -3917,7 +4157,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
     ) -> anyhow::Result<Resource<ToolStdinEntry>> {
         accessor.with(|mut access| {
             let ctx = access.get();
-            let memory = AttachmentMemory::tracked(ctx.public_state.worker().active_agents());
+            let memory = AttachmentMemory::for_store(
+                ctx.public_state.worker().active_agents(),
+                ctx.state.is_live(),
+            );
             let (producer, consumer, observer) =
                 attachment_pair(ctx.state.config.limits.max_tool_attachment_bytes, memory);
             let stdin = ctx.table().push(ToolStdinEntry { consumer })?;
@@ -3945,7 +4188,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
     )> {
         accessor.with(|mut access| {
             let ctx = access.get();
-            let memory = AttachmentMemory::tracked(ctx.public_state.worker().active_agents());
+            let memory = AttachmentMemory::for_store(
+                ctx.public_state.worker().active_agents(),
+                ctx.state.is_live(),
+            );
             let (producer, consumer, _) =
                 attachment_pair(ctx.state.config.limits.max_tool_attachment_bytes, memory);
             let target = ctx.table().push(ToolStdoutEntry {

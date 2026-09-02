@@ -81,6 +81,12 @@ pub trait ToolStreamingCaller {
     async fn hold_capable_published_checkpoint(&self, path: String, input: Vec<u8>);
     async fn hold_capable_overflow_terminal(&self, input: Vec<u8>);
     async fn hold_completed_reconstruction_barrier(&self);
+    async fn hold_completed_attachment_reconstruction_under_pressure(
+        &self,
+        path: String,
+        input_size: u64,
+    );
+    async fn reject_incomplete_attachment_upgrade_under_pressure(&self) -> Vec<String>;
     async fn hold_completed_reconstruction_before_exclusive_clock(&self);
     async fn hold_reconstruction_backpressure_before_exclusive_clock(
         &self,
@@ -1443,6 +1449,50 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .await
             .expect("completed reconstruction result");
         wait_at_crash_checkpoint("reconstruction-live-effect").await;
+    }
+
+    async fn hold_completed_attachment_reconstruction_under_pressure(
+        &self,
+        path: String,
+        input_size: u64,
+    ) {
+        let input = vec![b'i'; input_size as usize];
+        let invocation = CapableStreamingClient::default()
+            .run_capable(path, input_stream(vec![input.clone()]))
+            .expect("start completed attachment reconstruction operation");
+        let (summary, output) = invocation
+            .collect()
+            .await
+            .expect("complete attachment reconstruction operation");
+        assert_eq!(summary.bytes_read, input.len() as u64);
+        assert_eq!(output, input);
+        wait_at_crash_checkpoint("completed-attachment-pressure").await;
+    }
+
+    async fn reject_incomplete_attachment_upgrade_under_pressure(&self) -> Vec<String> {
+        let rpc = ToolRpc::new("streaming");
+        let (stdout_target, mut stdout) = tool_host::create_stdout();
+        let result = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("hold-large-after-eof"),
+            Some(closed_raw_stdin()),
+            Some(stdout_target),
+        );
+        assert!(matches!(
+            raw_result(&result).await,
+            Err(RpcError::ResourceExhausted(_))
+        ));
+        assert!(matches!(
+            stdout.next().await,
+            Some(Err(ByteStreamFailure::ResourceExhausted))
+        ));
+        assert!(stdout.next().await.is_none());
+        std::fs::write("/incomplete-attachment-upgrade-rejected", b"durable")
+            .expect("record durable incomplete attachment rejection");
+        vec![
+            "resource-exhausted".to_string(),
+            "stdout-resource-exhausted".to_string(),
+        ]
     }
 
     async fn hold_completed_reconstruction_before_exclusive_clock(&self) {

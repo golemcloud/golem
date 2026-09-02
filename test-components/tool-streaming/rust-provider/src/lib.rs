@@ -608,6 +608,14 @@ impl Streaming for StreamingImpl {
                 let _ = stdout.write(b"eof-observed".to_vec()).await;
                 wait_at_crash_checkpoint(&stdout, "after-eof-before-terminal").await;
             }
+            "hold-large-after-eof" => {
+                while stdin.next().await.is_some() {}
+                stdout
+                    .write(vec![b'h'; 8 * 1024 * 1024])
+                    .await
+                    .expect("buffer incomplete replay attachment");
+                wait_at_crash_checkpoint(&stdout, "after-large-eof-before-terminal").await;
+            }
             "hold-after-stdout-terminal" => {
                 let _ = stdout.write(b"ready".to_vec()).await;
                 if let Some(Ok(chunk)) = stdin.next().await {

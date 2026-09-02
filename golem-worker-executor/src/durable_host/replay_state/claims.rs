@@ -498,6 +498,9 @@ impl ReplayState {
                                         .to_string(),
                                 ))
                             }
+                            Ok(StartClaimAttempt::MissingSettling { .. }) => unreachable!(
+                                "ordinary Start claims never enter missing-scope settlement"
+                            ),
                             Err(error) => Err(error),
                         })
                         .await
@@ -642,7 +645,7 @@ impl ReplayState {
 
     /// Claims an exact synthetic scope `Start`. If no such entry was committed, atomically proves
     /// that the remaining replay suffix has no competing claim, matching discriminator, delivery
-    /// boundary, or concurrent side effect before switching replay to live mode.
+    /// boundary, or concurrent side effect before entering replay settlement.
     pub(crate) async fn claim_scope_start_or_recover_missing(
         &self,
         expected_function_name: &HostFunctionName,
@@ -702,8 +705,8 @@ impl ReplayState {
                 )
                 .await
             }
-            ScopeStartClaimOutcome::MissingSwitchedToLive => {
-                unreachable!("presence-only scope claim never switches replay to live")
+            ScopeStartClaimOutcome::MissingSettling { .. } => {
+                unreachable!("presence-only scope claim never enters replay settlement")
             }
         }
     }
@@ -739,13 +742,6 @@ impl ReplayState {
                             Ok((outcome, tx.blocked_on_completion_delivery))
                         })
                         .await?;
-                    if recover_missing && matches!(&result.0, StartClaimAttempt::Missing) {
-                        state
-                            .cursor
-                            .oplog
-                            .on_replay_progress(state.cursor.replay_target())
-                            .await;
-                    }
                     Ok(result)
                 })
                 .await?;
@@ -758,11 +754,12 @@ impl ReplayState {
                     });
                 }
                 StartClaimAttempt::Missing => {
-                    return Ok(if recover_missing {
-                        ScopeStartClaimOutcome::MissingSwitchedToLive
-                    } else {
-                        ScopeStartClaimOutcome::Missing
-                    });
+                    debug_assert!(!recover_missing);
+                    return Ok(ScopeStartClaimOutcome::Missing);
+                }
+                StartClaimAttempt::MissingSettling { replay_target } => {
+                    debug_assert!(recover_missing);
+                    return Ok(ScopeStartClaimOutcome::MissingSettling { replay_target });
                 }
                 StartClaimAttempt::Blocked => {
                     debug_assert!(blocked_on_completion_delivery);
@@ -1014,6 +1011,9 @@ impl ReplayState {
                                                 .to_string(),
                                         ));
                                     }
+                                    StartClaimAttempt::MissingSettling { .. } => unreachable!(
+                                        "custom invocation claims never enter missing-scope settlement"
+                                    ),
                                 }
                             }
                             OplogEntryLookupResult::NotFound { .. } => {

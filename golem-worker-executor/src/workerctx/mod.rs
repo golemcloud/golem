@@ -231,6 +231,7 @@ pub trait WorkerCtx:
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
         runtime: OwnerRuntime,
+        entity_execution_mode: Option<InvocationExecutionMode>,
         owner_execution: Arc<OwnerExecution>,
         owner_resources: Arc<OwnerRuntimeResources>,
         filesystem: FilesystemCapability,

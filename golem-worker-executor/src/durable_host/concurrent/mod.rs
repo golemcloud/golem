@@ -56,11 +56,11 @@ use crate::durable_host::durability::{
     try_trigger_host_trap_retry,
 };
 use crate::durable_host::replay_state::{
-    OplogEntryLookupResult, ReplayState, ReplayToLiveOutcome, ReplayToLiveRole,
-    ScopeStartClaimOutcome,
+    OplogEntryLookupResult, ReplayState, ReplayToLiveRole, ScopeStartClaimOutcome,
 };
 use crate::durable_host::{
-    AtomicRegionLease, DurableScopeKind, DurableWorkerCtx, PublicDurableWorkerState,
+    AtomicRegionLease, BeginReplayToLive, DurableScopeKind, DurableWorkerCtx, FinishReplayToLive,
+    PendingReplayToLive, PublicDurableWorkerState,
 };
 use crate::services::HasWorker;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, PendingUpload};

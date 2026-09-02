@@ -41,6 +41,45 @@ pub(crate) enum BodyAdmissionState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ToolLiveAdmissionOutcome {
+    Admitted,
+    ResourceExhausted,
+    Cancelled,
+    Fenced,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ToolLiveAdmissionState {
+    Historical,
+    Live,
+    ResourceExhaustedPending,
+    ResourceExhaustedHandled,
+}
+
+pub(crate) struct ToolAttachmentAdmissionRejection;
+
+struct LiveAttachmentPreparationRollback {
+    attachments: Vec<AttachmentController>,
+    armed: bool,
+}
+
+impl LiveAttachmentPreparationRollback {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for LiveAttachmentPreparationRollback {
+    fn drop(&mut self) {
+        if self.armed {
+            for attachment in &self.attachments {
+                attachment.abort_prepared_live_memory_accounting();
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ToolBodyAdmissionMetadata {
     Staging,
     Ready,
@@ -318,6 +357,9 @@ impl OwnerToolOperations {
                 owner: self.clone(),
                 _winner: winner_tx,
                 lease,
+                live_admission: Arc::new(tokio::sync::Mutex::new(
+                    ToolLiveAdmissionState::Historical,
+                )),
             }),
         }
     }
@@ -446,6 +488,15 @@ impl OwnerToolOperations {
 
     pub(crate) fn selected_owner_failure(&self) -> Option<OwnerFailureWinner> {
         self.state.lock().unwrap().owner_winner.clone()
+    }
+
+    pub(crate) fn commit_if_owner_open(&self, commit: impl FnOnce()) -> bool {
+        let state = self.state.lock().unwrap();
+        if state.owner_winner.is_some() {
+            return false;
+        }
+        commit();
+        true
     }
 
     pub(crate) async fn wait_for_owner_failure(&self) -> OwnerFailureWinner {
@@ -688,6 +739,7 @@ pub(crate) struct OwnerToolOperation {
     owner: Arc<OwnerToolOperations>,
     _winner: watch::Sender<ToolOperationWinner>,
     lease: Arc<OperationLease>,
+    live_admission: Arc<tokio::sync::Mutex<ToolLiveAdmissionState>>,
 }
 
 impl Clone for OwnerToolOperation {
@@ -699,6 +751,7 @@ impl Clone for OwnerToolOperation {
             owner: self.owner.clone(),
             _winner: self._winner.clone(),
             lease: self.lease.clone(),
+            live_admission: self.live_admission.clone(),
         }
     }
 }
@@ -759,6 +812,144 @@ impl OwnerToolOperation {
             "Attached tool operation streams"
         );
         true
+    }
+
+    pub(crate) async fn activate_live_attachment_memory_accounting(
+        &self,
+    ) -> ToolLiveAdmissionOutcome {
+        let mut live_admission = self.live_admission.lock().await;
+        match *live_admission {
+            ToolLiveAdmissionState::Live => {
+                return ToolLiveAdmissionOutcome::Admitted;
+            }
+            ToolLiveAdmissionState::ResourceExhaustedPending
+            | ToolLiveAdmissionState::ResourceExhaustedHandled => {
+                return ToolLiveAdmissionOutcome::ResourceExhausted;
+            }
+            ToolLiveAdmissionState::Historical => {}
+        }
+
+        let attachments = {
+            let state = self.owner.state.lock().unwrap();
+            let Some(operation) = state.operations.get(&self.id) else {
+                return ToolLiveAdmissionOutcome::Fenced;
+            };
+            if state.owner_winner.is_some() {
+                return ToolLiveAdmissionOutcome::Fenced;
+            }
+            match operation.winner {
+                ToolOperationWinner::Open => {}
+                ToolOperationWinner::SelectingCancelled | ToolOperationWinner::Cancelled => {
+                    return ToolLiveAdmissionOutcome::Cancelled;
+                }
+                _ => return ToolLiveAdmissionOutcome::Fenced,
+            }
+            operation
+                .stdin
+                .iter()
+                .chain(operation.stdout.iter())
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let mut rollback = LiveAttachmentPreparationRollback {
+            attachments: attachments.clone(),
+            armed: true,
+        };
+        for attachment in &attachments {
+            if !attachment.prepare_live_memory_accounting().await {
+                let mut state = self.owner.state.lock().unwrap();
+                if state.owner_winner.is_some() {
+                    return ToolLiveAdmissionOutcome::Fenced;
+                }
+                let Some(operation) = state.operations.get_mut(&self.id) else {
+                    return ToolLiveAdmissionOutcome::Fenced;
+                };
+                match operation.winner {
+                    ToolOperationWinner::Open => {
+                        operation.winner = ToolOperationWinner::SelectingOrdinary;
+                        operation
+                            .winner_tx
+                            .send_replace(ToolOperationWinner::SelectingOrdinary);
+                        *live_admission = ToolLiveAdmissionState::ResourceExhaustedPending;
+                        drop(state);
+                        rollback.disarm();
+                        return ToolLiveAdmissionOutcome::ResourceExhausted;
+                    }
+                    ToolOperationWinner::SelectingCancelled | ToolOperationWinner::Cancelled => {
+                        return ToolLiveAdmissionOutcome::Cancelled;
+                    }
+                    _ => return ToolLiveAdmissionOutcome::Fenced,
+                }
+            }
+        }
+
+        let state = self.owner.state.lock().unwrap();
+        let Some(operation) = state.operations.get(&self.id) else {
+            return ToolLiveAdmissionOutcome::Fenced;
+        };
+        if state.owner_winner.is_some() {
+            return ToolLiveAdmissionOutcome::Fenced;
+        }
+        match operation.winner {
+            ToolOperationWinner::Open => {}
+            ToolOperationWinner::SelectingCancelled | ToolOperationWinner::Cancelled => {
+                return ToolLiveAdmissionOutcome::Cancelled;
+            }
+            _ => return ToolLiveAdmissionOutcome::Fenced,
+        }
+        for attachment in &attachments {
+            attachment.commit_live_memory_accounting();
+        }
+        if !attachments.is_empty() {
+            *live_admission = ToolLiveAdmissionState::Live;
+        }
+        rollback.disarm();
+        ToolLiveAdmissionOutcome::Admitted
+    }
+
+    pub(crate) async fn take_live_attachment_admission_rejection(
+        &self,
+    ) -> Option<ToolAttachmentAdmissionRejection> {
+        let mut live_admission = self.live_admission.lock().await;
+        if *live_admission == ToolLiveAdmissionState::ResourceExhaustedPending {
+            *live_admission = ToolLiveAdmissionState::ResourceExhaustedHandled;
+            Some(ToolAttachmentAdmissionRejection)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) async fn has_pending_live_admission_rejection(&self) -> bool {
+        *self.live_admission.lock().await == ToolLiveAdmissionState::ResourceExhaustedPending
+    }
+
+    pub(crate) async fn live_attachment_admission_was_rejected(&self) -> bool {
+        matches!(
+            *self.live_admission.lock().await,
+            ToolLiveAdmissionState::ResourceExhaustedPending
+                | ToolLiveAdmissionState::ResourceExhaustedHandled
+        )
+    }
+
+    pub(crate) fn complete_rejected_live_attachment_memory_accounting(&self) {
+        let attachments = {
+            let state = self.owner.state.lock().unwrap();
+            state
+                .operations
+                .get(&self.id)
+                .map(|operation| {
+                    operation
+                        .stdin
+                        .iter()
+                        .chain(operation.stdout.iter())
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        for attachment in attachments {
+            attachment.complete_rejected_live_memory_accounting();
+        }
     }
 
     fn accept(&self, invocation_id: EntityInvocationId) -> bool {
@@ -1579,6 +1770,7 @@ mod tests {
     };
     use super::*;
     use crate::preview2::golem::tool::host::ByteStreamFailure;
+    use crate::services::active_agents::MemoryGrant;
     use golem_common::model::AgentId;
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::deployment::DeploymentRevision;
@@ -1646,6 +1838,14 @@ mod tests {
     }
 
     fn context() -> OwnerToolOperationContext {
+        context_with_filesystem(FilesystemCapability::Incapable)
+    }
+
+    fn capable_context() -> OwnerToolOperationContext {
+        context_with_filesystem(FilesystemCapability::Capable)
+    }
+
+    fn context_with_filesystem(filesystem: FilesystemCapability) -> OwnerToolOperationContext {
         let owner = golem_common::model::OwnedAgentId::new(
             EnvironmentId::new(),
             &AgentId {
@@ -1653,11 +1853,7 @@ mod tests {
                 agent_id: "Agent(owner)".to_string(),
             },
         );
-        context_for(
-            &owner,
-            FilesystemCapability::Incapable,
-            EntityCallMode::Asynchronous,
-        )
+        context_for(&owner, filesystem, EntityCallMode::Asynchronous)
     }
 
     fn context_for(
@@ -1778,6 +1974,400 @@ mod tests {
         waiting.await.unwrap();
         assert_eq!(owner.operation_count(), 0);
         assert_eq!(owner.operation_removal_count(), 1);
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn attachment_admission_rejection_preselects_ordinary_terminal() {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(capable_context()), 2);
+        let (stdout, _consumer, _) = attachment_pair(
+            8,
+            AttachmentMemory::with_test_reservation(false, |_| async { None }),
+        );
+        stdout.write(vec![1, 2, 3]).await.unwrap();
+        let stdout = stdout.controller();
+        assert!(operation.attach(None, Some(stdout.clone())));
+
+        assert_eq!(
+            operation.activate_live_attachment_memory_accounting().await,
+            ToolLiveAdmissionOutcome::ResourceExhausted
+        );
+        assert!(matches!(
+            operation.winner_if_active(),
+            Some(ToolOperationWinner::SelectingOrdinary)
+        ));
+        assert!(!operation.begin_cancel());
+
+        let failing_owner = owner.clone();
+        let owner_failure = tokio::spawn(async move {
+            failing_owner
+                .select_owner_failure(OwnerFailureWinner::Infrastructure(
+                    WorkerExecutorError::runtime("concurrent owner failure"),
+                ))
+                .await
+        });
+        tokio::task::yield_now().await;
+        assert!(!owner_failure.is_finished());
+
+        operation
+            .take_live_attachment_admission_rejection()
+            .await
+            .expect("admission rejection marker");
+        operation.complete_rejected_live_attachment_memory_accounting();
+        let terminal = Arc::new(SerializableToolOperationTerminal {
+            body_execution: golem_common::model::oplog::payload::types::SerializableEntityBodyExecution::Skipped,
+            result: Err(
+                golem_common::model::oplog::payload::types::SerializableToolRpcError::ResourceExhausted(
+                    "limit".to_string(),
+                ),
+            ),
+        });
+        operation.resolve_ordinary(terminal, true).await;
+        assert!(owner_failure.await.unwrap());
+        assert!(matches!(
+            operation.winner_if_active(),
+            Some(ToolOperationWinner::Ordinary { .. })
+        ));
+        assert_eq!(
+            stdout.metadata().terminal,
+            Some(super::super::attachment::ToolAttachmentTerminalMetadata::ResourceExhausted)
+        );
+        operation.settle().await;
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn cancelled_multi_attachment_preparation_rolls_back_and_can_retry() {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(capable_context()), 2);
+        let (stdin, _stdin_consumer, _) = attachment_pair(
+            8,
+            AttachmentMemory::with_test_reservation(false, |bytes| async move {
+                Some(MemoryGrant::inert(bytes))
+            }),
+        );
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_reservation = attempts.clone();
+        let (stdout, _stdout_consumer, _) = attachment_pair(
+            8,
+            AttachmentMemory::with_test_reservation(false, move |bytes| {
+                let attempt = attempts_for_reservation.fetch_add(1, Ordering::AcqRel);
+                async move {
+                    if attempt == 0 {
+                        std::future::pending().await
+                    } else {
+                        Some(MemoryGrant::inert(bytes))
+                    }
+                }
+            }),
+        );
+        stdin.write(vec![1]).await.unwrap();
+        stdout.write(vec![2]).await.unwrap();
+        let stdin_controller = stdin.controller();
+        let stdout_controller = stdout.controller();
+        assert!(operation.attach(
+            Some(stdin_controller.clone()),
+            Some(stdout_controller.clone())
+        ));
+
+        let preparing_operation = operation.clone();
+        let preparation = tokio::spawn(async move {
+            preparing_operation
+                .activate_live_attachment_memory_accounting()
+                .await
+        });
+        while attempts.load(Ordering::Acquire) == 0 {
+            tokio::task::yield_now().await;
+        }
+        preparation.abort();
+        assert!(preparation.await.unwrap_err().is_cancelled());
+
+        assert_eq!(
+            stdin_controller.live_memory_accounting_state(),
+            (false, false)
+        );
+        assert_eq!(
+            stdout_controller.live_memory_accounting_state(),
+            (false, false)
+        );
+        stdin.write(vec![3]).await.unwrap();
+        stdout.write(vec![4]).await.unwrap();
+
+        assert_eq!(
+            operation.activate_live_attachment_memory_accounting().await,
+            ToolLiveAdmissionOutcome::Admitted
+        );
+        assert_eq!(
+            stdin_controller.live_memory_accounting_state(),
+            (true, false)
+        );
+        assert_eq!(
+            stdout_controller.live_memory_accounting_state(),
+            (true, false)
+        );
+
+        assert!(operation.begin_cancel());
+        operation.resolve_cancel(true).await;
+        operation.settle().await;
+    }
+
+    #[test]
+    async fn empty_incomplete_activation_does_not_skip_later_capable_attachments() {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(capable_context()), 2);
+
+        assert_eq!(
+            operation.activate_live_attachment_memory_accounting().await,
+            ToolLiveAdmissionOutcome::Admitted
+        );
+        assert_eq!(
+            *operation.live_admission.lock().await,
+            ToolLiveAdmissionState::Historical
+        );
+
+        let (stdout, _consumer, _) = attachment_pair(
+            8,
+            AttachmentMemory::with_test_reservation(false, |_| async { None }),
+        );
+        stdout.write(vec![1, 2, 3]).await.unwrap();
+        let stdout = stdout.controller();
+        assert!(operation.attach(None, Some(stdout)));
+        assert_eq!(
+            operation.activate_live_attachment_memory_accounting().await,
+            ToolLiveAdmissionOutcome::ResourceExhausted
+        );
+        assert!(matches!(
+            operation.winner_if_active(),
+            Some(ToolOperationWinner::SelectingOrdinary)
+        ));
+
+        operation
+            .take_live_attachment_admission_rejection()
+            .await
+            .expect("admission rejection marker");
+        operation.resolve_ordinary(
+            Arc::new(SerializableToolOperationTerminal {
+                body_execution: golem_common::model::oplog::payload::types::SerializableEntityBodyExecution::Skipped,
+                result: Err(
+                    golem_common::model::oplog::payload::types::SerializableToolRpcError::ResourceExhausted(
+                        "limit".to_string(),
+                    ),
+                ),
+            }),
+            true,
+        ).await;
+        operation.settle().await;
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn owner_failure_during_capable_attachment_activation_rolls_back_the_batch() {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(capable_context()), 2);
+        let (stdin, _stdin_consumer, _) = attachment_pair(
+            8,
+            AttachmentMemory::with_test_reservation(false, |bytes| async move {
+                Some(MemoryGrant::inert(bytes))
+            }),
+        );
+        let reservation_entered = Arc::new(Notify::new());
+        let reservation_release = Arc::new(Notify::new());
+        let (stdout, _stdout_consumer, _) = attachment_pair(
+            8,
+            AttachmentMemory::with_test_reservation(false, {
+                let reservation_entered = reservation_entered.clone();
+                let reservation_release = reservation_release.clone();
+                move |bytes| {
+                    let reservation_entered = reservation_entered.clone();
+                    let reservation_release = reservation_release.clone();
+                    async move {
+                        reservation_entered.notify_one();
+                        reservation_release.notified().await;
+                        Some(MemoryGrant::inert(bytes))
+                    }
+                }
+            }),
+        );
+        stdin.write(vec![1]).await.unwrap();
+        stdout.write(vec![2]).await.unwrap();
+        let stdin_controller = stdin.controller();
+        let stdout_controller = stdout.controller();
+        assert!(operation.attach(
+            Some(stdin_controller.clone()),
+            Some(stdout_controller.clone())
+        ));
+
+        let activation = tokio::spawn({
+            let operation = operation.clone();
+            async move { operation.activate_live_attachment_memory_accounting().await }
+        });
+        reservation_entered.notified().await;
+        assert!(
+            owner
+                .select_owner_failure(OwnerFailureWinner::Infrastructure(
+                    WorkerExecutorError::runtime("owner failed during attachment activation"),
+                ))
+                .await
+        );
+        reservation_release.notify_one();
+
+        assert_eq!(activation.await.unwrap(), ToolLiveAdmissionOutcome::Fenced);
+        assert_eq!(
+            stdin_controller.live_memory_accounting_state(),
+            (false, false)
+        );
+        assert_eq!(
+            stdout_controller.live_memory_accounting_state(),
+            (false, false)
+        );
+        assert!(stdin_controller.metadata().owner_fenced);
+        assert!(stdout_controller.metadata().owner_fenced);
+
+        owner.drain_owner_failure_lanes().await;
+        operation.settle().await;
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn cancellation_during_capable_attachment_activation_rolls_back_the_batch() {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(capable_context()), 2);
+        let (stdin, _stdin_consumer, _) = attachment_pair(
+            8,
+            AttachmentMemory::with_test_reservation(false, |bytes| async move {
+                Some(MemoryGrant::inert(bytes))
+            }),
+        );
+        let reservation_entered = Arc::new(Notify::new());
+        let reservation_release = Arc::new(Notify::new());
+        let (stdout, _stdout_consumer, _) = attachment_pair(
+            8,
+            AttachmentMemory::with_test_reservation(false, {
+                let reservation_entered = reservation_entered.clone();
+                let reservation_release = reservation_release.clone();
+                move |bytes| {
+                    let reservation_entered = reservation_entered.clone();
+                    let reservation_release = reservation_release.clone();
+                    async move {
+                        reservation_entered.notify_one();
+                        reservation_release.notified().await;
+                        Some(MemoryGrant::inert(bytes))
+                    }
+                }
+            }),
+        );
+        stdin.write(vec![1]).await.unwrap();
+        stdout.write(vec![2]).await.unwrap();
+        let stdin_controller = stdin.controller();
+        let stdout_controller = stdout.controller();
+        assert!(operation.attach(
+            Some(stdin_controller.clone()),
+            Some(stdout_controller.clone())
+        ));
+
+        let local_live_tail = Arc::new(AtomicBool::new(false));
+        let activation = tokio::spawn({
+            let operation = operation.clone();
+            let local_live_tail = local_live_tail.clone();
+            async move {
+                crate::durable_host::PendingReplayToLive {
+                    replay_target: OplogIndex::from_u64(9),
+                    role: crate::durable_host::replay_state::ReplayToLiveRole::NonPrimary,
+                    replaying_incomplete_entity: true,
+                    tool_entity: true,
+                    tool_operation: Some(operation),
+                    local_live_tail,
+                }
+                .finish()
+                .await
+            }
+        });
+        reservation_entered.notified().await;
+        assert!(operation.begin_cancel());
+        reservation_release.notify_one();
+
+        let outcome = activation.await.unwrap().unwrap();
+        assert_eq!(outcome, crate::durable_host::FinishReplayToLive::Cancelled);
+        assert!(!local_live_tail.load(Ordering::Acquire));
+        let live_action_ran = Arc::new(AtomicBool::new(false));
+        if outcome.require_live().is_ok() {
+            live_action_ran.store(true, Ordering::Release);
+        }
+        assert!(!live_action_ran.load(Ordering::Acquire));
+        assert_eq!(
+            stdin_controller.live_memory_accounting_state(),
+            (false, false)
+        );
+        assert_eq!(
+            stdout_controller.live_memory_accounting_state(),
+            (false, false)
+        );
+        operation.resolve_cancel(true).await;
+        operation.settle().await;
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn cancellation_during_failed_attachment_activation_rolls_back_the_batch() {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(capable_context()), 2);
+        let (stdin, _stdin_consumer, _) = attachment_pair(
+            8,
+            AttachmentMemory::with_test_reservation(false, |bytes| async move {
+                Some(MemoryGrant::inert(bytes))
+            }),
+        );
+        let reservation_entered = Arc::new(Notify::new());
+        let reservation_release = Arc::new(Notify::new());
+        let (stdout, _stdout_consumer, _) = attachment_pair(
+            8,
+            AttachmentMemory::with_test_reservation(false, {
+                let reservation_entered = reservation_entered.clone();
+                let reservation_release = reservation_release.clone();
+                move |_| {
+                    let reservation_entered = reservation_entered.clone();
+                    let reservation_release = reservation_release.clone();
+                    async move {
+                        reservation_entered.notify_one();
+                        reservation_release.notified().await;
+                        None
+                    }
+                }
+            }),
+        );
+        stdin.write(vec![1]).await.unwrap();
+        stdout.write(vec![2]).await.unwrap();
+        let stdin_controller = stdin.controller();
+        let stdout_controller = stdout.controller();
+        assert!(operation.attach(
+            Some(stdin_controller.clone()),
+            Some(stdout_controller.clone())
+        ));
+
+        let activation = tokio::spawn({
+            let operation = operation.clone();
+            async move { operation.activate_live_attachment_memory_accounting().await }
+        });
+        reservation_entered.notified().await;
+        assert!(operation.begin_cancel());
+        reservation_release.notify_one();
+
+        assert_eq!(
+            activation.await.unwrap(),
+            ToolLiveAdmissionOutcome::Cancelled
+        );
+        assert_eq!(
+            stdin_controller.live_memory_accounting_state(),
+            (false, false)
+        );
+        assert_eq!(
+            stdout_controller.live_memory_accounting_state(),
+            (false, false)
+        );
+        assert!(owner.owner_winner().is_none());
+        operation.resolve_cancel(true).await;
+        operation.settle().await;
     }
 
     #[test]

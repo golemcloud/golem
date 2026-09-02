@@ -99,7 +99,9 @@ use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::entity::{ExecutableTarget, FilesystemCapability, OwnerRuntime};
+use golem_common::model::entity::{
+    ExecutableTarget, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
+};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     AgentError, OplogEntry, OplogIndex, OplogPayload, TimestampedUpdateDescription,
@@ -1014,6 +1016,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn create_entity_context(
         self: &Arc<Self>,
         runtime: OwnerRuntime,
+        execution_mode: InvocationExecutionMode,
         filesystem: FilesystemCapability,
         executable_component: golem_service_base::model::component::Component,
         activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
@@ -1099,6 +1102,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             None,
             worker_metadata.original_phantom_id,
             runtime,
+            Some(execution_mode),
             self.owner_execution(),
             self.owner_runtime_resources(),
             filesystem,
@@ -6684,6 +6688,7 @@ impl RunningWorker {
             pending_update,
             worker_metadata.original_phantom_id,
             OwnerRuntime::Agent,
+            None,
             parent.owner_execution(),
             parent.owner_runtime_resources(),
             FilesystemCapability::Capable,
