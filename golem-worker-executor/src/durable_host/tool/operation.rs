@@ -744,6 +744,10 @@ impl OwnerToolOperation {
             .get_mut(&self.id)
             .expect("owner tool operation must remain registered");
         if operation.winner.is_terminal() {
+            drop(state);
+            for attachment in stdin.iter().chain(stdout.iter()) {
+                attachment.fence_owner();
+            }
             return false;
         }
         operation.stdin = stdin;
@@ -1897,6 +1901,33 @@ mod tests {
         );
         assert!(stdout_metadata.owner_fenced);
         assert!(!stdout_metadata.backpressured);
+
+        owner.drain_owner_failure_lanes().await;
+        operation.settle().await;
+    }
+
+    #[test]
+    async fn attaching_to_a_fenced_operation_fences_and_clears_local_attachments() {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(context()), 2);
+        let (stdout, consumer, _observer) = attachment_pair(4, AttachmentMemory::inert());
+        let controller = consumer.controller();
+        stdout.write(vec![1, 2, 3, 4]).await.unwrap();
+
+        assert!(
+            owner
+                .select_owner_failure(OwnerFailureWinner::Infrastructure(
+                    WorkerExecutorError::runtime("owner failed before attachment"),
+                ))
+                .await
+        );
+        assert!(!operation.attach(None, Some(controller.clone())));
+
+        let metadata = controller.metadata();
+        assert!(metadata.owner_fenced);
+        assert_eq!(metadata.mode, ToolAttachmentModeMetadata::Pending);
+        assert_eq!(metadata.buffered_bytes, 0);
+        assert_eq!(metadata.charged_bytes, 0);
 
         owner.drain_owner_failure_lanes().await;
         operation.settle().await;

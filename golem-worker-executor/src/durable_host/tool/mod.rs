@@ -1994,11 +1994,19 @@ impl SkippedToolAttachmentEndpoints {
         failure: ByteStreamFailure,
     ) {
         for controller in controllers.0.iter().chain(controllers.1.iter()) {
-            controller.configure_completion();
             let _ = controller.host_fail(failure.clone());
-            controller.publish_completion();
+            controller.publish_no_body_terminal();
         }
         drop(self);
+    }
+}
+
+fn publish_no_body_terminals(
+    stdin: Option<&AttachmentController>,
+    stdout: Option<&AttachmentController>,
+) {
+    for controller in stdin.into_iter().chain(stdout) {
+        controller.publish_no_body_terminal();
     }
 }
 
@@ -2070,8 +2078,6 @@ where
             .expect("eager deferred admission must own cleanup")
             .disarm();
     }
-    endpoints.publish_failure(&controllers, failure);
-
     let outcome = match recorded {
         RecordedEntityTerminal::Completed(response) => {
             if !operation.begin_ordinary() {
@@ -2117,6 +2123,7 @@ where
         }
     }?;
     operation.settle().await;
+    endpoints.publish_failure(&controllers, failure);
     match outcome {
         crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(response, _)
         | crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(response, _) => {
@@ -2191,10 +2198,6 @@ where
         .as_mut()
         .expect("capable call must own deferred admission")
         .disarm();
-    for controller in stdin.into_iter().chain(stdout) {
-        let _ = controller.cancel();
-        controller.publish_completion();
-    }
     if !operation.begin_cancel() {
         return Err(anyhow!(
             "tool invocation lost cancellation terminal arbitration"
@@ -2211,6 +2214,7 @@ where
         .await;
     let outcome = outcome?;
     operation.settle().await;
+    publish_no_body_terminals(stdin, stdout);
     match outcome {
         crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(response, _)
         | crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(response, _) => {
@@ -2230,10 +2234,6 @@ where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
-    for controller in stdin.into_iter().chain(stdout) {
-        let _ = controller.cancel();
-        controller.publish_completion();
-    }
     if !operation.begin_cancel() {
         return Err(anyhow!(
             "tool invocation lost cancellation terminal arbitration"
@@ -2250,6 +2250,7 @@ where
         .await;
     let outcome = outcome?;
     operation.settle().await;
+    publish_no_body_terminals(stdin, stdout);
     match outcome {
         crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(response, _)
         | crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(response, _) => {
@@ -2503,12 +2504,6 @@ where
         .as_ref()
         .is_some_and(ToolStdoutWriterEntry::completion_only);
     if !operation.attach(stdin_controller.clone(), stdout_controller.clone()) {
-        if let Some(stdin) = &stdin_controller {
-            let _ = stdin.cancel();
-        }
-        if let Some(stdout) = &stdout_controller {
-            let _ = stdout.cancel();
-        }
         return Err(anyhow!("owner generation fenced tool invocation"));
     }
     let mut deferred_cleanup =
@@ -2678,8 +2673,11 @@ where
                             operation.settle().await;
                             if let Some(stdout) = &stdout_controller {
                                 let _ = stdout.host_fail(ByteStreamFailure::ResourceExhausted);
-                                stdout.publish_completion();
                             }
+                            publish_no_body_terminals(
+                                stdin_controller.as_ref(),
+                                stdout_controller.as_ref(),
+                            );
                             return decode_tool_terminal(*response).map_err(Into::into);
                         }
                         Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(
@@ -2690,9 +2688,10 @@ where
                             let _ = operation.begin_cancel();
                             operation.resolve_cancel(true).await;
                             operation.settle().await;
-                            if let Some(stdout) = &stdout_controller {
-                                stdout.publish_completion();
-                            }
+                            publish_no_body_terminals(
+                                stdin_controller.as_ref(),
+                                stdout_controller.as_ref(),
+                            );
                             return decode_tool_terminal(*response).map_err(Into::into);
                         }
                         Err(error) => {
@@ -4208,7 +4207,9 @@ mod tests {
     };
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use crate::durable_host::entity::RecordedEntityTerminal;
-    use crate::durable_host::tool::attachment::{AttachmentMemory, attachment_pair};
+    use crate::durable_host::tool::attachment::{
+        AttachmentMemory, ToolAttachmentModeMetadata, attachment_pair,
+    };
     use crate::preview2::golem::tool::host::{ByteStreamCloseCause, ByteStreamFailure};
     use crate::services::environment_state::ToolDiscoveryError;
     use golem_common::model::account::{AccountEmail, AccountId};
@@ -4839,6 +4840,14 @@ mod tests {
 
             endpoints.publish_failure(&controllers, failure.clone());
 
+            assert_eq!(
+                controllers.0.as_ref().unwrap().metadata().mode,
+                ToolAttachmentModeMetadata::TerminalOnly
+            );
+            assert_eq!(
+                controllers.1.as_ref().unwrap().metadata().mode,
+                ToolAttachmentModeMetadata::TerminalOnly
+            );
             for observer in [&stdin_observer, &stdout_observer] {
                 let Some(ByteStreamCloseCause::Failed(actual)) = observer.terminal() else {
                     panic!("skipped replay endpoint did not retain its recorded failure");

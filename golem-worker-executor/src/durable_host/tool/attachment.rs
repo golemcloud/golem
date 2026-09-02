@@ -277,6 +277,35 @@ impl ByteAttachment {
         true
     }
 
+    fn publish_no_body_terminal(&self) -> bool {
+        let reader = {
+            let mut state = self.state.lock().unwrap();
+            if state.owner_fenced || state.terminal.is_none() {
+                return false;
+            }
+            match state.mode {
+                AttachmentMode::Pending => {
+                    state.chunks.clear();
+                    state.buffered_bytes = 0;
+                    state.mode = AttachmentMode::TerminalOnly;
+                }
+                AttachmentMode::Completion { published: false } => {
+                    state.mode = AttachmentMode::Completion { published: true };
+                }
+                AttachmentMode::Live
+                | AttachmentMode::Completion { published: true }
+                | AttachmentMode::TerminalOnly
+                | AttachmentMode::Discard => {}
+            }
+            state.reader_waker.take()
+        };
+        self.changed.notify_waiters();
+        if let Some(reader) = reader {
+            reader.wake();
+        }
+        true
+    }
+
     fn select_terminal(&self, cause: ByteStreamCloseCause) -> Result<(), StreamWriteError> {
         self.select_terminal_with_origin(cause, false)
     }
@@ -719,9 +748,10 @@ impl AttachmentProducer {
 
     pub(crate) fn reject_unconfigured(&self) -> Result<bool, StreamWriteError> {
         self.attachment
-            .terminate_unconfigured(ByteStreamCloseCause::Failed(ByteStreamFailure::Failed(
+            .select_terminal(ByteStreamCloseCause::Failed(ByteStreamFailure::Failed(
                 "tool invocation rejected".to_string(),
-            )))
+            )))?;
+        Ok(self.attachment.publish_no_body_terminal())
     }
 
     #[cfg(test)]
@@ -918,6 +948,10 @@ impl AttachmentController {
 
     pub(crate) fn publish_completion(&self) -> bool {
         self.attachment.publish_completion()
+    }
+
+    pub(crate) fn publish_no_body_terminal(&self) -> bool {
+        self.attachment.publish_no_body_terminal()
     }
 
     pub(crate) fn cancel(&self) -> Result<(), StreamWriteError> {
@@ -1446,6 +1480,134 @@ mod tests {
     }
 
     #[test]
+    async fn no_body_terminal_publication_handles_every_attachment_mode() {
+        let (pending, pending_consumer, _) = pair(16);
+        let pending_controller = pending.controller();
+        pending.write(vec![1, 2, 3]).await.unwrap();
+        let mut pending_read = tokio::spawn(async move {
+            (
+                pending_consumer.read_next().await,
+                pending_consumer.read_next().await,
+                pending_consumer.read_next().await,
+            )
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut pending_read)
+                .await
+                .is_err()
+        );
+        pending_controller.cancel().unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut pending_read)
+                .await
+                .is_err()
+        );
+        assert!(pending_controller.publish_no_body_terminal());
+        assert_eq!(
+            pending_controller.metadata().mode,
+            ToolAttachmentModeMetadata::TerminalOnly
+        );
+        assert_eq!(pending_controller.metadata().buffered_bytes, 0);
+        assert_eq!(pending_controller.metadata().charged_bytes, 0);
+        assert!(pending_controller.publish_no_body_terminal());
+        let (failure, end, repeated_end) = pending_read.await.unwrap();
+        assert!(matches!(
+            failure,
+            AttachmentRead::Item(Err(ByteStreamFailure::Cancelled))
+        ));
+        assert!(matches!(end, AttachmentRead::End));
+        assert!(matches!(repeated_end, AttachmentRead::End));
+
+        let (completion, completion_consumer, _) = pair(16);
+        let completion_controller = completion.controller();
+        assert!(completion_controller.configure_completion());
+        completion.write(vec![4, 5]).await.unwrap();
+        completion_controller.cancel().unwrap();
+        assert!(completion_controller.publish_no_body_terminal());
+        assert_eq!(
+            completion_controller.metadata().mode,
+            ToolAttachmentModeMetadata::CompletionPublished
+        );
+        assert!(completion_controller.publish_no_body_terminal());
+        assert!(matches!(
+            completion_consumer.read_next().await,
+            AttachmentRead::Item(Ok(bytes)) if bytes == vec![4, 5]
+        ));
+        assert!(matches!(
+            completion_consumer.read_next().await,
+            AttachmentRead::Item(Err(ByteStreamFailure::Cancelled))
+        ));
+        assert!(matches!(
+            completion_consumer.read_next().await,
+            AttachmentRead::End
+        ));
+
+        let (live, live_consumer, _) = pair(16);
+        let live_controller = live.controller();
+        assert!(live_controller.configure_live());
+        live.write(vec![6, 7]).await.unwrap();
+        live_controller.cancel().unwrap();
+        assert!(live_controller.publish_no_body_terminal());
+        assert_eq!(
+            live_controller.metadata().mode,
+            ToolAttachmentModeMetadata::Live
+        );
+        assert!(matches!(
+            live_consumer.read_next().await,
+            AttachmentRead::Item(Ok(bytes)) if bytes == vec![6, 7]
+        ));
+        assert!(matches!(
+            live_consumer.read_next().await,
+            AttachmentRead::Item(Err(ByteStreamFailure::Cancelled))
+        ));
+        assert!(matches!(
+            live_consumer.read_next().await,
+            AttachmentRead::End
+        ));
+
+        let discard = discard_producer(AttachmentMemory::inert());
+        let discard_controller = discard.controller();
+        discard_controller.cancel().unwrap();
+        assert!(discard_controller.publish_no_body_terminal());
+        assert_eq!(
+            discard_controller.metadata().mode,
+            ToolAttachmentModeMetadata::Discard
+        );
+
+        let (unterminated, _consumer, _) = pair(16);
+        assert!(!unterminated.controller().publish_no_body_terminal());
+    }
+
+    #[test]
+    async fn no_body_terminal_publication_wakes_a_wasmtime_reader() {
+        let (producer, consumer, _) = pair(16);
+        let controller = producer.controller();
+        assert!(controller.configure_completion());
+        controller.cancel().unwrap();
+
+        let mut config = Config::new();
+        config.concurrency_support(true);
+        let engine = Engine::new(&config).unwrap();
+        let mut store = Store::new(&engine, ());
+        let drain = drain_with_store(&mut store, consumer);
+        tokio::pin!(drain);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut drain)
+                .await
+                .is_err()
+        );
+
+        assert!(controller.publish_no_body_terminal());
+        let items = tokio::time::timeout(std::time::Duration::from_secs(1), &mut drain)
+            .await
+            .unwrap();
+        assert!(matches!(
+            items.as_slice(),
+            [Err(ByteStreamFailure::Cancelled)]
+        ));
+    }
+
+    #[test]
     async fn unconfigured_stdout_target_drop_publishes_only_abandonment() {
         let (producer, consumer, _) = pair(4);
         let target = ToolStdoutEntry {
@@ -1675,10 +1837,18 @@ mod tests {
 
     #[test]
     async fn owner_fenced_wasmtime_reader_traps_without_delivering_cancellation() {
-        let (_producer, consumer, _) = pair(4);
+        let (producer, consumer, _) = pair(4);
         let controller = consumer.controller();
-        assert!(controller.configure_live());
+        producer.write(vec![1, 2, 3, 4]).await.unwrap();
         controller.fence_owner();
+        assert!(controller.metadata().owner_fenced);
+        assert_eq!(
+            controller.metadata().mode,
+            ToolAttachmentModeMetadata::Pending
+        );
+        assert_eq!(controller.metadata().buffered_bytes, 0);
+        assert_eq!(controller.metadata().charged_bytes, 0);
+        assert!(!controller.publish_no_body_terminal());
 
         let mut config = Config::new();
         config.concurrency_support(true);

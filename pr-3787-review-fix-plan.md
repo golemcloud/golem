@@ -43,7 +43,7 @@ documented verification commands are all complete.
 | P2 | Introduce typed replay-claim outcomes | **Complete** | 18 | P0 |
 | P3 | Add replay-stable tool-attempt identity | **Complete** | 6 | P2 |
 | P4 | Replace operation strong-count cleanup with explicit leases | **Complete** | 17, 27 | P0 |
-| P5 | Centralize no-body attachment publication | Not started | 4, 16, 27 | P1, P4 |
+| P5 | Centralize no-body attachment publication | **Complete** | 4, 16, 27 | P1, P4 |
 | P6 | Make execution mode and attachment admission replay-deterministic | Not started | 3, 5 | P1, P5 |
 | P7a | Fix the Rust started-invocation caller contract | Not started | 7–9 | P1, P5 |
 | P7b | Fix the TypeScript started-invocation caller contract | Not started | 11 | P1, P5 |
@@ -71,7 +71,15 @@ documented verification commands are all complete.
   pass, and Oracle approved the phase. Recorded in local commit `778dcbab8`.
 - **P4 — Complete (2026-09-02):** explicit operation lease accounting replaced strong-count
   inference. All focused unit, broader tool-module, integration, formatting, and clippy checks
-  pass, and Oracle approved the corrected notification ordering.
+  pass, and Oracle approved the corrected notification ordering. Recorded in local commit
+  `24cafcf69`.
+- **P5 — Complete (2026-09-02):** implemented one mode-aware no-body terminal publication
+  transition, rewired rejection/cancellation/skipped-replay/resource-exhaustion paths to publish
+  only after their durable outcome, and moved failed-attach fencing into the operation boundary.
+  Added mode-matrix, buffered-memory release, waiter wake-up, and failed-attach regression tests.
+  All 84 attachment/operation/tool-host unit tests, the two affected executor integration tests,
+  formatting, diff checks, and package clippy pass. Owner-fence trap semantics remain separate;
+  Oracle approved the phase without corrections.
 
 ## Invariants that govern every fix
 
@@ -328,28 +336,43 @@ weakening owner fencing.
 
 ### Implementation
 
-- [ ] Add one atomic attachment operation that exposes an already selected terminal:
+- [x] Add one atomic attachment operation that exposes an already selected terminal:
   - `Pending` becomes `TerminalOnly`;
   - staged `Completion` becomes published `Completion`;
   - `Live` retains its mode with the terminal visible;
   - `TerminalOnly` and `Discard` are idempotent.
-- [ ] Wake async waiters and Wasmtime reader wakers in the same transition.
-- [ ] Define explicitly whether pending buffered input is discarded for each no-body cause.
-- [ ] Invoke publication only after the corresponding durable no-body outcome is authoritative.
-- [ ] Rewire rejection, pre-body cancellation, recorded skipped execution, and resource exhaustion
+- [x] Wake async waiters and Wasmtime reader wakers in the same transition.
+- [x] Discard buffered input whenever a pending attachment is published without a body, releasing
+      its memory grants immediately.
+- [x] Invoke publication only after the corresponding durable no-body outcome is authoritative.
+- [x] Rewire rejection, pre-body cancellation, recorded skipped execution, and resource exhaustion
       through the primitive.
-- [ ] Absorb PR 3805's one-off cancelled no-body publication branch.
-- [ ] On failed `OwnerToolOperation::attach`, call `fence_owner()` on local controllers instead of
+- [x] Absorb PR 3805's one-off cancelled no-body publication branch.
+- [x] On failed `OwnerToolOperation::attach`, call `fence_owner()` on local controllers instead of
       publishing ordinary cancellation.
-- [ ] Keep body completion, endpoint-role drop, and owner fencing as separate operations.
+- [x] Keep body completion, endpoint-role drop, and owner fencing as separate operations.
 
 ### Verification
 
-- [ ] Test the terminal/publication matrix for `Pending`, buffered pending stdin, `Live`, staged and
+- [x] Test the terminal/publication matrix for `Pending`, buffered pending stdin, `Live`, staged and
       published `Completion`, `TerminalOnly`, and `Discard`.
-- [ ] Verify pre-dispatch cancellation publishes stdout exactly once.
-- [ ] Verify failed attach clears buffered data and makes readers observe the owner-fenced trap.
-- [ ] Verify publication happens only after durable outcome selection.
+- [x] Verify pre-dispatch cancellation publishes stdout exactly once.
+- [x] Verify failed attach clears buffered data and makes readers observe the owner-fenced trap.
+- [x] Verify publication happens only after durable outcome selection.
+
+### Progress evidence
+
+- All 30 attachment tests, 38 operation tests, and 16 direct tool-host tests passed. Logs:
+  `.amp/pr-3787-tests/p5-attachment-unit.log`, `.amp/pr-3787-tests/p5-operation-unit.log`, and
+  `.amp/pr-3787-tests/p5-tool-unit.log`.
+- `rust_generated_client_streams_live_and_handles_edges` and
+  `capable_streams_enforce_completion_limits_without_leaks` passed, covering pre-body cancellation,
+  no-body resource exhaustion, and its crash/replay behavior. Log:
+  `.amp/pr-3787-tests/p5-no-body-tool-streaming-integration.log`.
+- Rust formatting, diff whitespace, and
+  `cargo clippy -p golem-worker-executor --lib --tests -- -D warnings` passed. Clippy log:
+  `.amp/pr-3787-tests/p5-clippy.log`.
+- Oracle completion gate: approved on 2026-09-02 with no required corrections.
 
 ## P6 — Make execution mode and attachment admission replay-deterministic
 
@@ -620,7 +643,8 @@ Append an entry whenever a workstream changes status or a design gate is resolve
 | 2026-09-02 | P4 | In progress | Replacing map-plus-handle `Arc::strong_count` inference with explicit per-operation handle lease accounting; focused concurrent final-drop and pre-parked waiter tests are next. |
 | 2026-09-02 | P4 | Awaiting Oracle approval | Five focused lease/removal tests, all 36 operation tests, all 80 tool-host unit tests, the Rust generated-client executor integration regression, formatting, diff whitespace, and executor clippy pass. |
 | 2026-09-02 | P4 | Oracle correction applied | Moved explicit-settlement notification before awaitable lane drainage and added a deterministic cancellation-window regression. Six focused tests, all 81 tool-host tests, the integration regression, formatting, and clippy pass after the correction. |
-| 2026-09-02 | P4 | Complete | Oracle approved the explicit lease accounting, all removal paths, final-drop concurrency, owner-failure cleanup, and corrected pre-drain notification ordering. |
+| 2026-09-02 | P4 | Complete | Commit `24cafcf69`. Oracle approved the explicit lease accounting, all removal paths, final-drop concurrency, owner-failure cleanup, and corrected pre-drain notification ordering. |
+| 2026-09-02 | P5 | In progress | Centralizing durable no-body attachment terminal publication while preserving owner-fence trap semantics. |
 
 ## Definition of done
 
