@@ -2327,28 +2327,28 @@ pub mod account {
     use crate::command::shared_args::AccountIdOptionalArg;
     use clap::{Args, Subcommand};
     use golem_common::model::account_usage::{
-        DEFAULT_STORAGE_USAGE_HISTORY_PERIODS, StorageUsagePeriod,
+        AccountUsagePeriod, DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS,
     };
     use golem_common::model::permission_share::PermissionShareId;
 
     #[derive(Debug, Subcommand)]
     pub enum AccountUsageSubcommand {
-        /// Show storage usage for current or selected billing period.
+        /// Show account usage for the current or selected UTC billing period.
         Show {
             #[command(flatten)]
             account_id: AccountIdOptionalArg,
 
             /// Billing period in YYYY-MM format.
             #[arg(long)]
-            period: Option<StorageUsagePeriod>,
+            period: Option<AccountUsagePeriod>,
         },
-        /// Show storage usage for closed billing periods.
+        /// Show sparse account usage for closed UTC billing periods, newest first.
         History {
             #[command(flatten)]
             account_id: AccountIdOptionalArg,
 
             /// Number of closed periods to show.
-            #[arg(long, default_value_t = DEFAULT_STORAGE_USAGE_HISTORY_PERIODS)]
+            #[arg(long, default_value_t = DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS)]
             last: usize,
         },
     }
@@ -2513,7 +2513,7 @@ pub mod account {
             #[command(flatten)]
             account_id: AccountIdOptionalArg,
         },
-        /// Show current or historical account storage usage.
+        /// Show current or historical account usage.
         Usage {
             #[command(subcommand)]
             subcommand: AccountUsageSubcommand,

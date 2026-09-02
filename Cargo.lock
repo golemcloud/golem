@@ -3752,6 +3752,7 @@ dependencies = [
  "serde_yaml",
  "shadow-rs",
  "shlex 1.3.0",
+ "sqlx",
  "strip-ansi-escapes",
  "strum",
  "strum_macros",

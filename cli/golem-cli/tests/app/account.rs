@@ -1,11 +1,16 @@
 use crate::Tracing;
 use crate::app::{TestContext, cmd, flag};
+use chrono::{DateTime, Datelike, Utc};
 use golem_cli::{fs, versions};
-use golem_common::model::account_usage::StorageUsagePeriod;
+use golem_common::model::account_usage::{
+    AccountUsageMetering, AccountUsagePeriod, MeteringStatus,
+};
 use indoc::{formatdoc, indoc};
 use serde::Deserialize;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
+use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 
@@ -25,7 +30,9 @@ struct AccountUsageItemView {
     memory_gb_seconds: u64,
     durable_storage_gb_month: f64,
     ephemeral_storage_gb_month: f64,
-    period: StorageUsagePeriod,
+    period: AccountUsagePeriod,
+    as_of: DateTime<Utc>,
+    metering: AccountUsageMetering,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,17 +54,117 @@ struct AccountLimitsView {
     user_configurable: bool,
 }
 
+fn previous_period(period: AccountUsagePeriod) -> AccountUsagePeriod {
+    if period.month == 1 {
+        AccountUsagePeriod {
+            year: period.year - 1,
+            month: 12,
+        }
+    } else {
+        AccountUsagePeriod {
+            year: period.year,
+            month: period.month - 1,
+        }
+    }
+}
+
+async fn seed_account_usage(
+    ctx: &TestContext,
+) -> (AccountUsagePeriod, AccountUsagePeriod, AccountUsagePeriod) {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(ctx.data_dir.path().join("registry.db"))
+                .journal_mode(SqliteJournalMode::Wal)
+                .foreign_keys(true),
+        )
+        .await
+        .expect("failed to open registry database");
+    let account_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT account_id FROM accounts WHERE email = 'initial@user'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("initial account is missing");
+
+    let now = Utc::now();
+    let current = AccountUsagePeriod {
+        year: now.year(),
+        month: now.month(),
+    };
+    let previous = previous_period(current);
+    let zero_period = previous_period(previous);
+    let gb_month = 1024_i64.pow(3) * 730 * 3600;
+
+    for (period, values, metering) in [
+        (
+            current,
+            [(2, 1_500_000), (10, gb_month), (11, 2 * gb_month), (12, 14)],
+            (true, true, true),
+        ),
+        (
+            previous,
+            [
+                (2, 2_500_000),
+                (10, 3 * gb_month),
+                (11, 4 * gb_month),
+                (12, 21),
+            ],
+            (true, false, true),
+        ),
+        (
+            zero_period,
+            [(2, 0), (10, 0), (11, 0), (12, 0)],
+            (false, true, false),
+        ),
+    ] {
+        let usage_key = period.to_string();
+        for (usage_type, value) in values {
+            sqlx::query(
+                "INSERT INTO account_usage_stats \
+                 (account_id, usage_type, usage_key, value, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5)",
+            )
+            .bind(account_id)
+            .bind(usage_type)
+            .bind(&usage_key)
+            .bind(value)
+            .bind(now)
+            .execute(&pool)
+            .await
+            .expect("failed to seed account usage");
+        }
+        sqlx::query(
+            "INSERT INTO account_usage_metering_state \
+             (account_id, usage_key, compute_enabled, memory_enabled, \
+              filesystem_enabled, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(account_id)
+        .bind(usage_key)
+        .bind(metering.0)
+        .bind(metering.1)
+        .bind(metering.2)
+        .bind(now)
+        .execute(&pool)
+        .await
+        .expect("failed to seed account usage metering state");
+    }
+
+    (current, previous, zero_period)
+}
+
 #[test]
 #[timeout("1m")]
-async fn account_storage_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
+async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     ctx.start_server().await;
+    let (current_period, previous_period, zero_period) = seed_account_usage(&ctx).await;
 
-    let period_before_request = StorageUsagePeriod::current();
     let output = ctx
         .cli([cmd::ACCOUNT, "usage", "show", flag::FORMAT, "json"])
         .await;
-    let period_after_request = StorageUsagePeriod::current();
     assert!(output.success_or_dump());
     let usage = output
         .stdout_json::<AccountUsageView>()
@@ -65,14 +172,29 @@ async fn account_storage_usage_and_limits_use_live_cli_wire_path(_tracing: &Trac
         .next()
         .expect("account usage show produced no JSON output");
     assert_eq!(usage.kind, "account.usage.show");
-    assert_eq!(usage.usage.compute_gcu, 0.0);
-    assert_eq!(usage.usage.memory_gb_seconds, 0);
-    assert_eq!(usage.usage.durable_storage_gb_month, 0.0);
-    assert_eq!(usage.usage.ephemeral_storage_gb_month, 0.0);
-    assert!(
-        usage.usage.period == period_before_request || usage.usage.period == period_after_request,
-        "usage period should match the current period during the request"
+    assert_eq!(usage.usage.compute_gcu, 1.5);
+    assert_eq!(usage.usage.memory_gb_seconds, 14);
+    assert_eq!(usage.usage.durable_storage_gb_month, 1.0);
+    assert_eq!(usage.usage.ephemeral_storage_gb_month, 2.0);
+    assert!(usage.usage.as_of <= Utc::now());
+    assert_eq!(usage.usage.metering.compute, MeteringStatus::Enabled);
+    assert_eq!(usage.usage.metering.memory, MeteringStatus::Enabled);
+    assert_eq!(
+        usage.usage.metering.durable_storage,
+        MeteringStatus::Enabled
     );
+    assert_eq!(
+        usage.usage.metering.ephemeral_storage,
+        MeteringStatus::Enabled
+    );
+    assert_eq!(usage.usage.period, current_period);
+
+    let output = ctx.cli([cmd::ACCOUNT, "usage", "show"]).await;
+    assert!(output.success_or_dump());
+    assert!(output.stdout_contains("1.5 GCU"));
+    assert!(output.stdout_contains("14 GB-seconds"));
+    assert!(output.stdout_contains("1 GB-month"));
+    assert!(output.stdout_contains("2 GB-month"));
 
     let output = ctx
         .cli([cmd::ACCOUNT, "usage", "history", flag::FORMAT, "json"])
@@ -84,7 +206,50 @@ async fn account_storage_usage_and_limits_use_live_cli_wire_path(_tracing: &Trac
         .next()
         .expect("account usage history produced no JSON output");
     assert_eq!(history.kind, "account.usage.history");
-    assert!(history.usage.is_empty());
+    assert_eq!(history.usage.len(), 2);
+    assert_eq!(history.usage[0].period, previous_period);
+    assert_eq!(history.usage[0].compute_gcu, 2.5);
+    assert_eq!(history.usage[0].memory_gb_seconds, 21);
+    assert_eq!(history.usage[0].durable_storage_gb_month, 3.0);
+    assert_eq!(history.usage[0].ephemeral_storage_gb_month, 4.0);
+    assert_eq!(history.usage[0].metering.compute, MeteringStatus::Enabled);
+    assert_eq!(history.usage[0].metering.memory, MeteringStatus::Disabled);
+    assert_eq!(
+        history.usage[0].metering.durable_storage,
+        MeteringStatus::Enabled
+    );
+    assert_eq!(
+        history.usage[0].metering.ephemeral_storage,
+        MeteringStatus::Enabled
+    );
+    assert_eq!(history.usage[1].period, zero_period);
+    assert_eq!(history.usage[1].compute_gcu, 0.0);
+    assert_eq!(history.usage[1].memory_gb_seconds, 0);
+    assert_eq!(history.usage[1].durable_storage_gb_month, 0.0);
+    assert_eq!(history.usage[1].ephemeral_storage_gb_month, 0.0);
+    assert_eq!(history.usage[1].metering.compute, MeteringStatus::Disabled);
+    assert_eq!(history.usage[1].metering.memory, MeteringStatus::Enabled);
+    assert_eq!(
+        history.usage[1].metering.durable_storage,
+        MeteringStatus::Disabled
+    );
+    assert_eq!(
+        history.usage[1].metering.ephemeral_storage,
+        MeteringStatus::Disabled
+    );
+
+    let output = ctx.cli([cmd::ACCOUNT, "usage", "history"]).await;
+    assert!(output.success_or_dump());
+    assert!(output.stdout_contains("2.5 GCU"));
+    assert!(
+        output.stdout_contains_ordered(["21", "GB-seconds", "(metering", "disabled)"]),
+        "disabled metering must not hide accrued usage"
+    );
+    assert!(output.stdout_contains("3 GB-month"));
+    assert!(output.stdout_contains("4 GB-month"));
+    assert!(output.stdout_contains(zero_period.to_string()));
+    assert!(output.stdout_contains_ordered(["0 GCU", "(metering", "disabled)"]));
+    assert!(output.stdout_contains_ordered([zero_period.to_string(), "GB-seconds".to_string()]));
 
     let output = ctx
         .cli([cmd::ACCOUNT, "limits", "show", flag::FORMAT, "json"])
