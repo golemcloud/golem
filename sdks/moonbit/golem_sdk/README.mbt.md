@@ -360,6 +360,7 @@ Use `golem build` and `golem deploy` with a `golem.yaml` application manifest. S
 - **Agent registry** — register multiple agent types in a single component via `#derive.agent`
 - **Custom data types** — `#derive.golem_schema` implements every nexessary trait to use custom data types on the public interface of your agents
 - **Agent-to-agent RPC** — auto-generated client stubs (`CounterClient`); stream-bearing methods are awaited, while stream-free methods also support fire-and-forget and scheduled invocations
+- **Runtime reflection** — discover agent types, pack reflected schemas, define caller-codec clients, or invoke direct `SchemaValue`s
 - **Agent tools** — code-first tool descriptors, command trees, constraints, custom errors, runtime dispatch, and typed tool RPC clients via `#derive.tool`
 - **Tool middleware** — monomorphic policy/adapter middleware and universal transparent middleware with invocation-scoped underlying capabilities
 - **Multimodal input** — accept mixed text, binary, and custom modality data via `#derive.multimodal` and `@multimodal.Multimodal[T]`
@@ -380,6 +381,7 @@ Use `golem build` and `golem deploy` with a `golem.yaml` application manifest. S
 | `logging` | Structured logging with named loggers and level filtering |
 | `context` | Span-based tracing and invocation context |
 | `rpc` | Agent-to-agent RPC helpers |
+| `reflection` | Runtime discovery, reflected JSON packing, caller-codec clients, and schema-free value invocation |
 | `tool-core` | Host-neutral tool descriptors, schemas, canonical input handling, and error model |
 | `tool` | Ordinary tool registry, dispatch, help rendering, and ambient typed RPC client runtime |
 | `tool-middleware` | Host-neutral middleware registry, opaque invocation carriers, typed/universal underlying capabilities, and ownership enforcement |

@@ -190,3 +190,61 @@ steps:
           equals: "reflected value"
         - path: "$.directValue"
           equals: "direct value"
+
+  - id: "create-moonbit-project"
+    only_if:
+      language: "moonbit"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-moonbit-reflected-rpc"
+    only_if:
+      language: "moonbit"
+    prompt: >
+      In the MoonBit test-app project, add a durable `ReflectionTarget` agent
+      identified by a string `name`, with an `echo` method accepting and
+      returning a string. Add a durable `ReflectionCaller` whose async `run`
+      method discovers `ReflectionTarget`, inspects `echo`, and invokes it
+      through the JSON convenience path with `hello`.
+
+      Also invoke the same target through a discovery-free
+      `CallerCodecClient` with caller-authored record codecs and the message
+      `caller codec`. Explicitly pack JSON through the reflected method
+      `SchemaRef`, invoke its value API, await the result, and unpack it as
+      `reflected value`. Finally bind a `DynamicAgentClient` to the same
+      `AgentId`, manually construct a positional `SchemaValue::Record`, and
+      invoke `echo` with `direct value` without schemas.
+
+      Return a schema-derived record containing `listed`, `type_name`,
+      `method_name`, `json_value`, `caller_codec`, `reflected_value`, and
+      `direct_value`. Make sure the project builds successfully.
+    expectedSkills:
+      - "golem-call-agent-reflectively-moonbit"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-moonbit-reflected-rpc"
+    only_if:
+      language: "moonbit"
+    invoke_json:
+      agent: 'ReflectionCaller("main")'
+      method: "run"
+    expect:
+      result_json:
+        - path: "$.listed"
+          equals: true
+        - path: "$.type_name"
+          equals: "ReflectionTarget"
+        - path: "$.method_name"
+          equals: "echo"
+        - path: "$.json_value"
+          equals: "hello"
+        - path: "$.caller_codec"
+          equals: "caller codec"
+        - path: "$.reflected_value"
+          equals: "reflected value"
+        - path: "$.direct_value"
+          equals: "direct value"
