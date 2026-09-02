@@ -82,7 +82,7 @@ mod tests {
             .registry_service()
             .client(&user.token)
             .await
-            .get_account_storage_usage(&user.account_id.0, None)
+            .get_account_usage(&user.account_id.0, None)
             .await?;
         Ok(usage.usage.memory_gb_seconds)
     }
@@ -95,7 +95,7 @@ mod tests {
             .registry_service()
             .client(&user.token)
             .await
-            .get_account_storage_usage(&user.account_id.0, None)
+            .get_account_usage(&user.account_id.0, None)
             .await?;
         Ok(usage.usage.durable_storage_gb_month * BYTE_SECONDS_PER_GB_MONTH)
     }

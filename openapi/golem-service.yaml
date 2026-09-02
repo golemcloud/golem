@@ -2720,8 +2720,15 @@ paths:
       tags:
       - RegistryService
       - Account
-      summary: Get current durable and ephemeral storage usage and storage limit.
-      operationId: get_account_storage_usage
+      summary: Get account usage for a UTC calendar month.
+      description: |-
+        Compute is reported in GCU, memory in allocated linear-memory GB-seconds, and durable and
+        ephemeral storage in GB-month using byte-seconds / (1024^3 * 730 * 3600). `asOf` is when
+        the registry last received a usage snapshot for the period, or the response time if no
+        snapshot exists. Metering status distinguishes enabled meters that measured zero from
+        disabled meters. `unknown` means no usage producer has reported metering state for the
+        period. Durable and ephemeral storage both reflect the shared filesystem meter.
+      operationId: get_account_usage
       parameters:
       - in: path
         name: account_id
@@ -2734,6 +2741,7 @@ paths:
         style: simple
       - in: query
         name: period
+        description: Billing period in YYYY-MM format. Defaults to the current UTC calendar month.
         deprecated: false
         schema:
           type: string
@@ -2745,7 +2753,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/StorageUsage'
+                $ref: '#/components/schemas/AccountUsage'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -2796,8 +2804,11 @@ paths:
       tags:
       - RegistryService
       - Account
-      summary: Get storage usage for closed billing periods, newest first.
-      operationId: get_account_storage_usage_history
+      summary: Get sparse account usage for closed UTC calendar months, newest first.
+      description: |-
+        Each item uses the same metrics and metering-status contract as current usage. The response
+        does not include plan or limit metadata because historical limits are not snapshotted.
+      operationId: get_account_usage_history
       parameters:
       - in: path
         name: account_id
@@ -2824,7 +2835,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/StorageUsageHistory'
+                  $ref: '#/components/schemas/AccountUsage'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -17871,6 +17882,81 @@ components:
           type: string
       required:
       - currentRevision
+    AccountUsage:
+      title: AccountUsage
+      type: object
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        usage:
+          $ref: '#/components/schemas/AccountUsageMetrics'
+      required:
+      - accountId
+      - usage
+    AccountUsageMetering:
+      title: AccountUsageMetering
+      type: object
+      properties:
+        compute:
+          $ref: '#/components/schemas/MeteringStatus'
+        memory:
+          $ref: '#/components/schemas/MeteringStatus'
+        durableStorage:
+          $ref: '#/components/schemas/MeteringStatus'
+        ephemeralStorage:
+          $ref: '#/components/schemas/MeteringStatus'
+      required:
+      - compute
+      - memory
+      - durableStorage
+      - ephemeralStorage
+    AccountUsageMetrics:
+      title: AccountUsageMetrics
+      type: object
+      properties:
+        period:
+          $ref: '#/components/schemas/AccountUsagePeriod'
+        asOf:
+          type: string
+          format: date-time
+        computeGcu:
+          type: number
+          format: double
+        memoryGbSeconds:
+          type: integer
+          format: uint64
+        durableStorageGbMonth:
+          type: number
+          format: double
+        ephemeralStorageGbMonth:
+          type: number
+          format: double
+        metering:
+          $ref: '#/components/schemas/AccountUsageMetering'
+      required:
+      - period
+      - asOf
+      - computeGcu
+      - memoryGbSeconds
+      - durableStorageGbMonth
+      - ephemeralStorageGbMonth
+      - metering
+    AccountUsagePeriod:
+      title: AccountUsagePeriod
+      type: object
+      properties:
+        year:
+          type: integer
+          format: int32
+        month:
+          type: integer
+          minimum: 1.0
+          maximum: 12.0
+          format: uint32
+      required:
+      - year
+      - month
     AgentConfigDeclarationSchema:
       type: object
       properties:
@@ -19929,6 +20015,12 @@ components:
       - planDefault
       - ceiling
       - userConfigurable
+    MeteringStatus:
+      type: string
+      enum:
+      - enabled
+      - disabled
+      - unknown
     NamedField:
       type: object
       properties:
@@ -21550,83 +21642,6 @@ components:
       - planDefault
       - ceiling
       - userConfigurable
-    StorageUsage:
-      title: StorageUsage
-      type: object
-      properties:
-        accountId:
-          type: string
-          format: uuid
-        planId:
-          type: string
-          format: uuid
-        planName:
-          type: string
-        usage:
-          $ref: '#/components/schemas/StorageUsageMetrics'
-        maxStoragePerAgent:
-          $ref: '#/components/schemas/StorageLimit'
-        maxMemoryPerAgent:
-          $ref: '#/components/schemas/MemoryLimit'
-        monthlyMemoryGbSeconds:
-          $ref: '#/components/schemas/MemoryLimit'
-      required:
-      - accountId
-      - planId
-      - planName
-      - usage
-      - maxStoragePerAgent
-      - maxMemoryPerAgent
-      - monthlyMemoryGbSeconds
-    StorageUsageHistory:
-      title: StorageUsageHistory
-      type: object
-      properties:
-        accountId:
-          type: string
-          format: uuid
-        usage:
-          $ref: '#/components/schemas/StorageUsageMetrics'
-      required:
-      - accountId
-      - usage
-    StorageUsageMetrics:
-      title: StorageUsageMetrics
-      type: object
-      properties:
-        period:
-          $ref: '#/components/schemas/StorageUsagePeriod'
-        computeGcu:
-          type: number
-          format: double
-        memoryGbSeconds:
-          type: integer
-          format: uint64
-        durableStorageGbMonth:
-          type: number
-          format: double
-        ephemeralStorageGbMonth:
-          type: number
-          format: double
-      required:
-      - period
-      - computeGcu
-      - memoryGbSeconds
-      - durableStorageGbMonth
-      - ephemeralStorageGbMonth
-    StorageUsagePeriod:
-      title: StorageUsagePeriod
-      type: object
-      properties:
-        year:
-          type: integer
-          format: int32
-        month:
-          type: integer
-          format: uint32
-      required:
-      - year
-      - month
     StreamSpec:
       type: object
       properties:
