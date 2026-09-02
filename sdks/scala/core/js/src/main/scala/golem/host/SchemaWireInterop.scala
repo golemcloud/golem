@@ -792,7 +792,7 @@ object SchemaWireInterop {
   private final class PreparedValueTree(val value: JsSchemaValueTree, streams: List[PreparedStream]) {
     private var settled = false
 
-    def commit(): JsSchemaValueTree = synchronized {
+    def commit(): JsSchemaValueTree = {
       if (!settled) {
         streams.foreach(_.commit())
         settled = true
@@ -800,29 +800,27 @@ object SchemaWireInterop {
       value
     }
 
-    def rollback(): Future[Unit] = synchronized {
+    def rollback(): Future[Unit] =
       if (settled) Future.successful(())
       else {
         settled = true
         Future.sequence(streams.reverse.map(_.rollback())).map(_ => ())
       }
-    }
   }
 
   private final class NativeSchemaValueIteratorLifecycle(endpoint: GuestSchemaValueStream.Native) {
     private var closed: Option[Future[Unit]] = None
     private var active                       = false
 
-    def begin(): Either[Throwable, Unit] = synchronized {
+    def begin(): Either[Throwable, Unit] =
       if (closed.isDefined) Left(new IllegalStateException("schema value stream iterator was closed"))
       else if (active) Left(new IllegalStateException("schema value stream iterator already has an active pull"))
       else {
         active = true
         Right(())
       }
-    }
 
-    def accept(prepared: PreparedValueTree): Future[JsSchemaValueTree] = synchronized {
+    def accept(prepared: PreparedValueTree): Future[JsSchemaValueTree] =
       if (closed.isDefined)
         prepared
           .rollback()
@@ -831,9 +829,8 @@ object SchemaWireInterop {
         active = false
         Future.successful(prepared.commit())
       }
-    }
 
-    def close(): Future[Unit] = synchronized {
+    def close(): Future[Unit] =
       closed.getOrElse {
         active = false
         val result =
@@ -844,13 +841,12 @@ object SchemaWireInterop {
         closed = Some(result)
         result
       }
-    }
   }
 
   private final class PreparedStream(endpoint: GuestSchemaValueStream) {
     private var wrappedRaw: Option[JsSchemaValueStream] = None
     private lazy val rollbackResult: Future[Unit]       = {
-      val releaseRaw = synchronized(wrappedRaw) match {
+      val releaseRaw = wrappedRaw match {
         case Some(raw) =>
           AgentStreamOwnership.cleanup(FutureInterop.fromPromise(JsSchemaValueStreamUnwrap.unwrap(raw)).map(_ => ()))
         case None => Future.successful(())
@@ -858,9 +854,8 @@ object SchemaWireInterop {
       releaseRaw.flatMap(_ => AgentStreamOwnership.cleanup(endpoint.dispose()))
     }
 
-    def setWrappedRaw(raw: JsSchemaValueStream): Unit = synchronized {
+    def setWrappedRaw(raw: JsSchemaValueStream): Unit =
       wrappedRaw = Some(raw)
-    }
 
     def commit(): Unit = endpoint.commitTransfer()
 
@@ -907,13 +902,12 @@ object SchemaWireInterop {
   private final class JsSchemaValueIteratorLifecycle(val iterator: JsSchemaValueIterator) {
     private var finalization: Option[Future[Unit]] = None
 
-    def acceptItem(): Boolean = synchronized(finalization.isEmpty)
+    def acceptItem(): Boolean = finalization.isEmpty
 
-    def complete(): Unit = synchronized {
+    def complete(): Unit =
       if (finalization.isEmpty) finalization = Some(Future.successful(()))
-    }
 
-    def close(): Future[Unit] = synchronized {
+    def close(): Future[Unit] =
       finalization.getOrElse {
         val done = Promise[Unit]()
         finalization = Some(done.future)
@@ -937,7 +931,6 @@ object SchemaWireInterop {
         result.onComplete(done.tryComplete)
         done.future
       }
-    }
   }
 
   private def valueNodeFromJs(j: JsSchemaValueNode): WitSchemaValueNode = {

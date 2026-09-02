@@ -52,7 +52,6 @@ final class AgentStream[+A] private[golem] (
   private final case class Closed(error: Throwable) extends State
   private case object Transferred                   extends State
 
-  private val lock                                     = new AnyRef
   private var state: State                             = Open
   private var activePull: Option[Promise[Option[Any]]] = None
   private var finalization: Option[Promise[Unit]]      = None
@@ -66,7 +65,7 @@ final class AgentStream[+A] private[golem] (
    * active returns a failed future.
    */
   def pull(): Future[Option[A]] = {
-    val result = lock.synchronized {
+    val result =
       state match {
         case Open =>
           val promise = Promise[Option[Any]]()
@@ -86,7 +85,6 @@ final class AgentStream[+A] private[golem] (
         case Closed(error) => Right(Future.failed(error))
         case Transferred   => Right(Future.failed(new IllegalStateException("agent stream was already transferred")))
       }
-    }
 
     result match {
       case Right(future)           => future
@@ -105,7 +103,7 @@ final class AgentStream[+A] private[golem] (
    * moved to another stream or schema value.
    */
   def close(): Future[Unit] = {
-    val (pending, result, finalizer) = lock.synchronized {
+    val (pending, result, finalizer) =
       state match {
         case Transferred =>
           (None, Future.failed(new IllegalStateException("agent stream was already transferred")), None)
@@ -121,7 +119,6 @@ final class AgentStream[+A] private[golem] (
           val (result, finalizer) = reserveFinalization()
           (pull.map(_ -> error), result, finalizer)
       }
-    }
     pending.foreach { case (promise, error) => promise.tryFailure(error) }
     runFinalizer(finalizer)
     result
@@ -134,61 +131,59 @@ final class AgentStream[+A] private[golem] (
    * returned stream. The original can no longer be pulled, closed, or
    * transferred.
    */
-  def map[B](f: A => B)(implicit ec: ExecutionContext): AgentStream[B] =
-    lock.synchronized {
-      ensureTransferable()
-      val mapped = new AgentStream(
-        () => {
-          val ownership = effectiveOwnership
-          pullValue().map(value => AgentStreamOwnership.capture(ownership)(value.map(f)))
-        },
-        finalizeValue,
-        ownershipEntry = ownershipEntry
-      )
-      state = Transferred
-      directTransfer = None
-      ownershipEntry.foreach(_.replace(mapped))
-      mapped
-    }
+  def map[B](f: A => B)(implicit ec: ExecutionContext): AgentStream[B] = {
+    ensureTransferable()
+    val mapped = new AgentStream(
+      () => {
+        val ownership = effectiveOwnership
+        pullValue().map(value => AgentStreamOwnership.capture(ownership)(value.map(f)))
+      },
+      finalizeValue,
+      ownershipEntry = ownershipEntry
+    )
+    state = Transferred
+    directTransfer = None
+    ownershipEntry.foreach(_.replace(mapped))
+    mapped
+  }
 
   private[golem] def moveToSchemaValueStream(
     encode: A => SchemaValue
-  )(implicit ec: ExecutionContext): GuestSchemaValueStreamHandle =
-    lock.synchronized {
-      ensureTransferable()
-      val handle = directTransfer match {
-        case Some(transfer) => transfer()
-        case None           =>
-          val nestedOwnership = new AgentStreamOwnership
-          val stream          = new AgentStream(
-            () => {
-              val ownership = effectiveOwnership.orElse(Some(nestedOwnership))
-              pullValue().map(value => AgentStreamOwnership.capture(ownership)(value.map(encode)))
-            },
-            () => {
-              val sourceFinalization =
-                try finalizeValue()
-                catch {
-                  case NonFatal(error) => Future.failed(error)
-                }
-              sourceFinalization.transformWith(completed =>
-                nestedOwnership.close().flatMap(_ => Future.fromTry(completed))(using ExecutionContext.parasitic)
-              )(using ExecutionContext.parasitic)
-            },
-            ownershipEntry = ownershipEntry
-          )
-          GuestSchemaValueStreamHandle.native(stream)
-      }
-      val endpoint = handle.withHandle(identity).getOrElse {
-        throw new IllegalStateException("schema value stream was already transferred")
-      }
-      state = Transferred
-      ownershipEntry.foreach { entry =>
-        endpoint.attachOwnership(entry)
-        entry.replace(endpoint)
-      }
-      handle
+  )(implicit ec: ExecutionContext): GuestSchemaValueStreamHandle = {
+    ensureTransferable()
+    val handle = directTransfer match {
+      case Some(transfer) => transfer()
+      case None           =>
+        val nestedOwnership = new AgentStreamOwnership
+        val stream          = new AgentStream(
+          () => {
+            val ownership = effectiveOwnership.orElse(Some(nestedOwnership))
+            pullValue().map(value => AgentStreamOwnership.capture(ownership)(value.map(encode)))
+          },
+          () => {
+            val sourceFinalization =
+              try finalizeValue()
+              catch {
+                case NonFatal(error) => Future.failed(error)
+              }
+            sourceFinalization.transformWith(completed =>
+              nestedOwnership.close().flatMap(_ => Future.fromTry(completed))(using ExecutionContext.parasitic)
+            )(using ExecutionContext.parasitic)
+          },
+          ownershipEntry = ownershipEntry
+        )
+        GuestSchemaValueStreamHandle.native(stream)
     }
+    val endpoint = handle.withHandle(identity).getOrElse {
+      throw new IllegalStateException("schema value stream was already transferred")
+    }
+    state = Transferred
+    ownershipEntry.foreach { entry =>
+      endpoint.attachOwnership(entry)
+      entry.replace(endpoint)
+    }
+    handle
+  }
 
   private[golem] def ownership: Option[AgentStreamOwnership.Entry] = ownershipEntry
 
@@ -199,16 +194,14 @@ final class AgentStream[+A] private[golem] (
     }
 
   private[golem] def attachOwnership(entry: AgentStreamOwnership.Entry): Unit =
-    lock.synchronized {
-      ownershipEntry match {
-        case Some(existing) if existing ne entry =>
-          throw new IllegalStateException("agent stream already belongs to another invocation")
-        case _ => ownershipEntry = Some(entry)
-      }
+    ownershipEntry match {
+      case Some(existing) if existing ne entry =>
+        throw new IllegalStateException("agent stream already belongs to another invocation")
+      case _ => ownershipEntry = Some(entry)
     }
 
   private def completePull(promise: Promise[Option[Any]], result: Try[Option[A]]): Unit = {
-    val completion = lock.synchronized {
+    val completion =
       if (state != Pulling || !activePull.contains(promise)) None
       else {
         activePull = None
@@ -226,7 +219,6 @@ final class AgentStream[+A] private[golem] (
             Some((promise, Failure(error), finalizer))
         }
       }
-    }
     completion.foreach { case (target, value, finalizer) =>
       target.tryComplete(value)
       runFinalizer(finalizer)
@@ -244,7 +236,6 @@ final class AgentStream[+A] private[golem] (
 
   private def runFinalizer(finalizer: Option[Promise[Unit]]): Unit =
     finalizer.foreach { promise =>
-      val entry  = lock.synchronized(ownershipEntry)
       val result =
         try finalizeValue()
         catch {
@@ -252,13 +243,13 @@ final class AgentStream[+A] private[golem] (
         }
       result
         .transformWith(completed =>
-          entry
+          ownershipEntry
             .map(_.closeTransferredOwnership())
             .getOrElse(Future.successful(()))
             .flatMap(_ => Future.fromTry(completed))(using ExecutionContext.parasitic)
         )(using ExecutionContext.parasitic)
         .onComplete(promise.tryComplete)(using ExecutionContext.parasitic)
-      entry.foreach(_.release(this, promise.future))
+      ownershipEntry.foreach(_.release(this, promise.future))
     }
 
   private def ensureTransferable(): Unit =
@@ -362,7 +353,7 @@ private[golem] sealed trait GuestSchemaValueStream extends AgentStreamOwnership.
   private var ownershipEntry: Option[AgentStreamOwnership.Entry] = None
   private var committed                                          = false
 
-  private[golem] final def ownership: Option[AgentStreamOwnership.Entry] = synchronized(ownershipEntry)
+  private[golem] final def ownership: Option[AgentStreamOwnership.Entry] = ownershipEntry
 
   /**
    * Runs the one-time disposal of the underlying stream and releases this
@@ -380,20 +371,19 @@ private[golem] sealed trait GuestSchemaValueStream extends AgentStreamOwnership.
   private[golem] final def closeTransferredOwnership(): Future[Unit] =
     ownership.map(_.closeTransferredOwnership()).getOrElse(Future.successful(()))
 
-  private[golem] final def attachOwnership(entry: AgentStreamOwnership.Entry): Unit = synchronized {
+  private[golem] final def attachOwnership(entry: AgentStreamOwnership.Entry): Unit =
     ownershipEntry match {
       case Some(existing) if existing ne entry =>
         throw new IllegalStateException("schema value stream already belongs to another invocation")
       case _ => ownershipEntry = Some(entry)
     }
-  }
 
-  private[golem] final def commitTransfer(): Unit = synchronized {
+  private[golem] final def commitTransfer(): Unit = {
     committed = true
     ownershipEntry.foreach(_.commit())
   }
 
-  private[golem] final def isTransferCommitted: Boolean = synchronized(committed)
+  private[golem] final def isTransferCommitted: Boolean = committed
 }
 private[golem] object GuestSchemaValueStream {
   final case class Wrapped(raw: Any, unwrapValue: () => Future[AgentStream[SchemaValue]])
@@ -473,21 +463,20 @@ private[golem] final class AgentStreamOwnership {
   private val entries                                     = mutable.LinkedHashSet.empty[AgentStreamOwnership.Entry]
   private var closed                                      = false
 
-  private[golem] def register(owned: AgentStreamOwnership.Owned): AgentStreamOwnership.Entry = synchronized {
+  private[golem] def register(owned: AgentStreamOwnership.Owned): AgentStreamOwnership.Entry = {
     val entry = new AgentStreamOwnership.Entry(this, owned)
     if (!closed) entries += entry
     else AgentStreamOwnership.cleanup(entry.close())
     entry
   }
 
-  private def remove(entry: AgentStreamOwnership.Entry): Unit = synchronized {
+  private def remove(entry: AgentStreamOwnership.Entry): Unit =
     if (!closed) entries -= entry
-  }
 
-  private[golem] def pendingEntries: Int = synchronized(entries.size)
+  private[golem] def pendingEntries: Int = entries.size
 
   def close(): Future[Unit] = {
-    val owned = synchronized {
+    val owned =
       if (closed) Nil
       else {
         closed = true
@@ -495,7 +484,6 @@ private[golem] final class AgentStreamOwnership {
         entries.clear()
         snapshot
       }
-    }
     Future
       .sequence(owned.map(entry => AgentStreamOwnership.cleanup(entry.close())))
       .map(_ => ())
@@ -524,15 +512,14 @@ private[golem] object AgentStreamOwnership {
     private var state: Either[Boolean, Promise[Unit]]              = Left(false)
     private var transferredOwnership: Option[AgentStreamOwnership] = None
 
-    def replace(target: Owned): Unit = synchronized {
+    def replace(target: Owned): Unit =
       state match {
         case Left(false) => owned = target
         case _           => ()
       }
-    }
 
     def commit(): Unit = {
-      val committed = synchronized {
+      val committed =
         state match {
           case Left(false) =>
             transferredOwnership = Some(new AgentStreamOwnership)
@@ -540,7 +527,6 @@ private[golem] object AgentStreamOwnership {
             true
           case _ => false
         }
-      }
       if (committed) owner.remove(this)
     }
 
@@ -551,7 +537,7 @@ private[golem] object AgentStreamOwnership {
      * part of the outer stream and must not settle the shared entry early.
      */
     def release(target: Owned, completion: Future[Unit]): Unit = {
-      val released = synchronized {
+      val released =
         state match {
           case Left(false) if owned eq target =>
             val done = Promise[Unit]()
@@ -559,7 +545,6 @@ private[golem] object AgentStreamOwnership {
             Some(done)
           case _ => None
         }
-      }
       released.foreach(settle(_, completion))
     }
 
@@ -569,16 +554,15 @@ private[golem] object AgentStreamOwnership {
         owner.remove(this)
       }(using ExecutionContext.parasitic)
 
-    def activeOwner: Option[AgentStreamOwnership] = synchronized {
+    def activeOwner: Option[AgentStreamOwnership] =
       state match {
         case Left(false) => Some(owner)
         case Left(true)  => transferredOwnership
         case Right(_)    => None
       }
-    }
 
     def closeTransferredOwnership(): Future[Unit] = {
-      val transferred = synchronized {
+      val transferred = {
         val result = transferredOwnership
         transferredOwnership = None
         result
@@ -587,7 +571,7 @@ private[golem] object AgentStreamOwnership {
     }
 
     def close(): Future[Unit] = {
-      val result = synchronized {
+      val result =
         state match {
           case Left(true)  => Right(Future.successful(()))
           case Right(done) => Right(done.future)
@@ -596,7 +580,6 @@ private[golem] object AgentStreamOwnership {
             state = Right(done)
             Left((done, owned))
         }
-      }
       result match {
         case Right(done)          => done
         case Left((done, target)) =>
@@ -646,9 +629,8 @@ private[golem] final class AgentStreamOutputTransaction {
   private implicit val executionContext: ExecutionContext = ExecutionContext.parasitic
   private val streams                                     = mutable.ListBuffer.empty[GuestSchemaValueStream]
 
-  def register(stream: GuestSchemaValueStream): Unit = synchronized {
+  def register(stream: GuestSchemaValueStream): Unit =
     if (!streams.exists(_ eq stream)) streams += stream
-  }
 
   def rollback(): Future[Unit] =
     close(streams.toList.reverse)
