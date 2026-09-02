@@ -25,6 +25,9 @@ explicitly revised, **do not perform backward-compatibility work**.
 - **cargo-make**: Latest version (`cargo install --force cargo-make`)
 - **cargo-test-r**: Match the version CI installs, pinned in
   `.github/actions/restore-binaries/action.yml` (`cargo install --force --locked cargo-test-r@<VERSION>`)
+- **protoc**: Required to build `golem-shard-manager`, and therefore the `golem` binary. The
+  `etcd-client` crate's build script compiles its protos with `tonic-prost-build`, which shells out
+  to the protobuf compiler; the workspace's own protos use `protox` and need no binary
 - **redis-server**: Required by worker-executor, service-integration, and CLI integration tests that
   use spawned test dependencies; not required by every unit test
 - **docker**: Required by tests that use containerized dependencies

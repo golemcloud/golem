@@ -2993,23 +2993,41 @@ impl DurableSessionStreams {
         responses: &mpsc::Sender<InvocationResponse>,
     ) -> Result<(), String> {
         self.recover_session_mappings().await?;
-        let output_mapping_ids = self.session_root_output_mapping_ids().await?;
-        self.pump_output_streams_from_recovered(&HashMap::new(), &output_mapping_ids, responses)
-            .await
+        let root_output_mapping_ids = self.session_root_output_mapping_ids().await?;
+        self.pump_output_streams_from_recovered(
+            &HashMap::new(),
+            &root_output_mapping_ids,
+            &[],
+            responses,
+        )
+        .await
     }
 
+    /// Replays output streams for a resumed attachment.
+    ///
+    /// The root output streams are pumped first, and nested streams are pumped only after the
+    /// enclosing item that announces their transport mapping has been emitted, so the client
+    /// observes the same tree order as during the original invocation. Output streams that were
+    /// already mapped but are not reached by that traversal, because a cursor skipped the parent
+    /// item that introduced them, are pumped afterwards.
     pub(crate) async fn pump_output_streams_from(
         &self,
         cursors: &HashMap<
             golem_common::model::durable_stream::StreamId,
             Option<golem_common::model::durable_stream::StreamOffsetV1>,
         >,
-        output_mapping_ids: &[u64],
+        root_output_mapping_ids: &[u64],
+        known_output_mapping_ids: &[u64],
         responses: &mpsc::Sender<InvocationResponse>,
     ) -> Result<(), String> {
         self.recover_session_mappings().await?;
-        self.pump_output_streams_from_recovered(cursors, output_mapping_ids, responses)
-            .await
+        self.pump_output_streams_from_recovered(
+            cursors,
+            root_output_mapping_ids,
+            known_output_mapping_ids,
+            responses,
+        )
+        .await
     }
 
     async fn pump_output_streams_from_recovered(
@@ -3018,12 +3036,36 @@ impl DurableSessionStreams {
             golem_common::model::durable_stream::StreamId,
             Option<golem_common::model::durable_stream::StreamOffsetV1>,
         >,
+        root_output_mapping_ids: &[u64],
+        known_output_mapping_ids: &[u64],
+        responses: &mpsc::Sender<InvocationResponse>,
+    ) -> Result<(), String> {
+        let mut seen = HashSet::new();
+        self.pump_output_stream_trees(cursors, root_output_mapping_ids, &mut seen, responses)
+            .await?;
+        let detached = known_output_mapping_ids
+            .iter()
+            .copied()
+            .filter(|transport_stream_id| !seen.contains(transport_stream_id))
+            .collect::<Vec<_>>();
+        self.pump_output_stream_trees(cursors, &detached, &mut seen, responses)
+            .await
+    }
+
+    async fn pump_output_stream_trees(
+        &self,
+        cursors: &HashMap<
+            golem_common::model::durable_stream::StreamId,
+            Option<golem_common::model::durable_stream::StreamOffsetV1>,
+        >,
         output_mapping_ids: &[u64],
+        seen: &mut HashSet<u64>,
         responses: &mpsc::Sender<InvocationResponse>,
     ) -> Result<(), String> {
         let mut pending = output_mapping_ids
             .iter()
             .copied()
+            .filter(|transport_stream_id| seen.insert(*transport_stream_id))
             .map(|transport_stream_id| {
                 let mapping = self.mapping(transport_stream_id).ok_or_else(|| {
                     format!("unknown durable output stream {transport_stream_id}")
@@ -3031,10 +3073,6 @@ impl DurableSessionStreams {
                 Ok((transport_stream_id, mapping.handle))
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let mut seen = pending
-            .iter()
-            .map(|(transport_stream_id, _)| *transport_stream_id)
-            .collect::<HashSet<_>>();
         while !pending.is_empty() {
             let nested = try_join_all(pending.into_iter().map(|(transport_stream_id, handle)| {
                 let after = cursors.get(&handle.stream_id).copied().flatten();
@@ -6397,7 +6435,7 @@ mod tests {
         ]);
         let (responses, mut receiver) = mpsc::channel(8);
         restarted
-            .pump_output_streams_from(&cursors, &[7, nested_transport_stream_id], &responses)
+            .pump_output_streams_from(&cursors, &[7], &[7, nested_transport_stream_id], &responses)
             .await
             .unwrap();
         drop(responses);

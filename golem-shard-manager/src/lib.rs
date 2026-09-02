@@ -22,8 +22,10 @@ pub(crate) mod sharding;
 use self::grpc::ShardManagerServiceImpl;
 #[cfg(feature = "kubernetes")]
 use crate::config::HealthCheckK8sConfig;
-use crate::config::HealthCheckMode;
-use crate::quota::{DbQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService};
+use crate::config::{HealthCheckMode, PersistenceConfig};
+use crate::quota::{
+    DbQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService, UnavailableQuotaRepo,
+};
 use crate::registry_event_subscriber::ShardManagerRegistryInvalidationHandler;
 use crate::sharding::healthcheck::GrpcHealthCheck;
 use crate::sharding::worker_executor::WorkerExecutorServiceDefault;
@@ -37,7 +39,10 @@ use include_dir::include_dir;
 use prometheus::Registry;
 pub use sharding::error::{HealthCheckError, ShardManagerError};
 pub use sharding::healthcheck::HealthCheck;
-pub use sharding::persistence::{DbRoutingTablePersistence, RoutingTablePersistence};
+pub use sharding::persistence::{
+    DbRoutingTablePersistence, EtcdRoutingTablePersistence, ExternalRevision, NO_REVISION,
+    RoutingTablePersistence, STATE_KEY,
+};
 pub use sharding::shard_management::ShardManagement;
 pub use sharding::worker_executor::WorkerExecutorService;
 pub use sharding::{
@@ -107,48 +112,58 @@ pub async fn run(
         Arc<dyn RoutingTablePersistence>,
         Arc<dyn crate::quota::QuotaRepo>,
     ) = {
-        use golem_common::config::DbConfig;
         use golem_service_base::db;
         use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
-        use include_dir::include_dir;
 
-        static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
         let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
 
-        match &shard_manager_config.db {
-            DbConfig::Postgres(postgres) => {
+        match &shard_manager_config.persistence {
+            PersistenceConfig::Postgres(postgres) => {
                 db::postgres::migrate(postgres, migrations.postgres_migrations()).await?;
-                let pool =
-                    golem_service_base::db::postgres::PostgresPool::configured(postgres).await?;
+                let pool = db::postgres::PostgresPool::configured(postgres).await?;
 
                 let pool_for_metrics = pool.clone();
                 join_set
                     .spawn(async move { pool_for_metrics.run_metrics_loop("shard_manager").await });
 
-                let persistence = Arc::new(
-                    crate::sharding::persistence::DbRoutingTablePersistence::new(
+                (
+                    Arc::new(DbRoutingTablePersistence::new(
                         pool.clone(),
                         shard_manager_config.number_of_shards,
-                    ),
-                );
-                let quota_repo = Arc::new(DbQuotaRepo::logged(pool));
-                (persistence, quota_repo)
+                    )),
+                    Arc::new(DbQuotaRepo::logged(pool)),
+                )
             }
-            DbConfig::Sqlite(sqlite) => {
+            PersistenceConfig::Sqlite(sqlite) => {
                 db::sqlite::migrate(sqlite, migrations.sqlite_migrations()).await?;
-                let pool = golem_service_base::db::sqlite::SqlitePool::configured(sqlite).await?;
+                let pool = db::sqlite::SqlitePool::configured(sqlite).await?;
 
-                let persistence = Arc::new(
-                    crate::sharding::persistence::DbRoutingTablePersistence::new(
+                (
+                    Arc::new(DbRoutingTablePersistence::new(
                         pool.clone(),
                         shard_manager_config.number_of_shards,
+                    )),
+                    Arc::new(DbQuotaRepo::logged(pool)),
+                )
+            }
+            PersistenceConfig::Etcd(etcd) => {
+                // Distributed mode. The shard lease state is durable in etcd, but the quota
+                // tables have not moved there and there is no SQL pool here to hold them, so
+                // quota operations fail rather than silently succeeding against nothing.
+                (
+                    Arc::new(
+                        EtcdRoutingTablePersistence::new(
+                            etcd,
+                            shard_manager_config.number_of_shards,
+                        )
+                        .await?,
                     ),
-                );
-                let quota_repo = Arc::new(DbQuotaRepo::logged(pool));
-                (persistence, quota_repo)
+                    Arc::new(UnavailableQuotaRepo),
+                )
             }
         }
     };
+
     let worker_executors = Arc::new(WorkerExecutorServiceDefault::new(
         shard_manager_config.worker_executors.clone(),
     ));
