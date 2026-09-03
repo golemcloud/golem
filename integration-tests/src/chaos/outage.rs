@@ -902,7 +902,7 @@ impl StorageFaultReport {
                 // A control run: the expectation is a delay, but it names no
                 // stream that should feel it, so there is no slowdown to report
                 // and its absence is the result rather than missing data.
-                (None, None) if self.expect.slowdown_floor().is_some() => {
+                (None, None) if self.expect.names_no_slowed_stream() => {
                     "no stream in this run was expected to slow down, so whether the delay \
                      landed has to be read from the storage metrics rather than from here"
                         .to_string()
@@ -917,6 +917,16 @@ impl StorageFaultReport {
                      window (floor {}%)",
                     self.expect.quiet_floor_percent()
                 ),
+                // A delay that did name streams to slow down, none of which
+                // produced a pair of medians to divide. Under a severe enough
+                // delay that is the expected shape rather than missing data: a
+                // stream that stops answering inside the fault window has a
+                // baseline and no during-fault median.
+                (None, None) if self.expect.slowdown_floor().is_some() => {
+                    "no stream expected to slow down produced both a before-fault and a \
+                     during-fault median, so the delay's effect cannot be read from here"
+                        .to_string()
+                }
                 (None, None) => {
                     "no stream had a before-fault baseline to be judged against".to_string()
                 }

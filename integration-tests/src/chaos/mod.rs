@@ -829,6 +829,10 @@ pub enum OutageExpectation {
         /// The streams whose latency must rise for the injected delay to have
         /// landed. Their slowdown plays the part silence plays elsewhere: it is
         /// the only positive evidence the run has that anything happened.
+        ///
+        /// May be empty, and empty is a claim rather than an omission: a run
+        /// that delays a store and names no stream to feel it is a control, so
+        /// the absence of a slowdown is its result. S15A.
         slowed: Vec<Stream>,
         /// The least each named stream's during-fault median latency must be as
         /// a multiple of its own before-fault median.
@@ -913,6 +917,19 @@ impl OutageExpectation {
             OutageExpectation::LatencyDegradation { slowed, .. } => slowed.contains(&stream),
             _ => false,
         }
+    }
+
+    /// Whether this is a delay that names no stream to feel it.
+    ///
+    /// True only of a control run. Worth its own accessor because
+    /// [`Self::slowdown_floor`] is `Some` for every delay, empty `slowed` or
+    /// not, so testing the floor cannot tell a control run apart from a run
+    /// whose slowed streams produced no latency to compare.
+    pub fn names_no_slowed_stream(&self) -> bool {
+        matches!(
+            self,
+            OutageExpectation::LatencyDegradation { slowed, .. } if slowed.is_empty()
+        )
     }
 
     /// The multiple of its own baseline median a slowed stream must reach, or
@@ -1220,7 +1237,6 @@ impl ScenarioConfig {
         })
     }
 
-    /// The storage-outage block. See [`Self::require_workload`].
     /// Whether this scenario's configuration actually produces operations on a
     /// stream.
     ///
@@ -1306,6 +1322,7 @@ impl ScenarioConfig {
         Ok(())
     }
 
+    /// The storage-outage block. See [`Self::require_workload`].
     pub fn require_storage(&self) -> anyhow::Result<&StorageConfig> {
         let config = self.storage.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
@@ -1933,9 +1950,39 @@ mod tests {
         assert_eq!(ScenarioCode::parse("s17"), Some(ScenarioCode::S17));
         assert_eq!(ScenarioCode::parse("s15"), Some(ScenarioCode::S15));
         assert_eq!(ScenarioCode::parse("s15a"), Some(ScenarioCode::S15A));
+        assert_eq!(ScenarioCode::parse("s15b"), Some(ScenarioCode::S15B));
         assert_eq!(ScenarioCode::parse("s15c"), Some(ScenarioCode::S15C));
         assert_eq!(ScenarioCode::parse("s23"), Some(ScenarioCode::S23));
         assert_eq!(ScenarioCode::parse("S99"), None);
+    }
+
+    /// The gate that fails a run when nothing fired has to tell "no fire was
+    /// observed" apart from "no fire was asked for". S15A's first run was lost
+    /// to that distinction: it registers no targets, so the gate aborted it
+    /// during the baseline, before the fault it exists to measure was injected.
+    #[test]
+    fn a_run_that_registers_no_scheduled_targets_does_not_drive_that_stream() {
+        let suite = ChaosSuite::load(suite_path()).unwrap();
+        let drives = |code: ScenarioCode| {
+            suite
+                .scenarios
+                .iter()
+                .find(|entry| entry.scenario_code().ok() == Some(code))
+                .unwrap_or_else(|| panic!("{code} is missing from the suite"))
+                .drives_stream(Stream::Scheduled)
+        };
+        for code in [ScenarioCode::S15A, ScenarioCode::S15B, ScenarioCode::S15C] {
+            assert!(
+                !drives(code),
+                "{code} registers no targets, so the fire gate has nothing to gate"
+            );
+        }
+        for code in [ScenarioCode::S15, ScenarioCode::S23] {
+            assert!(
+                drives(code),
+                "{code} drives the scheduled loop, so the fire gate still applies to it"
+            );
+        }
     }
 
     /// A scenario whose YAML entry is missing the workload block it needs must
