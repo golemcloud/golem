@@ -6,7 +6,7 @@ inputs:
     default: 'lts/*'
   pnpm-version:
     description: 'pnpm version to install'
-    default: 'latest'
+    default: '10.17.1'
   registry-url:
     description: 'Optional npm registry URL for actions/setup-node'
     default: ''
