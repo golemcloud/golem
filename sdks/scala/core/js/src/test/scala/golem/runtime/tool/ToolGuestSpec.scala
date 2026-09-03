@@ -17,10 +17,11 @@
 package golem.runtime.tool
 
 import golem.host.SchemaWireInterop
+import golem.host.js.schema.JsTypedSchemaValue
 import golem.host.js.tool.{JsInvocationResult, JsTool}
 import golem.runtime.guest.Guest
 import golem.runtime.tool.host.ToolHostApi
-import golem.schema.{SchemaValue, TypedSchemaValue}
+import golem.schema.{AgentStream, IntoSchema, SchemaValue, TypedSchemaValue}
 import golem.schema.wire.{SchemaWire, WitTypedSchemaValue}
 import golem.tool._
 import golem.tool.wire.WitToolError
@@ -28,7 +29,7 @@ import golem.{FutureInterop, Principal}
 import zio.test._
 import zio.ZIO
 
-import scala.concurrent.Future
+import scala.concurrent.{Future, Promise}
 import scala.scalajs.js
 
 /**
@@ -136,6 +137,33 @@ object ToolGuestSpec extends ZIOSpecDefault {
     ToolImplementationRuntime.adaptHandler(tool, handle)
   }
 
+  private def attachmentTool(name: String): ExtendedToolType =
+    stdoutTool(name).copy(commands = stdoutTool(name).commands.map { node =>
+      node.copy(body = node.body.map(_.copy(stdin = Some(StreamSpec(doc(""), Nil, required = true)))))
+    })
+
+  private def attachmentInvoker(tool: ExtendedToolType): ToolRegistry.ToolInvoker = {
+    val handle = ToolImplementationHandle(
+      _ => Right(tool),
+      List(
+        ToolMethodBinding(
+          tool.commands.head.name,
+          Nil,
+          ctx =>
+            ToolInvokerRuntime.decodeArgs(
+              ctx,
+              List(ToolParamDecoder.StdinParam, ToolParamDecoder.StdoutParam)
+            ) match {
+              case Left(error)              => Future.successful(Left(error))
+              case Right((_, stdoutHandle)) => Future.successful(ToolInvokerRuntime.encodeUnit(stdoutHandle))
+            }
+        )
+      ),
+      Nil
+    )
+    ToolImplementationRuntime.adaptHandler(tool, handle)
+  }
+
   private def emptyInput(tool: ExtendedToolType): WitTypedSchemaValue =
     SchemaWire.typedSchemaValueToWit(
       TypedSchemaValue(
@@ -144,17 +172,73 @@ object ToolGuestSpec extends ZIOSpecDefault {
       )
     )
 
-  private def stdoutWriter(onFinish: () => Unit): ToolHostApi.RawToolStdoutWriter =
-    js.Dynamic
-      .literal(
-        "write"  -> js.Any.fromFunction1((_: js.typedarray.Uint8Array) => js.Promise.resolve[Unit](())),
-        "finish" -> js.Any.fromFunction0 { () =>
-          onFinish()
-          js.Promise.resolve[Unit](())
-        },
-        "fail" -> js.Any.fromFunction1((_: js.Any) => js.Promise.resolve[Unit](()))
+  private final case class InvocationAttachments(
+    stdin: ToolHostApi.RawByteStream,
+    stdout: ToolHostApi.RawToolStdoutWriter,
+    stdinCloses: () => Int,
+    stdoutFinishes: () => Int
+  )
+
+  private def invocationAttachments(cleanupFails: Boolean = false): InvocationAttachments = {
+    var stdinCloses                                 = 0
+    var stdoutFinishes                              = 0
+    val done                                        = js.Dynamic.literal("done" -> true, "value" -> js.undefined)
+    def resolved(value: js.Any): js.Promise[js.Any] =
+      js.Dynamic.global.Promise.resolve(value).asInstanceOf[js.Promise[js.Any]]
+    def cleanup(value: js.Any): js.Promise[js.Any] =
+      if (cleanupFails) js.Promise.reject(new RuntimeException("cleanup failed")).asInstanceOf[js.Promise[js.Any]]
+      else resolved(value)
+    val iterator = js.Dynamic.literal(
+      "next" -> js.Any.fromFunction0(() => resolved(done.asInstanceOf[js.Any]))
+    )
+    iterator.updateDynamic("return")(
+      js.Any.fromFunction0 { () =>
+        stdinCloses += 1
+        cleanup(done.asInstanceOf[js.Any])
+      }
+    )
+    val rawStdin = js.Dynamic.literal()
+    js.Dynamic.global.Reflect.set(
+      rawStdin,
+      js.Symbol.asyncIterator,
+      js.Any.fromFunction0(() => iterator)
+    )
+    val rawStdout = js.Dynamic.literal(
+      "write"  -> js.Any.fromFunction1((_: js.typedarray.Uint8Array) => js.Promise.resolve[Unit](())),
+      "finish" -> js.Any.fromFunction0 { () =>
+        stdoutFinishes += 1
+        cleanup(js.undefined)
+      },
+      "fail" -> js.Any.fromFunction1((_: js.Any) => js.Promise.resolve[Unit](()))
+    )
+    InvocationAttachments(
+      rawStdin.asInstanceOf[ToolHostApi.RawByteStream],
+      rawStdout.asInstanceOf[ToolHostApi.RawToolStdoutWriter],
+      () => stdinCloses,
+      () => stdoutFinishes
+    )
+  }
+
+  private def invokeAtGuest(
+    toolName: String,
+    input: js.Any,
+    stdin: Option[ToolHostApi.RawByteStream],
+    stdout: Option[ToolHostApi.RawToolStdoutWriter],
+    commandPath: js.Array[String] = js.Array[String]()
+  ): js.Promise[JsInvocationResult] =
+    guest
+      .invoke(
+        toolName,
+        commandPath,
+        input,
+        stdin.fold[js.Any](js.undefined)(_.asInstanceOf[js.Any]),
+        stdout.fold[js.Any](js.undefined)(_.asInstanceOf[js.Any]),
+        anonymousPrincipal
       )
-      .asInstanceOf[ToolHostApi.RawToolStdoutWriter]
+      .asInstanceOf[js.Promise[JsInvocationResult]]
+
+  private def encodedInput(input: WitTypedSchemaValue): js.Any =
+    SchemaWireInterop.typedToJs(input).asInstanceOf[js.Any]
 
   def spec: Spec[Any, Any] = suite("ToolGuestSpec")(
     test("discover_tools_returns_registered_tools_sorted_by_name") {
@@ -229,6 +313,69 @@ object ToolGuestSpec extends ZIOSpecDefault {
         err.selectDynamic("val").asInstanceOf[String] == "guest-nope"
       )
     },
+    test("early invalid-tool rejection closes stdin and finishes stdout") {
+      val attachments = invocationAttachments()
+      for {
+        err <- rejectionOf(
+                 invokeAtGuest(
+                   "guest-nope-with-attachments",
+                   encodedInput(typed("x")),
+                   Some(attachments.stdin),
+                   Some(attachments.stdout)
+                 )
+               )
+      } yield assertTrue(
+        err.tag.asInstanceOf[String] == "invalid-tool-name",
+        attachments.stdinCloses() == 1,
+        attachments.stdoutFinishes() == 1
+      )
+    },
+    test("early invalid-tool rejection closes schema streams carried by input") {
+      val into   = IntoSchema[AgentStream[String]]
+      var closes = 0
+      val source = AgentStream.fromPull[String](
+        () => Future.successful(None),
+        () => {
+          closes += 1
+          Future.successful(())
+        }
+      )
+      val input = SchemaWire.typedSchemaValueToWit(into.toTyped(source))
+      ZIO.fromFuture { implicit ec =>
+        for {
+          value  <- SchemaWireInterop.valueTreeToJsAsync(input.value)
+          encoded = JsTypedSchemaValue(SchemaWireInterop.graphToJs(input.graph), value)
+          error  <- FutureInterop
+                     .fromPromise(
+                       invokeAtGuest("guest-nope-with-stream-input", encoded, None, None)
+                     )
+                     .failed
+        } yield assertTrue(
+          error.isInstanceOf[js.JavaScriptException],
+          closes == 1
+        )
+      }
+    },
+    test("invalid command-path rejection closes invocation attachments") {
+      val tool        = stdoutTool("guest-invalid-command-path")
+      val attachments = invocationAttachments()
+      ToolRegistry.registerInvoker(tool, stdoutInvoker(tool, Right(ToolInvokeResult(None))))
+      for {
+        error <- rejectionOf(
+                   invokeAtGuest(
+                     tool.toolName,
+                     encodedInput(emptyInput(tool)),
+                     Some(attachments.stdin),
+                     Some(attachments.stdout),
+                     js.Array("missing")
+                   )
+                 )
+      } yield assertTrue(
+        error.tag.asInstanceOf[String] == "invalid-command-path",
+        attachments.stdinCloses() == 1,
+        attachments.stdoutFinishes() == 1
+      )
+    },
     test("invoke_rejects_definition_only_tools_with_invalid_tool_name") {
       definitionOnlyRegistered
       val input = SchemaWireInterop.typedToJs(typed("x"))
@@ -258,34 +405,187 @@ object ToolGuestSpec extends ZIOSpecDefault {
       )
     },
     test("provider invocation default-finishes stdout after structured success") {
-      val tool     = stdoutTool("guest-stdout-success")
-      var finishes = 0
-      val invoked  = stdoutInvoker(tool, Right(ToolInvokeResult(None)))(
-        Nil,
-        emptyInput(tool),
-        None,
-        Some(stdoutWriter(() => finishes += 1)),
-        Principal.Anonymous
-      )
-      ZIO.fromFuture(_ => invoked).map { result =>
-        assertTrue(result == Right(ToolInvocationResult(None)), finishes == 1)
+      val tool        = stdoutTool("guest-stdout-success")
+      val attachments = invocationAttachments()
+      ToolRegistry.registerInvoker(tool, stdoutInvoker(tool, Right(ToolInvokeResult(None))))
+      fromPromise(
+        invokeAtGuest(
+          tool.toolName,
+          encodedInput(emptyInput(tool)),
+          None,
+          Some(attachments.stdout)
+        )
+      ).map { result =>
+        val hasNoResult = result.result.toOption.isEmpty
+        assertTrue(hasNoResult, attachments.stdoutFinishes() == 1)
       }
     },
     test("provider invocation default-finishes stdout after a declared error") {
-      val tool     = stdoutTool("guest-stdout-error")
-      var finishes = 0
-      val invoked  = stdoutInvoker(
+      val tool        = stdoutTool("guest-stdout-error")
+      val attachments = invocationAttachments()
+      ToolRegistry.registerInvoker(
         tool,
-        Left(ToolInvokeError.Tool(TypedSchemaValue(strGraph, SchemaValue.StringValue("boom"))))
-      )(
-        Nil,
-        emptyInput(tool),
-        None,
-        Some(stdoutWriter(() => finishes += 1)),
-        Principal.Anonymous
+        stdoutInvoker(
+          tool,
+          Left(ToolInvokeError.Tool(TypedSchemaValue(strGraph, SchemaValue.StringValue("boom"))))
+        )
       )
-      ZIO.fromFuture(_ => invoked).map { result =>
-        assertTrue(result.isLeft, finishes == 1)
+      for {
+        error <- rejectionOf(
+                   invokeAtGuest(
+                     tool.toolName,
+                     encodedInput(emptyInput(tool)),
+                     Some(attachments.stdin),
+                     Some(attachments.stdout)
+                   )
+                 )
+      } yield assertTrue(
+        error.tag.asInstanceOf[String] == "custom-error",
+        attachments.stdinCloses() == 1,
+        attachments.stdoutFinishes() == 1
+      )
+    },
+    test("accepted attachments stay live through the invocation and close exactly once") {
+      val tool                              = echoTool("guest-attachment-transfer")
+      val attachments                       = invocationAttachments()
+      val completed                         = Promise[Either[WitToolError, ToolInvocationResult]]()
+      var acceptedIn                        = Option.empty[ToolInputStream]
+      var acceptedOut                       = Option.empty[ToolOutputStream]
+      val invoker: ToolRegistry.ToolInvoker = (_, _, stdin, stdout, _) => {
+        acceptedIn = stdin
+        acceptedOut = stdout
+        completed.future
+      }
+      ToolRegistry.registerInvoker(tool, invoker)
+      val invocation = fromPromise(
+        invokeAtGuest(
+          tool.toolName,
+          encodedInput(emptyInput(tool)),
+          Some(attachments.stdin),
+          Some(attachments.stdout)
+        )
+      )
+      for {
+        _ <- ZIO.succeed(
+               assertTrue(
+                 acceptedIn.nonEmpty,
+                 acceptedOut.nonEmpty,
+                 attachments.stdinCloses() == 0,
+                 attachments.stdoutFinishes() == 0
+               )
+             )
+        _ <- ZIO.fromFuture(_ => acceptedIn.get.cancel())
+        _ <- ZIO.fromFuture(_ => acceptedOut.get.finish())
+        _ <- ZIO.succeed(completed.success(Right(ToolInvocationResult(None))))
+        _ <- invocation
+      } yield assertTrue(
+        attachments.stdinCloses() == 1,
+        attachments.stdoutFinishes() == 1
+      )
+    },
+    test("missing declared attachments release every supplied peer") {
+      val missingStdinTool = attachmentTool("guest-missing-stdin")
+      val missingStdin     = invocationAttachments()
+      ToolRegistry.registerInvoker(missingStdinTool, attachmentInvoker(missingStdinTool))
+      val missingStdoutTool = attachmentTool("guest-missing-stdout")
+      val missingStdout     = invocationAttachments()
+      ToolRegistry.registerInvoker(missingStdoutTool, attachmentInvoker(missingStdoutTool))
+      for {
+        stdinError <- rejectionOf(
+                        invokeAtGuest(
+                          missingStdinTool.toolName,
+                          encodedInput(emptyInput(missingStdinTool)),
+                          None,
+                          Some(missingStdin.stdout)
+                        )
+                      )
+        stdoutError <- rejectionOf(
+                         invokeAtGuest(
+                           missingStdoutTool.toolName,
+                           encodedInput(emptyInput(missingStdoutTool)),
+                           Some(missingStdout.stdin),
+                           None
+                         )
+                       )
+      } yield assertTrue(
+        stdinError.tag.asInstanceOf[String] == "invalid-input",
+        missingStdin.stdoutFinishes() == 1,
+        stdoutError.tag.asInstanceOf[String] == "invalid-input",
+        missingStdout.stdinCloses() == 1
+      )
+    },
+    test("cleanup failures do not mask synchronous or asynchronous invocation failures") {
+      val syncTool    = echoTool("guest-sync-failure")
+      val syncFailure = new RuntimeException("synchronous failure")
+      ToolRegistry.registerInvoker(syncTool, (_, _, _, _, _) => throw syncFailure)
+      val syncAttachments = invocationAttachments(cleanupFails = true)
+      val asyncTool       = echoTool("guest-async-failure")
+      val asyncFailure    = new RuntimeException("asynchronous failure")
+      ToolRegistry.registerInvoker(asyncTool, (_, _, _, _, _) => Future.failed(asyncFailure))
+      val asyncAttachments = invocationAttachments(cleanupFails = true)
+      for {
+        syncError <- fromPromise(
+                       invokeAtGuest(
+                         syncTool.toolName,
+                         encodedInput(emptyInput(syncTool)),
+                         Some(syncAttachments.stdin),
+                         Some(syncAttachments.stdout)
+                       )
+                     ).flip
+        asyncError <- fromPromise(
+                        invokeAtGuest(
+                          asyncTool.toolName,
+                          encodedInput(emptyInput(asyncTool)),
+                          Some(asyncAttachments.stdin),
+                          Some(asyncAttachments.stdout)
+                        )
+                      ).flip
+      } yield assertTrue(
+        syncError.getMessage.contains(syncFailure.getMessage),
+        syncAttachments.stdinCloses() == 1,
+        syncAttachments.stdoutFinishes() == 1,
+        asyncError.getMessage.contains(asyncFailure.getMessage),
+        asyncAttachments.stdinCloses() == 1,
+        asyncAttachments.stdoutFinishes() == 1
+      )
+    },
+    test("malformed input releases invocation attachments before returning invalid-input") {
+      val captured    = echoCaptured
+      val _           = captured
+      val attachments = invocationAttachments()
+      for {
+        err <- rejectionOf(
+                 invokeAtGuest(
+                   "guest-echo",
+                   js.Dynamic.literal("graph" -> js.Dynamic.literal()),
+                   Some(attachments.stdin),
+                   Some(attachments.stdout)
+                 )
+               )
+      } yield assertTrue(
+        err.tag.asInstanceOf[String] == "invalid-input",
+        attachments.stdinCloses() == 1,
+        attachments.stdoutFinishes() == 1
+      )
+    },
+    test("provider structured success survives attachment cleanup failure") {
+      val tool        = stdoutTool("guest-cleanup-failure-success")
+      val attachments = invocationAttachments(cleanupFails = true)
+      ToolRegistry.registerInvoker(tool, stdoutInvoker(tool, Right(ToolInvokeResult(None))))
+      fromPromise(
+        invokeAtGuest(
+          tool.toolName,
+          encodedInput(emptyInput(tool)),
+          Some(attachments.stdin),
+          Some(attachments.stdout)
+        )
+      ).map { result =>
+        val hasNoResult = result.result.toOption.isEmpty
+        assertTrue(
+          hasNoResult,
+          attachments.stdinCloses() == 1,
+          attachments.stdoutFinishes() == 1
+        )
       }
     },
     test("invoke_rejects_malformed_input_with_invalid_input") {

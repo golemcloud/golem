@@ -118,6 +118,13 @@ struct ScalaStreamEvidence {
     bytes_read: i64,
 }
 
+#[derive(Debug, FromSchema)]
+struct ScalaCleanupEvidence {
+    error: String,
+    stdin_cancelled: bool,
+    stdout_terminal: String,
+}
+
 fn deployment_state(
     owner_account_id: AccountId,
     provider_component_id: golem_common::model::component::ComponentId,
@@ -5143,6 +5150,19 @@ async fn scala_generated_client_streams_live(
         .into_typed()?;
     assert_eq!(evidence.output, "scala-marker:scala-live");
     assert_eq!(evidence.bytes_read, 10);
+
+    let cleanup: ScalaCleanupEvidence = executor
+        .invoke_and_await_agent(
+            &stored_component,
+            &agent_id,
+            "invalidCommandPathCleanup",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(cleanup.error, "invalid-command-path:missing");
+    assert!(cleanup.stdin_cancelled);
+    assert_eq!(cleanup.stdout_terminal, "failed");
 
     Ok(())
 }

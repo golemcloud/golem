@@ -32,7 +32,7 @@ documented verification commands are all complete.
 - [x] Oracle-review the proposed fix architecture and ordering.
 - [x] Check scope, semantic, and file-level overlap with GOL-95 and GOL-96.
 - [x] Fast-forward the implementation branch to the reviewed PR 3787 revision.
-- [ ] Complete every workstream in this plan.
+- [x] Complete every workstream in this plan.
 
 ## Workstream status
 
@@ -49,7 +49,7 @@ documented verification commands are all complete.
 | P7b | Fix the TypeScript started-invocation caller contract | **Complete** | 11 | P1, P5 |
 | P7c | Fix the Scala started-invocation caller contract | **Complete** | 13 | Stable GOL-96 integration base imported |
 | P8 | Replace Scala middleware streams with transfer-only handles | **Complete** | 14 | Stable GOL-96 integration base |
-| P9a | Add Scala provider export-boundary ownership | **Not started** | 15, 26 | P8; stable GOL-96 integration base |
+| P9a | Add Scala provider export-boundary ownership | **Complete** | 15, 26 | P8; stable GOL-96 integration base |
 | P9b | Add MoonBit provider failure and cleanup support | **Complete** | 20–22, 26 | P0, P5 |
 | P9c | Preserve typed TypeScript tool-stream failures | **Complete** | 20 | P0, P5 |
 | P10 | Finish contract and integration conformance | **Complete** | 8, 19, 23, 25 | Owning workstreams; GOL-95 coordination |
@@ -126,6 +126,14 @@ documented verification commands are all complete.
   Prettier, Rust formatting, CLI clippy, and diff whitespace checks pass. Logs are under
   `.amp/pr-3787-tests/p7b-*`. GOL-95's `AgentStream` remains untouched. Oracle found no blockers
   and returned `APPROVED`.
+- **P9a — Complete (2026-09-03):** one outer Scala guest export boundary now owns
+  the invocation input graph, stdin, and stdout before validation and keeps them alive until the
+  invoker future settles. Result encoding precedes concurrent, exactly-once cleanup; cleanup
+  failures cannot replace structured success, declared rejection, synchronous failure, or failed
+  futures. Focused lifecycle tests, all 604 Scala core tests, optimized `testAgents` linking, a
+  rebuilt and validated real Scala fixture, its executor lifecycle E2E, Scala/Rust formatting,
+  executor clippy, and whitespace checks pass. Oracle reviewed the full ownership and failure
+  matrix and returned `APPROVED`. Logs are under `.amp/pr-3787-tests/p9a-*`.
 
 ## Invariants that govern every fix
 
@@ -600,17 +608,41 @@ handle contract.
 
 ### P9a — Scala export-boundary ownership
 
-Status: **Not started.** P8 and the stable GOL-96 integration base are complete.
+Status: **Complete.** Implementation and verification are complete, and Oracle approved the phase.
 
-- [ ] Begin invocation ownership at the outer WIT export boundary, before tool-name, command-path,
+- [x] Begin invocation ownership at the outer WIT export boundary, before tool-name, command-path,
       and input validation.
-- [ ] Keep input, stdin, and stdout owned until a registered invoker explicitly accepts or transfers
+- [x] Keep input, stdin, and stdout owned until a registered invoker explicitly accepts or transfers
       them.
-- [ ] Cover synchronous throws, failed futures, structured errors, malformed input, successful
+- [x] Cover synchronous throws, failed futures, structured errors, malformed input, successful
       transfer, and missing declared attachments.
-- [ ] Ensure cleanup failure never masks the primary invocation outcome.
-- [ ] Reuse GOL-96's exactly-once/affine design principles, but do not share its P3 `AgentStream`
+- [x] Ensure cleanup failure never masks the primary invocation outcome.
+- [x] Reuse GOL-96's exactly-once/affine design principles, but do not share its P3 `AgentStream`
       terminal model with tool attachments.
+
+The outer `Guest.invokeTool` export creates one JS wrapper for each host attachment and captures
+embedded P3 schema streams under invocation ownership before dispatch. Registered invokers receive
+the model stream interfaces rather than constructing competing wrappers, and nested tool-invoke
+environments forward the existing JS wrappers. The export encodes its structured result or
+rejection before concurrently cleaning input ownership, stdin, and stdout, then restores the
+primary `Try`; secondary cleanup failures therefore never alter the invocation outcome.
+
+Focused coverage exercises early invalid tool/command/input paths, structured success and errors,
+synchronous throws, failed futures, missing attachments, accepted resources remaining live through
+future settlement, embedded schema-stream cleanup, secondary cleanup failures, and lazy idempotent
+stdin cancellation. The focused 22-test suite and all 604 core tests pass, and `testAgents` links
+with full optimization. The rebuilt real Scala fixture verifies that an invalid command path
+preserves its structured error, cancels the live caller stdin, and publishes the executor's
+established `failed` no-body stdout terminal rather than drop-driven `abandoned`. The fixture WASM
+validates and the executor E2E passes. Final Scala and Rust formatting, executor integration-test
+clippy, and diff whitespace checks pass. Logs:
+`.amp/pr-3787-tests/p9a-focused-final-2.log`,
+`.amp/pr-3787-tests/p9a-scala-broad.log`,
+`.amp/pr-3787-tests/p9a-scala-tool-component-rebuild-e2e-final.log`,
+`.amp/pr-3787-tests/p9a-scala-tool-component-validate-final.log`,
+`.amp/pr-3787-tests/p9a-scala-tool-executor-integration-final.log`,
+`.amp/pr-3787-tests/p9a-scala-scalafmt-check-final.log`, and
+`.amp/pr-3787-tests/p9a-executor-clippy-final.log`.
 
 ### P9b — MoonBit provider output and cleanup
 
@@ -757,8 +789,8 @@ Coordination checklist:
 - [x] Allow P0–P7b and P9b/P9c to proceed independently.
 - [x] Defer P7c, P8, and P9a until GOL-96 is stable.
 - [x] Import the stable GOL-96 base through the requested local patch before starting P7c/P8/P9a.
-- [ ] Reuse GOL-96's ownership principles, not its P3 stream types or terminal semantics.
-- [ ] Keep tool conformance tests separate from the GOL-95/GOL-96 agent-stream lifecycle matrix.
+- [x] Reuse GOL-96's ownership principles, not its P3 stream types or terminal semantics.
+- [x] Keep tool conformance tests separate from the GOL-95/GOL-96 agent-stream lifecycle matrix.
 
 ## Finding coverage
 
@@ -876,6 +908,9 @@ Append an entry whenever a workstream changes status or a design gate is resolve
 | 2026-09-03 | P8 | In progress | Replacing middleware reuse of readable/writable tool stream types with dedicated transfer-only input/output handles and a middleware-specific result carrier, while preserving the existing affine ownership and lifecycle rules. |
 | 2026-09-03 | P8 | Awaiting Oracle approval | Added public transfer-only middleware input/output handles and a middleware-specific result carrier; ordinary readable/writable tool streams and clients remain unchanged. Updated all middleware model, macro, codegen, JS guest, ownership, docs, sbt test-agent, and Mill fixture surfaces. Focused ownership/macro/codegen/core tests pass (11 JVM, 11 JS, 42 macros, 15 codegen, 14 core); broad Scala 3 suites pass (314 model JVM, 314 model JS, 595 core, 110 macros, 161 codegen) and `testAgents/fullLinkJS` succeeds. All 161 codegen tests also pass on Scala 2.12, `sbtPlugin/test` succeeds, the real Mill 1.1.8 fixture compiles, and the Scala test component force-builds through `golem-cli`. Final scalafmt and whitespace checks pass. Logs: `.amp/pr-3787-tests/p8-focused-scala-tests-initial.log`, `.amp/pr-3787-tests/p8-scala-full.log`, `.amp/pr-3787-tests/p8-scala-cross-version-plugin.log`, `.amp/pr-3787-tests/p8-mill-fixture-compile.log`, and `.amp/pr-3787-tests/p8-scala-test-component-build-final.log`. |
 | 2026-09-03 | P8 | Complete | Oracle reviewed the complete public contract, generated/macro surfaces, JS conversions, affine ownership and cleanup behavior, regressions, and verification evidence, found no blockers, and returned `APPROVED`. |
+| 2026-09-03 | P9a | In progress | Moving Scala tool attachment and embedded schema-stream ownership to the outer guest export boundary so early validation and asynchronous provider exits share one cleanup path. |
+| 2026-09-03 | P9a | Awaiting Oracle approval | One export-owned invocation scope now wraps each attachment once, captures embedded schema streams, preserves ownership through result encoding and future settlement, concurrently releases all capabilities exactly once, and restores the primary outcome after cleanup. Focused tests cover every validation/result/failure/cleanup branch; 22 focused and all 604 core tests pass, `testAgents` full-links, and the rebuilt real Scala fixture proves invalid-command-path error preservation, live stdin cancellation, and non-abandoning stdout terminal publication. Fixture build/validation, executor integration, Scala/Rust formatting, executor clippy, and whitespace checks pass. Logs are under `.amp/pr-3787-tests/p9a-*`. |
+| 2026-09-03 | P9a | Complete | Oracle reviewed validation precedence, partial-decode cleanup, synchronous/asynchronous failure, result encoding and transfer, nested forwarding, attachment liveness, exactly-once concurrent cleanup, and primary-outcome preservation, found no blocker, and returned `APPROVED`. |
 
 ## Definition of done
 
