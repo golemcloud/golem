@@ -664,14 +664,14 @@ mod tests {
             assignment.expires_at,
         );
 
-        tokio::time::sleep(Duration::from_millis(60)).await;
+        tokio::time::sleep(Duration::from_millis(250)).await;
         assert!(
             mock.renew_calls().is_empty(),
             "a never-expiring lease must issue no renewal RPCs"
         );
 
         shutdown_token.cancel();
-        tokio::time::sleep(Duration::from_millis(60)).await;
+        tokio::time::sleep(Duration::from_millis(250)).await;
         assert_eq!(
             mock.deregister_calls().len(),
             1,
@@ -843,10 +843,13 @@ mod tests {
         }));
         let (service, shard_service) = make_service(mock.clone(), CancellationToken::new());
         let agent = agent_on_shard(0);
+        // The window has to outlast a descheduling of this thread: the suite runs
+        // ~1550 tests in parallel and the assert below is only meaningful while the
+        // granted lease is still live. One second of slack, not sixty milliseconds.
         shard_service.register(
             SHARDS,
             &epochs([(0, 1)]),
-            Some(Utc::now() + ChronoDuration::milliseconds(60)),
+            Some(Utc::now() + ChronoDuration::seconds(1)),
         );
 
         let first = service.renew_shard_lease().await;
@@ -856,7 +859,7 @@ mod tests {
             "still inside the lease the executor was granted"
         );
 
-        tokio::time::sleep(Duration::from_millis(80)).await;
+        tokio::time::sleep(Duration::from_millis(1300)).await;
 
         let second = service.renew_shard_lease().await;
         assert_eq!(second, Some(Duration::from_secs(2)), "and it keeps trying");
