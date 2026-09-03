@@ -616,6 +616,23 @@ function isDatabaseSync(val: unknown): val is DatabaseSync {
   return val instanceof DatabaseSync;
 }
 
+/**
+ * Restores `db` from snapshot bytes and leaves the connection warm.
+ *
+ * `restoreDatabaseSync` copies the pages into the open connection with SQLite's backup API, which
+ * bumps the schema cookie and discards the connection's cached schema. Left like that, the first
+ * statement run after the restore would reload the schema in a read transaction of its own before
+ * executing in a second one, while the same statement on the live (pre-snapshot) connection ran in
+ * a single read transaction. For a file-backed database each read transaction is a distinct
+ * sequence of filesystem host calls, and the invocations recorded after the snapshot are replayed
+ * against the recorded host calls, so the restored connection must behave like the live one did.
+ * Reading the schema here, while snapshot loading is not recorded, does exactly that.
+ */
+function restoreDatabase(db: DatabaseSync, bytes: Uint8Array): void {
+  restoreDatabaseSync(db, bytes);
+  db.prepare('SELECT count(*) FROM sqlite_master').get();
+}
+
 /** `val instanceof Ctor`, including builtins whose constructors are not public. */
 function isInstance(val: unknown, Ctor: Function): boolean {
   return typeof Ctor === 'function' && val instanceof Ctor;
@@ -859,7 +876,7 @@ export function registerAgentInitiator(
           if (!isDatabaseSync(target)) {
             throw new Error(`snapshot database field "${database.name}" is not a DatabaseSync`);
           }
-          restoreDatabaseSync(target, database.bytes);
+          restoreDatabase(target, database.bytes);
         }
       } catch (e) {
         return {

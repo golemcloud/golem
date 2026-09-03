@@ -295,8 +295,10 @@ jobs:
             description: "IT #4"
           - name: integration-tests-group5
             description: "IT #5"
-          - name: integration-tests-group6
-            description: "IT #6"
+          - name: integration-tests-group6-coordinated
+            description: "IT #6a"
+          - name: integration-tests-group6-rest
+            description: "IT #6b"
           - name: integration-tests-group7
             description: "IT #7"
           - name: integration-tests-group8
@@ -363,7 +365,11 @@ jobs:
       matrix:
         group:
           - { name: cli-integration-tests-agents, shard: agents }
+          - { name: cli-integration-tests-agents-guest-bridge, shard: agents_guest_bridge }
+          - { name: cli-integration-tests-agents-streaming, shard: agents_streaming }
           - { name: cli-integration-tests-bridge, shard: bridge_gen }
+          - { name: cli-integration-tests-bridge-rust, shard: bridge_gen_rust }
+          - { name: cli-integration-tests-deploy, shard: deploy }
           - { name: cli-integration-tests-core, shard: core }
     steps:
       - uses: actions/checkout@v5
@@ -478,6 +484,46 @@ jobs:
         with:
           artifact-name: '${{ matrix.group.name }}-report'
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  consolidate-test-reports:
+    name: consolidate-test-reports
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    needs:
+      - unit-tests-and-checks
+      - worker-tests
+      - it
+      - it-cli
+    steps:
+      - name: Download test reports for this attempt
+        uses: actions/download-artifact@v8
+        with:
+          pattern: '*-report-attempt${{ github.run_attempt }}'
+          path: tmp/test-reports
+          merge-multiple: false
+      - name: Preserve the source artifact name for a single report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ -f tmp/test-reports/ctrf-report.json ]]; then
+            mapfile -t artifact_names < <(
+              gh api --paginate "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+                --jq ".artifacts[].name | select(endswith(\"-report-attempt${GITHUB_RUN_ATTEMPT}\"))"
+            )
+            if [[ "${#artifact_names[@]}" -ne 1 ]]; then
+              echo "Expected one report artifact for attempt ${GITHUB_RUN_ATTEMPT}, found ${#artifact_names[@]}" >&2
+              exit 1
+            fi
+            mkdir -p "tmp/test-reports/${artifact_names[0]}"
+            mv tmp/test-reports/ctrf-report.json "tmp/test-reports/${artifact_names[0]}/"
+          fi
+      - name: Upload consolidated test reports
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-test-reports-attempt${{ github.run_attempt }}
+          path: tmp/test-reports
+          if-no-files-found: error
+          retention-days: 35
 
   scala-sdk-integration-tests:
     runs-on: blacksmith-8vcpu-ubuntu-2204
@@ -697,8 +743,25 @@ jobs:
         run: moon test cmd lib
         working-directory: sdks/moonbit/golem_sdk_tools
 
+  # The Rust SDK test suite is dominated by three integration test targets that each shell out to
+  # cargo (tool: one `cargo check` per test, tool_middleware_component: a full wasm component
+  # build, ui: trybuild). They run as separate matrix entries; the `check` entry runs lint and every
+  # other test target and fails if a test target is added without being assigned to an entry.
   build-golem-rust:
-    runs-on: blacksmith
+    name: build-golem-rust (${{ matrix.part.name }})
+    runs-on: blacksmith-16vcpu-ubuntu-2204
+    strategy:
+      fail-fast: false
+      matrix:
+        part:
+          - name: check
+            test-args: --lib --bins --test agent --test tool_canonical --test schema_reexport
+          - name: tool
+            test-args: --test tool
+          - name: tool-middleware-component
+            test-args: --test tool_middleware_component
+          - name: ui
+            test-args: --test ui
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup-rust
@@ -710,13 +773,36 @@ jobs:
       - name: Install wasm-tools
         run: cargo binstall --force --locked wasm-tools@1.248.0
       - name: Check formatting
+        if: matrix.part.name == 'check'
         run: cargo fmt -- --check
         working-directory: sdks/rust
       - name: Clippy
+        if: matrix.part.name == 'check'
         run: cargo clippy -- -Dwarnings
         working-directory: sdks/rust
+      - name: Check that every test target is covered by the matrix
+        if: matrix.part.name == 'check'
+        working-directory: sdks/rust
+        run: |
+          expected='agent
+          schema_reexport
+          tool
+          tool_canonical
+          tool_middleware_component
+          ui'
+          actual=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[].targets[] | select(.kind | index("test")) | .name' | sort)
+          if [ "$actual" != "$expected" ]; then
+            echo "Test targets of sdks/rust changed; update the build-golem-rust matrix in ci.yaml:"
+            diff <(echo "$expected") <(echo "$actual") || true
+            exit 1
+          fi
       - name: Tests
-        run: cargo test --all-features
+        run: cargo test --all-features ${{ matrix.part.test-args }}
+        working-directory: sdks/rust
+      - name: Doc tests
+        if: matrix.part.name == 'check'
+        run: cargo test --all-features --doc
         working-directory: sdks/rust
 
   build-golem-ts:
@@ -811,8 +897,11 @@ jobs:
 
   build-test-components:
     runs-on: blacksmith-8vcpu-ubuntu-2204
+    # Test components only need a `golem-cli` binary, so they are built from the optimized CLI
+    # produced by build-cli-test-bins rather than waiting for the full build-and-store job. This
+    # lets the component builds finish while build-and-store is still compiling test binaries.
     needs:
-      - build-and-store
+      - build-cli-test-bins
       - build-golem-ts
       - list-test-component-groups
     strategy:
@@ -827,13 +916,16 @@ jobs:
         with:
           use-cache: 'false'
           rust-targets: 'wasm32-wasip1 wasm32-wasip2'
-          install-cargo-binstall: 'true'
           install-cargo-make: 'false'
-      - uses: ./.github/actions/restore-binaries
+          install-cargo-binstall: 'true'
+      - name: Restore CLI test binaries
+        uses: actions/cache/restore@v5
         with:
-          run-id: ${{ github.run_id }}
-          copy-to-target: 'true'
-          fail-on-cache-miss: 'true'
+          path: tmp/golem-cli-test-binaries
+          key: golem-cli-test-binaries-${{ github.run_id }}
+          fail-on-cache-miss: true
+      - name: Install golem-cli
+        run: chmod +x tmp/golem-cli-test-binaries/golem-cli
 
       - name: Restore built TS SDK
         if: matrix.chunk.needs-node
@@ -868,6 +960,7 @@ jobs:
         working-directory: test-components
         env:
           GOLEM_TS_PRESET: quick
+          GOLEM_CLI: ${{ github.workspace }}/tmp/golem-cli-test-binaries/golem-cli
         run: ./build-components.sh ${{ matrix.chunk.name }}
 
       - name: Collect built WASMs

@@ -22,7 +22,10 @@ use crate::schema::schema_value::SchemaValue;
 #[cfg(all(feature = "guest", not(feature = "host")))]
 type RawSchemaValueStream = wit_bindgen::StreamReader<super::wit::wire::SchemaValueTree>;
 
-#[cfg(all(feature = "host", not(feature = "guest")))]
+#[cfg(all(
+    any(feature = "host", feature = "native-stream"),
+    not(feature = "guest")
+))]
 mod active {
     use std::any::Any;
     use std::sync::{Arc, Mutex};
@@ -128,10 +131,12 @@ mod active {
     /// It owns one affine runtime endpoint. Component Model readers are
     /// created or consumed only by the embedding runtime while it has access
     /// to the endpoint's Store.
+    #[cfg(feature = "host")]
     pub struct SchemaValueStreamHandleRep {
         stream: SchemaValueStream,
     }
 
+    #[cfg(feature = "host")]
     impl SchemaValueStreamHandleRep {
         #[doc(hidden)]
         pub fn new(stream: SchemaValueStream) -> Self {
@@ -285,7 +290,10 @@ mod active {
 }
 
 #[cfg(any(
-    all(feature = "host", not(feature = "guest")),
+    all(
+        any(feature = "host", feature = "native-stream"),
+        not(feature = "guest")
+    ),
     all(feature = "guest", not(feature = "host"))
 ))]
 pub use active::SchemaValueStream;
@@ -294,7 +302,10 @@ pub use active::SchemaValueStream;
 pub use active::SchemaValueStreamHandleRep;
 
 #[cfg(not(any(
-    all(feature = "host", not(feature = "guest")),
+    all(
+        any(feature = "host", feature = "native-stream"),
+        not(feature = "guest")
+    ),
     all(feature = "guest", not(feature = "host"))
 )))]
 #[derive(Clone, Debug, PartialEq)]

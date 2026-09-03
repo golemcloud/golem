@@ -7015,6 +7015,7 @@ async fn oplog_replay_after_raw_streaming_http_read(
 /// (io::poll::poll) with WaitFor::poll ready() calls (io::poll::ready).
 #[test]
 #[tracing::instrument]
+#[timeout("2m")]
 async fn oplog_replay_after_parallel_raw_streaming_http_reads(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

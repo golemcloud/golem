@@ -316,9 +316,12 @@ describe('snapshot — multipart databases', () => {
   it('attaches restored databases to fresh schema-backed state before installation', async () => {
     vi.resetModules();
 
+    const warmDatabase = vi.fn();
+    const prepare = vi.fn(() => ({ get: warmDatabase }));
     class FakeDatabaseSync {
       restored = new Uint8Array();
       inTransaction = false;
+      prepare = prepare;
       constructor(_path: string) {}
     }
     class FakeStatementSync {}
@@ -439,6 +442,8 @@ describe('snapshot — multipart databases', () => {
       expect(initializeCalls).toBe(0);
       expect(restoreDatabaseSync).toHaveBeenCalledTimes(1);
       expect(restoreDatabaseSync.mock.calls[0][1]).toEqual(databaseBytes);
+      expect(prepare).toHaveBeenCalledWith('SELECT count(*) FROM sqlite_master');
+      expect(warmDatabase).toHaveBeenCalledTimes(1);
 
       const saved = await isolatedGuest.saveSnapshot.save();
       const boundary = saved.mimeType.match(/boundary=([^\s;]+)/)?.[1];
