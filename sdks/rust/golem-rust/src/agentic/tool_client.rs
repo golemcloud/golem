@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cell::RefCell;
 use std::convert::Infallible;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::future::Future;
+use std::future::{Future, poll_fn};
 use std::pin::Pin;
 use std::rc::Rc;
-use std::task::{Context, Poll};
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Wake, Waker};
 
 use crate::TypedSchemaValue;
 use crate::agentic::AmbientToolRpc;
@@ -105,6 +107,7 @@ impl<E: Error + 'static> Error for ToolError<E> {
 }
 
 /// Decoded successful result of `tool-rpc.invoke-and-await`.
+#[derive(Clone)]
 pub struct InvocationResult {
     pub result: Option<TypedSchemaValue>,
 }
@@ -437,6 +440,36 @@ async fn join<A, B>(left: impl Future<Output = A>, right: impl Future<Output = B
     .await
 }
 
+async fn drive_left_until_right<A, B>(
+    left: impl Future<Output = A>,
+    right: impl Future<Output = B>,
+) -> B {
+    struct Drive<L, R> {
+        left: Option<Pin<Box<L>>>,
+        right: Pin<Box<R>>,
+    }
+    impl<A, B, L: Future<Output = A>, R: Future<Output = B>> Future for Drive<L, R> {
+        type Output = B;
+
+        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            // The futures remain pinned in their boxes; the surrounding fields
+            // are never structurally pinned.
+            let this = unsafe { self.get_unchecked_mut() };
+            if let Some(left) = &mut this.left
+                && left.as_mut().poll(cx).is_ready()
+            {
+                this.left = None;
+            }
+            this.right.as_mut().poll(cx)
+        }
+    }
+    Drive {
+        left: Some(Box::pin(left)),
+        right: Box::pin(right),
+    }
+    .await
+}
+
 /// Transfers an idiomatic input stream to the host's directional stdin
 /// attachment. The host boundary is required for error-bearing byte streams,
 /// which cannot rendezvous between sibling futures in one Component Model task.
@@ -444,11 +477,135 @@ pub fn pump_tool_stdin(source: InputStream) -> agentic_host_api::ToolStdin {
     agentic_host_api::create_stdin_from_stream(source)
 }
 
+type CachedInvocationResult = Result<InvocationResult, ToolError<TypedSchemaValue>>;
+type InvocationResultFuture = Pin<Box<dyn Future<Output = CachedInvocationResult>>>;
+type InvocationResultFutureFactory = Box<dyn FnOnce() -> InvocationResultFuture>;
+
+enum InvocationResultDriverState {
+    Initial(Option<InvocationResultFutureFactory>),
+    Polling(InvocationResultFuture),
+    Ready(Box<CachedInvocationResult>),
+}
+
+#[derive(Default)]
+struct InvocationResultWake {
+    waiters: Mutex<Vec<Waker>>,
+}
+
+impl InvocationResultWake {
+    fn register(&self, waker: &Waker) {
+        let mut waiters = self.waiters.lock().expect("result waiters mutex poisoned");
+        if !waiters.iter().any(|waiter| waiter.will_wake(waker)) {
+            waiters.push(waker.clone());
+        }
+    }
+
+    fn wake_waiters(&self) {
+        let waiters =
+            std::mem::take(&mut *self.waiters.lock().expect("result waiters mutex poisoned"));
+        for waiter in waiters {
+            waiter.wake();
+        }
+    }
+}
+
+impl Wake for InvocationResultWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_waiters();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.wake_waiters();
+    }
+}
+
+struct InvocationResultDriver {
+    state: RefCell<InvocationResultDriverState>,
+    wake: Arc<InvocationResultWake>,
+    source_waker: Waker,
+}
+
+impl InvocationResultDriver {
+    fn new(factory: impl FnOnce() -> InvocationResultFuture + 'static) -> Self {
+        let wake = Arc::new(InvocationResultWake::default());
+        Self {
+            state: RefCell::new(InvocationResultDriverState::Initial(Some(Box::new(
+                factory,
+            )))),
+            source_waker: Waker::from(Arc::clone(&wake)),
+            wake,
+        }
+    }
+
+    fn poll(&self, cx: &mut Context<'_>) -> Poll<CachedInvocationResult> {
+        loop {
+            let mut state = self.state.borrow_mut();
+            match &mut *state {
+                InvocationResultDriverState::Initial(factory) => {
+                    let future = factory
+                        .take()
+                        .expect("tool invocation result driver starts only once")(
+                    );
+                    *state = InvocationResultDriverState::Polling(future);
+                }
+                InvocationResultDriverState::Polling(future) => {
+                    self.wake.register(cx.waker());
+                    let mut source_context = Context::from_waker(&self.source_waker);
+                    let Poll::Ready(result) = future.as_mut().poll(&mut source_context) else {
+                        return Poll::Pending;
+                    };
+                    let result_for_caller = result.clone();
+                    *state = InvocationResultDriverState::Ready(Box::new(result));
+                    drop(state);
+                    self.wake.wake_waiters();
+                    return Poll::Ready(result_for_caller);
+                }
+                InvocationResultDriverState::Ready(result) => {
+                    return Poll::Ready((**result).clone());
+                }
+            }
+        }
+    }
+
+    async fn wait(self: Rc<Self>) -> CachedInvocationResult {
+        poll_fn(|cx| self.poll(cx)).await
+    }
+}
+
+/// The readable stdout of a started tool invocation.
+///
+/// Reading this stream also drives the invocation's shared result observer so
+/// stdout-only consumers can make progress for filesystem-capable tools.
+pub struct ToolInvocationStdout {
+    stream: Option<InputStream>,
+    result: Rc<InvocationResultDriver>,
+}
+
+impl ToolInvocationStdout {
+    pub async fn next(&mut self) -> Option<Result<Vec<u8>, agentic_host_api::ByteStreamFailure>> {
+        let stream = self.stream.as_mut()?;
+        drive_left_until_right(Rc::clone(&self.result).wait(), stream.next()).await
+    }
+
+    pub async fn collect(mut self) -> Vec<Result<Vec<u8>, agentic_host_api::ByteStreamFailure>> {
+        let mut output = Vec::new();
+        while let Some(item) = self.next().await {
+            output.push(item);
+        }
+        output
+    }
+
+    pub fn close(&mut self) {
+        self.stream = None;
+    }
+}
+
 /// A started stdout-bearing tool call. Output, structured completion, and
 /// cancellation are independent capabilities.
 pub struct ToolInvocation<T, E> {
-    pub stdout: InputStream,
+    pub stdout: ToolInvocationStdout,
     future: Rc<agentic_host_api::FutureInvokeResult>,
+    result: Rc<InvocationResultDriver>,
     decode: Rc<dyn Fn(InvocationResult) -> Result<T, ToolError<E>>>,
     decode_error: Rc<dyn Fn(TypedSchemaValue) -> Result<E, String>>,
 }
@@ -457,16 +614,18 @@ impl<T, E> ToolInvocation<T, E> {
     /// Returns an independently owned structured-completion future. The
     /// stdout field may be moved into a concurrent consumer after this call.
     pub fn result(&self) -> impl Future<Output = Result<T, ToolError<E>>> + use<T, E> {
-        let future = Rc::clone(&self.future);
+        let result = Rc::clone(&self.result);
         let decode = Rc::clone(&self.decode);
         let decode_error = Rc::clone(&self.decode_error);
         async move {
-            let result = future
-                .get()
-                .await
-                .map_err(|error| map_rpc_error(error.into(), &*decode_error))?;
-            let result = decode_wire_invocation_result(result)?;
-            decode(result)
+            match result.wait().await {
+                Ok(result) => decode(result),
+                Err(ToolError::Rpc(error)) => Err(ToolError::Rpc(error)),
+                Err(ToolError::Tool(error)) => match decode_error(error) {
+                    Ok(error) => Err(ToolError::Tool(error)),
+                    Err(message) => Err(protocol_error(message)),
+                },
+            }
         }
     }
 
@@ -527,9 +686,25 @@ pub fn start_tool_invocation<T: 'static, E: 'static>(
     let stdin = stdin.map(pump_tool_stdin);
     let (stdout_target, stdout) = agentic_host_api::create_stdout();
     let future = rpc.async_invoke_and_await_tool(command_path, input, stdin, Some(stdout_target));
+    let future = Rc::new(future);
+    let result = Rc::new(InvocationResultDriver::new({
+        let future = Rc::clone(&future);
+        move || {
+            Box::pin(async move {
+                let result = future.get().await.map_err(|error| {
+                    map_rpc_error(error.into(), &|value| Ok::<TypedSchemaValue, String>(value))
+                })?;
+                decode_wire_invocation_result(result)
+            })
+        }
+    }));
     Ok(ToolInvocation {
-        stdout,
-        future: Rc::new(future),
+        stdout: ToolInvocationStdout {
+            stream: Some(stdout),
+            result: Rc::clone(&result),
+        },
+        future,
+        result,
         decode: Rc::new(decode),
         decode_error: Rc::new(decode_error),
     })
@@ -592,6 +767,8 @@ fn remote_tool_error_label(error: &host::ToolError) -> String {
 mod tests {
     use super::*;
     use crate::{FromSchema, IntoSchema, IntoTypedSchemaValue};
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use test_r::test;
 
     #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -626,6 +803,116 @@ mod tests {
             decoded,
             ToolError::Tool(CliError::Usage("bad flag".to_string()))
         );
+    }
+
+    #[test]
+    async fn invocation_result_driver_shares_one_source_and_caches_its_outcome() {
+        let starts = Rc::new(Cell::new(0));
+        let polls = Rc::new(Cell::new(0));
+        let driver = Rc::new(InvocationResultDriver::new({
+            let starts = Rc::clone(&starts);
+            let polls = Rc::clone(&polls);
+            move || {
+                starts.set(starts.get() + 1);
+                Box::pin(poll_fn(move |cx| {
+                    let poll_count = polls.get() + 1;
+                    polls.set(poll_count);
+                    if poll_count == 1 {
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
+                    } else {
+                        Poll::Ready(Err(ToolError::Rpc(RpcError::Cancelled)))
+                    }
+                }))
+            }
+        }));
+
+        let (first, second) = join(Rc::clone(&driver).wait(), Rc::clone(&driver).wait()).await;
+        let cached = Rc::clone(&driver).wait().await;
+
+        for outcome in [first, second, cached] {
+            assert!(matches!(outcome, Err(ToolError::Rpc(RpcError::Cancelled))));
+        }
+        assert_eq!(starts.get(), 1, "the host get future is created once");
+        assert_eq!(
+            polls.get(),
+            2,
+            "cached observers do not poll the host future"
+        );
+    }
+
+    struct CountingWake(AtomicUsize);
+
+    impl Wake for CountingWake {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn result_source_wakes_surviving_observer_when_latest_observer_is_dropped() {
+        struct Source {
+            ready: Cell<bool>,
+            polls: Cell<usize>,
+            waker: RefCell<Option<Waker>>,
+        }
+
+        let starts = Rc::new(Cell::new(0));
+        let source = Rc::new(Source {
+            ready: Cell::new(false),
+            polls: Cell::new(0),
+            waker: RefCell::new(None),
+        });
+        let driver = Rc::new(InvocationResultDriver::new({
+            let starts = Rc::clone(&starts);
+            let source = Rc::clone(&source);
+            move || {
+                starts.set(starts.get() + 1);
+                Box::pin(poll_fn(move |cx| {
+                    source.polls.set(source.polls.get() + 1);
+                    if source.ready.get() {
+                        Poll::Ready(Ok(InvocationResult { result: None }))
+                    } else {
+                        *source.waker.borrow_mut() = Some(cx.waker().clone());
+                        Poll::Pending
+                    }
+                }))
+            }
+        }));
+
+        let first_wake = Arc::new(CountingWake(AtomicUsize::new(0)));
+        let second_wake = Arc::new(CountingWake(AtomicUsize::new(0)));
+        let first_waker = Waker::from(Arc::clone(&first_wake));
+        let second_waker = Waker::from(Arc::clone(&second_wake));
+        let mut first_context = Context::from_waker(&first_waker);
+        let mut second_context = Context::from_waker(&second_waker);
+        let mut first = Box::pin(Rc::clone(&driver).wait());
+        let mut second = Box::pin(Rc::clone(&driver).wait());
+
+        assert!(first.as_mut().poll(&mut first_context).is_pending());
+        assert!(second.as_mut().poll(&mut second_context).is_pending());
+        drop(second);
+
+        source.ready.set(true);
+        source
+            .waker
+            .borrow_mut()
+            .take()
+            .expect("source registered the driver's stable waker")
+            .wake();
+
+        assert_eq!(first_wake.0.load(Ordering::SeqCst), 1);
+        assert_eq!(second_wake.0.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            first.as_mut().poll(&mut first_context),
+            Poll::Ready(Ok(InvocationResult { result: None }))
+        ));
+        assert_eq!(starts.get(), 1, "the host get future is created once");
+        assert_eq!(source.polls.get(), 3);
     }
 
     struct FakeToolRpc;

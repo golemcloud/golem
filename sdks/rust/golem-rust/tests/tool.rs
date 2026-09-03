@@ -1386,14 +1386,14 @@ impl EchoMiddleware for Policy {
         let output = cargo_check_tool_crate(
             "stdout-tool-result-shape",
             r#"
-use golem_rust::agentic::{InputStream, ToolInvocation};
+use golem_rust::agentic::{ToolInvocation, ToolInvocationStdout};
 use std::convert::Infallible;
 
-fn stdout(invocation: ToolInvocation<(), Infallible>) -> InputStream {
+fn stdout(invocation: ToolInvocation<(), Infallible>) -> ToolInvocationStdout {
     invocation.stdout
 }
 
-async fn consume(_stdout: InputStream) {}
+async fn consume(_stdout: ToolInvocationStdout) {}
 
 fn consume_result_and_stdout_concurrently(invocation: ToolInvocation<(), Infallible>) {
     let result = invocation.result();

@@ -1,6 +1,6 @@
 # PR 3787 Review Fix Plan
 
-Last updated: 2026-09-02
+Last updated: 2026-09-03
 
 This plan covers every review finding validated as true or partially true for
 [PR 3787](https://github.com/golemcloud/golem/pull/3787), together with the additional validated
@@ -45,7 +45,7 @@ documented verification commands are all complete.
 | P4 | Replace operation strong-count cleanup with explicit leases | **Complete** | 17, 27 | P0 |
 | P5 | Centralize no-body attachment publication | **Complete** | 4, 16, 27 | P1, P4 |
 | P6 | Make execution mode and attachment admission replay-deterministic | **Complete** | 3, 5 | P1, P5 |
-| P7a | Fix the Rust started-invocation caller contract | Not started | 7–9 | P1, P5 |
+| P7a | Fix the Rust started-invocation caller contract | **Complete** | 7–9 | P1, P5 |
 | P7b | Fix the TypeScript started-invocation caller contract | Not started | 11 | P1, P5 |
 | P7c | Fix the Scala started-invocation caller contract | **Blocked** | 13 | Stable GOL-96 integration base |
 | P8 | Replace Scala middleware streams with transfer-only handles | **Blocked** | 14 | Stable GOL-96 integration base |
@@ -102,6 +102,19 @@ documented verification commands are all complete.
   unit, deterministic crash/replay, memory-pressure, generated-client, formatting, and clippy
   checks are green. Oracle's final holistic review approved the full phase and accepted the typed,
   deterministic compositional coverage as sufficient.
+- **P7a — Complete (2026-09-03):** one lazy shared driver now creates and polls
+  exactly one host `get`, caches its raw typed outcome, wakes concurrent result observers, and is
+  also driven by each stdout read. `collect()` retains concurrent result/stdout progress. Focused
+  driver and generated-API tests pass, as do all 135 feature-enabled SDK library tests (131 passed,
+  4 ignored). Oracle found that polling the source with the latest observer's waker could strand
+  earlier observers if that latest task was cancelled. The corrected driver uses one stable
+  fan-out waker, and a deterministic distinct-waker regression proves source completion wakes a
+  surviving observer after the latest observer is dropped. The rebuilt real Rust fixture verifies
+  simultaneous result observers, a later observer reading the stdout-produced cache, stdout-only
+  capable/incapable calls, and the capable filesystem effect. Its executor integration test,
+  SDK/executor clippy, all scoped formatting, and diff whitespace checks pass. Logs are under
+  `.amp/pr-3787-tests/p7a-*`. Oracle's follow-up review approved the corrected phase with no
+  remaining blockers.
 
 ## Invariants that govern every fix
 
@@ -522,13 +535,13 @@ requests so each SDK can be reviewed and verified independently.
 
 ### P7a — Rust
 
-- [ ] Introduce one shared result driver/cache per `ToolInvocation`.
-- [ ] Ensure all `result()` observers reuse the same host `get` and cached outcome.
-- [ ] Wrap stdout so polling it also drives the same completion future, allowing stdout-only
+- [x] Introduce one shared result driver/cache per `ToolInvocation`.
+- [x] Ensure all `result()` observers reuse the same host `get` and cached outcome.
+- [x] Wrap stdout so polling it also drives the same completion future, allowing stdout-only
       consumption of capable tools to complete.
-- [ ] Keep `collect()` driving result and stdout concurrently.
-- [ ] Restore a real behavioral runtime test rather than relying on the non-polling compile fixture.
-- [ ] Test concurrent result observers, exactly one host `get`, stdout-only consumption, cached
+- [x] Keep `collect()` driving result and stdout concurrently.
+- [x] Restore a real behavioral runtime test rather than relying on the non-polling compile fixture.
+- [x] Test concurrent result observers, exactly one host `get`, stdout-only consumption, cached
       result after stdout, and capable/incapable tools.
 
 ### P7b — TypeScript
@@ -766,6 +779,9 @@ Append an entry whenever a workstream changes status or a design gate is resolve
 | 2026-09-02 | P6 | Final Oracle correction applied | Oracle found that cancellation winning while a pending attachment reservation returned no grant was still mislabeled as owner fencing. The failed-reservation branch now returns cancellation with whole-batch rollback, covered by a deterministic two-attachment race test. All 44 operation tests, the generated-client, durable upgrade-rejection, and cancellation integration guards, formatting, whitespace checks, and clippy pass. |
 | 2026-09-02 | P6 | Awaiting final Oracle approval | Oracle found that successful-reservation cancellation rolled back attachments but still published live. Cancellation now propagates through replay transition and entity reconstruction as a typed no-body outcome: the reconstructed nested body is aborted and drained, its call remains incomplete, and the outer entity invocation commits one skipped-body cancellation before attachment publication. The generated nested-client regression exposed oversized recursive async state; boxing the entity durability driver at the tool boundary restores default-stack execution. All 13 entity, 53 concurrent, 44 operation, and 93 tool tests pass, as do the generated-client, durable-upgrade rejection, and cancellation integration guards plus formatting, whitespace, and clippy. |
 | 2026-09-02 | P6 | Complete | Oracle's final holistic review found no P6 blockers and returned `APPROVED`. It explicitly accepted the deterministic compositional coverage because every cross-layer cancellation transition is represented by an exhaustively matched typed outcome. |
+| 2026-09-03 | P7a | Awaiting Oracle approval | Implemented one shared lazy result driver/cache and result-driven stdout wrapper. Focused driver and API-shape tests, all 134 feature-enabled SDK library tests, rebuilt fixture, real generated-client capable/incapable and multi-observer integration coverage, SDK/executor clippy, formatting, and whitespace checks pass. |
+| 2026-09-03 | P7a | Oracle correction applied | Replaced latest-observer source registration with a stable driver-owned fan-out waker. A deterministic distinct-waker test drops the latest observer, completes the source, and proves the surviving observer wakes and receives the cached result from the one source factory. All 135 SDK library tests, the force-rebuilt real generated-client integration, SDK clippy, formatting, and whitespace checks pass. |
+| 2026-09-03 | P7a | Complete | Oracle's follow-up review found no blockers and returned `APPROVED`; it confirmed the stable fan-out closes observer cancellation races while preserving exactly-one-get, affine result, error, stdout, and cancellation semantics. |
 
 ## Definition of done
 

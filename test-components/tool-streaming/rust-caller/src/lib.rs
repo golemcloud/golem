@@ -1,7 +1,8 @@
 use capable_streaming_tool_guest_client::CapableStreamingClient;
 use futures_concurrency::prelude::*;
 use golem_rust::agentic::{
-    InputStream, Principal, ToolInvocation, pump_tool_stdin, spawn_local, tool_protocol_error,
+    InputStream, Principal, ToolInvocation, ToolInvocationStdout, pump_tool_stdin, spawn_local,
+    tool_protocol_error,
 };
 use golem_rust::durability::{Durability, DurableFunctionType};
 use golem_rust::golem_agentic::golem::tool::host::{
@@ -49,6 +50,11 @@ pub trait ToolStreamingCaller {
     async fn alternating_echo(&self, chunk_count: u32, chunk_size: u32) -> StreamEvidence;
     async fn collect(&self, mode: String, input: Vec<u8>, fragment_size: u32) -> StreamEvidence;
     async fn result_before_stdout(&self, mode: String) -> StreamEvidence;
+    async fn started_invocation_contracts(
+        &self,
+        capable_path: String,
+        capable_input: Vec<u8>,
+    ) -> Vec<Vec<u8>>;
     async fn two_live_calls(&self, left: Vec<u8>, right: Vec<u8>) -> Vec<Vec<u8>>;
     async fn two_http_calls(
         &self,
@@ -152,6 +158,17 @@ fn evidence(
 }
 
 async fn read_all(mut stdout: InputStream) -> Vec<u8> {
+    let mut output = Vec::new();
+    while let Some(item) = stdout.next().await {
+        match item {
+            Ok(chunk) => output.extend(chunk),
+            Err(failure) => panic!("tool stdout failed: {failure:?}"),
+        }
+    }
+    output
+}
+
+async fn read_tool_stdout(mut stdout: ToolInvocationStdout) -> Vec<u8> {
     let mut output = Vec::new();
     while let Some(item) = stdout.next().await {
         match item {
@@ -367,7 +384,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         drop(writer);
 
         let result = invocation.result().await;
-        output.extend(read_all(invocation.stdout).await);
+        output.extend(read_tool_stdout(invocation.stdout).await);
         evidence(result, output)
     }
 
@@ -390,7 +407,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         }
         drop(writer);
         let result = invocation.result().await;
-        output.extend(read_all(invocation.stdout).await);
+        output.extend(read_tool_stdout(invocation.stdout).await);
         evidence(result, output)
     }
 
@@ -409,8 +426,58 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .run(mode, input_stream(Vec::new()))
             .expect("start streaming tool");
         let result = invocation.result().await;
-        let output = read_all(invocation.stdout).await;
+        let output = read_tool_stdout(invocation.stdout).await;
         evidence(result, output)
+    }
+
+    async fn started_invocation_contracts(
+        &self,
+        capable_path: String,
+        capable_input: Vec<u8>,
+    ) -> Vec<Vec<u8>> {
+        let concurrent = StreamingClient::default()
+            .run("empty".to_string(), input_stream(Vec::new()))
+            .expect("start concurrent-result tool");
+        let first_result = concurrent.result();
+        let second_result = concurrent.result();
+        let (first_result, second_result) = (first_result, second_result).join().await;
+        let first_result = first_result.expect("first shared result observer");
+        let second_result = second_result.expect("second shared result observer");
+        assert_eq!(first_result.chunks_read, second_result.chunks_read);
+        assert_eq!(first_result.bytes_read, second_result.bytes_read);
+        assert_eq!(first_result.output_closed, second_result.output_closed);
+        let concurrent_output = read_tool_stdout(concurrent.stdout).await;
+
+        let incapable = StreamingClient::default()
+            .run("fragmented".to_string(), input_stream(Vec::new()))
+            .expect("start stdout-only incapable tool");
+        let incapable_output = read_tool_stdout(incapable.stdout).await;
+
+        let cached = StreamingClient::default()
+            .run(
+                "echo".to_string(),
+                input_stream(vec![b"cached-result".to_vec()]),
+            )
+            .expect("start cached-result tool");
+        let cached_result = cached.result();
+        let cached_output = read_tool_stdout(cached.stdout).await;
+        let cached_result = cached_result
+            .await
+            .expect("stdout must leave a cached structured result");
+        assert_eq!(cached_result.chunks_read, 1);
+        assert_eq!(cached_result.bytes_read, 13);
+
+        let capable = CapableStreamingClient::default()
+            .run_capable(capable_path, input_stream(vec![capable_input.clone()]))
+            .expect("start stdout-only capable tool");
+        let capable_output = read_tool_stdout(capable.stdout).await;
+
+        vec![
+            concurrent_output,
+            incapable_output,
+            cached_output,
+            capable_output,
+        ]
     }
 
     async fn two_live_calls(&self, left: Vec<u8>, right: Vec<u8>) -> Vec<Vec<u8>> {
@@ -448,8 +515,8 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
 
         let left_result = left_call.result();
         let right_result = right_call.result();
-        left_output.extend(read_all(left_call.stdout).await);
-        right_output.extend(read_all(right_call.stdout).await);
+        left_output.extend(read_tool_stdout(left_call.stdout).await);
+        right_output.extend(read_tool_stdout(right_call.stdout).await);
         let _ = left_result.await.expect("left result");
         let _ = right_result.await.expect("right result");
         vec![left_output, right_output]
@@ -512,8 +579,8 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
 
         let left_result = left_call.result();
         let right_result = right_call.result();
-        left_output.extend(read_all(left_call.stdout).await);
-        right_output.extend(read_all(right_call.stdout).await);
+        left_output.extend(read_tool_stdout(left_call.stdout).await);
+        right_output.extend(read_tool_stdout(right_call.stdout).await);
         let left_result = left_result.await;
         let right_result = right_result.await;
         vec![
@@ -874,8 +941,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             4096,
             "backpressured output starts before its reader is dropped"
         );
-        let dropped_stdout = std::mem::replace(&mut blocked.stdout, input_stream(Vec::new()));
-        drop(dropped_stdout);
+        blocked.stdout.close();
 
         let sibling = StreamingClient::default()
             .run(
@@ -901,21 +967,29 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_open_stdin(&self, calls: u32) {
+        let rpc = ToolRpc::new("streaming");
+        let path = ["run".to_string()];
         let mut sources = Vec::new();
-        let mut invocations = Vec::new();
+        let mut outputs = Vec::new();
+        let mut results = Vec::new();
         for _ in 0..calls {
             let (source, stdin) =
                 golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
-            let mut invocation = StreamingClient::default()
-                .run("marker-echo".to_string(), stdin)
-                .expect("start held streaming tool");
-            assert_eq!(first_chunk(&mut invocation).await, b"marker:");
+            let (stdout_target, mut stdout) = tool_host::create_stdout();
+            let result = rpc.async_invoke_and_await(
+                &path,
+                raw_input("marker-echo"),
+                Some(pump_tool_stdin(stdin)),
+                Some(stdout_target),
+            );
+            assert_eq!(raw_chunk(&mut stdout).await, b"marker:");
             sources.push(source);
-            invocations.push(invocation);
+            outputs.push(stdout);
+            results.push(result);
         }
         let _keep_sources_open = sources;
-        invocations[0]
-            .result()
+        let _keep_outputs_open = outputs;
+        raw_result(&results[0])
             .await
             .expect("held streaming tool only completes after interruption");
     }
@@ -936,10 +1010,15 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_capable_stdout_before_result(&self, path: String, input: Vec<u8>) {
-        let mut invocation = CapableStreamingClient::default()
-            .run_capable(path, input_stream(vec![input]))
-            .expect("start held capable streaming tool");
-        let item = invocation.stdout.next().await;
+        let rpc = ToolRpc::new("capable-streaming");
+        let (stdout_target, mut stdout) = tool_host::create_stdout();
+        let _result = rpc.async_invoke_and_await(
+            &["run-capable".to_string()],
+            raw_capable_input(&path),
+            Some(raw_stdin(vec![input])),
+            Some(stdout_target),
+        );
+        let item = stdout.next().await;
         panic!("capable stdout became visible before result-await admission: {item:?}");
     }
 
@@ -1005,7 +1084,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 .expect("lane must have returned before capable stdout publication");
             let _ = golem_rust::get_oplog_index();
             wait_at_crash_checkpoint("caller-observed-capable-publication").await;
-            read_all(stdout).await
+            read_tool_stdout(stdout).await
         };
         let (result, remaining_output) = (result, output).join().await;
         result.expect("capable publication checkpoint result");
@@ -1392,7 +1471,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 input_stream(vec![input.clone()]),
             )
             .expect("start capable terminal checkpoint tool");
-        let (result, output) = (invocation.result(), read_all(invocation.stdout))
+        let (result, output) = (invocation.result(), read_tool_stdout(invocation.stdout))
             .join()
             .await;
         result.expect("capable terminal checkpoint result");
@@ -1408,7 +1487,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .run_capable(path, input_stream(vec![input.clone()]))
             .expect("start post-publication capable checkpoint tool");
         let result = invocation.result();
-        let output = read_all(invocation.stdout);
+        let output = read_tool_stdout(invocation.stdout);
         let (result, output) = (result, output).join().await;
         result.expect("post-publication capable checkpoint result");
         assert_eq!(output, input);

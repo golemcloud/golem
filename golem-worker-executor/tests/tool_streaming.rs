@@ -1085,6 +1085,38 @@ async fn rust_generated_client_streams_live_and_handles_edges(
         capable_input
     );
 
+    let stdout_only_capable_input = b"stdout-only-capable".to_vec();
+    let started_contracts: Vec<Vec<u8>> = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        executor.invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "started_invocation_contracts",
+            data_value!(
+                "/stdout-only-capable.bin",
+                stdout_only_capable_input.clone()
+            ),
+        ),
+    )
+    .await
+    .expect("started invocation contract checks timed out")?
+    .into_typed()?;
+    assert_eq!(
+        started_contracts,
+        [
+            Vec::new(),
+            vec![b'f', b'r', b'a', b'g', 0, 255],
+            b"cached-result".to_vec(),
+            stdout_only_capable_input.clone(),
+        ]
+    );
+    assert_eq!(
+        executor
+            .get_file_contents(&worker_id, "/stdout-only-capable.bin")
+            .await?,
+        stdout_only_capable_input
+    );
+
     let raw_agent_id = agent_id!("ToolStreamingCaller", "rust-raw-modes");
     let raw_worker_id = executor
         .start_agent(&caller_component.id, raw_agent_id.clone())
