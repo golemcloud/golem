@@ -93,6 +93,19 @@ pub enum Stream {
     /// nobody suspended on it, and this one exists precisely to leave an agent
     /// parked across a fault.
     PromiseWait,
+    /// `Counter.increment_through_rpc` — one agent invoking another through
+    /// `golem:rpc` (GOL-368).
+    ///
+    /// The only stream whose work crosses an *executor* boundary of its own
+    /// accord. Every other stream is one client call landing on one agent; here
+    /// the caller agent is itself a client, and the agent it calls is chosen so
+    /// that a different executor owns it.
+    ///
+    /// What it records is the caller. The counter it advances belongs to the
+    /// callee, which the counters component derives as `{caller}-inner` — see
+    /// [`crate::chaos::scenarios::ReadKind::RpcInner`] for why read-back keeps
+    /// the two apart rather than recording the callee directly.
+    Rpc,
 }
 
 impl Stream {
@@ -105,6 +118,7 @@ impl Stream {
             Stream::Quota => "quota",
             Stream::PinnedHttp => "pinned-http",
             Stream::PromiseWait => "promise-wait",
+            Stream::Rpc => "rpc",
             Stream::Delete => "delete",
             Stream::Revert => "revert",
         }
@@ -128,11 +142,11 @@ impl Stream {
     pub fn has_readback(self) -> bool {
         matches!(
             self,
-            Stream::Durable | Stream::Scheduled | Stream::PinnedHttp | Stream::Quota
+            Stream::Durable | Stream::Scheduled | Stream::PinnedHttp | Stream::Quota | Stream::Rpc
         )
     }
 
-    pub const ALL: [Stream; 9] = [
+    pub const ALL: [Stream; 10] = [
         Stream::Durable,
         Stream::Ephemeral,
         Stream::Scheduled,
@@ -142,6 +156,7 @@ impl Stream {
         Stream::PromiseWait,
         Stream::Revert,
         Stream::Delete,
+        Stream::Rpc,
     ];
 }
 

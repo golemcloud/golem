@@ -62,6 +62,22 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
+/// The agent an RPC caller invokes, which is *not* the agent the driver invokes
+/// (GOL-368).
+///
+/// The suffix is not the driver's choice. `Counter::increment_through_rpc`
+/// builds its client as `CounterClient::get(format!("{}-inner", self.id))`, so
+/// the callee's id follows from the caller's. The driver reproduces that
+/// derivation rather than passing a target in, which is what lets it decide
+/// *before* the run which executor will own each half of the pair.
+///
+/// Free rather than a method on [`WorkloadContext`] because it depends on
+/// nothing about the run — only on what the component does — and because that
+/// is what makes the coupling testable without standing up a platform.
+pub fn rpc_callee_name(caller: &str) -> String {
+    format!("{caller}-inner")
+}
+
 /// Agent type names exported by the counters component.
 pub(crate) const COUNTER_AGENT: &str = "Counter";
 const EPHEMERAL_COUNTER_AGENT: &str = "EphemeralCounter";
@@ -457,6 +473,7 @@ pub fn start(ctx: WorkloadContext, config: &crate::chaos::WorkloadConfig) -> Wor
         (Stream::Scheduled, config.scheduled_agents),
         (Stream::Promise, config.promise_agents),
         (Stream::Quota, config.quota_agents),
+        (Stream::Rpc, config.rpc_agents),
     ]
     .into_iter()
     .filter(|(_, agents)| *agents > 0)
@@ -596,6 +613,43 @@ pub(crate) async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32
                     Ok(as_u32(value))
                 }
             })
+            .await;
+        }
+        Stream::Rpc => {
+            // The driver invokes the caller; the caller invokes the callee.
+            // Only the second hop is the one under test, and it is the hop the
+            // driver cannot address directly — which is the whole point, since
+            // an agent-to-agent call is the only traffic that chooses its own
+            // executor rather than being routed to one.
+            let agent = ctx.agent_name(Stream::Rpc, index);
+            let key = ctx.idempotency_key(&agent, seq);
+            let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.clone());
+            let ctx2 = ctx.clone();
+            let parsed2 = parsed.clone();
+            run_operation(
+                ctx,
+                Stream::Rpc,
+                agent.clone(),
+                "increment_through_rpc",
+                key,
+                |k| {
+                    let ctx = ctx2.clone();
+                    let parsed = parsed2.clone();
+                    async move {
+                        let value = ctx
+                            .user
+                            .invoke_and_await_agent_with_key(
+                                &ctx.counters,
+                                &parsed,
+                                &k,
+                                "increment_through_rpc",
+                                data_value!(),
+                            )
+                            .await?;
+                        Ok(as_u32(value))
+                    }
+                },
+            )
             .await;
         }
         Stream::Ephemeral => {
@@ -940,6 +994,24 @@ mod tests {
         let target = format!("{key_prefix}-scheduled-target-0007");
         let key = format!("{agent}-00000042");
         (agent, target, key)
+    }
+
+    /// The callee's id is fixed by the component, not by the driver.
+    ///
+    /// `Counter::increment_through_rpc` builds its client as
+    /// `CounterClient::get(format!("{}-inner", self.id))` in
+    /// `test-components/agent-counters/src/lib.rs`, and the driver reproduces
+    /// that derivation to decide which executor owns each half of a pair
+    /// *before* the run. Nothing in the type system links the two sides, and
+    /// they live in different crates, so a change to that suffix would silently
+    /// leave S2 pairing agents that never call each other — a run that then
+    /// reports a clean control while testing nothing.
+    #[test]
+    fn the_rpc_callee_name_matches_what_the_component_derives() {
+        assert_eq!(
+            rpc_callee_name("chaos-s2-1234-1-rpc-0007"),
+            "chaos-s2-1234-1-rpc-0007-inner"
+        );
     }
 
     #[test]

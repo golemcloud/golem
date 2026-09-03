@@ -54,6 +54,7 @@ use crate::chaos::outage::StorageFaultReport;
 use crate::chaos::ownership::OwnershipSample;
 use crate::chaos::probe::KeyProbe;
 use crate::chaos::reachability::ReachabilityReport;
+use crate::chaos::relay::RelayReport;
 use crate::chaos::resurrection::ResurrectionReport;
 use crate::chaos::rollback::RollbackReport;
 use crate::chaos::truncation::TruncationReport;
@@ -582,6 +583,10 @@ pub struct ChaosSummary {
     /// same reason as `scheduleFires`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reachability: Option<ReachabilityReport>,
+    /// The cross-pod RPC account, for the one scenario that cuts two executors
+    /// off from each other. `None` everywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay: Option<RelayReport>,
     /// The truncation account, for scenarios that revert agent state. Absent
     /// for scenarios that do not, for the same reason as `scheduleFires`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -743,6 +748,7 @@ impl ChaosSummary {
             schedule_fires: None,
             promise_wakeups: None,
             reachability: None,
+            relay: None,
             truncation: None,
             resurrection: None,
             rollback: None,
@@ -817,6 +823,22 @@ impl ChaosSummary {
         self.attention.extend(report.attention_lines());
         self.notes.extend(report.note_lines());
         self.reachability = Some(report);
+        self
+    }
+
+    /// Attaches the cross-pod RPC account and hoists everything it wants a
+    /// human to see into [`Self::attention`].
+    ///
+    /// Same split as [`Self::with_reachability`], with the polarity reversed:
+    /// there, healthy numbers under a partition that never landed read as
+    /// "this run tested nothing". Here healthy numbers are the expected result,
+    /// so what has to reach a reader is the evidence that the run could have
+    /// failed — which is why the note lines carry the split and the partition
+    /// evidence on every run, findings or not.
+    pub fn with_relay(mut self, report: RelayReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.relay = Some(report);
         self
     }
 

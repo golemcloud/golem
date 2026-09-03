@@ -33,6 +33,7 @@ pub mod s10;
 pub mod s11;
 pub mod s12;
 pub mod s13;
+pub mod s2;
 pub mod s3;
 pub mod s5;
 pub mod s6;
@@ -435,6 +436,18 @@ pub enum ReadKind {
     Polls,
     /// `QuotaCounter.count`, paired with `QuotaCounter.refused`.
     QuotaCounter,
+    /// `Counter.count` on the *callee* of an RPC pair (GOL-368).
+    ///
+    /// The only kind that reads a different agent from the one it is filed
+    /// under. The history records the caller, because that is the agent the
+    /// driver invoked and the one whose executor decides whether the call
+    /// crosses a pod; the count lives on the callee, because that is the agent
+    /// `increment_through_rpc` actually advances.
+    ///
+    /// Recording the callee instead would make read-back a one-liner and lose
+    /// the thing S2 exists to measure: which side of the partition each
+    /// operation started on.
+    RpcInner,
 }
 
 /// How many agents are read back at once.
@@ -479,6 +492,10 @@ pub async fn read_back_agents(
                     ReadKind::Counter => workload::read_counter(&ctx, &agent).await,
                     ReadKind::Polls => workload::read_polls(&ctx, &agent).await,
                     ReadKind::QuotaCounter => workload::read_quota_counter(&ctx, &agent).await,
+                    ReadKind::RpcInner => {
+                        let callee = workload::rpc_callee_name(&agent);
+                        workload::read_counter(&ctx, &callee).await
+                    }
                 };
                 // Only the quota stream has a second number, and it is the one
                 // that says what losing a lease actually cost.

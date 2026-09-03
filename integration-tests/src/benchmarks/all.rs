@@ -595,6 +595,7 @@ async fn run_chaos(
                 ChaosScenarioArg::S10 => chaos::ScenarioCode::S10,
                 ChaosScenarioArg::S11 => chaos::ScenarioCode::S11,
                 ChaosScenarioArg::S3 => chaos::ScenarioCode::S3,
+                ChaosScenarioArg::S2 => chaos::ScenarioCode::S2,
                 ChaosScenarioArg::S7 => chaos::ScenarioCode::S7,
                 ChaosScenarioArg::S6 => chaos::ScenarioCode::S6,
                 ChaosScenarioArg::S9 => chaos::ScenarioCode::S9,
@@ -647,6 +648,9 @@ async fn run_chaos(
                 }
                 chaos::ScenarioCode::S3 => {
                     chaos::scenarios::s3::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S2 => {
+                    chaos::scenarios::s2::run(&config, &manifest, &deps, &signals, &outputs).await
                 }
                 chaos::ScenarioCode::S7 => {
                     chaos::scenarios::s7::run(&config, &manifest, &deps, &signals, &outputs).await

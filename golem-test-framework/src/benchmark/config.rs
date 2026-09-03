@@ -248,6 +248,9 @@ pub enum ChaosScenarioArg {
     S11,
     /// Executor cut off from worker-service while it keeps its shards.
     S3,
+    /// Two executors cut off from each other while agents on one invoke agents
+    /// on the other. The control: the link carries no traffic.
+    S2,
     /// Executor pod kill while agents are having their state reverted.
     S7,
     /// Executor pod kill while agents are being deleted.

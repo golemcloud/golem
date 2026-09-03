@@ -627,6 +627,131 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
+  # S2 — executor-to-executor partition, cross-pod RPC control (GOL-368).
+  #
+  # The suite's control, and the only scenario whose fault is expected to change
+  # nothing at all.
+  #
+  # Executors hold no connection to each other. `WorkerExecutorClient` appears
+  # nowhere in golem-worker-executor; when an agent invokes an agent its own
+  # executor does not own, `DirectWorkerInvocationRpc::invoke_and_await` hands
+  # the call to `worker_proxy`, which is a client of worker-service. So executor
+  # A reaches executor B's agents through a third party, and cutting the A-to-B
+  # link cuts a link carrying no traffic. This run is what turns that reading of
+  # the code into a measurement on a real cluster, and what fails if someone
+  # later adds a direct path.
+  #
+  # ── Why a control needs more guards than a normal scenario ───────────────────
+  #
+  # A scenario that expects damage fails safe: the fault misses, the damage is
+  # absent, and the report says the fault was not observed. This one fails the
+  # other way. A run whose pairs were accidentally co-located, or whose workload
+  # never started, produces exactly the clean report a good run produces. Hence
+  # `crossPodFloorPercent` below, which stops the run before the fault window
+  # rather than letting it report numbers it did not earn.
+  #
+  # One weakness is inherent and stated in the result rather than hidden: nothing
+  # in the cluster is supposed to stop, so there is no in-run evidence the
+  # partition took hold. Chaos Mesh reporting AllInjected is all there is.
+  - code: S2
+    name: executor-executor-partition
+    enabled: true
+
+    fault:
+      kind: network-partition
+      target: worker-executor
+      # Both sides selected by label, and `all` on both. On the two-replica
+      # topology a chaos run uses that is every executor there is, so each drops
+      # traffic to the other and there is no pod for the driver to name — unlike
+      # S3, where naming one side is the whole basis of the comparison.
+      #
+      # The populations here are divided by where each agent *pair* landed, not
+      # by which executor the fault was aimed at, so pinning would buy nothing.
+      mode: all
+      durationSecs: 180
+
+    phases:
+      # Same as S3: long enough for cold starts and route warm-up to settle, so
+      # the cut lands on a population that has been cycling steadily. A control
+      # is only as good as the baseline it is compared against.
+      baselineSecs: 300
+      # Comfortably past the caller's 120s attempt timeout. If executor-to-
+      # executor traffic did exist, an RPC caught by the cut would stall for a
+      # full attempt and its retry, and both have to fit inside the window or
+      # the collapse this scenario hunts would land in the recovery phase.
+      faultSecs: 180
+      # Long enough that a population which held up during the fault and then
+      # fell over afterwards is distinguishable from one that never moved.
+      recoverySecs: 420
+
+    ownership:
+      # Shards must not move here: nothing in this fault touches the
+      # shard-manager. Sampled so that a run where they did move says so, since
+      # a reassignment would mean the two populations are no longer the ones
+      # that were paired.
+      settleSecs: 120
+
+    relay:
+      # The least share of callers whose callee must be on the other executor.
+      #
+      # Neither the driver nor the platform chooses this — both halves of a pair
+      # are placed by hashing their agent ids, so on two executors it lands near
+      # 50% but is not guaranteed. 25% is a floor, not an expectation: below it
+      # the partition has almost nothing to cut and the run aborts with
+      # FaultTargetUnverified rather than reporting a clean result.
+      crossPodFloorPercent: 25
+      # The assertion. Deliberately higher than any other floor in the suite:
+      # every other scenario sets one low enough to survive the disruption it
+      # injects, and here there is nothing to survive. A real drop means an
+      # executor was talking to an executor.
+      #
+      # 90 rather than 100 because throughput is measured against the group's
+      # own baseline and ordinary cluster jitter moves that a few percent.
+      crossPodFloorThroughputPercent: 90
+      # The same floor for pairs that landed on one executor. They never leave
+      # the pod, so the partition cannot reach them even in principle — and if
+      # both populations drop the cause is not the link under test. Kept as a
+      # separate number so the report can tell those two apart.
+      coLocatedFloorThroughputPercent: 90
+
+    workload:
+      # S12's mixed workload plus the stream that makes this scenario mean
+      # anything. `rpcAgents` is the load-bearing one: every other stream is one
+      # client call landing on one agent, so no other traffic in the suite ever
+      # crosses an executor boundary of its own accord.
+      #
+      # Each RPC caller implies a second agent, its callee, so 200 here creates
+      # 400 agents. The caller runs `Counter.increment_through_rpc`, which calls
+      # `Counter.increment` on `{caller}-inner` — the driver reproduces that
+      # derivation to decide, before the run, which executor owns each half.
+      #
+      # 200 for the same reason S3 drives 200 agents: the verdict is a
+      # percentage change in each population's throughput, roughly half of
+      # these land in each population, and a small pool cannot show one.
+      #
+      # The durable stream is halved against S1's 200 to keep the total agent
+      # count in the same range, since each RPC caller brings a callee with it.
+      durableAgents: 100
+      ephemeralAgents: 50
+      scheduledAgents: 50
+      promiseAgents: 50
+      # Zero. Quota traffic crosses the shard-manager link, which this fault
+      # does not touch, so it would add load without adding signal.
+      quotaAgents: 0
+      rpcAgents: 200
+      ratePerSec: 100
+
+    retryPolicy:
+      # Identical to every other scenario. Not load-bearing here in the usual
+      # way — a run where nothing fails has nothing to retry — but a retry is
+      # exactly what would appear if the architecture claim were false, so
+      # leaving it on is what makes that visible.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
   # S7 — executor pod kill during agent state revert (GOL-371).
   #
   # The only scenario that disturbs work the platform is trying to *undo*. Each

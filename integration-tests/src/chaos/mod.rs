@@ -44,6 +44,7 @@ pub mod pinned;
 pub mod prep;
 pub mod probe;
 pub mod reachability;
+pub mod relay;
 pub mod result;
 pub mod resurrection;
 pub mod reverts;
@@ -85,6 +86,17 @@ pub enum ScenarioCode {
     S11,
     /// Executor cut off from worker-service while it keeps its shards.
     S3,
+    /// Two executors cut off from each other while agents on one invoke agents
+    /// on the other.
+    ///
+    /// The control of the set, and the only scenario whose fault is expected to
+    /// change nothing. Executors hold no connection to each other: an
+    /// agent-to-agent call the local executor does not own is handed to
+    /// `worker_proxy`, which is a client of *worker-service*, not of the
+    /// executor that owns the callee. So the link this partition cuts carries
+    /// no traffic, and a run that degrades is reporting a path the architecture
+    /// says does not exist.
+    S2,
     /// Executor pod kill while agents are having their state reverted.
     S7,
     /// Executor pod kill while agents are being deleted.
@@ -137,6 +149,7 @@ impl ScenarioCode {
             ScenarioCode::S10 => "S10",
             ScenarioCode::S11 => "S11",
             ScenarioCode::S3 => "S3",
+            ScenarioCode::S2 => "S2",
             ScenarioCode::S7 => "S7",
             ScenarioCode::S6 => "S6",
             ScenarioCode::S9 => "S9",
@@ -156,8 +169,9 @@ impl ScenarioCode {
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 21] = [
+    pub const ALL: [ScenarioCode; 22] = [
         ScenarioCode::S1,
+        ScenarioCode::S2,
         ScenarioCode::S3,
         ScenarioCode::S5,
         ScenarioCode::S6,
@@ -319,6 +333,14 @@ pub struct WorkloadConfig {
     /// shard-manager↔executor traffic; see [`history::Stream::Quota`].
     #[serde(default)]
     pub quota_agents: u32,
+    /// Caller agents that invoke another agent through `golem:rpc`. Zero for
+    /// scenarios that do not need agent-to-agent traffic; see
+    /// [`history::Stream::Rpc`].
+    ///
+    /// Each caller implies a second agent, its callee, so a run configured with
+    /// `n` of these creates `2n` agents rather than `n`.
+    #[serde(default)]
+    pub rpc_agents: u32,
     /// Combined submission rate across all streams, in operations per second.
     /// The project caps this at 25% of measured per-pod capacity so the run
     /// measures fault recovery rather than saturation.
@@ -546,6 +568,49 @@ pub struct IsolationConfig {
     /// number the recovery gap is reported against. Recorded rather than
     /// asserted, like every other budget in the suite.
     pub recovery_budget_secs: u64,
+}
+
+/// Shape of the cross-pod RPC control (GOL-368).
+///
+/// S2 is the one scenario built to come back empty. It drives agent-to-agent
+/// calls whose two halves are known to live on different executors, cuts those
+/// executors off from each other, and asserts that nothing moves. The claim
+/// under test is architectural: an executor reaches another executor's agents
+/// only by asking worker-service, never by connecting to it directly.
+///
+/// A control is only worth running if it can fail, so the numbers below exist
+/// to stop it passing for the wrong reason. A run where the pairs turned out to
+/// be co-located, or where the partition never landed, would also report "no
+/// degradation" — and that report would be worthless.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayConfig {
+    /// The least share of configured callers that must have their callee on the
+    /// *other* executor, as a percentage, for the run to mean anything.
+    ///
+    /// Pairing is not something the driver can arrange. Both halves are placed
+    /// by hashing their agent ids onto shards, so the split is whatever the
+    /// hash gives — around half on a two-executor cluster, but not guaranteed.
+    /// Below this line the fault has almost nothing to cut and the run aborts
+    /// rather than reporting a clean result it did not earn. Same instinct as
+    /// S9's forward-leg gate.
+    pub cross_pod_floor_percent: f64,
+    /// The least of its own baseline throughput the cross-pod population must
+    /// keep during the fault, as a percentage.
+    ///
+    /// This is the assertion, and it is deliberately high. Every other scenario
+    /// sets a floor low enough to survive the disruption it injects; here there
+    /// is nothing to survive, so a real drop means an executor was talking to
+    /// an executor.
+    pub cross_pod_floor_throughput_percent: f64,
+    /// The same floor for the pairs that happened to land on one executor.
+    ///
+    /// They never leave the pod, so the partition cannot reach them even in
+    /// principle. Kept as a separate number because if *both* populations drop
+    /// the cause is not the link under test — it is the fault disturbing the
+    /// cluster some other way, and the run should say so rather than blame the
+    /// architecture.
+    pub co_located_floor_throughput_percent: f64,
 }
 
 impl IsolationConfig {
@@ -1087,6 +1152,9 @@ pub struct ScenarioConfig {
     /// The component rollback. Absent for scenarios that do not run one.
     #[serde(default)]
     pub rollback: Option<RollbackConfig>,
+    /// The cross-pod RPC control. Absent for scenarios that do not run one.
+    #[serde(default)]
+    pub relay: Option<RelayConfig>,
     /// Storage-outage settings. Absent for scenarios that do not take a
     /// storage dependency away.
     #[serde(default)]
@@ -1237,6 +1305,16 @@ impl ScenarioConfig {
         })
     }
 
+    /// The cross-pod RPC control block. See [`Self::require_workload`].
+    pub fn require_relay(&self) -> anyhow::Result<&RelayConfig> {
+        self.relay.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "chaos scenario {} needs a `relay` block in the suite YAML",
+                self.code
+            )
+        })
+    }
+
     /// Whether this scenario's configuration actually produces operations on a
     /// stream.
     ///
@@ -1252,6 +1330,7 @@ impl ScenarioConfig {
             Stream::Ephemeral => workload.is_some_and(|w| w.ephemeral_agents > 0),
             Stream::Promise => workload.is_some_and(|w| w.promise_agents > 0),
             Stream::Quota => workload.is_some_and(|w| w.quota_agents > 0),
+            Stream::Rpc => workload.is_some_and(|w| w.rpc_agents > 0),
             Stream::Scheduled => {
                 workload.is_some_and(|w| w.scheduled_agents > 0)
                     || self.scheduled.as_ref().is_some_and(|s| s.targets > 0)
@@ -1626,6 +1705,7 @@ mod tests {
                     scheduled_agents: 1,
                     promise_agents: 1,
                     quota_agents: 1,
+                    rpc_agents: 0,
                     rate_per_sec: 1,
                 }),
                 pinned: None,
@@ -1635,6 +1715,7 @@ mod tests {
                 revert: None,
                 delete: None,
                 rollback: None,
+                relay: None,
                 storage: None,
                 ownership: None,
                 scale_during_fault: None,
@@ -1673,6 +1754,7 @@ mod tests {
             isolation: None,
             delete: None,
             rollback: None,
+            relay: None,
             storage: None,
             revert: Some(RevertConfig {
                 agents: 10,
@@ -1747,6 +1829,7 @@ mod tests {
                 scheduled_agents,
                 promise_agents: 0,
                 quota_agents: 0,
+                rpc_agents: 0,
                 rate_per_sec: 10,
             }),
             pinned: None,
@@ -1760,6 +1843,7 @@ mod tests {
             isolation: None,
             delete: None,
             rollback: None,
+            relay: None,
             storage: Some(StorageConfig {
                 endpoint: endpoint.to_string(),
                 expect: OutageExpectation::WholeWorkload {
@@ -1956,6 +2040,27 @@ mod tests {
         assert_eq!(ScenarioCode::parse("S99"), None);
     }
 
+    /// S2 is the only scenario that drives agent-to-agent traffic, and it is
+    /// the only one that must.
+    ///
+    /// Asserted from the checked-in suite rather than a fixture because the
+    /// failure this guards against is a configuration one: an S2 entry that
+    /// lost its `rpcAgents` would still run, still produce two throughput
+    /// cells, and still come back clean — of a fault that had nothing to cut.
+    /// The pairing gate catches that at run time; this catches it at build time.
+    #[test]
+    fn only_s2_drives_the_rpc_stream() {
+        let suite = ChaosSuite::load(suite_path()).unwrap();
+        for entry in &suite.scenarios {
+            let code = entry.scenario_code().unwrap();
+            assert_eq!(
+                entry.drives_stream(Stream::Rpc),
+                code == ScenarioCode::S2,
+                "{code} disagrees with the suite about whether it drives cross-pod RPC"
+            );
+        }
+    }
+
     /// The gate that fails a run when nothing fired has to tell "no fire was
     /// observed" apart from "no fire was asked for". S15A's first run was lost
     /// to that distinction: it registers no targets, so the gate aborted it
@@ -2016,6 +2121,11 @@ mod tests {
                 }
                 ScenarioCode::S3 => {
                     entry.require_isolation().unwrap();
+                }
+                ScenarioCode::S2 => {
+                    entry.require_workload().unwrap();
+                    entry.require_relay().unwrap();
+                    entry.require_ownership().unwrap();
                 }
                 ScenarioCode::S7 => {
                     entry.require_revert().unwrap();
