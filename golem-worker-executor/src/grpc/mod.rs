@@ -2178,34 +2178,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
-    /// W2-PENDING STUB (ticket 4). `SetShardAssignment` is absorbed by the
-    /// full-replace `AssignShards` and nothing calls it any more, but the
-    /// generated `WorkerExecutor` trait has no default bodies
-    /// (`golem-api-grpc/build.rs` does not set `generate_default_stubs`), so
-    /// the method cannot be removed until W2 deletes the RPC from the proto.
-    /// W2 deletes this whole function with it.
-    async fn set_shard_assignment(
-        &self,
-        _request: Request<golem::workerexecutor::v1::SetShardAssignmentRequest>,
-    ) -> Result<Response<golem::workerexecutor::v1::SetShardAssignmentResponse>, Status> {
-        let mut err = WorkerExecutorError::invalid_request(
-            "SetShardAssignment has been replaced by AssignShards",
-        );
-        let record = recorded_grpc_api_request!("set_shard_assignment",);
-        record.fail(
-            Ok(Response::new(
-                golem::workerexecutor::v1::SetShardAssignmentResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::set_shard_assignment_response::Result::Failure(
-                            err.clone().into(),
-                        ),
-                    ),
-                },
-            )),
-            &mut err,
-        )
-    }
-
     async fn get_agent_metadata(
         &self,
         request: Request<golem::workerexecutor::v1::GetAgentMetadataRequest>,

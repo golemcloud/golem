@@ -2095,9 +2095,6 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
     assert!(!executor.worker_is_loaded(&owned_agent_id).await);
     let assigned = client
         .assign_shards(AssignShardsRequest {
-            // W2 (ticket 4, WIRE) replaces field 1 with `reserved`; nothing
-            // populates it any more.
-            shard_ids: vec![],
             shard_epochs: vec![ShardEpochEntry {
                 shard_id: Some(shard),
                 epoch: 0,

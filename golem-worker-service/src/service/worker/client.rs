@@ -2536,14 +2536,6 @@ mod rejection_mapping_tests {
         );
         unimplemented_unary!(revoke_shards, RevokeShardsRequest, RevokeShardsResponse);
         unimplemented_unary!(assign_shards, AssignShardsRequest, AssignShardsResponse);
-        // W2-PENDING STUB (ticket 4): SetShardAssignment is absorbed by the
-        // full-replace AssignShards, but the generated WorkerExecutor trait has
-        // no default bodies, so this arm survives until W2 deletes the RPC.
-        unimplemented_unary!(
-            set_shard_assignment,
-            SetShardAssignmentRequest,
-            SetShardAssignmentResponse
-        );
         unimplemented_unary!(
             get_agent_metadata,
             GetAgentMetadataRequest,
