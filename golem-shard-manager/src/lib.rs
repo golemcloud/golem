@@ -56,8 +56,9 @@ pub use sharding::persistence::{
 pub use sharding::shard_management::ShardManagement;
 pub use sharding::worker_executor::WorkerExecutorService;
 pub use sharding::{
-    ExecutorAddr, ExecutorAddrs, ExecutorId, ExecutorLease, ExecutorShards, ShardAssignmentEntry,
-    ShardEpoch, ShardLeaseRevision, ShardLeaseState,
+    ExecutorAddr, ExecutorAddrs, ExecutorId, ExecutorLease, ExecutorShards, RegisterAck,
+    ShardAssignmentEntry, ShardAssignmentPush, ShardEpoch, ShardLeaseGrant, ShardLeaseRevision,
+    ShardLeaseState,
 };
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::model::{Assignments, ExecutorShards, ShardLeaseState, Unassignments};
+use super::model::{Assignments, ExecutorShards, ShardEpoch, ShardLeaseState, Unassignments};
 use golem_common::model::ShardId;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use tracing::trace;
@@ -23,13 +23,40 @@ use tracing::trace;
 pub struct Rebalance {
     assignments: Assignments,
     unassignments: Unassignments,
+    /// The ownership epoch each assigned shard takes when this plan is applied, decided here
+    /// rather than at apply time.
+    ///
+    /// The plan is pushed to the executors before it is applied to the state, so the epoch has to
+    /// be known before the apply: predicting it at the push and minting it again at the apply are
+    /// two chances to disagree. A shard is assigned to at most one executor in a plan, so one
+    /// entry per shard is enough.
+    assigned_epochs: BTreeMap<ShardId, ShardEpoch>,
 }
 
 impl Rebalance {
-    pub fn new(assignments: Assignments, unassignments: Unassignments) -> Self {
+    /// Builds a plan against `shard_state` and decides, now, the epoch every assigned shard will
+    /// take when the plan is applied to that same state.
+    pub fn new(
+        assignments: Assignments,
+        unassignments: Unassignments,
+        shard_state: &ShardLeaseState,
+    ) -> Self {
+        let assigned_epochs = assignments
+            .assignments
+            .iter()
+            .flat_map(|(executor_id, shard_ids)| {
+                shard_ids.iter().map(|shard_id| {
+                    (
+                        *shard_id,
+                        shard_state.next_epoch_for(*executor_id, *shard_id),
+                    )
+                })
+            })
+            .collect();
         Rebalance {
             assignments,
             unassignments,
+            assigned_epochs,
         }
     }
 
@@ -49,10 +76,7 @@ impl Rebalance {
         let mut unassignments = Unassignments::new();
         let executor_count = shard_state.executor_count();
         if executor_count == 0 {
-            return Rebalance {
-                assignments,
-                unassignments,
-            };
+            return Rebalance::new(assignments, unassignments, shard_state);
         }
 
         let mut executors: Vec<ExecutorShards> = shard_state.executor_shard_sets();
@@ -109,10 +133,7 @@ impl Rebalance {
         }
 
         if executor_count == 1 {
-            return Rebalance {
-                assignments,
-                unassignments,
-            };
+            return Rebalance::new(assignments, unassignments, shard_state);
         };
 
         // We redistribute shards from each entry having more than the optimal count
@@ -170,10 +191,7 @@ impl Rebalance {
             }
         }
 
-        Rebalance {
-            assignments,
-            unassignments,
-        }
+        Rebalance::new(assignments, unassignments, shard_state)
     }
 
     pub fn get_assignments(&self) -> &Assignments {
@@ -188,13 +206,13 @@ impl Rebalance {
         self.assignments.assignments.is_empty() && self.unassignments.unassignments.is_empty()
     }
 
+    /// The epoch this plan decided for `shard_id`, if the plan assigns it.
+    pub fn epoch_for(&self, shard_id: ShardId) -> Option<ShardEpoch> {
+        self.assigned_epochs.get(&shard_id).copied()
+    }
+
     pub fn remove_shards(&mut self, shard_ids: &HashSet<ShardId>) {
-        for assigned_shard_ids in self.assignments.assignments.values_mut() {
-            assigned_shard_ids.retain(|shard_id| !shard_ids.contains(shard_id));
-        }
-        self.assignments
-            .assignments
-            .retain(|_, shards| !shards.is_empty());
+        self.remove_assignment_shards(shard_ids);
         for unassigned_shard_ids in self.unassignments.unassignments.values_mut() {
             unassigned_shard_ids.retain(|shard_id| !shard_ids.contains(shard_id));
         }
@@ -210,6 +228,8 @@ impl Rebalance {
         self.assignments
             .assignments
             .retain(|_, shards| !shards.is_empty());
+        self.assigned_epochs
+            .retain(|shard_id, _| !shard_ids.contains(shard_id));
     }
 }
 

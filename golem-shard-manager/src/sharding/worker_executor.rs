@@ -14,7 +14,7 @@
 
 use super::error::{HealthCheckError, ShardManagerError};
 use super::model::{
-    Assignments, ExecutorAddrs, ExecutorId, Unassignments, shard_assignments_to_string,
+    ExecutorAddrs, ExecutorId, ShardAssignmentPush, Unassignments, shard_assignments_to_string,
 };
 use crate::config::WorkerExecutorServiceConfig;
 use async_trait::async_trait;
@@ -28,6 +28,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::time::SystemTime;
 use tokio::time::error::Elapsed;
 use tokio::time::timeout;
 use tonic::Response;
@@ -41,34 +42,35 @@ use tracing::{info, warn};
 
 #[async_trait]
 pub trait WorkerExecutorService: Send + Sync {
+    /// Tells an executor the complete set of shards it holds. This is a full replace: the executor
+    /// drops every shard the payload does not name, which is what makes this one call enough for
+    /// the initial delivery, a rebalance and a repair alike.
     async fn assign_shards(
         &self,
         pod: &Pod,
-        shard_ids: &BTreeSet<ShardId>,
+        assignment: &ShardAssignmentPush,
     ) -> Result<(), ShardManagerError>;
 
     async fn health_check(&self, pod: &Pod) -> Result<(), HealthCheckError>;
 
+    /// Takes shards away from an executor. Still a delta: an executor that only loses shards is
+    /// revoked from, and `execute_rebalance` revokes before it assigns.
     async fn revoke_shards(
         &self,
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError>;
-
-    async fn set_shard_assignment(
-        &self,
-        pod: &Pod,
-        number_of_shards: usize,
-        shard_ids: &BTreeSet<ShardId>,
-    ) -> Result<(), ShardManagerError>;
 }
 
-/// Sends revoke requests to all worker executors based on an `Unassignments` plan
+/// Sends revoke requests to all worker executors based on an `Unassignments` plan.
+///
+/// Returns the executors the revoke did not reach; the caller holds the plan those shards came
+/// from.
 pub async fn revoke_shards(
     worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
     unassignments: &Unassignments,
     addrs: &ExecutorAddrs,
-) -> Vec<(ExecutorId, BTreeSet<ShardId>)> {
+) -> BTreeSet<ExecutorId> {
     fan_out(
         &unassignments.unassignments,
         addrs,
@@ -81,62 +83,42 @@ pub async fn revoke_shards(
     .await
 }
 
-/// Sends assign requests to all worker executors based on an `Assignments` plan.
+/// Pushes each executor the complete shard set it is to hold.
+///
+/// Returns the executors the push did not reach.
 pub async fn assign_shards(
     worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
-    assignments: &Assignments,
+    pushes: &BTreeMap<ExecutorId, ShardAssignmentPush>,
     addrs: &ExecutorAddrs,
-) -> Vec<(ExecutorId, BTreeSet<ShardId>)> {
-    fan_out(
-        &assignments.assignments,
-        addrs,
-        "assign_shards",
-        |pod, shard_ids| {
-            let worker_executors = worker_executors.clone();
-            Box::pin(async move { worker_executors.assign_shards(&pod, shard_ids).await })
-        },
-    )
+) -> BTreeSet<ExecutorId> {
+    fan_out(pushes, addrs, "assign_shards", |pod, assignment| {
+        let worker_executors = worker_executors.clone();
+        Box::pin(async move { worker_executors.assign_shards(&pod, assignment).await })
+    })
     .await
 }
 
-/// Reconciles executors to the authoritative shard assignments.
-pub async fn set_shard_assignments(
-    worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
-    number_of_shards: usize,
-    assignments: &Assignments,
-    addrs: &ExecutorAddrs,
-) -> Vec<(ExecutorId, BTreeSet<ShardId>)> {
-    fan_out(
-        &assignments.assignments,
-        addrs,
-        "set_shard_assignment",
-        |pod, shard_ids| {
-            let worker_executors = worker_executors.clone();
-            Box::pin(async move {
-                worker_executors
-                    .set_shard_assignment(&pod, number_of_shards, shard_ids)
-                    .await
-            })
-        },
-    )
-    .await
-}
-
-async fn fan_out<'a, F>(
-    plan: &'a BTreeMap<ExecutorId, BTreeSet<ShardId>>,
+/// Runs one `call` per planned executor concurrently and collects the ones that failed.
+///
+/// Generic in the payload because a revoke carries a shard set and an assign carries a whole
+/// [`ShardAssignmentPush`]; both are keyed by [`ExecutorId`], which is the identity the loop and
+/// the retry queue work in.
+async fn fan_out<'a, P, F>(
+    plan: &'a BTreeMap<ExecutorId, P>,
     addrs: &ExecutorAddrs,
     operation: &'static str,
     call: F,
-) -> Vec<(ExecutorId, BTreeSet<ShardId>)>
+) -> BTreeSet<ExecutorId>
 where
-    F: Fn(Pod, &'a BTreeSet<ShardId>) -> BoxFuture<'a, Result<(), ShardManagerError>>,
+    P: Sync,
+    F: Fn(Pod, &'a P) -> BoxFuture<'a, Result<(), ShardManagerError>>,
 {
     let futures: Vec<_> = plan
         .iter()
-        .map(|(executor_id, shard_ids)| {
+        .map(|(executor_id, payload)| {
             let call = addrs
                 .get(executor_id)
-                .map(|addr| call(Pod::from(*addr), shard_ids));
+                .map(|addr| call(Pod::from(*addr), payload));
             async move {
                 match call {
                     None => {
@@ -145,11 +127,11 @@ where
                             operation,
                             "Executor has no known address; reporting the operation as failed"
                         );
-                        Some((*executor_id, shard_ids.clone()))
+                        Some(*executor_id)
                     }
                     Some(call) => match call.await {
                         Ok(_) => None,
-                        Err(_) => Some((*executor_id, shard_ids.clone())),
+                        Err(_) => Some(*executor_id),
                     },
                 }
             }
@@ -172,10 +154,13 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
     async fn assign_shards(
         &self,
         pod: &Pod,
-        shard_ids: &BTreeSet<ShardId>,
+        assignment: &ShardAssignmentPush,
     ) -> Result<(), ShardManagerError> {
         info!(
-            assigned_shards = shard_assignments_to_string(pod, None, shard_ids.iter()),
+            assigned_shards =
+                shard_assignments_to_string(pod, None, assignment.shard_epochs.keys()),
+            number_of_shards = assignment.number_of_shards,
+            expires_at = %assignment.expires_at,
             "Assigning shards",
         );
 
@@ -184,8 +169,8 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
             "assign_shards",
             Some(format!("{pod}")),
             &self.config.retries,
-            &(pod, shard_ids),
-            |(pod, shard_ids)| Box::pin(self.assign_shards_internal(pod, shard_ids)),
+            &(pod, assignment),
+            |(pod, assignment)| Box::pin(self.assign_shards_internal(pod, assignment)),
         )
         .await
     }
@@ -240,30 +225,6 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         )
         .await
     }
-
-    async fn set_shard_assignment(
-        &self,
-        pod: &Pod,
-        number_of_shards: usize,
-        shard_ids: &BTreeSet<ShardId>,
-    ) -> Result<(), ShardManagerError> {
-        info!(
-            assigned_shards = shard_assignments_to_string(pod, None, shard_ids.iter()),
-            number_of_shards, "Setting authoritative shard assignment",
-        );
-
-        with_retriable_errors(
-            "worker_executor",
-            "set_shard_assignment",
-            Some(format!("{pod}")),
-            &self.config.retries,
-            &(pod, number_of_shards, shard_ids),
-            |(pod, number_of_shards, shard_ids)| {
-                Box::pin(self.set_shard_assignment_internal(pod, *number_of_shards, shard_ids))
-            },
-        )
-        .await
-    }
 }
 
 impl WorkerExecutorServiceDefault {
@@ -285,18 +246,24 @@ impl WorkerExecutorServiceDefault {
     async fn assign_shards_internal(
         &self,
         pod: &Pod,
-        shard_ids: &BTreeSet<ShardId>,
+        assignment: &ShardAssignmentPush,
     ) -> Result<(), ShardManagerError> {
         let assign_shards_request = golem::workerexecutor::v1::AssignShardsRequest {
-            shard_ids: shard_ids
-                .clone()
-                .into_iter()
-                .map(|shard_id| shard_id.into())
+            // Field 1 is still declared in worker_executor.proto and is replaced by `reserved`
+            // in W2, once no executor reads it any more. The set travels in `shard_epochs`.
+            shard_ids: Vec::new(),
+            shard_epochs: assignment
+                .shard_epochs
+                .iter()
+                .map(|(shard_id, epoch)| golem::shardmanager::ShardEpochEntry {
+                    shard_id: Some((*shard_id).into()),
+                    epoch: epoch.0,
+                })
                 .collect(),
-            // W1 (ticket 4, WIRE): inert until SM makes AssignShards full-replace.
-            shard_epochs: vec![],
-            expires_at: None,
-            number_of_shards: 0,
+            expires_at: Some(prost_types::Timestamp::from(SystemTime::from(
+                assignment.expires_at,
+            ))),
+            number_of_shards: assignment.number_of_shards as u32,
         };
 
         let assign_shards_response = timeout(
@@ -373,57 +340,6 @@ impl WorkerExecutorServiceDefault {
                     .unwrap_or_else(WorkerExecutorError::unknown),
             )),
             golem::workerexecutor::v1::RevokeShardsResponse { result: None } => {
-                Err(ShardManagerError::NoResult)
-            }
-        }
-    }
-
-    async fn set_shard_assignment_internal(
-        &self,
-        pod: &Pod,
-        number_of_shards: usize,
-        shard_ids: &BTreeSet<ShardId>,
-    ) -> Result<(), ShardManagerError> {
-        let set_shard_assignment_request = golem::workerexecutor::v1::SetShardAssignmentRequest {
-            number_of_shards: number_of_shards as u32,
-            shard_ids: shard_ids
-                .clone()
-                .into_iter()
-                .map(|shard_id| shard_id.into())
-                .collect(),
-        };
-
-        let set_shard_assignment_response = timeout(
-            self.config.assign_shards_timeout,
-            self.client.call(
-                "set_shard_assignment",
-                pod.uri(self.config.client_config.tls_enabled()),
-                move |client| {
-                    let set_shard_assignment_request = set_shard_assignment_request.clone();
-                    Box::pin(client.set_shard_assignment(set_shard_assignment_request))
-                },
-            ),
-        )
-        .await
-        .map_err(|_: Elapsed| ShardManagerError::Timeout)?
-        .map_err(ShardManagerError::GrpcError)?;
-
-        match set_shard_assignment_response.into_inner() {
-            golem::workerexecutor::v1::SetShardAssignmentResponse {
-                result:
-                    Some(golem::workerexecutor::v1::set_shard_assignment_response::Result::Success(_)),
-            } => Ok(()),
-            golem::workerexecutor::v1::SetShardAssignmentResponse {
-                result:
-                    Some(golem::workerexecutor::v1::set_shard_assignment_response::Result::Failure(
-                        failure,
-                    )),
-            } => Err(ShardManagerError::WorkerExecutionError(
-                failure
-                    .try_into()
-                    .unwrap_or_else(WorkerExecutorError::unknown),
-            )),
-            golem::workerexecutor::v1::SetShardAssignmentResponse { result: None } => {
                 Err(ShardManagerError::NoResult)
             }
         }
