@@ -341,7 +341,7 @@ pub async fn run(
     let mut report = RollbackReport {
         forward_revision: forward_revision.get(),
         rollback_revision: rollback_revision.get(),
-        forward_version: forward_revision.get() as u32,
+        forward_version: VERSION_ON_THE_NEW_BUILD,
         rollback_version: VERSION_AFTER_ROLLBACK,
         rolled_forward,
         rolled_back: None,

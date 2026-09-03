@@ -132,7 +132,11 @@ pub struct RollbackReport {
     /// rolled back to. The second carries the original build's code.
     pub forward_revision: u64,
     pub rollback_revision: u64,
-    /// What the running code reports on each of those builds.
+    /// What the running code reports on each of those builds, which is not the
+    /// revision carrying it. A revision number says where the platform filed a
+    /// build; these say which build answers. Mixing them silently disables
+    /// [`Self::stuck_on_the_new_build`], because it looks a build version up in
+    /// a census keyed by build version.
     pub forward_version: u32,
     pub rollback_version: u32,
     /// The forward leg, measured before the rollback was attempted.
@@ -166,6 +170,21 @@ impl RollbackReport {
     /// The lines that need a human.
     pub fn attention_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
+
+        // The whole scenario rests on the two builds answering differently. If
+        // they do not, every check downstream passes vacuously, because an
+        // agent that never moved reads exactly like one that came back. Cheap
+        // to assert and it catches both a misconfigured constant and a field
+        // handed the wrong quantity, which is how this went unnoticed once:
+        // `forward_version` was fed a revision number and
+        // `stuck_on_the_new_build` silently stopped being able to find anyone.
+        if self.forward_version == self.rollback_version {
+            lines.push(format!(
+                "S9: both builds report component version {}, so this run cannot tell a \
+                 rollback from an agent that never moved",
+                self.forward_version
+            ));
+        }
 
         if !self.forward_leg_landed() {
             lines.push(format!(
@@ -223,10 +242,11 @@ impl RollbackReport {
             self.rollback_version
         )];
         lines.push(format!(
-            "S9 forward leg: {} of {} agents on version {} before the rollback ({} unreadable)",
+            "S9 forward leg: {} of {} agents on revision {} before the rollback ({} \
+             unreadable), read from component metadata rather than by asking the build",
             self.rolled_forward.on_expected,
             self.rolled_forward.agents,
-            self.forward_version,
+            self.forward_revision,
             self.rolled_forward.unreadable
         ));
         lines.push(format!(
@@ -239,14 +259,15 @@ impl RollbackReport {
             self.control.max_retries
         ));
         if let Some(census) = &self.rolled_back {
+            let elsewhere = if census.on_other.is_empty() {
+                "none elsewhere".to_string()
+            } else {
+                format!("elsewhere {:?}", census.on_other)
+            };
             lines.push(format!(
-                "S9 return leg: {} of {} agents on version {} after recovery ({} unreadable, \
-                 {:?} elsewhere)",
-                census.on_expected,
-                census.agents,
-                census.expected,
-                census.unreadable,
-                census.on_other
+                "S9 return leg: {} of {} agents report build v{} after recovery ({} unreadable, \
+                 {elsewhere}), read by asking the running code",
+                census.on_expected, census.agents, census.expected, census.unreadable,
             ));
         }
         lines
@@ -379,6 +400,36 @@ mod tests {
                 .any(|l| l.contains("were refused even after")),
             "{:?}",
             r.attention_lines()
+        );
+    }
+
+    /// Two builds that answer with the same version make every downstream check
+    /// vacuous, so the report has to say so rather than read as a clean pass.
+    /// Run 33774261615 did exactly this: `forward_version` was assigned the
+    /// revision number instead of the build's version, both sides read 1, and
+    /// the notes claimed each revision carried build v1.
+    #[test]
+    fn two_builds_reporting_the_same_version_cannot_test_a_rollback() {
+        let mut r = report(census(2, 200, &[], 0), Some(census(1, 200, &[], 0)));
+        r.forward_version = 1;
+        assert!(
+            r.attention_lines()
+                .iter()
+                .any(|l| l.contains("cannot tell a rollback from an agent that never moved")),
+            "{:?}",
+            r.attention_lines()
+        );
+    }
+
+    /// The note has to name the two builds apart, because a reader uses it to
+    /// confirm the run had something to roll back from.
+    #[test]
+    fn the_notes_name_the_forward_and_rollback_builds_distinctly() {
+        let r = report(census(2, 200, &[], 0), Some(census(1, 200, &[], 0)));
+        let first = r.note_lines().first().cloned().unwrap_or_default();
+        assert!(
+            first.contains("revision 2 carries build v2") && first.contains("build v1 again"),
+            "{first}"
         );
     }
 
