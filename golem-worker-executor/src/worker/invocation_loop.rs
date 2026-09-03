@@ -263,15 +263,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .permit_state
                 .take_permit()
                 .expect("startup must hold a concurrent-agent permit");
-            let entity_generation = self
-                .parent
-                .active_agents()
-                .try_get_active_agent(&self.owned_agent_id)
-                .await
-                .map(|active_agent| {
-                    let generation = active_agent.entity_fence_generation();
-                    (active_agent, generation)
-                });
             let (mut agent, window, recovery_decision) = match self.create_instance(permit).await {
                 CreateInstanceResult::Created {
                     agent,
@@ -330,12 +321,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             self.permit_state.install_window(window);
             *self.filesystem_activity.lock().unwrap() =
                 Some(filesystem_activity(&agent.filesystem));
-            if let Some((active_agent, generation)) = entity_generation {
-                let interrupt_state = self.interrupt_signal.lock().await;
-                if !interrupt_state.has_interrupt() {
-                    active_agent.reopen_entity_admission_if_generation(generation);
-                }
-            }
             let mut final_decision = recovery_decision;
             let mut recovery_failure = None;
             let mut final_interrupt = None;
@@ -567,15 +552,18 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .try_get_active_agent(&self.owned_agent_id)
                 .await
             {
-                let owner_failure = recovery_failure.clone().map_or_else(
-                    || {
+                let owner_failure = final_interrupt
+                    .map(OwnerFailureWinner::Lifecycle)
+                    .or_else(|| {
+                        recovery_failure
+                            .clone()
+                            .map(OwnerFailureWinner::Infrastructure)
+                    })
+                    .unwrap_or_else(|| {
                         OwnerFailureWinner::Lifecycle(
-                            final_interrupt
-                                .unwrap_or_else(|| InterruptKind::Interrupt(Timestamp::now_utc())),
+                            InterruptKind::Interrupt(Timestamp::now_utc()),
                         )
-                    },
-                    OwnerFailureWinner::Infrastructure,
-                );
+                    });
                 active_agent.fence_entity_bodies(owner_failure).await;
             }
             if let Some(error) = Self::unload_running_agent(

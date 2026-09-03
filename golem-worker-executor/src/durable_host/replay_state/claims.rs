@@ -477,13 +477,30 @@ impl ReplayState {
                 .run_owned_cursor_op(move |state| async move {
                     state
                         .with_tx(async |tx| match tx.claim_start(&owned_claim).await {
-                            Ok(claimed) => {
-                                Ok((claimed, tx.blocked_on_completion_delivery, false, false))
+                            Ok(StartClaimAttempt::Claimed(handle, entry)) => {
+                                Ok((Some((handle, entry)), false, false, false))
                             }
-                            Err(_) if tx.cursor.is_live() => Ok((None, false, true, false)),
-                            Err(_) if tx.deleted_region_contains_start(&owned_claim).await? => {
+                            Ok(StartClaimAttempt::Blocked) => {
+                                Ok((None, tx.blocked_on_completion_delivery, false, false))
+                            }
+                            Ok(StartClaimAttempt::Missing) if tx.cursor.is_live() => {
+                                Ok((None, false, true, false))
+                            }
+                            Ok(StartClaimAttempt::Missing)
+                                if tx.deleted_region_contains_start(&owned_claim).await? =>
+                            {
                                 Ok((None, false, false, true))
                             }
+                            Ok(StartClaimAttempt::Missing) => {
+                                Err(WorkerExecutorError::unexpected_oplog_entry(
+                                    owned_claim.expected_description(),
+                                    "no matching Start between the replay cursor and the replay target"
+                                        .to_string(),
+                                ))
+                            }
+                            Ok(StartClaimAttempt::MissingSettling { .. }) => unreachable!(
+                                "ordinary Start claims never enter missing-scope settlement"
+                            ),
                             Err(error) => Err(error),
                         })
                         .await
@@ -628,7 +645,7 @@ impl ReplayState {
 
     /// Claims an exact synthetic scope `Start`. If no such entry was committed, atomically proves
     /// that the remaining replay suffix has no competing claim, matching discriminator, delivery
-    /// boundary, or concurrent side effect before switching replay to live mode.
+    /// boundary, or concurrent side effect before entering replay settlement.
     pub(crate) async fn claim_scope_start_or_recover_missing(
         &self,
         expected_function_name: &HostFunctionName,
@@ -688,8 +705,8 @@ impl ReplayState {
                 )
                 .await
             }
-            ScopeStartClaimOutcome::MissingSwitchedToLive => {
-                unreachable!("presence-only scope claim never switches replay to live")
+            ScopeStartClaimOutcome::MissingSettling { .. } => {
+                unreachable!("presence-only scope claim never enters replay settlement")
             }
         }
     }
@@ -725,13 +742,6 @@ impl ReplayState {
                             Ok((outcome, tx.blocked_on_completion_delivery))
                         })
                         .await?;
-                    if recover_missing && matches!(&result.0, StartClaimAttempt::Missing) {
-                        state
-                            .cursor
-                            .oplog
-                            .on_replay_progress(state.cursor.replay_target())
-                            .await;
-                    }
                     Ok(result)
                 })
                 .await?;
@@ -744,11 +754,12 @@ impl ReplayState {
                     });
                 }
                 StartClaimAttempt::Missing => {
-                    return Ok(if recover_missing {
-                        ScopeStartClaimOutcome::MissingSwitchedToLive
-                    } else {
-                        ScopeStartClaimOutcome::Missing
-                    });
+                    debug_assert!(!recover_missing);
+                    return Ok(ScopeStartClaimOutcome::Missing);
+                }
+                StartClaimAttempt::MissingSettling { replay_target } => {
+                    debug_assert!(recover_missing);
+                    return Ok(ScopeStartClaimOutcome::MissingSettling { replay_target });
                 }
                 StartClaimAttempt::Blocked => {
                     debug_assert!(blocked_on_completion_delivery);
@@ -1000,6 +1011,9 @@ impl ReplayState {
                                                 .to_string(),
                                         ));
                                     }
+                                    StartClaimAttempt::MissingSettling { .. } => unreachable!(
+                                        "custom invocation claims never enter missing-scope settlement"
+                                    ),
                                 }
                             }
                             OplogEntryLookupResult::NotFound { .. } => {
@@ -1123,8 +1137,9 @@ fn request_claim_identity_matches(
                         })?;
                 Ok(expected.matches(&metadata, &request.input))
             }
-            HostRequest::GolemToolInvocationRejected(request) => Ok(request.tool_name
-                == expected.rejected.tool_name.as_str()
+            HostRequest::GolemToolInvocationRejected(request) => Ok(request.attempt_ordinal
+                == expected.rejected.attempt_ordinal
+                && request.tool_name == expected.rejected.tool_name.as_str()
                 && request.command_path == expected.rejected.command_path
                 && request.input == expected.rejected.input
                 && request.input_decode_failure == expected.rejected.input_decode_failure
@@ -1162,6 +1177,7 @@ mod tests {
             RequestClaimIdentity::ToolInvocation(Box::new(ToolInvocationClaimIdentity {
                 accepted: None,
                 rejected: ToolInvocationRejectedIdentity {
+                    attempt_ordinal: 3,
                     tool_name: tool_name.clone(),
                     command_path: vec!["search".to_string()],
                     input: Some(input("needle")),
@@ -1173,6 +1189,7 @@ mod tests {
             }));
         let request =
             HostRequest::GolemToolInvocationRejected(HostRequestGolemToolInvocationRejected {
+                attempt_ordinal: 3,
                 tool_name: tool_name.into_inner(),
                 command_path: vec!["search".to_string()],
                 input: Some(input("needle")),
@@ -1184,6 +1201,19 @@ mod tests {
             });
 
         assert!(request_claim_identity_matches(&request, &expected).unwrap());
+
+        let HostRequest::GolemToolInvocationRejected(mut mismatched_ordinal) = request.clone()
+        else {
+            unreachable!();
+        };
+        mismatched_ordinal.attempt_ordinal = 4;
+        assert!(
+            !request_claim_identity_matches(
+                &HostRequest::GolemToolInvocationRejected(mismatched_ordinal),
+                &expected,
+            )
+            .unwrap()
+        );
 
         let HostRequest::GolemToolInvocationRejected(mut mismatched) = request else {
             unreachable!();
@@ -1204,6 +1234,7 @@ mod tests {
             RequestClaimIdentity::ToolInvocation(Box::new(ToolInvocationClaimIdentity {
                 accepted: None,
                 rejected: ToolInvocationRejectedIdentity {
+                    attempt_ordinal: 0,
                     tool_name: ToolName::try_from("grep").unwrap(),
                     command_path: Vec::new(),
                     input: None,
@@ -1215,6 +1246,7 @@ mod tests {
             }));
         let request =
             HostRequest::GolemToolInvocationRejected(HostRequestGolemToolInvocationRejected {
+                attempt_ordinal: 0,
                 tool_name: "grep".to_string(),
                 command_path: Vec::new(),
                 input: None,

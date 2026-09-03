@@ -32,29 +32,253 @@ type MemoryReservation = Pin<Box<dyn Future<Output = Option<MemoryGrant>> + Send
 
 #[derive(Clone)]
 pub(crate) struct AttachmentMemory {
-    reserve: Arc<dyn Fn(u64) -> MemoryReservation + Send + Sync>,
+    reserve_tracked: Arc<dyn Fn(u64) -> MemoryReservation + Send + Sync>,
+    tracking_enabled: Arc<AtomicBool>,
+    tracking_pending: Arc<AtomicBool>,
+    prepared_grant: Arc<Mutex<Option<MemoryGrant>>>,
+    historical_charges: Arc<HistoricalAttachmentCharges>,
+    live_activation: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AttachmentMemory {
     pub(crate) fn tracked<Ctx: WorkerCtx>(active_agents: Arc<ActiveAgents<Ctx>>) -> Self {
         Self {
-            reserve: Arc::new(move |bytes| {
+            reserve_tracked: Arc::new(move |bytes| {
                 let active_agents = active_agents.clone();
                 Box::pin(async move { active_agents.try_acquire(bytes).await })
             }),
+            tracking_enabled: Arc::new(AtomicBool::new(true)),
+            tracking_pending: Arc::new(AtomicBool::new(false)),
+            prepared_grant: Arc::new(Mutex::new(None)),
+            historical_charges: Arc::new(HistoricalAttachmentCharges::default()),
+            live_activation: Arc::new(tokio::sync::Mutex::new(())),
         }
+    }
+
+    pub(crate) fn for_store<Ctx: WorkerCtx>(
+        active_agents: Arc<ActiveAgents<Ctx>>,
+        is_live: bool,
+    ) -> Self {
+        let memory = Self::tracked(active_agents);
+        memory.tracking_enabled.store(is_live, Ordering::Release);
+        memory
     }
 
     #[cfg(test)]
     pub(crate) fn inert() -> Self {
         Self {
-            reserve: Arc::new(|bytes| Box::pin(async move { Some(MemoryGrant::inert(bytes)) })),
+            reserve_tracked: Arc::new(|bytes| {
+                Box::pin(async move { Some(MemoryGrant::inert(bytes)) })
+            }),
+            tracking_enabled: Arc::new(AtomicBool::new(true)),
+            tracking_pending: Arc::new(AtomicBool::new(false)),
+            prepared_grant: Arc::new(Mutex::new(None)),
+            historical_charges: Arc::new(HistoricalAttachmentCharges::default()),
+            live_activation: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
-    async fn reserve(&self, bytes: usize) -> Option<MemoryGrant> {
-        (self.reserve)(bytes as u64).await
+    #[cfg(test)]
+    pub(crate) fn with_test_reservation<F, Fut>(is_live: bool, reserve: F) -> Self
+    where
+        F: Fn(u64) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Option<MemoryGrant>> + Send + 'static,
+    {
+        Self {
+            reserve_tracked: Arc::new(move |bytes| Box::pin(reserve(bytes))),
+            tracking_enabled: Arc::new(AtomicBool::new(is_live)),
+            tracking_pending: Arc::new(AtomicBool::new(false)),
+            prepared_grant: Arc::new(Mutex::new(None)),
+            historical_charges: Arc::new(HistoricalAttachmentCharges::default()),
+            live_activation: Arc::new(tokio::sync::Mutex::new(())),
+        }
     }
+
+    async fn reserve(&self, bytes: usize) -> AttachmentReservationOutcome {
+        if self.tracking_pending.load(Ordering::Acquire) {
+            return AttachmentReservationOutcome::Pending;
+        }
+        let historical = !self.tracking_enabled.load(Ordering::Acquire);
+        if historical {
+            match self.historical_charges.reserve(bytes as u64) {
+                Some(historical_reservation) => {
+                    AttachmentReservationOutcome::Reserved(AttachmentReservation {
+                        grant: MemoryGrant::inert(bytes as u64),
+                        historical_reservation: Some(historical_reservation),
+                    })
+                }
+                None => AttachmentReservationOutcome::Pending,
+            }
+        } else {
+            match self.reserve_tracked(bytes as u64).await {
+                Some(grant) => AttachmentReservationOutcome::Reserved(AttachmentReservation {
+                    grant,
+                    historical_reservation: None,
+                }),
+                None => AttachmentReservationOutcome::Rejected,
+            }
+        }
+    }
+
+    async fn reserve_tracked(&self, bytes: u64) -> Option<MemoryGrant> {
+        (self.reserve_tracked)(bytes).await
+    }
+
+    fn tracking_enabled(&self) -> bool {
+        self.tracking_enabled.load(Ordering::Acquire)
+    }
+
+    fn tracking_pending(&self) -> bool {
+        self.tracking_pending.load(Ordering::Acquire)
+    }
+
+    fn begin_tracking(&self) {
+        self.tracking_pending.store(true, Ordering::Release);
+        self.historical_charges.close();
+    }
+
+    fn prepare_grant(&self, grant: MemoryGrant) {
+        *self.prepared_grant.lock().unwrap() = Some(grant);
+    }
+
+    fn commit_tracking(&self) {
+        if let Some(grant) = self.prepared_grant.lock().unwrap().take() {
+            self.historical_charges.install_upgrade(grant);
+        }
+        self.tracking_enabled.store(true, Ordering::Release);
+        self.tracking_pending.store(false, Ordering::Release);
+    }
+
+    fn abort_tracking(&self) {
+        self.prepared_grant.lock().unwrap().take();
+        if !self.tracking_enabled() {
+            self.historical_charges.reopen();
+        }
+        self.tracking_pending.store(false, Ordering::Release);
+    }
+}
+
+struct HistoricalAttachmentCharges {
+    state: Mutex<HistoricalAttachmentChargeState>,
+}
+
+struct HistoricalAttachmentChargeState {
+    bytes: u64,
+    accepting: bool,
+    upgrade_grant: Option<MemoryGrant>,
+}
+
+impl Default for HistoricalAttachmentCharges {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(HistoricalAttachmentChargeState {
+                bytes: 0,
+                accepting: true,
+                upgrade_grant: None,
+            }),
+        }
+    }
+}
+
+impl HistoricalAttachmentCharges {
+    fn reserve(self: &Arc<Self>, bytes: u64) -> Option<HistoricalAttachmentReservation> {
+        let mut state = self.state.lock().unwrap();
+        if !state.accepting {
+            return None;
+        }
+        state.bytes = state
+            .bytes
+            .checked_add(bytes)
+            .expect("historical attachment charge overflow");
+        Some(HistoricalAttachmentReservation {
+            charges: Some(self.clone()),
+            bytes,
+        })
+    }
+
+    fn release(&self, bytes: u64) {
+        let mut state = self.state.lock().unwrap();
+        assert!(
+            state.bytes >= bytes,
+            "historical attachment charge underflow"
+        );
+        state.bytes -= bytes;
+        if state.bytes == 0 {
+            state.upgrade_grant.take();
+        }
+    }
+
+    fn bytes(&self) -> u64 {
+        self.state.lock().unwrap().bytes
+    }
+
+    fn install_upgrade(&self, grant: MemoryGrant) {
+        let mut state = self.state.lock().unwrap();
+        if state.bytes != 0 {
+            state.upgrade_grant = Some(grant);
+        }
+    }
+
+    fn close(&self) {
+        self.state.lock().unwrap().accepting = false;
+    }
+
+    fn reopen(&self) {
+        self.state.lock().unwrap().accepting = true;
+    }
+}
+
+struct HistoricalAttachmentReservation {
+    charges: Option<Arc<HistoricalAttachmentCharges>>,
+    bytes: u64,
+}
+
+impl HistoricalAttachmentReservation {
+    fn into_charges(mut self) -> Arc<HistoricalAttachmentCharges> {
+        self.charges
+            .take()
+            .expect("historical attachment reservation must own its charges")
+    }
+}
+
+impl Drop for HistoricalAttachmentReservation {
+    fn drop(&mut self) {
+        if let Some(charges) = self.charges.take() {
+            charges.release(self.bytes);
+        }
+    }
+}
+
+struct AttachmentTrackingRollback<'a> {
+    memory: &'a AttachmentMemory,
+    changed: &'a Notify,
+    armed: bool,
+}
+
+impl AttachmentTrackingRollback<'_> {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for AttachmentTrackingRollback<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.memory.abort_tracking();
+            self.changed.notify_waiters();
+        }
+    }
+}
+
+enum AttachmentReservationOutcome {
+    Reserved(AttachmentReservation),
+    Pending,
+    Rejected,
+}
+
+struct AttachmentReservation {
+    grant: MemoryGrant,
+    historical_reservation: Option<HistoricalAttachmentReservation>,
 }
 
 struct BufferedChunk {
@@ -65,20 +289,31 @@ struct BufferedChunk {
 struct AttachmentCharge {
     grant: MemoryGrant,
     charged_bytes: Arc<AtomicU64>,
+    historical_charges: Option<Arc<HistoricalAttachmentCharges>>,
 }
 
 impl AttachmentCharge {
-    fn new(grant: MemoryGrant, charged_bytes: Arc<AtomicU64>) -> Self {
+    fn new(reservation: AttachmentReservation, charged_bytes: Arc<AtomicU64>) -> Self {
+        let AttachmentReservation {
+            grant,
+            historical_reservation,
+        } = reservation;
         charged_bytes.fetch_add(grant.bytes(), Ordering::AcqRel);
+        let historical_charges =
+            historical_reservation.map(HistoricalAttachmentReservation::into_charges);
         Self {
             grant,
             charged_bytes,
+            historical_charges,
         }
     }
 }
 
 impl Drop for AttachmentCharge {
     fn drop(&mut self) {
+        if let Some(historical_charges) = &self.historical_charges {
+            historical_charges.release(self.grant.bytes());
+        }
         self.charged_bytes
             .fetch_sub(self.grant.bytes(), Ordering::AcqRel);
     }
@@ -258,6 +493,71 @@ impl ByteAttachment {
         true
     }
 
+    async fn prepare_live_memory_accounting(&self) -> bool {
+        let _activation = self.memory.live_activation.lock().await;
+        if self.memory.tracking_enabled() {
+            return true;
+        }
+        if self.memory.tracking_pending() {
+            return self.memory.prepared_grant.lock().unwrap().is_some();
+        }
+
+        self.memory.begin_tracking();
+        self.changed.notify_waiters();
+        let mut rollback = AttachmentTrackingRollback {
+            memory: &self.memory,
+            changed: &self.changed,
+            armed: true,
+        };
+        let mut grant = MemoryGrant::inert(0);
+        loop {
+            let historical_bytes = self.memory.historical_charges.bytes();
+            if historical_bytes <= grant.bytes() {
+                self.memory.prepare_grant(grant);
+                rollback.disarm();
+                return true;
+            }
+            let Some(additional) = self
+                .memory
+                .reserve_tracked(historical_bytes - grant.bytes())
+                .await
+            else {
+                rollback.disarm();
+                return false;
+            };
+            grant.merge(additional);
+        }
+    }
+
+    fn commit_live_memory_accounting(&self) {
+        if self.memory.tracking_enabled() {
+            return;
+        }
+        self.memory.commit_tracking();
+        self.changed.notify_waiters();
+    }
+
+    fn complete_rejected_live_memory_accounting(&self) {
+        {
+            let mut state = self.state.lock().unwrap();
+            if matches!(
+                state.mode,
+                AttachmentMode::Pending
+                    | AttachmentMode::Live
+                    | AttachmentMode::Completion { published: false }
+            ) {
+                state.chunks.clear();
+                state.buffered_bytes = 0;
+                state.accepted_completion_bytes = 0;
+            }
+        }
+        let _ = self.select_terminal_with_origin(
+            ByteStreamCloseCause::Failed(ByteStreamFailure::ResourceExhausted),
+            true,
+        );
+        self.publish_no_body_terminal();
+    }
+
     fn publish_completion(&self) -> bool {
         let reader = {
             let mut state = self.state.lock().unwrap();
@@ -268,6 +568,36 @@ impl ByteAttachment {
                 return false;
             }
             state.mode = AttachmentMode::Completion { published: true };
+            state.reader_waker.take()
+        };
+        self.changed.notify_waiters();
+        if let Some(reader) = reader {
+            reader.wake();
+        }
+        true
+    }
+
+    fn publish_no_body_terminal(&self) -> bool {
+        self.memory.abort_tracking();
+        let reader = {
+            let mut state = self.state.lock().unwrap();
+            if state.owner_fenced || state.terminal.is_none() {
+                return false;
+            }
+            match state.mode {
+                AttachmentMode::Pending => {
+                    state.chunks.clear();
+                    state.buffered_bytes = 0;
+                    state.mode = AttachmentMode::TerminalOnly;
+                }
+                AttachmentMode::Completion { published: false } => {
+                    state.mode = AttachmentMode::Completion { published: true };
+                }
+                AttachmentMode::Live
+                | AttachmentMode::Completion { published: true }
+                | AttachmentMode::TerminalOnly
+                | AttachmentMode::Discard => {}
+            }
             state.reader_waker.take()
         };
         self.changed.notify_waiters();
@@ -319,6 +649,7 @@ impl ByteAttachment {
     }
 
     fn fence_owner(&self) {
+        self.memory.abort_tracking();
         let (reader, selected_terminal) = {
             let mut state = self.state.lock().unwrap();
             state.owner_fenced = true;
@@ -417,18 +748,22 @@ impl ByteAttachment {
                 if let Some(cause) = &state.terminal {
                     return Err(StreamWriteError::Closed(cause.clone()));
                 }
-                match state.mode {
-                    AttachmentMode::Discard => WritePlan::Discard,
-                    AttachmentMode::Pending | AttachmentMode::Live => WritePlan::Accept,
-                    AttachmentMode::Completion { .. } => {
-                        if len > self.limit.saturating_sub(state.accepted_completion_bytes) {
-                            WritePlan::ResourceExhausted
-                        } else {
-                            WritePlan::Accept
+                if self.memory.tracking_pending() {
+                    WritePlan::Wait
+                } else {
+                    match state.mode {
+                        AttachmentMode::Discard => WritePlan::Discard,
+                        AttachmentMode::Pending | AttachmentMode::Live => WritePlan::Accept,
+                        AttachmentMode::Completion { .. } => {
+                            if len > self.limit.saturating_sub(state.accepted_completion_bytes) {
+                                WritePlan::ResourceExhausted
+                            } else {
+                                WritePlan::Accept
+                            }
                         }
-                    }
-                    AttachmentMode::TerminalOnly => {
-                        unreachable!("terminal-only attachments always have a terminal")
+                        AttachmentMode::TerminalOnly => {
+                            unreachable!("terminal-only attachments always have a terminal")
+                        }
                     }
                 }
             };
@@ -439,7 +774,10 @@ impl ByteAttachment {
                     return Err(self.select_resource_exhausted());
                 }
                 WritePlan::Accept => {}
-                WritePlan::Wait => unreachable!("initial write planning does not wait"),
+                WritePlan::Wait => {
+                    notified.as_mut().await;
+                    continue;
+                }
             }
 
             let reservation = self.memory.reserve(allocation_bytes);
@@ -448,10 +786,14 @@ impl ByteAttachment {
                 charge = &mut reservation => charge,
                 () = &mut notified => continue,
             };
-            let Some(grant) = charge else {
-                return Err(self.select_resource_exhausted());
+            let reservation = match charge {
+                AttachmentReservationOutcome::Reserved(reservation) => reservation,
+                AttachmentReservationOutcome::Pending => continue,
+                AttachmentReservationOutcome::Rejected => {
+                    return Err(self.select_resource_exhausted());
+                }
             };
-            break AttachmentCharge::new(grant, self.charged_bytes.clone());
+            break AttachmentCharge::new(reservation, self.charged_bytes.clone());
         };
 
         let mut bytes = Some(bytes);
@@ -465,31 +807,35 @@ impl ByteAttachment {
                 if let Some(cause) = &state.terminal {
                     return Err(StreamWriteError::Closed(cause.clone()));
                 }
-                let plan = match state.mode {
-                    AttachmentMode::Discard => return Ok(()),
-                    AttachmentMode::Pending => {
-                        if len <= self.limit.saturating_sub(state.buffered_bytes) {
-                            WritePlan::Accept
-                        } else {
-                            WritePlan::Wait
+                let plan = if self.memory.tracking_pending() {
+                    WritePlan::Wait
+                } else {
+                    match state.mode {
+                        AttachmentMode::Discard => return Ok(()),
+                        AttachmentMode::Pending => {
+                            if len <= self.limit.saturating_sub(state.buffered_bytes) {
+                                WritePlan::Accept
+                            } else {
+                                WritePlan::Wait
+                            }
                         }
-                    }
-                    AttachmentMode::Live => {
-                        if len <= self.limit.saturating_sub(state.buffered_bytes) {
-                            WritePlan::Accept
-                        } else {
-                            WritePlan::Wait
+                        AttachmentMode::Live => {
+                            if len <= self.limit.saturating_sub(state.buffered_bytes) {
+                                WritePlan::Accept
+                            } else {
+                                WritePlan::Wait
+                            }
                         }
-                    }
-                    AttachmentMode::Completion { .. } => {
-                        if len <= self.limit.saturating_sub(state.accepted_completion_bytes) {
-                            WritePlan::Accept
-                        } else {
-                            WritePlan::ResourceExhausted
+                        AttachmentMode::Completion { .. } => {
+                            if len <= self.limit.saturating_sub(state.accepted_completion_bytes) {
+                                WritePlan::Accept
+                            } else {
+                                WritePlan::ResourceExhausted
+                            }
                         }
-                    }
-                    AttachmentMode::TerminalOnly => {
-                        unreachable!("terminal-only attachments always have a terminal")
+                        AttachmentMode::TerminalOnly => {
+                            unreachable!("terminal-only attachments always have a terminal")
+                        }
                     }
                 };
                 let reader = if matches!(plan, WritePlan::Accept) {
@@ -632,7 +978,7 @@ impl ByteAttachment {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 enum WritePlan {
     Wait,
     Discard,
@@ -719,9 +1065,10 @@ impl AttachmentProducer {
 
     pub(crate) fn reject_unconfigured(&self) -> Result<bool, StreamWriteError> {
         self.attachment
-            .terminate_unconfigured(ByteStreamCloseCause::Failed(ByteStreamFailure::Failed(
+            .select_terminal(ByteStreamCloseCause::Failed(ByteStreamFailure::Failed(
                 "tool invocation rejected".to_string(),
-            )))
+            )))?;
+        Ok(self.attachment.publish_no_body_terminal())
     }
 
     #[cfg(test)]
@@ -907,6 +1254,23 @@ pub(crate) struct AttachmentController {
 }
 
 impl AttachmentController {
+    pub(crate) async fn prepare_live_memory_accounting(&self) -> bool {
+        self.attachment.prepare_live_memory_accounting().await
+    }
+
+    pub(crate) fn commit_live_memory_accounting(&self) {
+        self.attachment.commit_live_memory_accounting();
+    }
+
+    pub(crate) fn complete_rejected_live_memory_accounting(&self) {
+        self.attachment.complete_rejected_live_memory_accounting();
+    }
+
+    pub(crate) fn abort_prepared_live_memory_accounting(&self) {
+        self.attachment.memory.abort_tracking();
+        self.attachment.changed.notify_waiters();
+    }
+
     pub(crate) fn configure_live(&self) -> bool {
         self.attachment.configure(AttachmentMode::Live)
     }
@@ -918,6 +1282,10 @@ impl AttachmentController {
 
     pub(crate) fn publish_completion(&self) -> bool {
         self.attachment.publish_completion()
+    }
+
+    pub(crate) fn publish_no_body_terminal(&self) -> bool {
+        self.attachment.publish_no_body_terminal()
     }
 
     pub(crate) fn cancel(&self) -> Result<(), StreamWriteError> {
@@ -944,6 +1312,14 @@ impl AttachmentController {
 
     pub(crate) fn metadata(&self) -> ToolAttachmentMetadata {
         self.attachment.metadata()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn live_memory_accounting_state(&self) -> (bool, bool) {
+        (
+            self.attachment.memory.tracking_enabled(),
+            self.attachment.memory.tracking_pending(),
+        )
     }
 }
 
@@ -976,8 +1352,6 @@ impl<D> StreamProducer<D> for AttachmentStreamProducer {
             .clone();
         let remaining = dst.remaining(store.as_context_mut());
         if finish {
-            attachment.consumer_cancel();
-            self.finished = true;
             return Poll::Ready(Ok(StreamResult::Cancelled));
         }
         if remaining == Some(0) {
@@ -1084,8 +1458,6 @@ impl<D> StreamProducer<D> for RawAttachmentStreamProducer {
             .clone();
         let remaining = dst.remaining(store.as_context_mut());
         if finish {
-            attachment.consumer_cancel();
-            self.finished = true;
             return Poll::Ready(Ok(StreamResult::Cancelled));
         }
         if remaining == Some(0) {
@@ -1217,7 +1589,7 @@ mod tests {
     use super::*;
     use test_r::test;
     use tokio::sync::mpsc;
-    use wasmtime::component::{Source, StreamConsumer, StreamReader};
+    use wasmtime::component::{Component, Linker, Source, StreamConsumer, StreamReader};
     use wasmtime::{Config, Engine, Store, StoreContextMut};
 
     fn pair(limit: usize) -> (AttachmentProducer, AttachmentConsumer, AttachmentObserver) {
@@ -1226,13 +1598,23 @@ mod tests {
 
     fn rejecting_memory() -> AttachmentMemory {
         AttachmentMemory {
-            reserve: Arc::new(|_| Box::pin(async { None })),
+            reserve_tracked: Arc::new(|_| Box::pin(async { None })),
+            tracking_enabled: Arc::new(AtomicBool::new(true)),
+            tracking_pending: Arc::new(AtomicBool::new(false)),
+            prepared_grant: Arc::new(Mutex::new(None)),
+            historical_charges: Arc::new(HistoricalAttachmentCharges::default()),
+            live_activation: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
     fn blocked_memory() -> AttachmentMemory {
         AttachmentMemory {
-            reserve: Arc::new(|_| Box::pin(std::future::pending())),
+            reserve_tracked: Arc::new(|_| Box::pin(std::future::pending())),
+            tracking_enabled: Arc::new(AtomicBool::new(true)),
+            tracking_pending: Arc::new(AtomicBool::new(false)),
+            prepared_grant: Arc::new(Mutex::new(None)),
+            historical_charges: Arc::new(HistoricalAttachmentCharges::default()),
+            live_activation: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -1317,6 +1699,43 @@ mod tests {
         }
     }
 
+    struct UpgradeInFlightRawConsumer {
+        controller: AttachmentController,
+        upgraded: bool,
+        completed: mpsc::UnboundedSender<()>,
+    }
+
+    impl<D> StreamConsumer<D> for UpgradeInFlightRawConsumer {
+        type Item = u8;
+
+        fn poll_consume(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            mut store: StoreContextMut<'_, D>,
+            source: Source<'_, Self::Item>,
+            finish: bool,
+        ) -> Poll<wasmtime::Result<StreamResult>> {
+            let mut source = source.as_direct(store.as_context_mut());
+            let count = source.remaining().len();
+            if count != 0 && !self.upgraded {
+                assert!(futures::executor::block_on(
+                    self.controller.prepare_live_memory_accounting()
+                ));
+                self.controller.commit_live_memory_accounting();
+                self.upgraded = true;
+            }
+            source.mark_read(count);
+            if finish {
+                let _ = self.completed.send(());
+            }
+            Poll::Ready(Ok(if finish {
+                StreamResult::Dropped
+            } else {
+                StreamResult::Completed
+            }))
+        }
+    }
+
     async fn drain_with_store(
         store: &mut Store<()>,
         consumer: AttachmentConsumer,
@@ -1365,6 +1784,21 @@ mod tests {
             observer.wait_terminal().await,
             ByteStreamCloseCause::Finished
         ));
+    }
+
+    #[test]
+    async fn empty_successful_writes_never_become_stream_items() {
+        let (producer, consumer, _) = pair(8);
+        assert!(producer.configure_live());
+        producer.write(Vec::new()).await.unwrap();
+        producer.write(vec![42]).await.unwrap();
+        producer.finish().unwrap();
+
+        assert!(matches!(
+            consumer.read_next().await,
+            AttachmentRead::Item(Ok(bytes)) if bytes == vec![42]
+        ));
+        assert!(matches!(consumer.read_next().await, AttachmentRead::End));
     }
 
     #[test]
@@ -1446,6 +1880,134 @@ mod tests {
         assert!(matches!(
             read.await.unwrap(),
             AttachmentRead::Item(Ok(bytes)) if bytes == vec![1, 2, 3]
+        ));
+    }
+
+    #[test]
+    async fn no_body_terminal_publication_handles_every_attachment_mode() {
+        let (pending, pending_consumer, _) = pair(16);
+        let pending_controller = pending.controller();
+        pending.write(vec![1, 2, 3]).await.unwrap();
+        let mut pending_read = tokio::spawn(async move {
+            (
+                pending_consumer.read_next().await,
+                pending_consumer.read_next().await,
+                pending_consumer.read_next().await,
+            )
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut pending_read)
+                .await
+                .is_err()
+        );
+        pending_controller.cancel().unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut pending_read)
+                .await
+                .is_err()
+        );
+        assert!(pending_controller.publish_no_body_terminal());
+        assert_eq!(
+            pending_controller.metadata().mode,
+            ToolAttachmentModeMetadata::TerminalOnly
+        );
+        assert_eq!(pending_controller.metadata().buffered_bytes, 0);
+        assert_eq!(pending_controller.metadata().charged_bytes, 0);
+        assert!(pending_controller.publish_no_body_terminal());
+        let (failure, end, repeated_end) = pending_read.await.unwrap();
+        assert!(matches!(
+            failure,
+            AttachmentRead::Item(Err(ByteStreamFailure::Cancelled))
+        ));
+        assert!(matches!(end, AttachmentRead::End));
+        assert!(matches!(repeated_end, AttachmentRead::End));
+
+        let (completion, completion_consumer, _) = pair(16);
+        let completion_controller = completion.controller();
+        assert!(completion_controller.configure_completion());
+        completion.write(vec![4, 5]).await.unwrap();
+        completion_controller.cancel().unwrap();
+        assert!(completion_controller.publish_no_body_terminal());
+        assert_eq!(
+            completion_controller.metadata().mode,
+            ToolAttachmentModeMetadata::CompletionPublished
+        );
+        assert!(completion_controller.publish_no_body_terminal());
+        assert!(matches!(
+            completion_consumer.read_next().await,
+            AttachmentRead::Item(Ok(bytes)) if bytes == vec![4, 5]
+        ));
+        assert!(matches!(
+            completion_consumer.read_next().await,
+            AttachmentRead::Item(Err(ByteStreamFailure::Cancelled))
+        ));
+        assert!(matches!(
+            completion_consumer.read_next().await,
+            AttachmentRead::End
+        ));
+
+        let (live, live_consumer, _) = pair(16);
+        let live_controller = live.controller();
+        assert!(live_controller.configure_live());
+        live.write(vec![6, 7]).await.unwrap();
+        live_controller.cancel().unwrap();
+        assert!(live_controller.publish_no_body_terminal());
+        assert_eq!(
+            live_controller.metadata().mode,
+            ToolAttachmentModeMetadata::Live
+        );
+        assert!(matches!(
+            live_consumer.read_next().await,
+            AttachmentRead::Item(Ok(bytes)) if bytes == vec![6, 7]
+        ));
+        assert!(matches!(
+            live_consumer.read_next().await,
+            AttachmentRead::Item(Err(ByteStreamFailure::Cancelled))
+        ));
+        assert!(matches!(
+            live_consumer.read_next().await,
+            AttachmentRead::End
+        ));
+
+        let discard = discard_producer(AttachmentMemory::inert());
+        let discard_controller = discard.controller();
+        discard_controller.cancel().unwrap();
+        assert!(discard_controller.publish_no_body_terminal());
+        assert_eq!(
+            discard_controller.metadata().mode,
+            ToolAttachmentModeMetadata::Discard
+        );
+
+        let (unterminated, _consumer, _) = pair(16);
+        assert!(!unterminated.controller().publish_no_body_terminal());
+    }
+
+    #[test]
+    async fn no_body_terminal_publication_wakes_a_wasmtime_reader() {
+        let (producer, consumer, _) = pair(16);
+        let controller = producer.controller();
+        assert!(controller.configure_completion());
+        controller.cancel().unwrap();
+
+        let mut config = Config::new();
+        config.concurrency_support(true);
+        let engine = Engine::new(&config).unwrap();
+        let mut store = Store::new(&engine, ());
+        let drain = drain_with_store(&mut store, consumer);
+        tokio::pin!(drain);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut drain)
+                .await
+                .is_err()
+        );
+
+        assert!(controller.publish_no_body_terminal());
+        let items = tokio::time::timeout(std::time::Duration::from_secs(1), &mut drain)
+            .await
+            .unwrap();
+        assert!(matches!(
+            items.as_slice(),
+            [Err(ByteStreamFailure::Cancelled)]
         ));
     }
 
@@ -1679,10 +2241,18 @@ mod tests {
 
     #[test]
     async fn owner_fenced_wasmtime_reader_traps_without_delivering_cancellation() {
-        let (_producer, consumer, _) = pair(4);
+        let (producer, consumer, _) = pair(4);
         let controller = consumer.controller();
-        assert!(controller.configure_live());
+        producer.write(vec![1, 2, 3, 4]).await.unwrap();
         controller.fence_owner();
+        assert!(controller.metadata().owner_fenced);
+        assert_eq!(
+            controller.metadata().mode,
+            ToolAttachmentModeMetadata::Pending
+        );
+        assert_eq!(controller.metadata().buffered_bytes, 0);
+        assert_eq!(controller.metadata().charged_bytes, 0);
+        assert!(!controller.publish_no_body_terminal());
 
         let mut config = Config::new();
         config.concurrency_support(true);
@@ -1730,6 +2300,134 @@ mod tests {
     }
 
     #[test]
+    async fn cancelling_raw_wasmtime_read_operation_preserves_and_resumes_the_attachment() {
+        let (producer, consumer, observer) = pair(4);
+        assert!(producer.configure_live());
+        let mut config = Config::new();
+        config.concurrency_support(true);
+        config.wasm_component_model_more_async_builtins(true);
+        let engine = Engine::new(&config).unwrap();
+        let component = Component::new(
+            &engine,
+            r#"
+(component
+  (import "cancelled" (func $cancelled))
+  (core func $cancelled (canon lower (func $cancelled)))
+  (core module $memory (memory (export "mem") 1))
+  (core instance $memory (instantiate $memory))
+  (core module $core
+    (import "" "mem" (memory 1))
+    (import "" "stream.read-async" (func $stream.read-async (param i32 i32 i32) (result i32)))
+    (import "" "stream.read-sync" (func $stream.read-sync (param i32 i32 i32) (result i32)))
+    (import "" "stream.cancel-read" (func $stream.cancel-read (param i32) (result i32)))
+    (import "" "stream.drop-readable" (func $stream.drop-readable (param i32)))
+    (import "" "cancelled" (func $cancelled))
+    (func (export "run") (param $stream i32)
+      (local $result i32)
+      (local.set $result (call $stream.read-async (local.get $stream) (i32.const 8) (i32.const 3)))
+      (if (i32.ne (local.get $result) (i32.const -1)) (then unreachable))
+      (local.set $result (call $stream.cancel-read (local.get $stream)))
+      (if (i32.ne (local.get $result) (i32.const 2)) (then unreachable))
+      (call $cancelled)
+      (local.set $result (call $stream.read-sync (local.get $stream) (i32.const 8) (i32.const 3)))
+      (if (i32.ne (local.get $result) (i32.const 48)) (then unreachable))
+      (if (i32.ne (i32.load8_u (i32.const 8)) (i32.const 4)) (then unreachable))
+      (if (i32.ne (i32.load8_u (i32.const 9)) (i32.const 5)) (then unreachable))
+      (if (i32.ne (i32.load8_u (i32.const 10)) (i32.const 6)) (then unreachable))
+      (call $stream.drop-readable (local.get $stream))
+    )
+  )
+  (type $stream (stream u8))
+  (core func $stream.read-async (canon stream.read $stream async (memory $memory "mem")))
+  (core func $stream.read-sync (canon stream.read $stream (memory $memory "mem")))
+  (core func $stream.cancel-read (canon stream.cancel-read $stream))
+  (core func $stream.drop-readable (canon stream.drop-readable $stream))
+  (core instance $core (instantiate $core (with "" (instance
+    (export "mem" (memory $memory "mem"))
+    (export "stream.read-async" (func $stream.read-async))
+    (export "stream.read-sync" (func $stream.read-sync))
+    (export "stream.cancel-read" (func $stream.cancel-read))
+    (export "stream.drop-readable" (func $stream.drop-readable))
+    (export "cancelled" (func $cancelled))
+  ))))
+  (func (export "run") async (param "stream" (stream u8))
+    (canon lift (core func $core "run") (memory $memory "mem")))
+)
+            "#,
+        )
+        .unwrap();
+        let (cancelled, mut cancellation) = mpsc::unbounded_channel();
+        let mut linker = Linker::new(&engine);
+        linker
+            .root()
+            .func_wrap("cancelled", move |_, (): ()| {
+                cancelled.send(()).unwrap();
+                Ok(())
+            })
+            .unwrap();
+        let mut store = Store::new(&engine, ());
+        let instance = linker
+            .instantiate_async(&mut store, &component)
+            .await
+            .unwrap();
+        let run = instance
+            .get_typed_func::<(StreamReader<u8>,), ()>(&mut store, "run")
+            .unwrap();
+        let reader = StreamReader::new(&mut store, consumer.into_raw_stream_producer()).unwrap();
+        let observer_during_cancellation = observer.clone();
+
+        store
+            .run_concurrent(async move |accessor| -> wasmtime::Result<()> {
+                tokio::try_join!(
+                    async {
+                        run.call_concurrent(accessor, (reader,)).await?;
+                        wasmtime::error::Ok(())
+                    },
+                    async {
+                        cancellation.recv().await.unwrap();
+                        assert!(observer_during_cancellation.terminal().is_none());
+                        producer.write(vec![4, 5, 6]).await.unwrap();
+                        producer.finish().unwrap();
+                        wasmtime::error::Ok(())
+                    }
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(matches!(
+            observer.terminal(),
+            Some(ByteStreamCloseCause::Finished)
+        ));
+    }
+
+    #[test]
+    async fn closing_raw_wasmtime_reader_still_cancels_the_consumer() {
+        let (producer, consumer, observer) = pair(4);
+        assert!(producer.configure_live());
+        let mut config = Config::new();
+        config.concurrency_support(true);
+        let engine = Engine::new(&config).unwrap();
+        let mut store = Store::new(&engine, ());
+        let mut reader =
+            StreamReader::new(&mut store, consumer.into_raw_stream_producer()).unwrap();
+        reader.close(store.as_context_mut()).unwrap();
+
+        assert!(matches!(
+            observer.wait_terminal().await,
+            ByteStreamCloseCause::ConsumerCancelled
+        ));
+        assert!(matches!(
+            producer.write(vec![1]).await,
+            Err(StreamWriteError::Closed(
+                ByteStreamCloseCause::ConsumerCancelled
+            ))
+        ));
+    }
+
+    #[test]
     async fn unread_raw_completion_stream_retains_grants_until_wasmtime_consumes_bytes() {
         let (producer, consumer, _) = pair(8);
         assert!(producer.configure_completion());
@@ -1760,6 +2458,50 @@ mod tests {
             .unwrap();
 
         assert_eq!(collected, vec![1, 2, 3, 4]);
+        assert_eq!(producer.attachment.activity().charged_bytes, 0);
+    }
+
+    #[test]
+    async fn wasmtime_in_flight_historical_chunk_is_included_in_live_upgrade() {
+        let reservations = Arc::new(Mutex::new(Vec::new()));
+        let reservations_for_memory = reservations.clone();
+        let memory = AttachmentMemory::with_test_reservation(false, move |bytes| {
+            reservations_for_memory.lock().unwrap().push(bytes);
+            async move { Some(MemoryGrant::inert(bytes)) }
+        });
+        let (producer, consumer, _) = attachment_pair(8, memory);
+        let controller = producer.controller();
+        producer.write(vec![1, 2, 3, 4]).await.unwrap();
+        assert!(producer.configure_live());
+        producer.finish().unwrap();
+
+        let mut config = Config::new();
+        config.concurrency_support(true);
+        let engine = Engine::new(&config).unwrap();
+        let mut store = Store::new(&engine, ());
+        let reader = StreamReader::new(&mut store, consumer.into_raw_stream_producer()).unwrap();
+        let (completed, mut completion) = mpsc::unbounded_channel();
+
+        store
+            .run_concurrent(async move |accessor| -> wasmtime::Result<()> {
+                accessor.with(|mut store| {
+                    reader.pipe(
+                        &mut store,
+                        UpgradeInFlightRawConsumer {
+                            controller,
+                            upgraded: false,
+                            completed,
+                        },
+                    )
+                })?;
+                completion.recv().await;
+                Ok(())
+            })
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(*reservations.lock().unwrap(), vec![4]);
         assert_eq!(producer.attachment.activity().charged_bytes, 0);
     }
 
@@ -1895,6 +2637,89 @@ mod tests {
                 .unwrap()
                 .host_resource_exhausted
         );
+    }
+
+    #[test]
+    async fn historical_writes_bypass_measured_admission_until_live_upgrade() {
+        let reservation_count = Arc::new(AtomicU64::new(0));
+        let reservation_count_for_memory = reservation_count.clone();
+        let memory = AttachmentMemory {
+            reserve_tracked: Arc::new(move |bytes| {
+                reservation_count_for_memory.fetch_add(1, Ordering::AcqRel);
+                Box::pin(async move { Some(MemoryGrant::inert(bytes)) })
+            }),
+            tracking_enabled: Arc::new(AtomicBool::new(false)),
+            tracking_pending: Arc::new(AtomicBool::new(false)),
+            prepared_grant: Arc::new(Mutex::new(None)),
+            historical_charges: Arc::new(HistoricalAttachmentCharges::default()),
+            live_activation: Arc::new(tokio::sync::Mutex::new(())),
+        };
+        let (producer, consumer, _) = attachment_pair(8, memory);
+        let controller = producer.controller();
+
+        producer.write(vec![1, 2, 3]).await.unwrap();
+        assert_eq!(reservation_count.load(Ordering::Acquire), 0);
+        assert!(controller.prepare_live_memory_accounting().await);
+        assert_eq!(reservation_count.load(Ordering::Acquire), 1);
+        controller.commit_live_memory_accounting();
+        assert!(controller.prepare_live_memory_accounting().await);
+        assert_eq!(reservation_count.load(Ordering::Acquire), 1);
+
+        assert!(producer.configure_live());
+        producer.write(vec![4]).await.unwrap();
+        assert_eq!(reservation_count.load(Ordering::Acquire), 2);
+        producer.finish().unwrap();
+        assert!(matches!(
+            consumer.read_next().await,
+            AttachmentRead::Item(Ok(bytes)) if bytes == vec![1, 2, 3]
+        ));
+        assert!(matches!(
+            consumer.read_next().await,
+            AttachmentRead::Item(Ok(bytes)) if bytes == vec![4]
+        ));
+    }
+
+    #[test]
+    async fn rejected_historical_upgrade_selects_resource_exhaustion() {
+        let reservation_count = Arc::new(AtomicU64::new(0));
+        let reservation_count_for_memory = reservation_count.clone();
+        let memory = AttachmentMemory {
+            reserve_tracked: Arc::new(move |_| {
+                reservation_count_for_memory.fetch_add(1, Ordering::AcqRel);
+                Box::pin(async { None })
+            }),
+            tracking_enabled: Arc::new(AtomicBool::new(false)),
+            tracking_pending: Arc::new(AtomicBool::new(false)),
+            prepared_grant: Arc::new(Mutex::new(None)),
+            historical_charges: Arc::new(HistoricalAttachmentCharges::default()),
+            live_activation: Arc::new(tokio::sync::Mutex::new(())),
+        };
+        let (producer, consumer, observer) = attachment_pair(8, memory);
+        let controller = producer.controller();
+
+        producer.write(vec![1, 2, 3]).await.unwrap();
+        assert_eq!(reservation_count.load(Ordering::Acquire), 0);
+        assert!(!controller.prepare_live_memory_accounting().await);
+        assert_eq!(reservation_count.load(Ordering::Acquire), 1);
+        assert!(observer.terminal_snapshot().is_none());
+        controller.complete_rejected_live_memory_accounting();
+        assert_eq!(controller.metadata().buffered_bytes, 0);
+        assert_eq!(controller.metadata().charged_bytes, 0);
+        assert!(matches!(
+            observer.wait_terminal().await,
+            ByteStreamCloseCause::Failed(ByteStreamFailure::ResourceExhausted)
+        ));
+        assert!(
+            observer
+                .terminal_snapshot()
+                .unwrap()
+                .host_resource_exhausted
+        );
+        assert!(matches!(
+            consumer.read_next().await,
+            AttachmentRead::Item(Err(ByteStreamFailure::ResourceExhausted))
+        ));
+        assert!(matches!(consumer.read_next().await, AttachmentRead::End));
     }
 
     #[test]

@@ -111,7 +111,9 @@ use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::entity::{ExecutableTarget, FilesystemCapability, OwnerRuntime};
+use golem_common::model::entity::{
+    ExecutableTarget, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
+};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     AgentError, OplogEntry, OplogIndex, OplogPayload, TimestampedUpdateDescription,
@@ -1069,6 +1071,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn create_entity_context(
         self: &Arc<Self>,
         runtime: OwnerRuntime,
+        execution_mode: InvocationExecutionMode,
         filesystem: FilesystemCapability,
         executable_component: golem_service_base::model::component::Component,
         activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
@@ -1132,13 +1135,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ),
             ));
         }
-        let retained_memory_grant = Arc::new(StdMutex::new(
-            self.active_agents()
-                .acquire_memory(initial_linear_memory)
-                .await,
-        ));
+        let retained_memory_grant = Arc::new(StdMutex::new(match execution_mode {
+            InvocationExecutionMode::Live => {
+                self.active_agents()
+                    .acquire_memory(initial_linear_memory)
+                    .await
+            }
+            InvocationExecutionMode::ReplayingCompleted
+            | InvocationExecutionMode::ReplayingIncomplete => {
+                MemoryGrant::inert(initial_linear_memory)
+            }
+        }));
         let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
-        let replaying = self.owner_execution.replay().await?.is_replay();
+        let replaying = matches!(
+            execution_mode,
+            InvocationExecutionMode::ReplayingCompleted
+                | InvocationExecutionMode::ReplayingIncomplete
+        );
         let linear_memory = LinearMemoryTracker::new_with_metering(
             initial_linear_memory,
             admitted_startup_bytes,
@@ -1203,6 +1216,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             None,
             worker_metadata.original_phantom_id,
             runtime,
+            Some(execution_mode),
             self.owner_execution(),
             self.owner_runtime_resources(),
             filesystem,
@@ -6805,6 +6819,14 @@ impl RunningWorker {
         CreateWorkerInstanceError,
     > {
         let component_id = parent.owned_agent_id.component_id();
+        let entity_generation = parent
+            .active_agents()
+            .try_get_active_agent(&parent.owned_agent_id)
+            .await
+            .map(|active_agent| {
+                let generation = active_agent.entity_fence_generation();
+                (active_agent, generation)
+            });
 
         // we might have detached the worker status during the last invocation loop. Make sure it's attached and we are fully up-to-date on the oplog
         parent.reattach_worker_status().await;
@@ -7152,6 +7174,7 @@ impl RunningWorker {
             pending_update,
             worker_metadata.original_phantom_id,
             OwnerRuntime::Agent,
+            None,
             parent.owner_execution(),
             parent.owner_runtime_resources(),
             FilesystemCapability::Capable,
@@ -7195,6 +7218,12 @@ impl RunningWorker {
             );
         }
         let (instance, mut store) = hosted.into_parts();
+        if let Some((active_agent, generation)) = entity_generation {
+            let interrupt_state = parent.interrupt_signal.lock().await;
+            if !interrupt_state.has_interrupt() {
+                active_agent.reopen_entity_admission_if_generation(generation);
+            }
+        }
         let prepare_result =
             Ctx::prepare_instance(&parent.owned_agent_id.agent_id, &instance, &mut store).await;
         let decision = match prepare_result {

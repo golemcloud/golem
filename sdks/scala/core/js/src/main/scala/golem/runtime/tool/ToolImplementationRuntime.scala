@@ -29,7 +29,8 @@ import scala.scalajs.js.JSConverters._
 
 /** The stdin handle of a JS-guest tool invocation. */
 final class JsToolInputStream(val underlying: ToolHostApi.RawByteStream) extends ToolInputStream {
-  private val iterator                                                        = underlying.asyncIterator()
+  private lazy val iterator                                                   = underlying.asyncIterator()
+  private var cancellation: Option[Future[Unit]]                              = None
   override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
     FutureInterop
       .fromPromise(iterator.next())
@@ -45,7 +46,17 @@ final class JsToolInputStream(val underlying: ToolHostApi.RawByteStream) extends
       }(ToolInvokerRuntime.executionContext)
 
   override def cancel(): Future[Unit] =
-    FutureInterop.fromPromise(iterator.returnIterator()).map(_ => ())(ToolInvokerRuntime.executionContext)
+    synchronized {
+      cancellation.getOrElse {
+        val result =
+          try FutureInterop.fromPromise(iterator.returnIterator()).map(_ => ())(ToolInvokerRuntime.executionContext)
+          catch {
+            case error: Throwable => Future.failed(error)
+          }
+        cancellation = Some(result)
+        result
+      }
+    }
 
   override private[golem] def close(): Future[Unit] =
     cancel().recover { case _ => () }(ToolInvokerRuntime.executionContext)
@@ -56,7 +67,8 @@ final class JsToolOutputStream(val underlying: ToolHostApi.RawToolStdoutWriter) 
   private var terminal: Option[Future[Either[StreamWriteError, Unit]]] = None
 
   override def write(bytes: Array[Byte]): Future[Either[StreamWriteError, Unit]] =
-    call(underlying.write(js.typedarray.Uint8Array.from(bytes.map(_.toShort).toJSArray)))
+    if (bytes.isEmpty) Future.successful(Right(()))
+    else call(underlying.write(js.typedarray.Uint8Array.from(bytes.map(_.toShort).toJSArray)))
   override def finish(): Future[Either[StreamWriteError, Unit]] =
     selectTerminal(underlying.finish())
   override def fail(reason: ByteStreamFailure): Future[Either[StreamWriteError, Unit]] =
@@ -116,18 +128,19 @@ object JsToolOutputStream {
     case "abandoned"          => ByteStreamFailure.Abandoned
     case "resource-exhausted" => ByteStreamFailure.ResourceExhausted
     case "failed"             => ByteStreamFailure.Failed(value.`val`.asInstanceOf[String])
+    case other                => ByteStreamFailure.Failed(s"unknown byte-stream failure: $other")
   }
 }
 
 /** Adapts the middleware ABI's legacy `stream<u8>` stdin. */
-final class JsMiddlewareInputStream(val underlying: JsWasiInputStream) extends ToolInputStream {
+final class JsMiddlewareInputStream(val underlying: JsWasiInputStream) extends ToolMiddlewareInputHandle {
   private val lifecycle = new JsMiddlewareStreamLifecycle(() => underlying.asyncIterator())
 
   override private[golem] def close(): Future[Unit] = lifecycle.close()
 }
 
 /** Adapts the middleware ABI's legacy result-carried stdout stream. */
-final class JsMiddlewareOutputStream(val underlying: JsWasiOutputStream) extends ToolOutputStream {
+final class JsMiddlewareOutputStream(val underlying: JsWasiOutputStream) extends ToolMiddlewareOutputHandle {
   private val lifecycle = new JsMiddlewareStreamLifecycle(() => underlying.asyncIterator())
 
   override private[golem] def close(): Future[Unit] = lifecycle.close()
@@ -188,7 +201,6 @@ private[golem] object ToolImplementationRuntime {
     handle: ToolImplementationHandle
   ): ToolRegistry.ToolInvoker =
     (commandPath, wireInput, stdin, stdout, principal) => {
-      val output  = stdout.map(new JsToolOutputStream(_))
       val decoded =
         try Right(SchemaWire.typedSchemaValueFromWit(wireInput))
         catch {
@@ -198,32 +210,24 @@ private[golem] object ToolImplementationRuntime {
       val invoked = decoded match {
         case Left(error)  => Future.successful(Left(error))
         case Right(input) =>
-          val env     = new JsToolInvokeEnv(output)
+          val env     = new JsToolInvokeEnv(stdout)
           val handler = ToolInvokerRuntime.handler(tool, handle, env)
           handler
             .invoke(
               commandPath,
               input,
-              stdin.map(new JsToolInputStream(_)),
+              stdin,
               principal
             )
       }
-      invoked.flatMap { outcome =>
-        val completed = output match {
-          case Some(stream) => stream.finishInvocation()
-          case None         => Future.successful(())
-        }
-        completed.map(_ =>
-          outcome match {
-            case Right(result) =>
-              Right(
-                ToolInvocationResult(
-                  result.result.map(SchemaWire.typedSchemaValueToWit)
-                )
-              )
-            case Left(error) => Left(errorToWire(error))
-          }
-        )
+      invoked.map {
+        case Right(result) =>
+          Right(
+            ToolInvocationResult(
+              result.result.map(SchemaWire.typedSchemaValueToWit)
+            )
+          )
+        case Left(error) => Left(errorToWire(error))
       }
     }
 
@@ -249,19 +253,19 @@ private[golem] object ToolImplementationRuntime {
             stdin: Option[ToolInputStream],
             principal: golem.Principal
           ): Future[Either[ToolInvokeError[golem.schema.TypedSchemaValue], ToolInvokeResult]] =
-            val rawStdin = stdin match {
-              case Some(stream: JsToolInputStream) => Right(Some(stream.underlying))
+            val forwardedStdin = stdin match {
+              case Some(stream: JsToolInputStream) => Right(Some(stream: ToolInputStream))
               case None                            => Right(None)
               case Some(_)                         => Left(ToolInvokeError.InvalidInput("unsupported nested stdin stream"))
             }
-            rawStdin match {
+            forwardedStdin match {
               case Left(error)  => Future.successful(Left(error))
               case Right(value) =>
                 registryInvoker(
                   commandPath,
                   SchemaWire.typedSchemaValueToWit(input),
                   value,
-                  stdout.collect { case stream: JsToolOutputStream => stream.underlying },
+                  stdout.collect { case stream: JsToolOutputStream => stream: ToolOutputStream },
                   principal
                 ).map {
                   case Right(result) =>

@@ -27,6 +27,9 @@ use golem_common::model::agent::{AgentTypeName, GolemUserPrincipal, Principal};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::json::NormalizedJsonValue;
+use golem_common::model::oplog::payload::types::{
+    SerializableEntityBodyExecution, SerializableToolOperationTerminal, SerializableToolRpcError,
+};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::tool::{
     CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolDeploymentState, ToolFilesystemAccess,
@@ -46,6 +49,9 @@ use golem_worker_executor::durable_host::tool::{
     ToolOperationLaneMetadata, ToolOperationMetadata, ToolOperationWinnerMetadata,
     ToolOwnerFailureMetadata,
 };
+use golem_worker_executor::services::environment_state::{
+    EnvironmentStateService, ToolActivationSnapshot, ToolDiscoveryError,
+};
 use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::{
@@ -55,6 +61,7 @@ use golem_worker_executor_test_utils::{
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -85,6 +92,10 @@ inherit_test_dep!(
     #[tagged_as("tool_streaming_moonbit")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("large_dynamic_memory")]
+    PrecompiledComponent
+);
 
 #[derive(Debug, FromSchema)]
 struct StreamEvidence {
@@ -105,6 +116,13 @@ struct TsStreamEvidence {
 struct ScalaStreamEvidence {
     output: String,
     bytes_read: i64,
+}
+
+#[derive(Debug, FromSchema)]
+struct ScalaCleanupEvidence {
+    error: String,
+    stdin_cancelled: bool,
+    stdout_terminal: String,
 }
 
 fn deployment_state(
@@ -179,6 +197,131 @@ fn deployment_state(
         deployment_revision,
         registered_tools,
         agent_tool_bindings: BTreeMap::from([(agent_type, bindings)]),
+    }
+}
+
+struct ReorderedToolActivationService {
+    inner: TestEnvironmentStateService,
+    activation_calls: AtomicUsize,
+    first_call_blocked: tokio::sync::Notify,
+    release_first_call: tokio::sync::Notify,
+}
+
+impl Default for ReorderedToolActivationService {
+    fn default() -> Self {
+        Self {
+            inner: TestEnvironmentStateService::default(),
+            activation_calls: AtomicUsize::new(0),
+            first_call_blocked: tokio::sync::Notify::new(),
+            release_first_call: tokio::sync::Notify::new(),
+        }
+    }
+}
+
+impl ReorderedToolActivationService {
+    fn set_tool_deployment(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+        component_id: golem_common::model::component::ComponentId,
+        component_revision: ComponentRevision,
+        deployment: Option<ToolDeploymentState>,
+    ) {
+        self.inner.set_tool_deployment(
+            environment_id,
+            component_id,
+            component_revision,
+            deployment,
+        );
+    }
+
+    fn activation_calls(&self) -> usize {
+        self.activation_calls.load(Ordering::SeqCst)
+    }
+
+    async fn wait_for_first_call_to_block(&self) {
+        self.first_call_blocked.notified().await;
+    }
+
+    fn release_first_call(&self) {
+        self.release_first_call.notify_one();
+    }
+}
+
+#[async_trait::async_trait]
+impl EnvironmentStateService for ReorderedToolActivationService {
+    async fn get_agent_deployment(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+        agent_type: &AgentTypeName,
+    ) -> Result<
+        Option<golem_service_base::model::AgentDeploymentDetails>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        self.inner
+            .get_agent_deployment(environment_id, agent_type)
+            .await
+    }
+
+    async fn get_agent_secrets(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+    ) -> Result<
+        HashMap<
+            golem_common::model::agent_secret::CanonicalAgentSecretPath,
+            golem_service_base::model::agent_secret::AgentSecret,
+        >,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        self.inner.get_agent_secrets(environment_id).await
+    }
+
+    async fn get_agent_secret_revision(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+        agent_secret_id: golem_common::model::agent_secret::AgentSecretId,
+        path: golem_common::model::agent_secret::CanonicalAgentSecretPath,
+        revision: golem_common::model::agent_secret::AgentSecretRevision,
+    ) -> Result<
+        Option<golem_service_base::model::agent_secret::AgentSecret>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        self.inner
+            .get_agent_secret_revision(environment_id, agent_secret_id, path, revision)
+            .await
+    }
+
+    async fn get_retry_policies(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+    ) -> Result<
+        Vec<golem_common::model::retry_policy::NamedRetryPolicy>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        self.inner.get_retry_policies(environment_id).await
+    }
+
+    async fn get_tool_activation(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+        agent_type: &AgentTypeName,
+        tool_name: &ToolName,
+    ) -> Result<Option<ToolActivationSnapshot>, ToolDiscoveryError> {
+        match self.activation_calls.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                self.first_call_blocked.notify_one();
+                self.release_first_call.notified().await;
+                Ok(None)
+            }
+            1 => {
+                self.inner
+                    .get_tool_activation(environment_id, agent_type, tool_name)
+                    .await
+            }
+            ordinal => panic!(
+                "replay unexpectedly performed tool activation lookup number {}",
+                ordinal + 1
+            ),
+        }
     }
 }
 
@@ -506,6 +649,187 @@ async fn next_crash_checkpoint(
 
 #[test]
 #[tracing::instrument]
+#[timeout("3m")]
+async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(ReorderedToolActivationService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let (
+        provider_checkpoint_port,
+        provider_checkpoint_gate_port,
+        provider_checkpoint_server,
+        mut provider_checkpoint_arrivals,
+    ) = start_crash_checkpoint_server().await;
+    let (
+        caller_checkpoint_port,
+        caller_checkpoint_gate_port,
+        caller_checkpoint_server,
+        mut caller_checkpoint_arrivals,
+    ) = start_crash_checkpoint_server().await;
+
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", "attempt-identity-replay");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
+                    provider_checkpoint_port.to_string(),
+                ),
+                (
+                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    provider_checkpoint_gate_port.to_string(),
+                ),
+                (
+                    "CALLER_CRASH_CHECKPOINT_PORT".to_string(),
+                    caller_checkpoint_port.to_string(),
+                ),
+                (
+                    "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    caller_checkpoint_gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    let call = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent_id,
+        "concurrent_attempt_identity_replay",
+        data_value!(),
+    );
+    let crash_and_replay = async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            environment_state.wait_for_first_call_to_block(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("first activation lookup did not block"))?;
+        let original_provider = next_crash_checkpoint(
+            &mut provider_checkpoint_arrivals,
+            "attempt-identity-accepted",
+        )
+        .await?;
+        original_provider
+            .release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("original accepted tool checkpoint was dropped"))?;
+        wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
+        environment_state.release_first_call();
+
+        let original = next_crash_checkpoint(
+            &mut caller_checkpoint_arrivals,
+            "concurrent-attempt-identities",
+        )
+        .await?;
+        assert_eq!(environment_state.activation_calls(), 2);
+
+        executor.simulated_crash(&worker_id).await?;
+        drop(original.release);
+
+        assert_eq!(
+            environment_state.activation_calls(),
+            2,
+            "replay must claim both attempts without repeating admission"
+        );
+        let replayed = next_crash_checkpoint(
+            &mut caller_checkpoint_arrivals,
+            "concurrent-attempt-identities",
+        )
+        .await?;
+        replayed
+            .release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("replayed attempt-identity checkpoint was dropped"))?;
+        Ok::<_, anyhow::Error>(())
+    };
+    let (result, ()) = tokio::try_join!(call, crash_and_replay)?;
+    let outcomes: Vec<String> = result.into_typed()?;
+    assert_eq!(outcomes, ["rejected", "accepted"]);
+    assert_eq!(environment_state.activation_calls(), 2);
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let accepted_start = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params) if params.function_name == "golem::entity::invoke" => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("second attempt retained its accepted Start");
+    let rejected_start = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params)
+                if params.function_name == "golem::tool::internal::invocation-rejected" =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("first attempt retained its rejected Start");
+    assert!(
+        accepted_start < rejected_start,
+        "the later accepted attempt must be durably ordered before the earlier rejected attempt"
+    );
+    assert!(
+        executor
+            .active_entity_metadata(&owned_agent_id)
+            .await
+            .is_none_or(|active| active.tool_operations.operations.is_empty())
+    );
+
+    executor.delete_worker(&worker_id).await?;
+    provider_checkpoint_server.abort();
+    caller_checkpoint_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 #[timeout("5m")]
 async fn rust_generated_client_streams_live_and_handles_edges(
     last_unique_id: &LastUniqueId,
@@ -768,6 +1092,38 @@ async fn rust_generated_client_streams_live_and_handles_edges(
         capable_input
     );
 
+    let stdout_only_capable_input = b"stdout-only-capable".to_vec();
+    let started_contracts: Vec<Vec<u8>> = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        executor.invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "started_invocation_contracts",
+            data_value!(
+                "/stdout-only-capable.bin",
+                stdout_only_capable_input.clone()
+            ),
+        ),
+    )
+    .await
+    .expect("started invocation contract checks timed out")?
+    .into_typed()?;
+    assert_eq!(
+        started_contracts,
+        [
+            Vec::new(),
+            vec![b'f', b'r', b'a', b'g', 0, 255],
+            b"cached-result".to_vec(),
+            stdout_only_capable_input.clone(),
+        ]
+    );
+    assert_eq!(
+        executor
+            .get_file_contents(&worker_id, "/stdout-only-capable.bin")
+            .await?,
+        stdout_only_capable_input
+    );
+
     let raw_agent_id = agent_id!("ToolStreamingCaller", "rust-raw-modes");
     let raw_worker_id = executor
         .start_agent(&caller_component.id, raw_agent_id.clone())
@@ -802,6 +1158,7 @@ async fn rust_generated_client_streams_live_and_handles_edges(
             "explicit-cancel",
             "result-detach",
             "stdout-detach",
+            "stdout-operation-resume",
         ]
     );
 
@@ -1719,6 +2076,521 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
         assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
     }
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn completed_tool_replay_bypasses_current_attachment_memory_pressure(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("large_dynamic_memory")] large_dynamic_memory: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const SYSTEM_MEMORY_BYTES: u64 = 128 * 1024 * 1024;
+    const ATTACHMENT_BYTES: usize = 2 * 1024 * 1024;
+    const DESIRED_REPLAY_HEADROOM_BYTES: u64 = 1024 * 1024;
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            configure: Some(Arc::new(|config| {
+                config.limits.max_tool_attachment_bytes = 2 * ATTACHMENT_BYTES;
+                config.memory.system_memory_override = Some(SYSTEM_MEMORY_BYTES);
+                config.memory.worker_memory_ratio = 1.0;
+                config.memory.component_size_coefficient = 0.0;
+                config.memory.acquire_retry_delay = std::time::Duration::from_millis(25);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let memory_component = executor
+        .component_dep(&context.default_environment_id, large_dynamic_memory)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
+    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
+        start_crash_checkpoint_server().await;
+    let agent_id = agent_id!("ToolStreamingCaller", "completed-replay-memory-pressure");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "CRASH_CHECKPOINT_PORT".to_string(),
+                    checkpoint_port.to_string(),
+                ),
+                (
+                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    checkpoint_gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let input = vec![b'i'; ATTACHMENT_BYTES];
+    executor
+        .invoke_agent(
+            &caller_component,
+            &agent_id,
+            "hold_completed_attachment_reconstruction_under_pressure",
+            data_value!("/completed-under-pressure.bin", ATTACHMENT_BYTES as u64),
+        )
+        .await?;
+    let original_checkpoint = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        checkpoint_arrivals.recv(),
+    )
+    .await
+    .expect("original completed-attachment checkpoint timed out")
+    .expect("checkpoint server stopped");
+    assert_eq!(original_checkpoint.name, "completed-attachment-pressure");
+    let target_memory = executor.worker_memory_requirement(&owned_agent_id).await?;
+
+    let pressure_agent = agent_id!("LargeDynamicMemoryAgent", "attachment-replay-pressure");
+    let pressure_worker = executor
+        .start_agent(&memory_component.id, pressure_agent.clone())
+        .await?;
+    let pressure_owned = OwnedAgentId::new(context.default_environment_id, &pressure_worker);
+    let initial_pressure_memory = executor.worker_memory_requirement(&pressure_owned).await?;
+    let growth_budget = SYSTEM_MEMORY_BYTES
+        .checked_sub(target_memory + initial_pressure_memory + DESIRED_REPLAY_HEADROOM_BYTES)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "initial workers leave no room for calibrated pressure: target={target_memory}, pressure={initial_pressure_memory}"
+            )
+        })?;
+    let growth_mib = growth_budget / (1024 * 1024);
+    anyhow::ensure!(growth_mib > 0, "calibrated pressure growth is empty");
+    executor
+        .invoke_agent(
+            &memory_component,
+            &pressure_agent,
+            "run_with_memory_and_work",
+            data_value!(growth_mib, 120_000_u64),
+        )
+        .await?;
+    let pressure_memory = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let memory = executor
+                .worker_memory_requirement(&pressure_owned)
+                .await
+                .expect("read pressure worker memory");
+            if memory + target_memory + ATTACHMENT_BYTES as u64 > SYSTEM_MEMORY_BYTES {
+                break memory;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("pressure worker did not consume attachment headroom");
+    assert!(
+        pressure_memory + target_memory <= SYSTEM_MEMORY_BYTES,
+        "pressure must still leave room to restart the owner: pressure={pressure_memory}, target={target_memory}, pool={SYSTEM_MEMORY_BYTES}"
+    );
+
+    let mut reconstruction = executor.gate_next_completed_entity_reconstruction(&worker_id);
+    executor.simulated_crash(&worker_id).await?;
+    drop(original_checkpoint.release);
+    tokio::time::timeout(std::time::Duration::from_secs(30), reconstruction.entered())
+        .await
+        .expect("completed tool body did not reexecute under attachment memory pressure");
+    assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
+    reconstruction.release();
+
+    let replayed_checkpoint = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        checkpoint_arrivals.recv(),
+    )
+    .await
+    .expect("replayed completed-attachment checkpoint timed out")
+    .expect("checkpoint server stopped");
+    assert_eq!(replayed_checkpoint.name, "completed-attachment-pressure");
+    replayed_checkpoint
+        .release
+        .send(())
+        .expect("release replayed completed-attachment checkpoint");
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let metadata = executor.get_worker_metadata(&worker_id).await?;
+            if metadata.status == AgentStatus::Idle && metadata.pending_invocation_count == 0 {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("replayed owner invocation did not settle"))??;
+    assert_eq!(
+        executor
+            .get_file_contents(&worker_id, "/completed-under-pressure.bin")
+            .await?,
+        input,
+        "completed replay must preserve the body-reconstructed filesystem state"
+    );
+    checkpoint_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("large_dynamic_memory")] large_dynamic_memory: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const SYSTEM_MEMORY_BYTES: u64 = 128 * 1024 * 1024;
+    const ATTACHMENT_BYTES: u64 = 8 * 1024 * 1024;
+    const DESIRED_REPLAY_HEADROOM_BYTES: u64 = 4 * 1024 * 1024;
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            configure: Some(Arc::new(|config| {
+                config.limits.max_tool_attachment_bytes = 2 * ATTACHMENT_BYTES as usize;
+                config.memory.system_memory_override = Some(SYSTEM_MEMORY_BYTES);
+                config.memory.worker_memory_ratio = 1.0;
+                config.memory.component_size_coefficient = 0.0;
+                config.memory.acquire_retry_delay = std::time::Duration::from_millis(25);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let memory_component = executor
+        .component_dep(&context.default_environment_id, large_dynamic_memory)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
+    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
+        start_crash_checkpoint_server().await;
+    let agent_id = agent_id!("ToolStreamingCaller", "incomplete-upgrade-rejection");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "CRASH_CHECKPOINT_PORT".to_string(),
+                    checkpoint_port.to_string(),
+                ),
+                (
+                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    checkpoint_gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent_id,
+        "reject_incomplete_attachment_upgrade_under_pressure",
+        data_value!(),
+    );
+    let prepare_replay = async {
+        let original_checkpoint = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            checkpoint_arrivals.recv(),
+        )
+        .await
+        .expect("original incomplete-attachment checkpoint timed out")
+        .expect("checkpoint server stopped");
+        assert_eq!(original_checkpoint.name, "after-large-eof-before-terminal");
+        let operation = executor
+            .active_entity_metadata(&owned_agent_id)
+            .await
+            .and_then(|active| active.tool_operations.operations.into_iter().next())
+            .expect("incomplete tool operation is active at the crash checkpoint");
+        let original_start = operation.start_index.expect("durable tool Start index");
+        let stdout = operation.stdout.expect("incomplete tool stdout metadata");
+        assert_eq!(stdout.buffered_bytes as u64, ATTACHMENT_BYTES);
+        assert_eq!(stdout.delivered_bytes, 0);
+        let reconstructed_entity_memory = executor
+            .active_entity_metadata(&owned_agent_id)
+            .await
+            .expect("incomplete tool entity remains active at the crash checkpoint")
+            .slots
+            .into_iter()
+            .flat_map(|slot| slot.invocations)
+            .map(|invocation| invocation.linear_memory_bytes)
+            .sum::<u64>();
+        anyhow::ensure!(
+            reconstructed_entity_memory > 0,
+            "incomplete tool entity has no reconstructed linear-memory charge"
+        );
+
+        let mut reconstructed_body = executor.gate_next_entity_body_start(&worker_id);
+        executor.simulated_crash(&worker_id).await?;
+        drop(original_checkpoint.release);
+        executor.resume(&worker_id, true).await?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            reconstructed_body.entered(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("reconstructed entity body start gate was not reached"))?;
+
+        let target_memory = executor.worker_memory_requirement(&owned_agent_id).await?;
+        let restart_memory = target_memory
+            .checked_add(reconstructed_entity_memory)
+            .ok_or_else(|| anyhow::anyhow!("reconstructed memory requirement overflow"))?;
+        let pressure_agent = agent_id!("LargeDynamicMemoryAgent", "incomplete-attachment-pressure");
+        let pressure_worker = executor
+            .start_agent(&memory_component.id, pressure_agent.clone())
+            .await?;
+        let pressure_owned = OwnedAgentId::new(context.default_environment_id, &pressure_worker);
+        let initial_pressure_memory = executor.worker_memory_requirement(&pressure_owned).await?;
+        let growth_budget = SYSTEM_MEMORY_BYTES
+            .checked_sub(restart_memory + initial_pressure_memory + DESIRED_REPLAY_HEADROOM_BYTES)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "initial workers leave no room for calibrated pressure: owner={target_memory}, entity={reconstructed_entity_memory}, pressure={initial_pressure_memory}"
+                )
+            })?;
+        let growth_mib = growth_budget / (1024 * 1024);
+        anyhow::ensure!(growth_mib > 0, "calibrated pressure growth is empty");
+        executor
+            .invoke_agent(
+                &memory_component,
+                &pressure_agent,
+                "run_with_memory_and_work",
+                data_value!(growth_mib, 120_000_u64),
+            )
+            .await?;
+        let pressure_memory = {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+            let mut maximum_observed = 0;
+            loop {
+                let memory = executor
+                    .worker_memory_requirement(&pressure_owned)
+                    .await
+                    .expect("read pressure worker memory");
+                maximum_observed = maximum_observed.max(memory);
+                if memory + restart_memory + ATTACHMENT_BYTES > SYSTEM_MEMORY_BYTES {
+                    break memory;
+                }
+                anyhow::ensure!(
+                    tokio::time::Instant::now() < deadline,
+                    "pressure worker did not consume attachment-upgrade headroom: owner={target_memory}, entity={reconstructed_entity_memory}, initial_pressure={initial_pressure_memory}, requested_growth_mib={growth_mib}, maximum_pressure={maximum_observed}, attachment={ATTACHMENT_BYTES}, pool={SYSTEM_MEMORY_BYTES}"
+                );
+                tokio::task::yield_now().await;
+            }
+        };
+        assert!(
+            pressure_memory + restart_memory <= SYSTEM_MEMORY_BYTES,
+            "pressure must fit beside the reconstructed owner and entity: pressure={pressure_memory}, owner={target_memory}, entity={reconstructed_entity_memory}, pool={SYSTEM_MEMORY_BYTES}"
+        );
+
+        reconstructed_body.release();
+        Ok::<_, anyhow::Error>(original_start)
+    };
+    let (result, original_start) = tokio::join!(invocation, prepare_replay);
+    let evidence = result?.into_typed::<Vec<String>>()?;
+    let original_start = original_start?;
+    assert_eq!(
+        evidence,
+        vec!["resource-exhausted", "stdout-resource-exhausted"]
+    );
+    assert_eq!(
+        executor
+            .get_file_contents(&worker_id, "/incomplete-attachment-upgrade-rejected")
+            .await?
+            .as_ref(),
+        b"durable".as_slice()
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "attachment admission rejection must be an ordinary durable tool outcome"
+    );
+    let (terminal_index, terminal_response) = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(params) if params.start_index == original_start => params
+                .response
+                .clone()
+                .map(|response| (entry.oplog_index, response)),
+            _ => None,
+        })
+        .expect("incomplete attachment upgrade rejection has one durable terminal");
+    let (jump_index, jump) = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Jump(params) if entry.oplog_index < terminal_index => {
+                Some((entry.oplog_index, params.jump.clone()))
+            }
+            _ => None,
+        })
+        .expect("incomplete atomic tail is jumped before the outer tool terminal");
+    assert_eq!(
+        jump.end, jump_index,
+        "the recovery Jump must delete itself with the abandoned atomic tail"
+    );
+    assert!(
+        jump.start > original_start,
+        "the recovery Jump must preserve the outer tool Start"
+    );
+    let terminal = SerializableToolOperationTerminal::from_value(terminal_response.value())?;
+    assert_eq!(
+        terminal.body_execution,
+        SerializableEntityBodyExecution::Skipped
+    );
+    assert!(matches!(
+        terminal.result,
+        Err(SerializableToolRpcError::ResourceExhausted(_))
+    ));
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(params)
+                        if params.function_name == "golem::entity::invoke"
+                )
+            })
+            .count(),
+        1
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::End(params) if params.start_index == original_start
+                )
+            })
+            .count(),
+        1
+    );
+    if let Some(active) = executor.active_entity_metadata(&owned_agent_id).await {
+        assert!(active.tool_operations.operations.is_empty());
+        assert!(active.lane.holder.is_none());
+        assert_eq!(active.lane.active_invocation_count, 0);
+        assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
+    }
+
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            checkpoint_arrivals.recv()
+        )
+        .await
+        .is_err(),
+        "rejected live repair must not reach the provider's live checkpoint"
+    );
+    executor.simulated_crash(&worker_id).await?;
+    executor.resume(&worker_id, true).await?;
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let metadata = executor.get_worker_metadata(&worker_id).await?;
+            if metadata.status == AgentStatus::Idle && metadata.pending_invocation_count == 0 {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("stable rejection replay did not settle"))??;
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            checkpoint_arrivals.recv()
+        )
+        .await
+        .is_err(),
+        "recorded skipped rejection must not reexecute the provider body"
+    );
+    let replayed_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        replayed_oplog
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::End(params) if params.start_index == original_start
+                )
+            })
+            .count(),
+        1,
+        "replay must retain the original attachment rejection terminal"
+    );
+    checkpoint_server.abort();
     Ok(())
 }
 
@@ -2923,6 +3795,8 @@ async fn completed_reconstruction_claim_blocks_concurrent_replay_to_live(
         let original_live =
             next_crash_checkpoint(&mut caller_checkpoints, "reconstruction-live-effect").await?;
         let mut reconstruction_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
+        let mut reconstruction_body =
+            executor.gate_next_completed_entity_reconstruction(&worker_id);
         executor.simulated_crash(&worker_id).await?;
         drop(original_live.release);
         let reconstruction_start = tokio::time::timeout(
@@ -2941,13 +3815,17 @@ async fn completed_reconstruction_claim_blocks_concurrent_replay_to_live(
         );
 
         reconstruction_claim.release();
-        let replayed_body =
-            next_crash_checkpoint(&mut provider_checkpoints, "historical-reconstruction-body")
-                .await?;
-        replayed_body
-            .release
-            .send(())
-            .map_err(|_| anyhow::anyhow!("replayed reconstruction body gate was dropped"))?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            reconstruction_body.entered(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("completed reconstruction body did not settle"))?;
+        assert!(
+            matches!(futures::poll!(barrier.as_mut()), std::task::Poll::Pending),
+            "the primary replay-to-live barrier was released before body validation"
+        );
+        reconstruction_body.release();
         tokio::time::timeout(std::time::Duration::from_secs(30), barrier)
             .await
             .map_err(|_| anyhow::anyhow!("validated reconstruction did not release the barrier"))?;
@@ -4203,6 +5081,17 @@ async fn typescript_generated_client_streams_live(
     assert_eq!(evidence.output, b"ts-marker:typescript-live");
     assert_eq!(evidence.bytes_read, 15);
 
+    let failure: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "typedStdoutFailure",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(failure, "resource-exhausted");
+
     Ok(())
 }
 
@@ -4261,6 +5150,19 @@ async fn scala_generated_client_streams_live(
         .into_typed()?;
     assert_eq!(evidence.output, "scala-marker:scala-live");
     assert_eq!(evidence.bytes_read, 10);
+
+    let cleanup: ScalaCleanupEvidence = executor
+        .invoke_and_await_agent(
+            &stored_component,
+            &agent_id,
+            "invalidCommandPathCleanup",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(cleanup.error, "invalid-command-path:missing");
+    assert!(cleanup.stdin_cancelled);
+    assert_eq!(cleanup.stdout_terminal, "failed");
 
     Ok(())
 }
@@ -4339,6 +5241,17 @@ async fn moonbit_generated_client_streams_live(
         }
     };
     assert_eq!(bytes_read, payload.len() as u64);
+
+    let explicit_failure: String = executor
+        .invoke_and_await_agent(
+            &stored_component,
+            &agent_id,
+            "explicit_stdout_failure",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(explicit_failure, "resource-exhausted:ok");
 
     Ok(())
 }

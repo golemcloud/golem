@@ -144,6 +144,18 @@ object ToolClientSpec extends ZIOSpecDefault {
         error <- ZIO.fromFuture(_ => collected.failed)
       } yield assertTrue(before, error eq failure)
     },
+    test("started invocation collect preserves a declared error when stdout also fails") {
+      val declared   = Usage("bad flag")
+      val stream     = new ChunkStream(List(Left(ByteStreamFailure.ResourceExhausted)))
+      val invocation = ToolInvocation[CliError, Unit](
+        stream,
+        Future.successful(Left(ToolError.Tool(declared))),
+        () => ()
+      )
+      ZIO.fromFuture(ec => invocation.collect()(ec)).map { result =>
+        assertTrue(result == Left(ToolError.Tool(declared)))
+      }
+    },
     test("started invocation cancellation is explicit and observer drop does not invoke it") {
       var cancelled  = false
       val invocation = ToolInvocation[Nothing, Unit](

@@ -379,6 +379,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         tool_entity,
         EntityCallMode::Asynchronous,
         Some(EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+            attempt_ordinal: 0,
             command_path: vec!["files".to_string(), "lookup".to_string()],
             args: vec!["configured-secret-rendering".to_string()],
             has_stdin: true,
@@ -549,6 +550,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         .await;
 
     let rejected_request: HostRequest = HostRequestGolemToolInvocationRejected {
+        attempt_ordinal: 0,
         tool_name: "rejected".to_string(),
         command_path: vec!["reject".to_string()],
         input: None,

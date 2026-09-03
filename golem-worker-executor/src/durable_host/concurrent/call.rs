@@ -15,7 +15,7 @@
 use super::*;
 use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
 use golem_common::model::entity::{
-    EntityInvocationRequestIdentity, InvocationExecutionMode, OwnerRuntime,
+    AgentEntity, EntityInvocationRequestIdentity, InvocationExecutionMode, OwnerRuntime,
     ToolInvocationClaimIdentity,
 };
 use golem_service_base::model::auth::AuthCtx;
@@ -296,6 +296,8 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
     public_state: PublicDurableWorkerState<Ctx>,
     primary_runtime: bool,
     replaying_incomplete_entity: bool,
+    tool_entity: bool,
+    tool_operation: Option<crate::durable_host::tool::operation::OwnerToolOperation>,
     local_live_tail: Arc<AtomicBool>,
     replay_state: crate::durable_host::replay_state::ReplayState,
     linear_memory: crate::services::linear_memory::LinearMemoryTracker,
@@ -320,25 +322,105 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
 }
 
 impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<Pair, P, Ctx> {
-    async fn switch_to_live(&mut self) -> Result<(), WorkerExecutorError> {
-        let role = if self.primary_runtime {
+    fn replay_to_live_role(&self) -> ReplayToLiveRole {
+        if self.primary_runtime {
             ReplayToLiveRole::PrimaryAgent
         } else {
             ReplayToLiveRole::NonPrimary
+        }
+    }
+
+    fn begin_switch_to_live(
+        &self,
+    ) -> impl Future<Output = Result<BeginReplayToLive, WorkerExecutorError>> + Send + 'static {
+        let replaying_incomplete_entity = self.replaying_incomplete_entity;
+        let tool_entity = self.tool_entity;
+        let tool_operation = self.tool_operation.clone();
+        let public_state = self.public_state.clone();
+        let linear_memory = self.linear_memory.clone();
+        let replay_state = self.replay_state.clone();
+        let role = self.replay_to_live_role();
+        let local_live_tail = self.local_live_tail.clone();
+        async move {
+            crate::durable_host::begin_replay_to_live(
+                replaying_incomplete_entity,
+                tool_entity,
+                tool_operation,
+                &public_state,
+                &linear_memory,
+                &replay_state,
+                role,
+                local_live_tail,
+            )
+            .await
+        }
+    }
+
+    fn finish_switch_to_live_from_settling(
+        &self,
+        replay_target: OplogIndex,
+    ) -> impl Future<Output = Result<BeginReplayToLive, WorkerExecutorError>> + Send + 'static {
+        let replaying_incomplete_entity = self.replaying_incomplete_entity;
+        let tool_entity = self.tool_entity;
+        let tool_operation = self.tool_operation.clone();
+        let public_state = self.public_state.clone();
+        let linear_memory = self.linear_memory.clone();
+        let replay_state = self.replay_state.clone();
+        let role = self.replay_to_live_role();
+        let local_live_tail = self.local_live_tail.clone();
+        async move {
+            crate::durable_host::finish_replay_to_live_from_settling(
+                replaying_incomplete_entity,
+                tool_entity,
+                tool_operation,
+                &public_state,
+                &linear_memory,
+                &replay_state,
+                role,
+                local_live_tail,
+                replay_target,
+            )
+            .await
+        }
+    }
+
+    fn begin_local_live_continuation(
+        &self,
+    ) -> impl Future<Output = Result<PendingReplayToLive, WorkerExecutorError>> + Send + 'static
+    {
+        let replaying_incomplete_entity = self.replaying_incomplete_entity;
+        let tool_entity = self.tool_entity;
+        let tool_operation = self.tool_operation.clone();
+        let public_state = self.public_state.clone();
+        let linear_memory = self.linear_memory.clone();
+        let role = self.replay_to_live_role();
+        let local_live_tail = self.local_live_tail.clone();
+        let replay_target = self.replay_state.replay_target();
+        async move {
+            crate::durable_host::begin_local_live_continuation(
+                replaying_incomplete_entity,
+                tool_entity,
+                tool_operation,
+                &public_state,
+                &linear_memory,
+                role,
+                local_live_tail,
+                replay_target,
+            )
+            .await
+        }
+    }
+
+    async fn switch_to_live(&mut self) -> Result<(), WorkerExecutorError> {
+        let pending = match self.begin_switch_to_live().await? {
+            BeginReplayToLive::ReplayResumed => {
+                return Err(WorkerExecutorError::runtime(
+                    "replay target grew while a durable call was settling",
+                ));
+            }
+            BeginReplayToLive::Pending(pending) => pending,
         };
-        let outcome = self
-            .replay_state
-            .switch_to_live(&self.linear_memory, role)
-            .await?;
-        if outcome == ReplayToLiveOutcome::ReplayResumed {
-            return Err(WorkerExecutorError::runtime(
-                "replay target grew while a durable call was settling",
-            ));
-        }
-        if role == ReplayToLiveRole::NonPrimary {
-            self.local_live_tail.store(true, Ordering::Release);
-        }
-        Ok(())
+        pending.finish().await?.require_live()
     }
 
     async fn continue_entity_live(
@@ -348,8 +430,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
         if replay_ended {
             self.switch_to_live().await?;
         } else {
-            self.local_live_tail.store(true, Ordering::Release);
-            self.linear_memory.switch_to_live();
+            self.begin_local_live_continuation()
+                .await?
+                .finish()
+                .await?
+                .require_live()?;
         }
         Ok(())
     }
@@ -358,13 +443,22 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
 async fn publish_incomplete_replay_tail_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-) -> Result<(), WorkerExecutorError>
+) -> Result<FinishReplayToLive, WorkerExecutorError>
 where
     T: 'static,
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let (replay_state, linear_memory, role, local_live_tail) = store.with(|mut access| {
+    let (
+        replay_state,
+        linear_memory,
+        role,
+        local_live_tail,
+        replaying_incomplete_entity,
+        tool_entity,
+        tool_operation,
+        public_state,
+    ) = store.with(|mut access| {
         let ctx = get_ctx(access.data_mut());
         (
             ctx.state.replay_state.clone(),
@@ -375,20 +469,54 @@ where
                 ReplayToLiveRole::NonPrimary
             },
             ctx.state.local_live_tail(),
+            ctx.state.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete),
+            matches!(ctx.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))),
+            ctx.entity_tool_operation(),
+            ctx.public_state.clone(),
         )
     });
-    let outcome = replay_state.switch_to_live(&linear_memory, role).await?;
-    if outcome == ReplayToLiveOutcome::ReplayResumed {
-        return Err(WorkerExecutorError::runtime(
-            "replay target grew while an incomplete durable call was settling",
-        ));
-    }
-    if role == ReplayToLiveRole::NonPrimary {
-        local_live_tail.store(true, Ordering::Release);
-    } else {
+    let pending = match crate::durable_host::begin_replay_to_live(
+        replaying_incomplete_entity,
+        tool_entity,
+        tool_operation,
+        &public_state,
+        &linear_memory,
+        &replay_state,
+        role,
+        local_live_tail,
+    )
+    .await?
+    {
+        BeginReplayToLive::ReplayResumed => {
+            return Err(WorkerExecutorError::runtime(
+                "replay target grew while an incomplete durable call was settling",
+            ));
+        }
+        BeginReplayToLive::Pending(pending) => pending,
+    };
+    let outcome = pending.finish().await?;
+    if outcome == FinishReplayToLive::Live && role == ReplayToLiveRole::PrimaryAgent {
         process_pending_replay_events_access(store, get_ctx).await?;
     }
-    Ok(())
+    Ok(outcome)
+}
+
+async fn finish_prepared_access_to_live<T, D, Ctx>(
+    pending: PendingReplayToLive,
+    primary_runtime: bool,
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<FinishReplayToLive, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let outcome = pending.finish().await?;
+    if outcome == FinishReplayToLive::Live && primary_runtime {
+        process_pending_replay_events_access(store, get_ctx).await?;
+    }
+    Ok(outcome)
 }
 
 async fn switch_prepared_access_to_live<T, D, Ctx, Pair, P>(
@@ -403,11 +531,17 @@ where
     Pair: HostPayloadPair,
     P: DropPolicy,
 {
-    prepared.switch_to_live().await?;
-    if prepared.primary_runtime {
-        process_pending_replay_events_access(store, get_ctx).await?;
-    }
-    Ok(())
+    let pending = match prepared.begin_switch_to_live().await? {
+        BeginReplayToLive::ReplayResumed => {
+            return Err(WorkerExecutorError::runtime(
+                "replay target grew while a durable call was settling",
+            ));
+        }
+        BeginReplayToLive::Pending(pending) => pending,
+    };
+    finish_prepared_access_to_live(pending, prepared.primary_runtime, store, get_ctx)
+        .await?
+        .require_live()
 }
 
 /// Options that make the durable records of a concurrent accessor call claim-safe on replay.
@@ -1021,28 +1155,55 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 "p3 accessor durable call path currently supports only ReadLocal/WriteLocal/ReadRemote/WriteRemote/WriteRemoteBatched, got {function_type:?}"
             )));
         }
-        let (is_live, replaying_incomplete_entity, replay_state, linear_memory, local_live_tail) =
-            store.with(|mut access| {
-                let ctx = get_ctx(access.data_mut());
-                (
-                    ctx.state.is_live(),
-                    ctx.entity_invocation_scope().is_some_and(|scope| {
-                        scope.mode() == InvocationExecutionMode::ReplayingIncomplete
-                    }),
-                    ctx.state.replay_state.clone(),
-                    ctx.linear_memory.clone(),
-                    ctx.state.local_live_tail(),
-                )
-            });
+        let (
+            is_live,
+            replaying_incomplete_entity,
+            replay_state,
+            linear_memory,
+            local_live_tail,
+            tool_entity,
+            tool_operation,
+            public_state,
+        ) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            (
+                ctx.state.is_live(),
+                ctx.entity_invocation_scope().is_some_and(|scope| {
+                    scope.mode() == InvocationExecutionMode::ReplayingIncomplete
+                }),
+                ctx.state.replay_state.clone(),
+                ctx.linear_memory.clone(),
+                ctx.state.local_live_tail(),
+                matches!(ctx.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))),
+                ctx.entity_tool_operation(),
+                ctx.public_state.clone(),
+            )
+        });
         if is_live {
             return if replaying_incomplete_entity {
                 // This Store belongs to an incomplete entity's live repair, not the primary
                 // agent runtime. It releases incomplete resolver claims but must not wait on
                 // completed sibling reconstructions.
-                replay_state
-                    .switch_to_live(&linear_memory, ReplayToLiveRole::NonPrimary)
-                    .await?;
-                local_live_tail.store(true, Ordering::Release);
+                let pending = match crate::durable_host::begin_replay_to_live(
+                    replaying_incomplete_entity,
+                    tool_entity,
+                    tool_operation,
+                    &public_state,
+                    &linear_memory,
+                    &replay_state,
+                    ReplayToLiveRole::NonPrimary,
+                    local_live_tail,
+                )
+                .await?
+                {
+                    BeginReplayToLive::ReplayResumed => {
+                        return Err(WorkerExecutorError::runtime(
+                            "replay target grew while an entity accessor was settling",
+                        ));
+                    }
+                    BeginReplayToLive::Pending(pending) => pending,
+                };
+                pending.finish().await?.require_live()?;
                 Ok(ReplayAccessStartOutcome::ReplayEnded)
             } else {
                 Err(WorkerExecutorError::unexpected_oplog_entry(
@@ -1092,12 +1253,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
 
         let replay_state = prepared.replay_state.clone();
+        let replaying_incomplete_entity = prepared.replaying_incomplete_entity;
+        let tool_entity = prepared.tool_entity;
+        let tool_operation = prepared.tool_operation.clone();
+        let public_state = prepared.public_state.clone();
         let linear_memory = prepared.linear_memory.clone();
-        let transition_role = if prepared.primary_runtime {
-            ReplayToLiveRole::PrimaryAgent
-        } else {
-            ReplayToLiveRole::NonPrimary
-        };
         let execution_scope = prepared.execution_scope;
         let retry = prepared.retry;
         let claim = Self::replay_start_claim(&prepared.claim_options, &execution_scope, &retry)?;
@@ -1143,22 +1303,47 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         ),
                     ));
                 }
-                if matches!(outcome, ReplayStartClaimOutcome::ReplayEnded) {
-                    let transition = replay_state
-                        .switch_to_live(&linear_memory, transition_role)
-                        .await?;
-                    if transition == ReplayToLiveOutcome::ReplayResumed {
-                        return Err(WorkerExecutorError::runtime(
-                            "replay target grew while a reconstructed durable call was settling",
-                        ));
-                    }
-                    if transition_role == ReplayToLiveRole::NonPrimary {
-                        prepared.local_live_tail.store(true, Ordering::Release);
+                let transition_role = if prepared.primary_runtime {
+                    ReplayToLiveRole::PrimaryAgent
+                } else {
+                    ReplayToLiveRole::NonPrimary
+                };
+                let pending = if matches!(outcome, ReplayStartClaimOutcome::ReplayEnded) {
+                    match crate::durable_host::begin_replay_to_live(
+                        replaying_incomplete_entity,
+                        tool_entity,
+                        tool_operation,
+                        &public_state,
+                        &linear_memory,
+                        &replay_state,
+                        transition_role,
+                        prepared.local_live_tail.clone(),
+                    )
+                    .await?
+                    {
+                        BeginReplayToLive::ReplayResumed => {
+                            return Err(WorkerExecutorError::runtime(
+                                "replay target grew while a reconstructed durable call was settling",
+                            ));
+                        }
+                        BeginReplayToLive::Pending(pending) => pending,
                     }
                 } else {
-                    prepared.local_live_tail.store(true, Ordering::Release);
-                    prepared.linear_memory.switch_to_live();
-                }
+                    crate::durable_host::begin_local_live_continuation(
+                        replaying_incomplete_entity,
+                        tool_entity,
+                        tool_operation,
+                        &public_state,
+                        &linear_memory,
+                        transition_role,
+                        prepared.local_live_tail.clone(),
+                        prepared.replay_state.replay_target(),
+                    )
+                    .await?
+                };
+                finish_prepared_access_to_live(pending, prepared.primary_runtime, store, get_ctx)
+                    .await?
+                    .require_live()?;
                 store.with(|mut access| {
                     Self::cleanup_access_start(
                         get_ctx(access.data_mut()),
@@ -1334,6 +1519,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             replaying_incomplete_entity: ctx
                 .entity_invocation_scope()
                 .is_some_and(|scope| scope.mode() == InvocationExecutionMode::ReplayingIncomplete),
+            tool_entity: matches!(ctx.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))),
+            tool_operation: ctx.entity_tool_operation(),
             local_live_tail: ctx.state.local_live_tail(),
             replay_state: ctx.state.replay_state.clone(),
             linear_memory: ctx.linear_memory.clone(),
@@ -1464,6 +1651,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         } else {
             ReplayToLiveRole::NonPrimary
         };
+        let replaying_incomplete_entity = prepared.replaying_incomplete_entity;
+        let tool_entity = prepared.tool_entity;
+        let tool_operation = prepared.tool_operation.clone();
+        let public_state = prepared.public_state.clone();
         let mut execution_scope = prepared.execution_scope;
         let mut retry = prepared.retry;
         let mut is_live = prepared.is_live;
@@ -1543,39 +1734,66 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             primary_replay_tail,
                             "Accessor durable call continued live after replay"
                         );
-                        if matches!(outcome, ReplayStartClaimOutcome::ReplayEnded) {
-                            let transition = replay_state
-                                .switch_to_live(&linear_memory, transition_role)
-                                .await
-                                .map_err(|error| {
-                                    (
-                                        error,
-                                        AccessStartCleanup {
-                                            atomic_lease: prepared.atomic_lease.clone(),
-                                        },
-                                    )
-                                })?;
-                            if transition == ReplayToLiveOutcome::ReplayResumed {
-                                continue;
-                            }
-                            if transition_role == ReplayToLiveRole::NonPrimary {
-                                prepared.local_live_tail.store(true, Ordering::Release);
-                            } else {
-                                process_pending_replay_events_access(store, get_ctx)
-                                    .await
-                                    .map_err(|error| {
-                                        (
-                                            error,
-                                            AccessStartCleanup {
-                                                atomic_lease: prepared.atomic_lease.clone(),
-                                            },
-                                        )
-                                    })?;
+                        let pending = if matches!(outcome, ReplayStartClaimOutcome::ReplayEnded) {
+                            match crate::durable_host::begin_replay_to_live(
+                                replaying_incomplete_entity,
+                                tool_entity,
+                                tool_operation.clone(),
+                                &public_state,
+                                &linear_memory,
+                                &replay_state,
+                                transition_role,
+                                prepared.local_live_tail.clone(),
+                            )
+                            .await
+                            .map_err(|error| {
+                                (
+                                    error,
+                                    AccessStartCleanup {
+                                        atomic_lease: prepared.atomic_lease.clone(),
+                                    },
+                                )
+                            })? {
+                                BeginReplayToLive::ReplayResumed => continue,
+                                BeginReplayToLive::Pending(pending) => pending,
                             }
                         } else {
-                            prepared.local_live_tail.store(true, Ordering::Release);
-                            prepared.linear_memory.switch_to_live();
-                        }
+                            crate::durable_host::begin_local_live_continuation(
+                                replaying_incomplete_entity,
+                                tool_entity,
+                                tool_operation.clone(),
+                                &public_state,
+                                &linear_memory,
+                                transition_role,
+                                prepared.local_live_tail.clone(),
+                                prepared.replay_state.replay_target(),
+                            )
+                            .await
+                            .map_err(|error| {
+                                (
+                                    error,
+                                    AccessStartCleanup {
+                                        atomic_lease: prepared.atomic_lease.clone(),
+                                    },
+                                )
+                            })?
+                        };
+                        finish_prepared_access_to_live(
+                            pending,
+                            prepared.primary_runtime,
+                            store,
+                            get_ctx,
+                        )
+                        .await
+                        .and_then(FinishReplayToLive::require_live)
+                        .map_err(|error| {
+                            (
+                                error,
+                                AccessStartCleanup {
+                                    atomic_lease: prepared.atomic_lease.clone(),
+                                },
+                            )
+                        })?;
                         let previous = retry.durable_execution_state();
                         retry = InFunctionRetryController::new(
                             retry.function_type().clone(),
@@ -1822,9 +2040,54 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                     },
                                 )
                             })? {
-                            ScopeStartClaimOutcome::MissingSwitchedToLive => {}
+                            ScopeStartClaimOutcome::MissingSettling { replay_target } => {
+                                match prepared
+                                    .finish_switch_to_live_from_settling(replay_target)
+                                    .await
+                                    .map_err(|error| {
+                                        (
+                                            error,
+                                            AccessStartCleanup {
+                                                atomic_lease: prepared.atomic_lease.clone(),
+                                            },
+                                        )
+                                    })? {
+                                    BeginReplayToLive::ReplayResumed => {
+                                        return Err((
+                                            WorkerExecutorError::runtime(
+                                                "replay target grew while a missing accessor scope was settling",
+                                            ),
+                                            AccessStartCleanup {
+                                                atomic_lease: prepared.atomic_lease.clone(),
+                                            },
+                                        ));
+                                    }
+                                    BeginReplayToLive::Pending(pending) => {
+                                        pending
+                                            .finish()
+                                            .await
+                                            .map_err(|error| {
+                                                (
+                                                    error,
+                                                    AccessStartCleanup {
+                                                        atomic_lease: prepared.atomic_lease.clone(),
+                                                    },
+                                                )
+                                            })?
+                                            .require_live()
+                                            .map_err(|error| {
+                                                (
+                                                    error,
+                                                    AccessStartCleanup {
+                                                        atomic_lease: prepared.atomic_lease.clone(),
+                                                    },
+                                                )
+                                            })?;
+                                    }
+                                }
+                            }
                             ScopeStartClaimOutcome::Missing => unreachable!(
-                                "missing-scope recovery either claims the scope or switches live"
+                                "missing-scope recovery either claims the scope or enters settlement"
                             ),
                             ScopeStartClaimOutcome::Claimed { .. } => {
                                 return Err((
@@ -1884,8 +2147,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         begin_index,
                         handle,
                     } => Some((begin_index, handle)),
-                    ScopeStartClaimOutcome::MissingSwitchedToLive => {
-                        switch_prepared_access_to_live(prepared, store, get_ctx)
+                    ScopeStartClaimOutcome::MissingSettling { replay_target } => {
+                        let pending = match prepared
+                            .finish_switch_to_live_from_settling(replay_target)
                             .await
                             .map_err(|error| {
                                 (
@@ -1894,11 +2158,39 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                         atomic_lease: prepared.atomic_lease.clone(),
                                     },
                                 )
-                            })?;
+                            })? {
+                            BeginReplayToLive::ReplayResumed => {
+                                return Err((
+                                    WorkerExecutorError::runtime(
+                                        "replay target grew while a missing accessor scope was settling",
+                                    ),
+                                    AccessStartCleanup {
+                                        atomic_lease: prepared.atomic_lease.clone(),
+                                    },
+                                ));
+                            }
+                            BeginReplayToLive::Pending(pending) => pending,
+                        };
+                        finish_prepared_access_to_live(
+                            pending,
+                            prepared.primary_runtime,
+                            store,
+                            get_ctx,
+                        )
+                        .await
+                        .and_then(FinishReplayToLive::require_live)
+                        .map_err(|error| {
+                            (
+                                error,
+                                AccessStartCleanup {
+                                    atomic_lease: prepared.atomic_lease.clone(),
+                                },
+                            )
+                        })?;
                         None
                     }
                     ScopeStartClaimOutcome::Missing => unreachable!(
-                        "missing-scope recovery either claims the scope or switches live"
+                        "missing-scope recovery either claims the scope or enters settlement"
                     ),
                 }
             } else {
@@ -2083,19 +2375,31 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             prepared.retry.durable_execution_state().assume_idempotence,
                         ) =>
                     {
-                        switch_prepared_access_to_live(prepared, store, get_ctx)
-                            .await
-                            .map_err(|error| {
+                        let pending = match prepared.begin_switch_to_live().await.map_err(
+                            |error| {
                                 (
                                     error,
                                     AccessStartCleanup {
                                         atomic_lease: prepared.atomic_lease.clone(),
                                     },
                                 )
-                            })?;
+                            },
+                        )? {
+                            BeginReplayToLive::ReplayResumed => {
+                                return Err((
+                                    WorkerExecutorError::runtime(
+                                        "replay target grew while an accessor batched write was settling",
+                                    ),
+                                    AccessStartCleanup {
+                                        atomic_lease: prepared.atomic_lease.clone(),
+                                    },
+                                ));
+                            }
+                            BeginReplayToLive::Pending(pending) => pending,
+                        };
                         let deleted_region = OplogRegion {
                             start: begin_index.next(),
-                            end: prepared.replay_state.replay_target().next(),
+                            end: pending.replay_target().next(),
                         };
                         prepared
                             .public_state
@@ -2110,6 +2414,22 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             .worker()
                             .reattach_worker_status()
                             .await;
+                        finish_prepared_access_to_live(
+                            pending,
+                            prepared.primary_runtime,
+                            store,
+                            get_ctx,
+                        )
+                        .await
+                        .and_then(FinishReplayToLive::require_live)
+                        .map_err(|error| {
+                            (
+                                error,
+                                AccessStartCleanup {
+                                    atomic_lease: prepared.atomic_lease.clone(),
+                                },
+                            )
+                        })?;
                         Ok(AccessOpenedScope {
                             begin_index,
                             replay_handle: None,
@@ -3291,7 +3611,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 park_undelivered_forever().await
             }
             ReplayedResolution::Incomplete => {
-                if let Err(error) = publish_incomplete_replay_tail_access(store, get_ctx).await {
+                let transition = publish_incomplete_replay_tail_access(store, get_ctx).await;
+                if let Err(error) = transition.and_then(FinishReplayToLive::require_live) {
                     self.finished = true;
                     return Err(error);
                 }
@@ -3392,10 +3713,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 Err(terminal.direct_divergence_error())
             }
             ReplayedResolution::Incomplete => {
-                if let Err(error) = publish_incomplete_replay_tail_access(store, get_ctx).await {
-                    self.finished = true;
-                    return Err(error);
-                }
+                let transition = match publish_incomplete_replay_tail_access(store, get_ctx).await {
+                    Ok(transition) => transition,
+                    Err(error) => {
+                        self.finished = true;
+                        return Err(error);
+                    }
+                };
                 self.prepare_incomplete_live_repair(
                     Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
                     || {
@@ -3404,7 +3728,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         })
                     },
                 )?;
-                Ok(ReconstructionReplayOutcome::Incomplete(self))
+                match transition {
+                    FinishReplayToLive::Cancelled => {
+                        Ok(ReconstructionReplayOutcome::LiveAdmissionCancelled(self))
+                    }
+                    FinishReplayToLive::Live | FinishReplayToLive::AttachmentAdmissionRejected => {
+                        Ok(ReconstructionReplayOutcome::Incomplete(self))
+                    }
+                }
             }
         }
     }
@@ -3555,7 +3886,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 park_undelivered_forever().await
             }
             ReplayedResolution::Incomplete => {
-                if let Err(error) = publish_incomplete_replay_tail_access(store, get_ctx).await {
+                let transition = publish_incomplete_replay_tail_access(store, get_ctx).await;
+                if let Err(error) = transition.and_then(FinishReplayToLive::require_live) {
                     self.finished = true;
                     return Err(error);
                 }
@@ -4703,27 +5035,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                         "Durable call continued live after replay"
                     );
                     if matches!(outcome, ReplayStartClaimOutcome::ReplayEnded) {
-                        let role = if ctx.runtime == OwnerRuntime::Agent {
-                            ReplayToLiveRole::PrimaryAgent
-                        } else {
-                            ReplayToLiveRole::NonPrimary
+                        let pending = match ctx.begin_switch_to_live().await? {
+                            BeginReplayToLive::ReplayResumed => continue,
+                            BeginReplayToLive::Pending(pending) => pending,
                         };
-                        let transition = ctx
-                            .state
-                            .replay_state
-                            .switch_to_live(&ctx.linear_memory, role)
-                            .await?;
-                        if transition == ReplayToLiveOutcome::ReplayResumed {
-                            continue;
-                        }
-                        if role == ReplayToLiveRole::NonPrimary {
-                            ctx.state.local_live_tail.store(true, Ordering::Release);
-                        } else {
-                            ctx.process_pending_replay_events().await?;
-                        }
+                        ctx.finish_switch_to_live(pending).await?.require_live()?;
                     } else {
-                        ctx.state.local_live_tail.store(true, Ordering::Release);
-                        ctx.linear_memory.switch_to_live();
+                        let pending = ctx.begin_local_live_continuation().await?;
+                        ctx.finish_switch_to_live(pending).await?.require_live()?;
                     }
                     let previous = self.retry.durable_execution_state();
                     self.retry = InFunctionRetryController::new(

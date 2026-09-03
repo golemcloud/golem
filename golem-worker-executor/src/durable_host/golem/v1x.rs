@@ -22,7 +22,7 @@ use crate::durable_host::suspendable_wait::{
     ParkOutcome, SuspendableWaitContext, ephemeral_sleep_too_long_error, park_suspendable_wait,
 };
 use crate::durable_host::{
-    ActiveAtomicRegion, DurabilityHost, DurableWorkerCtx, InternalRetryResult,
+    ActiveAtomicRegion, BeginReplayToLive, DurabilityHost, DurableWorkerCtx, InternalRetryResult,
 };
 use crate::get_oplog_entry;
 use crate::model::public_oplog::{
@@ -799,15 +799,22 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         begin_index
                     );
 
-                    // We need to jump to the end of the oplog
-                    self.switch_to_live().await?;
+                    let pending = match self.begin_switch_to_live().await? {
+                        BeginReplayToLive::ReplayResumed => {
+                            return Err(WorkerExecutorError::runtime(
+                                "replay target grew while an atomic operation was settling",
+                            )
+                            .into());
+                        }
+                        BeginReplayToLive::Pending(pending) => pending,
+                    };
 
                     // But this is not enough, because if the retried transactional block succeeds,
                     // and later we replay it, we need to skip the first attempt and only replay the second.
                     // Se we add a Jump entry to the oplog that registers a deleted region.
                     let deleted_region = OplogRegion {
                         start: begin_index.next(), // need to keep the BeginAtomicRegion entry
-                        end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
+                        end: pending.replay_target().next(), // skipping the Jump entry too
                     };
 
                     self.public_state
@@ -820,6 +827,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
                     // TODO: this recomputation should not be necessary.
                     self.public_state.worker().reattach_worker_status().await;
+
+                    self.finish_switch_to_live(pending).await?.require_live()?;
                 }
             }
 

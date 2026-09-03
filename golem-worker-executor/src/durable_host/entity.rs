@@ -85,10 +85,16 @@ pub enum RecordedEntityTerminal {
     Cancelled(HostResponseEntityInvocation),
 }
 
+pub(crate) enum IncompleteLiveRepairBeforeBody {
+    Ready(EntityInvocationDurability),
+    Cancelled(EntityInvocationDurability),
+}
+
 enum EntityReconstructionResolution<R, H> {
     Replayed(R),
     Cancelled(R),
     Incomplete(H),
+    LiveAdmissionCancelled(H),
 }
 
 #[derive(Debug)]
@@ -97,6 +103,7 @@ enum EntityReconstructionOutcome<R, H> {
     Cancelled(R),
     Incomplete { response: R, handle: H },
     IncompleteCancelled { handle: H },
+    IncompleteLiveAdmissionCancelled { handle: H },
 }
 
 /// Task-owned durable state for one entity body. Its `Start` index is the entity invocation ID.
@@ -299,6 +306,12 @@ impl EntityInvocationDurability {
                         .complete_access(store, get_ctx, expected)
                         .await
                         .map_err(|error| error.source)?,
+                    ReconstructionReplayOutcome::LiveAdmissionCancelled(mut live) => {
+                        live.abandon_for_trap();
+                        return Err(
+                            crate::durable_host::tool_attachment_live_admission_cancelled_error(),
+                        );
+                    }
                 };
                 Ok(ToolInvocationReplayOutcome::Rejected(Box::new(response)))
             }
@@ -409,21 +422,21 @@ impl EntityInvocationDurability {
         self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    ) -> Result<Self, WorkerExecutorError>
+    ) -> Result<IncompleteLiveRepairBeforeBody, WorkerExecutorError>
     where
         T: 'static,
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
         if self.scope.mode() != InvocationExecutionMode::ReplayingIncomplete {
-            return Ok(self);
+            return Ok(IncompleteLiveRepairBeforeBody::Ready(self));
         }
         let replay = store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
         if replay
             .has_visible_scope_descendant(self.handle.start_index())
             .await
         {
-            return Ok(self);
+            return Ok(IncompleteLiveRepairBeforeBody::Ready(self));
         }
 
         let Self {
@@ -436,8 +449,9 @@ impl EntityInvocationDurability {
             input,
             mut historical_reconstruction,
         } = self;
-        let handle = match handle.replay_reconstruction_access(store, get_ctx).await? {
-            ReconstructionReplayOutcome::Incomplete(handle) => handle,
+        let (handle, cancelled) = match handle.replay_reconstruction_access(store, get_ctx).await? {
+            ReconstructionReplayOutcome::Incomplete(handle) => (handle, false),
+            ReconstructionReplayOutcome::LiveAdmissionCancelled(handle) => (handle, true),
             ReconstructionReplayOutcome::Replayed(_) => {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
                     "incomplete entity invocation Start",
@@ -455,8 +469,16 @@ impl EntityInvocationDurability {
             reconstruction.body_settled();
         }
         drop(historical_reconstruction.take());
+        let scope = EntityInvocationScope::new(
+            scope.invocation_id().clone(),
+            scope.parent_start_index(),
+            scope.activation().clone(),
+            scope.calling_principal().clone(),
+            InvocationExecutionMode::Live,
+        )
+        .map_err(WorkerExecutorError::runtime)?;
 
-        Ok(Self {
+        let durability = Self {
             handle,
             scope,
             principal,
@@ -465,6 +487,11 @@ impl EntityInvocationDurability {
             operation,
             input,
             historical_reconstruction: None,
+        };
+        Ok(if cancelled {
+            IncompleteLiveRepairBeforeBody::Cancelled(durability)
+        } else {
+            IncompleteLiveRepairBeforeBody::Ready(durability)
         })
     }
 
@@ -585,6 +612,12 @@ impl EntityInvocationDurability {
                     .complete_access(store, get_ctx, response)
                     .await
                     .map_err(|error| error.source)?,
+                ReconstructionReplayOutcome::LiveAdmissionCancelled(mut live) => {
+                    live.abandon_for_trap();
+                    return Err(
+                        crate::durable_host::tool_attachment_live_admission_cancelled_error(),
+                    );
+                }
             }
         };
         Ok(EntityInvocationDurabilityOutcome::Completed(
@@ -631,7 +664,8 @@ impl EntityInvocationDurability {
                         "completed entity invocation terminal",
                     ));
                 }
-                ReconstructionReplayOutcome::Incomplete(live) => {
+                ReconstructionReplayOutcome::Incomplete(live)
+                | ReconstructionReplayOutcome::LiveAdmissionCancelled(live) => {
                     live.cancel_access(store, get_ctx, Some(response.clone()))
                         .await
                         .map_err(|error| error.source)?;
@@ -788,14 +822,17 @@ impl EntityInvocationDurability {
                         resources: take_entity_resources(&monitor_body_resources),
                     }),
                 };
-                if let Err(failure) = &completed {
+                let retained_reconstruction = if let Err(failure) = &completed {
                     on_completed_failure(failure.error.clone()).await;
-                }
-                drop(monitor_reconstruction);
-                let _ = completed_tx.send(completed);
+                    drop(monitor_reconstruction);
+                    None
+                } else {
+                    Some(monitor_reconstruction)
+                };
+                let _ = completed_tx.send((completed, retained_reconstruction));
             });
             on_completed_started();
-            let completed =
+            let (completed, mut retained_reconstruction) =
                 completed_rx
                     .await
                     .map_err(|error| EntityInvocationDurabilityFailure {
@@ -803,8 +840,11 @@ impl EntityInvocationDurability {
                             "completed entity reconstruction monitor failed: {error}"
                         )),
                         resources: take_entity_resources(&body_resources),
-                    })??;
-            let (reconstruction, terminal) = completed;
+                    })?;
+            let (reconstruction, terminal) = completed?;
+            if !terminal.is_replay_at_marker() {
+                drop(retained_reconstruction.take());
+            }
             terminal
                 .finish_access(store, get_ctx)
                 .await
@@ -812,6 +852,7 @@ impl EntityInvocationDurability {
                     error,
                     resources: take_entity_resources(&body_resources),
                 })?;
+            drop(retained_reconstruction);
             return Ok(match reconstruction {
                 EntityReconstructionOutcome::Replayed(recorded) => {
                     EntityInvocationDurabilityOutcome::Completed(
@@ -826,7 +867,8 @@ impl EntityInvocationDurability {
                     )
                 }
                 EntityReconstructionOutcome::Incomplete { .. }
-                | EntityReconstructionOutcome::IncompleteCancelled { .. } => {
+                | EntityReconstructionOutcome::IncompleteCancelled { .. }
+                | EntityReconstructionOutcome::IncompleteLiveAdmissionCancelled { .. } => {
                     unreachable!("completed reconstruction cannot resolve incomplete")
                 }
             });
@@ -889,7 +931,7 @@ impl EntityInvocationDurability {
 
         let replay = async {
             Ok(
-                match handle.replay_reconstruction_access(store, get_ctx).await? {
+                match Box::pin(handle.replay_reconstruction_access(store, get_ctx)).await? {
                     ReconstructionReplayOutcome::Replayed(response) => {
                         EntityReconstructionResolution::Replayed(response)
                     }
@@ -898,6 +940,9 @@ impl EntityInvocationDurability {
                     }
                     ReconstructionReplayOutcome::Incomplete(handle) => {
                         EntityReconstructionResolution::Incomplete(handle)
+                    }
+                    ReconstructionReplayOutcome::LiveAdmissionCancelled(handle) => {
+                        EntityReconstructionResolution::LiveAdmissionCancelled(handle)
                     }
                 },
             )
@@ -964,6 +1009,27 @@ impl EntityInvocationDurability {
                 handle: live_handle,
             } => {
                 let response = cancelled_tool_terminal(SerializableEntityBodyExecution::Executed)
+                    .await
+                    .map_err(|error| EntityInvocationDurabilityFailure {
+                        error,
+                        resources: take_entity_resources(&body_resources),
+                    })?;
+                live_handle
+                    .cancel_access(store, get_ctx, Some(response.clone()))
+                    .await
+                    .map_err(|error| EntityInvocationDurabilityFailure {
+                        error: error.source,
+                        resources: take_entity_resources(&body_resources),
+                    })?;
+                Ok(EntityInvocationDurabilityOutcome::Cancelled(
+                    Box::new(response),
+                    take_entity_resources(&body_resources),
+                ))
+            }
+            EntityReconstructionOutcome::IncompleteLiveAdmissionCancelled {
+                handle: live_handle,
+            } => {
+                let response = cancelled_tool_terminal(SerializableEntityBodyExecution::Skipped)
                     .await
                     .map_err(|error| EntityInvocationDurabilityFailure {
                         error,
@@ -1304,6 +1370,16 @@ where
             }
             Ok(EntityReconstructionOutcome::Replayed(recorded))
         }
+        EntityReconstructionResolution::LiveAdmissionCancelled(handle) => {
+            abort.take().unwrap()();
+            if body_result.is_none() {
+                let _ = body.await;
+                if let Some(reconstruction) = historical_reconstruction.as_mut() {
+                    reconstruction.body_settled();
+                }
+            }
+            Ok(EntityReconstructionOutcome::IncompleteLiveAdmissionCancelled { handle })
+        }
         EntityReconstructionResolution::Incomplete(handle) => {
             // The resolver already released the historical fence when replay reached the live
             // tail. Keep body membership until the body actually settles so structural-stall
@@ -1557,6 +1633,39 @@ mod tests {
                 handle: ()
             }
         ));
+        assert!(body_settled.load(Ordering::Acquire));
+    }
+
+    #[test]
+    async fn cancelled_activation_drains_body() {
+        let (body_cancelled, wait_for_cancellation) = oneshot::channel();
+        let aborted = Arc::new(AtomicBool::new(false));
+        let abort_flag = aborted.clone();
+        let body_settled = Arc::new(AtomicBool::new(false));
+        let result = coordinate_entity_reconstruction(
+            &invocation(),
+            InvocationExecutionMode::ReplayingIncomplete,
+            async move {
+                let _ = wait_for_cancellation.await;
+                Err::<u64, _>(WorkerExecutorError::runtime("body was cancelled"))
+            },
+            async { Ok(EntityReconstructionResolution::<u64, ()>::LiveAdmissionCancelled(())) },
+            no_structural_stall(),
+            move || {
+                abort_flag.store(true, Ordering::Release);
+                let _ = body_cancelled.send(());
+            },
+            Some(BodySettlementProbe(body_settled.clone())),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            result,
+            EntityReconstructionOutcome::IncompleteLiveAdmissionCancelled { handle: () }
+        ));
+        assert!(aborted.load(Ordering::Acquire));
         assert!(body_settled.load(Ordering::Acquire));
     }
 

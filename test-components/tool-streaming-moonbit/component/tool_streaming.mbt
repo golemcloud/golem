@@ -6,8 +6,12 @@ struct MoonBitStreaming {}
 pub async fn MoonBitStreaming::stream(
   mode : String,
   stdin : @asyncCore.Stream[Byte],
-  stdout : @asyncCore.Sink[Byte],
+  stdout : @tool.ProviderStdout,
 ) -> UInt64 {
+  if mode == "resource-exhausted" {
+    stdout.fail(@tool.ToolStreamError::ResourceExhausted)
+    return 0UL
+  }
   if mode == "marker-echo" {
     guard (stdout.write_all_bytes(b"moonbit-marker:") catch { _ => false }) else {
       abort("MoonBit marker write failed")
@@ -73,6 +77,38 @@ pub async fn MoonBitToolStreamingCaller::marker_before_eof(
     }
     Err(_) => abort("MoonBit streaming tool failed")
   }
+}
+
+///|
+pub async fn MoonBitToolStreamingCaller::explicit_stdout_failure(
+  self : Self,
+) -> String {
+  ignore(self)
+  let stdin = @asyncCore.Stream::produce(_ => ())
+  let client = MoonbitStreamingClient::new()
+  defer client.drop()
+  let invocation = match client.stream("resource-exhausted", stdin) {
+    Ok(invocation) => invocation
+    Err(_) => abort("failed to start MoonBit stdout failure tool")
+  }
+  let stdout_terminal = try invocation.stdout.read(1) catch {
+    @tool.ToolStreamError::Cancelled => "cancelled"
+    @tool.ToolStreamError::Abandoned => "abandoned"
+    @tool.ToolStreamError::ResourceExhausted => "resource-exhausted"
+    @tool.ToolStreamError::Failed(message) => "failed:" + message
+    error => "unexpected:" + repr(error)
+  } noraise {
+    None => "eof"
+    Some(_) => "data"
+  }
+  let result_terminal = match invocation.get() {
+    Err(@tool.ToolError::Rpc(@tool.RpcError::ResourceExhausted(_))) =>
+      "resource-exhausted"
+    Err(@tool.ToolError::Rpc(error)) => "rpc:" + repr(error)
+    Err(@tool.ToolError::Tool(_)) => "tool-error"
+    Ok(_) => "ok"
+  }
+  stdout_terminal + ":" + result_terminal
 }
 
 ///|

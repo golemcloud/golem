@@ -67,13 +67,16 @@ test "pure dispatcher, subtree authoring, and stdout support" {
   let stdout =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(input : @asyncCore.Stream[Byte], output : @asyncCore.Sink[Byte]) -> Unit { () }
+    #|pub fn Out::out(input : @asyncCore.Stream[Byte], output : @tool.ProviderStdout) -> Unit { () }
   let stdout_tools = @lib.parse_tools([("stdout.mbt", stdout)])
   let stdout_registration = @formatter.impls_to_string(
     @lib.generate_tool_registration(stdout_tools),
   )
   assert_true(stdout_registration.contains("stdout: Some("))
   assert_true(stdout_registration.contains("match __golem_stdin"))
+  assert_true(
+    stdout_registration.contains("__golem_stdout : @tool.ProviderStdout?"),
+  )
   assert_true(
     stdout_registration.contains("Some(__golem_output) => __golem_output"),
   )
@@ -83,7 +86,7 @@ test "pure dispatcher, subtree authoring, and stdout support" {
     @lib.generate_tool_client_code(stdout_tools),
   )
   assert_true(stdout_client.contains("@tool.TypedToolInvocation[Unit"))
-  assert_false(stdout_client.contains("output : @asyncCore.Sink[Byte]"))
+  assert_false(stdout_client.contains("output : @tool.ProviderStdout"))
   assert_true(stdout_client.contains("@tool.typed_invocation"))
 }
 
@@ -92,7 +95,7 @@ test "async tool commands generate async provider invokers" {
   let source =
     #|#derive.tool
     #|struct Streaming {}
-    #|pub async fn Streaming::stream(input : @asyncCore.Stream[Byte], output : @asyncCore.Sink[Byte]) -> UInt64 { 0UL }
+    #|pub async fn Streaming::stream(input : @asyncCore.Stream[Byte], output : @tool.ProviderStdout) -> UInt64 { 0UL }
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(
       @lib.parse_tools([("streaming.mbt", source)]),
@@ -107,7 +110,7 @@ test "labelled stdout is injected and returned by generated invoker" {
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(output~ : @asyncCore.Sink[Byte]) -> Unit { ignore(output) }
+    #|pub fn Out::out(output~ : @tool.ProviderStdout) -> Unit { ignore(output) }
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("stdout.mbt", source)])),
   )
@@ -121,7 +124,7 @@ test "stdout result does not reuse the stream handle owned by the tool method" {
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(output : @asyncCore.Sink[Byte]) -> Unit {
+    #|pub fn Out::out(output : @tool.ProviderStdout) -> Unit {
     #|  output.drop()
     #|}
   let generated = @formatter.impls_to_string(
@@ -136,7 +139,7 @@ test "stdout parameter is not shadowed by a generated result binding" {
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(value : @asyncCore.Sink[Byte]) -> String {
+    #|pub fn Out::out(value : @tool.ProviderStdout) -> String {
     #|  ignore(value)
     #|  "ok"
     #|}
@@ -155,7 +158,7 @@ test "stdout parameter cannot collide with reserved result binding" {
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(__golem_value : @asyncCore.Sink[Byte]) -> String {
+    #|pub fn Out::out(__golem_value : @tool.ProviderStdout) -> String {
     #|  ignore(__golem_value)
     #|  "ok"
     #|}
@@ -167,7 +170,7 @@ test "tool generated internals use runtime facades instead of consumer aliases" 
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(output : @asyncCore.Sink[Byte]) -> Unit { ignore(output) }
+    #|pub fn Out::out(output : @tool.ProviderStdout) -> Unit { ignore(output) }
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("stdout.mbt", source)])),
   )
@@ -199,7 +202,7 @@ test "generated invokers claim stdout only after fallible input decoding" {
     #|#derive.tool
     #|struct StreamAfterInput {}
     #|pub fn StreamAfterInput::run(
-    #|  output : @asyncCore.Sink[Byte],
+    #|  output : @tool.ProviderStdout,
     #|  value : String,
     #|) -> String {
     #|  ignore(output)
@@ -214,6 +217,27 @@ test "generated invokers claim stdout only after fallible input decoding" {
     .split("Some(__golem_output) => __golem_output")
     .collect()[0]
   assert_true(before_stdout.contains("@tool.decode_canonical_field"))
+}
+
+///|
+test "generated missing attachment failures release decoded invocation inputs" {
+  let source =
+    #|#derive.tool
+    #|struct Streams {}
+    #|pub fn Streams::run(
+    #|  input : @asyncCore.Stream[Byte],
+    #|  output : @tool.ProviderStdout,
+    #|) -> Unit {
+    #|  ignore(input)
+    #|  ignore(output)
+    #|}
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("streams.mbt", source)])),
+  )
+  let helper_calls = generated.split("@tool.reject_decoded_invocation").length()
+  assert_true(helper_calls >= 3)
+  assert_true(generated.contains("\"required stdin stream is missing\""))
+  assert_true(generated.contains("\"required stdout stream is missing\""))
 }
 
 ///|

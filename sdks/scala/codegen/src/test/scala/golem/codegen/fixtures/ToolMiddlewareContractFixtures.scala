@@ -86,8 +86,8 @@ object ToolMiddlewareContractFixtures {
        |  override def copy(
        |    underlying: PublicEchoUnderlying,
        |    config: String,
-       |    stdin: golem.tool.ToolInputStream
-       |  ): Future[Either[ToolInvokeError[Nothing], (Long, golem.tool.ToolOutputStream)]] =
+       |    stdin: golem.tool.ToolMiddlewareInputHandle
+       |  ): Future[Either[ToolInvokeError[Nothing], (Long, golem.tool.ToolMiddlewareOutputHandle)]] =
        |    underlying.copy(config, stdin)
        |
        |  override def inspect(
@@ -133,8 +133,8 @@ object ToolMiddlewareContractFixtures {
        |  override def copy(
        |    underlying: BackendEchoUnderlying,
        |    config: String,
-       |    stdin: golem.tool.ToolInputStream
-       |  ): Future[Either[ToolInvokeError[Nothing], (Long, golem.tool.ToolOutputStream)]] =
+       |    stdin: golem.tool.ToolMiddlewareInputHandle
+       |  ): Future[Either[ToolInvokeError[Nothing], (Long, golem.tool.ToolMiddlewareOutputHandle)]] =
        |    Future.successful(Left(ToolInvokeError.ConstraintViolation("copy is not supported")))
        |
        |  override def inspect(
@@ -162,7 +162,7 @@ object ToolMiddlewareContractFixtures {
        |  override def invoke(
        |    invocation: UniversalToolMiddlewareInvocation,
        |    underlying: UniversalToolUnderlying
-       |  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
+       |  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
        |    underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
        |}
        |""".stripMargin

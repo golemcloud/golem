@@ -51,6 +51,23 @@ trait ToolOutputStream {
   private[golem] def close(): Future[Unit] = Future.successful(())
 }
 
+/**
+ * Transfer-only handle to the stdin of a tool invocation passing through
+ * middleware. Middleware may forward this handle to an underlying tool but
+ * cannot read from it.
+ */
+trait ToolMiddlewareInputHandle {
+  private[golem] def close(): Future[Unit] = Future.successful(())
+}
+
+/**
+ * Transfer-only handle to the stdout returned by an underlying tool. Middleware
+ * may return this handle from its own invocation but cannot write to it.
+ */
+trait ToolMiddlewareOutputHandle {
+  private[golem] def close(): Future[Unit] = Future.successful(())
+}
+
 sealed trait ByteStreamFailure extends Product with Serializable
 object ByteStreamFailure {
   case object Cancelled                    extends ByteStreamFailure
@@ -93,9 +110,10 @@ final case class ToolInvocation[+E, +A](
     val terminal = result.map(Right(_): Either[Throwable, Either[ToolError[E], A]]).recover { case t => Left(t) }
     val output   = drain(Vector.empty).map(Right(_): Either[Throwable, Array[Byte]]).recover { case t => Left(t) }
     terminal.zip(output).flatMap {
-      case (Left(error), _)              => Future.failed(error)
-      case (_, Left(error))              => Future.failed(error)
-      case (Right(result), Right(bytes)) => Future.successful(result.map(_ -> bytes))
+      case (Right(Left(error @ ToolError.Tool(_))), _) => Future.successful(Left(error))
+      case (Left(error), _)                            => Future.failed(error)
+      case (_, Left(error))                            => Future.failed(error)
+      case (Right(result), Right(bytes))               => Future.successful(result.map(_ -> bytes))
     }
   }
 }

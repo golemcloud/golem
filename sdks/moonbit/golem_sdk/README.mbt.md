@@ -142,9 +142,12 @@ let current : Result[String, @tool.ToolError[WeatherError]] =
 client.drop()
 ```
 
-Parameters typed as `@tool.Principal`, `@streams.InputStream`, or `@streams.OutputStream` are
+Parameters typed as `@tool.Principal`, `@asyncCore.Stream[Byte]`, or `@tool.ProviderStdout` are
 provided by the runtime and omitted from typed client inputs. An input stream becomes a client
-parameter. A declared output stream becomes part of the generated result type. See the
+parameter. A declared provider stdout becomes part of the generated result type. Providers can
+write with `write_all`/`write_all_bytes`, select successful completion with `finish`, or select a
+typed `@tool.ToolStreamError` terminal with `fail`. Returning normally also finishes an open
+stdout; dropping it while still open selects `Abandoned`. See the
 [`golem_sdk_tools` documentation](https://mooncakes.io/docs/#/golemcloud/golem_sdk_tools/) and the
 canonical `grep`/`git` examples for the complete annotation surface.
 

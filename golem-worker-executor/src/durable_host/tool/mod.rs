@@ -37,8 +37,8 @@ use crate::durable_host::concurrent::{
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::entity::{
-    EntityInvocationDurability, RecordedEntityTerminal, ToolInvocationReplayOutcome,
-    encode_tool_terminal, record_tool_rejection_access,
+    EntityInvocationDurability, IncompleteLiveRepairBeforeBody, RecordedEntityTerminal,
+    ToolInvocationReplayOutcome, encode_tool_terminal, record_tool_rejection_access,
 };
 use crate::durable_host::secrets::secret_hold_targets_for_value;
 use crate::durable_host::tool::attachment::{
@@ -71,8 +71,9 @@ use golem_common::model::agent::{AgentPrincipal, AgentTypeName, Principal};
 use golem_common::model::card::owner::ToolOwnerPattern;
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationDescriptorIdentity,
-    EntityInvocationRequestIdentity, ToolInputDecodeFailure, ToolInvocationClaimIdentity,
-    ToolInvocationDescriptor, ToolInvocationDescriptorIdentity, ToolInvocationRejectedIdentity,
+    EntityInvocationRequestIdentity, InvocationExecutionMode, ToolInputDecodeFailure,
+    ToolInvocationClaimIdentity, ToolInvocationDescriptor, ToolInvocationDescriptorIdentity,
+    ToolInvocationRejectedIdentity,
 };
 use golem_common::model::oplog::host_functions::{GolemToolGetAllTools, GolemToolGetTool};
 use golem_common::model::oplog::payload::types::{
@@ -222,7 +223,6 @@ impl<D> StreamConsumer<D> for ToolStdinStreamConsumer {
         }
 
         if finish {
-            self.items.take();
             return Poll::Ready(Ok(StreamResult::Cancelled));
         }
 
@@ -301,7 +301,6 @@ impl<D> StreamConsumer<D> for UnderlyingToolStdinStreamConsumer {
         }
 
         if finish {
-            self.items.take();
             return Poll::Ready(Ok(StreamResult::Cancelled));
         }
 
@@ -1264,6 +1263,7 @@ struct ToolInvocationAttempt {
     rpc: ToolRpcEntry,
     input: Result<ModelTypedSchemaValue, ToolInputDecodeFailure>,
     parent: crate::worker::owner_lane::OwnerInvocationId,
+    attempt_ordinal: u64,
 }
 
 impl ToolInvocationAttempt {
@@ -1285,6 +1285,7 @@ impl ToolInvocationAttempt {
                 call_mode,
                 operation: Some(EntityInvocationDescriptorIdentity::Tool(
                     ToolInvocationDescriptorIdentity {
+                        attempt_ordinal: self.attempt_ordinal,
                         command_path: command_path.to_vec(),
                         has_stdin,
                         has_stdout,
@@ -1293,6 +1294,7 @@ impl ToolInvocationAttempt {
                 input,
             }),
             rejected: ToolInvocationRejectedIdentity {
+                attempt_ordinal: self.attempt_ordinal,
                 tool_name: self.rpc.tool_name.clone(),
                 command_path: command_path.to_vec(),
                 input,
@@ -1349,16 +1351,28 @@ where
                 "tool RPC resource belongs to a different owner runtime"
             ));
         }
+        let parent = ctx.owner_invocation_id()?;
+        let next_ordinal = ctx
+            .state
+            .tool_invocation_attempt_ordinals
+            .entry(parent.clone())
+            .or_default();
+        let attempt_ordinal = *next_ordinal;
+        *next_ordinal = next_ordinal
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("tool invocation attempt ordinal overflow"))?;
         Ok(ToolInvocationAttempt {
             rpc,
             input: decode_typed_tool_value(input, ctx),
-            parent: ctx.owner_invocation_id()?,
+            parent,
+            attempt_ordinal,
         })
     })
 }
 
 fn rejected_tool_call(
     rpc: &ToolRpcEntry,
+    attempt_ordinal: u64,
     command_path: &[String],
     input: Option<ModelTypedSchemaValue>,
     input_decode_failure: Option<ToolInputDecodeFailure>,
@@ -1370,6 +1384,7 @@ fn rejected_tool_call(
 ) -> ToolCallPreparation {
     ToolCallPreparation::Rejected {
         request: Box::new(HostRequestGolemToolInvocationRejected {
+            attempt_ordinal,
             tool_name: rpc.tool_name.to_string(),
             command_path: command_path.to_vec(),
             input,
@@ -1396,7 +1411,12 @@ where
     Ctx: WorkerCtx,
 {
     let has_stdin = stdin.is_some();
-    let ToolInvocationAttempt { rpc, input, parent } = attempt;
+    let ToolInvocationAttempt {
+        rpc,
+        input,
+        parent,
+        attempt_ordinal,
+    } = attempt;
     let environment_state_service =
         accessor.with(|mut access| access.get().state.environment_state_service.clone());
     let input = match input {
@@ -1404,6 +1424,7 @@ where
         Err(error) => {
             return Ok(rejected_tool_call(
                 &rpc,
+                attempt_ordinal,
                 &command_path,
                 None,
                 Some(error),
@@ -1437,6 +1458,7 @@ where
         Ok(None) => {
             return Ok(rejected_tool_call(
                 &rpc,
+                attempt_ordinal,
                 &command_path,
                 Some(input),
                 None,
@@ -1465,6 +1487,7 @@ where
         Err(error) => {
             return Ok(rejected_tool_call(
                 &rpc,
+                attempt_ordinal,
                 &command_path,
                 Some(input),
                 None,
@@ -1485,6 +1508,7 @@ where
     ) {
         return Ok(rejected_tool_call(
             &rpc,
+            attempt_ordinal,
             &command_path,
             Some(input),
             None,
@@ -1509,6 +1533,7 @@ where
         Err(error) => {
             return Ok(rejected_tool_call(
                 &rpc,
+                attempt_ordinal,
                 &command_path,
                 Some(input),
                 None,
@@ -1531,6 +1556,7 @@ where
         Err(error) => {
             return Ok(rejected_tool_call(
                 &rpc,
+                attempt_ordinal,
                 &command_path,
                 Some(input),
                 None,
@@ -1554,6 +1580,7 @@ where
             })?,
     );
     let descriptor = EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+        attempt_ordinal,
         command_path,
         args,
         has_stdin,
@@ -1730,6 +1757,10 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         principal,
     } = invocation;
     let mut store = store.as_context_mut();
+    store
+        .data_mut()
+        .durable_ctx_mut()
+        .set_entity_tool_operation(operation.clone())?;
     let cancellation_for_arbitration = cancellation.clone();
     let cancellation_epoch = if let Some(cancellation) = cancellation {
         store
@@ -1801,6 +1832,9 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     let finish = finish_invocation_and_get_fuel_consumption(&mut store, &display_name).await;
     let parent_end = prepare_tool_parent_end(&mut store, parent).await;
     drop(cancellation_epoch);
+    if operation.has_pending_live_admission_rejection().await {
+        return Err(crate::durable_host::tool_attachment_live_admission_rejected_error());
+    }
     finish?;
     if let Err(error) = parent_end
         && matches!(&result, Ok(Ok(_)))
@@ -1899,15 +1933,19 @@ async fn guest_trap_stdout_failure(
     }
 }
 
+fn resource_exhausted_terminal() -> SerializableToolOperationTerminal {
+    SerializableToolOperationTerminal {
+        body_execution: SerializableEntityBodyExecution::Skipped,
+        result: Err(SerializableToolRpcError::ResourceExhausted(
+            "tool stdin exceeded the attachment byte limit".to_string(),
+        )),
+    }
+}
+
 async fn resource_exhausted_without_body()
 -> Result<HostResponseEntityInvocation, WorkerExecutorError> {
     encode_tool_terminal(
-        SerializableToolOperationTerminal {
-            body_execution: SerializableEntityBodyExecution::Skipped,
-            result: Err(SerializableToolRpcError::ResourceExhausted(
-                "tool stdin exceeded the attachment byte limit".to_string(),
-            )),
-        },
+        resource_exhausted_terminal(),
         "failed to encode resource-exhausted tool terminal",
     )
     .await
@@ -1963,11 +2001,145 @@ impl SkippedToolAttachmentEndpoints {
         failure: ByteStreamFailure,
     ) {
         for controller in controllers.0.iter().chain(controllers.1.iter()) {
-            controller.configure_completion();
             let _ = controller.host_fail(failure.clone());
-            controller.publish_completion();
+            controller.publish_no_body_terminal();
         }
         drop(self);
+    }
+}
+
+fn publish_no_body_terminals(
+    stdin: Option<&AttachmentController>,
+    stdout: Option<&AttachmentController>,
+) {
+    for controller in stdin.into_iter().chain(stdout) {
+        controller.publish_no_body_terminal();
+    }
+}
+
+fn settle_resource_exhausted_admission(
+    operation: &operation::OwnerToolOperation,
+    filesystem: golem_common::model::entity::FilesystemCapability,
+    deferred_admission: &Arc<operation::DeferredAdmissionTable>,
+    deferred_cleanup: &mut Option<DeferredAdmissionCleanup>,
+    parent: &crate::worker::owner_lane::OwnerInvocationId,
+    start: golem_common::model::oplog::OplogIndex,
+    call_mode: EntityCallMode,
+) -> anyhow::Result<()> {
+    if !operation.transition_admission(
+        operation::BodyAdmissionState::Staging,
+        operation::BodyAdmissionState::SettledWithoutBody,
+    ) {
+        return Err(anyhow!(
+            "tool invocation was fenced before resource-exhausted no-body admission"
+        ));
+    }
+    if filesystem == golem_common::model::entity::FilesystemCapability::Incapable {
+        return Ok(());
+    }
+    if !deferred_admission.settle_staging(
+        parent,
+        start,
+        operation::DeferredAdmissionReadiness::SettledWithoutBody,
+    ) {
+        return Err(anyhow!(
+            "tool invocation lost its deferred no-body admission"
+        ));
+    }
+    if call_mode == EntityCallMode::Synchronous
+        && !deferred_admission.remove_settled_without_body(parent, start)
+    {
+        return Err(anyhow!(
+            "synchronous tool invocation lost its no-body admission"
+        ));
+    }
+    deferred_cleanup
+        .as_mut()
+        .expect("capable call must own deferred admission")
+        .disarm();
+    Ok(())
+}
+
+async fn complete_resource_exhausted_without_body<U, Ctx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    durability: EntityInvocationDurability,
+    operation: operation::OwnerToolOperation,
+    stdin: Option<&AttachmentController>,
+    stdout: Option<&AttachmentController>,
+) -> anyhow::Result<ToolInvokeResponse>
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+{
+    let admission_rejection_preselected = operation
+        .take_live_attachment_admission_rejection()
+        .await
+        .is_some();
+    if !admission_rejection_preselected && !operation.begin_ordinary() {
+        return Err(anyhow!(
+            "tool invocation was fenced before no-body completion"
+        ));
+    }
+    let fallback_terminal = Arc::new(resource_exhausted_terminal());
+    let response = match resource_exhausted_without_body().await {
+        Ok(response) => response,
+        Err(error) => {
+            operation.resolve_ordinary(fallback_terminal, false).await;
+            let _ = operation.select_infrastructure(error.clone()).await;
+            return Err(error.into());
+        }
+    };
+    let terminal = match terminal_from_response(&response) {
+        Ok(terminal) => terminal,
+        Err(error) => {
+            operation.resolve_ordinary(fallback_terminal, false).await;
+            let _ = operation.select_infrastructure(error.clone()).await;
+            return Err(error.into());
+        }
+    };
+    let outcome = durability
+        .complete_without_body_access(accessor, accessor.getter(), response)
+        .await;
+    match outcome {
+        Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(
+            response,
+            _,
+        )) => {
+            operation.resolve_ordinary(terminal, true).await;
+            operation.settle().await;
+            let terminal = terminal_from_response(&response)?;
+            let failure = skipped_attachment_failure(&terminal);
+            for controller in stdin.into_iter().chain(stdout) {
+                if matches!(failure, ByteStreamFailure::ResourceExhausted) {
+                    controller.complete_rejected_live_memory_accounting();
+                } else {
+                    let _ = controller.host_fail(failure.clone());
+                }
+            }
+            publish_no_body_terminals(stdin, stdout);
+            decode_tool_terminal(*response).map_err(Into::into)
+        }
+        Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(
+            response,
+            _,
+        )) => {
+            operation.resolve_ordinary(terminal, false).await;
+            let _ = operation.begin_cancel();
+            operation.resolve_cancel(true).await;
+            operation.settle().await;
+            let terminal = terminal_from_response(&response)?;
+            let failure = skipped_attachment_failure(&terminal);
+            for controller in stdin.into_iter().chain(stdout) {
+                let _ = controller.host_fail(failure.clone());
+            }
+            publish_no_body_terminals(stdin, stdout);
+            decode_tool_terminal(*response).map_err(Into::into)
+        }
+        Err(error) => {
+            operation.resolve_ordinary(terminal, false).await;
+            let _ = operation.select_infrastructure(error.clone()).await;
+            Err(error.into())
+        }
     }
 }
 
@@ -2039,8 +2211,6 @@ where
             .expect("eager deferred admission must own cleanup")
             .disarm();
     }
-    endpoints.publish_failure(&controllers, failure);
-
     let outcome = match recorded {
         RecordedEntityTerminal::Completed(response) => {
             if !operation.begin_ordinary() {
@@ -2086,6 +2256,7 @@ where
         }
     }?;
     operation.settle().await;
+    endpoints.publish_failure(&controllers, failure);
     match outcome {
         crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(response, _)
         | crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(response, _) => {
@@ -2160,10 +2331,6 @@ where
         .as_mut()
         .expect("capable call must own deferred admission")
         .disarm();
-    for controller in stdin.into_iter().chain(stdout) {
-        let _ = controller.cancel();
-        controller.publish_completion();
-    }
     if !operation.begin_cancel() {
         return Err(anyhow!(
             "tool invocation lost cancellation terminal arbitration"
@@ -2180,6 +2347,7 @@ where
         .await;
     let outcome = outcome?;
     operation.settle().await;
+    publish_no_body_terminals(stdin, stdout);
     match outcome {
         crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(response, _)
         | crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(response, _) => {
@@ -2199,10 +2367,6 @@ where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
-    for controller in stdin.into_iter().chain(stdout) {
-        let _ = controller.cancel();
-        controller.publish_completion();
-    }
     if !operation.begin_cancel() {
         return Err(anyhow!(
             "tool invocation lost cancellation terminal arbitration"
@@ -2219,6 +2383,7 @@ where
         .await;
     let outcome = outcome?;
     operation.settle().await;
+    publish_no_body_terminals(stdin, stdout);
     match outcome {
         crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(response, _)
         | crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(response, _) => {
@@ -2261,14 +2426,14 @@ where
             )
         });
     let failed_resources = Arc::new(Mutex::new(None));
-    let execution_future = execute_accepted_tool_call_inner(
+    let execution_future = Box::pin(execute_accepted_tool_call_inner(
         accessor,
         accepted,
         stdout,
         execution,
         failed_resources.clone(),
         inner_supervisor_started,
-    );
+    ));
     let execution_future = async {
         if execution.is_some_and(|execution| !execution.cancellable) {
             crate::durable_host::without_entity_cancellation(execution_future).await
@@ -2420,12 +2585,26 @@ where
         .await;
     }
     let filesystem = durability.scope().activation().filesystem();
-    if filesystem == golem_common::model::entity::FilesystemCapability::Capable {
-        durability = durability
-            .enter_incomplete_live_repair_before_body_access(accessor, accessor.getter())
-            .await?;
-    }
+    let pre_body_live_admission_cancelled =
+        if filesystem == golem_common::model::entity::FilesystemCapability::Capable {
+            match durability
+                .enter_incomplete_live_repair_before_body_access(accessor, accessor.getter())
+                .await?
+            {
+                IncompleteLiveRepairBeforeBody::Ready(ready) => {
+                    durability = ready;
+                    false
+                }
+                IncompleteLiveRepairBeforeBody::Cancelled(cancelled) => {
+                    durability = cancelled;
+                    true
+                }
+            }
+        } else {
+            false
+        };
     let call_mode = durability.call_mode();
+    let execution_mode = durability.scope().mode();
     let discard_stdout = call_mode == EntityCallMode::FireAndForget
         && matches!(
             durability.operation(),
@@ -2448,8 +2627,9 @@ where
             .map(|stdout| ctx.table().delete(stdout).map(ToolStdoutEntry::into_writer))
             .transpose()?;
         let stdout = if stdout.is_none() && discard_stdout {
-            Some(ToolStdoutWriterEntry::discard(AttachmentMemory::tracked(
+            Some(ToolStdoutWriterEntry::discard(AttachmentMemory::for_store(
                 ctx.public_state.worker().active_agents(),
+                execution_mode == InvocationExecutionMode::Live,
             )))
         } else {
             stdout
@@ -2472,12 +2652,6 @@ where
         .as_ref()
         .is_some_and(ToolStdoutWriterEntry::completion_only);
     if !operation.attach(stdin_controller.clone(), stdout_controller.clone()) {
-        if let Some(stdin) = &stdin_controller {
-            let _ = stdin.cancel();
-        }
-        if let Some(stdout) = &stdout_controller {
-            let _ = stdout.cancel();
-        }
         return Err(anyhow!("owner generation fenced tool invocation"));
     }
     let mut deferred_cleanup =
@@ -2498,6 +2672,22 @@ where
             None
         };
 
+    if pre_body_live_admission_cancelled {
+        return Box::pin(cancel_tool_before_body(
+            accessor,
+            durability,
+            operation,
+            &deferred_admission,
+            &mut deferred_cleanup,
+            &parent,
+            start,
+            operation::BodyAdmissionState::Staging,
+            stdin_controller.as_ref(),
+            stdout_controller.as_ref(),
+        ))
+        .await;
+    }
+
     if filesystem == golem_common::model::entity::FilesystemCapability::Incapable
         && execution.is_some_and(ToolExecution::is_cancelled)
     {
@@ -2517,6 +2707,69 @@ where
             stdout_controller.as_ref(),
         )
         .await;
+    }
+
+    if execution_mode == InvocationExecutionMode::Live {
+        match operation.activate_live_attachment_memory_accounting().await {
+            operation::ToolLiveAdmissionOutcome::Admitted => {}
+            operation::ToolLiveAdmissionOutcome::ResourceExhausted => {
+                settle_resource_exhausted_admission(
+                    &operation,
+                    filesystem,
+                    &deferred_admission,
+                    &mut deferred_cleanup,
+                    &parent,
+                    start,
+                    call_mode,
+                )?;
+                return complete_resource_exhausted_without_body(
+                    accessor,
+                    durability,
+                    operation,
+                    stdin_controller.as_ref(),
+                    stdout_controller.as_ref(),
+                )
+                .await;
+            }
+            operation::ToolLiveAdmissionOutcome::Cancelled => {
+                if filesystem == golem_common::model::entity::FilesystemCapability::Capable {
+                    return Box::pin(cancel_tool_before_body(
+                        accessor,
+                        durability,
+                        operation,
+                        &deferred_admission,
+                        &mut deferred_cleanup,
+                        &parent,
+                        start,
+                        operation::BodyAdmissionState::Staging,
+                        stdin_controller.as_ref(),
+                        stdout_controller.as_ref(),
+                    ))
+                    .await;
+                }
+                if !operation.transition_admission(
+                    operation::BodyAdmissionState::Staging,
+                    operation::BodyAdmissionState::SettledWithoutBody,
+                ) {
+                    return Err(anyhow!(
+                        "tool invocation was fenced before pre-dispatch cancellation"
+                    ));
+                }
+                return Box::pin(cancel_registered_tool_before_body(
+                    accessor,
+                    durability,
+                    operation,
+                    stdin_controller.as_ref(),
+                    stdout_controller.as_ref(),
+                ))
+                .await;
+            }
+            operation::ToolLiveAdmissionOutcome::Fenced => {
+                return Err(anyhow!(
+                    "tool invocation was fenced during live-memory admission"
+                ));
+            }
+        }
     }
 
     match filesystem {
@@ -2604,69 +2857,23 @@ where
                     .terminal_snapshot()
                     .is_some_and(|terminal| terminal.host_resource_exhausted);
                 if host_resource_exhausted {
-                    operation.transition_admission(
-                        operation::BodyAdmissionState::Staging,
-                        operation::BodyAdmissionState::SettledWithoutBody,
-                    );
-                    if !deferred_admission.settle_staging(
+                    settle_resource_exhausted_admission(
+                        &operation,
+                        filesystem,
+                        &deferred_admission,
+                        &mut deferred_cleanup,
                         &parent,
                         start,
-                        operation::DeferredAdmissionReadiness::SettledWithoutBody,
-                    ) {
-                        return Err(anyhow!(
-                            "tool invocation lost its deferred no-body admission"
-                        ));
-                    }
-                    if call_mode == EntityCallMode::Synchronous
-                        && !deferred_admission.remove_settled_without_body(&parent, start)
-                    {
-                        return Err(anyhow!(
-                            "synchronous tool invocation lost its no-body admission"
-                        ));
-                    }
-                    deferred_cleanup
-                        .as_mut()
-                        .expect("capable call must own deferred admission")
-                        .disarm();
-                    let response = resource_exhausted_without_body().await?;
-                    let terminal = terminal_from_response(&response)?;
-                    if !operation.begin_ordinary() {
-                        return Err(anyhow!(
-                            "tool invocation was fenced before no-body completion"
-                        ));
-                    }
-                    let outcome = durability
-                        .complete_without_body_access(accessor, accessor.getter(), response)
-                        .await;
-                    match outcome {
-                        Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(
-                            response,
-                            _,
-                        )) => {
-                            operation.resolve_ordinary(terminal, true).await;
-                            operation.settle().await;
-                            if let Some(stdout) = &stdout_controller {
-                                let _ = stdout.host_fail(ByteStreamFailure::ResourceExhausted);
-                                stdout.publish_completion();
-                            }
-                            return decode_tool_terminal(*response).map_err(Into::into);
-                        }
-                        Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(
-                            response,
-                            _,
-                        )) => {
-                            operation.resolve_ordinary(terminal, false).await;
-                            let _ = operation.begin_cancel();
-                            operation.resolve_cancel(true).await;
-                            operation.settle().await;
-                            return decode_tool_terminal(*response).map_err(Into::into);
-                        }
-                        Err(error) => {
-                            operation.resolve_ordinary(terminal, false).await;
-                            let _ = operation.select_infrastructure(error.clone()).await;
-                            return Err(error.into());
-                        }
-                    }
+                        call_mode,
+                    )?;
+                    return complete_resource_exhausted_without_body(
+                        accessor,
+                        durability,
+                        operation,
+                        stdin_controller.as_ref(),
+                        stdout_controller.as_ref(),
+                    )
+                    .await;
                 }
                 tracing::debug!(
                     terminal = ?attachment::terminal_metadata(&terminal),
@@ -2819,10 +3026,45 @@ where
     let finalize = move |result: Result<HostResponseEntityInvocation, WorkerExecutorError>| {
         let operation = operation_for_finalize;
         async move {
+            let (result, admission_rejection_preselected) = match result {
+                Err(error)
+                    if crate::durable_host::is_tool_attachment_live_admission_rejection(&error) =>
+                {
+                    operation
+                        .take_live_attachment_admission_rejection()
+                        .await
+                        .ok_or_else(|| {
+                            WorkerExecutorError::runtime(
+                                "tool attachment admission rejection lost its operation marker",
+                            )
+                        })?;
+                    let result = resource_exhausted_without_body().await;
+                    if result.is_err() {
+                        operation
+                            .resolve_ordinary(Arc::new(resource_exhausted_terminal()), false)
+                            .await;
+                    }
+                    (result, true)
+                }
+                result => (result, false),
+            };
             match &result {
                 Ok(response) => {
-                    let selected = terminal_from_response(response)?;
-                    if !operation.begin_ordinary() {
+                    let selected = match terminal_from_response(response) {
+                        Ok(selected) => selected,
+                        Err(error) => {
+                            if admission_rejection_preselected {
+                                operation
+                                    .resolve_ordinary(
+                                        Arc::new(resource_exhausted_terminal()),
+                                        false,
+                                    )
+                                    .await;
+                            }
+                            return Err(error);
+                        }
+                    };
+                    if !admission_rejection_preselected && !operation.begin_ordinary() {
                         return Err(WorkerExecutorError::runtime(
                             "tool operation terminal lost owner arbitration",
                         ));
@@ -2869,8 +3111,8 @@ where
             return Err(error.into());
         }
     };
-    let outcome = durability
-        .drive_access(
+    let outcome = Box::pin(
+        durability.drive_access(
             accessor,
             accessor.getter(),
             body,
@@ -2893,16 +3135,21 @@ where
                     .select_infrastructure(error)
                     .await;
             },
-        )
-        .await;
+        ),
+    )
+    .await;
     match outcome {
         Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(
             response,
             resources,
         )) => {
+            let live_admission_rejected = operation.live_attachment_admission_was_rejected().await;
             let terminal = terminal.lock().unwrap().take().ok_or_else(|| {
                 anyhow!("completed tool body did not select an operation terminal")
             })?;
+            if live_admission_rejected {
+                operation.complete_rejected_live_attachment_memory_accounting();
+            }
             let resources = match resources {
                 Some(mut retained) => {
                     if let Err(error) = retained.prepare_parent_end().await {
@@ -2934,6 +3181,10 @@ where
             response,
             resources,
         )) => {
+            let live_admission_rejected = operation.live_attachment_admission_was_rejected().await;
+            let response_terminal = terminal_from_response(&response)?;
+            let no_body =
+                response_terminal.body_execution == SerializableEntityBodyExecution::Skipped;
             let selected_terminal = terminal.lock().unwrap().take();
             if let Some(terminal) = selected_terminal {
                 operation.resolve_ordinary(terminal, false).await;
@@ -2956,8 +3207,16 @@ where
             if let Some(resources) = resources {
                 resources.settle_after_parent_end().await?;
             }
+            if live_admission_rejected {
+                let failure = skipped_attachment_failure(&response_terminal);
+                for controller in stdin_controller.iter().chain(stdout_controller.iter()) {
+                    let _ = controller.host_fail(failure.clone());
+                }
+            }
             operation.settle().await;
-            if (filesystem == golem_common::model::entity::FilesystemCapability::Capable
+            if no_body {
+                publish_no_body_terminals(stdin_controller.as_ref(), stdout_controller.as_ref());
+            } else if (filesystem == golem_common::model::entity::FilesystemCapability::Capable
                 || stdout_completion_only)
                 && let Some(stdout) = &stdout_controller
             {
@@ -3405,7 +3664,10 @@ where
 {
     accessor.with(|mut access| {
         let ctx = access.get();
-        let memory = AttachmentMemory::tracked(ctx.public_state.worker().active_agents());
+        let memory = AttachmentMemory::for_store(
+            ctx.public_state.worker().active_agents(),
+            ctx.state.is_live(),
+        );
         let max_attachment_bytes = ctx.state.config.limits.max_tool_attachment_bytes;
         let (producer, consumer, observer) = attachment_pair(max_attachment_bytes, memory);
         let stdin = ctx.table().push(ToolStdinEntry { consumer })?;
@@ -3441,7 +3703,10 @@ where
 {
     accessor.with(|mut access| {
         let ctx = access.get();
-        let memory = AttachmentMemory::tracked(ctx.public_state.worker().active_agents());
+        let memory = AttachmentMemory::for_store(
+            ctx.public_state.worker().active_agents(),
+            ctx.state.is_live(),
+        );
         let (producer, consumer, _) =
             attachment_pair(ctx.state.config.limits.max_tool_attachment_bytes, memory);
         let target = ctx.table().push(ToolStdoutEntry {
@@ -3854,7 +4119,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Resource<ToolStdinEntry>,
         Resource<ToolStdinClosedEntry>,
     )> {
-        let memory = AttachmentMemory::tracked(self.public_state.worker().active_agents());
+        let memory = AttachmentMemory::for_store(
+            self.public_state.worker().active_agents(),
+            self.state.is_live(),
+        );
         let (producer, consumer, observer) =
             attachment_pair(self.state.config.limits.max_tool_attachment_bytes, memory);
         let writer = self.table().push(ToolStdinWriterEntry { producer })?;
@@ -3884,7 +4152,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
     ) -> anyhow::Result<Resource<ToolStdinEntry>> {
         accessor.with(|mut access| {
             let ctx = access.get();
-            let memory = AttachmentMemory::tracked(ctx.public_state.worker().active_agents());
+            let memory = AttachmentMemory::for_store(
+                ctx.public_state.worker().active_agents(),
+                ctx.state.is_live(),
+            );
             let (producer, consumer, observer) =
                 attachment_pair(ctx.state.config.limits.max_tool_attachment_bytes, memory);
             let stdin = ctx.table().push(ToolStdinEntry { consumer })?;
@@ -3912,7 +4183,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
     )> {
         accessor.with(|mut access| {
             let ctx = access.get();
-            let memory = AttachmentMemory::tracked(ctx.public_state.worker().active_agents());
+            let memory = AttachmentMemory::for_store(
+                ctx.public_state.worker().active_agents(),
+                ctx.state.is_live(),
+            );
             let (producer, consumer, _) =
                 attachment_pair(ctx.state.config.limits.max_tool_attachment_bytes, memory);
             let target = ctx.table().push(ToolStdoutEntry {
@@ -4166,14 +4440,17 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ResolvedToolCommand, SkippedToolAttachmentEndpoints, ToolStdinEntry, ToolStdoutWriterEntry,
-        UnderlyingToolStdinStreamConsumer, WitRegisteredTool, classify_tool_discovery_error,
-        cleanup_tool_endpoints, recorded_tool_body_is_skipped, resolve_tool_command,
-        stdout_limit_error, terminal_tool_discovery_error, validate_stream_attachments,
+        ResolvedToolCommand, SkippedToolAttachmentEndpoints, ToolStdinEntry,
+        ToolStdinStreamConsumer, ToolStdoutWriterEntry, UnderlyingToolStdinStreamConsumer,
+        WitRegisteredTool, classify_tool_discovery_error, cleanup_tool_endpoints,
+        recorded_tool_body_is_skipped, resolve_tool_command, stdout_limit_error,
+        terminal_tool_discovery_error, validate_stream_attachments,
     };
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use crate::durable_host::entity::RecordedEntityTerminal;
-    use crate::durable_host::tool::attachment::{AttachmentMemory, attachment_pair};
+    use crate::durable_host::tool::attachment::{
+        AttachmentMemory, ToolAttachmentModeMetadata, attachment_pair,
+    };
     use crate::preview2::golem::tool::host::{ByteStreamCloseCause, ByteStreamFailure};
     use crate::services::environment_state::ToolDiscoveryError;
     use golem_common::model::account::{AccountEmail, AccountId};
@@ -4199,7 +4476,9 @@ mod tests {
     use std::task::{Context, Poll};
     use test_r::test;
     use tokio::sync::mpsc;
-    use wasmtime::component::{Destination, StreamProducer, StreamReader, StreamResult};
+    use wasmtime::component::{
+        Component, Destination, Linker, StreamProducer, StreamReader, StreamResult,
+    };
     use wasmtime::{Config, Engine, Store, StoreContextMut};
 
     struct OneBufferProducer {
@@ -4244,6 +4523,398 @@ mod tests {
             SerializableToolRpcError::ResourceExhausted(_)
         ));
         assert!(stdout_limit_error(false).is_none());
+    }
+
+    fn raw_wasmtime_writer_component(engine: &Engine) -> Component {
+        Component::new(
+            engine,
+            r#"
+(component
+  (import "attach" (func $attach))
+  (core func $attach (canon lower (func $attach)))
+  (core module $memory (memory (export "mem") 1))
+  (core instance $memory (instantiate $memory))
+  (core module $core
+    (import "" "mem" (memory 1))
+    (import "" "stream.new" (func $stream.new (result i64)))
+    (import "" "stream.write-async" (func $stream.write-async (param i32 i32 i32) (result i32)))
+    (import "" "stream.write-sync" (func $stream.write-sync (param i32 i32 i32) (result i32)))
+    (import "" "stream.cancel-write" (func $stream.cancel-write (param i32) (result i32)))
+    (import "" "stream.drop-writable" (func $stream.drop-writable (param i32)))
+    (import "" "attach" (func $attach))
+    (global $writer (mut i32) (i32.const 0))
+    (data (i32.const 0) "\01\02\03\04\05\06\07\08\09\0a\0b\0c")
+    (func (export "start") (result i32)
+      (local $pair i64)
+      (local.set $pair (call $stream.new))
+      (global.set $writer (i32.wrap_i64 (i64.shr_u (local.get $pair) (i64.const 32))))
+      (i32.wrap_i64 (local.get $pair))
+    )
+    (func (export "cancel-without-acknowledgement")
+      (local $result i32)
+      (local.set $result (call $stream.write-async (global.get $writer) (i32.const 9) (i32.const 3)))
+      (if (i32.ne (local.get $result) (i32.const -1)) (then unreachable))
+      (call $attach)
+      (local.set $result (call $stream.cancel-write (global.get $writer)))
+      (if (i32.ne (local.get $result) (i32.const 2)) (then unreachable))
+    )
+    (func (export "attach") (call $attach))
+    (func (export "write-first")
+      (local $result i32)
+      (local.set $result (call $stream.write-sync (global.get $writer) (i32.const 0) (i32.const 3)))
+      (if (i32.ne (local.get $result) (i32.const 48)) (then unreachable))
+    )
+    (func (export "cancel-with-pending-acknowledgement")
+      (local $result i32)
+      (local.set $result (call $stream.write-async (global.get $writer) (i32.const 3) (i32.const 3)))
+      (if (i32.ne (local.get $result) (i32.const -1)) (then unreachable))
+      (local.set $result (call $stream.cancel-write (global.get $writer)))
+      (if (i32.ne (local.get $result) (i32.const 2)) (then unreachable))
+    )
+    (func (export "resume-and-close")
+      (local $result i32)
+      (local.set $result (call $stream.write-sync (global.get $writer) (i32.const 6) (i32.const 3)))
+      (if (i32.ne (local.get $result) (i32.const 48)) (then unreachable))
+      (call $stream.drop-writable (global.get $writer))
+    )
+  )
+  (type $stream (stream u8))
+  (core func $stream.new (canon stream.new $stream))
+  (core func $stream.write-async (canon stream.write $stream async (memory $memory "mem")))
+  (core func $stream.write-sync (canon stream.write $stream (memory $memory "mem")))
+  (core func $stream.cancel-write (canon stream.cancel-write $stream))
+  (core func $stream.drop-writable (canon stream.drop-writable $stream))
+  (core instance $core (instantiate $core (with "" (instance
+    (export "mem" (memory $memory "mem"))
+    (export "stream.new" (func $stream.new))
+    (export "stream.write-async" (func $stream.write-async))
+    (export "stream.write-sync" (func $stream.write-sync))
+    (export "stream.cancel-write" (func $stream.cancel-write))
+    (export "stream.drop-writable" (func $stream.drop-writable))
+    (export "attach" (func $attach))
+  ))))
+  (func (export "start") async (result (stream u8))
+    (canon lift (core func $core "start")))
+  (func (export "cancel-without-acknowledgement") async
+    (canon lift (core func $core "cancel-without-acknowledgement")))
+  (func (export "attach") async
+    (canon lift (core func $core "attach")))
+  (func (export "write-first") async
+    (canon lift (core func $core "write-first")))
+  (func (export "cancel-with-pending-acknowledgement") async
+    (canon lift (core func $core "cancel-with-pending-acknowledgement")))
+  (func (export "resume-and-close") async
+    (canon lift (core func $core "resume-and-close")))
+)
+            "#,
+        )
+        .unwrap()
+    }
+
+    fn typed_wasmtime_writer_component(engine: &Engine) -> Component {
+        Component::new(
+            engine,
+            r#"
+(component
+  (import "attach" (func $attach))
+  (core func $attach (canon lower (func $attach)))
+  (core module $memory
+    (memory (export "mem") 1)
+    (data (i32.const 128) "\01\02\03\00\04\05\06\00\07\08\09\00\0a\0b\0c")
+  )
+  (core instance $memory (instantiate $memory))
+  (core module $core
+    (import "" "mem" (memory 1))
+    (import "" "stream.new" (func $stream.new (result i64)))
+    (import "" "stream.write-async" (func $stream.write-async (param i32 i32 i32) (result i32)))
+    (import "" "stream.write-sync" (func $stream.write-sync (param i32 i32 i32) (result i32)))
+    (import "" "stream.cancel-write" (func $stream.cancel-write (param i32) (result i32)))
+    (import "" "stream.drop-writable" (func $stream.drop-writable (param i32)))
+    (import "" "attach" (func $attach))
+    (global $writer (mut i32) (i32.const 0))
+    (func $set-item (param $item i32) (param $bytes i32)
+      (i32.store8 (local.get $item) (i32.const 0))
+      (i32.store (i32.add (local.get $item) (i32.const 4)) (local.get $bytes))
+      (i32.store (i32.add (local.get $item) (i32.const 8)) (i32.const 3))
+    )
+    (func (export "start") (result i32)
+      (local $pair i64)
+      (call $set-item (i32.const 0) (i32.const 128))
+      (call $set-item (i32.const 16) (i32.const 132))
+      (call $set-item (i32.const 32) (i32.const 136))
+      (call $set-item (i32.const 48) (i32.const 140))
+      (local.set $pair (call $stream.new))
+      (global.set $writer (i32.wrap_i64 (i64.shr_u (local.get $pair) (i64.const 32))))
+      (i32.wrap_i64 (local.get $pair))
+    )
+    (func (export "cancel-without-acknowledgement")
+      (local $result i32)
+      (local.set $result (call $stream.write-async (global.get $writer) (i32.const 48) (i32.const 1)))
+      (if (i32.ne (local.get $result) (i32.const -1)) (then unreachable))
+      (call $attach)
+      (local.set $result (call $stream.cancel-write (global.get $writer)))
+      (if (i32.ne (local.get $result) (i32.const 2)) (then unreachable))
+    )
+    (func (export "attach") (call $attach))
+    (func (export "write-first")
+      (local $result i32)
+      (local.set $result (call $stream.write-sync (global.get $writer) (i32.const 0) (i32.const 1)))
+      (if (i32.ne (local.get $result) (i32.const 16)) (then unreachable))
+    )
+    (func (export "cancel-with-pending-acknowledgement")
+      (local $result i32)
+      (local.set $result (call $stream.write-async (global.get $writer) (i32.const 16) (i32.const 1)))
+      (if (i32.ne (local.get $result) (i32.const -1)) (then unreachable))
+      (local.set $result (call $stream.cancel-write (global.get $writer)))
+      (if (i32.ne (local.get $result) (i32.const 2)) (then unreachable))
+    )
+    (func (export "resume-and-close")
+      (local $result i32)
+      (local.set $result (call $stream.write-sync (global.get $writer) (i32.const 32) (i32.const 1)))
+      (if (i32.ne (local.get $result) (i32.const 16)) (then unreachable))
+      (call $stream.drop-writable (global.get $writer))
+    )
+  )
+  (type $failure (variant
+    (case "cancelled")
+    (case "abandoned")
+    (case "resource-exhausted")
+    (case "failed" string)
+  ))
+  (export $failure-export "byte-stream-failure" (type $failure))
+  (type $item (result (list u8) (error $failure-export)))
+  (export $item-export "byte-stream-item" (type $item))
+  (type $stream (stream $item-export))
+  (core func $stream.new (canon stream.new $stream))
+  (core func $stream.write-async (canon stream.write $stream async (memory $memory "mem")))
+  (core func $stream.write-sync (canon stream.write $stream (memory $memory "mem")))
+  (core func $stream.cancel-write (canon stream.cancel-write $stream))
+  (core func $stream.drop-writable (canon stream.drop-writable $stream))
+  (core instance $core (instantiate $core (with "" (instance
+    (export "mem" (memory $memory "mem"))
+    (export "stream.new" (func $stream.new))
+    (export "stream.write-async" (func $stream.write-async))
+    (export "stream.write-sync" (func $stream.write-sync))
+    (export "stream.cancel-write" (func $stream.cancel-write))
+    (export "stream.drop-writable" (func $stream.drop-writable))
+    (export "attach" (func $attach))
+  ))))
+  (func (export "start") async (result (stream $item-export))
+    (canon lift (core func $core "start")))
+  (func (export "cancel-without-acknowledgement") async
+    (canon lift (core func $core "cancel-without-acknowledgement")))
+  (func (export "attach") async
+    (canon lift (core func $core "attach")))
+  (func (export "write-first") async
+    (canon lift (core func $core "write-first")))
+  (func (export "cancel-with-pending-acknowledgement") async
+    (canon lift (core func $core "cancel-with-pending-acknowledgement")))
+  (func (export "resume-and-close") async
+    (canon lift (core func $core "resume-and-close")))
+)
+            "#,
+        )
+        .unwrap()
+    }
+
+    async fn assert_raw_stdin_operation_cancellation(pending_acknowledgement: bool) {
+        let (_attachment_producer, _attachment_consumer, observer) =
+            attachment_pair(3, AttachmentMemory::inert());
+        let (items, mut received) = mpsc::unbounded_channel();
+        let mut config = Config::new();
+        config.concurrency_support(true);
+        config.wasm_component_model_more_async_builtins(true);
+        let engine = Engine::new(&config).unwrap();
+        let component = raw_wasmtime_writer_component(&engine);
+        let mut store = Store::new(&engine, ());
+        let reader_slot = std::sync::Arc::new(std::sync::Mutex::new(None::<StreamReader<u8>>));
+        let reader_slot_for_attach = reader_slot.clone();
+        let observer_during_cancellation = observer.clone();
+        let mut linker = Linker::new(&engine);
+        linker
+            .root()
+            .func_wrap("attach", move |mut store, (): ()| {
+                reader_slot_for_attach
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("raw stream reader was not ready to attach")
+                    .pipe(
+                        &mut store,
+                        UnderlyingToolStdinStreamConsumer::new(items.clone(), observer.clone(), 3),
+                    )?;
+                Ok(())
+            })
+            .unwrap();
+        let instance = linker
+            .instantiate_async(&mut store, &component)
+            .await
+            .unwrap();
+        let start = instance
+            .get_typed_func::<(), (StreamReader<u8>,)>(&mut store, "start")
+            .unwrap();
+        let write_first = instance
+            .get_typed_func::<(), ()>(&mut store, "write-first")
+            .unwrap();
+        let attach = instance
+            .get_typed_func::<(), ()>(&mut store, "attach")
+            .unwrap();
+        let cancel = instance
+            .get_typed_func::<(), ()>(
+                &mut store,
+                if pending_acknowledgement {
+                    "cancel-with-pending-acknowledgement"
+                } else {
+                    "cancel-without-acknowledgement"
+                },
+            )
+            .unwrap();
+        let resume = instance
+            .get_typed_func::<(), ()>(&mut store, "resume-and-close")
+            .unwrap();
+
+        store
+            .run_concurrent(async move |accessor| -> wasmtime::Result<()> {
+                let (reader,) = start.call_concurrent(accessor, ()).await?;
+                *reader_slot.lock().unwrap() = Some(reader);
+                let first = if pending_acknowledgement {
+                    attach.call_concurrent(accessor, ()).await?;
+                    write_first.call_concurrent(accessor, ()).await?;
+                    let first = received.recv().await.unwrap();
+                    assert_eq!(first.item.as_ref().unwrap(), &vec![1, 2, 3]);
+                    Some(first)
+                } else {
+                    None
+                };
+                cancel.call_concurrent(accessor, ()).await?;
+                assert!(received.try_recv().is_err());
+                assert!(observer_during_cancellation.terminal_snapshot().is_none());
+                if let Some(first) = first {
+                    first.acknowledged.send(()).unwrap();
+                }
+
+                resume.call_concurrent(accessor, ()).await?;
+                let resumed = received.recv().await.unwrap();
+                assert_eq!(resumed.item.unwrap(), vec![7, 8, 9]);
+                let _ = resumed.acknowledged.send(());
+                assert!(received.try_recv().is_err());
+                Ok(())
+            })
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    async fn assert_typed_stdin_operation_cancellation(pending_acknowledgement: bool) {
+        let (_attachment_producer, _attachment_consumer, observer) =
+            attachment_pair(3, AttachmentMemory::inert());
+        let (items, mut received) = mpsc::unbounded_channel();
+        let mut config = Config::new();
+        config.concurrency_support(true);
+        config.wasm_component_model_more_async_builtins(true);
+        let engine = Engine::new(&config).unwrap();
+        let component = typed_wasmtime_writer_component(&engine);
+        let mut store = Store::new(&engine, ());
+        let reader_slot = std::sync::Arc::new(std::sync::Mutex::new(
+            None::<StreamReader<Result<Vec<u8>, ByteStreamFailure>>>,
+        ));
+        let reader_slot_for_attach = reader_slot.clone();
+        let observer_during_cancellation = observer.clone();
+        let mut linker = Linker::new(&engine);
+        linker
+            .root()
+            .func_wrap("attach", move |mut store, (): ()| {
+                reader_slot_for_attach
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("typed stream reader was not ready to attach")
+                    .pipe(
+                        &mut store,
+                        ToolStdinStreamConsumer::new(items.clone(), observer.clone()),
+                    )?;
+                Ok(())
+            })
+            .unwrap();
+        let instance = linker
+            .instantiate_async(&mut store, &component)
+            .await
+            .unwrap();
+        let start = instance
+            .get_typed_func::<(), (StreamReader<Result<Vec<u8>, ByteStreamFailure>>,)>(
+                &mut store, "start",
+            )
+            .unwrap();
+        let attach = instance
+            .get_typed_func::<(), ()>(&mut store, "attach")
+            .unwrap();
+        let write_first = instance
+            .get_typed_func::<(), ()>(&mut store, "write-first")
+            .unwrap();
+        let cancel = instance
+            .get_typed_func::<(), ()>(
+                &mut store,
+                if pending_acknowledgement {
+                    "cancel-with-pending-acknowledgement"
+                } else {
+                    "cancel-without-acknowledgement"
+                },
+            )
+            .unwrap();
+        let resume = instance
+            .get_typed_func::<(), ()>(&mut store, "resume-and-close")
+            .unwrap();
+
+        store
+            .run_concurrent(async move |accessor| -> wasmtime::Result<()> {
+                let (reader,) = start.call_concurrent(accessor, ()).await?;
+                *reader_slot.lock().unwrap() = Some(reader);
+                let first = if pending_acknowledgement {
+                    attach.call_concurrent(accessor, ()).await?;
+                    write_first.call_concurrent(accessor, ()).await?;
+                    let first = received.recv().await.unwrap();
+                    assert_eq!(first.item.as_ref().unwrap(), &vec![1, 2, 3]);
+                    Some(first)
+                } else {
+                    None
+                };
+                cancel.call_concurrent(accessor, ()).await?;
+                assert!(received.try_recv().is_err());
+                assert!(observer_during_cancellation.terminal_snapshot().is_none());
+                if let Some(first) = first {
+                    first.acknowledged.send(()).unwrap();
+                }
+
+                resume.call_concurrent(accessor, ()).await?;
+                let resumed = received.recv().await.unwrap();
+                assert_eq!(resumed.item.unwrap(), vec![7, 8, 9]);
+                let _ = resumed.acknowledged.send(());
+                assert!(received.try_recv().is_err());
+                Ok(())
+            })
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    async fn cancelling_raw_stdin_without_acknowledgement_resumes_without_false_eof() {
+        assert_raw_stdin_operation_cancellation(false).await;
+    }
+
+    #[test]
+    async fn cancelling_raw_stdin_with_pending_acknowledgement_preserves_it_and_resumes() {
+        assert_raw_stdin_operation_cancellation(true).await;
+    }
+
+    #[test]
+    async fn cancelling_typed_stdin_without_acknowledgement_resumes_without_false_eof() {
+        assert_typed_stdin_operation_cancellation(false).await;
+    }
+
+    #[test]
+    async fn cancelling_typed_stdin_with_pending_acknowledgement_preserves_it_and_resumes() {
+        assert_typed_stdin_operation_cancellation(true).await;
     }
 
     #[test]
@@ -4410,6 +5081,14 @@ mod tests {
 
             endpoints.publish_failure(&controllers, failure.clone());
 
+            assert_eq!(
+                controllers.0.as_ref().unwrap().metadata().mode,
+                ToolAttachmentModeMetadata::TerminalOnly
+            );
+            assert_eq!(
+                controllers.1.as_ref().unwrap().metadata().mode,
+                ToolAttachmentModeMetadata::TerminalOnly
+            );
             for observer in [&stdin_observer, &stdout_observer] {
                 let Some(ByteStreamCloseCause::Failed(actual)) = observer.terminal() else {
                     panic!("skipped replay endpoint did not retain its recorded failure");

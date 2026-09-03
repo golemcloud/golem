@@ -338,6 +338,7 @@ oplog_payload! {
             input: TypedSchemaValue,
         },
         GolemToolInvocationRejected {
+            attempt_ordinal: u64,
             tool_name: String,
             command_path: Vec<String>,
             input: Option<TypedSchemaValue>,

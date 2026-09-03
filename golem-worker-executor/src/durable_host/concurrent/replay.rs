@@ -105,6 +105,7 @@ pub enum ReconstructionReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
     Replayed(Pair::Resp),
     Cancelled(Pair::Resp),
     Incomplete(DurableCallSession<Pair, P>),
+    LiveAdmissionCancelled(DurableCallSession<Pair, P>),
 }
 
 pub(in crate::durable_host) struct ResolvedReconstructionTerminal {
@@ -117,6 +118,10 @@ pub(in crate::durable_host) struct ResolvedReconstructionTerminal {
 impl ResolvedReconstructionTerminal {
     pub(in crate::durable_host) fn cancelled(&self) -> bool {
         self.cancelled
+    }
+
+    pub(in crate::durable_host) fn is_replay_at_marker(&self) -> bool {
+        self.delivery.is_replay_at_marker()
     }
 }
 
@@ -277,6 +282,10 @@ impl ReconstructionClaimState {
             .await
             .expect("replay cursor retains the reconstruction claim state");
         tracing::debug!("Resolver-owned historical entity reconstructions settled");
+    }
+
+    pub(crate) fn subscribe_fences(&self) -> watch::Receiver<HashSet<OplogIndex>> {
+        self.active_fences.subscribe()
     }
 
     pub(crate) fn ensure_empty(&self) -> Result<(), WorkerExecutorError> {
@@ -475,6 +484,28 @@ impl ConcurrentReplayResolver {
 
     pub fn has_claim(&self, start_idx: OplogIndex) -> bool {
         self.pending.contains_key(&start_idx) || self.prefetched_terminals.contains_key(&start_idx)
+    }
+
+    pub(crate) fn pending_reconstruction_starts(&self) -> HashSet<OplogIndex> {
+        let fences = self.reconstruction_claims.active_fences.borrow();
+        self.pending
+            .keys()
+            .filter(|start_index| fences.contains(start_index))
+            .copied()
+            .collect()
+    }
+
+    pub(crate) fn only_pending_reconstruction_fences_remain(
+        &self,
+        incomplete: &HashSet<OplogIndex>,
+    ) -> bool {
+        self.reconstruction_claims
+            .active_fences
+            .borrow()
+            .iter()
+            .all(|start_index| {
+                incomplete.contains(start_index) && self.pending.contains_key(start_index)
+            })
     }
 
     pub fn has_any_claims(&self) -> bool {

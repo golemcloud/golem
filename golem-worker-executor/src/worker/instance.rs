@@ -775,6 +775,9 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let mut context = owner
             .create_entity_context(
                 self.runtime.clone(),
+                scope
+                    .map(EntityInvocationScope::mode)
+                    .unwrap_or(InvocationExecutionMode::Live),
                 self.filesystem,
                 component_metadata,
                 self.activation.clone(),

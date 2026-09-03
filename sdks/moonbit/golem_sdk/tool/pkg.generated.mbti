@@ -68,15 +68,15 @@ pub async fn[E : @schema.FromSchema] invoke_and_await_payload_error(@host.ToolRp
 
 pub async fn[E : @tool-core.ToolErrorSchema] invoke_and_await_tool_error(@host.ToolRpc, Array[String], @schema_model.TypedSchemaValue, @async-core.Stream[Byte]?) -> Result[@tool-core.InvocationResult, ToolError[E]]
 
-pub async fn invoke_registered_subtool(String, Array[String], Array[@tool-core.CanonicalInputValue], @async-core.Stream[Byte]?, @async-core.Sink[Byte]?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
+pub async fn invoke_registered_subtool(String, Array[String], Array[@tool-core.CanonicalInputValue], @async-core.Stream[Byte]?, @tool-core.ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
 
-pub async fn invoke_registered_tool(String, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, @async-core.Sink[Byte]?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
+pub async fn invoke_registered_tool(String, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, @tool-core.ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
 
 pub fn literal_to_schema_value(@schema_model.SchemaGraph, @tool-core.ToolLiteral) -> @schema_model.SchemaValue raise @tool-core.ToolBuildError
 
 pub fn new_stdout() -> (@async-core.Stream[Byte], @async-core.Sink[Byte])
 
-pub fn provider_stdout(@host.ToolStdoutWriter) -> ProviderStdout
+pub fn provider_stdout(@host.ToolStdoutWriter) -> @tool-core.ProviderStdout
 
 pub fn refine_numeric(@schema_model.SchemaGraph, String?, String?, String?) -> @schema_model.SchemaGraph raise @tool-core.ToolBuildError
 
@@ -86,15 +86,15 @@ pub fn refine_text(@schema_model.SchemaGraph, String?, UInt?, UInt?) -> @schema_
 
 pub fn refine_url(@schema_model.SchemaGraph, Array[String]?) -> @schema_model.SchemaGraph raise @tool-core.ToolBuildError
 
-pub fn register_subtool_def_invoker(@tool-core.ToolDef, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, @async-core.Sink[Byte]?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]) -> Unit raise @tool-core.ToolBuildError
+pub fn register_subtool_def_invoker(@tool-core.ToolDef, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, @tool-core.ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]) -> Unit raise @tool-core.ToolBuildError
 
 pub fn register_tool_def(@tool-core.ToolDef) -> Unit raise @tool-core.ToolBuildError
 
-pub fn register_tool_def_invoker(@tool-core.ToolDef, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, @async-core.Sink[Byte]?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]) -> Unit raise @tool-core.ToolBuildError
+pub fn register_tool_def_invoker(@tool-core.ToolDef, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, @tool-core.ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]) -> Unit raise @tool-core.ToolBuildError
 
 pub fn register_wire_tool(@golemcloud/golem_sdk/interface/golem/tool/common.Tool) -> Unit raise @tool-core.ToolBuildError
 
-pub fn register_wire_tool_invoker(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, @async-core.Sink[Byte]?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]) -> Unit raise @tool-core.ToolBuildError
+pub fn register_wire_tool_invoker(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, @tool-core.ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]) -> Unit raise @tool-core.ToolBuildError
 
 pub fn reject_decoded_invocation(Array[@tool-core.CanonicalInputValue], @async-core.Stream[Byte]?, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
 
@@ -117,21 +117,8 @@ pub fn[T, E] typed_invocation(ToolInvocation[E], (@tool-core.InvocationResult) -
 pub fn value_is_literal_to_schema_value(@schema_model.SchemaGraph, @tool-core.ToolLiteral) -> @schema_model.SchemaValue raise @tool-core.ToolBuildError
 
 // Errors
-pub(all) suberror ToolStreamError {
-  Cancelled
-  Abandoned
-  ResourceExhausted
-  Failed(String)
-} derive(Eq, @debug.Debug)
 
 // Types and methods
-pub struct ProviderStdout {
-  // private fields
-}
-pub fn ProviderStdout::drop(Self) -> Unit
-pub async fn ProviderStdout::finish(Self) -> Unit
-pub fn ProviderStdout::output(Self) -> @async-core.Sink[Byte]
-
 pub(all) enum RpcError {
   Protocol(String)
   Denied(String)
@@ -210,6 +197,8 @@ pub using @tool-core {type PositionalsDef}
 
 pub using @golemcloud/golem_sdk/interface/golem/agent/common {type Principal}
 
+pub using @tool-core {type ProviderStdout}
+
 pub using @tool-core {type RefDef}
 
 pub using @tool-core {type RefGroupDef}
@@ -227,6 +216,8 @@ pub using @tool-core {type ToolBuildError}
 pub using @tool-core {type ToolDef}
 
 pub using @tool-core {type ToolLiteral}
+
+pub using @tool-core {type ToolStreamError}
 
 pub using @tool-core {type ValueIsLiteralDef}
 

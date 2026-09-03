@@ -183,7 +183,9 @@ fn nested_input(bytes: Vec<u8>) -> InputStream {
     let (mut writer, reader) =
         golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
     spawn_local(async move {
-        let _ = writer.write_all(vec![Ok(bytes)]).await;
+        if !bytes.is_empty() {
+            let _ = writer.write_all(vec![Ok(bytes)]).await;
+        }
     });
     reader
 }
@@ -606,6 +608,14 @@ impl Streaming for StreamingImpl {
                 let _ = stdout.write(b"eof-observed".to_vec()).await;
                 wait_at_crash_checkpoint(&stdout, "after-eof-before-terminal").await;
             }
+            "hold-large-after-eof" => {
+                while stdin.next().await.is_some() {}
+                stdout
+                    .write(vec![b'h'; 8 * 1024 * 1024])
+                    .await
+                    .expect("buffer incomplete replay attachment");
+                wait_at_crash_checkpoint(&stdout, "after-large-eof-before-terminal").await;
+            }
             "hold-after-stdout-terminal" => {
                 let _ = stdout.write(b"ready".to_vec()).await;
                 if let Some(Ok(chunk)) = stdin.next().await {
@@ -694,6 +704,9 @@ impl Streaming for StreamingImpl {
     }
 
     async fn no_stream(&self, value: String) -> Result<String, StreamingError> {
+        if value == "hold-attempt-identity" {
+            wait_at_crash_checkpoint(&value, "attempt-identity-accepted").await;
+        }
         Ok(format!("no-stream:{value}"))
     }
 

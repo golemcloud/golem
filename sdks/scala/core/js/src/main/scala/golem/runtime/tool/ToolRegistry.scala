@@ -17,9 +17,8 @@
 package golem.runtime.tool
 
 import golem.Principal
-import golem.runtime.tool.host.ToolHostApi
 import golem.schema.wire.WitTypedSchemaValue
-import golem.tool.ExtendedToolType
+import golem.tool.{ExtendedToolType, ToolInputStream, ToolOutputStream}
 import golem.tool.wire.{WitTool, WitToolError}
 
 import scala.collection.mutable
@@ -46,7 +45,7 @@ final case class ToolInvocationResult(
 private[golem] object ToolRegistry {
 
   /**
-   * Dispatches one `guest.invoke` call: `(command-path, input, stdin,
+   * Dispatches one `guest.invoke` call: `(command-path, input, stdin, stdout,
    * principal)` to either a successful [[ToolInvocationResult]] or a
    * [[WitToolError]].
    */
@@ -54,8 +53,8 @@ private[golem] object ToolRegistry {
     (
       List[String],
       WitTypedSchemaValue,
-      Option[ToolHostApi.RawByteStream],
-      Option[ToolHostApi.RawToolStdoutWriter],
+      Option[ToolInputStream],
+      Option[ToolOutputStream],
       Principal
     ) => Future[Either[WitToolError, ToolInvocationResult]]
 

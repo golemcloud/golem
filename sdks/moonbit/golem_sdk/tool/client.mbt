@@ -199,8 +199,14 @@ pub fn[E] ToolClient::start(
   decode_error : (@model.TypedSchemaValue) -> Result[E, String],
 ) -> Result[ToolInvocation[E], ToolError[E]] {
   let wire_input = @model.typed_schema_value_to_wit(input) catch {
-    e =>
+    e => {
+      release_failed_tool_input(input, @model_host.resource_drops())
+      match stdin {
+        Some(stdin) => stdin.drop_sync()
+        None => ()
+      }
       return Err(tool_protocol_error("failed to encode tool input: \{Repr(e)}"))
+    }
   }
   let wire_stdin = prepare_stdin(stdin)
   let (wire_stdout, output, stdout_source) = if stdout {

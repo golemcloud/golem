@@ -17,6 +17,7 @@
 package golem.runtime.tool
 
 import golem.host.js.tool.{JsByteStreamIterator, JsWasiInputStream, JsWasiOutputStream}
+import golem.runtime.tool.host.ToolHostApi
 import zio.ZIO
 import zio.test.*
 
@@ -74,6 +75,16 @@ object ToolStreamLifecycleSpec extends ZIOSpecDefault {
         val fixture = stream(withReturn = false)
         val input   = new JsMiddlewareInputStream(fixture.stream.asInstanceOf[JsWasiInputStream])
         ZIO.fromFuture(_ => input.close()).map(_ => assertTrue(fixture.closeCount() == 0, fixture.iteratorCount() == 1))
+      },
+      test("tool input cancellation lazily closes its JS iterator at most once") {
+        val fixture = stream(withReturn = true)
+        val input   = new JsToolInputStream(fixture.stream.asInstanceOf[ToolHostApi.RawByteStream])
+        for {
+          _ <- ZIO.succeed(assertTrue(fixture.iteratorCount() == 0))
+          _ <- ZIO.fromFuture(_ => input.cancel())
+          _ <- ZIO.fromFuture(_ => input.cancel())
+          _ <- ZIO.fromFuture(_ => input.close())
+        } yield assertTrue(fixture.closeCount() == 1, fixture.iteratorCount() == 1)
       }
     )
 }

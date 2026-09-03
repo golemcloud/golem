@@ -10,7 +10,6 @@ import {
   type FutureInvokeResult,
   type RpcError,
   type ToolError,
-  type ToolStdin,
 } from 'golem:tool/host@0.1.0';
 import {
   preflightWitTypedSchemaValue,
@@ -18,10 +17,21 @@ import {
   typedSchemaValueToWit,
   type TypedSchemaValue,
 } from '../internal/schema-model';
-import type { ToolInputStream } from '../internal/tool/startedToolInvocation';
+import {
+  mapSettledToolResult,
+  settleToolResult,
+  toolStreamFailureFromError,
+  type SettledToolResult,
+  type ToolInputStream,
+} from '../internal/tool/startedToolInvocation';
 
 export {
+  mapSettledToolResult,
+  resultFromSettledToolResult,
+  settleToolResult,
   startedToolInvocation,
+  ToolStreamError,
+  type SettledToolResult,
   type StartedToolInvocation,
   type ToolInputStream,
 } from '../internal/tool/startedToolInvocation';
@@ -32,7 +42,9 @@ export interface ToolInvocationResult {
 
 export interface RawToolInvocation {
   readonly stdout?: AsyncIterable<ByteStreamItem>;
-  readonly result: Promise<Awaited<ReturnType<FutureInvokeResult['get']>>>;
+  readonly settledResult: Promise<
+    SettledToolResult<Awaited<ReturnType<FutureInvokeResult['get']>>>
+  >;
   cancel(): void;
 }
 
@@ -58,10 +70,11 @@ export function createToolClientTransport(toolName: string): ToolClientTransport
         inputEndpoints?.[1],
         outputEndpoints?.[0],
       );
-      if (inputEndpoints) void pumpToolStdin(stdin!, ...inputEndpoints);
+      if (inputEndpoints) void pumpToolStdin(stdin!, inputEndpoints[0], inputEndpoints[2]);
+      const settledResult = settleToolResult(future.get());
       return {
         stdout: outputEndpoints?.[1],
-        result: future.get(),
+        settledResult,
         cancel: () => future.cancel(),
       };
     },
@@ -71,7 +84,6 @@ export function createToolClientTransport(toolName: string): ToolClientTransport
 async function pumpToolStdin(
   source: ToolInputStream,
   writer: ReturnType<typeof createStdin>[0],
-  _capability: ToolStdin,
   closed: ReturnType<typeof createStdin>[2],
 ): Promise<void> {
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -95,12 +107,12 @@ async function pumpToolStdin(
         throw new TypeError('tool stdin yielded a non-byte chunk');
       }
       if (next.value.value.byteLength === 0) {
-        throw new TypeError('tool stdin yielded an empty chunk');
+        continue;
       }
       await writer.write(next.value.value);
     }
   } catch (error) {
-    const reason: ByteStreamFailure = { tag: 'failed', val: errorMessage(error) };
+    const reason: ByteStreamFailure = toolStreamFailureFromError(error);
     try {
       await writer.fail(reason);
     } catch {
@@ -124,7 +136,7 @@ export interface ToolClientRuntime {
     stdout: boolean,
   ): {
     stdout?: AsyncIterable<ByteStreamItem>;
-    result: Promise<ToolInvocationResult>;
+    settledResult: Promise<SettledToolResult<ToolInvocationResult>>;
     cancel(): void;
   };
 }
@@ -138,7 +150,7 @@ export function createToolClientRuntime(
       const invocation = transport.start(commandPath, typedSchemaValueToWit(input), stdin, stdout);
       return {
         stdout: invocation.stdout,
-        result: invocation.result.then((value) => ({
+        settledResult: mapSettledToolResult(invocation.settledResult, (value) => ({
           result: value.result === undefined ? undefined : typedSchemaValueFromWit(value.result),
         })),
         cancel: () => invocation.cancel(),
@@ -212,8 +224,5 @@ export function splitToolRpcError<Declared>(
   if (error.tag !== 'remote-tool-error' || error.val.tag !== 'custom-error')
     return { tag: 'rpc', error };
   return { tag: 'tool', error: decodeCustomError(typedSchemaValueFromWit(error.val.val)) };
-}
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 export type { RpcError, ToolError };

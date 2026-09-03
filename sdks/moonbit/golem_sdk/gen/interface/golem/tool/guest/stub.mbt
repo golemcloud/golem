@@ -40,10 +40,12 @@ pub async fn invoke(
         command_path,
         input,
         stdin,
-        Some(stdout.output()),
+        Some(stdout),
         principal,
       )
-      stdout.finish()
+      stdout.finish() catch {
+        _ => ()
+      }
       result
     }
   }

@@ -1,4 +1,9 @@
-import { ok, s, toolDefinition } from "@golemcloud/golem-ts-sdk";
+import {
+  ok,
+  s,
+  toolDefinition,
+  ToolStreamError,
+} from "@golemcloud/golem-ts-sdk";
 import { z } from "zod/v4";
 
 toolDefinition("ts-streaming")
@@ -15,7 +20,13 @@ toolDefinition("ts-streaming")
       const writer = context.stdout.getWriter();
       let bytesRead = 0n;
 
+      if (mode === "resource-exhausted") {
+        await writer.abort(new ToolStreamError({ tag: "resource-exhausted" }));
+        return ok(bytesRead);
+      }
+
       if (mode === "marker-echo") {
+        await writer.write(new Uint8Array());
         await writer.write(new TextEncoder().encode("ts-marker:"));
       }
 

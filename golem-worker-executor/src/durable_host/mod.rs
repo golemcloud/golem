@@ -136,7 +136,9 @@ use golem_common::model::card::{
     StoredCard, WalletVersionToken,
 };
 use golem_common::model::component::{CanonicalFilePath, ComponentId, ComponentRevision};
-use golem_common::model::entity::{EntityInvocationScope, FilesystemCapability, OwnerRuntime};
+use golem_common::model::entity::{
+    AgentEntity, EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
+};
 #[cfg(test)]
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
@@ -371,6 +373,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     runtime: OwnerRuntime,
     filesystem: FilesystemCapability,
     entity_invocation_scope: Option<EntityInvocationScope>,
+    entity_tool_operation: Option<tool::operation::OwnerToolOperation>,
     entity_cancellation: Option<tokio_util::sync::CancellationToken>,
     primary_invocation_start_index: Option<OplogIndex>,
     invocation_principal: Option<Principal>,
@@ -781,6 +784,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
         runtime: OwnerRuntime,
+        entity_execution_mode: Option<InvocationExecutionMode>,
         owner_execution: Arc<OwnerExecution>,
         owner_resources: Arc<OwnerRuntimeResources>,
         entity_reconstruction_claim_hook: Option<
@@ -794,6 +798,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             generation_handle: filesystem_generation_handle,
             preopen: filesystem_preopen,
         } = filesystem;
+        if matches!(runtime, OwnerRuntime::Agent) != entity_execution_mode.is_none() {
+            return Err(WorkerExecutorError::runtime(
+                "Entity execution mode must be supplied exactly for entity Stores",
+            ));
+        }
         if runtime == OwnerRuntime::Agent && filesystem_capability != FilesystemCapability::Capable
         {
             return Err(WorkerExecutorError::runtime(
@@ -973,6 +982,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             worker_proxy,
             replay_state,
             runtime.clone(),
+            entity_execution_mode,
             tail_work,
             component_metadata,
             worker_config.owner_component_metadata,
@@ -1018,6 +1028,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             runtime,
             filesystem: filesystem_capability,
             entity_invocation_scope: None,
+            entity_tool_operation: None,
             entity_cancellation: None,
             primary_invocation_start_index: None,
             invocation_principal: None,
@@ -1186,6 +1197,27 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn entity_invocation_scope(&self) -> Option<&EntityInvocationScope> {
         self.entity_invocation_scope.as_ref()
+    }
+
+    pub(crate) fn set_entity_tool_operation(
+        &mut self,
+        operation: tool::operation::OwnerToolOperation,
+    ) -> Result<(), WorkerExecutorError> {
+        if !matches!(self.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))) {
+            return Err(WorkerExecutorError::runtime(
+                "Tool operation can only be installed in a tool entity Store",
+            ));
+        }
+        if self.entity_tool_operation.replace(operation).is_some() {
+            return Err(WorkerExecutorError::runtime(
+                "Tool operation is already installed in the entity Store",
+            ));
+        }
+        Ok(())
+    }
+
+    fn entity_tool_operation(&self) -> Option<tool::operation::OwnerToolOperation> {
+        self.entity_tool_operation.clone()
     }
 
     pub(crate) fn set_invocation_principal(&mut self, principal: Option<Principal>) {
@@ -2297,28 +2329,66 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.linear_memory.clone()
     }
 
-    async fn switch_to_live(&mut self) -> Result<(), WorkerExecutorError> {
-        let role = if self.runtime == OwnerRuntime::Agent {
-            ReplayToLiveRole::PrimaryAgent
-        } else {
-            ReplayToLiveRole::NonPrimary
-        };
-        let outcome = self
-            .state
-            .replay_state
-            .switch_to_live(&self.linear_memory, role)
-            .await?;
-        if outcome == ReplayToLiveOutcome::ReplayResumed {
-            return Err(WorkerExecutorError::runtime(
-                "replay target grew while the primary runtime was settling",
-            ));
-        }
-        if role == ReplayToLiveRole::NonPrimary {
-            self.state.local_live_tail.store(true, Ordering::Release);
-        } else {
+    async fn begin_switch_to_live(&self) -> Result<BeginReplayToLive, WorkerExecutorError> {
+        begin_replay_to_live(
+            self.state.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete),
+            matches!(self.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))),
+            self.entity_tool_operation(),
+            &self.public_state,
+            &self.linear_memory,
+            &self.state.replay_state,
+            if self.runtime == OwnerRuntime::Agent {
+                ReplayToLiveRole::PrimaryAgent
+            } else {
+                ReplayToLiveRole::NonPrimary
+            },
+            self.state.local_live_tail(),
+        )
+        .await
+    }
+
+    async fn begin_local_live_continuation(
+        &self,
+    ) -> Result<PendingReplayToLive, WorkerExecutorError> {
+        begin_local_live_continuation(
+            self.state.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete),
+            matches!(self.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))),
+            self.entity_tool_operation(),
+            &self.public_state,
+            &self.linear_memory,
+            if self.runtime == OwnerRuntime::Agent {
+                ReplayToLiveRole::PrimaryAgent
+            } else {
+                ReplayToLiveRole::NonPrimary
+            },
+            self.state.local_live_tail(),
+            self.state.replay_state.replay_target(),
+        )
+        .await
+    }
+
+    async fn finish_switch_to_live(
+        &mut self,
+        pending: PendingReplayToLive,
+    ) -> Result<FinishReplayToLive, WorkerExecutorError> {
+        let role = pending.role();
+        let outcome = pending.finish().await?;
+        if outcome == FinishReplayToLive::Live && role == ReplayToLiveRole::PrimaryAgent {
             self.process_pending_replay_events().await?;
         }
-        Ok(())
+        Ok(outcome)
+    }
+
+    async fn switch_to_live(&mut self) -> Result<(), WorkerExecutorError> {
+        let pending = match self.begin_switch_to_live().await? {
+            BeginReplayToLive::ReplayResumed => {
+                return Err(WorkerExecutorError::runtime(
+                    "replay target grew while the primary runtime was settling",
+                ));
+            }
+            BeginReplayToLive::Pending(pending) => pending,
+        };
+        self.finish_switch_to_live(pending).await?.require_live()
     }
 
     fn cleanup_custom_durability_state(&mut self) {
@@ -2777,15 +2847,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         OplogEntryLookupResult::NotFound {
                             violates_for_all: false,
                         } if self.state.assume_idempotence => {
-                            // We need to jump to the end of the oplog
-                            self.switch_to_live().await?;
+                            let pending = match self.begin_switch_to_live().await? {
+                                BeginReplayToLive::ReplayResumed => {
+                                    return Err(WorkerExecutorError::runtime(
+                                        "replay target grew while a batched write was settling",
+                                    ));
+                                }
+                                BeginReplayToLive::Pending(pending) => pending,
+                            };
 
                             // But this is not enough, because if the retried batched write operation succeeds,
                             // and later we replay it, we need to skip the first attempt and only replay the second.
                             // Se we add a Jump entry to the oplog that registers a deleted region.
                             let deleted_region = OplogRegion {
                                 start: begin_index.next(), // keep the durable scope `Start` at `begin_index`
-                                end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
+                                end: pending.replay_target().next(), // skipping the Jump entry too
                             };
 
                             self.public_state
@@ -2798,6 +2874,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
                             // TODO: this recomputation should not be necessary.
                             self.public_state.worker().reattach_worker_status().await;
+
+                            self.finish_switch_to_live(pending).await?.require_live()?;
                             // Switched to live and re-running the body: the scope `End` will be
                             // appended live by `end_function`, so do not store the (now incomplete)
                             // replay handle.
@@ -3162,10 +3240,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             };
 
             let (result, tx) = if should_restart {
-                // We need to jump to the end of the oplog
-                self.switch_to_live().await?;
+                let pending = match self.begin_switch_to_live().await? {
+                    BeginReplayToLive::ReplayResumed => {
+                        return Err(WorkerExecutorError::runtime(
+                            "replay target grew while a remote transaction was settling",
+                        )
+                        .into());
+                    }
+                    BeginReplayToLive::Pending(pending) => pending,
+                };
 
                 if !assume_idempotence {
+                    self.finish_switch_to_live(pending).await?.require_live()?;
                     Err(WorkerExecutorError::runtime(
                         "Non-idempotent remote write operation was not completed, cannot retry",
                     ))
@@ -3178,7 +3264,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         // because we'll get a new tx id. The transaction scope `Start` lives at
                         // `scope_start_index < begin_index`, so it is preserved.
                         start: begin_index,
-                        end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
+                        end: pending.replay_target().next(), // skipping the Jump entry too
                     };
 
                     self.public_state
@@ -3191,6 +3277,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
                     // TODO: this recomputation should not be necessary.
                     self.public_state.worker().reattach_worker_status().await;
+
+                    self.finish_switch_to_live(pending).await?.require_live()?;
 
                     let (tx_id, tx) = handler.create_new().await?;
                     let _ = self
@@ -6259,6 +6347,227 @@ fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> b
     ) || status.has_pending_work()
 }
 
+fn store_is_live(
+    entity_execution_mode: Option<InvocationExecutionMode>,
+    local_live_tail: bool,
+    shared_live_published: bool,
+) -> bool {
+    match entity_execution_mode {
+        Some(InvocationExecutionMode::ReplayingCompleted) => false,
+        Some(InvocationExecutionMode::ReplayingIncomplete | InvocationExecutionMode::Live) => {
+            local_live_tail
+        }
+        None => shared_live_published,
+    }
+}
+
+pub(crate) enum BeginReplayToLive {
+    ReplayResumed,
+    Pending(PendingReplayToLive),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FinishReplayToLive {
+    Live,
+    AttachmentAdmissionRejected,
+    Cancelled,
+}
+
+impl FinishReplayToLive {
+    pub(crate) fn require_live(self) -> Result<(), WorkerExecutorError> {
+        match self {
+            Self::Live => Ok(()),
+            Self::AttachmentAdmissionRejected => {
+                Err(tool_attachment_live_admission_rejected_error())
+            }
+            Self::Cancelled => Err(tool_attachment_live_admission_cancelled_error()),
+        }
+    }
+}
+
+#[must_use = "replay cleanup must finish before live attachment admission is finalized"]
+pub(crate) struct PendingReplayToLive {
+    replay_target: OplogIndex,
+    role: ReplayToLiveRole,
+    replaying_incomplete_entity: bool,
+    tool_entity: bool,
+    tool_operation: Option<tool::operation::OwnerToolOperation>,
+    local_live_tail: Arc<AtomicBool>,
+}
+
+impl PendingReplayToLive {
+    pub(crate) fn replay_target(&self) -> OplogIndex {
+        self.replay_target
+    }
+
+    fn role(&self) -> ReplayToLiveRole {
+        self.role
+    }
+
+    pub(crate) async fn finish(self) -> Result<FinishReplayToLive, WorkerExecutorError> {
+        if self.replaying_incomplete_entity && self.tool_entity {
+            let operation = self.tool_operation.ok_or_else(|| {
+                WorkerExecutorError::runtime(
+                    "Incomplete tool entity has no live-admission operation installed",
+                )
+            })?;
+            match operation.activate_live_attachment_memory_accounting().await {
+                tool::operation::ToolLiveAdmissionOutcome::Admitted => {}
+                tool::operation::ToolLiveAdmissionOutcome::ResourceExhausted => {
+                    return Ok(FinishReplayToLive::AttachmentAdmissionRejected);
+                }
+                tool::operation::ToolLiveAdmissionOutcome::Cancelled => {
+                    return Ok(FinishReplayToLive::Cancelled);
+                }
+                tool::operation::ToolLiveAdmissionOutcome::Fenced => {
+                    return Err(WorkerExecutorError::runtime(
+                        "Tool operation was fenced during live-memory admission",
+                    ));
+                }
+            }
+        }
+
+        if self.role == ReplayToLiveRole::NonPrimary {
+            self.local_live_tail.store(true, Ordering::Release);
+        }
+        Ok(FinishReplayToLive::Live)
+    }
+}
+
+const TOOL_ATTACHMENT_LIVE_ADMISSION_REJECTED: &str =
+    "Tool attachment live-memory admission was exhausted";
+
+pub(crate) fn tool_attachment_live_admission_rejected_error() -> WorkerExecutorError {
+    WorkerExecutorError::runtime(TOOL_ATTACHMENT_LIVE_ADMISSION_REJECTED)
+}
+
+pub(crate) fn is_tool_attachment_live_admission_rejection(error: &WorkerExecutorError) -> bool {
+    matches!(
+        error,
+        WorkerExecutorError::Runtime { details }
+            if details == TOOL_ATTACHMENT_LIVE_ADMISSION_REJECTED
+    )
+}
+
+const TOOL_ATTACHMENT_LIVE_ADMISSION_CANCELLED: &str =
+    "Tool attachment live-memory admission was cancelled";
+
+pub(crate) fn tool_attachment_live_admission_cancelled_error() -> WorkerExecutorError {
+    WorkerExecutorError::runtime(TOOL_ATTACHMENT_LIVE_ADMISSION_CANCELLED)
+}
+
+async fn activate_incomplete_entity_linear_memory<Ctx: WorkerCtx>(
+    replaying_incomplete_entity: bool,
+    public_state: &PublicDurableWorkerState<Ctx>,
+    linear_memory: &LinearMemoryTracker,
+) -> Result<(), WorkerExecutorError> {
+    if !replaying_incomplete_entity {
+        return Ok(());
+    }
+
+    let active_agents = public_state.worker().active_agents();
+    linear_memory
+        .activate_live_reservation(move |bytes| {
+            let active_agents = active_agents.clone();
+            async move { active_agents.acquire_memory(bytes).await }
+        })
+        .await;
+    Ok(())
+}
+
+async fn begin_replay_to_live<Ctx: WorkerCtx>(
+    replaying_incomplete_entity: bool,
+    tool_entity: bool,
+    tool_operation: Option<tool::operation::OwnerToolOperation>,
+    public_state: &PublicDurableWorkerState<Ctx>,
+    linear_memory: &LinearMemoryTracker,
+    replay_state: &ReplayState,
+    role: ReplayToLiveRole,
+    local_live_tail: Arc<AtomicBool>,
+) -> Result<BeginReplayToLive, WorkerExecutorError> {
+    activate_incomplete_entity_linear_memory(
+        replaying_incomplete_entity,
+        public_state,
+        linear_memory,
+    )
+    .await?;
+    match replay_state.switch_to_live(linear_memory, role).await? {
+        ReplayToLiveOutcome::ReplayResumed => Ok(BeginReplayToLive::ReplayResumed),
+        ReplayToLiveOutcome::Live { replay_target } => {
+            Ok(BeginReplayToLive::Pending(PendingReplayToLive {
+                replay_target,
+                role,
+                replaying_incomplete_entity,
+                tool_entity,
+                tool_operation,
+                local_live_tail,
+            }))
+        }
+    }
+}
+
+async fn finish_replay_to_live_from_settling<Ctx: WorkerCtx>(
+    replaying_incomplete_entity: bool,
+    tool_entity: bool,
+    tool_operation: Option<tool::operation::OwnerToolOperation>,
+    public_state: &PublicDurableWorkerState<Ctx>,
+    linear_memory: &LinearMemoryTracker,
+    replay_state: &ReplayState,
+    role: ReplayToLiveRole,
+    local_live_tail: Arc<AtomicBool>,
+    replay_target: OplogIndex,
+) -> Result<BeginReplayToLive, WorkerExecutorError> {
+    activate_incomplete_entity_linear_memory(
+        replaying_incomplete_entity,
+        public_state,
+        linear_memory,
+    )
+    .await?;
+    match replay_state
+        .finish_settling_to_live(linear_memory, role, replay_target)
+        .await?
+    {
+        ReplayToLiveOutcome::ReplayResumed => Ok(BeginReplayToLive::ReplayResumed),
+        ReplayToLiveOutcome::Live { replay_target } => {
+            Ok(BeginReplayToLive::Pending(PendingReplayToLive {
+                replay_target,
+                role,
+                replaying_incomplete_entity,
+                tool_entity,
+                tool_operation,
+                local_live_tail,
+            }))
+        }
+    }
+}
+
+async fn begin_local_live_continuation<Ctx: WorkerCtx>(
+    replaying_incomplete_entity: bool,
+    tool_entity: bool,
+    tool_operation: Option<tool::operation::OwnerToolOperation>,
+    public_state: &PublicDurableWorkerState<Ctx>,
+    linear_memory: &LinearMemoryTracker,
+    role: ReplayToLiveRole,
+    local_live_tail: Arc<AtomicBool>,
+    replay_target: OplogIndex,
+) -> Result<PendingReplayToLive, WorkerExecutorError> {
+    activate_incomplete_entity_linear_memory(
+        replaying_incomplete_entity,
+        public_state,
+        linear_memory,
+    )
+    .await?;
+    linear_memory.switch_to_live();
+    Ok(PendingReplayToLive {
+        replay_target,
+        role,
+        replaying_incomplete_entity,
+        tool_entity,
+        tool_operation,
+        local_live_tail,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6281,6 +6590,56 @@ mod tests {
     use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
     use test_r::test;
+
+    #[test]
+    fn entity_store_liveness_is_scoped_to_its_invocation_mode() {
+        assert!(!store_is_live(None, false, false));
+        assert!(store_is_live(None, false, true));
+
+        let completed = Some(InvocationExecutionMode::ReplayingCompleted);
+        assert!(!store_is_live(completed, false, false));
+        assert!(!store_is_live(completed, false, true));
+        assert!(!store_is_live(completed, true, true));
+
+        let incomplete = Some(InvocationExecutionMode::ReplayingIncomplete);
+        assert!(!store_is_live(incomplete, false, false));
+        assert!(!store_is_live(incomplete, false, true));
+        assert!(store_is_live(incomplete, true, true));
+        assert!(store_is_live(
+            Some(InvocationExecutionMode::Live),
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    async fn pending_replay_to_live_is_fail_closed_until_finished() {
+        let local_live_tail = Arc::new(AtomicBool::new(false));
+        let pending = PendingReplayToLive {
+            replay_target: OplogIndex::from_u64(42),
+            role: ReplayToLiveRole::NonPrimary,
+            replaying_incomplete_entity: false,
+            tool_entity: false,
+            tool_operation: None,
+            local_live_tail: local_live_tail.clone(),
+        };
+
+        assert_eq!(pending.replay_target(), OplogIndex::from_u64(42));
+        assert!(!local_live_tail.load(Ordering::Acquire));
+        assert_eq!(pending.finish().await.unwrap(), FinishReplayToLive::Live);
+        assert!(local_live_tail.load(Ordering::Acquire));
+
+        let dropped_tail = Arc::new(AtomicBool::new(false));
+        drop(PendingReplayToLive {
+            replay_target: OplogIndex::from_u64(43),
+            role: ReplayToLiveRole::NonPrimary,
+            replaying_incomplete_entity: false,
+            tool_entity: false,
+            tool_operation: None,
+            local_live_tail: dropped_tail.clone(),
+        });
+        assert!(!dropped_tail.load(Ordering::Acquire));
+    }
 
     #[test]
     fn operator_authorized_invocation_guard_clears_mode_when_dropped() {
@@ -9147,6 +9506,9 @@ struct PrivateDurableWorkerState {
     resources: HashMap<AgentResourceId, (ResourceTypeId, ResourceAny)>,
     last_resource_id: AgentResourceId,
     replay_state: ReplayState,
+    /// The invocation's fixed initial mode for entity Stores. Primary Stores follow the shared
+    /// published replay state instead.
+    entity_execution_mode: Option<InvocationExecutionMode>,
     /// Per-Store live continuation after this entity's matching historical call was removed by a
     /// replay jump while sibling Stores still have owner-oplog reconstruction work.
     local_live_tail: Arc<AtomicBool>,
@@ -9157,6 +9519,8 @@ struct PrivateDurableWorkerState {
     /// Next custom invocation ordinal in each logical parent namespace for the current top-level
     /// agent invocation. `None` is the root namespace.
     custom_invocation_ordinals: HashMap<Option<uuid::Uuid>, u64>,
+    /// Next tool invocation attempt ordinal in each durable parent namespace.
+    tool_invocation_attempt_ordinals: HashMap<OwnerInvocationId, u64>,
     /// Live custom invocation ownership scopes, keyed by their process-local resource identity.
     custom_invocation_scopes: HashMap<u64, OpenCustomInvocationScope>,
     next_custom_invocation_scope_id: u64,
@@ -9470,6 +9834,7 @@ impl PrivateDurableWorkerState {
         worker_proxy: Arc<dyn WorkerProxy>,
         replay_state: ReplayState,
         runtime: OwnerRuntime,
+        entity_execution_mode: Option<InvocationExecutionMode>,
         tail_work: tail_work::TailWorkTracker,
         component_metadata: Component,
         owner_component_metadata: Option<Arc<Component>>,
@@ -9548,7 +9913,7 @@ impl PrivateDurableWorkerState {
             (OwnerRuntime::Agent, None) => golem_common::model::card::EffectiveSurface::default(),
             (OwnerRuntime::Entity(_), _) => configured_agent_effective_surface,
         };
-        let local_live_tail = matches!(runtime, OwnerRuntime::Entity(_)) && replay_state.is_live();
+        let local_live_tail = matches!(entity_execution_mode, Some(InvocationExecutionMode::Live));
         Ok(Self {
             oplog_service,
             oplog,
@@ -9579,10 +9944,12 @@ impl PrivateDurableWorkerState {
             worker_proxy,
             resources: HashMap::new(),
             last_resource_id: AgentResourceId::INITIAL,
+            entity_execution_mode,
             local_live_tail: Arc::new(AtomicBool::new(local_live_tail)),
             assume_idempotence: true,
             active_custom_invocations: HashMap::new(),
             custom_invocation_ordinals: HashMap::new(),
+            tool_invocation_attempt_ordinals: HashMap::new(),
             custom_invocation_scopes: HashMap::new(),
             next_custom_invocation_scope_id: 1,
             open_http_requests: HashMap::new(),
@@ -10098,6 +10465,7 @@ impl PrivateDurableWorkerState {
         self.http_call_count = 0;
         self.rpc_call_count = 0;
         self.scope_card_mint_ordinal = 0;
+        self.tool_invocation_attempt_ordinals.clear();
         // The `get_oplog_index` marker watermark is per-invocation: a marker captured in a previous
         // invocation only costs a graceful checkpoint fallback if jumped to, never correctness.
         self.min_exposed_marker = None;
@@ -10105,7 +10473,11 @@ impl PrivateDurableWorkerState {
 
     /// Returns whether we are in live mode where we are executing new calls.
     pub fn is_live(&self) -> bool {
-        self.local_live_tail.load(Ordering::Acquire) || self.replay_state.is_live_published()
+        store_is_live(
+            self.entity_execution_mode,
+            self.local_live_tail.load(Ordering::Acquire),
+            self.replay_state.is_live_published(),
+        )
     }
 
     pub(crate) fn local_live_tail(&self) -> Arc<AtomicBool> {

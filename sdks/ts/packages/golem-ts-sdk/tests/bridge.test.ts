@@ -2,12 +2,18 @@
 // Licensed under the Golem Source License v1.1
 
 import { WasmRpc } from 'golem:agent/host@2.0.0';
-import { createStdin, ToolRpc, type RpcError } from 'golem:tool/host@0.1.0';
+import { createStdin, ToolRpc, type ByteStreamFailure, type RpcError } from 'golem:tool/host@0.1.0';
 import { describe, expect, it, vi } from 'vitest';
 import { bridge } from '../src';
 import { GuestSchemaValueStreamHandle, validateSchemaGraph } from '../src/internal/schema-model';
 
 const graph = (root: bridge.SchemaType): bridge.SchemaGraph => ({ defs: new Map(), root });
+const streamFailures = [
+  { tag: 'cancelled' },
+  { tag: 'abandoned' },
+  { tag: 'resource-exhausted' },
+  { tag: 'failed', val: 'source failed' },
+] satisfies ByteStreamFailure[];
 
 describe('public bridge runtime', () => {
   it('validates both the graph and value of typed schema values', () => {
@@ -141,7 +147,7 @@ describe('public bridge runtime', () => {
       undefined,
       false,
     );
-    const result = await invocation.result;
+    const result = await bridge.resultFromSettledToolResult(invocation.settledResult);
     expect(result.result?.value).toEqual(bridge.v.string('ok'));
     expect(ToolRpc).toHaveBeenCalledWith('git');
   });
@@ -190,10 +196,124 @@ describe('public bridge runtime', () => {
     await vi.waitFor(() => expect(cancelSource).toHaveBeenCalledOnce(), { timeout: 100 });
   });
 
+  it('starts the stdin pump before result completion and skips empty source chunks', async () => {
+    const callOrder: string[] = [];
+    const getResult = vi.fn(() => {
+      callOrder.push('result');
+      return new Promise<never>(() => {});
+    });
+    const writer = {
+      write: vi.fn().mockResolvedValue(undefined),
+      finish: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createStdin).mockReturnValue([
+      writer,
+      {},
+      { wait: vi.fn(() => new Promise(() => undefined)) },
+    ] as never);
+    vi.mocked(ToolRpc).mockImplementationOnce(
+      () =>
+        ({
+          asyncInvokeAndAwait: vi.fn(() => ({
+            get: getResult,
+            cancel: vi.fn(),
+          })),
+        }) as never,
+    );
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array());
+        controller.enqueue(Uint8Array.of(1, 2));
+        controller.close();
+      },
+    });
+    const getReader = source.getReader.bind(source);
+    vi.spyOn(source, 'getReader').mockImplementationOnce(() => {
+      callOrder.push('stdin');
+      return getReader();
+    });
+
+    bridge.createToolClientTransport('empty-stdin-chunk').start([], {} as never, source, false);
+
+    expect(callOrder).toEqual(['stdin', 'result']);
+    await vi.waitFor(() => expect(writer.finish).toHaveBeenCalledOnce());
+    expect(writer.write).toHaveBeenCalledOnce();
+    expect(writer.write).toHaveBeenCalledWith(Uint8Array.of(1, 2));
+    expect(writer.fail).not.toHaveBeenCalled();
+  });
+
+  it.each(streamFailures)('preserves a typed $tag stdin source failure', async (failure) => {
+    const writer = {
+      write: vi.fn().mockResolvedValue(undefined),
+      finish: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createStdin).mockReturnValue([
+      writer,
+      {},
+      { wait: vi.fn(() => new Promise(() => undefined)) },
+    ] as never);
+    vi.mocked(ToolRpc).mockImplementationOnce(
+      () =>
+        ({
+          asyncInvokeAndAwait: vi.fn(() => ({
+            get: () => new Promise<never>(() => {}),
+            cancel: vi.fn(),
+          })),
+        }) as never,
+    );
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new bridge.ToolStreamError(failure));
+      },
+    });
+
+    bridge.createToolClientTransport('failed-stdin').start([], {} as never, source, false);
+
+    await vi.waitFor(() => expect(writer.fail).toHaveBeenCalledWith(failure));
+  });
+
+  it('maps an unknown stdin source exception to generic failure', async () => {
+    const writer = {
+      write: vi.fn().mockResolvedValue(undefined),
+      finish: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createStdin).mockReturnValue([
+      writer,
+      {},
+      { wait: vi.fn(() => new Promise(() => undefined)) },
+    ] as never);
+    vi.mocked(ToolRpc).mockImplementationOnce(
+      () =>
+        ({
+          asyncInvokeAndAwait: vi.fn(() => ({
+            get: () => new Promise<never>(() => {}),
+            cancel: vi.fn(),
+          })),
+        }) as never,
+    );
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error('unknown source failure'));
+      },
+    });
+
+    bridge.createToolClientTransport('failed-stdin').start([], {} as never, source, false);
+
+    await vi.waitFor(() =>
+      expect(writer.fail).toHaveBeenCalledWith({
+        tag: 'failed',
+        val: 'unknown source failure',
+      }),
+    );
+  });
+
   it('forwards cancellation to a transport invocation whose cancel method uses its receiver', () => {
     const rawInvocation = {
       cancelled: false,
-      result: new Promise<never>(() => {}),
+      settledResult: new Promise<never>(() => {}),
       cancel() {
         this.cancelled = true;
       },
@@ -234,10 +354,13 @@ describe('public bridge runtime', () => {
     };
     const runtime = bridge.createToolClientRuntime('broken-result', {
       start: () => ({
-        result: Promise.resolve({
-          result: {
-            graph: { typeNodes: [], defs: [], root: 0 },
-            value: { valueNodes: [], root: 0 },
+        settledResult: Promise.resolve({
+          status: 'fulfilled',
+          value: {
+            result: {
+              graph: { typeNodes: [], defs: [], root: 0 },
+              value: { valueNodes: [], root: 0 },
+            },
           },
         }),
         stdout,
@@ -254,7 +377,7 @@ describe('public bridge runtime', () => {
       undefined,
       true,
     );
-    await expect(invocation.result).rejects.toThrow();
+    await expect(bridge.resultFromSettledToolResult(invocation.settledResult)).rejects.toThrow();
     const chunks = [];
     for await (const item of invocation.stdout!) chunks.push(item);
     expect(chunks).toEqual([{ tag: 'ok', val: Uint8Array.of(1, 2) }]);
@@ -275,7 +398,10 @@ describe('public bridge runtime', () => {
     };
     const runtime = bridge.createToolClientRuntime('valid-result', {
       start: () => ({
-        result: Promise.resolve({ result: bridge.typedSchemaValueToWit(typed) }),
+        settledResult: Promise.resolve({
+          status: 'fulfilled',
+          value: { result: bridge.typedSchemaValueToWit(typed) },
+        }),
         stdout,
         cancel: vi.fn(),
       }),
@@ -290,7 +416,9 @@ describe('public bridge runtime', () => {
       undefined,
       true,
     );
-    await expect(invocation.result).resolves.toEqual({ result: typed });
+    await expect(bridge.resultFromSettledToolResult(invocation.settledResult)).resolves.toEqual({
+      result: typed,
+    });
     expect(invocation.stdout).toBe(stdout);
     expect(close).not.toHaveBeenCalled();
   });

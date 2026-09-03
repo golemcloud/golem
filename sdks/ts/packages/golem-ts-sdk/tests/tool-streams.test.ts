@@ -2,7 +2,15 @@
 // Licensed under the Golem Source License v1.1
 
 import { describe, expect, it, vi } from 'vitest';
-import { startedToolInvocation } from '../src/bridge/tool';
+import type { ByteStreamFailure } from 'golem:tool/host@0.1.0';
+import { settleToolResult, startedToolInvocation, ToolStreamError } from '../src/bridge/tool';
+
+const streamFailures = [
+  { tag: 'cancelled' },
+  { tag: 'abandoned' },
+  { tag: 'resource-exhausted' },
+  { tag: 'failed', val: 'source failed' },
+] satisfies ByteStreamFailure[];
 
 async function* chunks(...values: Uint8Array[]) {
   for (const value of values) yield { tag: 'ok' as const, val: value };
@@ -28,7 +36,11 @@ describe('started tool invocations', () => {
   it('exposes stdout before its independently awaitable structured result', async () => {
     let finish!: (value: string) => void;
     const result = new Promise<string>((resolve) => (finish = resolve));
-    const invocation = startedToolInvocation(chunks(Uint8Array.of(1, 2)), result, vi.fn());
+    const invocation = startedToolInvocation(
+      chunks(Uint8Array.of(1, 2)),
+      settleToolResult(result),
+      vi.fn(),
+    );
     const reader = invocation.stdout.getReader();
 
     await expect(reader.read()).resolves.toEqual({ done: false, value: Uint8Array.of(1, 2) });
@@ -38,16 +50,41 @@ describe('started tool invocations', () => {
 
   it('cancels without consuming the result observer', async () => {
     const cancel = vi.fn();
-    const invocation = startedToolInvocation(chunks(), Promise.resolve(undefined), cancel);
+    const invocation = startedToolInvocation(
+      chunks(),
+      settleToolResult(Promise.resolve(undefined)),
+      cancel,
+    );
     invocation.cancel();
     expect(cancel).toHaveBeenCalledOnce();
     await expect(invocation.result).resolves.toBeUndefined();
   });
 
+  it('keeps a failed result handled until the result getter is accessed', async () => {
+    const failure = new Error('structured result failed');
+    const unhandled: unknown[] = [];
+    const recordUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', recordUnhandled);
+
+    try {
+      const invocation = startedToolInvocation(
+        chunks(),
+        settleToolResult(Promise.reject(failure)),
+        vi.fn(),
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+      await expect(invocation.result).rejects.toBe(failure);
+    } finally {
+      process.off('unhandledRejection', recordUnhandled);
+    }
+  });
+
   it('collects stdout and result concurrently without deadlocking', async () => {
     const invocation = startedToolInvocation(
       chunks(Uint8Array.of(1), Uint8Array.of(2, 3)),
-      Promise.resolve(42),
+      settleToolResult(Promise.resolve(42)),
       vi.fn(),
     );
     await expect(invocation.collect()).resolves.toEqual({
@@ -56,14 +93,18 @@ describe('started tool invocations', () => {
     });
   });
 
-  it('surfaces a terminal attachment failure', async () => {
+  it.each(streamFailures)('preserves the $tag stdout attachment failure', async (failure) => {
     async function* failed() {
-      yield { tag: 'err' as const, val: { tag: 'cancelled' as const } };
+      yield { tag: 'err' as const, val: failure };
     }
-    const invocation = startedToolInvocation(failed(), Promise.resolve(undefined), vi.fn());
-    await expect(invocation.stdout.getReader().read()).rejects.toThrow(
-      'tool stdout failed: cancelled',
+    const invocation = startedToolInvocation(
+      failed(),
+      settleToolResult(Promise.resolve(undefined)),
+      vi.fn(),
     );
+    const read = invocation.stdout.getReader().read();
+    await expect(read).rejects.toBeInstanceOf(ToolStreamError);
+    await expect(read).rejects.toMatchObject({ failure });
   });
 
   it('keeps stdout consumable after a structured result failure', async () => {
@@ -76,7 +117,11 @@ describe('started tool invocations', () => {
       },
     });
     const failure = new Error('structured result failed');
-    const invocation = startedToolInvocation(stdout, Promise.reject(failure), vi.fn());
+    const invocation = startedToolInvocation(
+      stdout,
+      settleToolResult(Promise.reject(failure)),
+      vi.fn(),
+    );
 
     await expect(invocation.result).rejects.toBe(failure);
     controller!.enqueue({ tag: 'ok', val: Uint8Array.of(1, 2, 3) });
@@ -95,7 +140,11 @@ describe('started tool invocations', () => {
       },
     });
     const failure = new Error('structured result failed');
-    const invocation = startedToolInvocation(stdout, Promise.reject(failure), vi.fn());
+    const invocation = startedToolInvocation(
+      stdout,
+      settleToolResult(Promise.reject(failure)),
+      vi.fn(),
+    );
     const collect = invocation.collect();
     let settled = false;
     void collect.then(
