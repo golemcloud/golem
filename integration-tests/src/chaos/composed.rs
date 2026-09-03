@@ -244,7 +244,12 @@ impl ComposedFaultReport {
             primary: primary.into(),
             secondary: Some(secondary.into()),
             secondary_offset_secs: Some(round2(offset)),
-            overlap_secs: overlap.map(round2),
+            // Only a positive overlap is reported. A second fault that landed
+            // after the heal yields a negative number, and a reader who saw it
+            // would have to work out that it is the same fact the finding above
+            // already states. The offset is always there and always signed, so
+            // nothing is lost by leaving this one out.
+            overlap_secs: overlap.filter(|overlap| *overlap > 0.0).map(round2),
             overlap_percent: match (overlap, window) {
                 (Some(overlap), Some(window)) if window > 0.0 && overlap > 0.0 => {
                     Some(round2(100.0 * overlap / window))
@@ -347,6 +352,29 @@ mod tests {
         assert_eq!(report.secondary_offset_secs, Some(30.0));
         assert_eq!(report.overlap_secs, Some(30.0));
         assert_eq!(report.overlap_percent, Some(50.0));
+    }
+
+    /// A negative overlap is not a measurement, and the ordering finding
+    /// already says what happened. Reporting one would leave a reader
+    /// reconciling two statements of the same fact, one of them nonsense.
+    #[test]
+    fn a_kill_outside_the_window_reports_no_overlap() {
+        let primary = signal("network-partition", t0());
+        let secondary = signal("pod-kill", t0() + TimeDelta::seconds(150));
+        let report = ComposedFaultReport::build(
+            &primary,
+            Some(t0() + TimeDelta::seconds(120)),
+            Some(&secondary),
+            FLOOR,
+        );
+
+        assert_eq!(
+            violations(&report),
+            vec![ComposedViolation::SecondaryOutsidePrimary]
+        );
+        assert_eq!(report.overlap_secs, None);
+        assert_eq!(report.overlap_percent, None);
+        assert_eq!(report.secondary_offset_secs, Some(150.0));
     }
 
     /// The failure this whole module exists for. Without it the run reads as a
