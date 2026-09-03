@@ -13,6 +13,7 @@ CREATE TABLE tool_releases
     tool_definition       BLOB      NOT NULL,
     metadata_version      TEXT      NOT NULL,
     metadata_digest       BLOB      NOT NULL,
+    immutable             BOOLEAN   NOT NULL,
     lifecycle             SMALLINT  NOT NULL,
     origin                SMALLINT  NOT NULL,
     system_availability   SMALLINT,
@@ -45,7 +46,7 @@ CREATE TABLE tool_releases
                 AND implementation_version IS NOT NULL)
         ),
     CONSTRAINT tool_releases_lifecycle_check
-        CHECK (lifecycle IN (0, 1)),
+        CHECK (lifecycle IN (0, 1, 2)),
     CONSTRAINT tool_releases_origin_check
         CHECK (origin IN (0, 1)),
     CONSTRAINT tool_releases_system_availability_check
@@ -58,7 +59,8 @@ CREATE TABLE tool_releases
 );
 
 CREATE UNIQUE INDEX tool_releases_owner_name_version_uk
-    ON tool_releases (owner_account_id, tool_name, tool_version);
+    ON tool_releases (owner_account_id, tool_name, tool_version)
+    WHERE lifecycle != 2;
 
 CREATE INDEX tool_releases_component_revision_idx
     ON tool_releases (component_id, component_revision);
@@ -98,6 +100,7 @@ CREATE TABLE environment_tool_grants
     tool_release_id            UUID      NOT NULL,
     protected                  BOOLEAN   NOT NULL,
     automatic                  BOOLEAN   NOT NULL,
+    follow_coordinates         BOOLEAN   NOT NULL,
     lifecycle                  SMALLINT  NOT NULL,
     created_at                 TIMESTAMP NOT NULL,
     created_by                 UUID      NOT NULL,

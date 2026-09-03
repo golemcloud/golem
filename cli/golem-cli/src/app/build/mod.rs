@@ -89,7 +89,7 @@ async fn build_app_with_build_plan(ctx: &BuildContext<'_>) -> anyhow::Result<()>
         .collect::<BTreeSet<_>>();
     let mut built_components = BTreeSet::<ComponentName>::new();
     let mut available_guest_bridge_dependencies =
-        available_registry_guest_bridge_dependencies(ctx, &effective_component_names)?;
+        available_remote_tool_guest_bridge_dependencies(ctx, &effective_component_names)?;
     let mut generated_guest_target_keys = BTreeSet::<BridgeSdkTargetKey>::new();
 
     build_components_with_dependency_ordering(
@@ -177,7 +177,7 @@ async fn build_app_with_build_plan(ctx: &BuildContext<'_>) -> anyhow::Result<()>
     Ok(())
 }
 
-fn available_registry_guest_bridge_dependencies(
+fn available_remote_tool_guest_bridge_dependencies(
     ctx: &BuildContext<'_>,
     component_names: &[ComponentName],
 ) -> anyhow::Result<BTreeSet<ComponentDependency>> {
@@ -187,22 +187,22 @@ fn available_registry_guest_bridge_dependencies(
         for dependency in &component.properties().dependencies {
             match dependency {
                 ComponentDependency::Tool {
-                    source: crate::model::app::SubjectSource::Registry,
+                    source: crate::model::app::SubjectSource::RemoteRelease,
                     tool_name,
                 } => {
-                    ctx.registry_tool_grant_by_name(tool_name).ok_or_else(|| {
+                    ctx.release_grant_by_name(tool_name).ok_or_else(|| {
                         anyhow::anyhow!(
-                            "Registry tool dependency '{}' is not granted to the selected environment",
+                            "Remote tool dependency '{}' is not granted to the selected environment",
                             tool_name
                         )
                     })?;
                     available.insert(dependency.clone());
                 }
                 ComponentDependency::Agent {
-                    source: crate::model::app::SubjectSource::Registry,
+                    source: crate::model::app::SubjectSource::RemoteRelease,
                     ..
                 } => anyhow::bail!(
-                    "Registry agent dependencies are not supported by the tool release registry"
+                    "Remote agent dependencies are not supported by published tool releases"
                 ),
                 _ => {}
             }
@@ -457,7 +457,7 @@ fn report_guest_bridge_dependency_ordering_cycle(
 fn format_subject_source(source: &crate::model::app::SubjectSource) -> String {
     match source {
         crate::model::app::SubjectSource::Local { component_name } => component_name.to_string(),
-        crate::model::app::SubjectSource::Registry => "registry".to_string(),
+        crate::model::app::SubjectSource::RemoteRelease => "remote release".to_string(),
     }
 }
 
@@ -843,17 +843,17 @@ fn manifest_tool_bridge_request_may_match_selected_components(
     selected_component_names: &[ComponentName],
 ) -> bool {
     let matchers = tools.clone().into_set();
-    let matches_registry = (matchers.contains("*")
+    let matches_remote_release = (matchers.contains("*")
         && ctx
             .application()
-            .registry_tool_references()
+            .remote_release_references()
             .next()
             .is_some())
         || ctx
             .application()
-            .registry_tool_references()
+            .remote_release_references()
             .any(|(name, _)| matchers.contains(name.as_str()));
-    matches_registry
+    matches_remote_release
         || manifest_matchers_may_match_selected_components(ctx, matchers, selected_component_names)
 }
 

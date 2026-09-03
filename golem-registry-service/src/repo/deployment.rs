@@ -944,6 +944,9 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                                 ToolReleaseRepoError::ImmutableConflict => {
                                     DeployRepoError::ToolReleaseConflict
                                 }
+                                ToolReleaseRepoError::DePublishedConflict => {
+                                    DeployRepoError::ToolReleaseConflict
+                                }
                                 ToolReleaseRepoError::ConcurrentModification => {
                                     DeployRepoError::ConcurrentModification
                                 }

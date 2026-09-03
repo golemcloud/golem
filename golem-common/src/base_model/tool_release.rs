@@ -27,6 +27,7 @@ declare_enums! {
     pub enum ToolReleaseLifecycle {
         Published,
         DePublished,
+        Superseded,
     }
 
     pub enum ToolReleaseOrigin {
@@ -51,6 +52,7 @@ declare_structs! {
         pub definition: Tool,
         pub metadata_version: String,
         pub metadata_digest: Hash,
+        pub immutable: bool,
         pub lifecycle: ToolReleaseLifecycle,
         pub origin: ToolReleaseOrigin,
         pub system_availability: Option<SystemToolAvailability>,

@@ -628,8 +628,8 @@ mod tests {
     }
 
     #[test]
-    fn registry_bridge_marker_covers_release_and_metadata_identity() {
-        let base = BridgeSdkTargetSource::Registry {
+    fn remote_release_bridge_marker_covers_release_and_metadata_identity() {
+        let base = BridgeSdkTargetSource::RemoteRelease {
             release_id: ToolReleaseId::new(),
             version: "1.2.0".to_string(),
             metadata_version: "0.1.0".to_string(),
@@ -639,14 +639,14 @@ mod tests {
         let base_marker = bridge_marker_source(&base);
 
         let mut changed_release = base.clone();
-        let BridgeSdkTargetSource::Registry { release_id, .. } = &mut changed_release else {
+        let BridgeSdkTargetSource::RemoteRelease { release_id, .. } = &mut changed_release else {
             unreachable!()
         };
         *release_id = ToolReleaseId::new();
         assert_ne!(base_marker, bridge_marker_source(&changed_release));
 
         let mut changed_schema = base.clone();
-        let BridgeSdkTargetSource::Registry {
+        let BridgeSdkTargetSource::RemoteRelease {
             metadata_version, ..
         } = &mut changed_schema
         else {
@@ -656,7 +656,7 @@ mod tests {
         assert_ne!(base_marker, bridge_marker_source(&changed_schema));
 
         let mut changed_metadata = base.clone();
-        let BridgeSdkTargetSource::Registry {
+        let BridgeSdkTargetSource::RemoteRelease {
             metadata_digest, ..
         } = &mut changed_metadata
         else {
@@ -666,7 +666,7 @@ mod tests {
         assert_ne!(base_marker, bridge_marker_source(&changed_metadata));
 
         let mut changed_source = base.clone();
-        let BridgeSdkTargetSource::Registry { source_digest, .. } = &mut changed_source else {
+        let BridgeSdkTargetSource::RemoteRelease { source_digest, .. } = &mut changed_source else {
             unreachable!()
         };
         *source_digest = Hash::new(blake3::hash(b"source-b"));

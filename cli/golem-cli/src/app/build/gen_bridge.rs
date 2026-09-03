@@ -529,7 +529,7 @@ async fn collect_agent_manifest_targets_for_entry(
     Ok(())
 }
 
-fn collect_registry_tool_manifest_targets_for_entry(
+fn collect_remote_tool_manifest_targets_for_entry(
     ctx: &BuildContext<'_>,
     bridge_mode: BridgeMode,
     target_language: GuestLanguage,
@@ -537,18 +537,18 @@ fn collect_registry_tool_manifest_targets_for_entry(
     is_matching_all: bool,
     targets: &mut Vec<BridgeSdkTarget>,
 ) -> anyhow::Result<()> {
-    for (name, _) in ctx.application().registry_tool_references() {
+    for (name, _) in ctx.application().remote_release_references() {
         if !is_matching_all && !matchers.remove(name.as_str()) {
             continue;
         }
-        let grant = ctx.registry_tool_grant_by_name(name).ok_or_else(|| {
+        let grant = ctx.release_grant_by_name(name).ok_or_else(|| {
             anyhow::anyhow!(
-                "Registry tool '{}' is not granted to the selected environment",
+                "Remote tool '{}' is not granted to the selected environment",
                 name
             )
         })?;
         targets.push(BridgeSdkTarget {
-            source: BridgeSdkTargetSource::Registry {
+            source: BridgeSdkTargetSource::RemoteRelease {
                 release_id: grant.release.id,
                 version: grant.release.version.clone(),
                 metadata_version: grant.release.metadata_version.clone(),
@@ -590,7 +590,7 @@ async fn collect_tool_manifest_targets_for_entry(
     }
 
     let is_matching_all = matchers.remove("*");
-    collect_registry_tool_manifest_targets_for_entry(
+    collect_remote_tool_manifest_targets_for_entry(
         ctx,
         bridge_mode,
         target_language,
@@ -628,7 +628,7 @@ async fn collect_tool_manifest_targets_for_entry(
         tools.retain(|tool| {
             tool.name()
                 .and_then(|name| ToolName::try_from(name).ok())
-                .is_none_or(|name| ctx.application().registry_tool_reference(&name).is_none())
+                .is_none_or(|name| ctx.application().remote_release_reference(&name).is_none())
         });
 
         if !is_matching_all && !is_matching_component {
@@ -755,7 +755,7 @@ async fn collect_dependency_guest_bridge_targets(
         }
     }
 
-    let registry_dependencies = selection_scope_component_names
+    let remote_tool_dependencies = selection_scope_component_names
         .iter()
         .flat_map(|component_name| {
             ctx.application()
@@ -769,24 +769,24 @@ async fn collect_dependency_guest_bridge_targets(
             matches!(
                 dependency,
                 ComponentDependency::Tool {
-                    source: crate::model::app::SubjectSource::Registry,
+                    source: crate::model::app::SubjectSource::RemoteRelease,
                     ..
                 }
             )
         })
         .collect::<BTreeSet<_>>();
 
-    for dependency in registry_dependencies {
+    for dependency in remote_tool_dependencies {
         let ComponentDependency::Tool {
-            source: crate::model::app::SubjectSource::Registry,
+            source: crate::model::app::SubjectSource::RemoteRelease,
             tool_name,
         } = &dependency
         else {
             unreachable!()
         };
-        let grant = ctx.registry_tool_grant_by_name(tool_name).ok_or_else(|| {
+        let grant = ctx.release_grant_by_name(tool_name).ok_or_else(|| {
             anyhow::anyhow!(
-                "Registry tool dependency '{}' is not granted to the selected environment",
+                "Remote tool dependency '{}' is not granted to the selected environment",
                 tool_name
             )
         })?;
@@ -796,7 +796,7 @@ async fn collect_dependency_guest_bridge_targets(
             selection_scope_component_names,
         ) {
             targets.push(BridgeSdkTarget {
-                source: BridgeSdkTargetSource::Registry {
+                source: BridgeSdkTargetSource::RemoteRelease {
                     release_id: grant.release.id,
                     version: grant.release.version.clone(),
                     metadata_version: grant.release.metadata_version.clone(),
@@ -931,7 +931,7 @@ async fn gen_bridge_sdk_target(
         BridgeSdkTargetSource::Local { component_name } => {
             ctx.application().component(component_name).final_wasm()
         }
-        BridgeSdkTargetSource::Registry { .. } => {
+        BridgeSdkTargetSource::RemoteRelease { .. } => {
             ctx.application().bridge_sdks_source().to_path_buf()
         }
     };

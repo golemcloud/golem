@@ -54,7 +54,8 @@ use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{
     DeployConfig, DeployError, DeployResult, DeploySummary, EnvironmentSetupPlan,
     EnvironmentToolGrantPlanAction, EnvironmentToolGrantPlanEntry, EnvironmentToolGrantPlanView,
-    PostDeployError, PostDeployResult, PostDeploySummary, UpdateStagedComponentError,
+    PostDeployError, PostDeployResult, PostDeploySummary, ToolPublicationPlan,
+    ToolPublicationPlanAction, ToolPublicationPlanEntry, UpdateStagedComponentError,
     build_environment_setup_plan, preferred_source_language_for_setup,
 };
 use crate::model::deploy::{DeployPlanView, log_unified_diff, log_unified_diff_for_path};
@@ -68,7 +69,7 @@ use colored::Colorize;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use golem_client::api::{
     AgentSecretsClient, ApplicationClient, ComponentClient, EnvironmentClient,
-    EnvironmentToolGrantsClient, ResourcesClient, RetryPoliciesClient,
+    EnvironmentToolGrantsClient, ResourcesClient, RetryPoliciesClient, ToolReleasesClient,
 };
 use golem_client::model::{
     ApplicationCreation, DeploymentCreation, DeploymentRollback, EnvironmentToolGrantReconciliation,
@@ -90,7 +91,10 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_tool_grant::{
     EnvironmentToolGrantCreation, EnvironmentToolGrantId, EnvironmentToolGrantWithDetails,
 };
-use golem_common::model::tool_release::ToolReleaseReference;
+use golem_common::model::tool::{TOOL_METADATA_WIT_VERSION, ToolName};
+use golem_common::model::tool_release::{
+    ToolReleaseLifecycle, ToolReleaseReference, tool_metadata_digest,
+};
 use golem_common::schema::schema_type::SchemaType;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -938,25 +942,19 @@ impl AppCommandHandler {
         };
 
         if config.plan {
-            return Ok(
-                if deploy_diff.has_deployment_changes()
-                    || deploy_diff.has_environment_setup_entries_to_apply()
-                {
-                    DeploySummary::PlanOk
-                } else if deploy_diff.has_environment_setup_entries_skipped_already_exists() {
-                    DeploySummary::PlanSkippedOnly
-                } else {
-                    DeploySummary::PlanUpToDate
-                },
-            );
+            return Ok(if deploy_diff.has_apply_work() {
+                DeploySummary::PlanOk
+            } else if deploy_diff.has_environment_setup_entries_skipped_already_exists() {
+                DeploySummary::PlanSkippedOnly
+            } else {
+                DeploySummary::PlanUpToDate
+            });
         }
 
-        let has_deployment_changes = deploy_diff.has_deployment_changes();
-        let has_environment_setup_apply = deploy_diff.has_environment_setup_entries_to_apply();
         let has_environment_setup_skipped =
             deploy_diff.has_environment_setup_entries_skipped_already_exists();
 
-        if !has_deployment_changes && !has_environment_setup_apply {
+        if !deploy_diff.has_apply_work() {
             return Ok(if has_environment_setup_skipped {
                 DeploySummary::DeploySkippedOnly(
                     self.apply_post_deploy_args(
@@ -1047,7 +1045,7 @@ impl AppCommandHandler {
 
         debug!("deploy_quick_diff: {:#?}", deploy_quick_diff);
 
-        let deployment_is_up_to_date = deploy_quick_diff.is_up_to_date();
+        let deployment_is_up_to_date = deploy_quick_diff.is_deployment_up_to_date();
 
         let deploy_diff = self.deploy_diff(deploy_quick_diff).await?;
         debug!("deploy_diff: {:#?}", deploy_diff);
@@ -1056,6 +1054,7 @@ impl AppCommandHandler {
             let plan = self.build_environment_setup_plan(&deploy_diff).await?;
             if !plan.display.has_entries_to_apply()
                 && !plan.display.has_entries_skipped_already_exists()
+                && deploy_diff.tool_publication_plan.entries.is_empty()
             {
                 return Ok(None);
             }
@@ -1069,7 +1068,10 @@ impl AppCommandHandler {
             .await?;
         debug!("detailed deploy_diff: {:#?}", deploy_diff);
 
-        if deployment_is_up_to_date && !deploy_diff.has_environment_setup_work() {
+        if deployment_is_up_to_date
+            && !deploy_diff.has_environment_setup_work()
+            && deploy_diff.tool_publication_plan.entries.is_empty()
+        {
             return Ok(None);
         }
 
@@ -1162,10 +1164,14 @@ impl AppCommandHandler {
                 } else {
                     log_action("Planned", "changes to be applied to the environment:");
                 }
-                if deploy_diff.has_deployment_changes() || deploy_diff.environment_setup.is_some() {
+                if deploy_diff.has_deployment_changes()
+                    || !deploy_diff.tool_publication_plan.entries.is_empty()
+                    || deploy_diff.environment_setup.is_some()
+                {
                     let _indent = self.ctx.log_handler().decorated_indent_secondary();
                     self.ctx.log_handler().log_output(DeployPlanView {
                         deployment_diff: &deploy_diff.diff,
+                        tool_publications: &deploy_diff.tool_publication_plan,
                         environment_setup: deploy_diff.environment_setup.as_ref(),
                     })?;
                 }
@@ -1176,6 +1182,10 @@ impl AppCommandHandler {
                     );
                 }
             }
+        }
+
+        if deploy_diff.tool_publication_plan.has_conflicts() {
+            bail!("Tool publication plan contains conflicts");
         }
 
         // Emit schema evolution warnings
@@ -1290,6 +1300,13 @@ impl AppCommandHandler {
         };
 
         let local_deployment_hash = diffable_local_deployment.hash()?;
+        let tool_publication_plan = self
+            .plan_tool_publications(
+                &environment,
+                &deployable_manifest_components,
+                &published_tools,
+            )
+            .await?;
 
         Ok(DeployQuickDiff {
             environment,
@@ -1301,7 +1318,99 @@ impl AppCommandHandler {
             deployable_manifest_mcp_deployments,
             diffable_local_deployment,
             local_deployment_hash,
+            tool_publication_plan,
         })
+    }
+
+    async fn plan_tool_publications(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        components: &BTreeMap<ComponentName, crate::model::component::ComponentDeployProperties>,
+        published_tools: &BTreeSet<ToolName>,
+    ) -> anyhow::Result<ToolPublicationPlan> {
+        if published_tools.is_empty() {
+            return Ok(ToolPublicationPlan::default());
+        }
+
+        let releases = self
+            .ctx
+            .golem_clients()
+            .await?
+            .tool_releases
+            .list_account_tool_releases(&environment.server_environment.owner_account_id.0)
+            .await
+            .map_service_error()?
+            .values;
+
+        let mut entries = Vec::with_capacity(published_tools.len());
+        for name in published_tools {
+            let definition = components
+                .values()
+                .flat_map(|component| &component.tools)
+                .find(|tool| tool.name() == Some(name.as_str()))
+                .ok_or_else(|| anyhow!("Published tool {name} has no local definition"))?;
+            let existing = releases
+                .iter()
+                .find(|release| {
+                    release.name == *name
+                        && release.version == definition.version
+                        && release.lifecycle != ToolReleaseLifecycle::Superseded
+                })
+                .or_else(|| {
+                    releases.iter().find(|release| {
+                        release.name == *name && release.version == definition.version
+                    })
+                });
+            let Some(existing) = existing else {
+                entries.push(ToolPublicationPlanEntry {
+                    action: ToolPublicationPlanAction::Publish,
+                    name: name.to_string(),
+                    version: definition.version.clone(),
+                    reason: None,
+                });
+                continue;
+            };
+            let metadata_digest = tool_metadata_digest(TOOL_METADATA_WIT_VERSION, definition)?;
+            let content_matches = existing.definition == *definition
+                && existing.metadata_version == TOOL_METADATA_WIT_VERSION
+                && existing.metadata_digest == metadata_digest;
+            let (action, reason) = if existing.lifecycle == ToolReleaseLifecycle::DePublished {
+                (
+                    ToolPublicationPlanAction::Conflict,
+                    Some(
+                        "this release is de-published; restore it explicitly before deploying"
+                            .to_string(),
+                    ),
+                )
+            } else if existing.lifecycle == ToolReleaseLifecycle::Superseded {
+                (
+                    ToolPublicationPlanAction::Conflict,
+                    Some(
+                        "this coordinate belongs to a superseded release; use a new version"
+                            .to_string(),
+                    ),
+                )
+            } else if content_matches {
+                (ToolPublicationPlanAction::NoChange, None)
+            } else if environment.server_environment.version_check {
+                (
+                    ToolPublicationPlanAction::Conflict,
+                    Some(
+                        "this coordinate already has different content; use a new version or disable versionCheck for this environment"
+                            .to_string(),
+                    ),
+                )
+            } else {
+                (ToolPublicationPlanAction::Publish, None)
+            };
+            entries.push(ToolPublicationPlanEntry {
+                action,
+                name: name.to_string(),
+                version: definition.version.clone(),
+                reason,
+            });
+        }
+        Ok(ToolPublicationPlan { entries })
     }
 
     async fn deploy_diff(&self, deploy_quick_diff: DeployQuickDiff) -> anyhow::Result<DeployDiff> {
@@ -1371,6 +1480,7 @@ impl AppCommandHandler {
             diff,
             diff_stage,
             environment_setup: None,
+            tool_publication_plan: deploy_quick_diff.tool_publication_plan,
         })
     }
 
@@ -1516,7 +1626,7 @@ impl AppCommandHandler {
             app_ctx
                 .some_or_err()?
                 .application()
-                .registry_tool_references()
+                .remote_release_references()
                 .map(|(_, reference)| reference.clone())
                 .collect::<BTreeSet<_>>()
                 .into_iter()
@@ -2688,15 +2798,15 @@ impl AppCommandHandler {
     ) -> anyhow::Result<()> {
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
-        let requires_registry_metadata = {
+        let requires_remote_release_metadata = {
             let app_ctx = self.ctx.app_context_lock().await;
             app_ctx
                 .some_or_err()?
                 .application()
-                .requires_registry_bridge_metadata()
+                .requires_remote_release_bridge_metadata()
         };
         let effective_build_config =
-            if requires_registry_metadata && build_config.registry_tool_grants.is_empty() {
+            if requires_remote_release_metadata && build_config.release_grants.is_empty() {
                 let environment = self
                     .ctx
                     .environment_handler()
@@ -2732,7 +2842,7 @@ impl AppCommandHandler {
                     .await
                     .map_service_error()?
                     .values;
-                build_config.clone().with_registry_tool_grants(grants)
+                build_config.clone().with_release_grants(grants)
             } else {
                 build_config.clone()
             };
@@ -3382,6 +3492,7 @@ mod tests {
                 tool_release_id: release_id,
                 protected,
                 automatic,
+                follow_coordinates: false,
                 lifecycle: EnvironmentToolGrantLifecycle::Active,
                 created_at: now,
                 created_by: actor,

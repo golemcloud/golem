@@ -20288,6 +20288,8 @@ components:
           type: boolean
         automatic:
           type: boolean
+        followCoordinates:
+          type: boolean
         lifecycle:
           $ref: '#/components/schemas/EnvironmentToolGrantLifecycle'
         createdAt:
@@ -20308,6 +20310,7 @@ components:
       - toolReleaseId
       - protected
       - automatic
+      - followCoordinates
       - lifecycle
       - createdAt
       - createdBy
@@ -23068,6 +23071,8 @@ components:
         metadataDigest:
           type: string
           format: hash
+        immutable:
+          type: boolean
         lifecycle:
           $ref: '#/components/schemas/ToolReleaseLifecycle'
         origin:
@@ -23095,6 +23100,7 @@ components:
       - definition
       - metadataVersion
       - metadataDigest
+      - immutable
       - lifecycle
       - origin
       - createdAt
@@ -23129,6 +23135,7 @@ components:
       enum:
       - published
       - de-published
+      - superseded
     ToolReleaseMetadata:
       title: ToolReleaseMetadata
       description: |-

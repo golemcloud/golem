@@ -48,7 +48,7 @@ pub enum ToolValidationCode {
     DuplicateImplementation,
     MissingDeclaration,
     MissingImplementation,
-    RegistryReleaseNotFound,
+    ReleaseNotGranted,
     UnknownToolReference,
     UnknownAgentReference,
     VersionMismatch,
@@ -198,7 +198,7 @@ pub enum ToolImplementationSource {
     Component {
         component_name: ComponentName,
     },
-    Registry {
+    RemoteRelease {
         grant: Box<EnvironmentToolGrantWithDetails>,
     },
 }
@@ -207,14 +207,14 @@ impl ToolImplementationSource {
     pub fn local_component_name(&self) -> Option<&ComponentName> {
         match self {
             Self::Component { component_name } => Some(component_name),
-            Self::Registry { .. } => None,
+            Self::RemoteRelease { .. } => None,
         }
     }
 
-    pub fn registry_grant(&self) -> Option<&EnvironmentToolGrantWithDetails> {
+    pub fn release_grant(&self) -> Option<&EnvironmentToolGrantWithDetails> {
         match self {
             Self::Component { .. } => None,
-            Self::Registry { grant } => Some(grant),
+            Self::RemoteRelease { grant } => Some(grant),
         }
     }
 }

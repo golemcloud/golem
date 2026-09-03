@@ -108,35 +108,33 @@ impl<'a> BuildContext<'a> {
         &self.application_context.tools_with_ensured_common_deps
     }
 
-    pub fn registry_tool_grants(&self) -> &[EnvironmentToolGrantWithDetails] {
-        &self.build_config.registry_tool_grants
+    pub fn release_grants(&self) -> &[EnvironmentToolGrantWithDetails] {
+        &self.build_config.release_grants
     }
 
-    pub fn registry_tool_grant(
+    pub fn release_grant(
         &self,
         reference: &app_raw::RegistrySubject,
     ) -> Option<&EnvironmentToolGrantWithDetails> {
-        self.registry_tool_grants()
-            .iter()
-            .find(|grant| match reference {
-                app_raw::RegistrySubject::ById(reference) => {
-                    grant.release.id == ToolReleaseId(reference.release_id.0)
-                }
-                app_raw::RegistrySubject::ByCoordinates(reference) => {
-                    grant.release_owner.email.as_str() == reference.account
-                        && grant.release.name.as_str() == reference.name
-                        && grant.release.version == reference.version
-                }
-            })
+        self.release_grants().iter().find(|grant| match reference {
+            app_raw::RegistrySubject::ById(reference) => {
+                grant.release.id == ToolReleaseId(reference.release_id.0)
+            }
+            app_raw::RegistrySubject::ByCoordinates(reference) => {
+                grant.release_owner.email.as_str() == reference.account
+                    && grant.release.name.as_str() == reference.name
+                    && grant.release.version == reference.version
+            }
+        })
     }
 
-    pub fn registry_tool_grant_by_name(
+    pub fn release_grant_by_name(
         &self,
         name: &golem_common::model::tool::ToolName,
     ) -> Option<&EnvironmentToolGrantWithDetails> {
         self.application()
-            .registry_tool_reference(name)
-            .and_then(|reference| self.registry_tool_grant(reference))
+            .remote_release_reference(name)
+            .and_then(|reference| self.release_grant(reference))
     }
 }
 

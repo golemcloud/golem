@@ -23,6 +23,10 @@ pub use crate::repo::model::environment::{
     EnvironmentScopedRecord,
 };
 use crate::repo::model::environment_plugin_grant::EnvironmentPluginGrantRecord;
+use crate::repo::model::environment_tool_grant::ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE;
+use crate::repo::model::tool_release::{
+    TOOL_RELEASE_LIFECYCLE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_SUPERSEDED,
+};
 use crate::repo::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
 };
@@ -728,6 +732,42 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     ) -> Result<EnvironmentScopedExtRevisionRecord, EnvironmentRepoError> {
         self.with_tx_err("update", |tx| {
             async move {
+                tx.execute(
+                    sqlx::query(indoc! { r#"
+                        UPDATE environments
+                        SET current_revision_id = current_revision_id
+                        WHERE environment_id = $1
+                    "#})
+                    .bind(revision.environment_id),
+                )
+                .await?;
+
+                if revision.version_check
+                    && tx
+                        .fetch_optional(
+                            sqlx::query(indoc! { r#"
+                                SELECT etg.environment_tool_grant_id
+                                FROM environment_tool_grants etg
+                                JOIN tool_releases tr
+                                    ON tr.tool_release_id = etg.tool_release_id
+                                WHERE etg.environment_id = $1
+                                    AND etg.lifecycle = $2
+                                    AND etg.deleted_at IS NULL
+                                    AND NOT tr.immutable
+                                    AND tr.lifecycle IN ($3, $4)
+                                LIMIT 1
+                            "#})
+                            .bind(revision.environment_id)
+                            .bind(ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE)
+                            .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
+                            .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED),
+                        )
+                        .await?
+                        .is_some()
+                {
+                    return Err(EnvironmentRepoError::MutableToolGrantsInVersionCheckedEnvironment);
+                }
+
                 let revision: EnvironmentRevisionRecord =
                     Self::insert_revision(tx, revision).await?;
 

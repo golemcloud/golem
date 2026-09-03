@@ -195,6 +195,10 @@ impl EnvironmentToolGrantService {
         .map_err(|_| EnvironmentToolGrantError::ReferencedToolReleaseNotFound)?;
 
         let release_id = ToolReleaseId(release.release.tool_release_id);
+        let follow_coordinates = matches!(creation.release, ToolReleaseReference::ByCoordinates(_));
+        if !release.release.immutable && environment.version_check {
+            return Err(EnvironmentToolGrantError::ReferencedToolReleaseNotFound);
+        }
         match self
             .environment_tool_grant_repo
             .create(EnvironmentToolGrantRecord::creation(
@@ -202,6 +206,7 @@ impl EnvironmentToolGrantService {
                 release_id,
                 false,
                 automatic,
+                follow_coordinates,
                 auth.actor_account_id(),
             ))
             .await
@@ -435,6 +440,7 @@ impl EnvironmentToolGrantService {
             release_id,
             true,
             true,
+            false,
             AccountId::SYSTEM,
         );
         match self.environment_tool_grant_repo.create(record).await {

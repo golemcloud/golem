@@ -31,6 +31,7 @@ use crate::command::server::ServerSubcommand;
 use crate::command::shared_args::{
     BuildArgs, ForceBuildArg, OptionalComponentName, OptionalComponentNames, PostDeployArgs,
 };
+use crate::command::tool::ToolSubcommand;
 use crate::command::worker::AgentSubcommand;
 use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
@@ -860,6 +861,11 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: EnvironmentSubcommand,
     },
+    /// Manage tools
+    Tool {
+        #[clap(subcommand)]
+        subcommand: ToolSubcommand,
+    },
     /// Manage components
     Component {
         #[clap(subcommand)]
@@ -1222,6 +1228,37 @@ pub mod environment {
         /// Published tool version
         #[arg(long, requires_all = ["account", "name"])]
         pub version: Option<String>,
+    }
+}
+
+pub mod tool {
+    use clap::Subcommand;
+    use golem_common::base_model::account::AccountId;
+    use golem_common::base_model::tool_release::ToolReleaseId;
+
+    #[derive(Debug, Subcommand)]
+    pub enum ToolSubcommand {
+        /// Manage published tool releases
+        Release {
+            #[command(subcommand)]
+            subcommand: ToolReleaseSubcommand,
+        },
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum ToolReleaseSubcommand {
+        /// List tool releases owned by an account
+        List {
+            /// Account ID; defaults to the authenticated account
+            #[arg(long)]
+            account_id: Option<AccountId>,
+        },
+        /// Get a tool release
+        Get { release_id: ToolReleaseId },
+        /// Make a release unavailable for new coordinate-based grants
+        DePublish { release_id: ToolReleaseId },
+        /// Restore a de-published release
+        Restore { release_id: ToolReleaseId },
     }
 }
 

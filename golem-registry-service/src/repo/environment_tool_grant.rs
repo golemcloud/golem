@@ -16,7 +16,9 @@ use crate::repo::model::environment_tool_grant::{
     ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE, ENVIRONMENT_TOOL_GRANT_LIFECYCLE_DELETED,
     EnvironmentToolGrantRecord, EnvironmentToolGrantWithDetailsRecord,
 };
-use crate::repo::model::tool_release::TOOL_RELEASE_LIFECYCLE_PUBLISHED;
+use crate::repo::model::tool_release::{
+    TOOL_RELEASE_LIFECYCLE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_SUPERSEDED,
+};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -235,20 +237,64 @@ impl<DBP: Pool> DbEnvironmentToolGrantRepo<DBP> {
 }
 
 impl DbEnvironmentToolGrantRepo<PostgresPool> {
-    async fn published_release_exists(
+    async fn grantable_release_exists(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
+        environment_id: Uuid,
         release_id: Uuid,
+        follow_coordinates: bool,
     ) -> RepoResult<bool> {
+        let release_exists = tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    SELECT tool_release_id
+                    FROM tool_releases
+                    WHERE tool_release_id = $1
+                        AND (lifecycle = $2 OR ($3 AND lifecycle = $4))
+                    FOR SHARE
+                "#})
+                .bind(release_id)
+                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
+                .bind(!follow_coordinates)
+                .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED),
+            )
+            .await?
+            .is_some();
+        if !release_exists {
+            return Ok(false);
+        }
+
+        tx.execute(
+            sqlx::query(indoc! { r#"
+                UPDATE environments
+                SET current_revision_id = current_revision_id
+                WHERE environment_id = $1
+            "#})
+            .bind(environment_id),
+        )
+        .await?;
         Ok(tx
             .fetch_optional(
                 sqlx::query(indoc! { r#"
-                SELECT tool_release_id
-                FROM tool_releases
-                WHERE tool_release_id = $1 AND lifecycle = $2
-                FOR SHARE
+                SELECT tr.tool_release_id
+                FROM tool_releases tr
+                WHERE tr.tool_release_id = $2
+                    AND (
+                        NOT EXISTS (
+                            SELECT 1 FROM environments e WHERE e.environment_id = $1
+                        )
+                        OR EXISTS (
+                            SELECT 1
+                            FROM environments e
+                            JOIN environment_revisions er
+                                ON er.environment_id = e.environment_id
+                                AND er.revision_id = e.current_revision_id
+                            WHERE e.environment_id = $1
+                                AND (NOT er.version_check OR tr.immutable)
+                        )
+                    )
             "#})
-                .bind(release_id)
-                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED),
+                .bind(environment_id)
+                .bind(release_id),
             )
             .await?
             .is_some())
@@ -258,6 +304,40 @@ impl DbEnvironmentToolGrantRepo<PostgresPool> {
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         grant_id: Uuid,
     ) -> RepoResult<bool> {
+        let release_exists = tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    SELECT tr.tool_release_id
+                    FROM tool_releases tr
+                    JOIN environment_tool_grants etg
+                        ON etg.tool_release_id = tr.tool_release_id
+                    WHERE etg.environment_tool_grant_id = $1
+                        AND (tr.lifecycle = $2 OR (NOT etg.follow_coordinates AND tr.lifecycle = $3))
+                    FOR SHARE OF tr
+                "#})
+                .bind(grant_id)
+                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
+                .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED),
+            )
+            .await?
+            .is_some();
+        if !release_exists {
+            return Ok(false);
+        }
+
+        tx.execute(
+            sqlx::query(indoc! { r#"
+                UPDATE environments
+                SET current_revision_id = current_revision_id
+                WHERE environment_id = (
+                    SELECT environment_id
+                    FROM environment_tool_grants
+                    WHERE environment_tool_grant_id = $1
+                )
+            "#})
+            .bind(grant_id),
+        )
+        .await?;
         Ok(tx
             .fetch_optional(
                 sqlx::query(indoc! { r#"
@@ -265,11 +345,14 @@ impl DbEnvironmentToolGrantRepo<PostgresPool> {
                 FROM tool_releases tr
                 JOIN environment_tool_grants etg
                     ON etg.tool_release_id = tr.tool_release_id
-                WHERE etg.environment_tool_grant_id = $1 AND tr.lifecycle = $2
-                FOR SHARE OF tr
+                JOIN environments e ON e.environment_id = etg.environment_id
+                JOIN environment_revisions er
+                    ON er.environment_id = e.environment_id
+                    AND er.revision_id = e.current_revision_id
+                WHERE etg.environment_tool_grant_id = $1
+                    AND (NOT er.version_check OR tr.immutable)
             "#})
-                .bind(grant_id)
-                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED),
+                .bind(grant_id),
             )
             .await?
             .is_some())
@@ -277,19 +360,63 @@ impl DbEnvironmentToolGrantRepo<PostgresPool> {
 }
 
 impl DbEnvironmentToolGrantRepo<SqlitePool> {
-    async fn published_release_exists(
+    async fn grantable_release_exists(
         tx: &mut PoolLabelledTransaction<SqlitePool>,
+        environment_id: Uuid,
         release_id: Uuid,
+        follow_coordinates: bool,
     ) -> RepoResult<bool> {
+        let release_exists = tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    SELECT tool_release_id
+                    FROM tool_releases
+                    WHERE tool_release_id = $1
+                        AND (lifecycle = $2 OR ($3 AND lifecycle = $4))
+                "#})
+                .bind(release_id)
+                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
+                .bind(!follow_coordinates)
+                .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED),
+            )
+            .await?
+            .is_some();
+        if !release_exists {
+            return Ok(false);
+        }
+
+        tx.execute(
+            sqlx::query(indoc! { r#"
+                UPDATE environments
+                SET current_revision_id = current_revision_id
+                WHERE environment_id = $1
+            "#})
+            .bind(environment_id),
+        )
+        .await?;
         Ok(tx
             .fetch_optional(
                 sqlx::query(indoc! { r#"
-                SELECT tool_release_id
-                FROM tool_releases
-                WHERE tool_release_id = $1 AND lifecycle = $2
+                SELECT tr.tool_release_id
+                FROM tool_releases tr
+                WHERE tr.tool_release_id = $2
+                    AND (
+                        NOT EXISTS (
+                            SELECT 1 FROM environments e WHERE e.environment_id = $1
+                        )
+                        OR EXISTS (
+                            SELECT 1
+                            FROM environments e
+                            JOIN environment_revisions er
+                                ON er.environment_id = e.environment_id
+                                AND er.revision_id = e.current_revision_id
+                            WHERE e.environment_id = $1
+                                AND (NOT er.version_check OR tr.immutable)
+                        )
+                    )
             "#})
-                .bind(release_id)
-                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED),
+                .bind(environment_id)
+                .bind(release_id),
             )
             .await?
             .is_some())
@@ -299,6 +426,39 @@ impl DbEnvironmentToolGrantRepo<SqlitePool> {
         tx: &mut PoolLabelledTransaction<SqlitePool>,
         grant_id: Uuid,
     ) -> RepoResult<bool> {
+        let release_exists = tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    SELECT tr.tool_release_id
+                    FROM tool_releases tr
+                    JOIN environment_tool_grants etg
+                        ON etg.tool_release_id = tr.tool_release_id
+                    WHERE etg.environment_tool_grant_id = $1
+                        AND (tr.lifecycle = $2 OR (NOT etg.follow_coordinates AND tr.lifecycle = $3))
+                "#})
+                .bind(grant_id)
+                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
+                .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED),
+            )
+            .await?
+            .is_some();
+        if !release_exists {
+            return Ok(false);
+        }
+
+        tx.execute(
+            sqlx::query(indoc! { r#"
+                UPDATE environments
+                SET current_revision_id = current_revision_id
+                WHERE environment_id = (
+                    SELECT environment_id
+                    FROM environment_tool_grants
+                    WHERE environment_tool_grant_id = $1
+                )
+            "#})
+            .bind(grant_id),
+        )
+        .await?;
         Ok(tx
             .fetch_optional(
                 sqlx::query(indoc! { r#"
@@ -306,10 +466,14 @@ impl DbEnvironmentToolGrantRepo<SqlitePool> {
                 FROM tool_releases tr
                 JOIN environment_tool_grants etg
                     ON etg.tool_release_id = tr.tool_release_id
-                WHERE etg.environment_tool_grant_id = $1 AND tr.lifecycle = $2
+                JOIN environments e ON e.environment_id = etg.environment_id
+                JOIN environment_revisions er
+                    ON er.environment_id = e.environment_id
+                    AND er.revision_id = e.current_revision_id
+                WHERE etg.environment_tool_grant_id = $1
+                    AND (NOT er.version_check OR tr.immutable)
             "#})
-                .bind(grant_id)
-                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED),
+                .bind(grant_id),
             )
             .await?
             .is_some())
@@ -319,6 +483,7 @@ impl DbEnvironmentToolGrantRepo<SqlitePool> {
 const GRANT_DETAILS_SELECT: &str = r#"
     SELECT
         etg.environment_tool_grant_id, etg.environment_id, etg.protected, etg.automatic,
+        etg.follow_coordinates,
         etg.lifecycle AS grant_lifecycle,
         etg.created_at AS grant_created_at, etg.created_by AS grant_created_by,
         etg.state_changed_at AS grant_state_changed_at,
@@ -326,7 +491,7 @@ const GRANT_DETAILS_SELECT: &str = r#"
         etg.deleted_at AS grant_deleted_at, etg.deleted_by AS grant_deleted_by,
         tr.tool_release_id, tr.owner_account_id, tr.tool_name, tr.tool_version,
         tr.source_kind, tr.tool_definition, tr.metadata_version, tr.metadata_digest,
-        tr.lifecycle, tr.origin, tr.system_availability,
+        tr.immutable, tr.lifecycle, tr.origin, tr.system_availability,
         tr.created_at, tr.created_by, tr.state_changed_at, tr.state_changed_by,
         tr.component_id, tr.component_revision, tr.component_name,
         tr.host_tool_id, tr.implementation_version,
@@ -349,23 +514,31 @@ impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
         self.db_pool
             .with_tx_err(METRICS_SVC_NAME, "create", |tx| {
                 async move {
-                    if !Self::published_release_exists(tx, record.tool_release_id).await? {
+                    if !Self::grantable_release_exists(
+                        tx,
+                        record.environment_id,
+                        record.tool_release_id,
+                        record.follow_coordinates,
+                    )
+                    .await?
+                    {
                         return Err(EnvironmentToolGrantRepoError::ConcurrentModification);
                     }
                     tx.execute(
                         sqlx::query(indoc! { r#"
                             INSERT INTO environment_tool_grants (
                                 environment_tool_grant_id, environment_id, tool_release_id,
-                                protected, automatic, lifecycle, created_at, created_by,
+                                protected, automatic, follow_coordinates, lifecycle, created_at, created_by,
                                 state_changed_at, state_changed_by, deleted_at, deleted_by
                             )
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, NULL)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, NULL)
                         "#})
                         .bind(record.environment_tool_grant_id)
                         .bind(record.environment_id)
                         .bind(record.tool_release_id)
                         .bind(record.protected)
                         .bind(record.automatic)
+                        .bind(record.follow_coordinates)
                         .bind(record.lifecycle)
                         .bind(record.created_at)
                         .bind(record.created_by)
@@ -394,7 +567,7 @@ impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
         include_deleted: bool,
     ) -> Result<Option<EnvironmentToolGrantWithDetailsRecord>, EnvironmentToolGrantRepoError> {
         let query = format!(
-            "{GRANT_DETAILS_SELECT} WHERE etg.environment_tool_grant_id = $1 AND ($2 OR (etg.lifecycle = {ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE} AND tr.lifecycle = {TOOL_RELEASE_LIFECYCLE_PUBLISHED}))"
+            "{GRANT_DETAILS_SELECT} WHERE etg.environment_tool_grant_id = $1 AND ($2 OR (etg.lifecycle = {ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE} AND tr.lifecycle IN ({TOOL_RELEASE_LIFECYCLE_PUBLISHED}, {TOOL_RELEASE_LIFECYCLE_SUPERSEDED})))"
         );
         Ok(self
             .with_ro("get_by_id")
@@ -409,7 +582,7 @@ impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
         include_deleted: bool,
     ) -> Result<Option<EnvironmentToolGrantWithDetailsRecord>, EnvironmentToolGrantRepoError> {
         let query = format!(
-            "{GRANT_DETAILS_SELECT} WHERE etg.environment_id = $1 AND etg.tool_release_id = $2 AND ($3 OR (etg.lifecycle = {ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE} AND tr.lifecycle = {TOOL_RELEASE_LIFECYCLE_PUBLISHED}))"
+            "{GRANT_DETAILS_SELECT} WHERE etg.environment_id = $1 AND etg.tool_release_id = $2 AND ($3 OR (etg.lifecycle = {ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE} AND tr.lifecycle IN ({TOOL_RELEASE_LIFECYCLE_PUBLISHED}, {TOOL_RELEASE_LIFECYCLE_SUPERSEDED})))"
         );
         Ok(self
             .with_ro("get_by_environment_and_release")
@@ -427,7 +600,7 @@ impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
         environment_id: Uuid,
     ) -> Result<Vec<EnvironmentToolGrantWithDetailsRecord>, EnvironmentToolGrantRepoError> {
         let query = format!(
-            "{GRANT_DETAILS_SELECT} WHERE etg.environment_id = $1 AND etg.deleted_at IS NULL AND tr.lifecycle = {TOOL_RELEASE_LIFECYCLE_PUBLISHED} ORDER BY tr.tool_name, tr.tool_version"
+            "{GRANT_DETAILS_SELECT} WHERE etg.environment_id = $1 AND etg.deleted_at IS NULL AND tr.lifecycle IN ({TOOL_RELEASE_LIFECYCLE_PUBLISHED}, {TOOL_RELEASE_LIFECYCLE_SUPERSEDED}) ORDER BY tr.tool_name, tr.tool_version"
         );
         Ok(self
             .with_ro("list_by_environment")
@@ -448,7 +621,7 @@ impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
             .collect::<Vec<_>>()
             .join(", ");
         let query = format!(
-            "{GRANT_DETAILS_SELECT} WHERE etg.environment_id = $1 AND etg.tool_release_id IN ({placeholders}) AND etg.deleted_at IS NULL AND tr.lifecycle = {TOOL_RELEASE_LIFECYCLE_PUBLISHED}"
+            "{GRANT_DETAILS_SELECT} WHERE etg.environment_id = $1 AND etg.tool_release_id IN ({placeholders}) AND etg.deleted_at IS NULL AND tr.lifecycle IN ({TOOL_RELEASE_LIFECYCLE_PUBLISHED}, {TOOL_RELEASE_LIFECYCLE_SUPERSEDED})"
         );
         let mut query = sqlx::query_as(&query).bind(environment_id);
         for release_id in release_ids {

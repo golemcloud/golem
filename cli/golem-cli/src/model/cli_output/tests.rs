@@ -289,6 +289,12 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         "environment.sync-deployment-options",
         arb_environment_sync_deployment_options_result
     ),
+    registry_entry!("ToolReleaseView", "tool.release", arb_tool_release_result),
+    registry_entry!(
+        "ToolReleaseListView",
+        "tool.release.list",
+        arb_tool_release_list_result
+    ),
     registry_entry!(
         "EnvironmentSetupPlanView",
         "deploy.environment-setup-plan",
@@ -771,6 +777,7 @@ fn deploy_diff_and_plan_structured_outputs_mask_secret_payloads() {
     let diff_value = hidden_structured_output(diff.clone());
     let plan_value = hidden_structured_output(DeployPlanView {
         deployment_diff: &diff,
+        tool_publications: &Default::default(),
         environment_setup: None,
     });
 
@@ -4624,6 +4631,7 @@ fn arb_deploy_plan_result() -> OutputDocumentStrategy {
             to_structured_output_value_masked(
                 DeployPlanView {
                     deployment_diff: &deployment_diff,
+                    tool_publications: &Default::default(),
                     environment_setup: environment_setup.as_ref(),
                 },
                 MaskingConfig::hide_secrets(),
@@ -5088,6 +5096,60 @@ fn arb_environment_tool_grant_restore_result() -> OutputDocumentStrategy {
         arb_environment_tool_grant_view()
             .prop_map(|grant| crate::model::environment::EnvironmentToolGrantRestoreView { grant }),
     )
+}
+
+fn sample_tool_release() -> golem_common::model::tool_release::ToolRelease {
+    use golem_common::model::tool_release::{ToolReleaseLifecycle, ToolReleaseOrigin};
+    use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
+
+    let owner_account_id = golem_common::model::account::AccountId::new();
+    golem_common::model::tool_release::ToolRelease {
+        id: golem_common::model::tool_release::ToolReleaseId::new(),
+        owner_account_id,
+        name: golem_common::model::tool::ToolName::try_from("search").unwrap(),
+        version: "1.0.0".to_string(),
+        source: golem_common::model::tool::ToolSource::Component {
+            component_id: golem_common::model::component::ComponentId::new(),
+            component_revision: golem_common::model::component::ComponentRevision::INITIAL,
+            component_name: golem_common::model::component::ComponentName("tools".to_string()),
+        },
+        definition: Tool {
+            version: "1.0.0".to_string(),
+            commands: CommandTree {
+                nodes: vec![CommandNode {
+                    name: "search".to_string(),
+                    aliases: Vec::new(),
+                    doc: Doc::default(),
+                    globals: Globals::default(),
+                    subcommands: Vec::new(),
+                    body: None,
+                }],
+            },
+            schema: golem_common::schema::SchemaGraph::empty(),
+        },
+        metadata_version: "0.1.0".to_string(),
+        metadata_digest: golem_common::model::diff::Hash::new(blake3::hash(b"metadata")),
+        immutable: true,
+        lifecycle: ToolReleaseLifecycle::Published,
+        origin: ToolReleaseOrigin::Ordinary,
+        system_availability: None,
+        created_at: fixed_datetime(),
+        created_by: owner_account_id,
+        state_changed_at: fixed_datetime(),
+        state_changed_by: owner_account_id,
+    }
+}
+
+fn arb_tool_release_result() -> OutputDocumentStrategy {
+    serialized_output(Just(crate::model::tool_release::ToolReleaseView {
+        release: sample_tool_release(),
+    }))
+}
+
+fn arb_tool_release_list_result() -> OutputDocumentStrategy {
+    serialized_output(Just(crate::model::tool_release::ToolReleaseListView {
+        releases: vec![sample_tool_release()],
+    }))
 }
 
 fn arb_environment_with_details()

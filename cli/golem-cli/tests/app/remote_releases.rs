@@ -124,7 +124,7 @@ async fn create_app_and_environment(
     Ok((application, environment))
 }
 
-fn registry_tool(version: &str) -> Tool {
+fn remote_release_tool(version: &str) -> Tool {
     Tool {
         version: version.to_string(),
         commands: CommandTree {
@@ -182,7 +182,7 @@ fn wasm_files_under(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
 
 #[test]
 #[timeout("2m")]
-async fn registry_tool_bridge_automatically_reconciles_its_environment_grant(
+async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let mut ctx = TestContext::new();
@@ -209,7 +209,7 @@ async fn registry_tool_bridge_automatically_reconciles_its_environment_grant(
                     .map_err(anyhow::Error::msg)?,
                 agent_types: Vec::new(),
                 agent_type_provision_configs: BTreeMap::new(),
-                tools: vec![registry_tool("1.2.0")],
+                tools: vec![remote_release_tool("1.2.0")],
                 tool_deployment_configs: BTreeMap::from([(
                     tool_name.clone(),
                     publisher_tool_config(),
@@ -348,25 +348,25 @@ bridge:
     );
     assert!(
         wasm_files_under(ctx.cwd_path())?.is_empty(),
-        "registry bridge generation must not fetch or require publisher WASM"
+        "remote-release bridge generation must not fetch or require publisher WASM"
     );
 
     let marker_dir = ctx.cwd_path_join("golem-temp/task-results");
-    let mut registry_bridge_marker = None;
+    let mut remote_release_bridge_marker = None;
     for entry in std::fs::read_dir(&marker_dir)? {
         let marker: serde_json::Value = serde_json::from_slice(&std::fs::read(entry?.path())?)?;
         if marker.get("kind").and_then(serde_json::Value::as_str)
             == Some("GenerateBridgeSdkMarkerHash")
         {
-            registry_bridge_marker = Some(marker);
+            remote_release_bridge_marker = Some(marker);
             break;
         }
     }
-    let marker_input = registry_bridge_marker
-        .expect("registry bridge generation must write a cache marker")
+    let marker_input = remote_release_bridge_marker
+        .expect("remote-release bridge generation must write a cache marker")
         .get("hashInput")
         .and_then(serde_json::Value::as_str)
-        .expect("registry bridge cache marker must retain its hash input")
+        .expect("remote-release bridge cache marker must retain its hash input")
         .to_string();
     for expected in [
         release.id.to_string(),
@@ -376,7 +376,7 @@ bridge:
     ] {
         assert!(
             marker_input.contains(&expected),
-            "registry bridge cache identity must include {expected}: {marker_input}"
+            "remote-release bridge cache identity must include {expected}: {marker_input}"
         );
     }
 

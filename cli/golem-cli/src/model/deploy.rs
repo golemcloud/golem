@@ -198,6 +198,54 @@ pub struct EnvironmentToolGrantPlanView {
     pub entries: Vec<EnvironmentToolGrantPlanEntry>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolPublicationPlanAction {
+    NoChange,
+    Publish,
+    Conflict,
+}
+
+impl std::fmt::Display for ToolPublicationPlanAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NoChange => "no change",
+            Self::Publish => "publish",
+            Self::Conflict => "conflict",
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolPublicationPlanEntry {
+    pub action: ToolPublicationPlanAction,
+    pub name: String,
+    pub version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolPublicationPlan {
+    pub entries: Vec<ToolPublicationPlanEntry>,
+}
+
+impl ToolPublicationPlan {
+    pub fn has_work(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| matches!(entry.action, ToolPublicationPlanAction::Publish))
+    }
+
+    pub fn has_conflicts(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.action == ToolPublicationPlanAction::Conflict)
+    }
+}
+
 impl EnvironmentToolGrantPlanView {
     pub fn has_changes(&self) -> bool {
         self.entries.iter().any(|entry| {
@@ -314,6 +362,35 @@ mod tests {
             unit: "unit".to_string(),
             units: "units".to_string(),
         }
+    }
+
+    #[::test_r::test]
+    fn tool_publication_plan_distinguishes_work_and_conflicts() {
+        let entry = |action| ToolPublicationPlanEntry {
+            action,
+            name: "example".to_string(),
+            version: "1.0.0".to_string(),
+            reason: None,
+        };
+
+        assert!(
+            !ToolPublicationPlan {
+                entries: vec![entry(ToolPublicationPlanAction::NoChange)]
+            }
+            .has_work()
+        );
+        assert!(
+            ToolPublicationPlan {
+                entries: vec![entry(ToolPublicationPlanAction::Publish)]
+            }
+            .has_work()
+        );
+        assert!(
+            ToolPublicationPlan {
+                entries: vec![entry(ToolPublicationPlanAction::Conflict)]
+            }
+            .has_conflicts()
+        );
     }
 
     #[::test_r::test]
@@ -1964,16 +2041,21 @@ impl TextOutput for DeploymentDiff {
             logln("");
         }
         if !self.published_tools.is_empty() {
-            logln("Published tool changes:".log_color_help_group().to_string());
+            logln(
+                "Deployment tool release changes:"
+                    .log_color_help_group()
+                    .to_string(),
+            );
             for (tool_name, publication_diff) in &self.published_tools {
                 let change = match publication_diff {
-                    diff::BTreeSetDiffValue::Create => {
-                        format!("publish tool {}", tool_name.log_color_highlight(),)
-                            .green()
-                            .to_string()
-                    }
+                    diff::BTreeSetDiffValue::Create => format!(
+                        "include tool release reference {} in this deployment",
+                        tool_name.log_color_highlight(),
+                    )
+                    .green()
+                    .to_string(),
                     diff::BTreeSetDiffValue::Delete => format!(
-                        "stop publishing tool {} from this deployment (release remains available)",
+                        "remove tool release {} from this deployment (release remains available)",
                         tool_name.log_color_highlight(),
                     )
                     .red()
@@ -2201,6 +2283,7 @@ impl Serialize for EnvironmentSetupPlanView<'_> {
 
 pub struct DeployPlanView<'a> {
     pub deployment_diff: &'a DeploymentDiff,
+    pub tool_publications: &'a ToolPublicationPlan,
     pub environment_setup: Option<&'a EnvironmentSetupPlan>,
 }
 
@@ -2208,6 +2291,7 @@ pub struct DeployPlanView<'a> {
 #[serde(rename_all = "camelCase")]
 struct DeployPlanFields<'a> {
     deployment_diff: &'a DeploymentDiff,
+    tool_publications: &'a ToolPublicationPlan,
     environment_setup: Option<&'a EnvironmentSetupDisplay>,
 }
 
@@ -2224,6 +2308,7 @@ impl Serialize for DeployPlanView<'_> {
 
         DeployPlanFields {
             deployment_diff: &deployment_diff,
+            tool_publications: self.tool_publications,
             environment_setup: self.environment_setup.map(|setup| &setup.display),
         }
         .serialize(serializer)
@@ -2240,6 +2325,29 @@ impl TextOutput for DeployPlanView<'_> {
 
         if has_deployment_changes {
             self.deployment_diff.log();
+        }
+
+        if !self.tool_publications.entries.is_empty() {
+            logln("Tool publication plan:".log_color_help_group().to_string());
+            for entry in &self.tool_publications.entries {
+                let coordinate = format!("{}@{}", entry.name, entry.version);
+                let action = match entry.action {
+                    ToolPublicationPlanAction::NoChange => entry.action.to_string().normal(),
+                    ToolPublicationPlanAction::Publish => entry.action.to_string().green(),
+                    ToolPublicationPlanAction::Conflict => entry.action.to_string().red(),
+                };
+                logln(format!(
+                    "  - {} {}{}",
+                    action,
+                    coordinate.log_color_highlight(),
+                    entry
+                        .reason
+                        .as_ref()
+                        .map(|reason| format!(": {reason}"))
+                        .unwrap_or_default()
+                ));
+            }
+            logln("");
         }
 
         if let Some(environment_setup) = self.environment_setup.map(EnvironmentSetupPlanView)
@@ -2271,6 +2379,7 @@ impl StructuredOutput for DeployPlanView<'_> {
 
         DeployPlanFields {
             deployment_diff: &deployment_diff,
+            tool_publications: self.tool_publications,
             environment_setup: self.environment_setup.map(|setup| &setup.display),
         }
         .serialize(serializer)

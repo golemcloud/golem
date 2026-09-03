@@ -876,7 +876,7 @@ impl ComponentCommandHandler {
         BTreeSet<ToolName>,
         Vec<PendingRemoteInitialFile>,
     )> {
-        let registry_grants = self
+        let release_grants = self
             .ctx
             .golem_clients()
             .await?
@@ -957,12 +957,12 @@ impl ComponentCommandHandler {
         }
 
         for (tool_name, declaration) in app.tool_declarations() {
-            let Some(registry_source) = declaration.value.source.as_ref() else {
+            let Some(release_source) = declaration.value.source.as_ref() else {
                 continue;
             };
-            let grant = registry_grants
+            let grant = release_grants
                 .iter()
-                .find(|grant| match &registry_source.registry {
+                .find(|grant| match &release_source.registry {
                     app_raw::RegistrySubject::ById(reference) => {
                         grant.release.id == reference.release_id
                     }
@@ -975,10 +975,10 @@ impl ComponentCommandHandler {
             let Some(grant) = grant else {
                 issues.push(ToolValidationIssue::error(
                     ToolValidationPhase::DeclarationDiscoveryIdentity,
-                    ToolValidationCode::RegistryReleaseNotFound,
+                    ToolValidationCode::ReleaseNotGranted,
                     ToolEntityPath::tool(tool_name, "tools.source.registry"),
                     Some(declaration.source.clone()),
-                    "Registry tool release was not found among the active grants for this environment",
+                    "Published tool release was not found among the active grants for this environment",
                 ));
                 continue;
             };
@@ -989,7 +989,7 @@ impl ComponentCommandHandler {
                     ToolEntityPath::tool(tool_name, "tools.source.registry"),
                     Some(declaration.source.clone()),
                     format!(
-                        "Declaration key must equal resolved registry tool name '{}'",
+                        "Declaration key must equal resolved published tool name '{}'",
                         grant.release.name
                     ),
                 ));
@@ -1007,7 +1007,7 @@ impl ComponentCommandHandler {
             implementations.entry(tool_name.clone()).or_default().push(
                 DiscoveredToolImplementation {
                     definition: grant.release.definition.clone(),
-                    implementation: ToolImplementationSource::Registry {
+                    implementation: ToolImplementationSource::RemoteRelease {
                         grant: Box::new(grant.clone()),
                     },
                     diagnostic_source: Some(declaration.source.clone()),
@@ -1052,7 +1052,7 @@ impl ComponentCommandHandler {
                             .map(|source| match &source.implementation {
                                 ToolImplementationSource::Component { component_name } =>
                                     component_name.as_str(),
-                                ToolImplementationSource::Registry { .. } => "registry",
+                                ToolImplementationSource::RemoteRelease { .. } => "remote release",
                             })
                             .join(", ")
                     ),
@@ -1115,7 +1115,7 @@ impl ComponentCommandHandler {
             let definition = &source.definition;
             let owner = source
                 .implementation
-                .registry_grant()
+                .release_grant()
                 .map(|grant| &grant.release_owner.email)
                 .unwrap_or(local_owner);
             let declaration_source = app
@@ -1224,7 +1224,7 @@ impl ComponentCommandHandler {
                 .implementation
                 .local_component_name()
                 .cloned()
-                .unwrap_or_else(|| ComponentName(format!("registry-tool-{tool_name}")));
+                .unwrap_or_else(|| ComponentName(format!("remote-release-{tool_name}")));
             let config = resolve_json_value(
                 &materialization_component,
                 "tool config",
@@ -1273,7 +1273,7 @@ impl ComponentCommandHandler {
                     .entry(component_name.clone())
                     .or_default()
                     .insert(tool_name.clone(), manifest_config);
-            } else if let Some(grant) = source.implementation.registry_grant() {
+            } else if let Some(grant) = source.implementation.release_grant() {
                 let (provision, pending_files) = self
                     .materialize_remote_tool_provision(
                         tool_name,

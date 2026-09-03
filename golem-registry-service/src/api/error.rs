@@ -515,6 +515,9 @@ impl From<EnvironmentError> for ApiError {
             EnvironmentError::EnvironmentWithNameAlreadyExists => {
                 Self::conflict(api::error_code::ENVIRONMENT_ALREADY_EXISTS, error)
             }
+            EnvironmentError::MutableToolGrantsInVersionCheckedEnvironment => {
+                Self::bad_request(api::error_code::ENVIRONMENT_TOOL_GRANT_CONFLICT, error)
+            }
             EnvironmentError::ConcurrentModification => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
             }
@@ -899,6 +902,11 @@ impl From<ToolReleaseError> for ApiError {
             }
             ToolReleaseError::ImmutableReleaseConflict => {
                 Self::conflict(api::error_code::TOOL_RELEASE_IMMUTABLE_CONFLICT, error)
+            }
+            ToolReleaseError::DePublishedReleaseRequiresExplicitRestore
+            | ToolReleaseError::ToolReleaseNotPublished
+            | ToolReleaseError::ToolReleaseNotDePublished => {
+                Self::conflict(api::error_code::TOOL_RELEASE_LIFECYCLE_CONFLICT, error)
             }
             ToolReleaseError::ProtectedToolRelease => {
                 Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)

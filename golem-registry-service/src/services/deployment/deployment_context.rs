@@ -256,8 +256,8 @@ impl DeploymentContext {
         for (index, (deployment, resolved)) in remote_tools.iter().enumerate() {
             let source = resolved
                 .as_ref()
-                .map(|resolved| format!("registry release {}", resolved.release.id))
-                .unwrap_or_else(|| format!("registry reference {}", index + 1));
+                .map(|resolved| format!("published release {}", resolved.release.id))
+                .unwrap_or_else(|| format!("remote reference {}", index + 1));
             all_sources
                 .entry(deployment.name.clone())
                 .or_default()
@@ -1438,6 +1438,7 @@ mod tests {
                 &definition,
             )
             .unwrap(),
+            immutable: true,
             lifecycle: ToolReleaseLifecycle::Published,
             origin: ToolReleaseOrigin::Ordinary,
             system_availability: None,

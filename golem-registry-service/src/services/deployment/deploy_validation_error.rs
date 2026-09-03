@@ -187,51 +187,49 @@ pub enum DeployValidationError {
         components: Vec<ComponentName>,
     },
     #[error(
-        "Tool {tool_name} has multiple local or registry sources: {sources}",
+        "Tool {tool_name} has multiple local or remote sources: {sources}",
         sources = sources.join(", ")
     )]
     ToolSourceCollision {
         tool_name: ToolName,
         sources: Vec<String>,
     },
-    #[error("Registry tool {tool_name} is unavailable in this environment")]
+    #[error("Remote tool {tool_name} is unavailable in this environment")]
     RemoteToolUnavailable { tool_name: ToolName },
-    #[error("Registry tool declaration {tool_name} selected a release for tool {release_name}")]
+    #[error("Remote tool declaration {tool_name} selected a release for tool {release_name}")]
     RemoteToolNameMismatch {
         tool_name: ToolName,
         release_name: ToolName,
     },
-    #[error("Registry tool {tool_name} release definition has root name {definition_name:?}")]
+    #[error("Remote tool {tool_name} release definition has root name {definition_name:?}")]
     RemoteToolDefinitionNameMismatch {
         tool_name: ToolName,
         definition_name: Option<String>,
     },
     #[error(
-        "Registry tool {tool_name} release version {release_version} does not match its definition version {definition_version}"
+        "Remote tool {tool_name} release version {release_version} does not match its definition version {definition_version}"
     )]
     RemoteToolVersionMismatch {
         tool_name: ToolName,
         release_version: String,
         definition_version: String,
     },
-    #[error(
-        "Registry tool {tool_name} uses unsupported metadata schema version {metadata_version}"
-    )]
+    #[error("Remote tool {tool_name} uses unsupported metadata schema version {metadata_version}")]
     RemoteToolUnsupportedMetadataVersion {
         tool_name: ToolName,
         metadata_version: String,
     },
-    #[error("Registry tool {tool_name} has an invalid metadata digest")]
+    #[error("Remote tool {tool_name} has an invalid metadata digest")]
     RemoteToolMetadataDigestMismatch { tool_name: ToolName },
     #[error(
-        "Registry tool {tool_name} is invalid: {errors}",
+        "Remote tool {tool_name} is invalid: {errors}",
         errors = errors.join(", ")
     )]
     InvalidRemoteTool {
         tool_name: ToolName,
         errors: Vec<String>,
     },
-    #[error("Registry tool {tool_name} has a binding for unknown agent type {agent_type}")]
+    #[error("Remote tool {tool_name} has a binding for unknown agent type {agent_type}")]
     RemoteToolBindingUnknownAgent {
         tool_name: ToolName,
         agent_type: AgentTypeName,

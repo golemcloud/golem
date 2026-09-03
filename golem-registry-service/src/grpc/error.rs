@@ -389,6 +389,13 @@ impl From<EnvironmentError> for GrpcApiError {
                 code: api::error_code::ENVIRONMENT_ALREADY_EXISTS.to_string(),
                 cause: None,
             }),
+            EnvironmentError::MutableToolGrantsInVersionCheckedEnvironment => {
+                Self::BadRequest(ErrorsBody {
+                    errors: vec![error],
+                    code: api::error_code::ENVIRONMENT_TOOL_GRANT_CONFLICT.to_string(),
+                    cause: None,
+                })
+            }
             EnvironmentError::ConcurrentModification => Self::AlreadyExists(ErrorBody {
                 error,
                 code: api::error_code::CONCURRENT_UPDATE.to_string(),

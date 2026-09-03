@@ -30,6 +30,7 @@ pub const TOOL_RELEASE_SOURCE_COMPONENT: i16 = 0;
 pub const TOOL_RELEASE_SOURCE_HOST: i16 = 1;
 pub const TOOL_RELEASE_LIFECYCLE_PUBLISHED: i16 = 0;
 pub const TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED: i16 = 1;
+pub const TOOL_RELEASE_LIFECYCLE_SUPERSEDED: i16 = 2;
 pub const TOOL_RELEASE_ORIGIN_ORDINARY: i16 = 0;
 pub const TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM: i16 = 1;
 pub const SYSTEM_TOOL_AVAILABILITY_GRANTABLE: i16 = 0;
@@ -46,6 +47,7 @@ pub struct ToolReleaseRecord {
     pub tool_definition: Blob<Tool>,
     pub metadata_version: String,
     pub metadata_digest: SqlBlake3Hash,
+    pub immutable: bool,
     pub lifecycle: i16,
     pub origin: i16,
     pub system_availability: Option<i16>,
@@ -69,7 +71,11 @@ pub struct ToolReleaseWithOwnerRecord {
 }
 
 impl ToolReleaseRecord {
-    pub fn from_registered_tool(tool: &RegisteredTool, actor: AccountId) -> anyhow::Result<Self> {
+    pub fn from_registered_tool(
+        tool: &RegisteredTool,
+        immutable: bool,
+        actor: AccountId,
+    ) -> anyhow::Result<Self> {
         let name = tool
             .definition
             .name()
@@ -84,6 +90,7 @@ impl ToolReleaseRecord {
             tool_definition: Blob::new(tool.definition.clone()),
             metadata_version: tool.metadata_version.clone(),
             metadata_digest: tool_metadata_digest(&tool.metadata_version, &tool.definition)?.into(),
+            immutable,
             lifecycle: TOOL_RELEASE_LIFECYCLE_PUBLISHED,
             origin: TOOL_RELEASE_ORIGIN_ORDINARY,
             system_availability: None,
@@ -132,6 +139,7 @@ impl ToolReleaseRecord {
             .into(),
             tool_definition: Blob::new(provision.definition),
             metadata_version: provision.metadata_version,
+            immutable: true,
             lifecycle: TOOL_RELEASE_LIFECYCLE_PUBLISHED,
             origin: TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM,
             system_availability: Some(availability_to_i16(provision.availability)),
@@ -241,6 +249,7 @@ impl TryFrom<ToolReleaseRecord> for ToolRelease {
             definition: value.tool_definition.into_value(),
             metadata_version: value.metadata_version,
             metadata_digest: value.metadata_digest.into(),
+            immutable: value.immutable,
             lifecycle: lifecycle_from_i16(value.lifecycle)?,
             origin: origin_from_i16(value.origin)?,
             system_availability: value
@@ -269,6 +278,7 @@ fn lifecycle_from_i16(value: i16) -> anyhow::Result<ToolReleaseLifecycle> {
     match value {
         TOOL_RELEASE_LIFECYCLE_PUBLISHED => Ok(ToolReleaseLifecycle::Published),
         TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED => Ok(ToolReleaseLifecycle::DePublished),
+        TOOL_RELEASE_LIFECYCLE_SUPERSEDED => Ok(ToolReleaseLifecycle::Superseded),
         other => Err(anyhow!("unknown tool release lifecycle {other}")),
     }
 }

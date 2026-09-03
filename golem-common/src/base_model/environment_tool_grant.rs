@@ -34,6 +34,7 @@ declare_structs! {
         pub tool_release_id: ToolReleaseId,
         pub protected: bool,
         pub automatic: bool,
+        pub follow_coordinates: bool,
         pub lifecycle: EnvironmentToolGrantLifecycle,
         pub created_at: DateTime<Utc>,
         pub created_by: AccountId,

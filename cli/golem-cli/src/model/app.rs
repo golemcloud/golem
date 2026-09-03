@@ -77,7 +77,7 @@ pub struct BuildConfig {
     pub steps_filter: HashSet<AppBuildStep>,
     pub custom_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
     pub repl_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
-    pub registry_tool_grants:
+    pub release_grants:
         Vec<golem_common::model::environment_tool_grant::EnvironmentToolGrantWithDetails>,
 }
 
@@ -117,13 +117,13 @@ impl BuildConfig {
         self
     }
 
-    pub fn with_registry_tool_grants(
+    pub fn with_release_grants(
         mut self,
-        registry_tool_grants: Vec<
+        release_grants: Vec<
             golem_common::model::environment_tool_grant::EnvironmentToolGrantWithDetails,
         >,
     ) -> Self {
-        self.registry_tool_grants = registry_tool_grants;
+        self.release_grants = release_grants;
         self
     }
 
@@ -300,7 +300,7 @@ pub enum AppBuildStep {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum SubjectSource {
     Local { component_name: ComponentName },
-    Registry,
+    RemoteRelease,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -321,7 +321,7 @@ impl ComponentDependency {
             ComponentDependency::Agent { source, .. }
             | ComponentDependency::Tool { source, .. } => match source {
                 SubjectSource::Local { component_name } => Some(component_name),
-                SubjectSource::Registry => None,
+                SubjectSource::RemoteRelease => None,
             },
         }
     }
@@ -333,7 +333,7 @@ pub enum BridgeSdkTargetSource {
     Local {
         component_name: ComponentName,
     },
-    Registry {
+    RemoteRelease {
         release_id: golem_common::model::tool_release::ToolReleaseId,
         version: String,
         metadata_version: String,
@@ -350,7 +350,7 @@ impl BridgeSdkTargetSource {
     pub fn component_name(&self) -> Option<&ComponentName> {
         match self {
             Self::Local { component_name } => Some(component_name),
-            Self::Registry { .. } => None,
+            Self::RemoteRelease { .. } => None,
         }
     }
 }
@@ -783,7 +783,7 @@ impl Application {
             .map(String::as_str)
     }
 
-    pub fn registry_tool_references(
+    pub fn remote_release_references(
         &self,
     ) -> impl Iterator<Item = (&ToolName, &app_raw::RegistrySubject)> {
         self.tool_declarations
@@ -797,16 +797,16 @@ impl Application {
             })
     }
 
-    pub fn registry_tool_reference(&self, name: &ToolName) -> Option<&app_raw::RegistrySubject> {
+    pub fn remote_release_reference(&self, name: &ToolName) -> Option<&app_raw::RegistrySubject> {
         self.tool_declarations
             .get(name)
             .and_then(|declaration| declaration.value.source.as_ref())
             .map(|source| &source.registry)
     }
 
-    pub fn requires_registry_bridge_metadata(&self) -> bool {
-        let registry_names = self
-            .registry_tool_references()
+    pub fn requires_remote_release_bridge_metadata(&self) -> bool {
+        let remote_release_names = self
+            .remote_release_references()
             .map(|(name, _)| name.as_str())
             .collect::<BTreeSet<_>>();
         self.bridge_sdks()
@@ -817,17 +817,17 @@ impl Application {
                     .tools
                     .map(|tools| tools.clone().into_set())
                     .unwrap_or_default();
-                (matchers.contains("*") && !registry_names.is_empty())
+                (matchers.contains("*") && !remote_release_names.is_empty())
                     || matchers
                         .iter()
-                        .any(|matcher| registry_names.contains(matcher.as_str()))
+                        .any(|matcher| remote_release_names.contains(matcher.as_str()))
             })
             || self.components.values().any(|component| {
                 component.value.0.dependencies.iter().any(|dependency| {
                     matches!(
                         dependency,
                         ComponentDependency::Tool {
-                            source: SubjectSource::Registry,
+                            source: SubjectSource::RemoteRelease,
                             ..
                         }
                     )
@@ -3050,7 +3050,7 @@ impl ComponentProperties {
                         )?;
                         (SubjectSource::Local { component_name }, name)
                     } else {
-                        (SubjectSource::Registry, shortcut.clone())
+                        (SubjectSource::RemoteRelease, shortcut.clone())
                     }
                 }
                 app_raw::ComponentDependencyReference::LocalAlias(_) => {
@@ -3725,7 +3725,7 @@ mod app_builder {
             builder.validate_selected_preset_references(&mut validation, &component_presets);
             builder.resolve_and_validate_components(&mut validation, &component_presets);
             builder.validate_unique_sources(&mut validation);
-            builder.validate_tool_registry_configuration(&mut validation);
+            builder.validate_tool_release_configuration(&mut validation);
             builder.validate_http_api_deployments(&mut validation, &environments);
 
             validation.build(Application {
@@ -4533,7 +4533,7 @@ mod app_builder {
                 })
         }
 
-        fn validate_tool_registry_configuration(&self, validation: &mut ValidationBuilder) {
+        fn validate_tool_release_configuration(&self, validation: &mut ValidationBuilder) {
             for (tool_name, declaration) in &self.tool_declarations {
                 let Some(source) = &declaration.value.source else {
                     continue;
@@ -4542,14 +4542,14 @@ mod app_builder {
                     && reference.name != tool_name.as_str()
                 {
                     validation.add_error(format!(
-                        "Remote tool declaration {} references registry tool {}, but the declaration key must match the registry tool name",
+                        "Remote tool declaration {} references published tool {}, but the declaration key must match the published tool name",
                         tool_name.as_str().log_color_error_highlight(),
                         reference.name.log_color_error_highlight(),
                     ));
                 }
                 if let Err(error) = source.registry.to_release_reference() {
                     validation.add_error(format!(
-                        "Invalid registry source for tool {}: {}",
+                        "Invalid release reference for tool {}: {}",
                         tool_name.as_str().log_color_error_highlight(),
                         error,
                     ));
@@ -4559,7 +4559,7 @@ mod app_builder {
             for (component_name, component) in &self.components {
                 for dependency in &component.value.0.dependencies {
                     let ComponentDependency::Tool {
-                        source: SubjectSource::Registry,
+                        source: SubjectSource::RemoteRelease,
                         tool_name,
                     } = dependency
                     else {
@@ -4567,7 +4567,7 @@ mod app_builder {
                     };
                     match self.tool_declarations.get(tool_name) {
                         None => validation.add_error(format!(
-                            "Component {} depends on undeclared registry tool {}",
+                            "Component {} depends on undeclared remote tool {}",
                             component_name.as_str().log_color_highlight(),
                             tool_name.as_str().log_color_error_highlight(),
                         )),
@@ -4601,7 +4601,7 @@ mod app_builder {
                         )),
                         Some(declaration) if declaration.value.source.is_some() => {
                             validation.add_error(format!(
-                                "Environment {} cannot publish remote registry tool {}",
+                                "Environment {} cannot publish remote tool {}",
                                 environment_name.0.log_color_highlight(),
                                 published_name.log_color_error_highlight(),
                             ));
@@ -5974,7 +5974,7 @@ mod test {
     }
 
     #[test]
-    fn registry_tool_manifest_surfaces_parse_canonical_sources() {
+    fn remote_release_manifest_sources_parse_canonically() {
         let source = indoc! { r#"
             app: hello-app
 
@@ -6020,8 +6020,8 @@ mod test {
             app.selected_published_tools().collect::<Vec<_>>(),
             ["local-tool"]
         );
-        assert_eq!(app.registry_tool_references().count(), 2);
-        assert!(app.requires_registry_bridge_metadata());
+        assert_eq!(app.remote_release_references().count(), 2);
+        assert!(app.requires_remote_release_bridge_metadata());
 
         let component_name = parse_component_name("app:consumer");
         let component = app.component(&component_name);
@@ -6029,21 +6029,21 @@ mod test {
         assert!(matches!(
             &dependencies[0],
             ComponentDependency::Tool {
-                source: SubjectSource::Registry,
+                source: SubjectSource::RemoteRelease,
                 tool_name,
             } if tool_name.as_str() == "pinned-tool"
         ));
         assert!(matches!(
             &dependencies[1],
             ComponentDependency::Tool {
-                source: SubjectSource::Registry,
+                source: SubjectSource::RemoteRelease,
                 tool_name,
             } if tool_name.as_str() == "remote-tool"
         ));
     }
 
     #[test]
-    fn registry_tool_manifest_validation_reports_invalid_references() {
+    fn remote_release_manifest_validation_reports_invalid_references() {
         let errors = load_app_errors(indoc! { r#"
             app: hello-app
             environments:
@@ -6057,7 +6057,7 @@ mod test {
                 componentWasm: consumer.wasm
                 dependencies:
                   tools:
-                    - missing-registry-tool
+                    - missing-remote-release
                     - local-tool
             tools:
               local-tool: {}
@@ -6071,9 +6071,9 @@ mod test {
 
         for expected in [
             "declaration key must match",
-            "cannot publish remote registry tool",
+            "cannot publish remote tool",
             "publishes undeclared tool",
-            "depends on undeclared registry tool",
+            "depends on undeclared remote tool",
             "uses name-only dependency",
         ] {
             assert!(

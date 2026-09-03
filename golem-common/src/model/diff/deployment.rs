@@ -248,7 +248,9 @@ impl Diffable for Deployment {
 
 impl Hashable for Deployment {
     fn hash(&self) -> Result<Hash, DiffError> {
-        hash_from_serialized_value(self)
+        let mut deployment = self.clone();
+        deployment.published_tools.clear();
+        hash_from_serialized_value(&deployment)
     }
 }
 
@@ -300,8 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_tool_identity_hash_covers_release_source_metadata_provision_bindings_and_publication()
-    {
+    fn remote_tool_identity_hash_covers_release_source_metadata_provision_and_bindings() {
         let base = remote_tool();
         let base_hash = deployment_hash(base.clone(), false);
 
@@ -338,6 +339,6 @@ mod tests {
         );
         assert_ne!(base_hash, deployment_hash(changed_binding, false));
 
-        assert_ne!(base_hash, deployment_hash(base, true));
+        assert_eq!(base_hash, deployment_hash(base, true));
     }
 }

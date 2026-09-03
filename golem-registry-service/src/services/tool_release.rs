@@ -14,6 +14,7 @@
 
 use super::account::{AccountError, AccountService};
 use crate::repo::model::tool_release::{
+    TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_PUBLISHED,
     TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM, ToolReleaseRecord, ToolReleaseWithOwnerRecord,
 };
 use crate::repo::tool_release::{ToolReleaseRepo, ToolReleaseRepoError};
@@ -52,6 +53,12 @@ pub enum ToolReleaseError {
     PublicationHostSource(ToolName),
     #[error("Tool release coordinate already exists with different immutable metadata")]
     ImmutableReleaseConflict,
+    #[error("A de-published tool release must be restored explicitly before publication")]
+    DePublishedReleaseRequiresExplicitRestore,
+    #[error("Only a published tool release can be de-published")]
+    ToolReleaseNotPublished,
+    #[error("Only a de-published tool release can be restored")]
+    ToolReleaseNotDePublished,
     #[error("Protected system tool releases cannot be modified")]
     ProtectedToolRelease,
     #[error(transparent)]
@@ -122,6 +129,7 @@ impl ToolReleaseService {
             }
             records.push(ToolReleaseRecord::from_registered_tool(
                 tool,
+                environment.version_check,
                 auth.actor_account_id(),
             )?);
         }
@@ -146,12 +154,15 @@ impl ToolReleaseService {
             {
                 None => changed = true,
                 Some(existing) => {
-                    if !existing.release.publication_content_matches(candidate) {
-                        return Err(ToolReleaseError::ImmutableReleaseConflict);
-                    }
-                    candidate.tool_release_id = existing.release.tool_release_id;
-                    let release: ToolRelease = existing.release.try_into()?;
+                    let release: ToolRelease = existing.release.clone().try_into()?;
                     if release.lifecycle == ToolReleaseLifecycle::DePublished {
+                        return Err(ToolReleaseError::DePublishedReleaseRequiresExplicitRestore);
+                    }
+                    if existing.release.publication_content_matches(candidate) {
+                        candidate.tool_release_id = existing.release.tool_release_id;
+                    } else if candidate.immutable {
+                        return Err(ToolReleaseError::ImmutableReleaseConflict);
+                    } else {
                         changed = true;
                     }
                 }
@@ -221,6 +232,9 @@ impl ToolReleaseService {
         if record.release.origin == TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM {
             return Err(ToolReleaseError::ProtectedToolRelease);
         }
+        if record.release.lifecycle != TOOL_RELEASE_LIFECYCLE_PUBLISHED {
+            return Err(ToolReleaseError::ToolReleaseNotPublished);
+        }
         self.tool_release_repo
             .de_publish(release_id.0, auth.actor_account_id().0)
             .await?
@@ -241,6 +255,9 @@ impl ToolReleaseService {
         if record.release.origin == TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM {
             return Err(ToolReleaseError::ProtectedToolRelease);
         }
+        if record.release.lifecycle != TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED {
+            return Err(ToolReleaseError::ToolReleaseNotDePublished);
+        }
         self.tool_release_repo
             .restore(release_id.0, auth.actor_account_id().0)
             .await?
@@ -254,27 +271,37 @@ impl ToolReleaseService {
         &self,
         reference: &ToolReleaseReference,
     ) -> Result<ToolReleaseWithOwnerRecord, ToolReleaseError> {
-        let record = match reference {
-            ToolReleaseReference::ById(reference) => {
+        let (record, allows_superseded) = match reference {
+            ToolReleaseReference::ById(reference) => (
                 self.tool_release_repo
                     .get_by_id(reference.release_id.0)
-                    .await?
-            }
+                    .await?,
+                true,
+            ),
             ToolReleaseReference::ByCoordinates(reference) => {
                 let account = self
                     .account_service
                     .get_by_email(reference.account.as_str(), &AuthCtx::System)
                     .await
                     .map_err(|_| ToolReleaseError::ReferencedToolReleaseNotFound)?;
-                self.tool_release_repo
-                    .get_by_coordinates(account.id.0, reference.name.as_str(), &reference.version)
-                    .await?
+                (
+                    self.tool_release_repo
+                        .get_by_coordinates(
+                            account.id.0,
+                            reference.name.as_str(),
+                            &reference.version,
+                        )
+                        .await?,
+                    false,
+                )
             }
-        }
-        .ok_or(ToolReleaseError::ReferencedToolReleaseNotFound)?;
+        };
+        let record = record.ok_or(ToolReleaseError::ReferencedToolReleaseNotFound)?;
 
         let release: ToolRelease = record.release.clone().try_into()?;
-        if release.lifecycle != ToolReleaseLifecycle::Published {
+        if release.lifecycle != ToolReleaseLifecycle::Published
+            && !(allows_superseded && release.lifecycle == ToolReleaseLifecycle::Superseded)
+        {
             return Err(ToolReleaseError::ReferencedToolReleaseNotFound);
         }
         Ok(record)

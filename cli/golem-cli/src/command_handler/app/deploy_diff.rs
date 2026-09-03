@@ -15,6 +15,7 @@
 use crate::model::component::{ComponentDeployProperties, PendingRemoteInitialFile};
 use crate::model::deploy::{
     DeploymentDisplay, DeploymentDisplayContext, DeploymentDisplayMode, EnvironmentSetupPlan,
+    ToolPublicationPlan,
 };
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::http_api::HttpApiDeploymentDeployProperties;
@@ -50,6 +51,7 @@ pub struct DeployQuickDiff {
     pub deployable_manifest_mcp_deployments: BTreeMap<Domain, McpDeploymentDeployProperties>,
     pub diffable_local_deployment: diff::Deployment,
     pub local_deployment_hash: diff::Hash,
+    pub tool_publication_plan: ToolPublicationPlan,
 }
 
 impl DeployQuickDiff {
@@ -61,7 +63,7 @@ impl DeployQuickDiff {
             .map(|d| &d.deployment_hash)
     }
 
-    pub fn is_up_to_date(&self) -> bool {
+    pub fn is_deployment_up_to_date(&self) -> bool {
         let current_deployment_hash = self.current_deployment_hash();
         debug!(
             current_deployment_hash = current_deployment_hash
@@ -103,6 +105,7 @@ pub struct DeployDiff {
     pub diff: diff::DeploymentDiff,
     pub diff_stage: Option<diff::DeploymentDiff>,
     pub environment_setup: Option<EnvironmentSetupPlan>,
+    pub tool_publication_plan: ToolPublicationPlan,
 }
 
 impl DeployDiff {
@@ -133,6 +136,16 @@ impl DeployDiff {
     pub fn has_environment_setup_work(&self) -> bool {
         self.has_environment_setup_entries_to_apply()
             || self.has_environment_setup_entries_skipped_already_exists()
+    }
+
+    pub fn has_publication_work(&self) -> bool {
+        self.tool_publication_plan.has_work()
+    }
+
+    pub fn has_apply_work(&self) -> bool {
+        self.has_deployment_changes()
+            || self.has_environment_setup_entries_to_apply()
+            || self.has_publication_work()
     }
 
     pub fn empty_deployment_diff() -> diff::DeploymentDiff {

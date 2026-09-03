@@ -208,6 +208,12 @@
       "$ref": "#/definitions/environment.sync-deployment-options"
     },
     {
+      "$ref": "#/definitions/tool.release"
+    },
+    {
+      "$ref": "#/definitions/tool.release.list"
+    },
+    {
       "$ref": "#/definitions/deploy.environment-setup-plan"
     },
     {
@@ -2722,7 +2728,8 @@
       "required": [
         "$type",
         "deploymentDiff",
-        "environmentSetup"
+        "environmentSetup",
+        "toolPublications"
       ],
       "properties": {
         "$type": {
@@ -2730,6 +2737,9 @@
         },
         "deploymentDiff": {
           "$ref": "#/definitions/DeploymentDiffPayload"
+        },
+        "toolPublications": {
+          "$ref": "#/definitions/ToolPublicationPlan"
         },
         "environmentSetup": {
           "oneOf": [
@@ -5420,6 +5430,31 @@
       },
       "additionalProperties": false
     },
+    "ToolPublicationPlan": {
+      "type": "object",
+      "required": ["entries"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ToolPublicationPlanEntry" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ToolPublicationPlanEntry": {
+      "type": "object",
+      "required": ["action", "name", "version"],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["noChange", "publish", "conflict"]
+        },
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "reason": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
     "EnvironmentSetupDisplay": {
       "type": "object",
       "properties": {
@@ -5978,6 +6013,84 @@
       "properties": {
         "$type": { "const": "environment.tool.restore" },
         "grant": { "$ref": "#/definitions/EnvironmentToolGrantView" }
+      },
+      "additionalProperties": false
+    },
+    "ToolRelease": {
+      "type": "object",
+      "required": ["id", "ownerAccountId", "name", "version", "source", "definition", "metadataVersion", "metadataDigest", "immutable", "lifecycle", "origin", "systemAvailability", "createdAt", "createdBy", "stateChangedAt", "stateChangedBy"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "ownerAccountId": { "type": "string", "format": "uuid" },
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "source": { "$ref": "#/definitions/ToolReleaseSource" },
+        "definition": { "$ref": "#/definitions/Tool" },
+        "metadataVersion": { "type": "string" },
+        "metadataDigest": { "type": "string" },
+        "immutable": { "type": "boolean" },
+        "lifecycle": { "type": "string", "enum": ["published", "de-published", "superseded"] },
+        "origin": { "type": "string", "enum": ["ordinary", "protected-system"] },
+        "systemAvailability": {
+          "oneOf": [
+            { "type": "string", "enum": ["grantable", "auto-granted", "ambient"] },
+            { "type": "null" }
+          ]
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string", "format": "uuid" },
+        "stateChangedAt": { "type": "string", "format": "date-time" },
+        "stateChangedBy": { "type": "string", "format": "uuid" }
+      },
+      "additionalProperties": false
+    },
+    "ToolReleaseSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "componentId", "componentRevision", "componentName"],
+          "properties": {
+            "kind": { "const": "component" },
+            "componentId": { "type": "string", "format": "uuid" },
+            "componentRevision": { "type": "integer", "minimum": 0 },
+            "componentName": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "hostToolId", "implementationVersion"],
+          "properties": {
+            "kind": { "const": "host" },
+            "hostToolId": { "type": "string" },
+            "implementationVersion": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "tool.release": {
+      "type": "object",
+      "description": "A tool release returned by get, de-publish, or restore.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool release get",
+      "x-golem-commands": ["tool release get", "tool release de-publish", "tool release restore"],
+      "required": ["$type", "release"],
+      "properties": {
+        "$type": { "const": "tool.release" },
+        "release": { "$ref": "#/definitions/ToolRelease" }
+      },
+      "additionalProperties": false
+    },
+    "tool.release.list": {
+      "type": "object",
+      "description": "Tool releases owned by an account.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool release list",
+      "required": ["$type", "releases"],
+      "properties": {
+        "$type": { "const": "tool.release.list" },
+        "releases": { "type": "array", "items": { "$ref": "#/definitions/ToolRelease" } }
       },
       "additionalProperties": false
     },
@@ -8108,6 +8221,14 @@
     {
       "type": "environment.sync-deployment-options",
       "rustType": "EnvironmentSyncDeploymentOptionsResult"
+    },
+    {
+      "type": "tool.release",
+      "rustType": "ToolReleaseView"
+    },
+    {
+      "type": "tool.release.list",
+      "rustType": "ToolReleaseListView"
     },
     {
       "type": "deploy.environment-setup-plan",

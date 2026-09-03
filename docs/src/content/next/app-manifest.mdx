@@ -166,7 +166,7 @@ agents:
 
 ### Publishing and consuming exact releases
 
-A publisher opts a local tool into the registry for each environment. A successful deployment of this environment publishes an immutable, grantable release that pins the component revision, tool version, metadata version, and metadata digest:
+A publisher opts a local tool into the registry for each environment. A successful deployment of this environment publishes a grantable release that records the component revision, tool version, metadata version, and metadata digest:
 
 ```yaml
 tools:
@@ -208,9 +208,11 @@ agents:
       search: {}
 ```
 
-Registry subjects can use `releaseId` instead of the `account`, `name`, and `version` coordinate. Both forms resolve an exact immutable release. Deployment planning shows the automatic grant changes implied by registry-backed tool declarations. Deployment creates missing grants before reading registry metadata or building bridge clients, and removes obsolete automatically managed grants. Protected system grants and grants created separately by an administrator are retained. The deploy actor must have permission to make the planned grant changes.
+Registry subjects can use `releaseId` instead of the `account`, `name`, and `version` coordinate. A release ID remains pinned to that release. A coordinate-following grant moves to a replacement release published at the same coordinate when the publisher environment has `versionCheck` disabled; an ID-pinned grant stays on the previous release. Environments with `versionCheck` enabled accept only immutable releases and prevent mutable coordinate replacement while an active coordinate-following grant exists. Deployment planning shows the automatic grant changes implied by registry-backed tool declarations. Deployment creates missing grants before reading registry metadata or building bridge clients, and removes obsolete automatically managed grants. Protected system grants and grants created separately by an administrator are retained. The deploy actor must have permission to make the planned grant changes.
 
-Remote release upgrades are explicit. Publishing a newer release does not move an existing consumer deployment. Selecting the new release creates a new deployment snapshot and reconciles its grant. Removing the registry-backed declaration or de-publishing a release prevents new deployments from selecting it, but existing deployment snapshots and historical replay continue to use their pinned source. De-publication also removes ordinary active grants; restoring the release does not restore those grants.
+`publishTools` is additive. Removing a name from the manifest does not de-publish its release, and rolling a deployment back does not undo publication. Manage lifecycle explicitly with `golem tool release list`, `get`, `de-publish`, and `restore`. De-publishing makes a release unavailable to new deployments but retains its grants; those grants become available again when the same release is restored. A deployment cannot restore or replace a de-published coordinate—you must restore it explicitly first. Superseded releases cannot be de-published or restored.
+
+Publishing a new version does not move an existing consumer deployment. Selecting it creates a new deployment snapshot and reconciles its grant. Existing deployment snapshots and historical replay continue to use their pinned source. When loose publication replaces an existing coordinate, coordinate-following grants move to the replacement while ID-pinned grants continue to resolve the superseded release.
 
 Runtime discovery and admission use the consumer deployment snapshot and the caller's environment policy. GOL-28 stops at the admitted component dispatch boundary; actual component-sidecar invocation is not implemented by this work. Executor-native Host tool dispatch is owned separately by GOL-24.
 
@@ -562,7 +564,7 @@ The generator reads only the release's safe tool definition and metadata digest.
     path: "environments.<environment-name>.deployment.versionCheck",
     since: Release.R_1_4_0
   }}>
-    ***Optional boolean*** to enable version checks during deployment.
+    ***Optional boolean*** to enable strict version checks during deployment. Published tool releases are immutable when enabled. When disabled, publishing changed content at an existing coordinate creates a replacement release, marks the previous release as superseded, and moves active coordinate-following grants to the replacement. Strict environments cannot use mutable releases.
   </Field>
 
   <Field meta={{
@@ -575,7 +577,7 @@ The generator reads only the release's safe tool definition and metadata digest.
   <Field meta={{
     path: "environments.<environment-name>.publishTools",
   }}>
-    ***Optional map of local tool names*** to publish as immutable grantable releases when this environment is deployed. Each value is an empty object. Publication pins the exact source and metadata of the deployed local tool.
+    ***Optional additive map of local tool names*** to publish as grantable releases when this environment is deployed. Each value is an empty object. Publication records the exact source and metadata of the deployed local tool and follows the environment's `deployment.versionCheck` policy. Removing a name does not de-publish an existing release; use `golem tool release de-publish <release-id>` for that explicit lifecycle action.
   </Field>
 
   <Field meta={{

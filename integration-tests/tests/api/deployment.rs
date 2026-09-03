@@ -1454,10 +1454,17 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
         .list_environment_tool_grants(&consumer_env.id.0)
         .await?
         .values;
-    assert_eq!(grants_after_release_restore.len(), 1);
-    assert_eq!(
-        grants_after_release_restore[0].release.id, release_v12.id,
-        "restoring a release must not restore grants tombstoned by de-publication"
+    assert_eq!(grants_after_release_restore.len(), 2);
+    assert!(
+        grants_after_release_restore
+            .iter()
+            .any(|grant| grant.release.id == release_v12.id)
+    );
+    assert!(
+        grants_after_release_restore
+            .iter()
+            .any(|grant| grant.release.id == release_v13.id),
+        "restoring a release must make its preserved grants active again"
     );
 
     Ok(())
