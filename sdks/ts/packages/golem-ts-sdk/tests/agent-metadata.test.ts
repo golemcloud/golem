@@ -384,6 +384,84 @@ describe('agent metadata (Phase 3)', () => {
     expect(restoreCalls).toBe(2);
   });
 
+  it('strictly validates JSON, multipart, and binary snapshot envelopes', async () => {
+    vi.resetModules();
+    const [{ defineAgent: isolatedDefineAgent }, isolatedGuest, { encodeMultipart }] =
+      await Promise.all([
+        import('../src/defineAgent'),
+        import('../src'),
+        import('../src/internal/multipart'),
+      ]);
+
+    isolatedDefineAgent({
+      name: 'StrictSnapshotEnvelope',
+      id: {},
+      snapshotting: 'default',
+      methods: {},
+    }).implement({
+      init: () => ({}),
+      methods: {},
+      snapshot: {
+        save: () => new Uint8Array(),
+        load: () => ({}),
+      },
+    });
+    const emptyInput = schemaValueToWit(v.record([]));
+    (globalThis as { currentAgentId?: string }).currentAgentId =
+      `StrictSnapshotEnvelope(${JSON.stringify(emptyInput)})`;
+
+    const jsonSnapshot = (envelope: object) => ({
+      payload: new TextEncoder().encode(JSON.stringify(envelope)),
+      mimeType: 'application/json',
+    });
+    const invalidJsonEnvelopes: Array<[object, string]> = [
+      [{ principal: { tag: 'anonymous' }, state: {} }, "missing 'version' field"],
+      [{ version: 2, principal: { tag: 'anonymous' }, state: {} }, 'version must be 1'],
+      [{ version: 1, state: {} }, "missing 'principal' field"],
+      [{ version: 1, principal: { tag: 'anonymous' } }, "missing 'state' field"],
+    ];
+    for (const [envelope, message] of invalidJsonEnvelopes) {
+      await expect(isolatedGuest.loadSnapshot.load(jsonSnapshot(envelope))).rejects.toContain(
+        message,
+      );
+    }
+
+    const multipart = encodeMultipart([
+      {
+        name: 'state',
+        contentType: 'application/json',
+        body: new TextEncoder().encode(
+          JSON.stringify({ principal: { tag: 'anonymous' }, state: {} }),
+        ),
+      },
+    ]);
+    await expect(
+      isolatedGuest.loadSnapshot.load({
+        payload: multipart.data,
+        mimeType: `multipart/mixed; boundary=${multipart.boundary}`,
+      }),
+    ).rejects.toContain("multipart state part missing 'version' field");
+
+    await expect(
+      isolatedGuest.loadSnapshot.load({
+        payload: new Uint8Array(),
+        mimeType: 'application/octet-stream',
+      }),
+    ).rejects.toContain('Snapshot is empty');
+    await expect(
+      isolatedGuest.loadSnapshot.load({
+        payload: new Uint8Array([2, 0, 0, 0]),
+        mimeType: 'application/octet-stream',
+      }),
+    ).rejects.toContain('too short for principal length');
+    await expect(
+      isolatedGuest.loadSnapshot.load({
+        payload: new Uint8Array([2, 0, 0, 0, 2, 123]),
+        mimeType: 'application/octet-stream',
+      }),
+    ).rejects.toContain('too short for principal data');
+  });
+
   it('attributes deferred implementation failures to the agent definition name', async () => {
     vi.resetModules();
     const {

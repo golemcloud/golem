@@ -806,6 +806,26 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   let principal: Principal;
   let databases: Array<{ name: string; bytes: Uint8Array }> = [];
 
+  const decodeJsonEnvelope = (data: Uint8Array, description: string) => {
+    const envelope = JSON.parse(new TextDecoder().decode(data));
+    if (envelope === null || typeof envelope !== 'object' || Array.isArray(envelope)) {
+      throw `${description} must be a JSON object`;
+    }
+    if (!Object.hasOwn(envelope, 'version')) {
+      throw `${description} missing 'version' field`;
+    }
+    if (envelope.version !== 1) {
+      throw `${description} version must be 1`;
+    }
+    if (!Object.hasOwn(envelope, 'principal')) {
+      throw `${description} missing 'principal' field`;
+    }
+    if (!Object.hasOwn(envelope, 'state')) {
+      throw `${description} missing 'state' field`;
+    }
+    return envelope;
+  };
+
   if (snapshot.mimeType.startsWith('multipart/mixed')) {
     // Multipart snapshot: extract principal from the state JSON part
     const boundaryMatch = snapshot.mimeType.match(/boundary=([^\s;]+)/);
@@ -820,14 +840,8 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
       throw 'multipart snapshot missing "state" part';
     }
 
-    const envelope = JSON.parse(new TextDecoder().decode(parts[stateIdx].body));
-    principal = envelope.principal
-      ? deserializePrincipal(envelope.principal)
-      : { tag: 'anonymous' };
-
-    if (envelope.state === undefined) {
-      throw `multipart state part missing 'state' field`;
-    }
+    const envelope = decodeJsonEnvelope(parts[stateIdx].body, 'multipart state part');
+    principal = deserializePrincipal(envelope.principal);
 
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'application/json';
@@ -836,17 +850,15 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
       .map((part) => ({ name: part.name.slice(3), bytes: part.body }));
   } else if (snapshot.mimeType === 'application/json') {
     // JSON snapshot: unwrap envelope { version, principal, state }
-    const envelope = JSON.parse(new TextDecoder().decode(bytes));
-    principal = envelope.principal
-      ? deserializePrincipal(envelope.principal)
-      : { tag: 'anonymous' };
-    if (envelope.state === undefined) {
-      throw `JSON snapshot missing 'state' field`;
-    }
+    const envelope = decodeJsonEnvelope(bytes, 'JSON snapshot');
+    principal = deserializePrincipal(envelope.principal);
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'application/json';
   } else {
     // Custom binary snapshot with version envelope
+    if (bytes.byteLength < 1) {
+      throw `Snapshot is empty`;
+    }
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const version = view.getUint8(0);
 
@@ -854,7 +866,13 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
       agentSnapshot = bytes.slice(1);
       principal = { tag: 'anonymous' };
     } else if (version === 2) {
+      if (bytes.byteLength < 5) {
+        throw `Version 2 snapshot too short for principal length`;
+      }
       const principalLen = view.getUint32(1, false); // big-endian
+      if (principalLen > bytes.byteLength - 5) {
+        throw `Version 2 snapshot too short for principal data`;
+      }
       const principalBytes = bytes.slice(5, 5 + principalLen);
       principal = deserializePrincipal(JSON.parse(new TextDecoder().decode(principalBytes)));
       agentSnapshot = bytes.slice(5 + principalLen);

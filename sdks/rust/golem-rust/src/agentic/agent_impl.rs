@@ -48,12 +48,17 @@ fn decode_snapshot(
     if is_json {
         let json: serde_json::Value = serde_json::from_slice(&bytes)
             .map_err(|e| format!("Failed to parse JSON snapshot: {e}"))?;
-        let principal = if let Some(p) = json.get("principal") {
-            serde_json::from_value(p.clone())
-                .map_err(|e| format!("Failed to deserialize principal from JSON: {e}"))?
-        } else {
-            get_principal().unwrap_or(Principal::Anonymous)
-        };
+        let version = json
+            .get("version")
+            .ok_or_else(|| "JSON snapshot missing 'version' field".to_string())?;
+        if version.as_u64() != Some(1) {
+            return Err("JSON snapshot version must be 1".to_string());
+        }
+        let principal = json
+            .get("principal")
+            .ok_or_else(|| "JSON snapshot missing 'principal' field".to_string())?;
+        let principal = serde_json::from_value(principal.clone())
+            .map_err(|e| format!("Failed to deserialize principal from JSON: {e}"))?;
         let state = json
             .get("state")
             .ok_or_else(|| "JSON snapshot missing 'state' field".to_string())?;
@@ -73,8 +78,10 @@ fn decode_snapshot(
                     return Err("Version 2 snapshot too short for principal length".into());
                 }
                 let principal_len = u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize;
-                let principal_start = 5;
-                let principal_end = principal_start + principal_len;
+                let principal_start = 5usize;
+                let principal_end = principal_start
+                    .checked_add(principal_len)
+                    .ok_or_else(|| "Version 2 snapshot principal length overflow".to_string())?;
                 if bytes.len() < principal_end {
                     return Err("Version 2 snapshot too short for principal data".into());
                 }
@@ -436,6 +443,54 @@ mod tests {
         .unwrap();
         assert!(matches!(decoded_principal, Principal::Anonymous));
         assert_eq!(state, b"state");
+    }
+
+    #[test]
+    fn json_snapshot_requires_complete_version_one_envelope() {
+        let cases = [
+            (
+                serde_json::json!({ "principal": { "tag": "anonymous" }, "state": {} }),
+                "JSON snapshot missing 'version' field",
+            ),
+            (
+                serde_json::json!({ "version": 2, "principal": { "tag": "anonymous" }, "state": {} }),
+                "JSON snapshot version must be 1",
+            ),
+            (
+                serde_json::json!({ "version": 1, "state": {} }),
+                "JSON snapshot missing 'principal' field",
+            ),
+            (
+                serde_json::json!({ "version": 1, "principal": { "tag": "anonymous" } }),
+                "JSON snapshot missing 'state' field",
+            ),
+        ];
+
+        for (payload, expected) in cases {
+            let error = decode_snapshot(
+                load_snapshot::exports::golem::api::load_snapshot::Snapshot {
+                    payload: serde_json::to_vec(&payload).unwrap(),
+                    mime_type: "application/json".to_string(),
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error, expected);
+        }
+    }
+
+    #[test]
+    fn binary_snapshot_rejects_truncated_envelopes() {
+        for payload in [vec![2], vec![2, 0, 0, 0], vec![2, 0, 0, 0, 2, b'{']] {
+            assert!(
+                decode_snapshot(
+                    load_snapshot::exports::golem::api::load_snapshot::Snapshot {
+                        payload,
+                        mime_type: "application/octet-stream".to_string(),
+                    },
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

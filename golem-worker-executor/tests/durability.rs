@@ -17,11 +17,15 @@ use axum::Router;
 use axum::extract::Query;
 use axum::routing::{any, get};
 use golem_api_grpc::proto::golem::worker::LogEvent;
+use golem_common::model::account::AccountId;
+use golem_common::model::agent::{GolemUserPrincipal, Principal};
 use golem_common::model::oplog::{
-    MultipartPartData, OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex, PublicSnapshotData,
+    MultipartPartData, OplogIndex, PublicAgentInvocation, PublicOplogEntry,
+    PublicOplogEntryWithIndex, PublicSnapshotData,
 };
-use golem_common::model::{AgentEvent, AgentStatus, OwnedAgentId};
-use golem_common::{agent_id, data_value};
+use golem_common::model::worker::AgentConfigEntryDto;
+use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId};
+use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::{
@@ -51,6 +55,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("constructor_parameter_echo")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_sdk_rust")]
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
@@ -110,6 +118,23 @@ pub(crate) async fn assert_snapshot_recovery_failed(
     })
     .await
     .expect("Timed out waiting for snapshot recovery event");
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SnapshotLoadProbeStatus {
+    value: u64,
+    loaded_value: Option<u64>,
+    origin: String,
+    mode: String,
+    principal: String,
+    agent_type: String,
+    phantom_id: Option<String>,
+    config_marker: String,
+    read_bytes: usize,
+    constructor_calls_at_restore: u32,
+    constructor_calls_now: u32,
+    load_calls_now: u32,
 }
 
 #[test]
@@ -884,6 +909,298 @@ async fn snapshot_based_recovery(
         106,
         "Counter should continue from 106 after snapshot recovery"
     );
+
+    drop(executor);
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn snapshot_load_restores_without_initialization_and_replays_only_the_suffix(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let config_marker = format!("snapshot-config-{}", context.redis_prefix());
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 4 },
+    )
+    .await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .with_agent_config(
+            "SnapshotLoadProbe",
+            vec![AgentConfigEntryDto {
+                path: vec!["marker".to_string()],
+                value: serde_json::Value::String(config_marker.clone()).into(),
+            }],
+        )
+        .store()
+        .await?;
+    let phantom_id = uuid::Uuid::new_v4();
+    let agent_id = phantom_agent_id!("SnapshotLoadProbe", phantom_id, "read");
+    let worker_id = AgentId {
+        component_id: component.id,
+        agent_id: agent_id.to_string(),
+    };
+    let principal = Principal::GolemUser(GolemUserPrincipal {
+        account_id: AccountId::new(),
+    });
+    let principal_account_id = match &principal {
+        Principal::GolemUser(principal) => principal.account_id.to_string(),
+        _ => unreachable!(),
+    };
+
+    for expected in 1..=4 {
+        let result = executor
+            .invoke_and_await_agent_as_principal(
+                &component,
+                &agent_id,
+                principal.clone(),
+                "increment",
+                data_value!(),
+            )
+            .await?;
+        assert_eq!(result.into_typed::<u64>()?, expected);
+    }
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let latest_snapshot = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Snapshot(params) => Some(&params.data),
+            _ => None,
+        })
+        .next_back()
+        .expect("the third invocation should create a snapshot");
+    let PublicSnapshotData::Raw(snapshot) = latest_snapshot else {
+        panic!("custom Rust snapshots should use the binary envelope");
+    };
+    assert_eq!(snapshot.mime_type, "application/octet-stream");
+    assert_eq!(
+        snapshot.data.first(),
+        Some(&2),
+        "expected binary envelope v2"
+    );
+    let principal_length = u32::from_be_bytes(
+        snapshot.data[1..5]
+            .try_into()
+            .expect("binary snapshot should contain the principal length"),
+    ) as usize;
+    let state_offset = 5 + principal_length;
+    assert!(
+        String::from_utf8_lossy(&snapshot.data[5..state_offset]).contains(&principal_account_id),
+        "snapshot envelope should retain the initialization principal"
+    );
+    assert_eq!(
+        &snapshot.data[state_offset..],
+        3u64.to_be_bytes().as_slice(),
+        "the latest snapshot should contain the state after invocation three"
+    );
+    let oplog_before_recovery = executor.oplog_max_index(&worker_id).await?;
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 4 },
+    )
+    .await?;
+    let mut events = executor.capture_output(&worker_id).await?;
+
+    executor.resume(&worker_id, false).await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+    assert_eq!(
+        executor.oplog_max_index(&worker_id).await?,
+        oplog_before_recovery,
+        "snapshot loading and suffix replay must not write to the oplog"
+    );
+
+    let status = executor
+        .invoke_and_await_agent_as_principal(
+            &component,
+            &agent_id,
+            principal,
+            "status",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    let status: SnapshotLoadProbeStatus = serde_json::from_str(&status)?;
+
+    assert_eq!(status.value, 4, "the invocation suffix should be replayed");
+    assert_eq!(status.loaded_value, Some(3));
+    assert_eq!(status.origin, "restored");
+    assert_eq!(status.mode, "read");
+    assert_eq!(status.agent_type, "SnapshotLoadProbe");
+    let expected_phantom_id = phantom_id.to_string();
+    assert_eq!(
+        status.phantom_id.as_deref(),
+        Some(expected_phantom_id.as_str())
+    );
+    assert_eq!(status.config_marker, config_marker);
+    assert_eq!(status.read_bytes, 4, "local reads should remain available");
+    assert_eq!(status.constructor_calls_at_restore, 0);
+    assert_eq!(status.constructor_calls_now, 0);
+    assert_eq!(status.load_calls_now, 1);
+    assert!(
+        status.principal.contains(&principal_account_id),
+        "restore context should contain the initialization principal"
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let recovery_entries: Vec<_> = oplog
+        .iter()
+        .filter(|entry| entry.oplog_index > oplog_before_recovery)
+        .collect();
+    assert!(
+        recovery_entries
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Start(_))),
+        "snapshot loading and suffix replay must not add durable host-call entries"
+    );
+    assert!(
+        recovery_entries.iter().all(|entry| !matches!(
+            &entry.entry,
+            PublicOplogEntry::AgentInvocationStarted(params)
+                if matches!(params.invocation, PublicAgentInvocation::LoadSnapshot(_))
+        )),
+        "snapshot loading must not be recorded as an agent invocation"
+    );
+
+    drop(executor);
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn snapshot_load_rejects_write_http_and_rpc_and_falls_back_to_full_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let config_marker = format!("snapshot-config-{}", context.redis_prefix());
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .with_agent_config(
+            "SnapshotLoadProbe",
+            vec![AgentConfigEntryDto {
+                path: vec!["marker".to_string()],
+                value: serde_json::Value::String(config_marker.clone()).into(),
+            }],
+        )
+        .store()
+        .await?;
+    let principal = Principal::GolemUser(GolemUserPrincipal {
+        account_id: AccountId::new(),
+    });
+    let mut probes = Vec::new();
+
+    for mode in ["write", "http", "rpc"] {
+        let agent_id = phantom_agent_id!("SnapshotLoadProbe", uuid::Uuid::new_v4(), mode);
+        let worker_id = AgentId {
+            component_id: component.id,
+            agent_id: agent_id.to_string(),
+        };
+        for expected in 1..=2 {
+            let result = executor
+                .invoke_and_await_agent_as_principal(
+                    &component,
+                    &agent_id,
+                    principal.clone(),
+                    "increment",
+                    data_value!(),
+                )
+                .await?;
+            assert_eq!(result.into_typed::<u64>()?, expected);
+        }
+        let snapshots = executor
+            .get_oplog(&worker_id, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+            .count();
+        assert!(
+            snapshots >= 2,
+            "{mode} probe should have an older loadable snapshot before the failing latest snapshot"
+        );
+        let oplog_before_recovery = executor.oplog_max_index(&worker_id).await?;
+        probes.push((mode, agent_id, worker_id, oplog_before_recovery));
+    }
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+
+    for (mode, agent_id, worker_id, oplog_before_recovery) in probes {
+        let mut events = executor.capture_output(&worker_id).await?;
+        executor.resume(&worker_id, false).await?;
+        assert_snapshot_recovery_failed(
+            &mut events,
+            "Read-only agent method attempted a side effect",
+        )
+        .await;
+        executor
+            .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+            .await?;
+        assert_eq!(
+            executor.oplog_max_index(&worker_id).await?,
+            oplog_before_recovery,
+            "{mode}: failed snapshot loading and full replay must not write to the oplog"
+        );
+
+        let status = executor
+            .invoke_and_await_agent_as_principal(
+                &component,
+                &agent_id,
+                principal.clone(),
+                "status",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<String>()?;
+        let status: SnapshotLoadProbeStatus = serde_json::from_str(&status)?;
+
+        assert_eq!(status.value, 2, "{mode}: full replay should restore state");
+        assert_eq!(status.loaded_value, None, "{mode}: no partial load state");
+        assert_eq!(status.origin, "initialized", "{mode}: constructor replay");
+        assert_eq!(status.mode, mode);
+        assert_eq!(status.config_marker, config_marker);
+        assert_eq!(
+            status.read_bytes, 0,
+            "{mode}: failed component was discarded"
+        );
+        assert_eq!(
+            status.constructor_calls_now, 1,
+            "{mode}: full replay ran init"
+        );
+        assert_eq!(
+            status.load_calls_now, 0,
+            "{mode}: failed load state was discarded"
+        );
+    }
 
     drop(executor);
     Ok(())
