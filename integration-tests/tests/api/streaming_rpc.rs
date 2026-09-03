@@ -15,18 +15,16 @@
 use futures::{SinkExt, StreamExt};
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::schema::{
-    RecordValue, SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, SecretValue,
-    schema_value,
+    RecordValue, SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
 };
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationFailure,
     InvocationFailureKind, InvocationRejectionReason, InvocationRequest, InvocationResponse,
-    InvocationStart, PublicInvocationRequest, PublicInvocationStart,
-    ResumeAttach as PrivateResumeAttach, ResumeOperation as PrivateResumeOperation,
-    StreamCancel, StreamCancelReason, StreamCancelRole, input_stream_item, invocation_request,
-    invocation_response, invocation_session_completion, invocation_session_result,
-    public_invocation_request,
+    InvocationStart, ResumeAttach as PrivateResumeAttach,
+    ResumeOperation as PrivateResumeOperation, StreamCancel, StreamCancelReason, StreamCancelRole,
+    input_stream_item, invocation_request, invocation_response, invocation_session_completion,
+    invocation_session_result,
 };
 use golem_client::model::ComponentDto;
 use golem_common::base_model::durable_stream::AttachmentId;
@@ -46,7 +44,6 @@ use golem_common::{agent_id, data_value};
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use prost::Message as ProstMessage;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;

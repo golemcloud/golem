@@ -4475,11 +4475,11 @@ impl Drop for DurableInputProducer {
             SessionStreamRoleV1::Output => StreamCancelRoleV1::OutputConsumer,
         };
         let _ = drop_event_sink.send(DropEvent::CancelDroppedDurableInput {
-            cancellation: DroppedDurableInput {
+            cancellation: Box::new(DroppedDurableInput {
                 streams: self.streams.clone(),
                 transport_stream_id: self.transport_stream_id,
                 role,
-            },
+            }),
         });
     }
 }

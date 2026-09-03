@@ -181,7 +181,9 @@ pub enum DropEvent {
     /// A guest dropped a durable readable stream endpoint synchronously. Wasmtime cannot await
     /// the durable consumer intent or source cancellation from the resource destructor, so the
     /// next safe worker-access window performs both before invocation progress can overtake them.
-    CancelDroppedDurableInput { cancellation: DroppedDurableInput },
+    CancelDroppedDurableInput {
+        cancellation: Box<DroppedDurableInput>,
+    },
 }
 
 struct AccessDropEventDrainGuard {
