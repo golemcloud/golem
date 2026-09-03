@@ -899,6 +899,9 @@ pub(crate) async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     display_name: &str,
 ) -> Result<u64, WorkerExecutorError> {
+    if !store.data().fuel_metering_enabled() {
+        return Ok(0);
+    }
     let current_fuel_level = store.get_fuel().unwrap_or(0);
     let consumed_fuel_for_call = store.data_mut().return_fuel(current_fuel_level);
 

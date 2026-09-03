@@ -54,10 +54,6 @@ impl OplogEntry {
                 entity_parent_start_index,
                 ..
             }
-            | OplogEntry::FilesystemStorageUsageUpdate {
-                entity_parent_start_index,
-                ..
-            }
             | OplogEntry::CreateResource {
                 entity_parent_start_index,
                 ..
@@ -289,7 +285,6 @@ impl OplogEntry {
             | OplogEntry::SuccessfulUpdate { .. }
             | OplogEntry::FailedUpdate { .. }
             | OplogEntry::GrowMemory { .. }
-            | OplogEntry::FilesystemStorageUsageUpdate { .. }
             | OplogEntry::CreateResource { .. }
             | OplogEntry::DropResource { .. }
             | OplogEntry::Log { .. }
@@ -377,7 +372,6 @@ impl OplogEntry {
             | OplogEntry::PendingUpdate { .. }
             | OplogEntry::FailedUpdate { .. }
             | OplogEntry::GrowMemory { .. }
-            | OplogEntry::FilesystemStorageUsageUpdate { .. }
             | OplogEntry::CreateResource { .. }
             | OplogEntry::DropResource { .. }
             | OplogEntry::Log { .. }
@@ -501,7 +495,6 @@ impl OplogScopeProjection {
             | OplogEntry::Jump { .. }
             | OplogEntry::BeginAtomicRegion { .. }
             | OplogEntry::EndAtomicRegion { .. }
-            | OplogEntry::FilesystemStorageUsageUpdate { .. }
             | OplogEntry::CreateResource { .. }
             | OplogEntry::DropResource { .. }
             | OplogEntry::SetRetryPolicy { .. }

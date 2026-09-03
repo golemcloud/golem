@@ -114,8 +114,8 @@ pushd "${GOLEM_DIR}/golem-shard-manager" || exit
 RUST_LOG=info,h2=warn,hyper=warn,tower=warn \
 GOLEM__HTTP_PORT=${SHARD_MANAGER_HTTP_PORT} \
 GOLEM__GRPC__PORT=${SHARD_MANAGER_GRPC_PORT} \
-GOLEM__DB__TYPE="Sqlite" \
-GOLEM__DB__CONFIG__DATABASE="../local-run/data/shard-manager/golem_shard_manager.sqlite" \
+GOLEM__PERSISTENCE__TYPE="Sqlite" \
+GOLEM__PERSISTENCE__CONFIG__DATABASE="../local-run/data/shard-manager/golem_shard_manager.sqlite" \
 GOLEM__REGISTRY_SERVICE__HOST="localhost" \
 GOLEM__REGISTRY_SERVICE__PORT=${REGISTRY_SERVICE_GRPC_PORT} \
 ../target/debug/golem-shard-manager &

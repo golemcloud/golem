@@ -1298,10 +1298,10 @@ where
 struct AccessRevisionUpdateInputs {
     component_service: Arc<dyn ComponentService>,
     file_loader: Arc<FileLoader>,
+    filesystem_generation_handle: FilesystemGenerationHandle,
     owned_agent_id: golem_common::model::OwnedAgentId,
     agent_id: Option<ParsedAgentId>,
     initial_agent_config: Vec<golem_common::model::worker::TypedAgentConfigEntry>,
-    worker_dir: PathBuf,
     current_revision: ComponentRevision,
 }
 
@@ -1313,7 +1313,6 @@ type AccessRevisionUpdateAgentState = (
 struct AccessRevisionUpdate {
     metadata: Component,
     agent_state: Option<AccessRevisionUpdateAgentState>,
-    files: HashMap<PathBuf, IFSWorkerFile>,
 }
 
 async fn finalize_pending_automatic_update_access<T, D, Ctx>(
@@ -1408,10 +1407,10 @@ where
         AccessRevisionUpdateInputs {
             component_service: ctx.state.component_service.clone(),
             file_loader: ctx.state.file_loader.clone(),
+            filesystem_generation_handle: ctx.filesystem_generation_handle(),
             owned_agent_id: ctx.owned_agent_id.clone(),
             agent_id: ctx.state.agent_id.clone(),
             initial_agent_config: ctx.state.initial_agent_config.clone(),
-            worker_dir: ctx.owner_filesystem.path().to_path_buf(),
             current_revision: ctx.state.component_metadata.revision,
         }
     });
@@ -1421,24 +1420,17 @@ where
         return Ok(());
     }
 
-    let update = prepare_revision_update_access(store, get_ctx, &inputs, new_revision).await?;
+    let update = prepare_revision_update_access(&inputs, new_revision).await?;
     store.with(|mut access| -> Result<(), WorkerExecutorError> {
         let ctx = get_ctx(access.data_mut());
         apply_revision_update_access(ctx, update)
     })
 }
 
-async fn prepare_revision_update_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
-    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+async fn prepare_revision_update_access(
     inputs: &AccessRevisionUpdateInputs,
     new_revision: ComponentRevision,
-) -> Result<AccessRevisionUpdate, WorkerExecutorError>
-where
-    T: 'static,
-    D: HasData + ?Sized,
-    Ctx: WorkerCtx,
-{
+) -> Result<AccessRevisionUpdate, WorkerExecutorError> {
     let metadata = inputs
         .component_service
         .get_metadata(inputs.owned_agent_id.component_id(), Some(new_revision))
@@ -1479,70 +1471,22 @@ where
         None
     };
 
-    let mut files = take_initial_files_access(store, get_ctx)?;
-    let update_result = super::update_filesystem(
-        &mut files,
-        &inputs.file_loader,
+    crate::services::agent_filesystem::update_initial_files(
+        &inputs.filesystem_generation_handle,
+        Arc::clone(&inputs.file_loader),
         inputs.owned_agent_id.environment_id,
-        &inputs.worker_dir,
         provision_config
             .as_ref()
-            .map(|c| c.files.as_slice())
+            .map(|c| c.files.clone())
             .unwrap_or_default(),
     )
-    .await;
-
-    if let Err(error) = update_result {
-        restore_initial_files_access(store, get_ctx, files)?;
-        return Err(error);
-    }
+    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+    .await
+    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
 
     Ok(AccessRevisionUpdate {
         metadata,
         agent_state,
-        files,
-    })
-}
-
-fn take_initial_files_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
-    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-) -> Result<HashMap<PathBuf, IFSWorkerFile>, WorkerExecutorError>
-where
-    T: 'static,
-    D: HasData + ?Sized,
-    Ctx: WorkerCtx,
-{
-    store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        let mut files = ctx.state.files.try_write().map_err(|_| {
-            WorkerExecutorError::runtime(
-                "p3 accessor durable call path cannot acquire initial-files lock",
-            )
-        })?;
-        Ok(std::mem::take(&mut *files))
-    })
-}
-
-fn restore_initial_files_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
-    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    restored: HashMap<PathBuf, IFSWorkerFile>,
-) -> Result<(), WorkerExecutorError>
-where
-    T: 'static,
-    D: HasData + ?Sized,
-    Ctx: WorkerCtx,
-{
-    store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        let mut files = ctx.state.files.try_write().map_err(|_| {
-            WorkerExecutorError::runtime(
-                "p3 accessor durable call path cannot restore initial-files state",
-            )
-        })?;
-        *files = restored;
-        Ok(())
     })
 }
 
@@ -1550,20 +1494,6 @@ fn apply_revision_update_access<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     update: AccessRevisionUpdate,
 ) -> Result<(), WorkerExecutorError> {
-    let read_only_paths = super::compute_read_only_paths(&update.files);
-    {
-        let mut files = ctx
-            .state
-            .files
-            .try_write()
-            .expect("initial-files state was taken by this update path");
-        *files = update.files;
-    }
-    {
-        let mut read_only = ctx.state.read_only_paths.write().unwrap();
-        *read_only = read_only_paths;
-    }
-
     ctx.state.component_metadata = update.metadata;
 
     if let Some((agent_config, initial_wallet_cards)) = update.agent_state {

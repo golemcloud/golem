@@ -14,12 +14,18 @@
 
 use golem_common::SafeDisplay;
 use golem_common::tracing::init_tracing_with_default_env_filter;
-use golem_shard_manager::config::{ShardManagerConfig, make_config_loader};
+use golem_shard_manager::config::{
+    ShardManagerConfig, make_config_loader, reject_legacy_db_env_vars,
+};
 use prometheus::default_registry;
 use tokio::task::JoinSet;
 use tracing::info;
 
 fn main() -> Result<(), anyhow::Error> {
+    // Before the configuration is loaded at all, so that `--dump-config` cannot print a config
+    // that silently ignores a deployment's legacy settings.
+    reject_legacy_db_env_vars().map_err(|err| anyhow::anyhow!(err))?;
+
     match make_config_loader().load_or_dump_config() {
         Some(config) => {
             rustls::crypto::ring::default_provider()

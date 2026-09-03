@@ -16,9 +16,14 @@ mod persistence;
 mod shard_management;
 
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
-use test_r::test_dep;
+use test_r::{sequential_suite, test_dep};
 
 test_r::enable!();
+
+// The etcd dimension shares one server per worker and the fixed `STATE_KEY`, and every store wipes
+// that key when it connects, so two persistence tests running at once would see each other's
+// writes as revision conflicts.
+sequential_suite!(persistence);
 
 #[derive(Debug)]
 pub struct Tracing;

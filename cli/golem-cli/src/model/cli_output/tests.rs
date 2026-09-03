@@ -4,6 +4,7 @@ use crate::model::cli_output::{
 };
 use crate::model::deploy::DeployPlanView;
 use crate::model::masking::MaskingConfig;
+use chrono::{TimeZone, Utc};
 use golem_common::model::card::{CardId, PolymorphicCard};
 use proptest::prelude::*;
 use quote::ToTokens;
@@ -2063,10 +2064,6 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             timestamp: timestamp(),
             delta: 64,
         }),
-        PublicOplogEntry::FilesystemStorageUsageUpdate(FilesystemStorageUsageUpdateParams {
-            timestamp: timestamp(),
-            delta: -5,
-        }),
         PublicOplogEntry::CreateResource(CreateResourceParams {
             timestamp: timestamp(),
             id: AgentResourceId(1),
@@ -3448,6 +3445,11 @@ fn arb_account_usage_view() -> BoxedStrategy<crate::model::account::AccountUsage
         0.0f64..1_000_000.0,
         1900i32..=2200,
         1u32..=12,
+        prop_oneof![
+            Just(golem_common::model::account_usage::MeteringStatus::Enabled),
+            Just(golem_common::model::account_usage::MeteringStatus::Disabled),
+            Just(golem_common::model::account_usage::MeteringStatus::Unknown),
+        ],
     )
         .prop_map(
             |(
@@ -3457,13 +3459,26 @@ fn arb_account_usage_view() -> BoxedStrategy<crate::model::account::AccountUsage
                 ephemeral_storage_gb_month,
                 year,
                 month,
+                metering_status,
             )| {
                 crate::model::account::AccountUsageView {
-                    compute_gcu,
-                    memory_gb_seconds,
-                    durable_storage_gb_month,
-                    ephemeral_storage_gb_month,
-                    period: golem_common::model::account_usage::StorageUsagePeriod { year, month },
+                    usage: golem_common::model::account_usage::AccountUsageMetrics {
+                        compute_gcu,
+                        memory_gb_seconds,
+                        durable_storage_gb_month,
+                        ephemeral_storage_gb_month,
+                        period: golem_common::model::account_usage::AccountUsagePeriod {
+                            year,
+                            month,
+                        },
+                        as_of: Utc.with_ymd_and_hms(2026, 4, 2, 3, 4, 5).unwrap(),
+                        metering: golem_common::model::account_usage::AccountUsageMetering {
+                            compute: metering_status,
+                            memory: metering_status,
+                            durable_storage: metering_status,
+                            ephemeral_storage: metering_status,
+                        },
+                    },
                 }
             },
         )

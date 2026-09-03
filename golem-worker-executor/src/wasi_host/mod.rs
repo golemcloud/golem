@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::durable_host::DurableWorkerCtx;
@@ -20,7 +19,7 @@ use crate::workerctx::WorkerCtx;
 use wasmtime::Engine;
 use wasmtime::component::{HasSelf, Linker};
 use wasmtime_wasi::cli::{StdinStream, StdoutStream};
-use wasmtime_wasi::{DirPerms, FilePerms, IoCtx, ResourceTable, WasiCtx, WasiCtxBuilder};
+use wasmtime_wasi::{IoCtx, ResourceTable, WasiCtx, WasiCtxBuilder};
 
 pub mod helpers;
 pub mod logging;
@@ -86,14 +85,7 @@ pub fn create_linker<Ctx: WorkerCtx + Send + Sync>(
         _,
         HasSelf<DurableWorkerCtx<Ctx>>,
     >(&mut linker, get)?;
-    wasmtime_wasi::p2::bindings::filesystem::preopens::add_to_linker::<
-        _,
-        HasSelf<DurableWorkerCtx<Ctx>>,
-    >(&mut linker, get)?;
-    wasmtime_wasi::p2::bindings::filesystem::types::add_to_linker::<
-        _,
-        HasSelf<DurableWorkerCtx<Ctx>>,
-    >(&mut linker, get)?;
+    crate::wasi_filesystem::p2::add_to_linker(&mut linker, get)?;
     wasmtime_wasi::p2::bindings::io::error::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
         get,
@@ -235,8 +227,6 @@ pub fn create_linker<Ctx: WorkerCtx + Send + Sync>(
 
 pub fn create_context(
     args: &[impl AsRef<str>],
-    root_dir: PathBuf,
-    preopen_root: bool,
     stdin: impl StdinStream + Sized + 'static,
     stdout: impl StdoutStream + Sized + 'static,
     stderr: impl StdoutStream + Sized + 'static,
@@ -245,18 +235,12 @@ pub fn create_context(
 ) -> Result<(WasiCtx, IoCtx, ResourceTable), anyhow::Error> {
     let table = ResourceTable::new();
     let mut builder = WasiCtxBuilder::new();
-    builder
+    let (wasi, io_ctx) = builder
         .args(args)
         .stdin(stdin)
         .stdout(stdout)
         .stderr(stderr)
-        .monotonic_clock(helpers::clocks::monotonic_clock());
-    if preopen_root {
-        builder
-            .preopened_dir(root_dir.clone(), "/", DirPerms::all(), FilePerms::all())?
-            .preopened_dir(root_dir, ".", DirPerms::all(), FilePerms::all())?;
-    }
-    let (wasi, io_ctx) = builder
+        .monotonic_clock(helpers::clocks::monotonic_clock())
         .set_suspend(suspend_threshold, suspend_signal)
         .allow_ip_name_lookup(true)
         .inherit_network()

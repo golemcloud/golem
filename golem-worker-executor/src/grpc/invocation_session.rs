@@ -1420,7 +1420,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         });
         let streams = acceptance.streams;
-        let output_mapping_ids = acceptance
+        let known_output_mapping_ids = acceptance
             .mappings
             .iter()
             .filter(|mapping| mapping.role == SessionStreamRoleV1::Output)
@@ -1556,8 +1556,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 }
             }
         };
-        if let Some((result, new_stream_mappings)) = persisted_result
-            && responses
+        let mut root_output_mapping_ids = Vec::new();
+        if let Some((result, new_stream_mappings)) = persisted_result {
+            root_output_mapping_ids = new_stream_mappings
+                .iter()
+                .filter(|mapping| {
+                    mapping.role() == golem_api_grpc::proto::golem::worker::StreamMappingRole::Output
+                })
+                .map(|mapping| mapping.transport_stream_id)
+                .collect();
+            if responses
                 .send(InvocationResponse {
                     response: Some(invocation_response::Response::Result(
                         InvocationSessionResult {
@@ -1585,6 +1593,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             {
                 return;
             }
+        }
 
         {
             let mut output_pump = tokio::task::JoinSet::new();
@@ -1594,7 +1603,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 output_streams
                     .pump_output_streams_from(
                         &cursor_map,
-                        &output_mapping_ids,
+                        &root_output_mapping_ids,
+                        &known_output_mapping_ids,
                         &output_responses,
                     )
                     .await
