@@ -219,6 +219,12 @@ fn command_output(args: &[String], input: Option<&[u8]>, retries: u32) -> Result
         }
         last_error = String::from_utf8_lossy(&output.stderr).trim().to_string();
         if attempt < retries {
+            eprintln!(
+                "GitHub request failed; retrying (attempt={}/{}, error={})",
+                attempt + 1,
+                retries + 1,
+                last_error
+            );
             thread::sleep(Duration::from_secs(1 << attempt));
         }
     }
@@ -339,7 +345,7 @@ fn collect_attempts(github: &GitHub, run: &WorkflowRun) -> Result<BTreeMap<u32, 
 
 fn collect_artifacts(github: &GitHub, runs: &[WorkflowRun]) -> Result<Vec<ArtifactWork>> {
     let mut work = Vec::new();
-    for run in runs {
+    for (index, run) in runs.iter().enumerate() {
         let attempts = Arc::new(collect_attempts(github, run)?);
         let endpoint = format!("/repos/{}/actions/runs/{}/artifacts", github.repo, run.id);
         let artifacts = github.paginated(&endpoint, |value| {
@@ -355,6 +361,14 @@ fn collect_artifacts(github: &GitHub, runs: &[WorkflowRun]) -> Result<Vec<Artifa
                     attempts: attempts.clone(),
                 }),
         );
+        if (index + 1) % 25 == 0 || index + 1 == runs.len() {
+            eprintln!(
+                "Scanned CI runs for artifacts (completed={}/{}, reports={})",
+                index + 1,
+                runs.len(),
+                work.len()
+            );
+        }
     }
     Ok(work)
 }
@@ -377,9 +391,10 @@ fn infer_attempt(artifact: &Artifact, attempts: &BTreeMap<u32, WorkflowRun>) -> 
 }
 
 fn download_reports(github: &GitHub, work: Vec<ArtifactWork>) -> Result<Vec<Observation>> {
+    let total = work.len();
     let queue = Arc::new(Mutex::new(VecDeque::from(work)));
     let (sender, receiver) = mpsc::channel();
-    thread::scope(|scope| {
+    thread::scope(|scope| -> Result<Vec<Observation>> {
         for _ in 0..8 {
             let queue = queue.clone();
             let sender = sender.clone();
@@ -409,13 +424,21 @@ fn download_reports(github: &GitHub, work: Vec<ArtifactWork>) -> Result<Vec<Obse
             });
         }
         drop(sender);
-    });
 
-    let mut observations = Vec::new();
-    for result in receiver {
-        observations.extend(result?);
-    }
-    Ok(observations)
+        let mut observations = Vec::new();
+        for (index, result) in receiver.into_iter().enumerate() {
+            observations.extend(result?);
+            if (index + 1) % 25 == 0 || index + 1 == total {
+                eprintln!(
+                    "Downloaded test reports (completed={}/{}, observations={})",
+                    index + 1,
+                    total,
+                    observations.len()
+                );
+            }
+        }
+        Ok(observations)
+    })
 }
 
 fn add_job_links(github: &GitHub, observations: &mut [Observation]) -> Result<()> {
@@ -585,13 +608,31 @@ fn main() -> Result<()> {
         repo: args.repo.clone(),
     };
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    eprintln!(
+        "Discovering CI runs (repository={}, workflow={}, window_days={})",
+        args.repo, args.workflow, args.days
+    );
     let runs = collect_runs(&github, &args, now)?;
+    eprintln!("Discovered CI runs (runs={})", runs.len());
+    eprintln!("Discovering test-report artifacts");
     let work = collect_artifacts(&github, &runs)?;
     let artifact_count = work.len();
+    eprintln!("Discovered test-report artifacts (reports={artifact_count})");
+    eprintln!("Downloading and parsing test reports (workers=8)");
     let mut observations = download_reports(&github, work)?;
+    eprintln!("Parsed test reports (observations={})", observations.len());
+    eprintln!("Resolving failing job links");
     add_job_links(&github, &mut observations)?;
+    eprintln!("Aggregating flaky-test signals");
     let candidates = aggregate(observations);
+    let active_count = candidates.iter().filter(|test| test.is_active()).count();
+    eprintln!(
+        "Aggregated flaky-test signals (active={}, recently_resolved={})",
+        active_count,
+        candidates.len() - active_count
+    );
     let existing = if args.update_issue {
+        eprintln!("Looking up the known-flaky-tests issue");
         find_issue(&github)?
     } else {
         None
@@ -618,8 +659,10 @@ fn main() -> Result<()> {
         fs::write(summary, &body)?;
     }
     if args.update_issue {
+        eprintln!("Updating and pinning the known-flaky-tests issue");
         eprintln!("Updated {}", upsert_issue(&github, existing, &body)?);
     }
+    eprintln!("Flaky-test report completed");
     Ok(())
 }
 
