@@ -19,8 +19,8 @@ use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
     AccountEmail, AccountId, AgentFilter, AgentFingerprint, AgentId, AgentMetadata, AgentMode,
     AgentStatus, AgentStatusRecord, ComponentId, FilterComparator, IdempotencyKey,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex,
-    ReceivedCardTransferState, StringFilterComparator, Timestamp,
+    InvocationResultMembership, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
+    ReceivedCardTransferIndex, ReceivedCardTransferState, StringFilterComparator, Timestamp,
 };
 use desert_rust::BinaryCodec;
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,67 @@ use std::str::FromStr;
 use std::vec;
 use test_r::test;
 use uuid::{Uuid, uuid};
+
+#[test]
+fn invocation_result_membership_bounds_exact_entries_without_false_negatives() {
+    let mut membership = InvocationResultMembership::new(2, 1024, 3);
+    let first = IdempotencyKey::new("first".to_string());
+    let second = IdempotencyKey::new("second".to_string());
+    let third = IdempotencyKey::new("third".to_string());
+
+    membership.insert(first.clone(), OplogIndex::from_u64(10));
+    membership.insert(second.clone(), OplogIndex::from_u64(20));
+    assert!(membership.is_exact_complete());
+
+    membership.insert(third.clone(), OplogIndex::from_u64(30));
+
+    assert_eq!(membership.len(), 2);
+    assert!(!membership.is_exact_complete());
+    assert_eq!(membership.get(&first), None);
+    assert_eq!(membership.get(&second), Some(&OplogIndex::from_u64(20)));
+    assert_eq!(membership.get(&third), Some(&OplogIndex::from_u64(30)));
+    assert!(membership.might_contain(&first));
+    assert!(membership.might_contain(&second));
+    assert!(membership.might_contain(&third));
+}
+
+#[test]
+fn invocation_result_membership_updates_recency_for_repeated_keys() {
+    let mut membership = InvocationResultMembership::new(2, 1024, 3);
+    let first = IdempotencyKey::new("first".to_string());
+    let second = IdempotencyKey::new("second".to_string());
+    let third = IdempotencyKey::new("third".to_string());
+
+    membership.insert(first.clone(), OplogIndex::from_u64(10));
+    membership.insert(second.clone(), OplogIndex::from_u64(20));
+    membership.insert(first.clone(), OplogIndex::from_u64(30));
+    membership.insert(third.clone(), OplogIndex::from_u64(40));
+
+    assert_eq!(membership.get(&first), Some(&OplogIndex::from_u64(30)));
+    assert_eq!(membership.get(&second), None);
+    assert_eq!(membership.get(&third), Some(&OplogIndex::from_u64(40)));
+}
+
+#[test]
+fn invocation_result_membership_binary_round_trip_preserves_membership() {
+    use crate::serialization::{deserialize, serialize};
+
+    let mut membership = InvocationResultMembership::new(2, 1024, 3);
+    let first = IdempotencyKey::new("first".to_string());
+    let second = IdempotencyKey::new("second".to_string());
+    let third = IdempotencyKey::new("third".to_string());
+    membership.insert(first.clone(), OplogIndex::from_u64(10));
+    membership.insert(second, OplogIndex::from_u64(20));
+    membership.insert(third, OplogIndex::from_u64(30));
+    membership.set_revert_generation(4);
+
+    let bytes = serialize(&membership).unwrap();
+    let recovered: InvocationResultMembership = deserialize(&bytes).unwrap();
+
+    assert_eq!(recovered, membership);
+    assert!(recovered.might_contain(&first));
+    assert_eq!(recovered.revert_generation(), 4);
+}
 
 #[test]
 fn timestamp_conversion() {

@@ -704,6 +704,11 @@ pub enum KeyValueStorageNamespace {
     AgentStatus {
         agent_id: AgentId,
     },
+    /// Per-agent invocation result index. Uses the same hash-style layout and cache routing as
+    /// [`Self::AgentStatus`], but has an independent physical namespace.
+    AgentInvocationResultIndex {
+        agent_id: AgentId,
+    },
     /// Per-agent *clean* cached status checkpoint. Same physical layout as [`Self::AgentStatus`]
     /// (one structure-per-agent split into `core` / `regions` / `updates` / `ir:{key}`), but
     /// written only at structurally clean boundaries (snapshot save, throttled idle) where no

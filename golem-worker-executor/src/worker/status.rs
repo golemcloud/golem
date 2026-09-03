@@ -10,9 +10,9 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
     AgentResourceDescription, AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
-    OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
-    RetryConfig, RetryPolicyState, SuccessfulUpdateRecord, Timestamp,
+    InvocationResultMembership, OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex,
+    ReceivedCardTransferState, RetryConfig, RetryPolicyState, SuccessfulUpdateRecord, Timestamp,
 };
 use golem_common::serialization::deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -169,11 +169,21 @@ pub async fn try_fold_status_from<T>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
-    baseline: AgentStatusRecord,
+    mut baseline: AgentStatusRecord,
 ) -> Option<AgentStatusRecord>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
+    let full_rebuild = baseline.oplog_idx == OplogIndex::NONE;
+    if full_rebuild && baseline.invocation_results.is_empty() {
+        let config = &this.config().invocation_results;
+        baseline.invocation_results = InvocationResultMembership::new(
+            config.recent_capacity,
+            config.bloom_bits,
+            config.bloom_hashes,
+        );
+    }
+
     let last_oplog_index = this
         .oplog_service()
         .get_last_index(owned_agent_id, agent_mode)
@@ -195,17 +205,131 @@ where
         return Some(baseline);
     }
 
-    let new_entries: BTreeMap<OplogIndex, OplogEntry> = this
-        .oplog_service()
-        .read_exact(
+    let chunk_size = this
+        .config()
+        .invocation_results
+        .physical_index_catch_up_chunk_size
+        .max(1);
+
+    if full_rebuild {
+        return fold_status_with_precomputed_regions(
+            this,
             owned_agent_id,
             agent_mode,
-            baseline.oplog_idx.next(),
-            last_oplog_index.as_u64() - baseline.oplog_idx.as_u64(),
+            baseline,
+            last_oplog_index,
+            chunk_size,
         )
         .await;
+    }
 
-    update_status_with_new_entries(agent_mode, baseline, new_entries, &this.config().retry)
+    let original_baseline = baseline.clone();
+    let mut first = baseline.oplog_idx.next();
+    while first <= last_oplog_index {
+        let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
+        let entries = this
+            .oplog_service()
+            .read_exact(owned_agent_id, agent_mode, first, count)
+            .await;
+        if entries.is_empty() {
+            return None;
+        }
+        baseline = match update_status_with_new_entries_internal(
+            agent_mode,
+            baseline,
+            entries,
+            &this.config().retry,
+            true,
+        ) {
+            Some(status) => status,
+            None => {
+                return fold_status_with_precomputed_regions(
+                    this,
+                    owned_agent_id,
+                    agent_mode,
+                    original_baseline,
+                    last_oplog_index,
+                    chunk_size,
+                )
+                .await;
+            }
+        };
+        first = baseline.oplog_idx.next();
+    }
+    Some(baseline)
+}
+
+async fn fold_status_with_precomputed_regions<T>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    mut baseline: AgentStatusRecord,
+    last_oplog_index: OplogIndex,
+    chunk_size: u64,
+) -> Option<AgentStatusRecord>
+where
+    T: HasOplogService + HasConfig + HasComponentService + Sync,
+{
+    let start = baseline.oplog_idx.next();
+    let mut deleted_regions = baseline.deleted_regions.clone();
+    let mut first = start;
+    while first <= last_oplog_index {
+        let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
+        let entries = this
+            .oplog_service()
+            .read_exact(owned_agent_id, agent_mode, first, count)
+            .await;
+        if entries.is_empty() {
+            return None;
+        }
+        deleted_regions = calculate_deleted_regions(deleted_regions, &entries);
+        first = entries.keys().max().unwrap().next();
+    }
+
+    let mut skipped_regions = baseline.skipped_regions.clone();
+    first = start;
+    while first <= last_oplog_index {
+        let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
+        let entries = this
+            .oplog_service()
+            .read_exact(owned_agent_id, agent_mode, first, count)
+            .await;
+        if entries.is_empty() {
+            return None;
+        }
+        skipped_regions = calculate_skipped_regions(skipped_regions, &deleted_regions, &entries);
+        first = entries.keys().max().unwrap().next();
+    }
+
+    if baseline_is_invalidated(&baseline, &skipped_regions) {
+        return None;
+    }
+    baseline.deleted_regions = deleted_regions;
+    baseline.skipped_regions = skipped_regions;
+
+    first = start;
+    while first <= last_oplog_index {
+        let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
+        let entries = this
+            .oplog_service()
+            .read_exact(owned_agent_id, agent_mode, first, count)
+            .await;
+        if entries.is_empty() {
+            return None;
+        }
+        let deleted_regions = baseline.deleted_regions.clone();
+        let skipped_regions = baseline.skipped_regions.clone();
+        baseline = update_status_with_precomputed_regions(
+            agent_mode,
+            baseline,
+            entries,
+            &this.config().retry,
+            deleted_regions,
+            skipped_regions,
+        );
+        first = baseline.oplog_idx.next();
+    }
+    Some(baseline)
 }
 
 // update a worker status with new entries. Returns None if the status cannot be calculated from the new entries alone and needs to be recalculated from the beginning.
@@ -215,6 +339,22 @@ pub fn update_status_with_new_entries(
     new_entries: BTreeMap<OplogIndex, OplogEntry>,
     // TODO: changing the retry policy will cause inconsistencies when reading existing oplogs.
     default_retry_policy: &RetryConfig,
+) -> Option<AgentStatusRecord> {
+    update_status_with_new_entries_internal(
+        agent_mode,
+        last_known,
+        new_entries,
+        default_retry_policy,
+        true,
+    )
+}
+
+fn update_status_with_new_entries_internal(
+    agent_mode: AgentMode,
+    last_known: AgentStatusRecord,
+    new_entries: BTreeMap<OplogIndex, OplogEntry>,
+    default_retry_policy: &RetryConfig,
+    validate_baseline: bool,
 ) -> Option<AgentStatusRecord> {
     let deleted_regions =
         calculate_deleted_regions(last_known.deleted_regions.clone(), &new_entries);
@@ -230,33 +370,50 @@ pub fn update_status_with_new_entries(
     // (Note that this is a rare case - for Jumps, this is not happening if the executor successfully writes out
     // the new status before performing the jump; for Reverts, the status is recalculated anyway, but only once, when
     // the revert is applied)
-    if skipped_regions.is_in_deleted_region(last_known.oplog_idx) {
-        let last_known_skipped_regions_without_overrides =
-            if last_known.skipped_regions.is_overridden() {
-                let mut cloned = last_known.skipped_regions.clone();
-                cloned.merge_override();
-                cloned
-            } else {
-                last_known.skipped_regions.clone()
-            };
-
-        let new_skipped_regions_without_overrides = if skipped_regions.is_overridden() {
-            let mut cloned = skipped_regions.clone();
-            cloned.merge_override();
-            cloned
-        } else {
-            skipped_regions.clone()
-        };
-
-        let effective_skipped_regions_changed =
-            new_skipped_regions_without_overrides != last_known_skipped_regions_without_overrides;
-        // We might have already calculated the status with these skipped regions as an override during a snapshot update.
-        // No need to recompute in this case, we are already up to date.
-        if effective_skipped_regions_changed {
-            return None;
-        }
+    if validate_baseline && baseline_is_invalidated(&last_known, &skipped_regions) {
+        return None;
     }
 
+    Some(update_status_with_precomputed_regions(
+        agent_mode,
+        last_known,
+        new_entries,
+        default_retry_policy,
+        deleted_regions,
+        skipped_regions,
+    ))
+}
+
+fn baseline_is_invalidated(baseline: &AgentStatusRecord, skipped_regions: &DeletedRegions) -> bool {
+    if !skipped_regions.is_in_deleted_region(baseline.oplog_idx) {
+        return false;
+    }
+
+    let baseline_without_overrides = if baseline.skipped_regions.is_overridden() {
+        let mut cloned = baseline.skipped_regions.clone();
+        cloned.merge_override();
+        cloned
+    } else {
+        baseline.skipped_regions.clone()
+    };
+    let new_without_overrides = if skipped_regions.is_overridden() {
+        let mut cloned = skipped_regions.clone();
+        cloned.merge_override();
+        cloned
+    } else {
+        skipped_regions.clone()
+    };
+    new_without_overrides != baseline_without_overrides
+}
+
+fn update_status_with_precomputed_regions(
+    agent_mode: AgentMode,
+    last_known: AgentStatusRecord,
+    new_entries: BTreeMap<OplogIndex, OplogEntry>,
+    default_retry_policy: &RetryConfig,
+    deleted_regions: DeletedRegions,
+    skipped_regions: DeletedRegions,
+) -> AgentStatusRecord {
     let active_plugins = last_known.active_plugins.clone();
 
     let (status, current_retry_state, overridden_retry_config) = calculate_latest_worker_status(
@@ -301,12 +458,14 @@ pub fn update_status_with_new_entries(
         &new_entries,
     );
 
-    let (invocation_results, current_idempotency_key) = calculate_invocation_results(
-        last_known.invocation_results,
-        last_known.current_idempotency_key,
-        &deleted_regions,
-        &new_entries,
-    );
+    let (invocation_results, current_idempotency_key, cancelled_idempotency_key) =
+        calculate_invocation_results(
+            last_known.invocation_results,
+            last_known.current_idempotency_key,
+            last_known.cancelled_idempotency_key,
+            &deleted_regions,
+            &new_entries,
+        );
 
     let total_linear_memory_size = calculate_total_linear_memory_size(
         last_known.total_linear_memory_size,
@@ -328,7 +487,7 @@ pub fn update_status_with_new_entries(
         &new_entries,
     );
 
-    let result = AgentStatusRecord {
+    AgentStatusRecord {
         oplog_idx: new_entries
             .keys()
             .max()
@@ -345,6 +504,7 @@ pub fn update_status_with_new_entries(
         invocation_results,
         received_card_transfers,
         current_idempotency_key,
+        cancelled_idempotency_key,
         component_revision,
         component_size,
         owned_resources,
@@ -360,9 +520,7 @@ pub fn update_status_with_new_entries(
         last_automatic_snapshot_timestamp,
         last_automatic_snapshot_component_revision,
         agent_mode,
-    };
-
-    Some(result)
+    }
 }
 
 fn calculate_latest_worker_status(
@@ -1055,19 +1213,55 @@ fn calculate_update_fields(
 }
 
 fn calculate_invocation_results(
-    invocation_results: HashMap<IdempotencyKey, OplogIndex>,
+    invocation_results: InvocationResultMembership,
     current_idempotency_key: Option<IdempotencyKey>,
+    cancelled_idempotency_key: Option<IdempotencyKey>,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> (HashMap<IdempotencyKey, OplogIndex>, Option<IdempotencyKey>) {
+) -> (
+    InvocationResultMembership,
+    Option<IdempotencyKey>,
+    Option<IdempotencyKey>,
+) {
     let mut invocation_results = invocation_results;
+    let revert_count = entries
+        .values()
+        .filter(|entry| matches!(entry, OplogEntry::Revert { .. }))
+        .count() as u64;
+    invocation_results.set_revert_generation(
+        invocation_results
+            .revert_generation()
+            .wrapping_add(revert_count),
+    );
     let mut current_idempotency_key = current_idempotency_key;
-    let mut cancelled_idempotency_key = None;
+    let mut cancelled_idempotency_key = cancelled_idempotency_key;
 
+    fold_invocation_result_entries(
+        &mut current_idempotency_key,
+        &mut cancelled_idempotency_key,
+        deleted_regions,
+        entries,
+        |key, index| invocation_results.insert(key.clone(), index),
+    );
+
+    (
+        invocation_results,
+        current_idempotency_key,
+        cancelled_idempotency_key,
+    )
+}
+
+pub(crate) fn fold_invocation_result_entries(
+    current_idempotency_key: &mut Option<IdempotencyKey>,
+    cancelled_idempotency_key: &mut Option<IdempotencyKey>,
+    deleted_regions: &DeletedRegions,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+    mut observe_result: impl FnMut(&IdempotencyKey, OplogIndex),
+) {
     for (oplog_idx, entry) in entries {
         // Skipping entries in deleted regions (by revert)
         if deleted_regions.is_in_deleted_region(*oplog_idx) {
-            cancelled_idempotency_key = None;
+            *cancelled_idempotency_key = None;
             continue;
         }
 
@@ -1075,50 +1269,48 @@ fn calculate_invocation_results(
             OplogEntry::AgentInvocationStarted {
                 idempotency_key, ..
             } => {
-                cancelled_idempotency_key = None;
-                current_idempotency_key = Some(idempotency_key.clone());
+                *cancelled_idempotency_key = None;
+                *current_idempotency_key = Some(idempotency_key.clone());
             }
             OplogEntry::AgentInvocationFinished { .. } => {
-                cancelled_idempotency_key = None;
-                if let Some(idempotency_key) = &current_idempotency_key {
-                    invocation_results.insert(idempotency_key.clone(), *oplog_idx);
+                *cancelled_idempotency_key = None;
+                if let Some(idempotency_key) = &*current_idempotency_key {
+                    observe_result(idempotency_key, *oplog_idx);
                 }
-                current_idempotency_key = None;
+                *current_idempotency_key = None;
             }
             OplogEntry::CancelPendingInvocation {
                 idempotency_key, ..
             } => {
-                cancelled_idempotency_key = Some(idempotency_key.clone());
+                *cancelled_idempotency_key = Some(idempotency_key.clone());
             }
             OplogEntry::Error {
                 error: AgentError::PermissionDenied(_),
                 ..
             } => {
                 if let Some(idempotency_key) = cancelled_idempotency_key.take() {
-                    invocation_results.insert(idempotency_key, *oplog_idx);
-                } else if let Some(idempotency_key) = &current_idempotency_key {
-                    invocation_results.insert(idempotency_key.clone(), *oplog_idx);
+                    observe_result(&idempotency_key, *oplog_idx);
+                } else if let Some(idempotency_key) = &*current_idempotency_key {
+                    observe_result(idempotency_key, *oplog_idx);
                 }
             }
             OplogEntry::Error { .. } => {
-                cancelled_idempotency_key = None;
-                if let Some(idempotency_key) = &current_idempotency_key {
-                    invocation_results.insert(idempotency_key.clone(), *oplog_idx);
+                *cancelled_idempotency_key = None;
+                if let Some(idempotency_key) = &*current_idempotency_key {
+                    observe_result(idempotency_key, *oplog_idx);
                 }
             }
             OplogEntry::Exited { .. } => {
-                cancelled_idempotency_key = None;
-                if let Some(idempotency_key) = &current_idempotency_key {
-                    invocation_results.insert(idempotency_key.clone(), *oplog_idx);
+                *cancelled_idempotency_key = None;
+                if let Some(idempotency_key) = &*current_idempotency_key {
+                    observe_result(idempotency_key, *oplog_idx);
                 }
             }
             _ => {
-                cancelled_idempotency_key = None;
+                *cancelled_idempotency_key = None;
             }
         }
     }
-
-    (invocation_results, current_idempotency_key)
 }
 
 fn calculate_total_linear_memory_size(
@@ -2475,6 +2667,10 @@ mod test {
                 .expected_status
                 .clone();
             self.add(OplogEntry::revert(region.clone()), move |mut status| {
+                let revert_generation = status
+                    .invocation_results
+                    .revert_generation()
+                    .wrapping_add(1);
                 status.active_plugins = old_status.active_plugins;
 
                 status.skipped_regions = old_status.skipped_regions;
@@ -2490,6 +2686,9 @@ mod test {
                 status.successful_updates = old_status.successful_updates;
                 status.failed_updates = old_status.failed_updates;
                 status.invocation_results = old_status.invocation_results;
+                status
+                    .invocation_results
+                    .set_revert_generation(revert_generation);
                 status.component_revision_for_replay = old_status.component_revision_for_replay;
                 status.last_manual_update_snapshot_index =
                     old_status.last_manual_update_snapshot_index;
@@ -2537,6 +2736,7 @@ mod test {
                 status
                     .pending_invocations
                     .retain(|ti| ti.idempotency_key() != Some(&idempotency_key));
+                status.cancelled_idempotency_key = Some(idempotency_key);
                 status
             })
         }
@@ -2550,6 +2750,7 @@ mod test {
                     None,
                 ),
                 move |mut status| {
+                    status.cancelled_idempotency_key = None;
                     status
                         .invocation_results
                         .insert(idempotency_key, status.oplog_idx);
@@ -2854,10 +3055,12 @@ mod test {
 
     impl HasConfig for TestCase {
         fn config(&self) -> Arc<GolemConfig> {
-            Arc::new(GolemConfig {
+            let mut config = GolemConfig {
                 retry: RetryConfig::default(),
                 ..Default::default()
-            })
+            };
+            config.invocation_results.physical_index_catch_up_chunk_size = 2;
+            Arc::new(config)
         }
     }
 

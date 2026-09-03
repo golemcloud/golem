@@ -39,6 +39,10 @@ impl RedisKeyValueStorage {
             KeyValueStorageNamespace::AgentStatus { agent_id } => {
                 Some(format!("agent-status:{}", agent_id.to_redis_key()))
             }
+            KeyValueStorageNamespace::AgentInvocationResultIndex { agent_id } => Some(format!(
+                "agent-invocation-result-index:{}",
+                agent_id.to_redis_key()
+            )),
             // Per-agent clean checkpoint hash; same per-agent isolation as `AgentStatus`.
             KeyValueStorageNamespace::AgentStatusCheckpoint { agent_id } => Some(format!(
                 "agent-status-checkpoint:{}",

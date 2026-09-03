@@ -79,7 +79,7 @@ use desert_rust::{
     SerializationContext,
 };
 use http::Uri;
-use im::OrdMap;
+use im::{OrdMap, Vector};
 use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -689,6 +689,188 @@ impl SafeDisplay for RetryConfig {
     }
 }
 
+pub const DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY: usize = 1024;
+pub const DEFAULT_INVOCATION_RESULT_BLOOM_BITS: usize = 1 << 16;
+pub const DEFAULT_INVOCATION_RESULT_BLOOM_HASHES: u8 = 4;
+
+/// A fixed-size, persistent Bloom filter used to prove that unseen idempotency keys are new
+/// without consulting the physical invocation-result index. False positives are allowed; false
+/// negatives are not.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub struct InvocationResultBloom {
+    words: Vector<u64>,
+    bit_count: usize,
+    hash_count: u8,
+}
+
+impl InvocationResultBloom {
+    pub fn new(bit_count: usize, hash_count: u8) -> Self {
+        assert!(
+            bit_count > 0,
+            "invocation result Bloom filter must not be empty"
+        );
+        assert!(
+            hash_count > 0,
+            "invocation result Bloom filter must use a hash"
+        );
+        let word_count = bit_count.div_ceil(u64::BITS as usize);
+        Self {
+            words: std::iter::repeat_n(0, word_count).collect(),
+            bit_count,
+            hash_count,
+        }
+    }
+
+    pub fn insert(&mut self, key: &IdempotencyKey) {
+        for bit in self.bit_indexes(key) {
+            let word_index = bit / u64::BITS as usize;
+            let bit_index = bit % u64::BITS as usize;
+            let word = self.words[word_index] | (1u64 << bit_index);
+            self.words.set(word_index, word);
+        }
+    }
+
+    pub fn might_contain(&self, key: &IdempotencyKey) -> bool {
+        self.bit_indexes(key).all(|bit| {
+            let word_index = bit / u64::BITS as usize;
+            let bit_index = bit % u64::BITS as usize;
+            self.words[word_index] & (1u64 << bit_index) != 0
+        })
+    }
+
+    fn bit_indexes(&self, key: &IdempotencyKey) -> impl Iterator<Item = usize> + use<> {
+        let digest = blake3::hash(key.value.as_bytes());
+        let bytes = digest.as_bytes();
+        let first = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+        let second = u64::from_le_bytes(bytes[8..16].try_into().unwrap()) | 1;
+        let bit_count = self.bit_count as u64;
+        let hash_count = self.hash_count;
+        (0..hash_count).map(move |index| {
+            first
+                .wrapping_add((index as u64).wrapping_mul(second))
+                .wrapping_rem(bit_count) as usize
+        })
+    }
+}
+
+impl Default for InvocationResultBloom {
+    fn default() -> Self {
+        Self::new(
+            DEFAULT_INVOCATION_RESULT_BLOOM_BITS,
+            DEFAULT_INVOCATION_RESULT_BLOOM_HASHES,
+        )
+    }
+}
+
+/// The bounded in-memory projection of completed invocation results.
+///
+/// The two persistent maps keep cloning proportional to changed paths while providing both
+/// key lookup and deterministic eviction in oplog order.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub struct InvocationResultMembership {
+    recent_by_key: OrdMap<IdempotencyKey, OplogIndex>,
+    recent_by_index: OrdMap<OplogIndex, IdempotencyKey>,
+    bloom: InvocationResultBloom,
+    capacity: usize,
+    exact_complete: bool,
+    /// Number of revert entries folded into this status. It identifies the current oplog branch
+    /// so physical and hydrated result entries from an earlier branch are never reused.
+    revert_generation: u64,
+}
+
+impl InvocationResultMembership {
+    pub fn new(capacity: usize, bloom_bits: usize, bloom_hashes: u8) -> Self {
+        Self {
+            recent_by_key: OrdMap::new(),
+            recent_by_index: OrdMap::new(),
+            bloom: InvocationResultBloom::new(bloom_bits, bloom_hashes),
+            capacity,
+            exact_complete: true,
+            revert_generation: 0,
+        }
+    }
+
+    pub fn get(&self, key: &IdempotencyKey) -> Option<&OplogIndex> {
+        self.recent_by_key.get(key)
+    }
+
+    pub fn contains_key(&self, key: &IdempotencyKey) -> bool {
+        self.recent_by_key.contains_key(key)
+    }
+
+    pub fn insert(&mut self, key: IdempotencyKey, result_index: OplogIndex) {
+        self.bloom.insert(&key);
+        if let Some(previous_index) = self.recent_by_key.remove(&key) {
+            self.recent_by_index.remove(&previous_index);
+        }
+        self.recent_by_key.insert(key.clone(), result_index);
+        self.recent_by_index.insert(result_index, key);
+
+        while self.recent_by_key.len() > self.capacity {
+            let Some((oldest_index, oldest_key)) = self
+                .recent_by_index
+                .get_min()
+                .map(|(index, key)| (*index, key.clone()))
+            else {
+                break;
+            };
+            self.recent_by_index.remove(&oldest_index);
+            self.recent_by_key.remove(&oldest_key);
+            self.exact_complete = false;
+        }
+    }
+
+    pub fn might_contain(&self, key: &IdempotencyKey) -> bool {
+        self.bloom.might_contain(key)
+    }
+
+    pub fn is_exact_complete(&self) -> bool {
+        self.exact_complete
+    }
+
+    /// Returns the number of revert entries folded into this status. A change means cached result
+    /// entries may belong to an obsolete oplog branch even when their indexes still exist.
+    pub fn revert_generation(&self) -> u64 {
+        self.revert_generation
+    }
+
+    pub fn set_revert_generation(&mut self, generation: u64) {
+        self.revert_generation = generation;
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&IdempotencyKey, &OplogIndex)> {
+        self.recent_by_key.iter()
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &IdempotencyKey> {
+        self.recent_by_key.keys()
+    }
+
+    pub fn len(&self) -> usize {
+        self.recent_by_key.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.recent_by_key.is_empty()
+    }
+
+    pub fn remove(&mut self, key: &IdempotencyKey) -> Option<OplogIndex> {
+        let index = self.recent_by_key.remove(key)?;
+        self.recent_by_index.remove(&index);
+        Some(index)
+    }
+}
+
+impl Default for InvocationResultMembership {
+    fn default() -> Self {
+        Self::new(
+            DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY,
+            DEFAULT_INVOCATION_RESULT_BLOOM_BITS,
+            DEFAULT_INVOCATION_RESULT_BLOOM_HASHES,
+        )
+    }
+}
+
 /// Contains status information about a worker according to a given oplog index.
 ///
 /// This status is just cached information, all fields must be computable by the oplog alone.
@@ -705,9 +887,10 @@ pub struct AgentStatusRecord {
     pub pending_updates: VecDeque<PendingUpdateRef>,
     pub failed_updates: Vec<FailedUpdateRecord>,
     pub successful_updates: Vec<SuccessfulUpdateRecord>,
-    pub invocation_results: HashMap<IdempotencyKey, OplogIndex>,
+    pub invocation_results: InvocationResultMembership,
     pub received_card_transfers: ReceivedCardTransferIndex,
     pub current_idempotency_key: Option<IdempotencyKey>,
+    pub cancelled_idempotency_key: Option<IdempotencyKey>,
     pub component_revision: ComponentRevision,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
@@ -753,9 +936,10 @@ impl Default for AgentStatusRecord {
             pending_updates: VecDeque::new(),
             failed_updates: Vec::new(),
             successful_updates: Vec::new(),
-            invocation_results: HashMap::new(),
+            invocation_results: InvocationResultMembership::default(),
             received_card_transfers: ReceivedCardTransferIndex::default(),
             current_idempotency_key: None,
+            cancelled_idempotency_key: None,
             component_revision: ComponentRevision::INITIAL,
             component_size: 0,
             total_linear_memory_size: 0,

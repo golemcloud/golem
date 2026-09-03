@@ -121,6 +121,13 @@ max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 3.0
 
+[invocation_results]
+bloom_bits = 65536
+bloom_hashes = 4
+hydrated_cache_capacity = 1024
+physical_index_catch_up_chunk_size = 1024
+recent_capacity = 1024
+
 [key_value_storage]
 type = "NamespaceRouted"
 
@@ -541,6 +548,13 @@ without_time = false
 # min_delay = "100ms"
 # multiplier = 3.0
 #
+# [invocation_results]
+# bloom_bits = 65536
+# bloom_hashes = 4
+# hydrated_cache_capacity = 1024
+# physical_index_catch_up_chunk_size = 1024
+# recent_capacity = 1024
+#
 # [key_value_storage]
 # type = "InMemory"
 #
@@ -905,6 +919,13 @@ without_time = false
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
+#
+# [invocation_results]
+# bloom_bits = 65536
+# bloom_hashes = 4
+# hydrated_cache_capacity = 1024
+# physical_index_catch_up_chunk_size = 1024
+# recent_capacity = 1024
 #
 # [key_value_storage]
 # type = "InMemory"

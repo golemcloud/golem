@@ -38,6 +38,7 @@ impl NamespaceRoutedKeyValueStorage {
         match namespace {
             KeyValueStorageNamespace::Worker { .. } => &self.cache,
             KeyValueStorageNamespace::AgentStatus { .. } => &self.cache,
+            KeyValueStorageNamespace::AgentInvocationResultIndex { .. } => &self.cache,
             KeyValueStorageNamespace::AgentStatusCheckpoint { .. } => &self.cache,
             _ => &self.persistent,
         }

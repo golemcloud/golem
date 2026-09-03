@@ -529,7 +529,9 @@ pub fn validate_lower_kebab_case_identifier(
     Debug,
     Eq,
     Hash,
+    Ord,
     PartialEq,
+    PartialOrd,
     golem_schema_derive::IntoSchema,
     golem_schema_derive::FromSchema,
 )]

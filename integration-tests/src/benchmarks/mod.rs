@@ -32,6 +32,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 pub mod cleanup;
 pub mod cold_start_unknown;
 pub mod durability_overhead;
+pub mod idempotency_key;
 pub mod latency;
 pub mod sleep;
 pub mod throughput;

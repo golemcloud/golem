@@ -23,7 +23,7 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
     find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
-use crate::model::{LastError, ReadFileResult};
+use crate::model::{LastError, LookupResult, ReadFileResult};
 use crate::services::events::Event;
 use crate::services::worker_activator::{
     DefaultWorkerActivator, LazyWorkerActivator, WorkerActivator,
@@ -773,14 +773,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
             worker.cancel_invocation(idempotency_key).await?;
             Ok(true)
-        } else if metadata
-            .last_known_status
-            .invocation_results
-            .contains_key(&idempotency_key)
-        {
-            Ok(false)
         } else {
-            Err(WorkerExecutorError::invalid_request("Invocation not found"))
+            let worker = Worker::get_or_create_suspended(
+                self,
+                &owned_agent_id,
+                None,
+                Vec::new(),
+                None,
+                None,
+                &InvocationContextStack::fresh(),
+                principal,
+            )
+            .await?;
+            match worker.lookup_invocation_result(&idempotency_key).await {
+                LookupResult::Complete(_) | LookupResult::Interrupted => Ok(false),
+                LookupResult::Pending => {
+                    worker.cancel_invocation(idempotency_key).await?;
+                    Ok(true)
+                }
+                LookupResult::New => {
+                    Err(WorkerExecutorError::invalid_request("Invocation not found"))
+                }
+            }
         }
     }
 

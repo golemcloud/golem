@@ -118,6 +118,13 @@ enum StatusJob {
         _card_event_boundary_guard: OwnedMutexGuard<()>,
         done: oneshot::Sender<()>,
     },
+    AppendInvocationIfVersion {
+        entry: Box<OplogEntry>,
+        expected_oplog_index: OplogIndex,
+        expected_revert_generation: u64,
+        instance_guard: OwnedMutexGuard<WorkerInstance>,
+        done: oneshot::Sender<bool>,
+    },
     /// Returns the published status after reattaching it when a jump or revert detached it.
     /// Serialization on the status queue prevents observing an in-flight status transition.
     AttachedStatus {
@@ -256,6 +263,37 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                         )
                         .await;
                     }
+                    StatusJob::AppendInvocationIfVersion {
+                        entry,
+                        expected_oplog_index,
+                        expected_revert_generation,
+                        instance_guard,
+                        done,
+                    } => {
+                        complete_status_job(
+                            async {
+                                state.ensure_status_attached().await;
+                                let status = state.last_known_status.load();
+                                if status.oplog_idx != expected_oplog_index
+                                    || status.invocation_results.revert_generation()
+                                        != expected_revert_generation
+                                {
+                                    return false;
+                                }
+                                drop(status);
+                                state.oplog.add(*entry).await;
+                                state
+                                    .commit_and_update_state(CommitLevel::Always, None)
+                                    .await;
+                                if let WorkerInstance::Running(running) = &*instance_guard {
+                                    running.sender.send(WorkerCommand::WorkAvailable).unwrap();
+                                }
+                                true
+                            },
+                            done,
+                        )
+                        .await;
+                    }
                     StatusJob::AttachedStatus { done } => {
                         if state.detached.load(Ordering::Acquire) {
                             state.reattach().await;
@@ -375,6 +413,24 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                 _worker_keepalive: worker_keepalive,
                 _instance_guard: instance_guard,
                 _card_event_boundary_guard: card_event_boundary_guard,
+                done,
+            })
+            .await
+    }
+
+    pub async fn append_invocation_if_version(
+        &self,
+        entry: OplogEntry,
+        expected_oplog_index: OplogIndex,
+        expected_revert_generation: u64,
+        instance_guard: OwnedMutexGuard<WorkerInstance>,
+    ) -> bool {
+        self.commit
+            .run_status_job(|done| StatusJob::AppendInvocationIfVersion {
+                entry: Box::new(entry),
+                expected_oplog_index,
+                expected_revert_generation,
+                instance_guard,
                 done,
             })
             .await
