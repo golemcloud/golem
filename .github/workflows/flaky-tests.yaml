@@ -30,11 +30,16 @@ jobs:
       DAYS: ${{ inputs.days || '30' }}
     steps:
       - uses: actions/checkout@v5
-      - name: Test aggregator
-        run: python3 .github/scripts/test_flaky_tests.py
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - name: Check and test aggregator
+        run: |
+          cargo clippy --locked --manifest-path .github/tools/flaky-tests/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path .github/tools/flaky-tests/Cargo.toml
       - name: Aggregate CI test reports
         run: >-
-          python3 .github/scripts/flaky_tests.py
+          cargo run --locked --release
+          --manifest-path .github/tools/flaky-tests/Cargo.toml --
           --repo "${GITHUB_REPOSITORY}"
           --days "${DAYS}"
           --summary "${GITHUB_STEP_SUMMARY}"
