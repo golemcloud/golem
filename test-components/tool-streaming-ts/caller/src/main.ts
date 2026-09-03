@@ -1,20 +1,11 @@
 import {
-  client,
   defineAgent,
   method,
   s,
-  toolDefinition,
   ToolStreamError,
 } from "@golemcloud/golem-ts-sdk";
+import { TsStreamingClient } from "ts-streaming-tool-guest-client";
 import { z } from "zod/v4";
-
-const streamingTool = toolDefinition("ts-streaming").body((body) =>
-  body
-    .positional("mode", z.string())
-    .stdin({ required: true })
-    .stdout({ required: true })
-    .returns(s.u64()),
-);
 
 const Evidence = z.object({
   output: s.bytes(),
@@ -47,14 +38,15 @@ Caller.implement({
       const stdin = new ReadableStream<Uint8Array>({
         async start(controller) {
           await inputGate;
+          controller.enqueue(new Uint8Array());
           if (payload.byteLength > 0) controller.enqueue(payload);
           controller.close();
         },
       });
-      const invocation = client(streamingTool)["ts-streaming"]({
-        mode: "marker-echo",
+      const invocation = TsStreamingClient.newClient().ts_streaming(
+        "marker-echo",
         stdin,
-      });
+      );
       const reader = invocation.stdout.getReader();
       const marker = await reader.read();
       if (
@@ -94,10 +86,10 @@ Caller.implement({
           controller.close();
         },
       });
-      const invocation = client(streamingTool)["ts-streaming"]({
-        mode: "resource-exhausted",
+      const invocation = TsStreamingClient.newClient().ts_streaming(
+        "resource-exhausted",
         stdin,
-      });
+      );
       const [result, stdout] = await Promise.allSettled([
         invocation.result,
         invocation.stdout.getReader().read(),

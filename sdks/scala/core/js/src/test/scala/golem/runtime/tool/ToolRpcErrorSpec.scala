@@ -17,15 +17,27 @@
 package golem.runtime.tool
 
 import golem.host.ToolWireInterop
+import golem.FutureInterop
 import golem.runtime.tool.host.ToolHostApi
+import golem.runtime.tool.client.JsToolRpcTransport
 import golem.schema.{IntoSchema, TypedSchemaValue}
 import golem.schema.wire.SchemaWire
-import golem.tool.{ByteStreamCloseCause, ByteStreamFailure, StreamWriteError, ToolInvokeError, ToolRpcFailure}
+import golem.tool.{
+  ByteStreamCloseCause,
+  ByteStreamFailure,
+  StreamWriteError,
+  ToolInputStream,
+  ToolInvokeError,
+  ToolRpcFailure
+}
 import golem.tool.wire.WitToolError
 import zio.test._
 import zio.ZIO
 
+import scala.collection.mutable.ListBuffer
+import scala.concurrent.{Future, Promise}
 import scala.scalajs.js
+import scala.scalajs.js.JSConverters._
 
 /**
  * Verifies the `golem:tool/host@0.1.0` `rpc-error` decoding used by the typed
@@ -111,6 +123,65 @@ object ToolRpcErrorSpec extends ZIOSpecDefault {
         .asInstanceOf[ToolHostApi.RawToolStdoutWriter]
       ZIO.fromFuture(_ => new JsToolOutputStream(writer).write(Array[Byte](1))).map { result =>
         assertTrue(result == Left(StreamWriteError.Closed(ByteStreamCloseCause.ConsumerCancelled)))
+      }
+    },
+    test("skips an empty provider stdout write before calling the host") {
+      var writes = 0
+      val writer = js.Dynamic
+        .literal(
+          "write" -> js.Any.fromFunction1 { (_: js.typedarray.Uint8Array) =>
+            writes += 1
+            js.Promise.resolve[Unit](())
+          },
+          "finish" -> js.Any.fromFunction0(() => js.Promise.resolve[Unit](())),
+          "fail"   -> js.Any.fromFunction1((_: js.Any) => js.Promise.resolve[Unit](()))
+        )
+        .asInstanceOf[ToolHostApi.RawToolStdoutWriter]
+      ZIO.fromFuture(_ => new JsToolOutputStream(writer).write(Array.emptyByteArray)).map { result =>
+        assertTrue(result == Right(()), writes == 0)
+      }
+    },
+    test("skips empty caller stdin chunks before writing to the host") {
+      val writes   = ListBuffer.empty[Array[Byte]]
+      val finished = Promise[Unit]()
+      val source   = new ToolInputStream {
+        private var reads = 0
+
+        override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] = {
+          reads += 1
+          Future.successful(
+            reads match {
+              case 1 => Right(Some(Array.emptyByteArray))
+              case 2 => Right(Some(Array[Byte](1, 2)))
+              case _ => Right(None)
+            }
+          )
+        }
+      }
+      val writer = js.Dynamic
+        .literal(
+          "write" -> js.Any.fromFunction1 { (bytes: js.typedarray.Uint8Array) =>
+            writes += bytes.toArray.map(_.toByte)
+            js.Promise.resolve[Unit](())
+          },
+          "finish" -> js.Any.fromFunction0 { () =>
+            finished.success(())
+            js.Promise.resolve[Unit](())
+          },
+          "fail" -> js.Any.fromFunction1((_: js.Any) => js.Promise.resolve[Unit](()))
+        )
+        .asInstanceOf[ToolHostApi.RawToolStdinWriter]
+      val neverClosed = Promise[js.Any]()
+      val closed      = js.Dynamic
+        .literal(
+          "wait" -> js.Any.fromFunction0(() => FutureInterop.toPromise(neverClosed.future))
+        )
+        .asInstanceOf[ToolHostApi.RawToolStdinClosed]
+
+      new JsToolRpcTransport(null.asInstanceOf[ToolHostApi.RawToolRpc]).pump(source, writer, closed)
+
+      ZIO.fromFuture(_ => finished.future).map { _ =>
+        assertTrue(writes.toList.map(_.toList) == List(List[Byte](1, 2)))
       }
     }
   )

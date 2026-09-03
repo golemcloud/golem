@@ -70,6 +70,31 @@ test "stdin preserves known tool stream failure variants" {
 }
 
 ///|
+test "stdin skips empty source chunks before producing host items" {
+  run_attachment_async(async fn() {
+    let mut reads = 0
+    let source : @async-core.Stream[Byte] = @async-core.Stream::from_source(
+      fn(_) {
+        reads += 1
+        match reads {
+          1 => Some([])
+          2 => Some([42])
+          _ => None
+        }
+      },
+      () => (),
+      () => (),
+    )
+    let encoded = stdin_byte_stream(source)
+    guard encoded.read(1) is Some(items) && items.length() == 1 else {
+      fail("expected one non-empty encoded stdin item")
+    }
+    assert_eq(items[0], Ok([42]))
+    assert_eq(encoded.read(1), None)
+  })
+}
+
+///|
 test "stdin preserves task cancellation as stream cancellation" {
   run_attachment_async(async fn() {
     let closes = Ref(0)

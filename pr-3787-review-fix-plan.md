@@ -52,7 +52,7 @@ documented verification commands are all complete.
 | P9a | Add Scala provider export-boundary ownership | **Blocked** | 15, 26 | P8; stable GOL-96 integration base |
 | P9b | Add MoonBit provider failure and cleanup support | **Complete** | 20–22, 26 | P0, P5 |
 | P9c | Preserve typed TypeScript tool-stream failures | **Complete** | 20 | P0, P5 |
-| P10 | Finish contract and integration conformance | Not started | 8, 19, 23, 25 | Owning workstreams; GOL-95 coordination |
+| P10 | Finish contract and integration conformance | **Complete** | 8, 19, 23, 25 | Owning workstreams; GOL-95 coordination |
 
 ## Execution progress log
 
@@ -696,27 +696,27 @@ documentation and genuine generated-client coverage.
 
 ### Manual stdin contract
 
-- [ ] Update the source WIT documentation to state that manually created stdin must either be
+- [x] Update the source WIT documentation to state that manually created stdin must either be
       terminal before synchronous invocation or be pumped concurrently with it.
-- [ ] Do not reject all open stdin: concurrently driven open stdin is valid.
-- [ ] Ensure generated SDK convenience paths start their pumps before awaiting invocation.
-- [ ] Regenerate/synchronize WIT consumers using the repository workflow if source WIT changes.
+- [x] Do not reject all open stdin: concurrently driven open stdin is valid.
+- [x] Ensure generated SDK convenience paths start their pumps before awaiting invocation.
+- [x] Regenerate/synchronize WIT consumers using the repository workflow if source WIT changes.
 
 ### Genuine generated TypeScript tool-client integration
 
-- [ ] Replace the dynamically defined local tool-client test with a fixture that imports and invokes
+- [x] Replace the dynamically defined local tool-client test with a fixture that imports and invokes
       an actually generated TypeScript tool client.
-- [ ] Keep generator/compiler subprocess execution in CLI integration tests.
-- [ ] This is distinct from GOL-95's native TypeScript `clientFor` agent-stream tests and its
+- [x] Keep generator/compiler subprocess execution in CLI integration tests.
+- [x] This is distinct from GOL-95's native TypeScript `clientFor` agent-stream tests and its
       generated Rust client regression.
-- [ ] Land after GOL-95 or isolate it from `golem-worker-executor/tests/rpc.rs` and the shared
+- [x] Land after GOL-95 or isolate it from `golem-worker-executor/tests/rpc.rs` and the shared
       `agent-rpc` fixture to avoid mechanical conflicts.
 
 ### Tool byte-stream conformance
 
-- [ ] Test that host and SDK adapters never emit an empty successful `byte-stream-item`.
-- [ ] Cover TypeScript, Scala, and MoonBit in both affected stream directions.
-- [ ] Do not apply this invariant to arbitrary P3 stream payloads.
+- [x] Test that host and SDK adapters never emit an empty successful `byte-stream-item`.
+- [x] Cover TypeScript, Scala, and MoonBit in both affected stream directions.
+- [x] Do not apply this invariant to arbitrary P3 stream payloads.
 
 ## GOL-95 and GOL-96 coordination
 
@@ -861,6 +861,10 @@ Append an entry whenever a workstream changes status or a design gate is resolve
 | 2026-09-03 | P9c | In progress | Adding a TypeScript tool-only stream error contract so all four `byte-stream-failure` variants survive caller/provider adapters while unknown JavaScript exceptions remain generic `failed` terminals. |
 | 2026-09-03 | P9c | Awaiting Oracle approval | Added the public `ToolStreamError`, preserved every typed terminal through all caller/provider adapters, retained generic fallback only for unknown JavaScript exceptions, and added a real provider-to-caller `resource-exhausted` round trip. All 721 SDK tests, SDK/template/fixture builds, WASM validation, executor integration, lint, formatting, clippy, and whitespace checks pass. |
 | 2026-09-03 | P9c | Complete | Oracle reviewed the public API, all four adapter directions, error identity, result/stdout independence, cleanup, and the full unit/integration matrix, found no blockers, and returned `APPROVED`. |
+| 2026-09-03 | P10 | In progress | Documenting manual stdin invocation ordering, replacing the dynamic TypeScript fixture client with its generated bridge, and adding cross-SDK bidirectional empty-successful-chunk conformance without changing arbitrary P3 stream semantics. The fixture and executor test remain isolated from GOL-95's `rpc.rs` and `agent-rpc` surfaces. |
+| 2026-09-03 | P10 | Awaiting Oracle approval | Source WIT now documents terminal-or-concurrent manual stdin driving and all five copies are synchronized; generated TypeScript declarations were refreshed. Empty successful tool chunks are covered at the host core and in both producer directions for TypeScript, Scala, and MoonBit. The TypeScript caller fixture now imports the generated `TsStreamingClient`, and its isolated live executor integration passes. Verification is green: 1 host unit test; 111 targeted and 722 full TypeScript SDK tests (20 skipped); 8 targeted and 569 full Scala core tests; 52 targeted MoonBit tests plus scoped checks/builds; SDK/template/fixture builds; both fixture WASM validations; executor clippy; SDK lint; Rust, Scala, TypeScript, and MoonBit formatting; and diff whitespace checks. Logs are under `.amp/pr-3787-tests/p10-*`. |
+| 2026-09-03 | P10 | Oracle correction applied | Oracle found the TypeScript transport observed `future.get()` before starting its stdin pump, contrary to the documented deadlock-prevention ordering. The pump now starts immediately after successful invocation ownership transfer and before terminal observation. A call-order regression proves `getReader()` precedes `future.get()`. All 111 targeted and 722 full SDK tests (20 skipped), SDK/template and forced fixture rebuilds, both WASM validations, the live generated-client executor integration, lint, Prettier, and whitespace checks pass after the correction. |
+| 2026-09-03 | P10 | Complete | Oracle's follow-up review confirmed the corrected ownership and pump-before-result ordering, synchronous failure behavior, empty-chunk normalization, generated-client coverage, WIT synchronization, and isolation from P3/GOL-95/GOL-96, and returned `APPROVED`. |
 
 ## Definition of done
 

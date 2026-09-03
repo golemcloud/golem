@@ -96,7 +96,7 @@ private[golem] final class JsToolRpcTransport(rpc: ToolHostApi.RawToolRpc) exten
         Left(ToolRpcFailure.ProtocolError(s"failed to encode tool input: ${String.valueOf(t.getMessage)}"))
     }
 
-  private def pump(
+  private[golem] def pump(
     source: ToolInputStream,
     writer: ToolHostApi.RawToolStdinWriter,
     closed: ToolHostApi.RawToolStdinClosed

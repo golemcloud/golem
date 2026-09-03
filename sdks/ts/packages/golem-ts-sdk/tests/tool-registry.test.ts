@@ -1242,13 +1242,14 @@ describe('tool guest exports', () => {
       expect(received).toMatchObject({ failure });
     });
 
-    it('writes handler stdout bytes through the supplied endpoint', async () => {
+    it('writes non-empty handler stdout chunks and skips empty chunks', async () => {
       toolDefinition('write-stdout')
         .body((body) => body.stdout({ required: true }).returns(z.void()))
         .implement({
           'write-stdout': async (_, context) => {
             const writer = context.stdout.getWriter();
             await writer.write(new Uint8Array([1, 2]));
+            await writer.write(new Uint8Array());
             await writer.write(new Uint8Array([3]));
             return ok(undefined);
           },
@@ -1264,6 +1265,7 @@ describe('tool guest exports', () => {
         { tag: 'anonymous' },
       );
       expect(result).toEqual({ result: undefined });
+      expect(output.write).toHaveBeenCalledTimes(2);
       expect(output.write).toHaveBeenCalledWith(new Uint8Array([1, 2]));
       expect(output.write).toHaveBeenCalledWith(new Uint8Array([3]));
       expect(output.finish).toHaveBeenCalledOnce();

@@ -78,6 +78,30 @@ test "provider stdout writes, finishes, and drops exactly once" {
 
 ///|
 #warnings("-unused_async")
+test "provider stdout skips empty writes before calling the host" {
+  run_provider_async(async fn() {
+    let writes : Ref[Array[FixedArray[Byte]]] = Ref([])
+    let stdout = provider_stdout_from_callbacks(
+      bytes => {
+        writes.val.push(bytes)
+        Ok(())
+      },
+      () => Ok(()),
+      _ => Ok(()),
+      () => (),
+    )
+    assert_eq(stdout.write([]), 0)
+    assert_eq(stdout.write_bytes(b""), 0)
+    assert_eq(writes.val, [])
+    assert_eq(stdout.write([42]), 1)
+    assert_eq(writes.val, [[42]])
+    stdout.finish()
+    stdout.drop()
+  })
+}
+
+///|
+#warnings("-unused_async")
 test "provider stdout dispatches one typed failure terminal" {
   run_provider_async(async fn() {
     let finishes = Ref(0)

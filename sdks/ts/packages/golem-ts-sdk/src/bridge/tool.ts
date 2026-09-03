@@ -70,8 +70,8 @@ export function createToolClientTransport(toolName: string): ToolClientTransport
         inputEndpoints?.[1],
         outputEndpoints?.[0],
       );
-      const settledResult = settleToolResult(future.get());
       if (inputEndpoints) void pumpToolStdin(stdin!, inputEndpoints[0], inputEndpoints[2]);
+      const settledResult = settleToolResult(future.get());
       return {
         stdout: outputEndpoints?.[1],
         settledResult,
@@ -107,7 +107,7 @@ async function pumpToolStdin(
         throw new TypeError('tool stdin yielded a non-byte chunk');
       }
       if (next.value.value.byteLength === 0) {
-        throw new TypeError('tool stdin yielded an empty chunk');
+        continue;
       }
       await writer.write(next.value.value);
     }

@@ -196,6 +196,53 @@ describe('public bridge runtime', () => {
     await vi.waitFor(() => expect(cancelSource).toHaveBeenCalledOnce(), { timeout: 100 });
   });
 
+  it('starts the stdin pump before result completion and skips empty source chunks', async () => {
+    const callOrder: string[] = [];
+    const getResult = vi.fn(() => {
+      callOrder.push('result');
+      return new Promise<never>(() => {});
+    });
+    const writer = {
+      write: vi.fn().mockResolvedValue(undefined),
+      finish: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createStdin).mockReturnValue([
+      writer,
+      {},
+      { wait: vi.fn(() => new Promise(() => undefined)) },
+    ] as never);
+    vi.mocked(ToolRpc).mockImplementationOnce(
+      () =>
+        ({
+          asyncInvokeAndAwait: vi.fn(() => ({
+            get: getResult,
+            cancel: vi.fn(),
+          })),
+        }) as never,
+    );
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array());
+        controller.enqueue(Uint8Array.of(1, 2));
+        controller.close();
+      },
+    });
+    const getReader = source.getReader.bind(source);
+    vi.spyOn(source, 'getReader').mockImplementationOnce(() => {
+      callOrder.push('stdin');
+      return getReader();
+    });
+
+    bridge.createToolClientTransport('empty-stdin-chunk').start([], {} as never, source, false);
+
+    expect(callOrder).toEqual(['stdin', 'result']);
+    await vi.waitFor(() => expect(writer.finish).toHaveBeenCalledOnce());
+    expect(writer.write).toHaveBeenCalledOnce();
+    expect(writer.write).toHaveBeenCalledWith(Uint8Array.of(1, 2));
+    expect(writer.fail).not.toHaveBeenCalled();
+  });
+
   it.each(streamFailures)('preserves a typed $tag stdin source failure', async (failure) => {
     const writer = {
       write: vi.fn().mockResolvedValue(undefined),

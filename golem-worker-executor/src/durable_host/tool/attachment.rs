@@ -1787,6 +1787,21 @@ mod tests {
     }
 
     #[test]
+    async fn empty_successful_writes_never_become_stream_items() {
+        let (producer, consumer, _) = pair(8);
+        assert!(producer.configure_live());
+        producer.write(Vec::new()).await.unwrap();
+        producer.write(vec![42]).await.unwrap();
+        producer.finish().unwrap();
+
+        assert!(matches!(
+            consumer.read_next().await,
+            AttachmentRead::Item(Ok(bytes)) if bytes == vec![42]
+        ));
+        assert!(matches!(consumer.read_next().await, AttachmentRead::End));
+    }
+
+    #[test]
     async fn blocked_live_write_wakes_after_consumer_progress() {
         let (producer, consumer, _) = pair(4);
         assert!(producer.configure_live());

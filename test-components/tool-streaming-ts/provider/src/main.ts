@@ -26,6 +26,7 @@ toolDefinition("ts-streaming")
       }
 
       if (mode === "marker-echo") {
+        await writer.write(new Uint8Array());
         await writer.write(new TextEncoder().encode("ts-marker:"));
       }
 
