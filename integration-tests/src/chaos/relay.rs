@@ -68,6 +68,7 @@ use crate::chaos::pinned::routing_agent_id_in;
 use crate::chaos::split::{
     FaultWindow, Window, longest_silence_ms, round2, window_end, window_secs, window_start,
 };
+use crate::chaos::summary::LatencyStats;
 use crate::chaos::workload::{COUNTER_AGENT, WorkloadContext, rpc_callee_name};
 use chrono::{DateTime, Utc};
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
@@ -128,6 +129,14 @@ pub enum RelayViolation {
     /// though they held up during the fault. Late damage, and still worth a
     /// look.
     CrossPodDidNotReturn,
+    /// Cross-pod calls cost no more than co-located ones on the undisturbed
+    /// baseline, so the population labelled cross-pod was not paying for a
+    /// network hop and this run measured nothing.
+    ///
+    /// The guard against the whole scenario being quietly vacuous. Every other
+    /// check here compares the two populations *through* the fault, and all of
+    /// them pass trivially if the two populations are really the same thing.
+    CrossPodNotRelayed,
 }
 
 impl RelayViolation {
@@ -137,6 +146,7 @@ impl RelayViolation {
             RelayViolation::CrossPodDegraded => "cross-pod-degraded",
             RelayViolation::BothDegraded => "both-degraded",
             RelayViolation::CrossPodDidNotReturn => "cross-pod-did-not-return",
+            RelayViolation::CrossPodNotRelayed => "cross-pod-not-relayed",
         }
     }
 }
@@ -230,6 +240,19 @@ pub struct RelayCell {
     /// The longest stretch of this window in which nothing was answered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub longest_silence_ms: Option<u64>,
+    /// Round-trip latency of the operations answered in this window.
+    ///
+    /// The most sensitive instrument this report has, and on the first run the
+    /// only one that could tell the two populations apart at all. Throughput is
+    /// set by the driver's own cadence, so both populations sit at the rate they
+    /// were asked to run at whether or not a call leaves the pod. Latency is
+    /// not: a cross-pod call pays executor -> worker-service -> executor, and
+    /// that hop shows up as a flat premium per call.
+    ///
+    /// So this is where the architecture is actually visible. A *change* in the
+    /// premium across the fault window would say the relay path changed under a
+    /// partition it is supposed to be indifferent to.
+    pub latency: LatencyStats,
 }
 
 /// The whole S2 verdict.
@@ -244,6 +267,12 @@ pub struct RelayReport {
     pub cross_pod_floor_percent: f64,
     pub cross_pod_floor_throughput_percent: f64,
     pub co_located_floor_throughput_percent: f64,
+    pub cross_pod_premium_floor_ms: u64,
+    /// How much more a cross-pod call cost than a co-located one on the
+    /// undisturbed baseline, in milliseconds of p50. `None` when either
+    /// population had no baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cross_pod_premium_ms: Option<i64>,
     pub cells: Vec<RelayCell>,
     /// What is, and is not, known about the fault having taken hold. Spelled
     /// out because this scenario has no in-cluster evidence of its own — see
@@ -311,6 +340,14 @@ impl RelayReport {
                 self.pairing.cross_pod.len(),
                 self.pairing.co_located.len(),
                 self.pairing.unresolved.len()
+            ));
+        }
+
+        if let Some(premium) = self.cross_pod_premium_ms {
+            lines.push(format!(
+                "S2: a cross-pod call cost {premium}ms more than a co-located one at p50 on the \
+                 undisturbed baseline. That premium is the relay hop through worker-service, and \
+                 it is the evidence that the two populations really are split"
             ));
         }
 
@@ -420,6 +457,9 @@ struct Tally {
     rejected: u64,
     indeterminate: u64,
     served_at: Vec<DateTime<Utc>>,
+    /// Durations of the operations *answered* in this window, so the latency
+    /// stats and the served count describe the same set of operations.
+    served_ms: Vec<u64>,
 }
 
 /// Which window an instant fell in.
@@ -448,6 +488,7 @@ pub fn build(
     cross_pod_floor_percent: f64,
     cross_pod_floor_throughput_percent: f64,
     co_located_floor_throughput_percent: f64,
+    cross_pod_premium_floor_ms: u64,
 ) -> RelayReport {
     let mut tallies: BTreeMap<(Placement, Window), Tally> = BTreeMap::new();
     let mut first_submitted: BTreeMap<Placement, DateTime<Utc>> = BTreeMap::new();
@@ -486,11 +527,11 @@ pub fn build(
                 .and_modify(|at| *at = (*at).max(completed_at))
                 .or_insert(completed_at);
             if record.outcome == Outcome::Confirmed {
-                tallies
+                let answered = tallies
                     .entry((placement, window_of(completed_at, fault)))
-                    .or_default()
-                    .served_at
-                    .push(completed_at);
+                    .or_default();
+                answered.served_at.push(completed_at);
+                answered.served_ms.push(record.duration_ms);
             }
         }
     }
@@ -542,6 +583,7 @@ pub fn build(
                 window_secs: round2(secs),
                 served_per_sec,
                 share_of_baseline_percent: share,
+                latency: LatencyStats::from_durations(tally.served_ms.clone()),
                 longest_silence_ms: longest_silence_ms(
                     &tally.served_at,
                     window_start(window, fault, first),
@@ -551,6 +593,23 @@ pub fn build(
         }
     }
 
+    // Measured on the undisturbed baseline, because this is a statement about
+    // the workload rather than about the fault. Judging it during the partition
+    // would confuse "the pairing is wrong" with "the partition did something".
+    let baseline_p50 = |placement: Placement| {
+        cells
+            .iter()
+            .find(|c| c.placement == placement && c.window == Window::BeforeFault)
+            .map(|c| c.latency.p50_ms as i64)
+    };
+    let cross_pod_premium_ms = match (
+        baseline_p50(Placement::CrossPod),
+        baseline_p50(Placement::CoLocated),
+    ) {
+        (Some(cross), Some(co)) => Some(cross - co),
+        _ => None,
+    };
+
     let cross_pod_percent = pairing.cross_pod_percent();
     let mut report = RelayReport {
         pairing,
@@ -558,6 +617,8 @@ pub fn build(
         cross_pod_floor_percent,
         cross_pod_floor_throughput_percent,
         co_located_floor_throughput_percent,
+        cross_pod_premium_floor_ms,
+        cross_pod_premium_ms,
         cells,
         partition_evidence: partition_evidence(fault),
         records_outside_the_pairing,
@@ -613,6 +674,34 @@ fn judge(report: &RelayReport) -> Vec<RelayFinding> {
                 ),
             });
         }
+        Some(_) => {}
+    }
+
+    // Checked before anything that compares the two populations through the
+    // fault, because if this fires those comparisons are between two samples of
+    // the same thing and every one of them passes for free.
+    match report.cross_pod_premium_ms {
+        Some(premium) if premium < report.cross_pod_premium_floor_ms as i64 => {
+            findings.push(RelayFinding {
+                violation: RelayViolation::CrossPodNotRelayed,
+                detail: format!(
+                    "on the undisturbed baseline a cross-pod call cost {premium}ms more than a \
+                     co-located one at p50, under the {}ms floor. A call to an agent this \
+                     executor does not own goes out through worker-service and back, which is a \
+                     real network round trip, so the two populations costing the same says they \
+                     are not actually split — either the pairing is wrong or both halves were \
+                     served locally. Every comparison below is then between two samples of the \
+                     same thing",
+                    report.cross_pod_premium_floor_ms
+                ),
+            });
+        }
+        None => findings.push(RelayFinding {
+            violation: RelayViolation::CrossPodNotRelayed,
+            detail: "one of the two populations produced no baseline latency, so the run cannot \
+                     show that its cross-pod calls were paying for a network hop"
+                .to_string(),
+        }),
         Some(_) => {}
     }
 
@@ -699,7 +788,21 @@ mod tests {
         })
     }
 
+    /// How long a call takes in the fixtures, by population.
+    ///
+    /// Not decoration. The relay premium is what
+    /// [`RelayViolation::CrossPodNotRelayed`] is built on, so a fixture where
+    /// both populations cost the same is a fixture of a broken run — which is
+    /// exactly what one test below wants and what the others must avoid.
+    const CO_LOCATED_MS: u64 = 100;
+    const CROSS_POD_MS: u64 = 150;
+
     fn record(agent: &str, submitted: i64, completed: Option<i64>) -> OperationRecord {
+        let duration_ms = if agent.starts_with("cross") {
+            CROSS_POD_MS
+        } else {
+            CO_LOCATED_MS
+        };
         OperationRecord {
             op_id: 0,
             stream: Stream::Rpc,
@@ -715,7 +818,7 @@ mod tests {
             } else {
                 Outcome::Indeterminate
             },
-            duration_ms: 10,
+            duration_ms,
             returned_value: None,
             first_attempt_value: None,
             error: None,
@@ -749,6 +852,7 @@ mod tests {
             25.0,
             70.0,
             70.0,
+            5,
         );
         assert!(
             !report.has_findings(),
@@ -779,6 +883,7 @@ mod tests {
             25.0,
             70.0,
             70.0,
+            5,
         );
         let violations: Vec<_> = report.findings.iter().map(|f| f.violation).collect();
         assert_eq!(violations, vec![RelayViolation::CrossPodDegraded]);
@@ -801,6 +906,7 @@ mod tests {
             25.0,
             70.0,
             70.0,
+            5,
         );
         let violations: Vec<_> = report.findings.iter().map(|f| f.violation).collect();
         assert_eq!(violations, vec![RelayViolation::BothDegraded]);
@@ -836,6 +942,7 @@ mod tests {
             25.0,
             70.0,
             70.0,
+            5,
         );
         assert_eq!(report.cross_pod_percent, Some(10.0));
         assert!(
@@ -844,6 +951,76 @@ mod tests {
                 .iter()
                 .any(|f| f.violation == RelayViolation::PairingTooThin),
             "a 10% split is below the 25% floor and must be called out"
+        );
+    }
+
+    /// The guard the first cluster run showed was needed.
+    ///
+    /// Run 33789281692 came back perfectly clean on every throughput cell, and
+    /// throughput could not have said otherwise: the driver sets the cadence,
+    /// so both populations run at the rate they were asked to whether or not a
+    /// call leaves the pod. Only latency separated them, at 151ms against
+    /// 101ms. A run where that premium is absent is a run whose two populations
+    /// are one population, and every comparison it makes passes for free.
+    #[test]
+    fn two_populations_that_cost_the_same_did_not_cross_a_pod_boundary() {
+        let mut records = Vec::new();
+        for second in (0..300).step_by(2) {
+            // Both at the co-located cost: nothing here paid a relay hop.
+            records.push(record("co-0", second, Some(second)));
+            records.push(record("co-1", second, Some(second)));
+        }
+        // `co-1` is *labelled* cross-pod, and the latency says it is not.
+        let report = build(
+            &records,
+            pairing(&["co-1"], &["co-0"]),
+            fault(),
+            25.0,
+            70.0,
+            70.0,
+            5,
+        );
+        assert_eq!(report.cross_pod_premium_ms, Some(0));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.violation == RelayViolation::CrossPodNotRelayed),
+            "a pairing whose halves cost the same has to be called out, got {:?}",
+            report.findings
+        );
+    }
+
+    /// The premium is the evidence the split is real, so it belongs in the
+    /// notes on every run rather than only when something is wrong.
+    #[test]
+    fn the_relay_premium_is_reported_on_a_clean_run() {
+        let mut records = Vec::new();
+        for second in (0..300).step_by(2) {
+            records.push(record("cross-0", second, Some(second)));
+            records.push(record("co-0", second, Some(second)));
+        }
+        let report = build(
+            &records,
+            pairing(&["cross-0"], &["co-0"]),
+            fault(),
+            25.0,
+            70.0,
+            70.0,
+            5,
+        );
+        assert!(
+            !report.has_findings(),
+            "expected clean, got {:?}",
+            report.findings
+        );
+        assert_eq!(
+            report.cross_pod_premium_ms,
+            Some((CROSS_POD_MS - CO_LOCATED_MS) as i64)
+        );
+        assert!(
+            report.note_lines().iter().any(|l| l.contains("relay hop")),
+            "the premium is the evidence the populations are split; it must reach the reader"
         );
     }
 
@@ -872,6 +1049,7 @@ mod tests {
             25.0,
             70.0,
             70.0,
+            5,
         );
         assert_eq!(report.records_outside_the_pairing, 1);
     }
@@ -888,6 +1066,7 @@ mod tests {
             25.0,
             70.0,
             70.0,
+            5,
         );
         assert!(report.partition_evidence.contains("unknown window"));
     }

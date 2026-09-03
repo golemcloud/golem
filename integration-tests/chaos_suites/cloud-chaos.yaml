@@ -713,6 +713,25 @@ scenarios:
       # both populations drop the cause is not the link under test. Kept as a
       # separate number so the report can tell those two apart.
       coLocatedFloorThroughputPercent: 90
+      # The guard against this whole scenario being vacuous, and the one the
+      # first run showed was needed.
+      #
+      # Throughput cannot tell the two populations apart: the driver sets the
+      # cadence, so both run at the rate they were asked to whether or not a
+      # call leaves the pod. The first run's cells were 9.51/s and 10.49/s
+      # before, during and after, which says nothing about where the callees
+      # were. Latency does say: run 33789281692 measured cross-pod at 151ms p50
+      # against co-located at 101ms, a flat 50ms premium in every phase, and
+      # that premium is the relay hop through worker-service.
+      #
+      # So if the two populations cost the same, they are not two populations,
+      # and every comparison this scenario makes is between two samples of the
+      # same thing.
+      #
+      # 5ms rather than something near the measured 50: this is a floor against
+      # *zero*, not a model of what the hop should cost, and a cluster with
+      # faster links should not fail for being fast.
+      crossPodPremiumFloorMs: 5
 
     workload:
       # S12's mixed workload plus the stream that makes this scenario mean

@@ -162,6 +162,7 @@ pub async fn run(
                     relay_config.cross_pod_floor_percent,
                     relay_config.cross_pod_floor_throughput_percent,
                     relay_config.co_located_floor_throughput_percent,
+                    relay_config.cross_pod_premium_floor_ms,
                 ));
             }
             let result = build_result(

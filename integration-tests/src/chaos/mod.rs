@@ -611,6 +611,19 @@ pub struct RelayConfig {
     /// cluster some other way, and the run should say so rather than blame the
     /// architecture.
     pub co_located_floor_throughput_percent: f64,
+    /// The least a cross-pod call must cost over a co-located one at p50 on the
+    /// undisturbed baseline, in milliseconds.
+    ///
+    /// The guard against the scenario being vacuous. Throughput cannot tell the
+    /// two populations apart, because the driver sets the cadence and both run
+    /// at the rate they were asked to. Latency can: a cross-pod call pays
+    /// executor -> worker-service -> executor and a co-located one does not, so
+    /// a premium at least this large is what says the split is real.
+    ///
+    /// Small on purpose. The first run measured 50ms, but this is a floor
+    /// against *zero*, not a model of what the hop should cost, and a cluster
+    /// with faster links should not fail for being fast.
+    pub cross_pod_premium_floor_ms: u64,
 }
 
 impl IsolationConfig {
