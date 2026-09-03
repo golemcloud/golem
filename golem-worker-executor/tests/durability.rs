@@ -65,17 +65,29 @@ fn total_memory_growth(entries: &[PublicOplogEntryWithIndex]) -> u64 {
         .sum()
 }
 
+/// Expects the snapshot to be loaded and kept during recovery. Must be called after the first
+/// invocation on the recovered worker completed: the events are read up to that invocation's
+/// `InvocationFinished`, so a snapshot that was loaded but abandoned afterwards because its replayed
+/// tail diverged fails the assertion too.
 pub(crate) async fn assert_snapshot_recovery_loaded(events: &mut UnboundedReceiver<LogEvent>) {
     tokio::time::timeout(Duration::from_secs(10), async {
+        let mut loaded = false;
         while let Some(event) = events.recv().await {
             match AgentEvent::try_from(event) {
-                Ok(AgentEvent::SnapshotRecoverySucceeded { .. }) => return,
+                Ok(AgentEvent::SnapshotRecoverySucceeded { .. }) => loaded = true,
                 Ok(AgentEvent::SnapshotRecoveryFailed {
                     snapshot_index,
                     error,
                     ..
                 }) => {
                     panic!("Snapshot recovery from {snapshot_index} failed: {error}");
+                }
+                Ok(AgentEvent::InvocationFinished { .. }) => {
+                    assert!(
+                        loaded,
+                        "Invocation finished without a snapshot recovery event"
+                    );
+                    return;
                 }
                 _ => {}
             }
@@ -1578,6 +1590,92 @@ async fn ts_sqlite_multipart_snapshot_recovery(
         state_after_json["items"],
         serde_json::json!(["apple", "banana", "cherry"])
     );
+    assert_eq!(
+        state_after_json["logs"],
+        serde_json::json!(["started", "recovered"])
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    Ok(())
+}
+
+/// `SqliteSnapshotAgent` snapshots every second invocation (the constructor counts as one), so the
+/// final `getState` below is recorded after the last snapshot and gets replayed on top of the
+/// restored SQLite databases after the restart. Reading the file-backed database from the restored
+/// connection must issue the same host calls as the live connection did, otherwise the replayed tail
+/// diverges from the oplog.
+#[test]
+#[tracing::instrument]
+async fn ts_sqlite_snapshot_recovery_replays_invocations_after_the_snapshot(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, constructor_parameter_echo)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SqliteSnapshotAgent", "sqlite-tail-replay");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "addItem", data_value!("apple"))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "addLog", data_value!("started"))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "setLabel", data_value!("after-init"))
+        .await?;
+    let state_before = executor
+        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
+        .await?;
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let last_snapshot_position = oplog
+        .iter()
+        .rposition(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+        .expect("Expected a snapshot before restart");
+    assert!(
+        oplog[last_snapshot_position..]
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_))),
+        "Expected an invocation recorded after the last snapshot"
+    );
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let mut events = executor.capture_output(&worker_id).await?;
+
+    let state_after = executor
+        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
+        .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
+
+    assert_eq!(
+        state_before, state_after,
+        "Agent state should be preserved by the snapshot and the replayed tail"
+    );
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "addLog", data_value!("recovered"))
+        .await?;
+    let state_after_more = executor
+        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
+        .await?;
+
+    let state_after_str = state_after_more.into_typed::<String>()?;
+    let state_after_json: serde_json::Value = serde_json::from_str(&state_after_str)?;
+    assert_eq!(state_after_json["label"], "after-init");
+    assert_eq!(state_after_json["items"], serde_json::json!(["apple"]));
     assert_eq!(
         state_after_json["logs"],
         serde_json::json!(["started", "recovered"])

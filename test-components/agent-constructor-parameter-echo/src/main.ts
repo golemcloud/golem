@@ -77,10 +77,11 @@ export const SnapshotCounterAgentImpl = SnapshotCounterAgent.implement({
     },
 });
 
+// The constructor counts as an invocation, so a snapshot is taken after every odd method call.
 export const SqliteSnapshotAgent = defineAgent({
     name: 'SqliteSnapshotAgent',
     id: { id: z.string() },
-    snapshotting: { everyNInvocations: 1 },
+    snapshotting: { everyNInvocations: 2 },
     methods: {
         addItem: method({ input: { value: z.string() }, returns: z.number() }),
         addLog: method({ input: { message: z.string() }, returns: z.number() }),
