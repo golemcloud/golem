@@ -12,30 +12,39 @@ Snapshotting also enables **manual agent updates** between incompatible versions
 
 ## Default snapshotting implementation
 
-Each language SDK provides a built-in snapshotting implementation that requires no custom code. As long as your agent's state is serializable, you can rely on the default implementation.
+Each language SDK can generate JSON saving and loading when the complete agent state has an explicit JSON-deserialization contract. Automatic loading is not generated for arbitrary state: use custom snapshotting when your SDK cannot deserialize the complete state.
 
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
     <Tabs.Tab>
-        Simply **do not** provide a `snapshot: { save, load }` block on `.implement(...)`. The SDK will automatically serialize the agent's state as JSON.
+        Provide a state schema in the snapshotting configuration and **do not** provide a custom `snapshot: { save, load }` block. The SDK serializes and restores the schema-defined state as JSON:
+
+        ```typescript
+        snapshotting: {
+            state: z.object({ value: z.number() }),
+            policy: { everyNInvocations: 1 },
+        }
+        ```
+
+        A bare enabled policy without `state` requires a custom `save`/`load` pair.
     </Tabs.Tab>
     <Tabs.Tab>
-        If your agent struct derives `Serialize` and `Deserialize` (from [serde](https://serde.rs/)), **do not** override the `save_snapshot` and `load_snapshot` methods. The SDK will use a default JSON-based implementation.
+        If your agent struct implements `Serialize` and `DeserializeOwned` (from [serde](https://serde.rs/)), **do not** override the `save_snapshot` and `load_snapshot` methods. The SDK will use a default JSON-based implementation. Ordinary owned structs commonly satisfy these bounds by deriving `Serialize` and `Deserialize`.
     </Tabs.Tab>
     <Tabs.Tab>
-        If your agent case class derives `Schema` (from [zio-blocks-schema](https://github.com/zio/zio-blocks)), the SDK provides a default implementation automatically.
+        Mix `Snapshotted[S]` into the implementation and provide a `Schema[S]` (from [zio-blocks-schema](https://github.com/zio/zio-blocks)). The SDK handles JSON, while a companion `loadSnapshot(state, context)` factory constructs the complete implementation instance.
     </Tabs.Tab>
     <Tabs.Tab>
-        If your agent struct derives `ToJson` and `@json.FromJson`, the SDK auto-generates a `Snapshottable` implementation.
+        If your agent struct derives `ToJson` and `@json.FromJson`, the SDK auto-generates JSON saving and a restoration factory.
     </Tabs.Tab>
 </Tabs>
 
 ## Custom snapshotting
 
-You can implement custom `save`/`load` logic to control exactly how agent state is serialized. The following example shows a simple counter agent that saves its count as raw bytes:
+You can implement custom saving and restoration to control exactly how agent state is serialized. Saving runs on the live instance. Loading is a separate factory that returns the complete state or instance; the SDK never runs the normal agent initialization path first and then hands that instance to the loader. The following example shows a counter agent that saves its count as raw bytes:
 
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
     <Tabs.Tab>
-        Provide a `snapshot: { save, load }` block on `.implement(...)`. `save()` returns the raw snapshot bytes and `load(bytes)` restores from them (`this` is the agent state):
+        Provide a `snapshot: { save, load }` block on `.implement(...)`. `save()` has the agent state as `this`. `load(bytes, context)` has no `this` and returns a complete fresh state object:
 
         ```typescript
         import { z } from 'zod';
@@ -44,6 +53,7 @@ You can implement custom `save`/`load` logic to control exactly how agent state 
         export const Counter = defineAgent({
             name: 'Counter',
             id: { name: z.string() },
+            snapshotting: { everyNInvocations: 1 },
             methods: {
                 increment: method({ input: {}, returns: z.number() }),
             },
@@ -63,71 +73,108 @@ You can implement custom `save`/`load` logic to control exactly how agent state 
                     new DataView(snapshot.buffer).setUint32(0, this.value);
                     return snapshot;
                 },
-                load(bytes) {
-                    this.value = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0);
+                load(bytes, _context) {
+                    const value = new DataView(
+                        bytes.buffer,
+                        bytes.byteOffset,
+                        bytes.byteLength,
+                    ).getUint32(0);
+                    return { value };
                 },
             },
         });
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        Override `save_snapshot` and `load_snapshot` on your agent implementation:
+        Define instance `save_snapshot` and an associated `load_snapshot` factory. The factory returns `Self`; it does not receive `&mut self`:
 
         ```rust
-        fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
             Ok(self.value.to_le_bytes().to_vec())
         }
 
-        fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+        async fn load_snapshot(
+            bytes: Vec<u8>,
+            _context: golem_rust::agentic::SnapshotRestoreContext,
+        ) -> Result<Self, String> {
             let arr: [u8; 4] = bytes
                 .try_into()
                 .map_err(|_| "Invalid snapshot".to_string())?;
-            self.value = u32::from_le_bytes(arr);
-            Ok(())
+            Ok(Self {
+                value: u32::from_le_bytes(arr),
+            })
         }
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        Override `saveSnapshot` and `loadSnapshot` on your agent:
+        Define `saveSnapshot()` on the implementation and `loadSnapshot(...)` on its companion object:
 
         ```scala
-        override def saveSnapshot: Future[Array[Byte]] =
-          Future.successful {
-            val buffer = java.nio.ByteBuffer.allocate(4)
-            buffer.putInt(value)
-            buffer.array()
-          }
+        final class CounterImpl(private val name: String) extends Counter {
+          private var value: Int = 0
 
-        override def loadSnapshot(bytes: Array[Byte]): Future[Unit] =
-          Future.successful {
-            val buffer = java.nio.ByteBuffer.wrap(bytes)
-            value = buffer.getInt()
+          def saveSnapshot(): Future[Array[Byte]] =
+            Future.successful {
+              val buffer = java.nio.ByteBuffer.allocate(4)
+              buffer.putInt(value)
+              buffer.array()
+            }
+        }
+
+        object CounterImpl {
+          def loadSnapshot(
+            bytes: Array[Byte],
+            context: SnapshotRestoreContext
+          ): Future[CounterImpl] = Future.successful {
+            val instance = new CounterImpl(context.identity[String](0))
+            instance.value = java.nio.ByteBuffer.wrap(bytes).getInt()
+            instance
           }
+        }
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        Implement the `@agents.Snapshottable` trait for your agent struct:
+        Implement the saving-only `@agents.Snapshottable` trait and define a separate static `load_snapshot` factory:
 
         ```moonbit
-        fn save_snapshot(self : Counter) -> Bytes {
-          let bytes = Bytes::new(4)
-          bytes[0] = (self.value & 0xFF).to_byte()
-          bytes[1] = ((self.value >> 8) & 0xFF).to_byte()
-          bytes[2] = ((self.value >> 16) & 0xFF).to_byte()
-          bytes[3] = ((self.value >> 24) & 0xFF).to_byte()
-          bytes
+        pub impl @agents.Snapshottable for Counter with save_snapshot(self) {
+          let arr: Array[Byte] = []
+          for i = 7; i >= 0; i = i - 1 {
+            arr.push(((self.value >> (i * 8)).to_int() & 0xff).to_byte())
+          }
+          Bytes::from_array(arr)
         }
 
-        fn load_snapshot(self : Counter, bytes : Bytes) -> Result[Unit, String] {
-          self.value = bytes[0].to_int()
-            | (bytes[1].to_int() << 8)
-            | (bytes[2].to_int() << 16)
-            | (bytes[3].to_int() << 24)
-          Ok(())
+        pub fn Counter::load_snapshot(
+          bytes: Bytes,
+          context: @agents.SnapshotRestoreContext,
+        ) -> Result[Counter, String] {
+          if bytes.length() != 8 {
+            return Err("Expected an 8-byte snapshot")
+          }
+          let mut value: UInt64 = 0
+          for i = 0; i < 8; i = i + 1 {
+            value = value | (bytes[i].to_uint64() << ((7 - i) * 8))
+          }
+          let name: String = context.identity(0) catch {
+            error => return Err(error.to_string())
+          }
+          Ok({ name, value })
         }
         ```
     </Tabs.Tab>
 </Tabs>
+
+## How snapshot restoration runs
+
+Snapshot loading is a specially supported SDK lifecycle operation, not an agent method. The SDKs keep it separate from normal initialization and install the returned state or instance only after restoration succeeds. Restore context exposes the agent identity and restored principal, plus the phantom ID and fresh configuration where applicable.
+
+Golem runs snapshot loading in read-only mode and writes nothing from it to the oplog. Decoding, local computation, fresh randomness, configuration access, and other permitted reads can be used to construct the restored value. Mutating host operations and outgoing HTTP or agent RPC calls are rejected before they take effect.
+
+If loading fails, partial state is discarded:
+
+- A manual update fails and the agent remains on its previous component version.
+- During automatic recovery, Golem recreates the component and recovers without the failed automatic snapshot. It does not try an older automatic snapshot.
 
 ## Configuring snapshot-based recovery
 
@@ -141,7 +188,10 @@ To enable snapshotting, add a `snapshotting` option to your agent definition:
         export const Counter = defineAgent({
             name: 'Counter',
             id: { name: z.string() },
-            snapshotting: { periodicSeconds: 5 },
+            snapshotting: {
+                state: z.object({ value: z.number() }),
+                policy: { periodicSeconds: 5 },
+            },
             methods: {
                 increment: method({ input: {}, returns: z.number() }),
             },
@@ -160,18 +210,18 @@ To enable snapshotting, add a `snapshotting` option to your agent definition:
     </Tabs.Tab>
     <Tabs.Tab>
         ```moonbit
-        #derive.agent(snapshotting="periodic(5)")
+        #derive.agent(snapshotting="every_n(5)")
         ```
     </Tabs.Tab>
 </Tabs>
 
-The available snapshotting options are:
+The available policy forms are listed below. Exact spelling and policy support vary by SDK, as shown in the examples above.
 
 | Option | Description |
 |---|---|
 | `disabled` | Snapshotting is turned off. Recovery replays the full oplog. |
-| `enabled` | Uses the server-side default snapshotting configuration. |
-| `every(N)` | Takes a snapshot every **N** oplog entries. |
+| `enabled` | Uses the server-side default snapshotting configuration, which may be disabled. |
+| `every(N)` | Takes a snapshot every **N** successful invocations. |
 | `periodic(duration)` | Takes a snapshot every **duration** interval (e.g. `5s`, `1m`). |
 
 ## Observability
