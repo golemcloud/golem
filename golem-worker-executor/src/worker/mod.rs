@@ -6700,6 +6700,7 @@ impl RunningWorker {
             LinearMemoryGrantRegistration::new(parent.clone(), memory_grant);
 
         let panic_parent = Arc::clone(&parent);
+        let invocation_loops = parent.active_agents().invocation_loops();
         let invocation_loop_task = async move {
             RunningWorker::invocation_loop(
                 receiver,
@@ -6721,7 +6722,7 @@ impl RunningWorker {
             .await;
             drop((memory_grant_registration, component_charge));
         };
-        let handle = tokio::task::spawn(async move {
+        let handle = invocation_loops.spawn(async move {
             run_invocation_loop_task(
                 invocation_loop_task,
                 move |error: WorkerExecutorError| async move {

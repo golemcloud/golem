@@ -34,7 +34,9 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use tracing::{Instrument, debug};
 
@@ -357,6 +359,65 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
     }
 }
 
+const INVOCATION_LOOP_DROP_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+/// The worker invocation loops spawned by one executor.
+///
+/// Every loop is bound to the executor's lifetime: when the executor's shutdown token is
+/// cancelled, the loop task is abandoned at its next await point, which stops the worker from
+/// touching storage exactly as if the executor process had died there. The oplog is designed to
+/// be reopened after such an interruption. Cloning shares the same set of loops; a clone does not
+/// keep any task alive.
+#[derive(Clone, Debug)]
+pub struct InvocationLoops {
+    shutdown_token: CancellationToken,
+    tracker: TaskTracker,
+}
+
+impl InvocationLoops {
+    pub fn new(shutdown_token: CancellationToken) -> Self {
+        Self {
+            shutdown_token,
+            tracker: TaskTracker::new(),
+        }
+    }
+
+    pub(crate) fn spawn(
+        &self,
+        invocation_loop: impl Future<Output = ()> + Send + 'static,
+    ) -> JoinHandle<()> {
+        let shutdown_token = self.shutdown_token.clone();
+        self.tracker.spawn(async move {
+            let mut invocation_loop = Box::pin(invocation_loop);
+            tokio::select! {
+                biased;
+                _ = shutdown_token.cancelled() => {
+                    // Suspended Wasmtime calls form a deeply nested future tree whose destructor
+                    // can exhaust Tokio's default worker-thread stack.
+                    stacker::grow(INVOCATION_LOOP_DROP_STACK_SIZE, move || drop(invocation_loop));
+                }
+                _ = &mut invocation_loop => {}
+            }
+        })
+    }
+
+    /// Whether the owning executor has been shut down. Once true, no new loop makes progress and
+    /// [`Self::wait_for_exit`] resolves as soon as the already running ones have exited.
+    pub fn is_shut_down(&self) -> bool {
+        self.shutdown_token.is_cancelled()
+    }
+
+    /// Resolves once every invocation loop of the executor has exited. Only meaningful after the
+    /// executor was shut down; a loop of a live executor runs until its worker is unloaded.
+    ///
+    /// A loop that is executing guest code without reaching an await point cannot be cancelled
+    /// once the executor's epoch ticker stopped, so callers should bound this wait.
+    pub async fn wait_for_exit(&self) {
+        self.tracker.close();
+        self.tracker.wait().await;
+    }
+}
+
 /// Holds owner-keyed active agent groups.
 pub struct ActiveAgents<Ctx: WorkerCtx> {
     agents: Cache<OwnedAgentId, (), Arc<ActiveAgent<Ctx>>, WorkerExecutorError>,
@@ -378,6 +439,7 @@ pub struct ActiveAgents<Ctx: WorkerCtx> {
     /// module charge.
     component_size_coefficient: f64,
     status_flush_queue: Arc<AgentStatusFlushQueue>,
+    invocation_loops: InvocationLoops,
 }
 
 /// Identifies a compiled component for module-charge accounting.
@@ -445,8 +507,9 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             status_flush_queue: AgentStatusFlushQueue::new(
                 agent_status_flush_config.interval,
                 agent_status_flush_config.max_concurrency,
-                shutdown_token,
+                shutdown_token.clone(),
             ),
+            invocation_loops: InvocationLoops::new(shutdown_token),
         };
         active_agents.initialize_metrics();
         Ok(active_agents)
@@ -455,6 +518,11 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     /// The per-executor queue used to batch cached agent status blob writes in the background.
     pub fn status_flush_queue(&self) -> Arc<AgentStatusFlushQueue> {
         self.status_flush_queue.clone()
+    }
+
+    /// The invocation loops of this executor's workers, bound to the executor's shutdown token.
+    pub fn invocation_loops(&self) -> InvocationLoops {
+        self.invocation_loops.clone()
     }
 
     pub(crate) fn agent_filesystems(&self) -> Arc<AgentFilesystems> {
