@@ -1936,7 +1936,7 @@ fn emit_invoker(
   buf.write_string(
     "///|\n#warnings(\"-alert_wit_bindgen\")\nasync fn " +
     name +
-    "(__golem_command_path : Array[String], __golem_input : @types.TypedSchemaValue, __golem_stdin : @asyncCore.Stream[Byte]?, __golem_stdout : @asyncCore.Sink[Byte]?, __golem_principal : @tool.Principal) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {\n  let __golem_def = " +
+    "(__golem_command_path : Array[String], __golem_input : @types.TypedSchemaValue, __golem_stdin : @asyncCore.Stream[Byte]?, __golem_stdout : @tool.ProviderStdout?, __golem_principal : @tool.Principal) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {\n  let __golem_def = " +
     descriptor_name(tool, symbol_scope) +
     "()\n  let __golem_index = match __golem_def.command_index_by_path(__golem_command_path) {\n    Some(__golem_index) => __golem_index\n    None => return @tool.reject_wire_invocation(__golem_input, __golem_stdin, @toolCommon.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n  let __golem_decoded = @tool.decode_canonical_input(__golem_def, __golem_index, __golem_input, \"" +
     escape_string_lit(context) +
@@ -2008,13 +2008,13 @@ fn emit_invoker(
           buf.write_string(
             "      let " +
             arg.source +
-            " = match __golem_stdin {\n        Some(__golem_stream) => __golem_stream\n        None => return Err(@toolCommon.ToolError::InvalidInput(\"required stdin stream is missing\"))\n      }\n",
+            " = match __golem_stdin {\n        Some(__golem_stream) => __golem_stream\n        None => return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @toolCommon.ToolError::InvalidInput(\"required stdin stream is missing\"))\n      }\n",
           )
         Hidden(OutputStream) =>
           buf.write_string(
             "      let " +
             arg.source +
-            " = match __golem_stdout {\n        Some(__golem_output) => __golem_output\n        None => return Err(@toolCommon.ToolError::InvalidInput(\"required stdout stream is missing\"))\n      }\n",
+            " = match __golem_stdout {\n        Some(__golem_output) => __golem_output\n        None => return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @toolCommon.ToolError::InvalidInput(\"required stdout stream is missing\"))\n      }\n",
           )
         _ => ()
       }

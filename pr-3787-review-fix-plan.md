@@ -50,7 +50,7 @@ documented verification commands are all complete.
 | P7c | Fix the Scala started-invocation caller contract | **Blocked** | 13 | Stable GOL-96 integration base |
 | P8 | Replace Scala middleware streams with transfer-only handles | **Blocked** | 14 | Stable GOL-96 integration base |
 | P9a | Add Scala provider export-boundary ownership | **Blocked** | 15, 26 | P8; stable GOL-96 integration base |
-| P9b | Add MoonBit provider failure and cleanup support | Not started | 20–22, 26 | P0, P5 |
+| P9b | Add MoonBit provider failure and cleanup support | **Complete** | 20–22, 26 | P0, P5 |
 | P9c | Preserve typed TypeScript tool-stream failures | Not started | 20 | P0, P5 |
 | P10 | Finish contract and integration conformance | Not started | 8, 19, 23, 25 | Owning workstreams; GOL-95 coordination |
 
@@ -611,16 +611,57 @@ Status: **Blocked by P8 and the GOL-96 integration base.**
 
 ### P9b — MoonBit provider output and cleanup
 
-- [ ] Replace the generated provider-facing raw sink with a dedicated output capability supporting
+- [x] Replace the generated provider-facing raw sink with a dedicated output capability supporting
       write, finish, and typed fail.
-- [ ] Update generator output, snapshots, `.mbti` interfaces, fixtures, examples, and documentation.
-- [ ] Route every generated missing-input/stdin/stdout and decode failure through the centralized
+- [x] Update generator output, snapshots, `.mbti` interfaces, fixtures, examples, and documentation.
+- [x] Route every generated missing-input/stdin/stdout and decode failure through the centralized
       release helpers.
-- [ ] Preserve recognized `cancelled`, `abandoned`, and `resource-exhausted` failures; map only
+- [x] Preserve recognized `cancelled`, `abandoned`, and `resource-exhausted` failures; map only
       unknown exceptions to generic `failed(message)`.
-- [ ] Verify success, declared error, synchronous failure, asynchronous failure, early validation,
+- [x] Verify success, declared error, synchronous failure, asynchronous failure, early validation,
       explicit stdout failure, missing attachment, and ownership transfer.
-- [ ] Run `moon test`, `moon check`, and `moon info && moon fmt` in the affected MoonBit workspaces.
+- [x] Run `moon test`, `moon check`, and `moon info && moon fmt` in the affected MoonBit workspaces.
+
+Status: **Complete.** Oracle approved the corrected phase after reviewing the real cancellation
+race, provider lifecycle state-machine tests, generated ownership behavior, published API docs, and
+the full rerun evidence.
+
+- The provider-facing API is now `@tool.ProviderStdout`; its shared state supports bounded writes,
+  explicit successful finish, all four typed failure terminals, open-state inspection, and
+  idempotent drop. The outer guest export still owns the raw host writer, automatically finishes an
+  open provider after the invoker returns, and ignores only secondary finish cleanup failure so it
+  cannot replace the primary structured result or error.
+- Generated invokers retain stdout as the provider capability and use the existing wire,
+  undecoded, or decoded rejection helper at every failure point. Parser/emitter tests cover the
+  ownership order and missing-attachment branches; the existing SDK resource-cleanup matrix covers
+  malformed input, partial transfer, structured errors, and synchronous/asynchronous exits.
+- MoonBit stdin adapters preserve every known `ToolStreamError` and task cancellation, while only
+  unknown source exceptions become `Failed(repr(error))`. Cancellation-terminal publication and
+  source cleanup run under cancellation shielding; a real task-cancellation regression verifies
+  the typed terminal and exactly-once source close. Host stdout adapters are source-backed so
+  terminal failures remain observable instead of being swallowed by the generic producer wrapper;
+  focused tests also cover bounded partial reads and suppression of invalid empty successful host
+  items. Callback-backed provider tests cover writes, explicit finish/fail, all typed mappings,
+  open/closed transitions, host-closed behavior, concurrent-operation rejection, and idempotent
+  resource drop.
+- Final verification: all 270 MoonBit SDK tests and all 299 generator tests pass; SDK, generator,
+  fixture, and example checks plus scoped `moon info`/`moon fmt` pass; the example's ordinary and
+  middleware components build through `golem-cli build`; the fixture rebuilds through the shared
+  test-component pipeline; and the real `moonbit_generated_client_streams_live` executor test
+  proves success, concurrent result/stdout ownership, and an explicit `ResourceExhausted` stdout
+  terminal whose successful structured result remains authoritative. Rust formatting, executor
+  integration-test clippy, script shellcheck, and whitespace checks pass. Logs:
+  `.amp/pr-3787-tests/p9b-sdk-final.log`,
+  `.amp/pr-3787-tests/p9b-tools-info-fmt-test-check-final.log`,
+  `.amp/pr-3787-tests/p9b-moonbit-example-build-final-2.log`,
+  `.amp/pr-3787-tests/p9b-moonbit-fixture-rebuild-final-2.log`, and
+  `.amp/pr-3787-tests/p9b-moonbit-executor-integration-final-2.log`. Oracle-correction reruns are in
+  `.amp/pr-3787-tests/p9b-oracle-fixes-sdk-full.log`,
+  `.amp/pr-3787-tests/p9b-oracle-fixes-tools-full-2.log`,
+  `.amp/pr-3787-tests/p9b-oracle-fixes-example-build.log`,
+  `.amp/pr-3787-tests/p9b-oracle-fixes-example-info-fmt-check.log`,
+  `.amp/pr-3787-tests/p9b-oracle-fixes-fixture-rebuild.log`, and
+  `.amp/pr-3787-tests/p9b-oracle-fixes-executor-integration.log`.
 
 ### P9c — TypeScript tool-stream failure fidelity
 
@@ -796,6 +837,10 @@ Append an entry whenever a workstream changes status or a design gate is resolve
 | 2026-09-03 | P7b | In progress | Auditing the TypeScript bridge's eager rejecting result promise, collect path, generated API surface, and existing rejection-handling coverage without importing unpublished GOL-95 changes. |
 | 2026-09-03 | P7b | Awaiting Oracle approval | Host `future.get()` rejection is immediately settled into a non-rejecting envelope; dynamic/generated clients preserve that invariant, public result access is lazy, and `collect()` consumes the envelope. All 705 SDK tests (20 skipped), two generated-client compile tests, a force-rebuilt real TypeScript tool-streaming executor integration, typecheck/build, lint, formatting, clippy, and whitespace checks pass. GOL-95 files remain untouched. |
 | 2026-09-03 | P7b | Complete | Oracle's holistic review found no blockers and returned `APPROVED`; it confirmed immediate host rejection handling, the non-rejecting internal envelope invariant, lazy public rejection, result-before-stdout collect precedence, and dynamic/generated RPC/custom-error fidelity. |
+| 2026-09-03 | P9b | In progress | Replacing the MoonBit provider's raw stdout sink with a dedicated typed capability, preserving typed source failures, and closing generated missing-attachment cleanup gaps. |
+| 2026-09-03 | P9b | Awaiting Oracle approval | Dedicated provider capability, typed failure preservation, source-backed stdout errors, missing-attachment cleanup, generated artifacts, docs, fixtures, and examples are complete. All 265 SDK and 299 generator tests, MoonBit checks/info/fmt, Golem application and fixture builds, the real executor success/explicit-failure E2E, Rust fmt/clippy, shellcheck, and whitespace checks pass. |
+| 2026-09-03 | P9b | Oracle corrections applied | Shielded typed stdin-terminal publication during real task cancellation and made source cleanup explicit; added callback-backed provider lifecycle/concurrency/closed-writer tests; corrected published generator documentation and documented middleware-only raw sinks. All 270 SDK and 299 generator tests, scoped MoonBit checks/info/fmt, rebuilt applications and fixture, the real executor integration, Rust fmt/clippy, shellcheck, and whitespace checks pass. Awaiting revised Oracle approval. |
+| 2026-09-03 | P9b | Complete | Oracle's follow-up review found all three blockers resolved and returned `APPROVED`; no concrete P9b blockers remain. |
 
 ## Definition of done
 

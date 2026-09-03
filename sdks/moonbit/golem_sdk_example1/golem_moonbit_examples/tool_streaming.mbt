@@ -6,7 +6,7 @@ struct MoonBitStreaming {}
 pub async fn MoonBitStreaming::stream(
   mode : String,
   stdin : @asyncCore.Stream[Byte],
-  stdout : @asyncCore.Sink[Byte],
+  stdout : @tool.ProviderStdout,
 ) -> UInt64 {
   if mode == "marker-echo" {
     guard (stdout.write_all_bytes(b"moonbit-marker:") catch { _ => false }) else {

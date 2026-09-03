@@ -5211,5 +5211,16 @@ async fn moonbit_generated_client_streams_live(
     };
     assert_eq!(bytes_read, payload.len() as u64);
 
+    let explicit_failure: String = executor
+        .invoke_and_await_agent(
+            &stored_component,
+            &agent_id,
+            "explicit_stdout_failure",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(explicit_failure, "resource-exhausted:ok");
+
     Ok(())
 }

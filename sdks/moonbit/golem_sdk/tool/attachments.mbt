@@ -1,12 +1,4 @@
 ///|
-pub(all) suberror ToolStreamError {
-  Cancelled
-  Abandoned
-  ResourceExhausted
-  Failed(String)
-} derive(Debug, Eq)
-
-///|
 fn stream_failure(error : @toolHost.ByteStreamFailure) -> ToolStreamError {
   match error {
     @toolHost.ByteStreamFailure::Cancelled => ToolStreamError::Cancelled
@@ -19,102 +11,88 @@ fn stream_failure(error : @toolHost.ByteStreamFailure) -> ToolStreamError {
 }
 
 ///|
-priv struct ProviderStdoutState {
-  writer : @toolHost.ToolStdoutWriter
-  mut open : Bool
-  mut busy : Bool
-  mut dropped : Bool
+priv struct ToolByteStreamSource {
+  source : @async-core.Stream[
+    Result[FixedArray[Byte], @toolHost.ByteStreamFailure],
+  ]
+  mut pending : FixedArray[Byte]?
+  mut pending_offset : Int
+  mut closed : Bool
 }
 
 ///|
-pub struct ProviderStdout {
-  priv state : Ref[ProviderStdoutState]
-  priv output : @async-core.Sink[Byte]
+fn ToolByteStreamSource::read_pending(
+  self : ToolByteStreamSource,
+  count : Int,
+) -> FixedArray[Byte]? {
+  guard self.pending is Some(bytes) else { return None }
+  let remaining = bytes.length() - self.pending_offset
+  let length = if remaining < count { remaining } else { count }
+  let result = FixedArray::makei(length, i => bytes[self.pending_offset + i])
+  self.pending_offset += length
+  if self.pending_offset == bytes.length() {
+    self.pending = None
+    self.pending_offset = 0
+  }
+  Some(result)
 }
 
 ///|
-pub fn provider_stdout(writer : @toolHost.ToolStdoutWriter) -> ProviderStdout {
-  let state = @ref.new({ writer, open: true, busy: false, dropped: false, })
-  let output = @async-core.Sink::from_callbacks(
-    async fn(bytes) {
-      if !state.val.open || state.val.dropped {
-        return 0
+async fn ToolByteStreamSource::read(
+  self : ToolByteStreamSource,
+  count : Int,
+) -> FixedArray[Byte]? {
+  if self.closed {
+    return None
+  }
+  if count <= 0 {
+    return Some([])
+  }
+  match self.read_pending(count) {
+    Some(bytes) => return Some(bytes)
+    None => ()
+  }
+  for ;; {
+    match self.source.read(1) {
+      None => {
+        self.closed = true
+        return None
       }
-      if state.val.busy {
-        raise @toolHost.StreamWriteError::ConcurrentOperation
-      }
-      state.val.busy = true
-      defer {
-        state.val.busy = false
-      }
-      let owned = FixedArray::from_array(bytes)
-      match state.val.writer.write(owned) {
-        Ok(_) => bytes.length()
-        Err(error) => {
-          if error is @toolHost.StreamWriteError::Closed(_) {
-            state.val.open = false
+      Some(items) if items.length() == 0 => return Some([])
+      Some(items) => {
+        guard! items.length() == 1
+        match items[0] {
+          Err(error) => {
+            self.closed = true
+            self.source.drop()
+            raise stream_failure(error)
           }
-          raise error
+          Ok(bytes) if bytes.length() == 0 => continue
+          Ok(bytes) => {
+            self.pending = Some(bytes)
+            return self.read_pending(count)
+          }
         }
       }
-    },
-    async fn() {
-      if !state.val.open || state.val.dropped {
-        return
-      }
-      if state.val.busy {
-        raise @toolHost.StreamWriteError::ConcurrentOperation
-      }
-      state.val.busy = true
-      defer {
-        state.val.busy = false
-      }
-      match state.val.writer.finish() {
-        Ok(_) => state.val.open = false
-        Err(error) => {
-          if error is @toolHost.StreamWriteError::Closed(_) {
-            state.val.open = false
-          }
-          raise error
-        }
-      }
-    },
-    fn() { state.val.open && !state.val.dropped },
-    None,
-  )
-  { state, output, }
-}
-
-///|
-pub fn ProviderStdout::output(self : ProviderStdout) -> @async-core.Sink[Byte] {
-  self.output
-}
-
-///|
-pub async fn ProviderStdout::finish(self : ProviderStdout) -> Unit {
-  if !self.state.val.open || self.state.val.dropped {
-    return
-  }
-  if self.state.val.busy {
-    raise @toolHost.StreamWriteError::ConcurrentOperation
-  }
-  self.state.val.busy = true
-  defer {
-    self.state.val.busy = false
-  }
-  match self.state.val.writer.finish() {
-    Ok(_) => self.state.val.open = false
-    Err(@toolHost.StreamWriteError::Closed(_)) => self.state.val.open = false
-    Err(error) => raise error
+    }
   }
 }
 
 ///|
-pub fn ProviderStdout::drop(self : ProviderStdout) -> Unit {
-  if !self.state.val.dropped {
-    self.state.val.dropped = true
-    self.state.val.open = false
-    self.state.val.writer.drop()
+async fn ToolByteStreamSource::close(
+  self : ToolByteStreamSource,
+) -> Unit noraise {
+  if !self.closed {
+    self.closed = true
+    self.source.drop()
+  }
+}
+
+///|
+fn ToolByteStreamSource::close_sync(self : ToolByteStreamSource) -> Unit {
+  if !self.closed {
+    self.closed = true
+    self.source.drop_sync()
   }
 }
 
@@ -124,26 +102,34 @@ pub fn byte_stream(
     Result[FixedArray[Byte], @toolHost.ByteStreamFailure],
   ],
 ) -> @async-core.Stream[Byte] {
-  @async-core.Stream::produce(
-    async fn(sink) {
-      for ;; {
-        match source.read(1) {
-          None => break
-          Some(items) =>
-            for item in items {
-              match item {
-                Ok(chunk) =>
-                  if !sink.write_all(chunk) {
-                    source.drop()
-                    return
-                  }
-                Err(error) => raise stream_failure(error)
-              }
-            }
-        }
-      }
+  let source = ToolByteStreamSource::{
+    source,
+    pending: None,
+    pending_offset: 0,
+    closed: false,
+  }
+  @async-core.Stream::from_source(
+    count => source.read(count),
+    () => source.close(),
+    () => source.close_sync(),
+  )
+}
+
+///|
+async fn reject_stdin_source(
+  source : @async-core.Stream[Byte],
+  sink : @async-core.Sink[Result[FixedArray[Byte], @toolHost.ByteStreamFailure]],
+  failure : @toolHost.ByteStreamFailure,
+) -> Unit {
+  @async-core.protect_from_cancel(
+    async fn() {
+      source.drop()
+      let failure : Result[FixedArray[Byte], @toolHost.ByteStreamFailure] = Err(
+        failure,
+      )
+      ignore(sink.write_all([failure]))
     },
-    on_unstarted_drop=fn() { source.drop_sync() },
+    resume_on_cancel=true,
   )
 }
 
@@ -155,11 +141,52 @@ fn stdin_byte_stream(
     async fn(sink) {
       for ;; {
         let chunk = source.read(65536) catch {
+          ToolStreamError::Cancelled => {
+            reject_stdin_source(
+              source,
+              sink,
+              @toolHost.ByteStreamFailure::Cancelled,
+            )
+            return
+          }
+          ToolStreamError::Abandoned => {
+            reject_stdin_source(
+              source,
+              sink,
+              @toolHost.ByteStreamFailure::Abandoned,
+            )
+            return
+          }
+          ToolStreamError::ResourceExhausted => {
+            reject_stdin_source(
+              source,
+              sink,
+              @toolHost.ByteStreamFailure::ResourceExhausted,
+            )
+            return
+          }
+          ToolStreamError::Failed(message) => {
+            reject_stdin_source(
+              source,
+              sink,
+              @toolHost.ByteStreamFailure::Failed(message),
+            )
+            return
+          }
+          @async-core.Cancelled::Cancelled => {
+            reject_stdin_source(
+              source,
+              sink,
+              @toolHost.ByteStreamFailure::Cancelled,
+            )
+            return
+          }
           error => {
-            let failure : Result[FixedArray[Byte], @toolHost.ByteStreamFailure] = Err(
+            reject_stdin_source(
+              source,
+              sink,
               @toolHost.ByteStreamFailure::Failed(repr(error)),
             )
-            ignore(sink.write_all([failure]))
             return
           }
         }
@@ -197,25 +224,5 @@ fn invocation_stdout(
     Result[FixedArray[Byte], @toolHost.ByteStreamFailure],
   ],
 ) -> @async-core.Stream[Byte] {
-  @async-core.Stream::produce(
-    async fn(sink) {
-      for ;; {
-        match source.read(1) {
-          None => break
-          Some(items) =>
-            for item in items {
-              match item {
-                Ok(chunk) =>
-                  if !sink.write_all(chunk) {
-                    source.drop()
-                    return
-                  }
-                Err(error) => raise stream_failure(error)
-              }
-            }
-        }
-      }
-    },
-    on_unstarted_drop=fn() { source.drop_sync() },
-  )
+  byte_stream(source)
 }

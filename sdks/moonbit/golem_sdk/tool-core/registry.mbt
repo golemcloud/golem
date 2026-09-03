@@ -11,7 +11,7 @@ type ToolInvoker = async (
   Array[String],
   @types.TypedSchemaValue,
   @async-core.Stream[Byte]?,
-  @async-core.Sink[Byte]?,
+  ProviderStdout?,
   @agentCommon.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError]
 
@@ -123,7 +123,7 @@ pub async fn invoke_registered_tool(
   command_path : Array[String],
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
-  stdout : @async-core.Sink[Byte]?,
+  stdout : ProviderStdout?,
   principal : @agentCommon.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   invoke_registered_tool_with_resource_drops(
@@ -143,7 +143,7 @@ async fn invoke_registered_tool_with_resource_drops(
   command_path : Array[String],
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
-  stdout : @async-core.Sink[Byte]?,
+  stdout : ProviderStdout?,
   principal : @agentCommon.Principal,
   drops : @model.SchemaValueResourceDrops,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
@@ -176,7 +176,7 @@ async fn invoke_registered_invoker(
   command_path : Array[String],
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
-  stdout : @async-core.Sink[Byte]?,
+  stdout : ProviderStdout?,
   principal : @agentCommon.Principal,
   drops : @model.SchemaValueResourceDrops,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
@@ -198,7 +198,7 @@ pub async fn invoke_registered_subtool(
   command_path : Array[String],
   fields : Array[CanonicalInputValue],
   stdin : @async-core.Stream[Byte]?,
-  stdout : @async-core.Sink[Byte]?,
+  stdout : ProviderStdout?,
   principal : @agentCommon.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   invoke_registered_subtool_with_resource_drops(
@@ -218,7 +218,7 @@ async fn invoke_registered_subtool_with_resource_drops(
   command_path : Array[String],
   fields : Array[CanonicalInputValue],
   stdin : @async-core.Stream[Byte]?,
-  stdout : @async-core.Sink[Byte]?,
+  stdout : ProviderStdout?,
   principal : @agentCommon.Principal,
   drops : @model.SchemaValueResourceDrops,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {

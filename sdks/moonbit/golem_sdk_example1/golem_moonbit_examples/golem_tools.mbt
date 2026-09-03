@@ -626,7 +626,7 @@ async fn __golem_tool_invoke_MoonBitStreaming(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
-  __golem_stdout : @asyncCore.Sink[Byte]?,
+  __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   let __golem_def = __golem_tool_def_MoonBitStreaming()
@@ -659,7 +659,9 @@ async fn __golem_tool_invoke_MoonBitStreaming(
       let stdin = match __golem_stdin {
         Some(__golem_stream) => __golem_stream
         None =>
-          return Err(
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
             @toolCommon.ToolError::InvalidInput(
               "required stdin stream is missing",
             ),
@@ -668,7 +670,9 @@ async fn __golem_tool_invoke_MoonBitStreaming(
       let stdout = match __golem_stdout {
         Some(__golem_output) => __golem_output
         None =>
-          return Err(
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
             @toolCommon.ToolError::InvalidInput(
               "required stdout stream is missing",
             ),
@@ -1083,7 +1087,7 @@ async fn __golem_tool_invoke_CanonicalGrep(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
-  __golem_stdout : @asyncCore.Sink[Byte]?,
+  __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalGrep()
@@ -1156,7 +1160,9 @@ async fn __golem_tool_invoke_CanonicalGrep(
       let stdin = match __golem_stdin {
         Some(__golem_stream) => __golem_stream
         None =>
-          return Err(
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
             @toolCommon.ToolError::InvalidInput(
               "required stdin stream is missing",
             ),
@@ -1165,7 +1171,9 @@ async fn __golem_tool_invoke_CanonicalGrep(
       let stdout = match __golem_stdout {
         Some(__golem_output) => __golem_output
         None =>
-          return Err(
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
             @toolCommon.ToolError::InvalidInput(
               "required stdout stream is missing",
             ),
@@ -1968,7 +1976,7 @@ async fn __golem_tool_invoke_CanonicalGit(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
-  __golem_stdout : @asyncCore.Sink[Byte]?,
+  __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalGit()
@@ -2630,7 +2638,7 @@ async fn __golem_tool_invoke_CanonicalRemote(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
-  __golem_stdout : @asyncCore.Sink[Byte]?,
+  __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalRemote()
@@ -3131,7 +3139,7 @@ async fn __golem_tool_invoke_CanonicalStash(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
-  __golem_stdout : @asyncCore.Sink[Byte]?,
+  __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalStash()
@@ -3434,7 +3442,7 @@ async fn __golem_tool_invoke_CanonicalBigBound(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
-  __golem_stdout : @asyncCore.Sink[Byte]?,
+  __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalBigBound()
