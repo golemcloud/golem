@@ -14,27 +14,34 @@
 
 use crate::grpc::client::{GrpcClient, GrpcClientConfig};
 use crate::model::quota_lease::{PendingReservation, QuotaLease};
+use applying::Apply;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_api_grpc::proto::golem::shardmanager::v1::{
-    AcquireQuotaLeaseRequest, BatchRenewQuotaLeasesRequest, GetRoutingTableRequest,
-    RegisterRequest, ReleaseQuotaLeaseRequest, RenewQuotaLeaseRequest,
-    acquire_quota_lease_response, get_routing_table_response, register_response,
-    release_quota_lease_response, renew_quota_lease_response, renew_quota_lease_result,
+    AcquireQuotaLeaseRequest, BatchRenewQuotaLeasesRequest, DeregisterRequest,
+    GetRoutingTableRequest, RegisterRequest, ReleaseQuotaLeaseRequest, RenewQuotaLeaseRequest,
+    RenewShardLeaseRequest, acquire_quota_lease_response, deregister_response,
+    get_routing_table_response, register_response, release_quota_lease_response,
+    renew_quota_lease_response, renew_quota_lease_result, renew_shard_lease_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::protobuf::{shard_epochs_from_proto, shard_epochs_to_proto};
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
-use golem_common::model::{RetryConfig, RoutingTable};
+use golem_common::model::{RetryConfig, RoutingTable, ShardEpoch, ShardId};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::with_retries;
 use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
 use http::Uri;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt::Write;
+use std::time::SystemTime;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
+use uuid::Uuid;
 
 /// Client for the shard manager service.
 ///
@@ -44,9 +51,33 @@ pub trait ShardManager: Send + Sync {
     /// Fetches the current routing table (shard-to-pod mapping).
     async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError>;
 
-    /// Registers this executor pod with the shard manager.
-    async fn register(&self, port: u16, pod_name: Option<String>)
-    -> Result<u32, ShardManagerError>;
+    /// Registers this executor pod with the shard manager, identified by the
+    /// UUID it generated at startup. Idempotent: the same `executor_id` at the
+    /// same address refreshes the existing shard lease rather than creating a
+    /// second one.
+    async fn register(
+        &self,
+        port: u16,
+        pod_name: Option<String>,
+        executor_id: Uuid,
+    ) -> Result<ShardRegistration, ShardManagerError>;
+
+    /// Extends this executor's shard lease. `shard_epochs` must be exactly the
+    /// set the executor was last told it holds; any mismatch fails the whole
+    /// renewal with `StaleEpoch` and renews nothing.
+    async fn renew_shard_lease(
+        &self,
+        executor_id: Uuid,
+        shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+    ) -> Result<ShardLease, ShardLeaseError>;
+
+    /// Releases the shard lease on a graceful shutdown. Lenient by contract: a
+    /// stale entry, or an unknown executor, never fails a shutdown.
+    async fn deregister(
+        &self,
+        executor_id: Uuid,
+        shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+    ) -> Result<(), ShardLeaseError>;
 
     /// Declares interest in a quota and requests an initial lease.
     async fn acquire_quota_lease(
@@ -82,6 +113,49 @@ pub trait ShardManager: Send + Sync {
         epoch: u64,
         unused: u64,
     ) -> Result<(), QuotaError>;
+}
+
+/// What a successful `Register` returns: the cluster's shard count plus this
+/// executor's shard lease.
+#[derive(Debug, Clone)]
+pub struct ShardRegistration {
+    pub number_of_shards: u32,
+    pub lease: ShardLease,
+}
+
+/// An executor's shard lease: the complete set of shards it owns with the epoch
+/// of each, and when the lease lapses if it is not renewed.
+#[derive(Debug, Clone, Default)]
+pub struct ShardLease {
+    pub shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+    /// `None` means the lease never expires.
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::shardmanager::v1::ShardLease> for ShardLease {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::shardmanager::v1::ShardLease,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            shard_epochs: shard_epochs_from_proto(value.shard_epochs)?,
+            expires_at: expires_at_from_proto(value.expires_at)?,
+        })
+    }
+}
+
+pub(crate) fn expires_at_from_proto(
+    expires_at: Option<prost_types::Timestamp>,
+) -> Result<Option<DateTime<Utc>>, String> {
+    expires_at
+        .map(|timestamp| {
+            timestamp
+                .apply(SystemTime::try_from)
+                .map_err(|_| "Failed to convert expires_at".to_string())
+                .map(DateTime::<Utc>::from)
+        })
+        .transpose()
 }
 
 /// One entry in a batch renewal request.
@@ -188,23 +262,22 @@ impl ShardManager for GrpcShardManager {
         &self,
         port: u16,
         pod_name: Option<String>,
-    ) -> Result<u32, ShardManagerError> {
+        executor_id: Uuid,
+    ) -> Result<ShardRegistration, ShardManagerError> {
         with_retries(
             "shard_manager",
             "register",
             Some(format!("{pod_name:?}")),
             &self.retries,
-            &(self.client.clone(), port, pod_name),
-            |(client, port, pod_name)| {
+            &(self.client.clone(), port, pod_name, executor_id),
+            |(client, port, pod_name, executor_id)| {
                 Box::pin(async move {
                     let response = client
                         .call("register", move |client| {
                             let request = RegisterRequest {
                                 port: *port as i32,
                                 pod_name: pod_name.clone(),
-                                // W1 (ticket 4, WIRE): inert until EX generates the
-                                // executor UUID and threads it through this trait.
-                                executor_id: String::new(),
+                                executor_id: executor_id.to_string(),
                             };
                             Box::pin(client.register(request))
                         })
@@ -214,7 +287,15 @@ impl ShardManager for GrpcShardManager {
                     match response.result {
                         None => Err(ShardManagerError::empty_response()),
                         Some(register_response::Result::Success(success)) => {
-                            Ok(success.number_of_shards)
+                            Ok(ShardRegistration {
+                                number_of_shards: success.number_of_shards,
+                                lease: ShardLease {
+                                    shard_epochs: shard_epochs_from_proto(success.shard_epochs)
+                                        .map_err(ShardManagerError::ConversionError)?,
+                                    expires_at: expires_at_from_proto(success.expires_at)
+                                        .map_err(ShardManagerError::ConversionError)?,
+                                },
+                            })
                         }
                         Some(register_response::Result::Failure(failure)) => Err(failure.into()),
                     }
@@ -223,6 +304,64 @@ impl ShardManager for GrpcShardManager {
             |_| true,
         )
         .await
+    }
+
+    async fn renew_shard_lease(
+        &self,
+        executor_id: Uuid,
+        shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+    ) -> Result<ShardLease, ShardLeaseError> {
+        let response = self
+            .client
+            .call("renew_shard_lease", move |client| {
+                let request = RenewShardLeaseRequest {
+                    executor_id: executor_id.to_string(),
+                    shard_epochs: shard_epochs_to_proto(
+                        shard_epochs
+                            .iter()
+                            .map(|(shard_id, epoch)| (*shard_id, *epoch)),
+                    ),
+                };
+                Box::pin(client.renew_shard_lease(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(ShardLeaseError::empty_response()),
+            Some(renew_shard_lease_response::Result::Success(lease)) => {
+                lease.try_into().map_err(ShardLeaseError::ConversionError)
+            }
+            Some(renew_shard_lease_response::Result::Failure(failure)) => Err(failure.into()),
+        }
+    }
+
+    async fn deregister(
+        &self,
+        executor_id: Uuid,
+        shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+    ) -> Result<(), ShardLeaseError> {
+        let response = self
+            .client
+            .call("deregister", move |client| {
+                let request = DeregisterRequest {
+                    executor_id: executor_id.to_string(),
+                    shard_epochs: shard_epochs_to_proto(
+                        shard_epochs
+                            .iter()
+                            .map(|(shard_id, epoch)| (*shard_id, *epoch)),
+                    ),
+                };
+                Box::pin(client.deregister(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(ShardLeaseError::empty_response()),
+            Some(deregister_response::Result::Success(_)) => Ok(()),
+            Some(deregister_response::Result::Failure(failure)) => Err(failure.into()),
+        }
     }
 
     async fn acquire_quota_lease(
@@ -529,6 +668,86 @@ impl From<String> for QuotaError {
 }
 
 impl From<&'static str> for QuotaError {
+    fn from(value: &'static str) -> Self {
+        Self::internal_client_error(value)
+    }
+}
+
+/// The failure arms of `RenewShardLease` and `Deregister`. Mirrors `QuotaError`
+/// arm for arm; the executor branches on the arm, never on the message string.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum ShardLeaseError {
+    #[error("Shard lease not found: {0}")]
+    LeaseNotFound(String),
+    #[error("Stale shard epoch: {0}")]
+    StaleEpoch(String),
+    #[error("Conversion error: {0}")]
+    ConversionError(String),
+    #[error("Internal server error: {0}")]
+    InternalServerError(String),
+    #[error("Internal client error: {0}")]
+    InternalClientError(String),
+}
+
+impl ShardLeaseError {
+    pub fn internal_client_error(error: impl AsRef<str>) -> Self {
+        Self::InternalClientError(error.as_ref().to_string())
+    }
+
+    pub fn empty_response() -> Self {
+        Self::internal_client_error("empty response")
+    }
+}
+
+impl SafeDisplay for ShardLeaseError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            Self::LeaseNotFound(_) => self.to_string(),
+            Self::StaleEpoch(_) => self.to_string(),
+            Self::ConversionError(_) => self.to_string(),
+            Self::InternalServerError(_) => "Internal error".to_string(),
+            Self::InternalClientError(_) => "Internal error".to_string(),
+        }
+    }
+}
+
+impl IntoAnyhow for ShardLeaseError {
+    fn into_anyhow(self) -> anyhow::Error {
+        anyhow::Error::from(self).context("ShardLeaseError")
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::shardmanager::v1::ShardLeaseError> for ShardLeaseError {
+    fn from(value: golem_api_grpc::proto::golem::shardmanager::v1::ShardLeaseError) -> Self {
+        use golem_api_grpc::proto::golem::shardmanager::v1::shard_lease_error::Error;
+        match value.error {
+            Some(Error::LeaseNotFound(body)) => Self::LeaseNotFound(body.error),
+            Some(Error::StaleEpoch(body)) => Self::StaleEpoch(body.error),
+            Some(Error::Internal(body)) => Self::InternalServerError(body.error),
+            None => Self::internal_client_error("Missing error field"),
+        }
+    }
+}
+
+impl From<tonic::transport::Error> for ShardLeaseError {
+    fn from(error: tonic::transport::Error) -> Self {
+        Self::internal_client_error(format!("Transport error: {error}"))
+    }
+}
+
+impl From<tonic::Status> for ShardLeaseError {
+    fn from(status: tonic::Status) -> Self {
+        Self::internal_client_error(format!("Connection error: {status}"))
+    }
+}
+
+impl From<String> for ShardLeaseError {
+    fn from(value: String) -> Self {
+        Self::internal_client_error(value)
+    }
+}
+
+impl From<&'static str> for ShardLeaseError {
     fn from(value: &'static str) -> Self {
         Self::internal_client_error(value)
     }

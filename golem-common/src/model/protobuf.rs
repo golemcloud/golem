@@ -20,7 +20,8 @@ use crate::model::{
     AgentCreatedAtFilter, AgentEnvFilter, AgentEvent, AgentFilePermissions, AgentFilter, AgentId,
     AgentModeFilter, AgentNameFilter, AgentNotFilter, AgentRevisionFilter, AgentStatus,
     AgentStatusFilter, FilterComparator, IdempotencyKey, LogLevel, NumberOfShards, Pod, PromiseId,
-    RoutingTable, RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, Timestamp,
+    RoutingTable, RoutingTableEntry, ScanCursor, ShardEpoch, ShardId, StringFilterComparator,
+    Timestamp,
 };
 use applying::Apply;
 use golem_api_grpc::proto::golem;
@@ -136,6 +137,39 @@ impl From<golem::shardmanager::ShardId> for ShardId {
     fn from(proto: golem::shardmanager::ShardId) -> Self {
         Self { value: proto.value }
     }
+}
+
+/// Free functions rather than `From`/`TryFrom` impls: the natural Rust side of
+/// a `ShardEpochEntry` is the pair `(ShardId, ShardEpoch)`, and a tuple counts
+/// as foreign for the orphan rule, so neither direction can be written as a
+/// trait impl here.
+pub fn shard_epochs_to_proto(
+    shard_epochs: impl IntoIterator<Item = (ShardId, ShardEpoch)>,
+) -> Vec<golem::shardmanager::ShardEpochEntry> {
+    shard_epochs
+        .into_iter()
+        .map(|(shard_id, epoch)| golem::shardmanager::ShardEpochEntry {
+            shard_id: Some(shard_id.into()),
+            epoch: epoch.0,
+        })
+        .collect()
+}
+
+pub fn shard_epochs_from_proto<C: FromIterator<(ShardId, ShardEpoch)>>(
+    entries: Vec<golem::shardmanager::ShardEpochEntry>,
+) -> Result<C, String> {
+    entries
+        .into_iter()
+        .map(|entry| {
+            Ok((
+                entry
+                    .shard_id
+                    .ok_or("ShardEpochEntry.shard_id missing")?
+                    .into(),
+                ShardEpoch(entry.epoch),
+            ))
+        })
+        .collect()
 }
 
 impl From<Pod> for GrpcPod {

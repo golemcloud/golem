@@ -213,7 +213,8 @@ impl DebugServiceDefault {
 
         self.all.shard_service().register(
             shard_assignment.number_of_shards,
-            &shard_assignment.shard_ids,
+            &shard_assignment.shard_epochs,
+            shard_assignment.expires_at,
         );
 
         let worker = Worker::get_or_create_suspended(
