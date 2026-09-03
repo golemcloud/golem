@@ -327,7 +327,7 @@ impl ComponentDependency {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum BridgeSdkTargetSource {
     Local {
@@ -394,7 +394,7 @@ impl BridgeSdkTargetSubject {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum BridgeSdkTargetKind {
     Agent,
     Tool,

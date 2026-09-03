@@ -77,15 +77,14 @@ use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantWithDet
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::plugin_registration::PluginSpecDto;
 use golem_common::model::tool::{
-    RemoteToolDeployment, SecretKeyScope, ToolBindingInput, ToolFilesystemAccess, ToolName,
-    ToolProvisionConfig,
+    RemoteToolDeployment, SecretKeyScope, ToolBindingInput, ToolName, ToolProvisionConfig,
 };
 use golem_common::model::tool_release::{ToolReleaseById, ToolReleaseReference};
 use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::schema::tool::Tool;
 use golem_common::schema::tool::validation::validate_tool;
 use itertools::Itertools;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -1359,6 +1358,9 @@ impl ComponentCommandHandler {
                 .tool_deployment_configs = tool_configs;
         }
 
+        let mut seen_initial_files = HashSet::new();
+        pending_remote_initial_files.retain(|file| seen_initial_files.insert(file.content_hash));
+
         Ok((
             remote_tool_deployments,
             diffable_remote_tool_deployments,
@@ -1427,8 +1429,8 @@ impl ComponentCommandHandler {
         let mut initial_files = Vec::with_capacity(loaded_files.len());
         let mut pending_files = Vec::with_capacity(loaded_files.len());
         for file in loaded_files {
-            let content_hash = AgentFileContentHash(diff::Hash::new(blake3::hash(&file.content)));
-            let size = u64::try_from(file.content.len())?;
+            let content_hash = AgentFileContentHash(diff::Hash::new(file.content_hash));
+            let size = file.size;
             initial_files.push(InitialAgentFile {
                 content_hash,
                 path: AgentFilePath::from_abs_str(file.target.path.as_abs_str())
@@ -2261,49 +2263,8 @@ fn effective_remote_tool_bindings(
         .keys()
         .filter_map(|agent_name| {
             let agent = agents.get(agent_name);
-            let (parameters, readable, requested_revealable) = match (environment, agent) {
-                (None, None) => return None,
-                (Some(binding), None) | (None, Some(binding)) => (
-                    binding.parameters.clone(),
-                    binding.secret_keys_readable.clone(),
-                    binding.secret_keys_revealable.clone(),
-                ),
-                (Some(environment), Some(agent)) => {
-                    let mut parameters = environment
-                        .parameters
-                        .0
-                        .as_object()
-                        .expect("validated tool binding parameters are objects")
-                        .clone();
-                    parameters.extend(
-                        agent
-                            .parameters
-                            .0
-                            .as_object()
-                            .expect("validated tool binding parameters are objects")
-                            .clone(),
-                    );
-                    (
-                        NormalizedJsonValue::new(serde_json::Value::Object(parameters)),
-                        environment
-                            .secret_keys_readable
-                            .intersection(&agent.secret_keys_readable),
-                        environment
-                            .secret_keys_revealable
-                            .intersection(&agent.secret_keys_revealable),
-                    )
-                }
-            };
-            let revealable = requested_revealable.intersection(&readable);
-            Some((
-                agent_name.clone(),
-                diff::EffectiveToolBinding {
-                    parameters,
-                    secret_keys_readable: readable,
-                    secret_keys_revealable: revealable,
-                    filesystem_access: ToolFilesystemAccess::Unset,
-                },
-            ))
+            diff::effective_tool_binding(environment, agent)
+                .map(|(binding, _)| (agent_name.clone(), binding))
         })
         .collect()
 }

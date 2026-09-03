@@ -59,6 +59,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedInitialPermissionCard {
@@ -360,7 +361,7 @@ pub struct DeployableManifestComponents {
 
 #[derive(Debug)]
 pub struct PendingRemoteInitialFile {
-    pub content: Vec<u8>,
+    pub content: Arc<tempfile::NamedTempFile>,
     pub content_hash: AgentFileContentHash,
     pub size: u64,
 }

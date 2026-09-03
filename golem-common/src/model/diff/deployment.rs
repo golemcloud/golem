@@ -23,8 +23,8 @@ use crate::model::diff::ser::serialize_with_mode;
 use crate::model::diff::{BTreeMapDiff, Diffable};
 use crate::model::json::NormalizedJsonValue;
 use crate::model::tool::{
-    CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolFilesystemAccess, ToolName,
-    ToolProvisionConfig, ToolSource,
+    CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolFilesystemAccess,
+    ToolName, ToolProvisionConfig, ToolSource,
 };
 use crate::model::tool_release::ToolReleaseId;
 use serde::Serialize;
@@ -37,6 +37,56 @@ pub struct EffectiveToolBinding {
     pub secret_keys_readable: SecretKeyScope,
     pub secret_keys_revealable: SecretKeyScope,
     pub filesystem_access: ToolFilesystemAccess,
+}
+
+pub fn effective_tool_binding(
+    environment: Option<&ToolBindingInput>,
+    agent: Option<&ToolBindingInput>,
+) -> Option<(EffectiveToolBinding, bool)> {
+    let (parameters, readable, requested_revealable) = match (environment, agent) {
+        (None, None) => return None,
+        (Some(binding), None) | (None, Some(binding)) => (
+            binding.parameters.clone(),
+            binding.secret_keys_readable.clone(),
+            binding.secret_keys_revealable.clone(),
+        ),
+        (Some(environment), Some(agent)) => {
+            let mut parameters = environment
+                .parameters
+                .0
+                .as_object()
+                .expect("validated tool binding parameters are objects")
+                .clone();
+            parameters.extend(
+                agent
+                    .parameters
+                    .0
+                    .as_object()
+                    .expect("validated tool binding parameters are objects")
+                    .clone(),
+            );
+            (
+                NormalizedJsonValue::new(serde_json::Value::Object(parameters)),
+                environment
+                    .secret_keys_readable
+                    .intersection(&agent.secret_keys_readable),
+                environment
+                    .secret_keys_revealable
+                    .intersection(&agent.secret_keys_revealable),
+            )
+        }
+    };
+    let revealable = requested_revealable.intersection(&readable);
+    let revealable_scope_narrowed = revealable != requested_revealable;
+    Some((
+        EffectiveToolBinding {
+            parameters,
+            secret_keys_readable: readable,
+            secret_keys_revealable: revealable,
+            filesystem_access: ToolFilesystemAccess::Unset,
+        },
+        revealable_scope_narrowed,
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

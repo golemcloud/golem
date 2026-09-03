@@ -5160,13 +5160,33 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .await
         .unwrap();
     deps.full_deployment_repo
+        .set_current_deployment(owner_account_id, environment_id, 1)
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let staged_after_component_update = deps
+        .full_deployment_repo
+        .get_staged_identity(environment_id)
+        .await
+        .unwrap()
+        .to_diffable();
+    assert_eq!(
+        staged_after_component_update.published_tools,
+        ["zeta".to_string()].into_iter().collect()
+    );
+    assert!(staged_after_component_update.remote_tools.is_empty());
+
+    deps.full_deployment_repo
         .deploy(
             deployment_creation(
                 3,
                 updated_component_revision_id,
                 "3.0.0",
-                vec![make_test_tool("alpha", "3.0.0")],
-                None,
+                vec![
+                    make_test_tool("alpha", "3.0.0"),
+                    make_test_tool("zeta", "1.0.0"),
+                ],
+                Some("zeta"),
             ),
             false,
         )
@@ -5200,7 +5220,19 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .try_into()
         .unwrap();
     assert_eq!(latest_for_updated_component.deployment_revision.get(), 3);
-
+    let republished_zeta =
+        &latest_for_updated_component.registered_tools[&ToolName::try_from("zeta").unwrap()];
+    assert_eq!(
+        republished_zeta.release_id,
+        Some(ToolReleaseId(published_zeta.release.tool_release_id))
+    );
+    assert!(matches!(
+        &republished_zeta.source,
+        ToolSource::Component {
+            component_revision,
+            ..
+        } if *component_revision == ComponentRevision::try_from(updated_component_revision_id).unwrap()
+    ));
     let remote_definition = make_test_tool("remote-search", "1.0.0");
     let remote_source = ToolSource::Component {
         component_id: ComponentId(component_id),
@@ -5297,6 +5329,14 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         remote_summary.components[0].revision,
         ComponentRevision::try_from(updated_component_revision_id).unwrap()
     );
+    let staged = deps
+        .full_deployment_repo
+        .get_staged_identity(environment_id)
+        .await
+        .unwrap()
+        .to_diffable();
+    assert_eq!(staged.remote_tools.len(), 1);
+    assert!(staged.published_tools.is_empty());
 
     let mut failed_publication = deployment_creation(
         5,

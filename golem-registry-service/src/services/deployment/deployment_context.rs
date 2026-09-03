@@ -311,11 +311,20 @@ impl DeploymentContext {
                 component_revision: component.revision,
                 component_name: component.component_name.clone(),
             };
-            let metadata_digest = golem_common::model::tool_release::tool_metadata_digest(
+            let metadata_digest = match golem_common::model::tool_release::tool_metadata_digest(
                 TOOL_METADATA_WIT_VERSION,
                 &metadata.definition,
-            )
-            .expect("validated tool metadata can be serialized");
+            ) {
+                Ok(metadata_digest) => metadata_digest,
+                Err(error) => {
+                    errors.push(DeployValidationError::ToolMetadataSerialization {
+                        component_name: component.component_name.clone(),
+                        tool_name: tool_name.clone(),
+                        error: error.to_string(),
+                    });
+                    continue;
+                }
+            };
             registered_tools.push(RegisteredTool {
                 deployment_revision,
                 release_id: None,
@@ -1025,25 +1034,8 @@ fn compile_tool_binding(
     metadata_digest: golem_common::model::diff::Hash,
     warnings: &mut Vec<super::DeployValidationWarning>,
 ) -> Option<CompiledToolBinding> {
-    let (parameters, readable, requested_revealable) = match (environment, agent) {
-        (None, None) => return None,
-        (Some(binding), None) | (None, Some(binding)) => (
-            binding.parameters.clone(),
-            binding.secret_keys_readable.clone(),
-            binding.secret_keys_revealable.clone(),
-        ),
-        (Some(environment), Some(agent)) => (
-            merge_tool_parameters(&environment.parameters, &agent.parameters),
-            environment
-                .secret_keys_readable
-                .intersection(&agent.secret_keys_readable),
-            environment
-                .secret_keys_revealable
-                .intersection(&agent.secret_keys_revealable),
-        ),
-    };
-    let revealable = requested_revealable.intersection(&readable);
-    if revealable != requested_revealable {
+    let (binding, revealable_scope_narrowed) = diff::effective_tool_binding(environment, agent)?;
+    if revealable_scope_narrowed {
         warnings.push(super::DeployValidationWarning::ToolRevealableSecretKeysDropped(
             golem_common::base_model::deploy_validation_warning::ToolRevealableSecretKeysDropped {
                 agent_type: agent_type.clone(),
@@ -1062,31 +1054,12 @@ fn compile_tool_binding(
         metadata_digest,
         account_id: owner_account_id,
         account_email: owner_account_email.clone(),
-        parameters,
-        secret_keys_readable: readable,
-        secret_keys_revealable: revealable,
-        filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
+        parameters: binding.parameters,
+        secret_keys_readable: binding.secret_keys_readable,
+        secret_keys_revealable: binding.secret_keys_revealable,
+        filesystem_access: binding.filesystem_access,
         source,
     })
-}
-
-fn merge_tool_parameters(
-    base: &golem_common::model::json::NormalizedJsonValue,
-    update: &golem_common::model::json::NormalizedJsonValue,
-) -> golem_common::model::json::NormalizedJsonValue {
-    let mut result = base
-        .0
-        .as_object()
-        .expect("validated tool binding parameters are objects")
-        .clone();
-    result.extend(
-        update
-            .0
-            .as_object()
-            .expect("validated tool binding parameters are objects")
-            .clone(),
-    );
-    golem_common::model::json::NormalizedJsonValue::new(serde_json::Value::Object(result))
 }
 
 /// Parse the optional JSON-encoded default for an agent secret against the

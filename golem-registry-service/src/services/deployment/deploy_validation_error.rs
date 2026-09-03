@@ -172,6 +172,12 @@ pub enum DeployValidationError {
         tool_name: ToolName,
         errors: Vec<String>,
     },
+    #[error("Tool {tool_name} in component {component_name} could not be serialized: {error}")]
+    ToolMetadataSerialization {
+        component_name: ComponentName,
+        tool_name: ToolName,
+        error: String,
+    },
     #[error(
         "Tool {tool_name} is implemented by multiple components: {components}",
         components = components.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")

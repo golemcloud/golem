@@ -272,7 +272,7 @@ impl DbToolReleaseRepo<PostgresPool> {
                     .bind(&record.tool_version),
             )
             .await?;
-        if !existing.release.immutable_fields_match(record) {
+        if !existing.release.publication_content_matches(record) {
             return Err(ToolReleaseRepoError::ImmutableConflict);
         }
 

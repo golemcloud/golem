@@ -1966,15 +1966,20 @@ impl TextOutput for DeploymentDiff {
         if !self.published_tools.is_empty() {
             logln("Published tool changes:".log_color_help_group().to_string());
             for (tool_name, publication_diff) in &self.published_tools {
-                let action = match publication_diff {
-                    diff::BTreeSetDiffValue::Create => "publish".green(),
-                    diff::BTreeSetDiffValue::Delete => "de-publish".red(),
+                let change = match publication_diff {
+                    diff::BTreeSetDiffValue::Create => {
+                        format!("publish tool {}", tool_name.log_color_highlight(),)
+                            .green()
+                            .to_string()
+                    }
+                    diff::BTreeSetDiffValue::Delete => format!(
+                        "stop publishing tool {} from this deployment (release remains available)",
+                        tool_name.log_color_highlight(),
+                    )
+                    .red()
+                    .to_string(),
                 };
-                logln(format!(
-                    "  - {} tool {}",
-                    action,
-                    tool_name.log_color_highlight(),
-                ));
+                logln(format!("  - {change}"));
             }
             logln("");
         }

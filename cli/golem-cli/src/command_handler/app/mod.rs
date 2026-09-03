@@ -2484,9 +2484,11 @@ impl AppCommandHandler {
 
         let clients = self.ctx.golem_clients().await?;
         for file in files {
+            let source = tokio::fs::File::from_std(file.content.reopen()?);
+            let body = reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(source));
             let uploaded = clients
                 .environment
-                .upload_environment_initial_agent_file(&environment_id.0, file.content.clone())
+                .upload_environment_initial_agent_file(&environment_id.0, body)
                 .await
                 .map_service_error()?;
             let uploaded_hash =

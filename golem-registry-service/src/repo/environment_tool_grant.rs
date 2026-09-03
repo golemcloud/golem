@@ -24,7 +24,9 @@ use golem_common::error_forwarding;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
-use golem_service_base::repo::{RepoError, ResultExt, SqlDateTime};
+use golem_service_base::repo::{
+    PoolLabelledTransaction, RepoError, RepoResult, ResultExt, SqlDateTime,
+};
 use indoc::indoc;
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
@@ -232,6 +234,88 @@ impl<DBP: Pool> DbEnvironmentToolGrantRepo<DBP> {
     }
 }
 
+impl DbEnvironmentToolGrantRepo<PostgresPool> {
+    async fn published_release_exists(
+        tx: &mut PoolLabelledTransaction<PostgresPool>,
+        release_id: Uuid,
+    ) -> RepoResult<bool> {
+        Ok(tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                SELECT tool_release_id
+                FROM tool_releases
+                WHERE tool_release_id = $1 AND lifecycle = $2
+                FOR SHARE
+            "#})
+                .bind(release_id)
+                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED),
+            )
+            .await?
+            .is_some())
+    }
+
+    async fn grant_has_published_release(
+        tx: &mut PoolLabelledTransaction<PostgresPool>,
+        grant_id: Uuid,
+    ) -> RepoResult<bool> {
+        Ok(tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                SELECT tr.tool_release_id
+                FROM tool_releases tr
+                JOIN environment_tool_grants etg
+                    ON etg.tool_release_id = tr.tool_release_id
+                WHERE etg.environment_tool_grant_id = $1 AND tr.lifecycle = $2
+                FOR SHARE OF tr
+            "#})
+                .bind(grant_id)
+                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED),
+            )
+            .await?
+            .is_some())
+    }
+}
+
+impl DbEnvironmentToolGrantRepo<SqlitePool> {
+    async fn published_release_exists(
+        tx: &mut PoolLabelledTransaction<SqlitePool>,
+        release_id: Uuid,
+    ) -> RepoResult<bool> {
+        Ok(tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                SELECT tool_release_id
+                FROM tool_releases
+                WHERE tool_release_id = $1 AND lifecycle = $2
+            "#})
+                .bind(release_id)
+                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED),
+            )
+            .await?
+            .is_some())
+    }
+
+    async fn grant_has_published_release(
+        tx: &mut PoolLabelledTransaction<SqlitePool>,
+        grant_id: Uuid,
+    ) -> RepoResult<bool> {
+        Ok(tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                SELECT tr.tool_release_id
+                FROM tool_releases tr
+                JOIN environment_tool_grants etg
+                    ON etg.tool_release_id = tr.tool_release_id
+                WHERE etg.environment_tool_grant_id = $1 AND tr.lifecycle = $2
+            "#})
+                .bind(grant_id)
+                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED),
+            )
+            .await?
+            .is_some())
+    }
+}
+
 const GRANT_DETAILS_SELECT: &str = r#"
     SELECT
         etg.environment_tool_grant_id, etg.environment_id, etg.protected, etg.automatic,
@@ -265,18 +349,7 @@ impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
         self.db_pool
             .with_tx_err(METRICS_SVC_NAME, "create", |tx| {
                 async move {
-                    let release = tx
-                        .execute(
-                            sqlx::query(indoc! { r#"
-                                UPDATE tool_releases
-                                SET lifecycle = lifecycle
-                                WHERE tool_release_id = $1 AND lifecycle = $2
-                            "#})
-                            .bind(record.tool_release_id)
-                            .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED),
-                        )
-                        .await?;
-                    if release.rows_affected() != 1 {
+                    if !Self::published_release_exists(tx, record.tool_release_id).await? {
                         return Err(EnvironmentToolGrantRepoError::ConcurrentModification);
                     }
                     tx.execute(
@@ -465,21 +538,7 @@ impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
         self.db_pool
             .with_tx_err(METRICS_SVC_NAME, "restore", |tx| {
                 async move {
-                    let release = tx
-                        .execute(
-                            sqlx::query(indoc! { r#"
-                                UPDATE tool_releases
-                                SET lifecycle = lifecycle
-                                WHERE lifecycle = $2 AND tool_release_id = (
-                                    SELECT tool_release_id FROM environment_tool_grants
-                                    WHERE environment_tool_grant_id = $1
-                                )
-                            "#})
-                            .bind(grant_id)
-                            .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED),
-                        )
-                        .await?;
-                    if release.rows_affected() != 1 {
+                    if !Self::grant_has_published_release(tx, grant_id).await? {
                         return Ok(None);
                     }
                     let updated = tx

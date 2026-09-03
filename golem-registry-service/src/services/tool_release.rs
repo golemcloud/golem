@@ -146,7 +146,7 @@ impl ToolReleaseService {
             {
                 None => changed = true,
                 Some(existing) => {
-                    if !existing.release.immutable_fields_match(candidate) {
+                    if !existing.release.publication_content_matches(candidate) {
                         return Err(ToolReleaseError::ImmutableReleaseConflict);
                     }
                     candidate.tool_release_id = existing.release.tool_release_id;

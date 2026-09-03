@@ -188,6 +188,12 @@ impl ToolReleaseRecord {
             && self.host_tool_id == other.host_tool_id
             && self.implementation_version == other.implementation_version
     }
+
+    pub fn publication_content_matches(&self, other: &Self) -> bool {
+        self.tool_definition == other.tool_definition
+            && self.metadata_version == other.metadata_version
+            && self.metadata_digest == other.metadata_digest
+    }
 }
 
 impl TryFrom<ToolReleaseRecord> for ToolRelease {

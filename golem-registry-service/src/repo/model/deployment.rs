@@ -38,7 +38,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::agent::RegisteredAgentTypeImplementer;
 use golem_common::model::agent_secret::AgentSecretId;
-use golem_common::model::component::ComponentName;
+use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
 use golem_common::model::deployment::{
     CurrentDeployment, CurrentDeploymentRevision, Deployment, DeploymentPlan, DeploymentRevision,
     DeploymentSummary, DeploymentVersion,
@@ -248,6 +248,7 @@ pub struct DeploymentIdentity {
     pub mcp_deployments: Vec<McpDeploymentRevisionIdentityRecord>,
     pub registered_tools: Vec<RegisteredTool>,
     pub agent_tool_bindings: Vec<CompiledToolBinding>,
+    pub local_tool_component_revisions: BTreeSet<(ComponentId, ComponentRevision)>,
 }
 
 impl DeploymentIdentity {
@@ -301,19 +302,6 @@ impl DeploymentIdentity {
 
 impl DeploymentIdentity {
     pub fn to_diffable(&self) -> diff::Deployment {
-        let local_component_revisions = self
-            .components
-            .iter()
-            .map(|component| {
-                (
-                    golem_common::model::component::ComponentId(component.component_id),
-                    component
-                        .revision_id
-                        .try_into()
-                        .expect("deployment component revision was validated when persisted"),
-                )
-            })
-            .collect::<BTreeSet<_>>();
         let published_tools = self
             .registered_tools
             .iter()
@@ -325,7 +313,7 @@ impl DeploymentIdentity {
                             component_id,
                             component_revision,
                             ..
-                        } if local_component_revisions.contains(&(*component_id, *component_revision))
+                        } if self.local_tool_component_revisions.contains(&(*component_id, *component_revision))
                     )
             })
             .filter_map(|tool| tool.definition.name().map(ToOwned::to_owned))
@@ -364,7 +352,7 @@ impl DeploymentIdentity {
             remote_tools: diff::remote_tool_deployments(
                 self.registered_tools.clone(),
                 self.agent_tool_bindings.clone(),
-                &local_component_revisions,
+                &self.local_tool_component_revisions,
             ),
             published_tools,
         }

@@ -134,6 +134,29 @@ ALTER TABLE deployment_registered_tools
     ADD COLUMN owner_account_email TEXT,
     ADD COLUMN metadata_digest BYTEA;
 
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM deployment_registered_tools registered
+        LEFT JOIN component_revisions
+          ON component_revisions.component_id = registered.component_id
+         AND component_revisions.revision_id = registered.component_revision_id
+        LEFT JOIN components ON components.component_id = component_revisions.component_id
+        LEFT JOIN environments ON environments.environment_id = registered.environment_id
+        LEFT JOIN applications ON applications.application_id = environments.application_id
+        LEFT JOIN accounts ON accounts.account_id = applications.account_id
+        WHERE component_revisions.component_id IS NULL
+           OR components.component_id IS NULL
+           OR environments.environment_id IS NULL
+           OR applications.application_id IS NULL
+           OR accounts.account_id IS NULL
+    ) THEN
+        RAISE EXCEPTION 'deployment_registered_tools contains rows with unresolved component ownership';
+    END IF;
+END;
+$$;
+
 UPDATE deployment_registered_tools registered
 SET component_name = components.name,
     owner_account_id = applications.account_id,

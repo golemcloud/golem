@@ -30,7 +30,7 @@ use golem_common::model::component::ComponentName;
 use golem_common::model::tool::ToolName;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 #[derive(Debug, Default)]
 pub(crate) struct BridgeGenerationPlan {
@@ -134,7 +134,23 @@ pub(crate) async fn plan_bridge_generation(
         plan.targets.extend(repl_targets);
     }
 
+    deduplicate_bridge_targets(&mut plan.targets);
+
     Ok(plan)
+}
+
+fn deduplicate_bridge_targets(targets: &mut Vec<BridgeSdkTarget>) {
+    let mut seen = HashSet::new();
+    targets.retain(|target| {
+        seen.insert((
+            target.source.clone(),
+            target.subject.kind(),
+            target.subject.display_name().to_string(),
+            target.target_language,
+            target.bridge_mode,
+            target.output_dir.clone(),
+        ))
+    });
 }
 
 pub(crate) async fn write_repl_metadata(
@@ -1158,6 +1174,53 @@ mod tests {
                 output_dir,
             ),
         ];
+
+        assert!(validate_no_output_dir_collisions(&targets).is_err());
+    }
+
+    #[test]
+    fn deduplicate_bridge_targets_preserves_distinct_output_directories() {
+        let temp_dir = tempdir().unwrap();
+        let mut targets = vec![
+            bridge_sdk_target_with_mode(
+                "AlphaAgent",
+                GuestLanguage::Rust,
+                BridgeMode::Guest,
+                temp_dir.path().join("manifest/alpha-agent-guest-client"),
+            ),
+            bridge_sdk_target_with_mode(
+                "AlphaAgent",
+                GuestLanguage::Rust,
+                BridgeMode::Guest,
+                temp_dir.path().join("repl/alpha-agent-guest-client"),
+            ),
+        ];
+
+        deduplicate_bridge_targets(&mut targets);
+
+        assert_eq!(targets.len(), 2);
+    }
+
+    #[test]
+    fn deduplicate_bridge_targets_preserves_distinct_sources_for_collision_validation() {
+        let output_dir = tempdir().unwrap().path().join("bridge/alpha-client");
+        let mut targets = vec![
+            bridge_sdk_target_with_mode(
+                "AlphaAgent",
+                GuestLanguage::Rust,
+                BridgeMode::Guest,
+                output_dir.clone(),
+            ),
+            BridgeSdkTarget {
+                source: BridgeSdkTargetSource::local(ComponentName("other-component".to_string())),
+                subject: BridgeSdkTargetSubject::Agent(agent_type("AlphaAgent")),
+                target_language: GuestLanguage::Rust,
+                bridge_mode: BridgeMode::Guest,
+                output_dir,
+            },
+        ];
+
+        deduplicate_bridge_targets(&mut targets);
 
         assert!(validate_no_output_dir_collisions(&targets).is_err());
     }

@@ -128,6 +128,30 @@ CREATE INDEX environment_tool_grants_active_environment_idx
 CREATE INDEX environment_tool_grants_active_release_idx
     ON environment_tool_grants (tool_release_id, deleted_at);
 
+CREATE TEMP TABLE migration_034_tool_release_validation
+(
+    valid INTEGER NOT NULL CHECK (valid = 1)
+);
+
+INSERT INTO migration_034_tool_release_validation (valid)
+SELECT 0
+FROM deployment_registered_tools registered
+LEFT JOIN component_revisions
+  ON component_revisions.component_id = registered.component_id
+ AND component_revisions.revision_id = registered.component_revision_id
+LEFT JOIN components ON components.component_id = component_revisions.component_id
+LEFT JOIN environments ON environments.environment_id = registered.environment_id
+LEFT JOIN applications ON applications.application_id = environments.application_id
+LEFT JOIN accounts ON accounts.account_id = applications.account_id
+WHERE component_revisions.component_id IS NULL
+   OR components.component_id IS NULL
+   OR environments.environment_id IS NULL
+   OR applications.application_id IS NULL
+   OR accounts.account_id IS NULL
+LIMIT 1;
+
+DROP TABLE migration_034_tool_release_validation;
+
 CREATE TABLE deployment_registered_tools_v2
 (
     environment_id         UUID     NOT NULL,

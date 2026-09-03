@@ -84,11 +84,10 @@ impl EnvironmentsApi {
         );
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         let result = async {
-            let file = payload.file.into_file();
-            let data = tokio::fs::read(file.path()).await?;
+            let file = Arc::new(payload.file.into_file());
             Ok(Json(
                 self.deployment_write_service
-                    .upload_initial_agent_file(environment_id.0, data, &auth)
+                    .upload_initial_agent_file(environment_id.0, file, &auth)
                     .await?,
             ))
         }

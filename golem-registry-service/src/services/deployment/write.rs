@@ -51,6 +51,7 @@ use golem_service_base::repo::RepoError;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tempfile::NamedTempFile;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeploymentWriteError {
@@ -165,7 +166,7 @@ impl DeploymentWriteService {
     pub async fn upload_initial_agent_file(
         &self,
         environment_id: EnvironmentId,
-        data: Vec<u8>,
+        data: Arc<NamedTempFile>,
         auth: &AuthCtx,
     ) -> Result<InitialAgentFileUpload, DeploymentWriteError> {
         let environment = self
@@ -179,10 +180,13 @@ impl DeploymentWriteService {
                 other => other.into(),
             })?;
 
-        store_initial_agent_file(
+        let size = data.length().await?;
+        let stream = data.map_item(|item| item.map(|bytes| bytes.to_vec()));
+        store_initial_agent_file_stream(
             self.initial_agent_files_service.as_ref(),
             &environment,
-            data,
+            stream,
+            size,
             auth,
         )
         .await
@@ -583,18 +587,30 @@ impl DeploymentWriteService {
     }
 }
 
+#[cfg(test)]
 async fn store_initial_agent_file(
     initial_agent_files_service: &InitialAgentFilesService,
     environment: &Environment,
     data: Vec<u8>,
     auth: &AuthCtx,
 ) -> Result<InitialAgentFileUpload, DeploymentWriteError> {
-    authorize_environment_permission(auth, environment, EnvironmentVerb::Deploy)?;
-
     let size = data.len() as u64;
     let stream = data
         .map_item(|item| item.map_err(anyhow::Error::from))
         .map_error(anyhow::Error::from);
+    store_initial_agent_file_stream(initial_agent_files_service, environment, stream, size, auth)
+        .await
+}
+
+async fn store_initial_agent_file_stream(
+    initial_agent_files_service: &InitialAgentFilesService,
+    environment: &Environment,
+    stream: impl ReplayableStream<Item = Result<Vec<u8>, anyhow::Error>, Error = anyhow::Error>,
+    size: u64,
+    auth: &AuthCtx,
+) -> Result<InitialAgentFileUpload, DeploymentWriteError> {
+    authorize_environment_permission(auth, environment, EnvironmentVerb::Deploy)?;
+
     let content_hash = initial_agent_files_service
         .put_if_not_exists(environment.id, stream)
         .await?;
