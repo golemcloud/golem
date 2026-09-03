@@ -877,6 +877,7 @@ jobs:
           use-cache: 'false'
           rust-targets: 'wasm32-wasip1 wasm32-wasip2'
           install-cargo-make: 'false'
+          install-cargo-binstall: 'true'
       - name: Restore CLI test binaries
         uses: actions/cache/restore@v5
         with:
