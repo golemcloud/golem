@@ -93,9 +93,10 @@ final case class ToolInvocation[+E, +A](
     val terminal = result.map(Right(_): Either[Throwable, Either[ToolError[E], A]]).recover { case t => Left(t) }
     val output   = drain(Vector.empty).map(Right(_): Either[Throwable, Array[Byte]]).recover { case t => Left(t) }
     terminal.zip(output).flatMap {
-      case (Left(error), _)              => Future.failed(error)
-      case (_, Left(error))              => Future.failed(error)
-      case (Right(result), Right(bytes)) => Future.successful(result.map(_ -> bytes))
+      case (Right(Left(error @ ToolError.Tool(_))), _) => Future.successful(Left(error))
+      case (Left(error), _)                            => Future.failed(error)
+      case (_, Left(error))                            => Future.failed(error)
+      case (Right(result), Right(bytes))               => Future.successful(result.map(_ -> bytes))
     }
   }
 }

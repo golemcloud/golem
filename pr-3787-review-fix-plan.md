@@ -47,7 +47,7 @@ documented verification commands are all complete.
 | P6 | Make execution mode and attachment admission replay-deterministic | **Complete** | 3, 5 | P1, P5 |
 | P7a | Fix the Rust started-invocation caller contract | **Complete** | 7–9 | P1, P5 |
 | P7b | Fix the TypeScript started-invocation caller contract | **Complete** | 11 | P1, P5 |
-| P7c | Fix the Scala started-invocation caller contract | **Blocked** | 13 | Stable GOL-96 integration base |
+| P7c | Fix the Scala started-invocation caller contract | **Complete** | 13 | Stable GOL-96 integration base imported |
 | P8 | Replace Scala middleware streams with transfer-only handles | **Blocked** | 14 | Stable GOL-96 integration base |
 | P9a | Add Scala provider export-boundary ownership | **Blocked** | 15, 26 | P8; stable GOL-96 integration base |
 | P9b | Add MoonBit provider failure and cleanup support | **Complete** | 20–22, 26 | P0, P5 |
@@ -568,13 +568,14 @@ requests so each SDK can be reviewed and verified independently.
 
 ### P7c — Scala
 
-Status: **Blocked until GOL-96 provides a stable integration base.**
+Status: **Complete.** The stable GOL-96 commits were imported as local cherry-picks `31a7569f4`
+and `2df530ced`, and Oracle approved the phase.
 
-- [ ] In `ToolInvocation.collect`, recognize a successful result future containing a declared
+- [x] In `ToolInvocation.collect`, recognize a successful result future containing a declared
       `ToolError` before interpreting stdout failure.
-- [ ] Preserve existing precedence for transport/component failures unless a focused test proves a
+- [x] Preserve existing precedence for transport/component failures unless a focused test proves a
       different contract is required.
-- [ ] Test simultaneous declared tool error and stdout failure.
+- [x] Test simultaneous declared tool error and stdout failure.
 
 ## P8 — Replace Scala middleware streams with transfer-only handles
 
@@ -745,14 +746,15 @@ Coordination checklist:
 GOL-96 owns Scala `AgentStream` lifecycle/state, affine transfer, schema/wire interop, invocation
 ownership for agent methods, Scala target/caller fixtures, and their E2Es. It is stable in local
 commits `164acf0d63c1660e182f6407347f094a0deb4078` and
-`aa6ff73e2ceb4994583f0d281ce1ab333ed49cca`, but those commits are not published and are not
-directly visible from this checkout. A patch transfer has been requested from the owning thread.
+`aa6ff73e2ceb4994583f0d281ce1ab333ed49cca`. Those exact changes were imported from the local
+`golem-5` checkout as cherry-picks `31a7569f4` and `2df530ced`; no later branch commits or GOL-95
+changes were imported.
 
 Coordination checklist:
 
-- [ ] Allow P0–P7b and P9b/P9c to proceed independently.
+- [x] Allow P0–P7b and P9b/P9c to proceed independently.
 - [x] Defer P7c, P8, and P9a until GOL-96 is stable.
-- [ ] Import the stable GOL-96 base through the requested local patch before starting P7c/P8/P9a.
+- [x] Import the stable GOL-96 base through the requested local patch before starting P7c/P8/P9a.
 - [ ] Reuse GOL-96's ownership principles, not its P3 stream types or terminal semantics.
 - [ ] Keep tool conformance tests separate from the GOL-95/GOL-96 agent-stream lifecycle matrix.
 
@@ -865,6 +867,10 @@ Append an entry whenever a workstream changes status or a design gate is resolve
 | 2026-09-03 | P10 | Awaiting Oracle approval | Source WIT now documents terminal-or-concurrent manual stdin driving and all five copies are synchronized; generated TypeScript declarations were refreshed. Empty successful tool chunks are covered at the host core and in both producer directions for TypeScript, Scala, and MoonBit. The TypeScript caller fixture now imports the generated `TsStreamingClient`, and its isolated live executor integration passes. Verification is green: 1 host unit test; 111 targeted and 722 full TypeScript SDK tests (20 skipped); 8 targeted and 569 full Scala core tests; 52 targeted MoonBit tests plus scoped checks/builds; SDK/template/fixture builds; both fixture WASM validations; executor clippy; SDK lint; Rust, Scala, TypeScript, and MoonBit formatting; and diff whitespace checks. Logs are under `.amp/pr-3787-tests/p10-*`. |
 | 2026-09-03 | P10 | Oracle correction applied | Oracle found the TypeScript transport observed `future.get()` before starting its stdin pump, contrary to the documented deadlock-prevention ordering. The pump now starts immediately after successful invocation ownership transfer and before terminal observation. A call-order regression proves `getReader()` precedes `future.get()`. All 111 targeted and 722 full SDK tests (20 skipped), SDK/template and forced fixture rebuilds, both WASM validations, the live generated-client executor integration, lint, Prettier, and whitespace checks pass after the correction. |
 | 2026-09-03 | P10 | Complete | Oracle's follow-up review confirmed the corrected ownership and pump-before-result ordering, synchronous failure behavior, empty-chunk normalization, generated-client coverage, WIT synchronization, and isolation from P3/GOL-95/GOL-96, and returned `APPROVED`. |
+| 2026-09-03 | Coordination | GOL-96 imported | Located the stable source checkout locally and cherry-picked exactly GOL-96 commits `164acf0d63c1660e182f6407347f094a0deb4078` and `aa6ff73e2ceb4994583f0d281ce1ab333ed49cca` as `31a7569f4` and `2df530ced`. No later `gol-96` branch commits or GOL-95 changes were imported. P7c, P8, and P9a are unblocked. |
+| 2026-09-03 | P7c | In progress | Correcting Scala `ToolInvocation.collect` precedence so a declared tool error remains authoritative when stdout also fails, while preserving existing transport/component-failure precedence. |
+| 2026-09-03 | P7c | Awaiting Oracle approval | `ToolInvocation.collect` now returns an available declared `ToolError.Tool` before interpreting a simultaneous stdout failure, while failed result futures and `ToolError.Rpc` retain their previous precedence behavior. The focused `ToolClientSpec` passes on JVM and JS (7 tests each), all 314 model tests pass on each platform, and scalafmt plus whitespace checks are green. Logs: `.amp/pr-3787-tests/p7c-tool-client-targeted.log`, `.amp/pr-3787-tests/p7c-model-full.log`, `.amp/pr-3787-tests/p7c-scalafmt-check-final.log`, and `.amp/pr-3787-tests/p7c-diff-check.log`. |
+| 2026-09-03 | P7c | Complete | Oracle confirmed the precedence matrix, concurrent drain/result waiting, exhaustiveness, covariance, and regression coverage, and returned `APPROVED`. |
 
 ## Definition of done
 
