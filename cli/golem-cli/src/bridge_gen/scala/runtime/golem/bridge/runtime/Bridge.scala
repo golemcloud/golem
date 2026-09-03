@@ -127,7 +127,7 @@ object Bridge {
     }
   }
 
-  private def toScala[A](future: CompletableFuture[A]): Future[A] = {
+  private[runtime] def toScala[A](future: CompletableFuture[A]): Future[A] = {
     val promise = Promise[A]()
     future.whenComplete { (value: A, error: Throwable) =>
       if (error != null) promise.failure(error)
@@ -136,4 +136,16 @@ object Bridge {
     }
     promise.future
   }
+
+  /** Direct awaited invocation for a stream-bearing method. */
+  def invokeStreamingAgent(
+    resolved: ResolvedAgent,
+    methodName: String,
+    methodParameters: () => SchemaValue,
+    constructorCodec: PublicValueCodec.Codec,
+    inputCodec: PublicValueCodec.Codec,
+    outputCodec: Option[PublicValueCodec.Codec],
+    configCodecs: List[(List[String], PublicValueCodec.Codec)]
+  ): Future[AgentInvocationResult] =
+    StreamSession.invoke(resolved, methodName, methodParameters, constructorCodec, inputCodec, outputCodec, configCodecs)
 }

@@ -38,7 +38,9 @@ pub mod typescript;
 
 use camino::Utf8Path;
 use golem_common::model::agent::AgentTypeName;
-use golem_common::schema::AgentTypeSchema;
+use golem_common::schema::graph::reachable_defs;
+use golem_common::schema::schema_type::{NamedFieldType, SchemaType};
+use golem_common::schema::{AgentTypeSchema, InputSchema, SchemaGraph};
 use heck::ToKebabCase;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -85,4 +87,28 @@ pub fn bridge_client_directory_name(agent_type_name: &AgentTypeName, mode: Bridg
         BridgeMode::External => format!("{}-client", agent_type_name.as_str().to_kebab_case()),
         BridgeMode::Guest => format!("{}-guest-client", agent_type_name.as_str().to_kebab_case()),
     }
+}
+
+pub(crate) fn projected_schema_graph(graph: &SchemaGraph, root: &SchemaType) -> SchemaGraph {
+    SchemaGraph {
+        defs: reachable_defs(graph, root),
+        root: root.clone(),
+    }
+}
+
+pub(crate) fn projected_input_schema_graph(
+    graph: &SchemaGraph,
+    input: &InputSchema,
+) -> SchemaGraph {
+    let root = SchemaType::record(
+        type_naming::user_supplied_fields(input)
+            .into_iter()
+            .map(|field| NamedFieldType {
+                name: field.name.clone(),
+                body: field.schema.clone(),
+                metadata: field.metadata.clone(),
+            })
+            .collect(),
+    );
+    projected_schema_graph(graph, &root)
 }
