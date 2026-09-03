@@ -249,9 +249,6 @@ impl WorkerExecutorServiceDefault {
         assignment: &ShardAssignmentPush,
     ) -> Result<(), ShardManagerError> {
         let assign_shards_request = golem::workerexecutor::v1::AssignShardsRequest {
-            // Field 1 is still declared in worker_executor.proto and is replaced by `reserved`
-            // in W2, once no executor reads it any more. The set travels in `shard_epochs`.
-            shard_ids: Vec::new(),
             shard_epochs: assignment
                 .shard_epochs
                 .iter()
