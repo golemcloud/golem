@@ -4986,7 +4986,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                     .await?
             }
         };
-        Ok(self.finish_replay(replay))
+        Ok(self.finish_replay(ctx, replay))
     }
 
     pub(crate) async fn start_replay_or_continue_live<Ctx: WorkerCtx>(
@@ -5005,7 +5005,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                 .await?;
             match outcome {
                 ReplayStartClaimOutcome::Claimed { handle, .. } => {
-                    return Ok(BegunCallReplayOutcome::Claimed(self.finish_replay(handle)));
+                    return Ok(BegunCallReplayOutcome::Claimed(
+                        self.finish_replay(ctx, handle),
+                    ));
                 }
                 outcome @ (ReplayStartClaimOutcome::ReplayEnded
                 | ReplayStartClaimOutcome::DeletedRegion) => {
@@ -5093,7 +5095,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         claim.with_observational_owner(self.execution_scope.observational_owner)
     }
 
-    fn finish_replay(self, replay: ReplayCallHandle) -> DurableCallSession<Pair, P> {
+    fn finish_replay<Ctx: WorkerCtx>(
+        self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        replay: ReplayCallHandle,
+    ) -> DurableCallSession<Pair, P> {
         let start_idx = replay.start_idx();
         // Replay handles never participate in the live in-flight member guard, but keep their
         // initiation-time region for trap/retry classification.
