@@ -754,8 +754,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_agent_id.agent_id(),
             ))?;
 
-        if metadata
-            .last_known_status
+        let status = &metadata.last_known_status;
+        if status
             .pending_invocations
             .iter()
             .any(|invocation| invocation.idempotency_key() == Some(&idempotency_key))
@@ -773,6 +773,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
             worker.cancel_invocation(idempotency_key).await?;
             Ok(true)
+        } else if status.invocation_results.contains_key(&idempotency_key) {
+            Ok(false)
+        } else if status.current_idempotency_key.as_ref() == Some(&idempotency_key)
+            || status.invocation_results.is_exact_complete()
+            || !status.invocation_results.might_contain(&idempotency_key)
+        {
+            Err(WorkerExecutorError::invalid_request("Invocation not found"))
         } else {
             let worker = Worker::get_or_create_suspended(
                 self,
@@ -788,8 +795,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             match worker.lookup_invocation_result(&idempotency_key).await {
                 LookupResult::Complete(_) | LookupResult::Interrupted => Ok(false),
                 LookupResult::Pending => {
-                    worker.cancel_invocation(idempotency_key).await?;
-                    Ok(true)
+                    let status = worker.get_last_known_status().await;
+                    if status
+                        .pending_invocations
+                        .iter()
+                        .any(|invocation| invocation.idempotency_key() == Some(&idempotency_key))
+                    {
+                        worker.cancel_invocation(idempotency_key).await?;
+                        Ok(true)
+                    } else {
+                        Err(WorkerExecutorError::invalid_request("Invocation not found"))
+                    }
                 }
                 LookupResult::New => {
                     Err(WorkerExecutorError::invalid_request("Invocation not found"))

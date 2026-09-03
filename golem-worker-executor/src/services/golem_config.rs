@@ -21,7 +21,7 @@ use golem_common::config::{
 use golem_common::model::base64::Base64;
 use golem_common::model::{
     DEFAULT_INVOCATION_RESULT_BLOOM_BITS, DEFAULT_INVOCATION_RESULT_BLOOM_HASHES,
-    DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY, RetryConfig,
+    DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY, InvocationResultMembership, RetryConfig,
 };
 use golem_common::tracing::TracingConfig;
 use golem_common::{SafeDisplay, grpc_uri};
@@ -794,6 +794,28 @@ pub struct InvocationResultsConfig {
     pub physical_index_catch_up_chunk_size: u64,
     /// Maximum number of invocation results hydrated from the oplog and retained in memory.
     pub hydrated_cache_capacity: usize,
+}
+
+impl InvocationResultsConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.bloom_bits > 0,
+            "invocation result Bloom filter must not be empty"
+        );
+        anyhow::ensure!(
+            self.bloom_hashes > 0,
+            "invocation result Bloom filter must use at least one hash"
+        );
+        anyhow::ensure!(
+            self.physical_index_catch_up_chunk_size > 0,
+            "invocation result physical-index catch-up chunk size must be at least one"
+        );
+        Ok(())
+    }
+
+    pub fn membership(&self) -> InvocationResultMembership {
+        InvocationResultMembership::new(self.recent_capacity, self.bloom_bits, self.bloom_hashes)
+    }
 }
 
 impl SafeDisplay for InvocationResultsConfig {
@@ -2508,7 +2530,7 @@ pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DurableStreamConfig, Limits};
+    use super::{DurableStreamConfig, InvocationResultsConfig, Limits};
     use golem_common::SafeDisplay;
     use serde_json::Value;
     use test_r::test;
@@ -2519,6 +2541,43 @@ mod tests {
         assert!(config.validate().is_ok());
         config.renewal_interval = config.lease_ttl;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn invocation_results_config_rejects_invalid_lookup_structures() {
+        let mut config = InvocationResultsConfig::default();
+        assert!(config.validate().is_ok());
+
+        config.bloom_bits = 0;
+        assert!(config.validate().is_err());
+
+        config.bloom_bits = 1;
+        config.bloom_hashes = 0;
+        assert!(config.validate().is_err());
+
+        config.bloom_hashes = 1;
+        config.physical_index_catch_up_chunk_size = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn invocation_results_config_constructs_configured_membership() {
+        let config = InvocationResultsConfig {
+            recent_capacity: 2,
+            bloom_bits: 128,
+            bloom_hashes: 3,
+            ..InvocationResultsConfig::default()
+        };
+        let mut membership = config.membership();
+        for index in 1..=3 {
+            membership.insert(
+                golem_common::model::IdempotencyKey::fresh(),
+                golem_common::model::oplog::OplogIndex::from_u64(index),
+            );
+        }
+
+        assert_eq!(membership.len(), 2);
+        assert!(!membership.is_exact_complete());
     }
 
     #[test]

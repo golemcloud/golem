@@ -176,12 +176,7 @@ where
 {
     let full_rebuild = baseline.oplog_idx == OplogIndex::NONE;
     if full_rebuild && baseline.invocation_results.is_empty() {
-        let config = &this.config().invocation_results;
-        baseline.invocation_results = InvocationResultMembership::new(
-            config.recent_capacity,
-            config.bloom_bits,
-            config.bloom_hashes,
-        );
+        baseline.invocation_results = this.config().invocation_results.membership();
     }
 
     let last_oplog_index = this
@@ -234,12 +229,15 @@ where
         if entries.is_empty() {
             return None;
         }
+        let finalize_oplog_processor_checkpoints =
+            entries.keys().next_back() == Some(&last_oplog_index);
         baseline = match update_status_with_new_entries_internal(
             agent_mode,
             baseline,
             entries,
             &this.config().retry,
             true,
+            finalize_oplog_processor_checkpoints,
         ) {
             Some(status) => status,
             None => {
@@ -272,6 +270,7 @@ where
 {
     let start = baseline.oplog_idx.next();
     let mut deleted_regions = baseline.deleted_regions.clone();
+    let mut region_entries = BTreeMap::new();
     let mut first = start;
     while first <= last_oplog_index {
         let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
@@ -283,23 +282,28 @@ where
             return None;
         }
         deleted_regions = calculate_deleted_regions(deleted_regions, &entries);
+        region_entries.extend(entries.iter().filter_map(|(index, entry)| {
+            let relevant = matches!(
+                entry,
+                OplogEntry::Jump { .. }
+                    | OplogEntry::Revert { .. }
+                    | OplogEntry::PendingUpdate {
+                        description: UpdateDescription::SnapshotBased { .. },
+                        ..
+                    }
+                    | OplogEntry::SuccessfulUpdate { .. }
+                    | OplogEntry::FailedUpdate { .. }
+            );
+            relevant.then(|| (*index, entry.clone()))
+        }));
         first = entries.keys().max().unwrap().next();
     }
 
-    let mut skipped_regions = baseline.skipped_regions.clone();
-    first = start;
-    while first <= last_oplog_index {
-        let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
-        let entries = this
-            .oplog_service()
-            .read_exact(owned_agent_id, agent_mode, first, count)
-            .await;
-        if entries.is_empty() {
-            return None;
-        }
-        skipped_regions = calculate_skipped_regions(skipped_regions, &deleted_regions, &entries);
-        first = entries.keys().max().unwrap().next();
-    }
+    let skipped_regions = calculate_skipped_regions(
+        baseline.skipped_regions.clone(),
+        &deleted_regions,
+        &region_entries,
+    );
 
     if baseline_is_invalidated(&baseline, &skipped_regions) {
         return None;
@@ -317,6 +321,8 @@ where
         if entries.is_empty() {
             return None;
         }
+        let finalize_oplog_processor_checkpoints =
+            entries.keys().next_back() == Some(&last_oplog_index);
         let deleted_regions = baseline.deleted_regions.clone();
         let skipped_regions = baseline.skipped_regions.clone();
         baseline = update_status_with_precomputed_regions(
@@ -326,6 +332,7 @@ where
             &this.config().retry,
             deleted_regions,
             skipped_regions,
+            finalize_oplog_processor_checkpoints,
         );
         first = baseline.oplog_idx.next();
     }
@@ -346,6 +353,7 @@ pub fn update_status_with_new_entries(
         new_entries,
         default_retry_policy,
         true,
+        true,
     )
 }
 
@@ -355,6 +363,7 @@ fn update_status_with_new_entries_internal(
     new_entries: BTreeMap<OplogIndex, OplogEntry>,
     default_retry_policy: &RetryConfig,
     validate_baseline: bool,
+    finalize_oplog_processor_checkpoints: bool,
 ) -> Option<AgentStatusRecord> {
     let deleted_regions =
         calculate_deleted_regions(last_known.deleted_regions.clone(), &new_entries);
@@ -381,6 +390,7 @@ fn update_status_with_new_entries_internal(
         default_retry_policy,
         deleted_regions,
         skipped_regions,
+        finalize_oplog_processor_checkpoints,
     ))
 }
 
@@ -413,6 +423,7 @@ fn update_status_with_precomputed_regions(
     default_retry_policy: &RetryConfig,
     deleted_regions: DeletedRegions,
     skipped_regions: DeletedRegions,
+    finalize_oplog_processor_checkpoints: bool,
 ) -> AgentStatusRecord {
     let active_plugins = last_known.active_plugins.clone();
 
@@ -485,6 +496,7 @@ fn update_status_with_precomputed_regions(
         &active_plugins,
         &deleted_regions,
         &new_entries,
+        finalize_oplog_processor_checkpoints,
     );
 
     AgentStatusRecord {
@@ -1429,6 +1441,7 @@ fn calculate_oplog_processor_checkpoints(
     active_plugins: &HashSet<EnvironmentPluginGrantId>,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
+    finalize: bool,
 ) -> HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState> {
     for (idx, entry) in entries {
         if deleted_regions.is_in_deleted_region(*idx) {
@@ -1500,9 +1513,11 @@ fn calculate_oplog_processor_checkpoints(
         }
     }
 
-    result.retain(|grant_id, state| {
-        active_plugins.contains(grant_id) || state.sending_up_to > state.confirmed_up_to
-    });
+    if finalize {
+        result.retain(|grant_id, state| {
+            active_plugins.contains(grant_id) || state.sending_up_to > state.confirmed_up_to
+        });
+    }
 
     result
 }
@@ -2427,6 +2442,25 @@ mod test {
     }
 
     #[test]
+    async fn full_recompute_reads_each_oplog_chunk_twice() {
+        let (test_case, _checkpoint, _stale_live, final_expected) = jump_repair_fixture();
+
+        let result = calculate_last_known_status(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            None,
+        )
+        .await;
+
+        assert_eq!(result, Some(final_expected));
+        assert_eq!(
+            *test_case.read_starts.lock().unwrap(),
+            vec![1, 3, 5, 7, 1, 3, 5, 7]
+        );
+    }
+
+    #[test]
     async fn checkpoint_repair_falls_back_to_full_recompute_when_checkpoint_unusable() {
         let (test_case, _checkpoint, stale_live, final_expected) = jump_repair_fixture();
 
@@ -3176,6 +3210,7 @@ mod test {
             &active_plugins,
             &deleted_regions,
             &entries,
+            true,
         );
 
         assert_eq!(result.len(), 1);
@@ -3230,6 +3265,7 @@ mod test {
             &active_plugins,
             &deleted_regions,
             &entries,
+            true,
         );
 
         assert_eq!(result.len(), 2);
@@ -3270,6 +3306,7 @@ mod test {
             &active_plugins,
             &deleted_regions,
             &entries,
+            true,
         );
 
         let state = result.get(&grant_id).unwrap();
@@ -3307,6 +3344,7 @@ mod test {
             &active_plugins,
             &deleted_regions,
             &entries,
+            true,
         );
 
         assert!(
@@ -3342,6 +3380,7 @@ mod test {
             &active_plugins,
             &deleted_regions,
             &entries,
+            true,
         );
 
         assert!(
@@ -3407,6 +3446,7 @@ mod test {
             &active_plugins,
             &deleted_regions,
             &entries,
+            true,
         );
 
         assert!(
@@ -3443,6 +3483,7 @@ mod test {
             &active_plugins,
             &deleted_regions,
             &entries,
+            true,
         );
 
         assert_eq!(result.len(), 1);
@@ -3495,6 +3536,7 @@ mod test {
             &active_plugins,
             &deleted_regions,
             &entries,
+            true,
         );
 
         let state = result.get(&grant_id).unwrap();
@@ -3505,6 +3547,101 @@ mod test {
         );
         assert_eq!(state.confirmed_up_to, OplogIndex::from_u64(3));
         assert_eq!(state.sending_up_to, OplogIndex::from_u64(8));
+    }
+
+    #[test]
+    fn oplog_processor_checkpoint_fold_is_chunk_composable() {
+        fn fold(
+            entries: &BTreeMap<OplogIndex, OplogEntry>,
+            chunk_size: usize,
+        ) -> AgentStatusRecord {
+            let mut status = AgentStatusRecord::default();
+            let last_index = *entries.keys().next_back().unwrap();
+            let all_entries: Vec<_> = entries.iter().collect();
+            for chunk in all_entries.chunks(chunk_size) {
+                let chunk: BTreeMap<_, _> = chunk
+                    .iter()
+                    .map(|(index, entry)| (**index, (**entry).clone()))
+                    .collect();
+                let finalize = chunk.keys().next_back() == Some(&last_index);
+                status = super::update_status_with_precomputed_regions(
+                    AgentMode::Durable,
+                    status,
+                    chunk,
+                    &RetryConfig::default(),
+                    DeletedRegions::new(),
+                    DeletedRegions::new(),
+                    finalize,
+                );
+            }
+            status
+        }
+
+        let grant_id = EnvironmentPluginGrantId::new();
+        let target = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "checkpoint-target".to_string(),
+        };
+        let test_case = TestCase::builder(0).build();
+        let mut create = test_case.entries[0].oplog_entry.clone();
+        let OplogEntry::Create {
+            initial_active_plugins,
+            ..
+        } = &mut create
+        else {
+            unreachable!()
+        };
+        initial_active_plugins.insert(grant_id);
+
+        let entries = BTreeMap::from([
+            (OplogIndex::INITIAL, create),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::OplogProcessorCheckpoint {
+                    timestamp: Timestamp::now_utc(),
+                    plugin_grant_id: grant_id,
+                    target_agent_id: target.clone(),
+                    confirmed_up_to: OplogIndex::INITIAL,
+                    sending_up_to: OplogIndex::from_u64(4),
+                    last_batch_start: OplogIndex::INITIAL,
+                },
+            ),
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::DeactivatePlugin {
+                    timestamp: Timestamp::now_utc(),
+                    plugin_grant_id: grant_id,
+                },
+            ),
+            (
+                OplogIndex::from_u64(4),
+                OplogEntry::OplogProcessorCheckpoint {
+                    timestamp: Timestamp::now_utc(),
+                    plugin_grant_id: grant_id,
+                    target_agent_id: target.clone(),
+                    confirmed_up_to: OplogIndex::from_u64(4),
+                    sending_up_to: OplogIndex::from_u64(4),
+                    last_batch_start: OplogIndex::INITIAL,
+                },
+            ),
+            (
+                OplogIndex::from_u64(5),
+                OplogEntry::ActivatePlugin {
+                    timestamp: Timestamp::now_utc(),
+                    plugin_grant_id: grant_id,
+                },
+            ),
+        ]);
+
+        let unchunked = fold(&entries, entries.len());
+        assert_eq!(fold(&entries, 1), unchunked);
+        assert_eq!(fold(&entries, 2), unchunked);
+        let checkpoint = unchunked
+            .oplog_processor_checkpoints
+            .get(&grant_id)
+            .unwrap();
+        assert_eq!(checkpoint.target_agent_id, Some(target));
+        assert_eq!(checkpoint.confirmed_up_to, OplogIndex::from_u64(4));
     }
 
     #[test]
@@ -3542,6 +3679,7 @@ mod test {
             &active_plugins,
             &deleted_regions,
             &entries,
+            true,
         );
 
         let state = result.get(&grant_id).unwrap();

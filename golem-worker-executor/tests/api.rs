@@ -2626,62 +2626,72 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.invocation_results.recent_capacity = 2;
+            config.invocation_results.physical_index_catch_up_chunk_size = 2;
+        })),
+        ..TestExecutorOverrides::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
 
-    let repo_id = agent_id!("Repository", "test-repo-3");
-    let worker_id = executor.start_agent(&component.id, repo_id.clone()).await?;
-
-    let idempotency_key = IdempotencyKey::fresh();
-    executor
-        .invoke_and_await_agent_with_key(
-            &component,
-            &repo_id,
-            &idempotency_key,
-            "add",
-            data_value!("G1000", "Golem T-Shirt M"),
-        )
+    let counter_id = agent_id!("Counter", "idempotency-index-after-restart");
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
         .await?;
+
+    let mut oldest_key = None;
+    for expected in 1..=32 {
+        let idempotency_key = IdempotencyKey::fresh();
+        let result = executor
+            .invoke_and_await_agent_with_key(
+                &component,
+                &counter_id,
+                &idempotency_key,
+                "increment",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<u32>()?;
+        assert_eq!(result, expected);
+        oldest_key.get_or_insert(idempotency_key);
+    }
 
     drop(executor);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(deps, &context, overrides).await?;
 
-    executor
+    let oldest_key = oldest_key.unwrap();
+    let duplicate_result = executor
         .invoke_and_await_agent_with_key(
             &component,
-            &repo_id,
-            &idempotency_key,
-            "add",
-            data_value!("G1000", "Golem T-Shirt M"),
+            &counter_id,
+            &oldest_key,
+            "increment",
+            data_value!(),
         )
-        .await?;
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(duplicate_result, 1);
 
-    let contents = executor
-        .invoke_and_await_agent(&component, &repo_id, "list", data_value!())
-        .await?;
+    let next_key = IdempotencyKey::fresh();
+    let next_result = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &counter_id,
+            &next_key,
+            "increment",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(next_result, 33);
 
     executor.check_oplog_is_queryable(&worker_id).await?;
-
-    let contents_value = contents
-        .into_return_value()
-        .expect("Expected a single return value");
-
-    assert_eq!(
-        contents_value,
-        SchemaValue::List {
-            elements: vec![SchemaValue::Record {
-                fields: vec![
-                    SchemaValue::String("G1000".to_string()),
-                    SchemaValue::String("Golem T-Shirt M".to_string()),
-                    SchemaValue::U64(1),
-                ],
-            }],
-        }
-    );
     Ok(())
 }
 

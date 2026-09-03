@@ -64,7 +64,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
-    AgentStatus, AgentStatusRecord, OwnedAgentId, ScheduledAction, Timestamp,
+    AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScheduledAction, Timestamp,
 };
 use golem_service_base::error::worker_executor::InterruptKind;
 use std::any::Any;
@@ -120,7 +120,8 @@ enum StatusJob {
     },
     AppendInvocationIfVersion {
         entry: Box<OplogEntry>,
-        expected_oplog_index: OplogIndex,
+        idempotency_key: IdempotencyKey,
+        expected_result_generation: u64,
         expected_revert_generation: u64,
         instance_guard: OwnedMutexGuard<WorkerInstance>,
         done: oneshot::Sender<bool>,
@@ -265,7 +266,8 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     }
                     StatusJob::AppendInvocationIfVersion {
                         entry,
-                        expected_oplog_index,
+                        idempotency_key,
+                        expected_result_generation,
                         expected_revert_generation,
                         instance_guard,
                         done,
@@ -274,10 +276,12 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                             async {
                                 state.ensure_status_attached().await;
                                 let status = state.last_known_status.load();
-                                if status.oplog_idx != expected_oplog_index
-                                    || status.invocation_results.revert_generation()
-                                        != expected_revert_generation
-                                {
+                                if !can_append_invocation(
+                                    &status,
+                                    &idempotency_key,
+                                    expected_result_generation,
+                                    expected_revert_generation,
+                                ) {
                                     return false;
                                 }
                                 drop(status);
@@ -421,14 +425,16 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     pub async fn append_invocation_if_version(
         &self,
         entry: OplogEntry,
-        expected_oplog_index: OplogIndex,
+        idempotency_key: IdempotencyKey,
+        expected_result_generation: u64,
         expected_revert_generation: u64,
         instance_guard: OwnedMutexGuard<WorkerInstance>,
     ) -> bool {
         self.commit
             .run_status_job(|done| StatusJob::AppendInvocationIfVersion {
                 entry: Box::new(entry),
-                expected_oplog_index,
+                idempotency_key,
+                expected_result_generation,
                 expected_revert_generation,
                 instance_guard,
                 done,
@@ -753,13 +759,125 @@ fn is_authority_state_entry(entry: &OplogEntry) -> bool {
     )
 }
 
+fn can_append_invocation(
+    status: &AgentStatusRecord,
+    idempotency_key: &IdempotencyKey,
+    expected_result_generation: u64,
+    expected_revert_generation: u64,
+) -> bool {
+    status.invocation_results.change_generation() == expected_result_generation
+        && status.invocation_results.revert_generation() == expected_revert_generation
+        && !status.invocation_results.contains_key(idempotency_key)
+        && status.current_idempotency_key.as_ref() != Some(idempotency_key)
+        && !status
+            .pending_invocations
+            .iter()
+            .any(|invocation| invocation.has_idempotency_key(idempotency_key))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::complete_status_job;
+    use super::{can_append_invocation, complete_status_job};
+    use golem_common::model::oplog::OplogIndex;
+    use golem_common::model::{AgentStatusRecord, IdempotencyKey, PendingInvocationRef, Timestamp};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
     use test_r::test;
     use tokio::sync::{Notify, oneshot};
+
+    fn pending_invocation(key: IdempotencyKey) -> PendingInvocationRef {
+        PendingInvocationRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::INITIAL,
+            idempotency_key: Some(key),
+            manual_update_target_revision: None,
+        }
+    }
+
+    #[test]
+    fn invocation_admission_ignores_unrelated_oplog_and_pending_changes() {
+        let key = IdempotencyKey::fresh();
+        let mut status = AgentStatusRecord {
+            oplog_idx: OplogIndex::from_u64(100),
+            pending_invocations: vec![pending_invocation(IdempotencyKey::fresh())],
+            ..AgentStatusRecord::default()
+        };
+        let result_generation = status.invocation_results.change_generation();
+        let revert_generation = status.invocation_results.revert_generation();
+
+        assert!(can_append_invocation(
+            &status,
+            &key,
+            result_generation,
+            revert_generation
+        ));
+
+        status.oplog_idx = OplogIndex::from_u64(1_000);
+        status
+            .pending_invocations
+            .push(pending_invocation(IdempotencyKey::fresh()));
+        assert!(can_append_invocation(
+            &status,
+            &key,
+            result_generation,
+            revert_generation
+        ));
+    }
+
+    #[test]
+    fn invocation_admission_rejects_same_key_or_result_branch_changes() {
+        let key = IdempotencyKey::fresh();
+        let mut status = AgentStatusRecord::default();
+        let result_generation = status.invocation_results.change_generation();
+        let revert_generation = status.invocation_results.revert_generation();
+
+        status.pending_invocations = vec![pending_invocation(key.clone())];
+        assert!(!can_append_invocation(
+            &status,
+            &key,
+            result_generation,
+            revert_generation
+        ));
+
+        status.pending_invocations.clear();
+        status.current_idempotency_key = Some(key.clone());
+        assert!(!can_append_invocation(
+            &status,
+            &key,
+            result_generation,
+            revert_generation
+        ));
+
+        status.current_idempotency_key = None;
+        status
+            .invocation_results
+            .insert(IdempotencyKey::fresh(), OplogIndex::INITIAL);
+        assert!(!can_append_invocation(
+            &status,
+            &key,
+            result_generation,
+            revert_generation
+        ));
+
+        status
+            .invocation_results
+            .insert(key.clone(), OplogIndex::from_u64(2));
+        let key_result_generation = status.invocation_results.change_generation();
+        assert!(!can_append_invocation(
+            &status,
+            &key,
+            key_result_generation,
+            revert_generation
+        ));
+
+        status.invocation_results.set_revert_generation(1);
+        assert!(!can_append_invocation(
+            &status,
+            &key,
+            key_result_generation,
+            revert_generation
+        ));
+    }
 
     #[test]
     async fn authority_publication_survives_producer_cancellation_before_actor_reply() {

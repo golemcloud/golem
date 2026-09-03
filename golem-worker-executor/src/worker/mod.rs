@@ -2432,6 +2432,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let stderr = self.worker_event_service.get_last_invocation_errors();
         let golem_error = trap_type.as_golem_error(&stderr);
         let mut map = self.hydrated_invocation_results.write().await;
+        // Co-pending fail-fast results exist only in this bounded warm cache. Once evicted, a
+        // poller sees the same `Pending` state that reconstructing this status from the oplog does.
         for key in &keys_to_fail {
             map.insert(
                 key.clone(),
@@ -3065,10 +3067,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Enqueue invocation, classified by the caller. Passing `ReadOnly` for a
     /// mutating method would skip cache invalidation and produce stale reads.
     ///
-    /// For `ReadOnly`, returns the epoch captured under the same instance lock
-    /// that commits the pending entry. Populating the cache later must use
-    /// this captured epoch, not the current one, to avoid storing a stale
-    /// result under a post-mutation epoch.
+    /// For `ReadOnly`, returns the epoch captured before admission. Populating
+    /// the cache later must use this captured epoch, not the current one, to
+    /// avoid storing a stale result under a post-mutation epoch.
     pub(crate) async fn enqueue_worker_invocation_with_effect(
         &self,
         invocation: AgentInvocation,
@@ -3109,6 +3110,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 return Err(err.clone());
             }
 
+            if let Some(idempotency_key) = invocation.idempotency_key()
+                && self.lookup_invocation_result(idempotency_key).await != LookupResult::New
+            {
+                return Ok(None);
+            }
+
             let (idempotency_key, invocation_payload, invocation_context) = invocation.into_parts();
             let invocation_context = invocation_context
                 .limit_depth(self.deps.config().limits.max_invocation_context_stack_depth);
@@ -3139,15 +3146,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 invocation,
             };
 
-            // Snapshot the epoch under the instance lock that commits the
-            // pending entry. Read-only captures the current epoch for later
-            // cache fill. Mutating invocations no longer bump here — the bump
-            // happens on *successful completion* in
+            // Snapshot the epoch for a later read-only cache fill. Keyed admission releases and
+            // reacquires the instance lock below; that staleness is safe because
+            // `populate_read_only_cache` rechecks the epoch before publishing the result. Mutating
+            // invocations no longer bump here — the bump happens on *successful completion* in
             // `DurableWorkerCtx::on_agent_invocation_success`, so a cached
             // read-only result stays serviceable while the mutation is queued
-            // / running. The populate-time recheck in
-            // `populate_read_only_cache` covers the race where the mutation
-            // completes before the read-only observer fills the cache.
+            // or running.
             let read_only_epoch_snapshot = match read_only_cache_effect {
                 read_only_cache::InvocationEffect::ReadOnly => {
                     Some(self.read_only_cache_epoch.load(Ordering::SeqCst))
@@ -3165,7 +3170,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         return Ok(None);
                     }
                     let current = self.last_known_status.load();
-                    if current.oplog_idx != status.oplog_idx
+                    if current.invocation_results.change_generation()
+                        != status.invocation_results.change_generation()
                         || current.invocation_results.revert_generation()
                             != status.invocation_results.revert_generation()
                     {
@@ -3181,7 +3187,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .state_actor
                         .append_invocation_if_version(
                             entry.clone(),
-                            status.oplog_idx,
+                            idempotency_key.clone(),
+                            status.invocation_results.change_generation(),
                             status.invocation_results.revert_generation(),
                             instance_guard,
                         )
@@ -5453,7 +5460,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .deps
             .config()
             .invocation_results
-            .physical_index_catch_up_chunk_size;
+            .physical_index_catch_up_chunk_size
+            .max(1);
         while first <= status.oplog_idx {
             let count = (status.oplog_idx.as_u64() - first.as_u64() + 1).min(chunk_size);
             let entries = self
@@ -6125,6 +6133,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .iter()
                         .map(|i| i.environment_plugin_grant_id)
                         .collect(),
+                    invocation_results: this.config().invocation_results.membership(),
                     agent_mode,
                     ..Default::default()
                 };
