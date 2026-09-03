@@ -48,6 +48,7 @@
 
 use crate::chaos::history::{OperationHistory, OperationRecord, Phase, Stream};
 use crate::chaos::prep::ChaosPrepManifest;
+use crate::chaos::probe;
 use crate::chaos::relay;
 use crate::chaos::result::{ChaosResult, PhaseWindow, Phases, RunScope};
 use crate::chaos::scenarios::{
@@ -56,7 +57,7 @@ use crate::chaos::scenarios::{
 };
 use crate::chaos::signal::{BaselineReady, FaultSignals};
 use crate::chaos::split::FaultWindow;
-use crate::chaos::summary::{AgentReadback, ChaosSummary, TerminationReason};
+use crate::chaos::summary::{AgentReadback, ChaosSummary, ExactlyOnceReport, TerminationReason};
 use crate::chaos::workload::{self, PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig};
 use chrono::Utc;
@@ -134,7 +135,7 @@ pub async fn run(
     let mut fault_target_observed = None;
 
     macro_rules! finish {
-        ($reason:expr, $records:expr, $readback:expr) => {{
+        ($reason:expr, $records:expr, $readback:expr, $exactly_once:expr) => {{
             let mut summary = ChaosSummary::build(
                 $records,
                 $readback,
@@ -146,6 +147,9 @@ pub async fn run(
             // needs to see, since the pairing is why it stopped.
             if !ownership_samples.is_empty() {
                 summary = summary.with_ownership(ownership_samples.clone());
+            }
+            if let Some(report) = $exactly_once {
+                summary = summary.with_exactly_once(report);
             }
             {
                 summary = summary.with_relay(relay::build(
@@ -210,7 +214,8 @@ pub async fn run(
                 detail: "no operation succeeded during the baseline phase".to_string(),
             },
             &records,
-            Vec::new()
+            Vec::new(),
+            None
         );
     }
 
@@ -229,7 +234,8 @@ pub async fn run(
                     detail: format!("the routing table could not be re-read before the fault: {e}"),
                 },
                 &records,
-                Vec::new()
+                Vec::new(),
+                None
             );
         }
     };
@@ -257,7 +263,8 @@ pub async fn run(
                 ),
             },
             &records,
-            Vec::new()
+            Vec::new(),
+            None
         );
     }
 
@@ -282,7 +289,7 @@ pub async fn run(
             warn!("S2: no fault-injected signal arrived: {e}");
             handle.stop().await;
             let records = history.snapshot();
-            finish!(signal_termination(&e), &records, Vec::new());
+            finish!(signal_termination(&e), &records, Vec::new(), None);
         }
     };
     info!(
@@ -301,7 +308,7 @@ pub async fn run(
             warn!("S2: no fault-recovered signal arrived: {e}");
             handle.stop().await;
             let records = history.snapshot();
-            finish!(signal_termination(&e), &records, Vec::new());
+            finish!(signal_termination(&e), &records, Vec::new(), None);
         }
     };
     info!(
@@ -342,7 +349,65 @@ pub async fn run(
     let records = history.snapshot();
     let readback = read_back(&ctx, &records, workload_config).await;
 
-    finish!(TerminationReason::Completed, &records, readback);
+    // ── Exactly-once ────────────────────────────────────────────────────────
+    //
+    // Accounted on the RPC stream rather than the durable one, which is the
+    // only interesting choice here. The durable stream is the same population
+    // every other scenario probes and this fault cannot reach it; the RPC
+    // stream is the one whose work crosses the partitioned link.
+    //
+    // It matters most in exactly the run that finds something. A control that
+    // stays green has almost no indeterminate operations to resolve, so the
+    // probe finds nothing. A run where cross-pod calls stalled would be full of
+    // them, and the probe is what says whether a stalled call executed anyway.
+    // The read-back above is a weaker form of the same question: it compares
+    // sums per agent, where this attributes to a key.
+    let before_probe = read_callee_counters(&ctx, workload_config).await;
+    let probes = probe::probe_keys(&ctx, &records, Stream::Rpc).await;
+    let after_probe = read_callee_counters(&ctx, workload_config).await;
+
+    let exactly_once =
+        ExactlyOnceReport::build(&records, &probes, Stream::Rpc, &before_probe, &after_probe);
+    info!(
+        "S2: exactly-once account — {} keys checked, {} recovered by the probe, {} findings",
+        exactly_once.keys_checked,
+        exactly_once.keys_recovered_by_probe,
+        exactly_once.findings.len()
+    );
+
+    finish!(
+        TerminationReason::Completed,
+        &records,
+        readback,
+        Some(exactly_once)
+    );
+}
+
+/// The current counter of every RPC callee, keyed by the **callee**.
+///
+/// Keyed by the agent whose number it is rather than by the caller the probe
+/// addresses, because the only thing this map feeds is
+/// `ExactlyOnceReport::probe_executed_per_agent` — a list of who moved during
+/// the probe pass. Naming the caller there would point an investigation at an
+/// agent whose own counter never changes.
+async fn read_callee_counters(
+    ctx: &WorkloadContext,
+    config: &crate::chaos::WorkloadConfig,
+) -> std::collections::BTreeMap<String, u64> {
+    let mut values = std::collections::BTreeMap::new();
+    for index in 0..config.rpc_agents {
+        let callee = workload::rpc_callee_name(&ctx.agent_name(Stream::Rpc, index));
+        match workload::read_counter(ctx, &callee).await {
+            Ok(value) => {
+                values.insert(callee, value);
+            }
+            // Recorded as absent rather than as zero: a callee that could not be
+            // read says nothing about whether the probe executed against it, and
+            // a zero here would be read as "it moved backwards".
+            Err(e) => warn!("S2: could not read RPC callee {callee}: {e}"),
+        }
+    }
+    values
 }
 
 /// Reads durable state back for every stream that keeps a count.
