@@ -27,7 +27,9 @@ use golem_api_grpc::proto::golem::shardmanager::v1::{
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::protobuf::{shard_epochs_from_proto, shard_epochs_to_proto};
+use golem_common::model::protobuf::{
+    lease_expiry_from_proto, shard_epochs_from_proto, shard_epochs_to_proto,
+};
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::model::{RetryConfig, RoutingTable, ShardEpoch, ShardId};
 use golem_common::retriable_error::IsRetriableError;
@@ -148,14 +150,7 @@ impl TryFrom<golem_api_grpc::proto::golem::shardmanager::v1::ShardLease> for Sha
 pub(crate) fn expires_at_from_proto(
     expires_at: Option<prost_types::Timestamp>,
 ) -> Result<Option<DateTime<Utc>>, String> {
-    expires_at
-        .map(|timestamp| {
-            timestamp
-                .apply(SystemTime::try_from)
-                .map_err(|_| "Failed to convert expires_at".to_string())
-                .map(DateTime::<Utc>::from)
-        })
-        .transpose()
+    lease_expiry_from_proto(expires_at, "expires_at")
 }
 
 /// One entry in a batch renewal request.

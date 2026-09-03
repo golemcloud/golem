@@ -24,6 +24,7 @@ use crate::model::{
     Timestamp,
 };
 use applying::Apply;
+use chrono::{DateTime, Utc};
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::{
     IpAddress as GrpcIpAddress, Pod as GrpcPod, RoutingTable as GrpcRoutingTable,
@@ -170,6 +171,43 @@ pub fn shard_epochs_from_proto<C: FromIterator<(ShardId, ShardEpoch)>>(
             ))
         })
         .collect()
+}
+
+/// Decodes a lease expiry off the wire.
+///
+/// Total by construction. The obvious spelling — `SystemTime::try_from(ts)`
+/// then `DateTime::<Utc>::from` — is not: chrono's `From<SystemTime> for
+/// DateTime<Utc>` ends in `Utc.timestamp_opt(sec, nsec).unwrap()`
+/// (chrono-0.4.45, datetime/mod.rs:1931), `prost` will hand it any `seconds` a
+/// platform `SystemTime` can hold, and these crates are built with
+/// `panic = "abort"`. A single hostile or corrupted `expires_at` would take the
+/// process down rather than fail the RPC.
+pub fn lease_expiry_from_proto(
+    expires_at: Option<prost_types::Timestamp>,
+    field: &str,
+) -> Result<Option<DateTime<Utc>>, String> {
+    match expires_at {
+        Some(timestamp) => {
+            let nanos = u32::try_from(timestamp.nanos)
+                .map_err(|_| format!("{field} has out-of-range nanoseconds"))?;
+            DateTime::from_timestamp(timestamp.seconds, nanos)
+                .map(Some)
+                .ok_or_else(|| format!("{field} is out of range"))
+        }
+        // An absent `expires_at` is rejected rather than decoded.
+        //
+        // `None` is the executor's "this lease never expires" sentinel
+        // (`ShardAssignment::lease_is_live`, model/mod.rs), which exists for
+        // single-shard mode and the debugging service — neither of which decodes
+        // proto. But `expires_at` is a plain (non-`optional`) proto3 message
+        // field, so absent-on-the-wire would arrive here as that same `None` and
+        // silently turn the self-fence off for good: the executor would serve
+        // unfenced, and on a `RegisterSuccess` it would also park its renewal
+        // loop (ruling E13) while still reporting healthy. Every producing path
+        // sets the field, so absent is a bug in the sender, and a rejected RPC
+        // is how a bug should read.
+        None => Err(format!("{field} is required")),
+    }
 }
 
 impl From<Pod> for GrpcPod {
@@ -883,5 +921,72 @@ mod tests {
             shard_epochs_from_proto(on_the_wire);
 
         assert!(decoded.is_err());
+    }
+
+    /// A lease expiry is required on the wire. `None` is the executor's
+    /// "never expires" sentinel, reachable only from the in-process
+    /// single-shard service; letting an absent proto field decode to it would
+    /// turn the self-fence off silently and permanently.
+    #[test]
+    fn an_absent_lease_expiry_is_rejected_rather_than_read_as_never_expiring() {
+        let decoded = lease_expiry_from_proto(None, "AssignShardsRequest.expires_at");
+
+        assert_eq!(
+            decoded,
+            Err("AssignShardsRequest.expires_at is required".to_string())
+        );
+    }
+
+    /// The obvious `SystemTime` conversion panics on a timestamp this far out,
+    /// and these crates abort on panic, so an inbound RPC could take the
+    /// process down. It has to come back as an error instead.
+    #[test]
+    fn an_out_of_range_lease_expiry_is_an_error_and_not_a_panic() {
+        let far_future = prost_types::Timestamp {
+            seconds: 10_000_000_000_000,
+            nanos: 0,
+        };
+
+        assert!(lease_expiry_from_proto(Some(far_future), "expires_at").is_err());
+
+        let far_past = prost_types::Timestamp {
+            seconds: -10_000_000_000_000,
+            nanos: 0,
+        };
+
+        assert!(lease_expiry_from_proto(Some(far_past), "expires_at").is_err());
+    }
+
+    /// `Timestamp.nanos` is an `i32` on the wire, so it can arrive negative or
+    /// past a second even though no correct producer sends that.
+    #[test]
+    fn a_lease_expiry_with_impossible_nanoseconds_is_rejected() {
+        let negative = prost_types::Timestamp {
+            seconds: 1,
+            nanos: -1,
+        };
+
+        assert!(lease_expiry_from_proto(Some(negative), "expires_at").is_err());
+
+        let overflowing = prost_types::Timestamp {
+            seconds: 1,
+            nanos: 2_000_000_000,
+        };
+
+        assert!(lease_expiry_from_proto(Some(overflowing), "expires_at").is_err());
+    }
+
+    #[test]
+    fn a_lease_expiry_survives_the_round_trip_to_the_wire_and_back() {
+        let granted = DateTime::from_timestamp(1_764_000_000, 123_456_789).unwrap();
+        let on_the_wire = prost_types::Timestamp {
+            seconds: granted.timestamp(),
+            nanos: granted.timestamp_subsec_nanos() as i32,
+        };
+
+        assert_eq!(
+            lease_expiry_from_proto(Some(on_the_wire), "expires_at"),
+            Ok(Some(granted))
+        );
     }
 }

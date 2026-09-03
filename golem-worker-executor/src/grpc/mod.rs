@@ -1007,18 +1007,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
 
-        let expires_at = request
-            .expires_at
-            .map(|expires_at| {
-                std::time::SystemTime::try_from(expires_at)
-                    .map_err(|_| {
-                        WorkerExecutorError::invalid_request(
-                            "AssignShardsRequest.expires_at is out of range",
-                        )
-                    })
-                    .map(chrono::DateTime::<chrono::Utc>::from)
-            })
-            .transpose()?;
+        let expires_at = golem_common::model::protobuf::lease_expiry_from_proto(
+            request.expires_at,
+            "AssignShardsRequest.expires_at",
+        )
+        .map_err(WorkerExecutorError::invalid_request)?;
 
         self.shard_service()
             .assign_shards(number_of_shards, &shard_epochs, expires_at)?;
