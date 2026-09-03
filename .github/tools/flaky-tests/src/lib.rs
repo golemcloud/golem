@@ -3,10 +3,12 @@ use serde::Deserialize;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
+use std::path::Path;
 
 pub const ISSUE_TITLE: &str = "Known flaky tests";
 pub const ISSUE_MARKER: &str = "<!-- known-flaky-tests:v1 -->";
 pub const CLEAN_RUNS_TO_RESOLVE: usize = 10;
+pub const CONSOLIDATED_REPORT_PREFIX: &str = "ci-test-reports-attempt";
 
 #[derive(Clone, Debug)]
 pub struct Observation {
@@ -155,6 +157,13 @@ pub fn observations_from_archive(
         if !file.name().ends_with(".json") {
             continue;
         }
+        let artifact_name = Path::new(file.name())
+            .components()
+            .next()
+            .and_then(|component| component.as_os_str().to_str())
+            .filter(|name| is_report_artifact(name))
+            .unwrap_or(&context.artifact_name)
+            .to_string();
         let mut json = String::new();
         file.read_to_string(&mut json)
             .map_err(|error| error.to_string())?;
@@ -179,7 +188,7 @@ pub fn observations_from_archive(
                 attempt: context.attempt,
                 branch: context.branch.clone(),
                 seen_at: context.seen_at.clone(),
-                artifact_name: context.artifact_name.clone(),
+                artifact_name: artifact_name.clone(),
                 run_url: context.run_url.clone(),
                 job_url: None,
             });
@@ -312,10 +321,10 @@ pub fn report_job_name(artifact_name: &str) -> String {
     } else if base.starts_with("integration-tests-group") {
         base.to_string()
     } else if let Some(shard) = base.strip_prefix("cli-integration-tests-") {
-        let shard = if shard == "bridge" {
-            "bridge_gen"
-        } else {
-            shard
+        let shard = match shard {
+            "bridge" => "bridge_gen".to_string(),
+            "bridge-rust" => "bridge_gen_rust".to_string(),
+            shard => shard.replace('-', "_"),
         };
         format!("it-cli ({shard})")
     } else {
@@ -344,6 +353,10 @@ pub fn attempt_from_artifact_name(name: &str) -> Option<u32> {
         .filter(|(prefix, value)| prefix.ends_with("-report") && !value.is_empty())
         .and_then(|(_, value)| value.parse().ok())
         .filter(|value| *value > 0)
+}
+
+pub fn consolidated_artifact_name(attempt: u32) -> String {
+    format!("{CONSOLIDATED_REPORT_PREFIX}{attempt}")
 }
 
 pub fn is_report_artifact(name: &str) -> bool {
@@ -442,7 +455,8 @@ fn append_table(lines: &mut Vec<String>, tests: &[&TestStats], empty_message: &s
 
 pub fn render_report(
     candidates: &[TestStats],
-    run_count: usize,
+    analyzed_run_count: usize,
+    discovered_run_count: usize,
     artifact_count: usize,
     days: u64,
     generated: &str,
@@ -466,7 +480,7 @@ pub fn render_report(
         format!("# {ISSUE_TITLE}"),
         String::new(),
         format!(
-            "Generated {generated} from **{run_count}** CI runs and **{artifact_count}** test-report artifacts in the last **{days} days**."
+            "Generated {generated} from **{analyzed_run_count} of {discovered_run_count}** CI runs and **{artifact_count}** consolidated test-report artifacts in the last **{days} days**. Runs before consolidated report collection was enabled are excluded."
         ),
         String::new(),
         "Score = 5 × cross-attempt flips + 3 × runs with in-run retries + 2 × runs failing on `main`. Failures seen only on a feature branch are not treated as flaky unless they later pass in another attempt of the same run.".to_string(),
@@ -659,7 +673,7 @@ mod tests {
         assert_eq!(resolved[0].clean_runs_since_flaky, 10);
         assert_eq!(resolved[0].last_flaky, "2026-09-03T10:01:01Z");
 
-        let report = render_report(&resolved, 11, 11, 30, "2026-09-03 12:00 UTC", "", 100);
+        let report = render_report(&resolved, 11, 11, 11, 30, "2026-09-03 12:00 UTC", "", 100);
         assert!(report.contains("## Recently resolved"));
         assert!(report.contains("No active flaky tests in this window"));
         assert!(!report.contains("- [ ] <code>suite::flaky</code>"));
@@ -720,7 +734,7 @@ mod tests {
         );
         let tests = aggregate(observations);
 
-        let report = render_report(&tests, 30, 30, 30, "2026-09-03 12:00 UTC", "", 1);
+        let report = render_report(&tests, 30, 30, 30, 30, "2026-09-03 12:00 UTC", "", 1);
 
         assert!(report.contains("<code>suite::active</code>"));
         assert!(!report.contains("<code>suite::resolved</code>"));
@@ -737,13 +751,13 @@ mod tests {
             1,
             10.0,
         )]);
-        let first = render_report(&tests, 1, 1, 30, "2026-09-03 12:00 UTC", "", 100);
+        let first = render_report(&tests, 1, 1, 1, 30, "2026-09-03 12:00 UTC", "", 100);
         let claimed = first.replace(
             "- [ ] <code>suite::flaky</code>",
             "- [x] <code>suite::flaky</code>",
         );
 
-        let second = render_report(&tests, 2, 2, 30, "2026-09-10 12:00 UTC", &claimed, 100);
+        let second = render_report(&tests, 2, 2, 2, 30, "2026-09-10 12:00 UTC", &claimed, 100);
 
         assert!(second.contains("- [x] <code>suite::flaky</code>"));
     }
@@ -765,7 +779,7 @@ mod tests {
             "<!-- flaky-test:c3VpdGU6OmZsYWt5 -->\n",
         );
 
-        let rendered = render_report(&tests, 2, 2, 30, "2026-09-10 12:00 UTC", existing, 100);
+        let rendered = render_report(&tests, 2, 2, 2, 30, "2026-09-10 12:00 UTC", existing, 100);
 
         assert!(rendered.contains("- [x] <code>suite::flaky</code>"));
     }
@@ -780,6 +794,18 @@ mod tests {
         assert_eq!(
             select_job_url(jobs, "integration-tests-group1-report-attempt1", "fallback"),
             "group1-url"
+        );
+    }
+
+    #[test]
+    fn maps_cli_artifacts_to_matrix_job_names() {
+        assert_eq!(
+            report_job_name("cli-integration-tests-agents-guest-bridge-report-attempt1"),
+            "it-cli (agents_guest_bridge)"
+        );
+        assert_eq!(
+            report_job_name("cli-integration-tests-bridge-rust-report-attempt1"),
+            "it-cli (bridge_gen_rust)"
         );
     }
 
