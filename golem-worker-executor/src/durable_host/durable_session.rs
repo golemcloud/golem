@@ -1790,8 +1790,21 @@ impl DurableSessionStreams {
         }
         let locally_produced = self.producer.owns_handle_identity(&mapping.handle);
         let epoch = if self.has_local_session_authority() {
-            self.ensure_current_attachment().await?;
-            self.attachment_epoch
+            match self.attachment_attempt_id {
+                // Streams bound to a transport attempt may only cancel while that attempt is
+                // still the current attachment; a superseded attempt is fenced.
+                Some(_) => {
+                    self.ensure_current_attachment().await?;
+                    self.attachment_epoch
+                }
+                // Streams handed to the callee guest are not bound to any transport attempt:
+                // the guest owns the consumer side for the whole invocation, so its cancellation
+                // targets whatever attachment epoch is currently authoritative.
+                None => {
+                    let (epoch, _, _) = self.authoritative_attachment_state().await?;
+                    epoch
+                }
+            }
         } else {
             self.validate_recovered_mapping(&mapping).await?;
             self.attachment_epoch
@@ -4187,8 +4200,15 @@ impl std::fmt::Debug for DroppedDurableInput {
 }
 
 impl DroppedDurableInput {
+    /// Cancels the durable source of a readable stream end the guest dropped without draining.
+    ///
+    /// The cleanup is best effort: once the session's attachment has been fenced (the invocation
+    /// finished or another attempt took over, which is also what a replaying guest observes when
+    /// it drops the same reader again), the cancellation is no longer ours to author and is
+    /// skipped instead of failing the worker.
     pub(crate) async fn cancel(&self) -> Result<(), String> {
-        self.streams
+        match self
+            .streams
             .cancel_stream(
                 self.transport_stream_id,
                 self.role,
@@ -4197,6 +4217,17 @@ impl DroppedDurableInput {
                 None,
             )
             .await
+        {
+            Ok(()) => Ok(()),
+            Err(error) if error.starts_with("StaleEpoch:") => {
+                tracing::debug!(
+                    transport_stream_id = self.transport_stream_id,
+                    "skipping cancellation of dropped durable stream: {error}"
+                );
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -4606,7 +4637,21 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
                 ))));
             }
             CommittedProducerStreamEventPayloadV1::Cancel {
-                role,
+                role: StreamCancelRoleV1::InputProducer | StreamCancelRoleV1::OutputProducer,
+                ..
+            } => {
+                self.finished = true;
+                return Poll::Ready(Ok(StreamResult::Dropped));
+            }
+            CommittedProducerStreamEventPayloadV1::Cancel {
+                role: StreamCancelRoleV1::InputConsumer | StreamCancelRoleV1::OutputConsumer,
+                ..
+            } => {
+                self.finished = true;
+                return Poll::Ready(Ok(StreamResult::Cancelled));
+            }
+            CommittedProducerStreamEventPayloadV1::Cancel {
+                role: role @ StreamCancelRoleV1::System,
                 reason,
                 details,
             } => {
@@ -4836,20 +4881,20 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
-    fn durable_source_cancellation_is_a_permanent_stream_error() {
+    fn system_durable_stream_cancellation_is_a_permanent_stream_error() {
         let error = durable_stream_cancel_error(
-            StreamCancelRoleV1::InputProducer,
+            StreamCancelRoleV1::System,
             StreamCancelReasonV1::Cancelled,
             Some("source stopped".to_string()),
         );
 
         let classified = error
             .downcast_ref::<ClassifiedHostError>()
-            .expect("durable source cancellation must retain its retry classification");
+            .expect("system stream cancellation must retain its retry classification");
         assert_eq!(classified.kind, HostFailureKind::Permanent);
         assert_eq!(
             classified.message,
-            "durable stream cancelled (InputProducer, Cancelled): source stopped"
+            "durable stream cancelled (System, Cancelled): source stopped"
         );
     }
 
@@ -5658,6 +5703,218 @@ mod tests {
         }
         assert_eq!(intents, 1);
         assert_eq!(cancellations, 1);
+    }
+
+    #[test]
+    async fn dropped_input_cancellation_is_skipped_once_the_attachment_is_fenced() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let handle = producer
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKindV1::InvocationOutput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        let attempt_id = AttemptId::fresh();
+        producer
+            .append_session_record(StreamSessionRecordV1::Attached(
+                StreamSessionAttachedRecordV1 {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: identity.invocation.clone(),
+                    attachment_id: AttachmentId::primary(
+                        identity.environment_id,
+                        &identity.agent_id,
+                        &identity.invocation.idempotency_key,
+                    )
+                    .unwrap(),
+                    attempt_id,
+                    epoch: 1,
+                    pending_invocation_oplog_index: OplogIndex::INITIAL,
+                },
+            ))
+            .await
+            .unwrap();
+        let streams = DurableSessionStreams::new(
+            producer.clone(),
+            oplog.clone(),
+            identity.invocation,
+            [(7, handle.clone(), SessionStreamRoleV1::Output)],
+        )
+        .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())))
+        .with_attachment(1, attempt_id);
+        let source_cancelled = tokio_util::sync::CancellationToken::new();
+        producer.register_source_cancellation(handle.stream_id, source_cancelled.clone());
+        let (drop_event_sink, mut drop_events) = mpsc::unbounded_channel();
+        let input = DurableInputProducer::new(
+            streams
+                .endpoint(handle.clone(), 0, SessionStreamRoleV1::Output)
+                .await
+                .unwrap(),
+        )
+        .with_drop_cleanup(drop_event_sink, Arc::new(|| false));
+
+        drop(input);
+        let cancellation = match drop_events.recv().await.unwrap() {
+            DropEvent::CancelDroppedDurableInput { cancellation } => cancellation,
+            event => panic!("unexpected drop event: {event:?}"),
+        };
+        assert!(streams.detach_current().await.unwrap());
+        assert!(streams.ensure_current_attachment().await.is_err());
+        let before_cancellation = oplog.current_oplog_index().await;
+
+        cancellation.cancel().await.unwrap();
+
+        assert!(!source_cancelled.is_cancelled());
+        assert_eq!(oplog.current_oplog_index().await, before_cancellation);
+    }
+
+    #[test]
+    async fn guest_authored_input_cancellation_targets_the_current_attachment_epoch() {
+        let identity = identity();
+        let attachment_id = AttachmentId::primary(
+            identity.environment_id,
+            &identity.agent_id,
+            &identity.invocation.idempotency_key,
+        )
+        .unwrap();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let handle = producer
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKindV1::AgentHostedInput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        let start_attempt_id = AttemptId::fresh();
+        producer
+            .append_session_record(StreamSessionRecordV1::Attached(
+                StreamSessionAttachedRecordV1 {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: identity.invocation.clone(),
+                    attachment_id,
+                    attempt_id: start_attempt_id,
+                    epoch: 1,
+                    pending_invocation_oplog_index: OplogIndex::INITIAL,
+                },
+            ))
+            .await
+            .unwrap();
+        let transport = DurableSessionStreams::new(
+            producer.clone(),
+            oplog.clone(),
+            identity.invocation.clone(),
+            [(7, handle.clone(), SessionStreamRoleV1::Input)],
+        )
+        .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())))
+        .with_attachment(1, start_attempt_id);
+        let guest = DurableSessionStreams::new(
+            producer.clone(),
+            oplog.clone(),
+            identity.invocation.clone(),
+            [(7, handle.clone(), SessionStreamRoleV1::Input)],
+        )
+        .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())));
+        let source_cancelled = tokio_util::sync::CancellationToken::new();
+        producer.register_source_cancellation(handle.stream_id, source_cancelled.clone());
+
+        assert!(transport.detach_current().await.unwrap());
+        let resume_attempt_id = AttemptId::fresh();
+        transport
+            .commit_resume_attempt(StreamSessionResumeAttemptRecordV1 {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                attempt: ResumeAttemptDescriptorV1 {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    operation: StreamResumeOperationV1::Resume,
+                    session_key: identity.invocation.clone(),
+                    attachment_id,
+                    expected_callee_fingerprint: identity.fingerprint,
+                    attempt_id: resume_attempt_id,
+                    expected_epoch: 1,
+                    effective_identity: vec![3],
+                    cursors: Vec::new(),
+                    live_join_buffer_events: 8,
+                },
+                accepted_epoch: 2,
+            })
+            .await
+            .unwrap();
+        assert!(transport.ensure_current_attachment().await.is_err());
+        assert!(guest.ensure_current_attachment().await.is_err());
+
+        guest
+            .cancel_stream(
+                7,
+                StreamCancelRoleV1::InputProducer,
+                StreamCancelReasonV1::GuestDrop,
+                Some("guest dropped input readable end".to_string()),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(source_cancelled.is_cancelled());
+        let current = oplog.current_oplog_index().await;
+        let mut intents = Vec::new();
+        for (_, entry) in oplog
+            .read_exact(OplogIndex::INITIAL, current.as_u64())
+            .await
+        {
+            if let OplogEntry::StreamSession { record, .. } = entry
+                && let StreamSessionRecordV1::ConsumerCancelIntent(record) =
+                    guest.download_record(record).await.unwrap()
+            {
+                intents.push(record);
+            }
+        }
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].stream_id, handle.stream_id);
+        assert_eq!(intents[0].epoch, 2);
+        assert_eq!(intents[0].role, StreamCancelRoleV1::InputProducer);
+        assert_eq!(intents[0].reason, StreamCancelReasonV1::GuestDrop);
+
+        let after_cancellation = oplog.current_oplog_index().await;
+        guest
+            .cancel_stream(
+                7,
+                StreamCancelRoleV1::InputProducer,
+                StreamCancelReasonV1::GuestDrop,
+                Some("guest dropped input readable end".to_string()),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(oplog.current_oplog_index().await, after_cancellation);
     }
 
     #[test]

@@ -1575,10 +1575,11 @@ async fn moonbit_direct_guest_abi_streaming_lifecycle(
         .await?;
     let cancelled_input = cancelled_input.finish(cancelled_input_report).await?;
     assert_eq!(
-        cancelled_input.failure()?.kind(),
-        InvocationFailureKind::Execution
+        decode_proto_value(cancelled_input.successful_result()?)?,
+        SchemaValue::List {
+            elements: vec![SchemaValue::U32(99)],
+        }
     );
-    assert!(cancelled_input.result.is_none());
     assert_moonbit_target_ping(deps, &component, &target_agent_id, &name).await?;
 
     Ok(())
