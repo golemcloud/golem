@@ -23,6 +23,7 @@ pub mod agent;
 mod common_impls;
 #[cfg(feature = "full")]
 pub mod protobuf;
+pub mod public_json;
 pub mod render;
 pub mod tool;
 pub mod validation;
@@ -30,10 +31,12 @@ pub mod validation;
 #[cfg(any(test, feature = "proptest"))]
 pub use golem_schema::schema::proptest_strategies;
 #[cfg(feature = "full")]
+pub use golem_schema::schema::protobuf::schema_value_to_proto_with_streams;
+#[cfg(feature = "full")]
 pub use golem_schema::schema::wit;
 pub use golem_schema::schema::{
-    canonical, conversion, derive, graph, host_managed, metadata, multimodal, schema_type,
-    schema_value, stream, unstructured,
+    canonical, conversion, derive, fingerprint, graph, host_managed, metadata, multimodal,
+    schema_type, schema_value, stream, unstructured,
 };
 
 #[cfg(test)]

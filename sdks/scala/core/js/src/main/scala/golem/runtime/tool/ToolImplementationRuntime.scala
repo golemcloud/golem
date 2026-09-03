@@ -45,7 +45,7 @@ private final class JsToolStreamLifecycle(iterator: () => JsByteStreamIterator) 
 
   private var closed: Option[Future[Unit]] = None
 
-  def close(): Future[Unit] = synchronized {
+  def close(): Future[Unit] =
     closed.getOrElse {
       val result =
         try {
@@ -67,7 +67,6 @@ private final class JsToolStreamLifecycle(iterator: () => JsByteStreamIterator) 
       closed = Some(result)
       result
     }
-  }
 }
 
 /**
