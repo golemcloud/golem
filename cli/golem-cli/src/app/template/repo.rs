@@ -329,7 +329,8 @@ impl AppTemplateRepo {
 
 #[cfg(test)]
 mod tests {
-    use super::AppTemplateRepo;
+    use super::{AppTemplateRepo, TEMPLATES_DIR};
+    use crate::model::app_raw::{Application, BuildCommand};
     use crate::model::language::GuestLanguage;
     use std::fs as stdfs;
     use std::path::{Path, PathBuf};
@@ -363,6 +364,80 @@ mod tests {
                 "{} common template skill drifted for {}",
                 language.name(),
                 relative_path.display(),
+            );
+        }
+    }
+
+    #[test]
+    fn moonbit_embed_commands_run_from_app_root() {
+        let template_source = TEMPLATES_DIR
+            .get_file("moonbit/common-on-demand/golem.yaml")
+            .unwrap()
+            .contents_utf8()
+            .unwrap();
+        let application = Application::from_yaml_str(template_source).unwrap();
+
+        let expected_commands = [
+            ("moonbit", "debug", "agent-guest"),
+            ("moonbit", "release", "agent-guest"),
+            ("moonbit-tool-middleware", "debug", "tool-middleware-guest"),
+            (
+                "moonbit-tool-middleware",
+                "release",
+                "tool-middleware-guest",
+            ),
+            (
+                "moonbit-agent-tool-middleware",
+                "debug",
+                "agent-tool-middleware-guest",
+            ),
+            (
+                "moonbit-agent-tool-middleware",
+                "release",
+                "agent-tool-middleware-guest",
+            ),
+        ];
+
+        let embed_command_count = application
+            .component_templates
+            .values()
+            .flat_map(|template| template.presets.values())
+            .flat_map(|preset| &preset.build)
+            .filter(|command| {
+                matches!(
+                    command,
+                    BuildCommand::External(command)
+                        if command.command.starts_with("wasm-tools component embed ")
+                )
+            })
+            .count();
+        assert_eq!(embed_command_count, expected_commands.len());
+
+        for (template_name, preset_name, world) in expected_commands {
+            let preset = &application.component_templates[template_name].presets[preset_name];
+            let embed_commands = preset
+                .build
+                .iter()
+                .filter_map(|command| match command {
+                    BuildCommand::External(command)
+                        if command.command.starts_with("wasm-tools component embed ") =>
+                    {
+                        Some(command)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!(embed_commands.len(), 1, "{template_name}.{preset_name}");
+            let embed_command = embed_commands[0];
+            assert!(
+                embed_command.command.contains(&format!("--world {world} ")),
+                "{template_name}.{preset_name} does not embed world {world}"
+            );
+            assert_eq!(
+                embed_command.dir.as_deref(),
+                Some("{{ appRootDir }}"),
+                "{template_name}.{preset_name}"
             );
         }
     }

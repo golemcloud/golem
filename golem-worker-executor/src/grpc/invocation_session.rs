@@ -1495,6 +1495,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         });
         let streams = acceptance.streams;
+        let known_output_mapping_ids = acceptance
+            .mappings
+            .iter()
+            .filter(|mapping| mapping.role == SessionStreamRoleV1::Output)
+            .map(|mapping| mapping.transport_stream_id)
+            .collect::<Vec<_>>();
         let high_waters = match streams.input_high_waters().await {
             Ok(high_waters) => high_waters,
             Err(error) => {
@@ -1652,8 +1658,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 return;
             }
 
-        let output_mapping_ids = match streams.session_root_output_mapping_ids().await {
-            Ok(output_mapping_ids) => output_mapping_ids,
+        let root_output_mapping_ids = match streams.session_root_output_mapping_ids().await {
+            Ok(root_output_mapping_ids) => root_output_mapping_ids,
             Err(error) => {
                 send_protocol_failure(&responses, error).await;
                 return;
@@ -1667,7 +1673,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 output_streams
                     .pump_output_streams_from(
                         &cursor_map,
-                        &output_mapping_ids,
+                        &root_output_mapping_ids,
+                        &known_output_mapping_ids,
                         &output_responses,
                     )
                     .await

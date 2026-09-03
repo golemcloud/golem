@@ -26,7 +26,6 @@ pub mod durability;
 pub(crate) mod durable_session;
 pub(crate) mod durable_stream;
 pub mod entity;
-mod filesystem;
 pub mod golem;
 pub mod http;
 pub mod io;
@@ -56,9 +55,6 @@ use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
 use crate::metrics::ephemeral::record_non_suspending_failure;
-use crate::metrics::storage::{
-    STORAGE_TYPE_FILESYSTEM, record_storage_bytes_deleted, record_storage_bytes_written,
-};
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
@@ -66,7 +62,7 @@ use crate::model::{
     TrapType,
 };
 use crate::services::active_agents::MemoryGrant;
-use crate::services::agent_storage_meter::AgentStorageMeter;
+use crate::services::agent_filesystem::{FilesystemGenerationHandle, update_initial_files};
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -74,7 +70,7 @@ use crate::services::card::{CardService, CardState};
 use crate::services::card_interest::CardInterestIndex;
 use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
-use crate::services::file_loader::{FileLoader, FileUseToken};
+use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::linear_memory::{
@@ -96,11 +92,10 @@ use crate::services::{
     HasActiveAgents, HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration,
 };
 use crate::services::{HasComponentService, HasOplogService, HasWorkerService};
+use crate::wasi_filesystem::AgentDescriptor;
 use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
-use crate::worker::instance::{
-    OwnerExecution, OwnerFilesystemAttachment, OwnerProvisionedFile, OwnerRuntimeResources,
-};
+use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
     AgentExportFuncs, InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
@@ -115,12 +110,13 @@ use crate::workerctx::{
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
+pub(crate) use concurrent::{
+    CallReplayOutcome, DurableCallSession, NotCancellable,
+    authorize_live_permissions_at_serialized_access,
+};
 pub use durability::*;
-use futures::TryFutureExt;
-use futures::TryStreamExt;
-use futures::future::try_join_all;
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
 use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -129,10 +125,9 @@ use golem_common::model::card::{
     AgentCardHolder, CardHolder, CardId, InvocationWalletPin, PermissionTarget, ScopeCard,
     StoredCard, WalletVersionToken,
 };
-use golem_common::model::component::{
-    AgentFilePermissions, CanonicalFilePath, ComponentId, ComponentRevision, InitialAgentFile,
-};
+use golem_common::model::component::{CanonicalFilePath, ComponentId, ComponentRevision};
 use golem_common::model::entity::{EntityInvocationScope, FilesystemCapability, OwnerRuntime};
+#[cfg(test)]
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
@@ -168,27 +163,22 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 use std::vec;
 use tokio::sync::RwLock as TRwLock;
 
-type PreparedFilesystemStorageReservation<Ctx> = (Arc<Worker<Ctx>>, u64);
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
-use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{Instrument, Level, debug, error, info, span, warn};
 use try_match::try_match;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut, MemoryKind, Store};
-use wasmtime_wasi::p2::FsResult;
-use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
 use wasmtime_wasi::{
-    I32Exit, IoCtx, IoData, IoView, ResourceTable, ResourceTableError, WasiCtx, WasiCtxView,
-    WasiView,
+    I32Exit, IoCtx, IoData, IoView, ResourceTable, WasiCtx, WasiCtxView, WasiView,
 };
 use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
 use wasmtime_wasi_http::p2::types::{HostFutureIncomingResponse, OutgoingRequestConfig};
@@ -373,25 +363,30 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     entity_invocation_scope: Option<EntityInvocationScope>,
     primary_invocation_start_index: Option<OplogIndex>,
     owner_execution: Arc<OwnerExecution>,
-    owner_resources: Arc<OwnerRuntimeResources>,
+    _owner_resources: Arc<OwnerRuntimeResources>,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
-    owner_filesystem: OwnerFilesystemAttachment,
+    filesystem_generation_handle: FilesystemGenerationHandle,
+    filesystem_preopen: AgentDescriptor,
     execution_status: Arc<RwLock<ExecutionStatus>>,
     stream_runtime_teardown: Arc<AtomicBool>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
     linear_memory: LinearMemoryTracker,
-    storage_meter: AgentStorageMeter,
     /// Per-instance cache of resolved typed guest export handles, populated
     /// lazily on first use during invocation dispatch.
     agent_export_funcs: AgentExportFuncs,
-    registered_resource_meters: bool,
     _store_alive_guard: StoreAliveGuard,
 }
 
 pub(crate) struct PrimaryInvocationBody {
     permit: Option<OwnerInvocationPermit>,
+}
+
+impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
+    fn drop(&mut self) {
+        self.linear_memory.clear_limit_exceeded_callback();
+    }
 }
 
 impl PrimaryInvocationBody {
@@ -452,20 +447,6 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
             self.durable_worker_ctx().unshared_memory_growth_failed();
         }
         Ok(())
-    }
-}
-
-impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
-    fn drop(&mut self) {
-        self.linear_memory.clear_limit_exceeded_callback();
-        self.linear_memory.stop(Instant::now());
-        self.storage_meter.flush(Instant::now());
-        if self.registered_resource_meters {
-            self.resource_limits
-                .unregister_memory_meter(&self.owned_agent_id, self.linear_memory.meter());
-            self.resource_limits
-                .unregister_storage_meter(&self.owned_agent_id, &self.storage_meter);
-        }
     }
 }
 
@@ -624,6 +605,25 @@ fn validate_unshared_memory_growth(
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    pub(crate) fn is_live(&self) -> bool {
+        self.state.is_live()
+    }
+
+    pub(crate) fn filesystem_generation_handle(&self) -> FilesystemGenerationHandle {
+        self.filesystem_generation_handle.clone()
+    }
+
+    pub(crate) fn activate_resident_generation_handle(
+        &mut self,
+        generation_handle: FilesystemGenerationHandle,
+    ) {
+        self.filesystem_generation_handle = generation_handle;
+    }
+
+    pub(crate) fn filesystem_preopen(&self) -> AgentDescriptor {
+        self.filesystem_preopen.clone()
+    }
+
     pub(crate) fn derive_card_id(
         &self,
         invocation_key: &IdempotencyKey,
@@ -720,7 +720,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         component_service: Arc<dyn ComponentService>,
         resource_limits: Arc<AtomicResourceEntry>,
         config: Arc<GolemConfig>,
-        mut worker_config: AgentConfig,
+        filesystem: crate::workerctx::WorkerFilesystemContext,
+        linear_memory: LinearMemoryTracker,
+        worker_config: AgentConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         worker_fork: Arc<dyn WorkerForkService>,
@@ -737,36 +739,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         runtime: OwnerRuntime,
         owner_execution: Arc<OwnerExecution>,
         owner_resources: Arc<OwnerRuntimeResources>,
-        filesystem: FilesystemCapability,
+        filesystem_capability: FilesystemCapability,
         executable_component: Component,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError> {
-        if runtime == OwnerRuntime::Agent && filesystem != FilesystemCapability::Capable {
+        let crate::workerctx::WorkerFilesystemContext {
+            generation_handle: filesystem_generation_handle,
+            preopen: filesystem_preopen,
+        } = filesystem;
+        if runtime == OwnerRuntime::Agent && filesystem_capability != FilesystemCapability::Capable
+        {
             return Err(WorkerExecutorError::runtime(
                 "The primary Store must be filesystem-capable",
             ));
         }
-        let filesystem_root = owner_resources.filesystem();
-        let owner_filesystem = match &runtime {
-            OwnerRuntime::Agent => {
-                let attachment = filesystem_root
-                    .begin_primary_generation(
-                        &owner_execution.lane(),
-                        config.filesystem_storage.deterministic_root_dir.as_deref(),
-                        &owned_agent_id,
-                    )
-                    .await?;
-                owner_resources
-                    .reset_filesystem_storage_usage(worker_config.current_filesystem_storage_usage);
-                attachment
-            }
-            OwnerRuntime::Entity(_) => filesystem_root.attach_entity()?,
-        };
-        debug!(
-            generation = owner_filesystem.generation(),
-            "Attached Store to owner file system root at {:?}",
-            owner_filesystem.path()
-        );
 
         debug!(
             "Worker {} initialized with deleted regions {}",
@@ -853,71 +839,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }),
             OwnerRuntime::Entity(_) => None,
         };
-        let provisioned_files = match (&runtime, entity_activation.as_deref()) {
-            (OwnerRuntime::Agent, _) => agent_type_provision_configs
-                .as_ref()
-                .map(|config| config.files.as_slice())
-                .unwrap_or_default(),
-            (OwnerRuntime::Entity(_), Some(activation)) => {
-                activation.policy().provision().files.as_slice()
-            }
-            (OwnerRuntime::Entity(_), None) => unreachable!("validated above"),
-        };
-        let initial_read_write_file_bytes = filesystem_root
-            .preflight_provisioning(&owner_filesystem, provisioned_files)
-            .await?;
-        let initial_filesystem_storage_usage = owner_resources
-            .filesystem_storage_usage()
-            .saturating_add(initial_read_write_file_bytes);
-        if initial_filesystem_storage_usage > resource_limits.max_disk_space_limit() {
-            return Err(WorkerExecutorError::worker_creation_failed(
-                owned_agent_id.agent_id.clone(),
-                format!(
-                    "Provisioned read-write files require {initial_filesystem_storage_usage} bytes, exceeding the per-agent disk limit of {} bytes",
-                    resource_limits.max_disk_space_limit()
-                ),
-            ));
-        }
-
-        // Acquire storage semaphore permits for read-write initial component files.
-        //
-        // Read-only files are hardlinked from the FileLoader shared cache, so
-        // they occupy disk space only once per unique content hash regardless of
-        // how many workers reference them. FileLoader acquires the semaphore
-        // permit on the first cache miss and releases it when the last
-        // FileUseToken for that entry is dropped — no per-worker charge here.
-        //
-        // Read-write files are copied per-worker (each worker gets its own
-        // private inode and data blocks), so they must be charged individually.
-        if let Some(worker) = invocation_queue.upgrade()
-            && initial_read_write_file_bytes > 0
-        {
-            worker
-                .acquire_initial_filesystem_storage(initial_read_write_file_bytes)
-                .await
-                .map_err(|trap| WorkerExecutorError::runtime(trap.to_string()))?;
-        }
-
-        let (files, provisioned_read_write_file_bytes) = prepare_filesystem(
-            &filesystem_root,
-            &owner_filesystem,
-            &file_loader,
-            owned_agent_id.environment_id,
-            provisioned_files,
-        )
-        .await?;
-        debug_assert_eq!(
-            provisioned_read_write_file_bytes,
-            initial_read_write_file_bytes
-        );
-        if provisioned_read_write_file_bytes > 0 {
-            owner_resources.acquire_filesystem_storage(provisioned_read_write_file_bytes);
-            owner_resources
-                .storage_meter()
-                .on_acquire(provisioned_read_write_file_bytes, Instant::now());
-        }
-        worker_config.current_filesystem_storage_usage = initial_filesystem_storage_usage;
-
         let agent_config = if agent_id.is_some() {
             effective_agent_config(
                 worker_config.initial_agent_config.clone(),
@@ -939,8 +860,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
-            owner_filesystem.path().to_path_buf(),
-            filesystem == FilesystemCapability::Capable,
             stdin.clone(),
             stdout,
             stderr,
@@ -954,7 +873,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             connection_pool: http_connection_pool,
             is_replay: Arc::new(AtomicBool::new(false)),
         };
-        let storage_meter = owner_resources.storage_meter();
         let deleted_regions = if let Some(snapshot_idx) = worker_config.last_snapshot_index {
             let mut regions = worker_config.deleted_regions.clone();
             let snapshot_skip =
@@ -975,50 +893,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
             OwnerRuntime::Entity(_) => owner_execution.replay().await?,
         };
-        let registered_resource_meters = runtime == OwnerRuntime::Agent;
-        if registered_resource_meters {
-            resource_limits.register_storage_meter(owned_agent_id.clone(), storage_meter.clone());
-        }
         let worker = invocation_queue
             .upgrade()
             .expect("worker must remain alive while creating its context");
-        let (retained_memory_grant, canonical_startup_bytes) = match &runtime {
-            OwnerRuntime::Agent => (
-                worker.linear_memory_grant(),
-                worker.startup_linear_memory_bytes(),
-            ),
-            OwnerRuntime::Entity(_) => (
-                Arc::new(Mutex::new(
-                    worker
-                        .active_agents()
-                        .acquire_memory(initial_linear_memory)
-                        .await,
-                )),
-                initial_linear_memory,
-            ),
-        };
         let card_event_boundary_lock = worker.card_event_boundary_lock();
         let published_authority_generation = worker.published_authority_generation();
-        let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
-        let linear_memory = LinearMemoryTracker::new(
-            canonical_startup_bytes,
-            admitted_startup_bytes,
-            execution_status.read().unwrap().agent_mode(),
-            match &runtime {
-                OwnerRuntime::Agent => true,
-                OwnerRuntime::Entity(_) => !replay_state.is_live(),
-            },
-            resource_limits.clone(),
-            retained_memory_grant,
-            Instant::now(),
-        );
-        let weak_worker = Arc::downgrade(&worker);
-        let memory_meter = linear_memory.meter().clone();
-        linear_memory.set_limit_exceeded_callback(Arc::new(move || {
-            if let Some(worker) = weak_worker.upgrade() {
-                worker.request_memory_limit_interrupt(memory_meter.clone());
-            }
-        }));
         let state = PrivateDurableWorkerState::new(
             agent_id,
             oplog_service,
@@ -1045,11 +924,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             runtime.clone(),
             component_metadata,
             worker_config.owner_component_metadata,
-            worker_config.current_filesystem_storage_usage,
             worker_config.agent_effective_surface,
             worker_fork,
-            RwLock::new(compute_read_only_paths(&files)),
-            TRwLock::new(files),
             file_loader,
             worker_config.created_by,
             worker_config.created_by_email,
@@ -1070,10 +946,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if state.is_live() {
             linear_memory.switch_to_live();
         }
-        if registered_resource_meters {
-            resource_limits
-                .register_memory_meter(owned_agent_id.clone(), linear_memory.meter().clone());
-        }
+        let weak_worker = Arc::downgrade(&worker);
+        let memory_limits = linear_memory.clone();
+        linear_memory.set_limit_exceeded_callback(Arc::new(move || {
+            if let Some(worker) = weak_worker.upgrade() {
+                worker.request_memory_limit_interrupt(memory_limits.clone());
+            }
+        }));
         let store_alive_guard = StoreAliveGuard::new(&runtime);
 
         Ok(DurableWorkerCtx {
@@ -1085,11 +964,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             http_hooks,
             owned_agent_id: owned_agent_id.clone(),
             runtime,
-            filesystem,
+            filesystem: filesystem_capability,
             entity_invocation_scope: None,
             primary_invocation_start_index: None,
             owner_execution,
-            owner_resources,
+            _owner_resources: owner_resources,
             websocket_connection_pool,
             public_state: PublicDurableWorkerState {
                 promise_service: promise_service.clone(),
@@ -1098,23 +977,32 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 oplog: oplog.clone(),
             },
             state,
-            owner_filesystem,
+            filesystem_generation_handle,
+            filesystem_preopen: AgentDescriptor::new(filesystem_preopen, PathBuf::new()),
             execution_status,
             stream_runtime_teardown: Arc::new(AtomicBool::new(false)),
             resource_limits,
             linear_memory,
-            storage_meter,
             agent_export_funcs: AgentExportFuncs::default(),
-            registered_resource_meters,
             _store_alive_guard: store_alive_guard,
         })
     }
 
-    fn table(&mut self) -> &mut ResourceTable {
+    pub(crate) fn table(&mut self) -> &mut ResourceTable {
         Arc::get_mut(&mut self.table)
             .expect("ResourceTable is shared and cannot be borrowed mutably")
             .get_mut()
             .expect("ResourceTable mutex must never fail")
+    }
+
+    pub(crate) fn register_filesystem_input_stream(&mut self, rep: u32) {
+        self.state.open_filesystem_input_streams.insert(rep);
+    }
+
+    pub(crate) fn register_filesystem_output_stream(&mut self, rep: u32) {
+        self.state
+            .open_filesystem_output_streams
+            .insert(rep, FilesystemOutputStreamState);
     }
 
     /// Resets the per-invocation HTTP and RPC call counters to zero.
@@ -1127,9 +1015,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Records one outgoing HTTP call against the monthly account quota.
     ///
     /// Returns `Err(WorkerMonthlyHttpCallBudgetExhausted)` if the monthly budget
-    /// is exhausted. This trap maps to `RetryDecision::TryStop` — the worker is
-    /// suspended (same as filesystem `NodeOutOfFilesystemStorage` -> `ReacquirePermits`),
-    /// and will be resumed when the registry replenishes the budget.
+    /// is exhausted. This trap maps to `RetryDecision::TryStop`; the worker is
+    /// suspended and resumed when the registry replenishes the budget.
     pub fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
         if self.state.is_live() && !self.state.resource_limit_entry.record_http_call() {
             Err(anyhow!(
@@ -1149,33 +1036,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Err(anyhow!(
                 GolemSpecificWasmTrap::WorkerMonthlyRpcCallBudgetExhausted
             ))
-        } else {
-            Ok(())
-        }
-    }
-
-    fn check_if_file_is_readonly(
-        &mut self,
-        fd: &Resource<Descriptor>,
-    ) -> Result<bool, ResourceTableError> {
-        let table = Arc::get_mut(&mut self.table)
-            .expect("ResourceTable is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("ResourceTable mutex must never fail");
-
-        match table.get(fd)? {
-            Descriptor::File(f) => {
-                let read_only = self.state.read_only_paths.read().unwrap().contains(&f.path);
-
-                Ok(read_only)
-            }
-            Descriptor::Dir(_) => Ok(false),
-        }
-    }
-
-    fn fail_if_read_only(&mut self, fd: &Resource<Descriptor>) -> FsResult<()> {
-        if self.check_if_file_is_readonly(fd)? {
-            Err(wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode::NotPermitted.into())
         } else {
             Ok(())
         }
@@ -1245,10 +1105,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) async fn acquire_owner_filesystem_inspection(
         &self,
     ) -> Result<crate::worker::owner_lane::OwnerLaneExclusiveGuard, WorkerExecutorError> {
-        self.owner_resources
-            .filesystem()
-            .acquire_inspection(&self.owner_execution.lane(), &self.owner_filesystem)
-            .await
+        Ok(self.owner_execution.lane().acquire_exclusive().await)
     }
 
     pub fn set_entity_invocation_scope(
@@ -2339,194 +2196,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
         self.state.active_custom_invocations.clear();
     }
-
-    pub fn current_filesystem_storage_usage(&self) -> u64 {
-        self.owner_resources.filesystem_storage_usage()
-    }
-
-    pub fn max_disk_space(&self) -> u64 {
-        self.resource_limits.max_disk_space_limit()
-    }
-
-    /// Check whether acquiring `new_bytes` would breach the per-plan storage
-    /// limit. Returns `WorkerAgentExceededFilesystemStorageLimit` (permanent) if so.
-    /// Does NOT check the executor semaphore pool — that is done by
-    /// `acquire_filesystem_space`.
-    ///
-    /// No-op during replay.
-    pub fn check_filesystem_storage_quota(&self, new_bytes: u64) -> anyhow::Result<()> {
-        if self.state.is_replay() {
-            return Ok(());
-        }
-        let after = self
-            .owner_resources
-            .filesystem_storage_usage()
-            .saturating_add(new_bytes);
-        if after > self.resource_limits.max_disk_space_limit() {
-            Err(anyhow!(
-                GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit
-            ))
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Acquire `new_bytes` of storage from the executor semaphore pool.
-    ///
-    /// - During replay: no-op (permits were pre-acquired at startup).
-    /// - During live execution: calls `Worker::acquire_filesystem_space`, which
-    ///   tries the semaphore non-blockingly. On failure returns
-    ///   `NodeOutOfFilesystemStorage` (retriable via `ReacquirePermits`).
-    ///
-    /// Call `check_filesystem_quota` before calling this to enforce the per-plan
-    /// limit (`WorkerAgentExceededFilesystemStorageLimit`). This method only checks the
-    /// executor-wide semaphore pool (`NodeOutOfFilesystemStorage`).
-    pub async fn acquire_filesystem_storage_space(&mut self, new_bytes: u64) -> anyhow::Result<()> {
-        if self.state.is_replay() {
-            return Ok(());
-        }
-        // Acquire the semaphore permit first (non-blocking try). Writing the
-        // oplog entry after a confirmed acquire ensures the oplog accurately
-        // reflects only committed storage changes — a failed acquire leaves no
-        // phantom delta that would inflate `current_filesystem_storage_usage` on restart.
-        self.public_state
-            .worker()
-            .acquire_filesystem_storage_space(new_bytes)
-            .await?;
-        self.public_state
-            .worker()
-            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
-                new_bytes as i64,
-            ))
-            .await;
-        self.storage_meter.on_acquire(new_bytes, Instant::now());
-        self.state.current_filesystem_storage_usage =
-            self.owner_resources.acquire_filesystem_storage(new_bytes);
-        let account_id = self.created_by().to_string();
-        let environment_id = self.state.owned_agent_id.environment_id().to_string();
-        record_storage_bytes_written(
-            STORAGE_TYPE_FILESYSTEM,
-            &account_id,
-            &environment_id,
-            new_bytes,
-        );
-        Ok(())
-    }
-
-    /// Release `freed_bytes` back to the executor semaphore pool.
-    /// Called when files are deleted or truncated.
-    /// During replay this is a no-op.
-    pub async fn release_filesystem_storage_space(&mut self, freed_bytes: u64) {
-        if self.state.is_replay() {
-            return;
-        }
-        let freed_bytes = self.owner_resources.release_filesystem_storage(freed_bytes);
-        if freed_bytes == 0 {
-            return;
-        }
-        self.public_state
-            .worker()
-            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
-                -(freed_bytes as i64),
-            ))
-            .await;
-        self.public_state
-            .worker()
-            .release_filesystem_storage_space(freed_bytes)
-            .await;
-        self.storage_meter.on_release(freed_bytes, Instant::now());
-        self.state.current_filesystem_storage_usage =
-            self.owner_resources.filesystem_storage_usage();
-        let account_id = self.created_by().to_string();
-        let environment_id = self.state.owned_agent_id.environment_id().to_string();
-        record_storage_bytes_deleted(
-            STORAGE_TYPE_FILESYSTEM,
-            &account_id,
-            &environment_id,
-            freed_bytes,
-        );
-    }
-
-    /// Check the per-agent storage quota and acquire permits from the
-    /// executor-wide semaphore pool in a single step.
-    ///
-    /// This combines `check_filesystem_storage_quota` (per-plan limit) and
-    /// `acquire_filesystem_storage_space` (executor semaphore) — the two must
-    /// always be called together in this order.
-    pub async fn reserve_filesystem_storage(&mut self, new_bytes: u64) -> anyhow::Result<()> {
-        self.check_filesystem_storage_quota(new_bytes)?;
-        self.acquire_filesystem_storage_space(new_bytes).await
-    }
-
-    pub(crate) fn prepare_filesystem_storage_reservation(
-        &mut self,
-        new_bytes: u64,
-    ) -> anyhow::Result<Option<PreparedFilesystemStorageReservation<Ctx>>> {
-        if new_bytes == 0 || self.state.is_replay() {
-            return Ok(None);
-        }
-        self.check_filesystem_storage_quota(new_bytes)?;
-        self.state.current_filesystem_storage_usage =
-            self.owner_resources.acquire_filesystem_storage(new_bytes);
-        Ok(Some((self.public_state.worker(), new_bytes)))
-    }
-
-    pub(crate) fn rollback_filesystem_storage_reservation(&mut self, new_bytes: u64) {
-        if new_bytes == 0 || self.state.is_replay() {
-            return;
-        }
-        self.owner_resources.release_filesystem_storage(new_bytes);
-        self.state.current_filesystem_storage_usage =
-            self.owner_resources.filesystem_storage_usage();
-    }
-
-    pub(crate) fn finish_filesystem_storage_reservation(&mut self, new_bytes: u64) {
-        if new_bytes == 0 || self.state.is_replay() {
-            return;
-        }
-        self.storage_meter.on_acquire(new_bytes, Instant::now());
-        let account_id = self.created_by().to_string();
-        let environment_id = self.state.owned_agent_id.environment_id().to_string();
-        record_storage_bytes_written(
-            STORAGE_TYPE_FILESYSTEM,
-            &account_id,
-            &environment_id,
-            new_bytes,
-        );
-    }
-
-    pub(crate) fn prepare_filesystem_storage_release(
-        &mut self,
-        freed_bytes: u64,
-    ) -> Option<(Arc<Worker<Ctx>>, u64)> {
-        if freed_bytes == 0 || self.state.is_replay() {
-            return None;
-        }
-        let freed_bytes = self.owner_resources.release_filesystem_storage(freed_bytes);
-        if freed_bytes == 0 {
-            None
-        } else {
-            self.state.current_filesystem_storage_usage =
-                self.owner_resources.filesystem_storage_usage();
-            Some((self.public_state.worker(), freed_bytes))
-        }
-    }
-
-    pub(crate) fn finish_filesystem_storage_release(&mut self, freed_bytes: u64) {
-        if freed_bytes == 0 || self.state.is_replay() {
-            return;
-        }
-        self.storage_meter.on_release(freed_bytes, Instant::now());
-        let account_id = self.created_by().to_string();
-        let environment_id = self.state.owned_agent_id.environment_id().to_string();
-        record_storage_bytes_deleted(
-            STORAGE_TYPE_FILESYSTEM,
-            &account_id,
-            &environment_id,
-            freed_bytes,
-        );
-    }
-
     pub fn increase_memory(&mut self, delta: u64) {
         let (_, reconciling) = self.linear_memory.grow(delta, Instant::now());
         if self.runtime == OwnerRuntime::Agent && self.state.is_live() && !reconciling {
@@ -2590,7 +2259,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// the caller falls through to policy-based resolution.
     pub(crate) fn fixed_decision_for_trap_type(trap_type: &TrapType) -> Option<RetryDecision> {
         match trap_type {
-            TrapType::Interrupt(InterruptKind::Interrupt(ts)) => Some(RetryDecision::TryStop(*ts)),
+            TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(RetryDecision::None),
             TrapType::Interrupt(InterruptKind::Suspend(ts)) => Some(RetryDecision::TryStop(*ts)),
             TrapType::Interrupt(InterruptKind::Restart) => Some(RetryDecision::Immediate),
             TrapType::Interrupt(InterruptKind::Jump) => Some(RetryDecision::Immediate),
@@ -2617,14 +2286,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } => Some(RetryDecision::None),
             TrapType::Error {
                 error: AgentError::ExceededTableLimit,
-                ..
-            } => Some(RetryDecision::None),
-            TrapType::Error {
-                error: AgentError::NodeOutOfFilesystemStorage,
-                ..
-            } => Some(RetryDecision::ReacquirePermits),
-            TrapType::Error {
-                error: AgentError::AgentExceededFilesystemStorageLimit,
                 ..
             } => Some(RetryDecision::None),
             TrapType::Error {
@@ -2687,10 +2348,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             AgentError::ExceededTableLimit => "exceeded-table-limit",
             AgentError::ExceededHttpCallLimit => "exceeded-http-call-limit",
             AgentError::ExceededRpcCallLimit => "exceeded-rpc-call-limit",
-            AgentError::NodeOutOfFilesystemStorage => "node-out-of-filesystem-storage",
-            AgentError::AgentExceededFilesystemStorageLimit => {
-                "agent-exceeded-filesystem-storage-limit"
-            }
             AgentError::InternalError(_) => "internal-error",
             AgentError::DeterministicTrap(_) => "deterministic-trap",
             AgentError::PermanentError(_) => "permanent-error",
@@ -4585,23 +4242,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             None
         };
 
-        {
-            let mut current_files = self.state.files.write().await;
-            update_filesystem(
-                &mut current_files,
-                &self.state.file_loader,
-                self.owned_agent_id.environment_id,
-                self.owner_filesystem.path(),
-                new_agent_type_provision_configs
-                    .as_ref()
-                    .map(|c| c.files.as_slice())
-                    .unwrap_or_default(),
-            )
-            .await?;
-
-            let mut read_only_paths = self.state.read_only_paths.write().unwrap();
-            *read_only_paths = compute_read_only_paths(&current_files);
-        }
+        update_initial_files(
+            &self.filesystem_generation_handle,
+            Arc::clone(&self.state.file_loader),
+            self.owned_agent_id.environment_id,
+            new_agent_type_provision_configs
+                .as_ref()
+                .map(|c| c.files.clone())
+                .unwrap_or_default(),
+        )
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+        .await
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
 
         self.state.component_metadata = new_metadata;
 
@@ -6723,7 +6375,7 @@ mod tests {
             Arc::new(Mutex::new(MemoryGrant::inert(60))),
             now,
         );
-        tracker.reconcile(60, now);
+        tracker.reconcile_at(60, now);
 
         let second_memory_growth = tracker.prepare_unshared_growth(0, 60);
 
@@ -8330,109 +7982,74 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
         &self,
         path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
-        let root = self.owner_filesystem.path();
-        let target = root.join(PathBuf::from(path.to_rel_string()));
+        use crate::services::agent_filesystem as agent_fs;
 
+        let generation_handle = self.filesystem_generation_handle();
+        let relative = PathBuf::from(path.to_rel_string());
+        let target = agent_fs::PathTarget::at_root(&generation_handle, relative.clone())
+            .map_err(|error| filesystem_read_error(path, error))?;
+        let attributes = match agent_fs::attributes(
+            &generation_handle,
+            agent_fs::Target::Path(&target, agent_fs::Follow::Yes),
+        )
+        .map_err(|error| filesystem_read_error(path, error))?
+        .await
         {
-            let exists = tokio::fs::try_exists(&target).await.map_err(|e| {
-                WorkerExecutorError::FileSystemError {
-                    path: path.to_string(),
-                    reason: format!("Failed to check whether file exists: {e}"),
-                }
-            })?;
-            if !exists {
+            Ok(attributes) => attributes,
+            Err(error) if filesystem_error_is_not_found(&error) => {
                 return Ok(GetFileSystemNodeResult::NotFound);
-            };
+            }
+            Err(error) => return Err(filesystem_read_error(path, error)),
+        };
+
+        if attributes.kind == agent_fs::ObjectKind::File {
+            return Ok(GetFileSystemNodeResult::File(component_file_node(
+                &generation_handle,
+                relative,
+                attributes,
+            )?));
+        }
+        if attributes.kind != agent_fs::ObjectKind::Directory {
+            return Ok(GetFileSystemNodeResult::NotFound);
         }
 
-        let metadata = tokio::fs::metadata(&target).await.map_err(|e| {
-            WorkerExecutorError::FileSystemError {
-                path: path.to_string(),
-                reason: format!("Failed to get metadata: {e}"),
-            }
-        })?;
-
-        if metadata.is_file() {
-            let is_readonly_by_host = metadata.permissions().readonly();
-            let is_readonly_by_us = self.state.read_only_paths.read().unwrap().contains(&target);
-
-            let permissions = if is_readonly_by_host || is_readonly_by_us {
-                AgentFilePermissions::ReadOnly
-            } else {
-                AgentFilePermissions::ReadWrite
-            };
-
-            let last_modified = metadata.modified().ok().unwrap_or(SystemTime::UNIX_EPOCH);
-            let file_name = target
-                .file_name()
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
-
-            let file_node = ComponentFileSystemNode {
-                name: file_name,
-                last_modified,
-                details: ComponentFileSystemNodeDetails::File {
-                    size: metadata.len(),
-                    permissions,
-                },
-            };
-
-            return Ok(GetFileSystemNodeResult::File(file_node));
-        }
-
-        let mut entries = tokio::fs::read_dir(target).await.map_err(|e| {
-            WorkerExecutorError::FileSystemError {
-                path: path.to_string(),
-                reason: format!("Failed to list directory: {e}"),
-            }
-        })?;
-
-        let mut result = Vec::new();
-        while let Some(entry) = entries.next_entry().await? {
-            let metadata =
-                entry
-                    .metadata()
-                    .await
-                    .map_err(|e| WorkerExecutorError::FileSystemError {
-                        path: path.to_string(),
-                        reason: format!("Failed to get file metadata {e}"),
-                    })?;
-
-            let entry_name = entry.file_name().to_string_lossy().to_string();
-
-            let last_modified = metadata.modified().ok().unwrap_or(SystemTime::UNIX_EPOCH);
-
-            if metadata.is_file() {
-                let is_readonly_by_host = metadata.permissions().readonly();
-                // additionally consider permissions we maintain ourselves
-                let is_readonly_by_us = self
-                    .state
-                    .read_only_paths
-                    .read()
-                    .unwrap()
-                    .contains(&entry.path());
-
-                let permissions = if is_readonly_by_host || is_readonly_by_us {
-                    AgentFilePermissions::ReadOnly
-                } else {
-                    AgentFilePermissions::ReadWrite
-                };
-
-                result.push(ComponentFileSystemNode {
-                    name: entry_name,
-                    last_modified,
-                    details: ComponentFileSystemNodeDetails::File {
-                        size: metadata.len(),
-                        permissions,
-                    },
-                });
-            } else {
-                result.push(ComponentFileSystemNode {
-                    name: entry_name,
-                    last_modified,
-                    details: ComponentFileSystemNodeDetails::Directory,
-                });
-            };
+        let opened = agent_fs::open(
+            &generation_handle,
+            target,
+            agent_fs::OpenOptions::Existing {
+                expected: agent_fs::ObjectKind::Directory,
+                access: agent_fs::AccessMode::Read,
+                follow: agent_fs::Follow::Yes,
+            },
+        )
+        .map_err(|error| filesystem_read_error(path, error))?
+        .await
+        .map_err(|error| filesystem_read_error(path, error))?;
+        let agent_fs::OpenNode::Directory(directory) = opened.node else {
+            unreachable!("directory open returned a non-directory node")
+        };
+        let entries = agent_fs::list_directory(&generation_handle, &directory)
+            .map_err(|error| filesystem_read_error(path, error))?
+            .await
+            .map_err(|error| filesystem_read_error(path, error))?;
+        let mut result = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let entry_relative = relative.join(&entry.name);
+            let entry_target =
+                agent_fs::PathTarget::at_root(&generation_handle, entry_relative.clone())
+                    .map_err(|error| filesystem_read_error(path, error))?;
+            let attributes = agent_fs::attributes(
+                &generation_handle,
+                agent_fs::Target::Path(&entry_target, agent_fs::Follow::Yes),
+            )
+            .map_err(|error| filesystem_read_error(path, error))?
+            .await
+            .map_err(|error| filesystem_read_error(path, error))?;
+            result.push(component_file_node(
+                &generation_handle,
+                entry_relative,
+                attributes,
+            )?);
         }
         Ok(GetFileSystemNodeResult::Ok(result))
     }
@@ -8441,45 +8058,103 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
         &self,
         path: &CanonicalFilePath,
     ) -> Result<ReadFileResult, WorkerExecutorError> {
-        let root = self.owner_filesystem.path();
-        let target = root.join(PathBuf::from(path.to_rel_string()));
+        use crate::services::agent_filesystem as agent_fs;
 
+        let generation_handle = self.filesystem_generation_handle();
+        let relative = PathBuf::from(path.to_rel_string());
+        let target = agent_fs::PathTarget::at_root(&generation_handle, relative)
+            .map_err(|error| filesystem_read_error(path, error))?;
+        let attributes = match agent_fs::attributes(
+            &generation_handle,
+            agent_fs::Target::Path(&target, agent_fs::Follow::Yes),
+        )
+        .map_err(|error| filesystem_read_error(path, error))?
+        .await
         {
-            let exists = tokio::fs::try_exists(&target).await.map_err(|e| {
-                WorkerExecutorError::FileSystemError {
-                    path: path.to_string(),
-                    reason: format!("Failed to check whether file exists: {e}"),
-                }
-            })?;
-            if !exists {
+            Ok(attributes) => attributes,
+            Err(error) if filesystem_error_is_not_found(&error) => {
                 return Ok(ReadFileResult::NotFound);
-            };
+            }
+            Err(error) => return Err(filesystem_read_error(path, error)),
+        };
+        if attributes.kind != agent_fs::ObjectKind::File {
+            return Ok(ReadFileResult::NotAFile);
         }
-
-        {
-            let metadata = tokio::fs::metadata(&target).await.map_err(|e| {
-                WorkerExecutorError::FileSystemError {
-                    path: path.to_string(),
-                    reason: format!("Failed to get metadata: {e}"),
-                }
+        let opened = agent_fs::open(
+            &generation_handle,
+            target,
+            agent_fs::OpenOptions::Existing {
+                expected: agent_fs::ObjectKind::File,
+                access: agent_fs::AccessMode::Read,
+                follow: agent_fs::Follow::Yes,
+            },
+        )
+        .map_err(|error| filesystem_read_error(path, error))?
+        .await
+        .map_err(|error| filesystem_read_error(path, error))?;
+        let agent_fs::OpenNode::File(file) = opened.node else {
+            unreachable!("file open returned a non-file node")
+        };
+        let length =
+            usize::try_from(attributes.size).map_err(|_| WorkerExecutorError::FileSystemError {
+                path: path.to_string(),
+                reason: "File is too large to read on this executor".to_string(),
             })?;
-            if !metadata.is_file() {
-                return Ok(ReadFileResult::NotAFile);
-            };
-        }
-
-        let path_clone = path.clone();
-
-        let stream = tokio::fs::File::open(target)
-            .map_ok(|file| FramedRead::new(file, BytesCodec::new()).map_ok(BytesMut::freeze))
-            .try_flatten_stream()
-            .map_err(move |e| WorkerExecutorError::FileSystemError {
-                path: path_clone.to_string(),
-                reason: format!("Failed to open file: {e}"),
-            });
-
+        let bytes = agent_fs::read_file(
+            &generation_handle,
+            &file,
+            agent_fs::ReadRange { offset: 0, length },
+        )
+        .map_err(|error| filesystem_read_error(path, error))?
+        .await
+        .map_err(|error| filesystem_read_error(path, error))?;
+        let stream = futures::stream::once(async move { Ok::<Bytes, WorkerExecutorError>(bytes) });
         Ok(ReadFileResult::Ok(Box::pin(stream)))
     }
+}
+
+fn filesystem_error_is_not_found(error: &crate::services::agent_filesystem::Error) -> bool {
+    matches!(
+        error,
+        crate::services::agent_filesystem::Error::Sandbox(source)
+            if source.io_error().is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    )
+}
+
+fn filesystem_read_error(path: &CanonicalFilePath, error: impl Display) -> WorkerExecutorError {
+    WorkerExecutorError::FileSystemError {
+        path: path.to_string(),
+        reason: error.to_string(),
+    }
+}
+
+fn component_file_node(
+    generation_handle: &FilesystemGenerationHandle,
+    relative: PathBuf,
+    attributes: crate::services::agent_filesystem::Attributes,
+) -> Result<ComponentFileSystemNode, WorkerExecutorError> {
+    use crate::services::agent_filesystem as agent_fs;
+
+    let name = relative
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "/".to_string());
+    let last_modified = attributes.modified.unwrap_or(SystemTime::UNIX_EPOCH);
+    let details = match attributes.kind {
+        agent_fs::ObjectKind::File => ComponentFileSystemNodeDetails::File {
+            size: attributes.size,
+            permissions: agent_fs::path_permissions(generation_handle, &relative)
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
+        },
+        agent_fs::ObjectKind::Directory | agent_fs::ObjectKind::Symlink => {
+            ComponentFileSystemNodeDetails::Directory
+        }
+    };
+    Ok(ComponentFileSystemNode {
+        name,
+        last_modified,
+        details,
+    })
 }
 
 /// Number of oplog entries read per backward-scan window. Sized to match the compressed oplog
@@ -9165,18 +8840,8 @@ struct ActiveDurableScope {
     replay_end: Option<concurrent::ReplayCallHandle>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct FilesystemOutputStreamState {
-    pub descriptor_rep: u32,
-    pub position: Option<u64>,
-    pub pending_reservation: Option<PendingFilesystemReservation>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PendingFilesystemReservation {
-    pub base_size: u64,
-    pub reserved_growth: u64,
-}
+#[derive(Debug)]
+pub(crate) struct FilesystemOutputStreamState;
 
 /// Direction of a P3 TCP one-shot stream acquisition (`send` vs `receive`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9384,11 +9049,6 @@ struct PrivateDurableWorkerState {
     authority_initialized: bool,
     next_authority_expiration: Option<DateTime<Utc>>,
 
-    /// Running total of storage bytes acquired from the executor semaphore pool
-    /// by this worker since it last started. Incremented on every successful
-    /// write; decremented when files are deleted or truncated.
-    current_filesystem_storage_usage: u64,
-
     invocation_context: InvocationContext,
     current_span_id: SpanId,
     forward_trace_context_headers: bool,
@@ -9396,8 +9056,6 @@ struct PrivateDurableWorkerState {
 
     worker_fork: Arc<dyn WorkerForkService>,
 
-    read_only_paths: RwLock<HashSet<PathBuf>>,
-    files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
     file_loader: Arc<FileLoader>,
 
     shard_service: Arc<dyn ShardService>,
@@ -9605,11 +9263,8 @@ impl PrivateDurableWorkerState {
         runtime: OwnerRuntime,
         component_metadata: Component,
         owner_component_metadata: Option<Arc<Component>>,
-        current_filesystem_storage_usage: u64,
         configured_agent_effective_surface: golem_common::model::card::EffectiveSurface,
         worker_fork: Arc<dyn WorkerForkService>,
-        read_only_paths: RwLock<HashSet<PathBuf>>,
-        files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
         file_loader: Arc<FileLoader>,
         created_by: AccountId,
         created_by_email: AccountEmail,
@@ -9748,15 +9403,12 @@ impl PrivateDurableWorkerState {
             processed_authority_generation: 0,
             authority_initialized: false,
             next_authority_expiration: None,
-            current_filesystem_storage_usage,
             replay_state,
             invocation_context,
             current_span_id,
             forward_trace_context_headers: true,
             set_outgoing_http_idempotency_key: true,
             worker_fork,
-            read_only_paths,
-            files,
             file_loader,
             created_by,
             created_by_email,
@@ -10575,217 +10227,6 @@ impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtx<Ctx> {
     fn http(&mut self) -> WasiHttpCtxView<'_> {
         self.as_wasi_http_view()
     }
-}
-
-/// File that was provisioned due to metadata. There might be additional files that the
-/// worker created itself.
-/// Ro files are symlinked to the proper location and might be garbage collected when the token is dropped.
-/// Rw files are directly copied to the target location.
-enum IFSWorkerFile {
-    Ro {
-        file: InitialAgentFile,
-        _token: FileUseToken,
-    },
-    Rw,
-}
-
-async fn prepare_filesystem(
-    owner_filesystem: &crate::worker::instance::OwnerFilesystem,
-    attachment: &OwnerFilesystemAttachment,
-    file_loader: &Arc<FileLoader>,
-    environment_id: EnvironmentId,
-    files: &[InitialAgentFile],
-) -> Result<(HashMap<PathBuf, IFSWorkerFile>, u64), WorkerExecutorError> {
-    let provisioning = owner_filesystem
-        .provision(attachment, file_loader, environment_id, files)
-        .await?;
-    let files = provisioning
-        .files
-        .into_iter()
-        .map(|(path, file)| {
-            let file = match file {
-                OwnerProvisionedFile::ReadOnly { file, token } => IFSWorkerFile::Ro {
-                    file,
-                    _token: token,
-                },
-                OwnerProvisionedFile::ReadWrite { .. } => IFSWorkerFile::Rw,
-            };
-            (path, file)
-        })
-        .collect();
-    Ok((files, provisioning.new_read_write_bytes))
-}
-
-async fn update_filesystem(
-    current_state: &mut HashMap<PathBuf, IFSWorkerFile>,
-    file_loader: &Arc<FileLoader>,
-    environment_id: EnvironmentId,
-    root: &Path,
-    files: &[InitialAgentFile],
-) -> Result<(), WorkerExecutorError> {
-    enum UpdateFileSystemResult {
-        NoChanges,
-        Remove(PathBuf),
-        Replace { path: PathBuf, value: IFSWorkerFile },
-    }
-
-    let desired_paths: HashSet<PathBuf> = HashSet::from_iter(
-        files
-            .iter()
-            .map(|f| root.join(PathBuf::from(f.path.to_rel_string()))),
-    );
-
-    // We do this in two phases to make errors less likely. First, delete all files that are no longer needed and then create
-    // new ones.
-    let futures_phase_1 = current_state.iter().map(|(path, file)| {
-        let path = path.clone();
-        let should_keep = desired_paths.contains(&path);
-        async move {
-            match file {
-                IFSWorkerFile::Ro { file, .. } if !should_keep => {
-                    tokio::fs::remove_dir(&path).await.map_err(|e| {
-                        WorkerExecutorError::FileSystemError {
-                            path: file.path.to_rel_string(),
-                            reason: format!("Failed deleting file during update: {e}"),
-                        }
-                    })?;
-                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Remove(path))
-                }
-                _ => Ok(UpdateFileSystemResult::NoChanges),
-            }
-        }
-    });
-
-    let futures_phase_2 = files.iter().map(|file| {
-        let path = root.join(PathBuf::from(file.path.to_rel_string()));
-        let file = file.clone();
-        let permissions = file.permissions;
-        let file_loader = file_loader.clone();
-
-        let existing = current_state.get(&path);
-
-        async move {
-            match (permissions, existing) {
-                (AgentFilePermissions::ReadOnly, None) => {
-                    debug!("Loading read-only file {}", path.display());
-
-                    let exists = tokio::fs::try_exists(&path).map_err(|e| WorkerExecutorError::FileSystemError { path: file.path.to_rel_string(), reason: format!("Failed checking whether path exists: {e}") }).await?;
-
-                    if exists {
-                        // Try removing it if it's an empty directory; this will fail otherwise, and we can report the error.
-                        tokio::fs::remove_dir(&path).await.map_err(|e|
-                            WorkerExecutorError::FileSystemError {
-                                path: file.path.to_rel_string(),
-                                reason: format!("Tried replacing an existing non-empty path with ro file during update: {e}"),
-                            }
-                        )?;
-                    };
-
-                    let token = file_loader
-                        .get_read_only_to(environment_id, file.content_hash, &path, file.size)
-                        .await?;
-
-                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
-                }
-                (AgentFilePermissions::ReadOnly, Some(IFSWorkerFile::Ro { file: existing_file, .. })) => {
-                    if existing_file.content_hash == file.content_hash {
-                        Ok(UpdateFileSystemResult::NoChanges)
-                    } else {
-                        debug!("updating ro file {}", path.display());
-                        tokio::fs::remove_file(&path).await.map_err(|e|
-                            WorkerExecutorError::FileSystemError {
-                                path: file.path.to_rel_string(),
-                                reason: format!("Failed deleting file during update: {e}"),
-                            }
-                        )?;
-                        let token = file_loader
-                            .get_read_only_to(environment_id, file.content_hash, &path, file.size)
-                            .await?;
-                        Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
-                    }
-                }
-                (AgentFilePermissions::ReadOnly, Some(IFSWorkerFile::Rw)) => {
-                    Err(WorkerExecutorError::FileSystemError {
-                        path: file.path.to_rel_string(),
-                        reason: "Tried updating rw file to ro during update".to_string(),
-                    })
-                }
-                (AgentFilePermissions::ReadWrite, None) => {
-                    debug!("Loading rw file {}", path.display());
-
-                    let exists = tokio::fs::try_exists(&path).map_err(|e| WorkerExecutorError::FileSystemError { path: file.path.to_rel_string(), reason: format!("Failed checking whether path exists: {e}") }).await?;
-
-                    if exists {
-                        let metadata = tokio::fs::metadata(&path).await.map_err(|e|
-                            WorkerExecutorError::FileSystemError {
-                                path: file.path.to_rel_string(),
-                                reason: format!("Failed getting metadata of path: {e}"),
-                            }
-                        )?;
-
-                        if metadata.is_file() {
-                            return Ok(UpdateFileSystemResult::NoChanges);
-                        }
-
-                        // Try removing it if it's an empty directory, this will fail otherwise, and we can report the error.
-                        tokio::fs::remove_dir(&path).await.map_err(|e|
-                            WorkerExecutorError::FileSystemError {
-                                path: file.path.to_rel_string(),
-                                reason: format!("Tried replacing an existing non-empty path with rw file during update: {e}"),
-                            }
-                        )?;
-                    }
-
-                    file_loader
-                        .get_read_write_to(environment_id, file.content_hash, &path)
-                        .await?;
-                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
-                }
-                (AgentFilePermissions::ReadWrite, Some(IFSWorkerFile::Ro { .. })) => {
-                    debug!("Updating ro file to rw {}", path.display());
-                    tokio::fs::remove_file(&path).await.map_err(|e|
-                        WorkerExecutorError::FileSystemError {
-                            path: file.path.to_rel_string(),
-                            reason: format!("Failed deleting file during update: {e}"),
-                        }
-                    )?;
-                    file_loader
-                        .get_read_write_to(environment_id, file.content_hash, &path)
-                        .await?;
-                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
-                }
-                (AgentFilePermissions::ReadWrite, Some(IFSWorkerFile::Rw)) => {
-                    debug!("Updating rw file {}", path.display());
-                    Ok(UpdateFileSystemResult::NoChanges)
-                }
-            }
-        }
-    });
-
-    let mut results = try_join_all(futures_phase_1).await?;
-    results.extend(try_join_all(futures_phase_2).await?);
-
-    for result in results {
-        match result {
-            UpdateFileSystemResult::NoChanges => {}
-            UpdateFileSystemResult::Remove(path) => {
-                current_state.remove(&path);
-            }
-            UpdateFileSystemResult::Replace { path, value } => {
-                current_state.insert(path, value);
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn compute_read_only_paths(files: &HashMap<PathBuf, IFSWorkerFile>) -> HashSet<PathBuf> {
-    let ro_paths = files.iter().filter_map(|(p, f)| match f {
-        IFSWorkerFile::Ro { .. } => Some(p.clone()),
-        _ => None,
-    });
-    HashSet::from_iter(ro_paths)
 }
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during

@@ -39,6 +39,13 @@ runs:
         for target in ${{ inputs.rust-targets }}; do
           rustup target add "$target"
         done
+    - name: Install protoc
+      # `etcd-client`'s build script compiles its protos with tonic-prost-build, which shells out
+      # to `protoc`. The workspace's own protos are compiled with protox (pure Rust) and need no
+      # binary, so this is the only thing that requires it.
+      uses: arduino/setup-protoc@v3
+      with:
+        repo-token: ${{ github.token }}
     - name: Setup Rust cache
       if: inputs.use-cache == 'true'
       uses: Swatinem/rust-cache@v2

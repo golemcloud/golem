@@ -149,16 +149,16 @@ impl Oplog for DebugOplog {
             .oplog_state
             .debug_session
             .get(&self.oplog_state.debug_session_id)
-            .await
-            .expect("Internal Error. Current Oplog Index failed. Debug session not found");
+            .await;
 
-        // If a debug session not found but hasn't been set up with a target index,
-        // it implies, we only connected to the worker and haven't started debugging yet.
-        if let Some(index) = debug_session_data.target_oplog_index {
-            index
-        } else {
-            self.inner.current_oplog_index().await
+        if let Some(debug_session_data) = debug_session_data
+            && let Some(index) = debug_session_data.target_oplog_index
+        {
+            return index;
         }
+
+        // Worker construction precedes session registration when first connecting.
+        self.inner.current_oplog_index().await
     }
 
     async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
@@ -171,18 +171,19 @@ impl Oplog for DebugOplog {
 
     // Reads never move the debug session's replay position: replay's single-entry reads are
     // speculative (progress is only committed via `on_replay_progress`), and other components
-    // (for example P3 request-body reconstruction) perform unrelated point lookups.
+    // (for example P3 request-body reconstruction) perform unrelated point lookups. Worker
+    // construction may read before session registration, when the raw oplog is the only view.
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-        let debug_session_data = self
+        let playback_overrides = self
             .oplog_state
             .debug_session
             .get(&self.oplog_state.debug_session_id)
             .await
-            .expect("Internal Error. Read failed. Debug session not found");
-        let playback_overrides = debug_session_data.playback_overrides.clone();
+            .map(|data| data.playback_overrides.overrides)
+            .unwrap_or_default();
 
         Self::get_oplog_entry_applying_overrides(
-            playback_overrides.overrides,
+            playback_overrides,
             oplog_index,
             self.inner.clone(),
         )
@@ -221,20 +222,16 @@ impl Oplog for DebugOplog {
 
         // Like `read`, this never moves the debug session's replay position; it only applies the
         // playback overrides on top of the underlying entries.
-        let debug_session_data = self
+        let playback_overrides = self
             .oplog_state
             .debug_session
             .get(&self.oplog_state.debug_session_id)
             .await
-            .expect("Internal Error. Read failed. Debug session not found");
-        let playback_overrides = debug_session_data.playback_overrides;
+            .map(|data| data.playback_overrides.overrides)
+            .unwrap_or_default();
 
         for (idx, entry) in self.inner.read_exact(oplog_index, n).await {
-            let entry = playback_overrides
-                .overrides
-                .get(&idx)
-                .cloned()
-                .unwrap_or(entry);
+            let entry = playback_overrides.get(&idx).cloned().unwrap_or(entry);
             result.insert(idx, entry);
         }
         result

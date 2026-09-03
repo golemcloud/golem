@@ -255,18 +255,23 @@ The response not only contains the token data but also the secret which can be p
 }
 ```
 
-## Get current durable and ephemeral storage usage and storage limit.
+## Get account usage for a UTC calendar month.
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/usage`|GET|Yes
 
-
+Compute is reported in GCU, memory in allocated linear-memory GB-seconds, and durable and
+ephemeral storage in GB-month using byte-seconds / (1024^3 * 730 * 3600). `asOf` is when
+the registry last received a usage snapshot for the period, or the response time if no
+snapshot exists. Metering status distinguishes enabled meters that measured zero from
+disabled meters. `unknown` means no usage producer has reported metering state for the
+period. Durable and ephemeral storage both reflect the shared filesystem meter.
 
 **Query Parameters**
 
 Name|Type|Required|Description
 ---|---|---|---
-period|string|No|-
+period|string|No|Billing period in YYYY-MM format. Defaults to the current UTC calendar month.
 
 
 
@@ -275,48 +280,33 @@ period|string|No|-
 ```json copy
 {
   "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
-  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
-  "planName": "string",
   "usage": {
     "period": {
       "year": 0,
-      "month": 0
+      "month": 1
     },
+    "asOf": "2019-08-24T14:15:22Z",
     "computeGcu": 0.1,
     "memoryGbSeconds": 0,
     "durableStorageGbMonth": 0.1,
-    "ephemeralStorageGbMonth": 0.1
-  },
-  "maxStoragePerAgent": {
-    "effectiveValue": 0,
-    "planDefault": 0,
-    "overrideValue": 0,
-    "ceiling": 0,
-    "userConfigurable": true
-  },
-  "maxMemoryPerAgent": {
-    "effectiveValue": 0,
-    "planDefault": 0,
-    "overrideValue": 0,
-    "ceiling": 0,
-    "userConfigurable": true
-  },
-  "monthlyMemoryGbSeconds": {
-    "effectiveValue": 0,
-    "planDefault": 0,
-    "overrideValue": 0,
-    "ceiling": 0,
-    "userConfigurable": true
+    "ephemeralStorageGbMonth": 0.1,
+    "metering": {
+      "compute": "enabled",
+      "memory": "enabled",
+      "durableStorage": "enabled",
+      "ephemeralStorage": "enabled"
+    }
   }
 }
 ```
 
-## Get storage usage for closed billing periods, newest first.
+## Get sparse account usage for closed UTC calendar months, newest first.
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/usage/history`|GET|Yes
 
-
+Each item uses the same metrics and metering-status contract as current usage. The response
+does not include plan or limit metadata because historical limits are not snapshotted.
 
 **Query Parameters**
 
@@ -335,12 +325,19 @@ last|integer|No|-
     "usage": {
       "period": {
         "year": 0,
-        "month": 0
+        "month": 1
       },
+      "asOf": "2019-08-24T14:15:22Z",
       "computeGcu": 0.1,
       "memoryGbSeconds": 0,
       "durableStorageGbMonth": 0.1,
-      "ephemeralStorageGbMonth": 0.1
+      "ephemeralStorageGbMonth": 0.1,
+      "metering": {
+        "compute": "enabled",
+        "memory": "enabled",
+        "durableStorage": "enabled",
+        "ephemeralStorage": "enabled"
+      }
     }
   }
 ]

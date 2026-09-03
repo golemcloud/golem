@@ -331,7 +331,13 @@ pub(crate) mod dump {
             if is_example {
                 config_as_toml_str = config_as_toml_str
                     .lines()
-                    .map(|l| format!("# {l}"))
+                    .map(|l| {
+                        if l.is_empty() {
+                            "#".to_string()
+                        } else {
+                            format!("# {l}")
+                        }
+                    })
                     .collect::<Vec<String>>()
                     .join("\n")
             }

@@ -50,32 +50,23 @@ private[golem] object ToolMiddlewareRegistry {
   def register(
     descriptor: ToolMiddlewareDescriptor,
     invoker: ToolMiddlewareInvoker
-  ): Unit =
-    synchronized {
-      if (entries.contains(descriptor.name))
-        throw new IllegalArgumentException(
-          s"duplicate tool middleware registration for middleware name: ${descriptor.name}"
-        )
-      entries.update(descriptor.name, Entry(descriptor, invoker))
-    }
+  ): Unit = {
+    if (entries.contains(descriptor.name))
+      throw new IllegalArgumentException(
+        s"duplicate tool middleware registration for middleware name: ${descriptor.name}"
+      )
+    entries.update(descriptor.name, Entry(descriptor, invoker))
+  }
 
   def allMiddlewares: List[ToolMiddlewareDescriptor] =
-    synchronized {
-      entries.toList.sortBy(_._1).map(_._2.descriptor)
-    }
+    entries.toList.sortBy(_._1).map(_._2.descriptor)
 
   def getMiddleware(name: String): Option[ToolMiddlewareDescriptor] =
-    synchronized {
-      entries.get(name).map(_.descriptor)
-    }
+    entries.get(name).map(_.descriptor)
 
   def getInvoker(name: String): Option[ToolMiddlewareInvoker] =
-    synchronized {
-      entries.get(name).map(_.invoker)
-    }
+    entries.get(name).map(_.invoker)
 
   private[golem] def clearForTests(): Unit =
-    synchronized {
-      entries.clear()
-    }
+    entries.clear()
 }
