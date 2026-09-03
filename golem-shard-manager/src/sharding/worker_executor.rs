@@ -293,6 +293,10 @@ impl WorkerExecutorServiceDefault {
                 .into_iter()
                 .map(|shard_id| shard_id.into())
                 .collect(),
+            // W1 (ticket 4, WIRE): inert until SM makes AssignShards full-replace.
+            shard_epochs: vec![],
+            expires_at: None,
+            number_of_shards: 0,
         };
 
         let assign_shards_response = timeout(

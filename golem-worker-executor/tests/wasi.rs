@@ -2099,6 +2099,10 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
     let assigned = client
         .assign_shards(AssignShardsRequest {
             shard_ids: vec![shard],
+            // W1 (ticket 4, WIRE): inert; EX rewrites this call site in plan step 6.
+            shard_epochs: vec![],
+            expires_at: None,
+            number_of_shards: 0,
         })
         .await?
         .into_inner();
