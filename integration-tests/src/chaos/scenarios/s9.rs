@@ -467,13 +467,13 @@ pub async fn run(
     let records = history.snapshot();
     let readback = read_back(&ctx, &records, workload_config).await;
 
-    let rolled_back = VersionCensus::build(
-        "after-recovery",
-        VERSION_AFTER_ROLLBACK,
-        &read_versions(&ctx, workload_config).await,
-    );
-    let stale: Vec<String> = read_versions(&ctx, workload_config)
-        .await
+    // One census, read once. Both the count and the stale list below describe
+    // the same moment: reading twice let an agent be counted as rolled back in
+    // the first pass and listed as stale in the second, so the report could
+    // contradict itself over an agent that simply landed between the two.
+    let versions = read_versions(&ctx, workload_config).await;
+    let rolled_back = VersionCensus::build("after-recovery", VERSION_AFTER_ROLLBACK, &versions);
+    let stale: Vec<String> = versions
         .into_iter()
         .filter(|(_, v)| *v == Some(VERSION_ON_THE_NEW_BUILD))
         .map(|(agent, _)| agent)
