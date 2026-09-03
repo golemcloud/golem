@@ -44,7 +44,7 @@
     },
     "tools": {
       "type": "object",
-      "description": "Canonical tool declarations by logical tool name. Registry source coordinates are specified only here; all consumers refer to the logical name.",
+      "description": "Canonical tool declarations by logical tool name. A declaration may select a local implementing component or an exact published release; all consumers refer to the logical name.",
       "propertyNames": {
         "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
       },
@@ -119,6 +119,20 @@
           "$ref": "#/definitions/resourceDefinitionCreation"
         }
       }
+    },
+    "toolReleases": {
+      "type": "object",
+      "description": "Local tools to publish as immutable grantable releases by environment name.",
+      "additionalProperties": {
+        "type": "object",
+        "propertyNames": {
+          "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+        },
+        "additionalProperties": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      }
     }
   },
   "definitions": {
@@ -177,7 +191,7 @@
       }
     },
     "componentDependencies": {
-      "description": "Provider-qualified guest bridge dependencies required by a component.",
+      "description": "Guest bridge dependencies required by a component. Agent dependencies are always provider-qualified. Tool dependencies may use a declared logical tool name or an explicit provider-qualified reference.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -189,7 +203,7 @@
           }
         },
         "tools": {
-          "description": "Tool guest bridge dependencies. A registry tool is referenced by its logical name from tools; a local tool identifies both provider component and tool name as 'component/name' or { component, name }.",
+          "description": "Tool guest bridge dependencies. A bare logical name is resolved through tools.<name>; an explicit local tool uses 'component/name' or { component, name }.",
           "type": "array",
           "items": {
             "$ref": "#/definitions/componentDependencyReference"
@@ -214,7 +228,7 @@
           "description": "File path for the output WASM component which is ready to be uploaded to Golem."
         },
         "dependencies": {
-          "description": "Provider-qualified guest bridge dependencies required by this component. Entries use 'component/name' or { component, name }.",
+          "description": "Guest bridge dependencies required by this component. Agents are provider-qualified; tools may use a logical name from tools or an explicit provider-qualified reference.",
           "$ref": "#/definitions/componentDependencies"
         },
         "buildMergeMode": {
@@ -317,7 +331,7 @@
           "description": "File path for the output WASM component which is ready to be uploaded to Golem."
         },
         "dependencies": {
-          "description": "Provider-qualified guest bridge dependencies required by this component. Entries use 'component/name' or { component, name }.",
+          "description": "Guest bridge dependencies required by this component. Agents are provider-qualified; tools may use a logical name from tools or an explicit provider-qualified reference.",
           "$ref": "#/definitions/componentDependencies"
         },
         "buildMergeMode": {
@@ -456,7 +470,7 @@
           "description": "File path for the output WASM component which is ready to be uploaded to Golem."
         },
         "dependencies": {
-          "description": "Provider-qualified guest bridge dependencies required by this component. Entries use 'component/name' or { component, name }.",
+          "description": "Guest bridge dependencies required by this component. Agents are provider-qualified; tools may use a logical name from tools or an explicit provider-qualified reference.",
           "$ref": "#/definitions/componentDependencies"
         },
         "buildMergeMode": {
@@ -558,7 +572,7 @@
           "description": "File path for the output WASM component which is ready to be uploaded to Golem."
         },
         "dependencies": {
-          "description": "Provider-qualified guest bridge dependencies required by this component. Entries use 'component/name' or { component, name }.",
+          "description": "Guest bridge dependencies required by this component. Agents are provider-qualified; tools may use a logical name from tools or an explicit provider-qualified reference.",
           "$ref": "#/definitions/componentDependencies"
         },
         "buildMergeMode": {
@@ -775,12 +789,22 @@
       }
     },
     "toolDeclaration": {
-      "description": "Canonical source and consumer-owned provision properties for a tool. Omit source for a local implementation or select an exact registry release. Deploy automatically reconciles the required environment grant.",
+      "description": "Canonical identity and consumer-owned provision properties for a tool. Omit both component and release for an implicitly discovered local implementation, select a local implementing component, or select an exact published release. Deploy automatically reconciles the required environment grant.",
       "type": "object",
       "additionalProperties": false,
+      "not": {
+        "required": [
+          "component",
+          "release"
+        ]
+      },
       "properties": {
-        "source": {
-          "$ref": "#/definitions/registrySource"
+        "component": {
+          "type": "string",
+          "description": "Component implementing this local tool. Use this when multiple components export a tool with the same name or when referring to the declaration as a name-only component dependency."
+        },
+        "release": {
+          "$ref": "#/definitions/registrySubject"
         },
         "templates": {
           "$ref": "#/definitions/lenientTokenList"
@@ -1119,23 +1143,6 @@
         "version": {
           "$ref": "#/definitions/appVersionSourceOverride",
           "description": "Per-environment override, layered over the application-wide version source."
-        },
-        "toolsMergeMode": {
-          "$ref": "#/definitions/mapMergeMode"
-        },
-        "tools": {
-          "$ref": "#/definitions/toolBindings"
-        },
-        "publishTools": {
-          "type": "object",
-          "description": "Local tools to publish as immutable grantable releases when this environment is deployed.",
-          "propertyNames": {
-            "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
-          },
-          "additionalProperties": {
-            "type": "object",
-            "maxProperties": 0
-          }
         }
       }
     },
@@ -2516,18 +2523,6 @@
         }
       ]
     },
-    "registrySource": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "registry"
-      ],
-      "properties": {
-        "registry": {
-          "$ref": "#/definitions/registrySubject"
-        }
-      }
-    },
     "localSubject": {
       "type": "object",
       "additionalProperties": false,
@@ -2545,7 +2540,7 @@
       }
     },
     "componentDependencyReference": {
-      "description": "A guest bridge dependency reference. Registry tools use their logical tool name; local agents and tools use 'component/name' or {component, name}.",
+      "description": "A guest bridge dependency reference. Agents always use 'component/name' or { component, name }. Tools may use a bare logical name resolved through tools.<name>, or an explicit local reference in the same provider-qualified forms.",
       "oneOf": [
         {
           "type": "string"

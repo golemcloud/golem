@@ -14,7 +14,7 @@
 
 use crate::model::app_raw;
 use indexmap::IndexMap;
-use minijinja::{Environment, Error};
+use minijinja::{Environment, Error, ErrorKind, Value};
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -38,7 +38,38 @@ where
 
 impl<C: Serialize> TemplateRender<C> for String {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
-        env.render_str(self, ctx)
+        let template = env.template_from_str(self)?;
+        template.render(ctx).map_err(|error| {
+            if error.kind() != ErrorKind::UndefinedError {
+                return error;
+            }
+
+            let context = Value::from_serialize(ctx);
+            let mut missing_variables = template
+                .undeclared_variables(false)
+                .into_iter()
+                .filter(|name| {
+                    context
+                        .get_attr(name)
+                        .is_ok_and(|value| value.is_undefined())
+                })
+                .collect::<Vec<_>>();
+            missing_variables.sort();
+
+            if missing_variables.is_empty() {
+                error
+            } else {
+                Error::new(
+                    ErrorKind::UndefinedError,
+                    format!(
+                        "{}; missing template variable(s): {}",
+                        error,
+                        missing_variables.join(", ")
+                    ),
+                )
+                .with_source(error)
+            }
+        })
     }
 }
 
@@ -128,23 +159,6 @@ impl<C: Serialize> TemplateRender<C> for app_raw::ComponentDependencyReferenceSt
         Ok(app_raw::ComponentDependencyReferenceStruct {
             component: self.component.render(env, ctx)?,
             name: self.name.render(env, ctx)?,
-        })
-    }
-}
-
-impl<C: Serialize> TemplateRender<C> for app_raw::RegistrySubject {
-    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
-        Ok(match self {
-            app_raw::RegistrySubject::ById(reference) => {
-                app_raw::RegistrySubject::ById(reference.clone())
-            }
-            app_raw::RegistrySubject::ByCoordinates(reference) => {
-                app_raw::RegistrySubject::ByCoordinates(app_raw::RegistrySubjectByCoordinates {
-                    account: reference.account.render(env, ctx)?,
-                    name: reference.name.render(env, ctx)?,
-                    version: reference.version.render(env, ctx)?,
-                })
-            }
         })
     }
 }

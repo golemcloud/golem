@@ -425,10 +425,26 @@ pub struct EnvironmentToolGrantCreateView {
 }
 
 impl StructuredOutput for EnvironmentToolGrantCreateView {
-    const KIND: &'static str = "environment.tool.grant";
+    const KIND: &'static str = "tool.grant.create";
 }
 
 impl TextOutput for EnvironmentToolGrantCreateView {
+    fn log(&self) {
+        log_text_view(&self.grant);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentToolGrantGetView {
+    pub grant: EnvironmentToolGrantView,
+}
+
+impl StructuredOutput for EnvironmentToolGrantGetView {
+    const KIND: &'static str = "tool.grant.get";
+}
+
+impl TextOutput for EnvironmentToolGrantGetView {
     fn log(&self) {
         log_text_view(&self.grant);
     }
@@ -441,7 +457,7 @@ pub struct EnvironmentToolGrantRestoreView {
 }
 
 impl StructuredOutput for EnvironmentToolGrantRestoreView {
-    const KIND: &'static str = "environment.tool.restore";
+    const KIND: &'static str = "tool.grant.restore";
 }
 
 impl TextOutput for EnvironmentToolGrantRestoreView {
@@ -473,7 +489,7 @@ pub struct EnvironmentToolGrantListView {
     pub grants: Vec<EnvironmentToolGrantView>,
 }
 impl StructuredOutput for EnvironmentToolGrantListView {
-    const KIND: &'static str = "environment.tool.list";
+    const KIND: &'static str = "tool.grant.list";
 }
 impl TextOutput for EnvironmentToolGrantListView {
     fn log(&self) {
@@ -500,7 +516,7 @@ pub struct EnvironmentToolGrantDeleteView {
     pub grant_id: EnvironmentToolGrantId,
 }
 impl StructuredOutput for EnvironmentToolGrantDeleteView {
-    const KIND: &'static str = "environment.tool.delete";
+    const KIND: &'static str = "tool.grant.delete";
 }
 impl TextOutput for EnvironmentToolGrantDeleteView {
     fn log(&self) {

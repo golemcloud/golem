@@ -12,13 +12,68 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cli_output::StructuredOutput;
+use crate::model::text_format::{Column, TextOutput, log_table, new_table_full_condensed};
 use crate::validation::ValidationBuilder;
 use golem_common::model::component::ComponentName;
 use golem_common::model::environment_tool_grant::EnvironmentToolGrantWithDetails;
+use golem_common::model::tool::DeployedRegisteredTool;
 use golem_common::schema::tool::Tool;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::path::PathBuf;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeployedToolView {
+    pub tool: DeployedRegisteredTool,
+}
+
+impl StructuredOutput for DeployedToolView {
+    const KIND: &'static str = "tool.get";
+}
+
+impl TextOutput for DeployedToolView {
+    fn log(&self) {
+        log_deployed_tools(std::slice::from_ref(&self.tool));
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeployedToolListView {
+    pub tools: Vec<DeployedRegisteredTool>,
+}
+
+impl StructuredOutput for DeployedToolListView {
+    const KIND: &'static str = "tool.list";
+}
+
+impl TextOutput for DeployedToolListView {
+    fn log(&self) {
+        log_deployed_tools(&self.tools);
+    }
+}
+
+fn log_deployed_tools(tools: &[DeployedRegisteredTool]) {
+    let mut table = new_table_full_condensed(vec![
+        Column::new("Tool"),
+        Column::new("Release ID"),
+        Column::new("Owner"),
+        Column::new("Deployment Revision"),
+        Column::new("Metadata Version"),
+    ]);
+    for tool in tools {
+        table.add_row(vec![
+            tool.definition.name().unwrap_or_default().to_string(),
+            tool.release_id.map(|id| id.to_string()).unwrap_or_default(),
+            tool.owner_account_email.to_string(),
+            tool.deployment_revision.to_string(),
+            tool.metadata_version.clone(),
+        ]);
+    }
+    log_table(table);
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -52,7 +107,6 @@ pub enum ToolValidationCode {
     UnknownToolReference,
     UnknownAgentReference,
     VersionMismatch,
-    EnvironmentAgentVersionMismatch,
     AccountMismatch,
     InvalidParameters,
     InvalidProvision,

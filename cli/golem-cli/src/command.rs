@@ -1148,11 +1148,7 @@ pub mod exec {
 }
 
 pub mod environment {
-    use crate::model::environment::EnvironmentReference;
-    use clap::{ArgGroup, Args, Subcommand};
-    use golem_common::base_model::environment_tool_grant::EnvironmentToolGrantId;
-    use golem_common::base_model::tool::ToolName;
-    use golem_common::base_model::tool_release::ToolReleaseId;
+    use clap::Subcommand;
 
     #[derive(Debug, Subcommand)]
     pub enum EnvironmentSubcommand {
@@ -1183,21 +1179,47 @@ pub mod environment {
         /// List application environments on the current server
         #[command(after_help = crate::command_examples::ENVIRONMENT_LIST)]
         List,
-        /// Manage tool grants
-        Tool {
+    }
+}
+
+pub mod tool {
+    use clap::{ArgGroup, Args, Subcommand};
+    use golem_common::base_model::account::AccountId;
+    use golem_common::base_model::environment_tool_grant::EnvironmentToolGrantId;
+    use golem_common::base_model::tool::ToolName;
+    use golem_common::base_model::tool_release::ToolReleaseId;
+
+    #[derive(Debug, Subcommand)]
+    pub enum ToolSubcommand {
+        /// List tools in the selected environment's current deployment
+        List,
+        /// Get a tool from the selected environment's current deployment
+        Get {
+            /// Deployed tool name
+            tool_name: ToolName,
+        },
+        /// Manage published tool releases
+        Release {
             #[command(subcommand)]
-            subcommand: EnvironmentToolSubcommand,
+            subcommand: ToolReleaseSubcommand,
+        },
+        /// Manage tool grants for the selected environment
+        Grant {
+            #[command(subcommand)]
+            subcommand: ToolGrantSubcommand,
         },
     }
 
     #[derive(Debug, Subcommand)]
-    pub enum EnvironmentToolSubcommand {
-        /// Grant a published tool release to an environment
-        Grant(EnvironmentToolGrantArgs),
-        /// List active tool grants in an environment
-        List {
-            /// Environment reference
-            environment: EnvironmentReference,
+    pub enum ToolGrantSubcommand {
+        /// Grant a published tool release to the selected environment
+        Create(ToolGrantCreateArgs),
+        /// List active tool grants in the selected environment
+        List,
+        /// Get an active tool grant
+        Get {
+            /// Environment tool grant ID
+            grant_id: EnvironmentToolGrantId,
         },
         /// Delete a tool grant
         Delete {
@@ -1213,9 +1235,7 @@ pub mod environment {
 
     #[derive(Debug, Args)]
     #[command(group(ArgGroup::new("release").required(true).multiple(false).args(["release_id", "account"])))]
-    pub struct EnvironmentToolGrantArgs {
-        /// Environment reference
-        pub environment: EnvironmentReference,
+    pub struct ToolGrantCreateArgs {
         /// Published tool release ID
         #[arg(long)]
         pub release_id: Option<ToolReleaseId>,
@@ -1229,21 +1249,6 @@ pub mod environment {
         #[arg(long, requires_all = ["account", "name"])]
         pub version: Option<String>,
     }
-}
-
-pub mod tool {
-    use clap::Subcommand;
-    use golem_common::base_model::account::AccountId;
-    use golem_common::base_model::tool_release::ToolReleaseId;
-
-    #[derive(Debug, Subcommand)]
-    pub enum ToolSubcommand {
-        /// Manage published tool releases
-        Release {
-            #[command(subcommand)]
-            subcommand: ToolReleaseSubcommand,
-        },
-    }
 
     #[derive(Debug, Subcommand)]
     pub enum ToolReleaseSubcommand {
@@ -1254,11 +1259,20 @@ pub mod tool {
             account_id: Option<AccountId>,
         },
         /// Get a tool release
-        Get { release_id: ToolReleaseId },
+        Get {
+            /// Published tool release ID
+            release_id: ToolReleaseId,
+        },
         /// Make a release unavailable for new coordinate-based grants
-        DePublish { release_id: ToolReleaseId },
+        DePublish {
+            /// Published tool release ID
+            release_id: ToolReleaseId,
+        },
         /// Restore a de-published release
-        Restore { release_id: ToolReleaseId },
+        Restore {
+            /// Published tool release ID
+            release_id: ToolReleaseId,
+        },
     }
 }
 
@@ -2818,6 +2832,52 @@ mod test {
     #[test]
     fn command_debug_assert() {
         GolemCliCommand::command().debug_assert();
+    }
+
+    #[test]
+    fn tool_commands_follow_deployment_release_and_grant_hierarchy() {
+        for args in [
+            vec!["golem", "tool", "list"],
+            vec!["golem", "tool", "get", "grep"],
+            vec!["golem", "tool", "release", "list"],
+            vec![
+                "golem",
+                "tool",
+                "grant",
+                "create",
+                "--release-id",
+                "00000000-0000-0000-0000-000000000001",
+            ],
+            vec!["golem", "tool", "grant", "list"],
+            vec![
+                "golem",
+                "tool",
+                "grant",
+                "get",
+                "00000000-0000-0000-0000-000000000001",
+            ],
+            vec![
+                "golem",
+                "tool",
+                "grant",
+                "delete",
+                "00000000-0000-0000-0000-000000000001",
+            ],
+            vec![
+                "golem",
+                "tool",
+                "grant",
+                "restore",
+                "00000000-0000-0000-0000-000000000001",
+            ],
+        ] {
+            assert!(
+                GolemCliCommand::try_parse_from(args.clone()).is_ok(),
+                "failed to parse {args:?}"
+            );
+        }
+
+        assert!(GolemCliCommand::try_parse_from(["golem", "environment", "tool", "list"]).is_err());
     }
 
     #[test]

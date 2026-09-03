@@ -21,7 +21,7 @@ use crate::model::language::GuestLanguage;
 use crate::{APP_MANIFEST_JSON_SCHEMA, fs};
 use anyhow::{Context, anyhow};
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
+use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
 use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
@@ -133,6 +133,8 @@ pub struct Application {
     pub retry_policy_defaults: IndexMap<EnvironmentName, IndexMap<String, EnvironmentRetryPolicy>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub resource_defaults: IndexMap<EnvironmentName, IndexMap<ResourceName, ResourceDefinition>>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub tool_releases: IndexMap<EnvironmentName, IndexMap<String, PublishTool>>,
 }
 
 pub type JsonObject = serde_json::Map<String, serde_json::Value>;
@@ -164,7 +166,9 @@ impl<'de> Deserialize<'de> for ToolDeclarations {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolDeclaration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<RegistrySource>,
+    pub component: Option<ComponentName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<RegistrySubject>,
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -199,11 +203,59 @@ impl ToolDeclaration {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(untagged)]
 pub enum RegistrySubject {
     ById(RegistrySubjectById),
     ByCoordinates(RegistrySubjectByCoordinates),
+}
+
+impl<'de> Deserialize<'de> for RegistrySubject {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let fields = value
+            .as_object()
+            .ok_or_else(|| {
+                serde::de::Error::custom(
+                    "tool release reference must be an object containing either `releaseId`, or `account`, `name`, and `version`",
+                )
+            })?
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+
+        let has_release_id = fields.contains("releaseId");
+        let has_coordinates = ["account", "name", "version"]
+            .iter()
+            .any(|field| fields.contains(*field));
+
+        match (has_release_id, has_coordinates) {
+            (true, false) => serde_json::from_value::<RegistrySubjectById>(value)
+                .map(Self::ById)
+                .map_err(|error| {
+                    serde::de::Error::custom(format!(
+                        "invalid release ID reference; expected only `releaseId`: {error}"
+                    ))
+                }),
+            (false, true) => serde_json::from_value::<RegistrySubjectByCoordinates>(value)
+                .map(Self::ByCoordinates)
+                .map_err(|error| {
+                    serde::de::Error::custom(format!(
+                        "invalid release coordinate reference; expected `account`, `name`, and `version`: {error}"
+                    ))
+                }),
+            (true, true) => Err(serde::de::Error::custom(
+                "tool release reference cannot combine `releaseId` with `account`, `name`, or `version`",
+            )),
+            (false, false) => Err(serde::de::Error::custom(format!(
+                "tool release reference must contain either `releaseId`, or `account`, `name`, and `version`; found fields: {}",
+                fields.into_iter().collect::<Vec<_>>().join(", ")
+            ))),
+        }
+    }
 }
 
 impl RegistrySubject {
@@ -243,12 +295,6 @@ pub struct RegistrySubjectByCoordinates {
     pub account: String,
     pub name: String,
     pub version: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RegistrySource {
-    pub registry: RegistrySubject,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -896,12 +942,6 @@ pub struct Environment {
     pub deployment: Option<DeploymentOptions>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub version: Option<AppVersionSourceOverride>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub tools_merge_mode: Option<MapMergeMode>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub tools: Option<IndexMap<String, ToolBinding>>,
-    #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
-    pub publish_tools: IndexMap<String, PublishTool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1791,7 +1831,8 @@ mod test {
                     files,
                     presets,
                 )| ToolDeclaration {
-                    source: None,
+                    component: None,
+                    release: None,
                     templates,
                     config,
                     env_merge_mode,
@@ -2308,22 +2349,9 @@ mod test {
             arb_opt(arb_cli_options_model()),
             arb_opt(arb_deployment_options_model()),
             arb_opt(arb_app_version_source_override_model()),
-            (
-                arb_opt(arb_map_merge_mode_model()),
-                arb_opt(arb_tool_bindings_model()),
-            ),
         )
             .prop_map(
-                |(
-                    is_default,
-                    account,
-                    server,
-                    component_presets,
-                    cli,
-                    deployment,
-                    version,
-                    (tools_merge_mode, tools),
-                )| {
+                |(is_default, account, server, component_presets, cli, deployment, version)| {
                     Environment {
                         default: is_default.then_some(Marker),
                         account,
@@ -2332,9 +2360,6 @@ mod test {
                         cli,
                         deployment,
                         version,
-                        tools_merge_mode,
-                        tools,
-                        publish_tools: Default::default(),
                     }
                 },
             )
@@ -2843,6 +2868,7 @@ mod test {
                     secret_defaults,
                     retry_policy_defaults,
                     resource_defaults,
+                    tool_releases: Default::default(),
                 },
             )
             .boxed()
@@ -2871,14 +2897,9 @@ mod test {
             environments:
               local:
                 server: local
-                toolsMergeMode: upsert
-                tools:
-                  grep:
-                    version: "1.0.0"
-                    parameters: { root: /workspace }
-                    secretKeysReadableMergeMode: intersect
-                    secretKeysReadable: [credentials.github]
-                    secretKeysRevealable: []
+            toolReleases:
+              local:
+                grep: {}
             components:
               app:main:
                 componentWasm: main.wasm
@@ -2886,8 +2907,12 @@ mod test {
               CoderAgent:
                 tools:
                   grep:
+                    version: "1.0.0"
                     parametersMergeMode: replace
                     parameters: { root: /workspace/src }
+                    secretKeysReadableMergeMode: intersect
+                    secretKeysReadable: [credentials.github]
+                    secretKeysRevealable: []
                 presets:
                   debug:
                     toolsMergeMode: remove
@@ -2895,6 +2920,7 @@ mod test {
                       grep: {}
             tools:
               grep:
+                component: app:main
                 templates: rust
                 config: { logLevel: info }
                 env: { RUST_LOG: info }
@@ -2913,6 +2939,7 @@ mod test {
 
         assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
         assert!(!app.tools.is_empty());
+        assert_eq!(app.tool_releases.len(), 1);
     }
 
     #[test]
@@ -2921,7 +2948,11 @@ mod test {
             "app": "test-app",
             "environments": {
                 "local": {
-                    "server": "local",
+                    "server": "local"
+                }
+            },
+            "agents": {
+                "CoderAgent": {
                     "tools": {
                         "grep": {
                             "secretKeysReadable": ["*"]
@@ -2932,6 +2963,58 @@ mod test {
         });
 
         assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    }
+
+    #[test]
+    fn environment_rejects_tool_bindings_and_publications() {
+        for field in ["tools", "toolsMergeMode", "publishTools"] {
+            let source = format!(
+                "app: test-app\nenvironments:\n  local:\n    server: local\n    {field}: {{}}\n"
+            );
+
+            assert!(
+                Application::from_yaml_str(&source).is_err(),
+                "environment unexpectedly accepted {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_declaration_accepts_literal_release_and_rejects_old_source_shape() {
+        let declaration = serde_yaml::from_str::<ToolDeclaration>(indoc::indoc! { r#"
+            release:
+              account: publisher@example.com
+              name: grep
+              version: "{{ VERSION }}"
+        "# })
+        .expect("literal release coordinates should parse");
+
+        assert!(matches!(
+            declaration.release,
+            Some(RegistrySubject::ByCoordinates(RegistrySubjectByCoordinates { version, .. }))
+                if version == "{{ VERSION }}"
+        ));
+        assert!(
+            serde_yaml::from_str::<ToolDeclaration>(
+                "source:\n  registry:\n    releaseId: 00000000-0000-0000-0000-000000000001\n"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn registry_subject_reports_expected_fields_for_typos() {
+        let error = serde_yaml::from_str::<ToolDeclaration>(
+            "release:\n  account: publisher@example.com\n  name: grep\n  vesrion: 1.2.3\n",
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            error.contains("expected `account`, `name`, and `version`")
+                && error.contains("unknown field `vesrion`"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

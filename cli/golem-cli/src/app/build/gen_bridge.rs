@@ -625,31 +625,17 @@ async fn collect_tool_manifest_targets_for_entry(
             .await?
             .tools;
 
-        tools.retain(|tool| {
-            tool.name()
-                .and_then(|name| ToolName::try_from(name).ok())
-                .is_none_or(|name| ctx.application().remote_release_reference(&name).is_none())
-        });
-
-        if !is_matching_all && !is_matching_component {
-            tools.retain(|tool| tool.name().is_some_and(|name| matchers.contains(name)));
-        }
-
-        for tool in tools {
-            let Some(name) = tool.name() else {
-                continue;
-            };
-            matchers.remove(name);
-
-            let output_dir = ctx.application().tool_bridge_sdk_dir(name, target_language);
-            targets.push(BridgeSdkTarget {
-                source: BridgeSdkTargetSource::local(component_name.clone()),
-                subject: BridgeSdkTargetSubject::Tool(tool),
-                target_language,
-                bridge_mode,
-                output_dir,
-            });
-        }
+        collect_local_tool_manifest_targets_for_component(
+            ctx.application(),
+            component_name,
+            bridge_mode,
+            target_language,
+            &mut matchers,
+            is_matching_all,
+            is_matching_component,
+            &mut tools,
+            targets,
+        );
     }
 
     if !ignore_unmatched_matchers && !matchers.is_empty() {
@@ -674,6 +660,59 @@ async fn collect_tool_manifest_targets_for_entry(
     }
 
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_local_tool_manifest_targets_for_component(
+    application: &crate::model::app::Application,
+    component_name: &ComponentName,
+    bridge_mode: BridgeMode,
+    target_language: GuestLanguage,
+    matchers: &mut BTreeSet<String>,
+    is_matching_all: bool,
+    is_matching_component: bool,
+    tools: &mut Vec<golem_common::schema::tool::Tool>,
+    targets: &mut Vec<BridgeSdkTarget>,
+) {
+    tools.retain(|tool| {
+        let Some(name) = tool.name() else {
+            return true;
+        };
+        let Ok(name) = ToolName::try_from(name) else {
+            return true;
+        };
+        let Some(declaration) = application.tool_declarations().get(&name) else {
+            return true;
+        };
+
+        declaration.value.release.is_none()
+            && (is_matching_component
+                || declaration
+                    .value
+                    .component
+                    .as_ref()
+                    .is_none_or(|selected| selected == component_name))
+    });
+
+    if !is_matching_all && !is_matching_component {
+        tools.retain(|tool| tool.name().is_some_and(|name| matchers.contains(name)));
+    }
+
+    for tool in tools.drain(..) {
+        let Some(name) = tool.name() else {
+            continue;
+        };
+        matchers.remove(name);
+
+        let output_dir = application.tool_bridge_sdk_dir(name, target_language);
+        targets.push(BridgeSdkTarget {
+            source: BridgeSdkTargetSource::local(component_name.clone()),
+            subject: BridgeSdkTargetSubject::Tool(tool),
+            target_language,
+            bridge_mode,
+            output_dir,
+        });
+    }
 }
 
 async fn collect_dependency_guest_bridge_targets(
@@ -1132,13 +1171,16 @@ impl StructuredOutput for GenerateBridgeResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::app::{Application, ApplicationPreload, ComponentPresetSelector};
+    use crate::model::app_raw;
     use golem_common::model::Empty;
     use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
     use golem_common::model::component::ComponentName;
     use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
     use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
+    use indoc::indoc;
     use strum::IntoEnumIterator;
-    use tempfile::tempdir;
+    use tempfile::{TempDir, tempdir};
     use test_r::test;
 
     #[test]
@@ -1323,6 +1365,56 @@ mod tests {
         );
     }
 
+    #[test]
+    fn manifest_tool_matching_uses_declared_component_for_logical_name_and_wildcard() {
+        let (application, _temp_dir) = application_with_duplicate_tool_exporters();
+        let first = ComponentName("app:first".to_string());
+        let second = ComponentName("app:second".to_string());
+
+        for mut matchers in [BTreeSet::from(["echo".to_string()]), BTreeSet::new()] {
+            let is_matching_all = matchers.is_empty();
+            let mut targets = Vec::new();
+            for component_name in [&first, &second] {
+                collect_local_tool_manifest_targets_for_component(
+                    &application,
+                    component_name,
+                    BridgeMode::Guest,
+                    GuestLanguage::Rust,
+                    &mut matchers,
+                    is_matching_all,
+                    false,
+                    &mut vec![tool("echo")],
+                    &mut targets,
+                );
+            }
+
+            assert_eq!(
+                targets
+                    .iter()
+                    .filter_map(|target| target.source.component_name())
+                    .collect::<Vec<_>>(),
+                vec![&second]
+            );
+        }
+
+        let mut explicit_component_targets = Vec::new();
+        collect_local_tool_manifest_targets_for_component(
+            &application,
+            &first,
+            BridgeMode::Guest,
+            GuestLanguage::Rust,
+            &mut BTreeSet::new(),
+            false,
+            true,
+            &mut vec![tool("echo")],
+            &mut explicit_component_targets,
+        );
+        assert_eq!(
+            explicit_component_targets[0].source.component_name(),
+            Some(&first)
+        );
+    }
+
     fn bridge_sdk_target(
         agent_type_name: &str,
         target_language: GuestLanguage,
@@ -1387,5 +1479,59 @@ mod tests {
             },
             schema: SchemaGraph::empty(),
         }
+    }
+
+    fn application_with_duplicate_tool_exporters() -> (Application, TempDir) {
+        let temp_dir = tempdir().unwrap();
+        let manifest = temp_dir.path().join("golem.yaml");
+        crate::fs::write(
+            &manifest,
+            indoc! {r#"
+                app: bridge-test
+
+                environments:
+                  local:
+                    server: local
+
+                components:
+                  app:first:
+                    componentWasm: first.wasm
+                  app:second:
+                    componentWasm: second.wasm
+
+                tools:
+                  echo:
+                    component: app:second
+            "#},
+        )
+        .unwrap();
+
+        let raw_apps = vec![app_raw::ApplicationWithSource::from_yaml_file(&manifest).unwrap()];
+        let (preload, warns, errors) = Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "{}", warns.join("\n"));
+        assert!(errors.is_empty(), "{}", errors.join("\n"));
+        let ApplicationPreload {
+            application_name,
+            environments,
+            local_server,
+            version: _,
+        } = preload.unwrap();
+
+        let (application, warns, errors) = Application::from_raw_apps(
+            temp_dir.path().to_path_buf(),
+            application_name,
+            environments,
+            local_server,
+            ComponentPresetSelector {
+                environment: "local".parse().unwrap(),
+                presets: Vec::new(),
+            },
+            raw_apps,
+        )
+        .into_product();
+        assert!(warns.is_empty(), "{}", warns.join("\n"));
+        assert!(errors.is_empty(), "{}", errors.join("\n"));
+
+        (application.unwrap(), temp_dir)
     }
 }

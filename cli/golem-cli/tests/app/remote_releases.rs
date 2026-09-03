@@ -264,11 +264,10 @@ app: {application}
 
 tools:
   search:
-    source:
-      registry:
-        account: {publisher_account}
-        name: search
-        version: "1.2.0"
+    release:
+      account: {publisher_account}
+      name: search
+      version: "1.2.0"
 
 environments:
   {environment}:

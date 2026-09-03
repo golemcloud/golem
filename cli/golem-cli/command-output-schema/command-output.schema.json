@@ -193,16 +193,19 @@
       "$ref": "#/definitions/environment.list"
     },
     {
-      "$ref": "#/definitions/environment.tool.grant"
+      "$ref": "#/definitions/tool.grant.create"
     },
     {
-      "$ref": "#/definitions/environment.tool.list"
+      "$ref": "#/definitions/tool.grant.get"
     },
     {
-      "$ref": "#/definitions/environment.tool.delete"
+      "$ref": "#/definitions/tool.grant.list"
     },
     {
-      "$ref": "#/definitions/environment.tool.restore"
+      "$ref": "#/definitions/tool.grant.delete"
+    },
+    {
+      "$ref": "#/definitions/tool.grant.restore"
     },
     {
       "$ref": "#/definitions/environment.sync-deployment-options"
@@ -212,6 +215,12 @@
     },
     {
       "$ref": "#/definitions/tool.release.list"
+    },
+    {
+      "$ref": "#/definitions/tool.get"
+    },
+    {
+      "$ref": "#/definitions/tool.list"
     },
     {
       "$ref": "#/definitions/deploy.environment-setup-plan"
@@ -5968,50 +5977,62 @@
       },
       "additionalProperties": false
     },
-    "environment.tool.grant": {
+    "tool.grant.create": {
       "type": "object",
-      "description": "Created environment tool grant emitted by `golem environment tool grant`.",
+      "description": "Created tool grant for the selected environment.",
       "x-golem-output-mode": "single",
-      "x-golem-command": "environment tool grant",
+      "x-golem-command": "tool grant create",
       "required": ["$type", "grant"],
       "properties": {
-        "$type": { "const": "environment.tool.grant" },
+        "$type": { "const": "tool.grant.create" },
         "grant": { "$ref": "#/definitions/EnvironmentToolGrantView" }
       },
       "additionalProperties": false
     },
-    "environment.tool.list": {
+    "tool.grant.get": {
       "type": "object",
-      "description": "Active environment tool grants listed by `golem environment tool list`.",
+      "description": "An active tool grant returned by `golem tool grant get`.",
       "x-golem-output-mode": "single",
-      "x-golem-command": "environment tool list",
+      "x-golem-command": "tool grant get",
+      "required": ["$type", "grant"],
+      "properties": {
+        "$type": { "const": "tool.grant.get" },
+        "grant": { "$ref": "#/definitions/EnvironmentToolGrantView" }
+      },
+      "additionalProperties": false
+    },
+    "tool.grant.list": {
+      "type": "object",
+      "description": "Active tool grants in the selected environment.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool grant list",
       "required": ["$type", "grants"],
       "properties": {
-        "$type": { "const": "environment.tool.list" },
+        "$type": { "const": "tool.grant.list" },
         "grants": { "type": "array", "items": { "$ref": "#/definitions/EnvironmentToolGrantView" } }
       },
       "additionalProperties": false
     },
-    "environment.tool.delete": {
+    "tool.grant.delete": {
       "type": "object",
-      "description": "Deleted environment tool grant ID emitted by `golem environment tool delete`.",
+      "description": "Deleted tool grant ID emitted by `golem tool grant delete`.",
       "x-golem-output-mode": "single",
-      "x-golem-command": "environment tool delete",
+      "x-golem-command": "tool grant delete",
       "required": ["$type", "grantId"],
       "properties": {
-        "$type": { "const": "environment.tool.delete" },
+        "$type": { "const": "tool.grant.delete" },
         "grantId": { "type": "string", "format": "uuid" }
       },
       "additionalProperties": false
     },
-    "environment.tool.restore": {
+    "tool.grant.restore": {
       "type": "object",
-      "description": "Restored environment tool grant emitted by `golem environment tool restore`.",
+      "description": "Restored tool grant emitted by `golem tool grant restore`.",
       "x-golem-output-mode": "single",
-      "x-golem-command": "environment tool restore",
+      "x-golem-command": "tool grant restore",
       "required": ["$type", "grant"],
       "properties": {
-        "$type": { "const": "environment.tool.restore" },
+        "$type": { "const": "tool.grant.restore" },
         "grant": { "$ref": "#/definitions/EnvironmentToolGrantView" }
       },
       "additionalProperties": false
@@ -6091,6 +6112,62 @@
       "properties": {
         "$type": { "const": "tool.release.list" },
         "releases": { "type": "array", "items": { "$ref": "#/definitions/ToolRelease" } }
+      },
+      "additionalProperties": false
+    },
+    "DeployedRegisteredTool": {
+      "type": "object",
+      "required": [
+        "deploymentRevision",
+        "releaseId",
+        "definition",
+        "source",
+        "ownerAccountId",
+        "ownerAccountEmail",
+        "metadataVersion",
+        "metadataDigest"
+      ],
+      "properties": {
+        "deploymentRevision": { "type": "integer", "minimum": 0 },
+        "releaseId": {
+          "oneOf": [
+            { "type": "string", "format": "uuid" },
+            { "type": "null" }
+          ]
+        },
+        "definition": { "$ref": "#/definitions/Tool" },
+        "source": { "$ref": "#/definitions/ToolReleaseSource" },
+        "ownerAccountId": { "type": "string", "format": "uuid" },
+        "ownerAccountEmail": { "type": "string" },
+        "metadataVersion": { "type": "string" },
+        "metadataDigest": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "tool.get": {
+      "type": "object",
+      "description": "A tool from the selected environment's current deployment.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool get",
+      "required": ["$type", "tool"],
+      "properties": {
+        "$type": { "const": "tool.get" },
+        "tool": { "$ref": "#/definitions/DeployedRegisteredTool" }
+      },
+      "additionalProperties": false
+    },
+    "tool.list": {
+      "type": "object",
+      "description": "Tools in the selected environment's current deployment.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool list",
+      "required": ["$type", "tools"],
+      "properties": {
+        "$type": { "const": "tool.list" },
+        "tools": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/DeployedRegisteredTool" }
+        }
       },
       "additionalProperties": false
     },
@@ -8203,19 +8280,23 @@
       "rustType": "EnvironmentListView"
     },
     {
-      "type": "environment.tool.grant",
+      "type": "tool.grant.create",
       "rustType": "EnvironmentToolGrantCreateView"
     },
     {
-      "type": "environment.tool.list",
+      "type": "tool.grant.get",
+      "rustType": "EnvironmentToolGrantGetView"
+    },
+    {
+      "type": "tool.grant.list",
       "rustType": "EnvironmentToolGrantListView"
     },
     {
-      "type": "environment.tool.delete",
+      "type": "tool.grant.delete",
       "rustType": "EnvironmentToolGrantDeleteView"
     },
     {
-      "type": "environment.tool.restore",
+      "type": "tool.grant.restore",
       "rustType": "EnvironmentToolGrantRestoreView"
     },
     {
@@ -8229,6 +8310,14 @@
     {
       "type": "tool.release.list",
       "rustType": "ToolReleaseListView"
+    },
+    {
+      "type": "tool.get",
+      "rustType": "DeployedToolView"
+    },
+    {
+      "type": "tool.list",
+      "rustType": "DeployedToolListView"
     },
     {
       "type": "deploy.environment-setup-plan",

@@ -266,22 +266,27 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
     ),
     registry_entry!(
         "EnvironmentToolGrantCreateView",
-        "environment.tool.grant",
+        "tool.grant.create",
         arb_environment_tool_grant_create_result
     ),
     registry_entry!(
+        "EnvironmentToolGrantGetView",
+        "tool.grant.get",
+        arb_environment_tool_grant_get_result
+    ),
+    registry_entry!(
         "EnvironmentToolGrantListView",
-        "environment.tool.list",
+        "tool.grant.list",
         arb_environment_tool_grant_list_result
     ),
     registry_entry!(
         "EnvironmentToolGrantDeleteView",
-        "environment.tool.delete",
+        "tool.grant.delete",
         arb_environment_tool_grant_delete_result
     ),
     registry_entry!(
         "EnvironmentToolGrantRestoreView",
-        "environment.tool.restore",
+        "tool.grant.restore",
         arb_environment_tool_grant_restore_result
     ),
     registry_entry!(
@@ -294,6 +299,12 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         "ToolReleaseListView",
         "tool.release.list",
         arb_tool_release_list_result
+    ),
+    registry_entry!("DeployedToolView", "tool.get", arb_deployed_tool_result),
+    registry_entry!(
+        "DeployedToolListView",
+        "tool.list",
+        arb_deployed_tool_list_result
     ),
     registry_entry!(
         "EnvironmentSetupPlanView",
@@ -5083,6 +5094,13 @@ fn arb_environment_tool_grant_create_result() -> OutputDocumentStrategy {
     )
 }
 
+fn arb_environment_tool_grant_get_result() -> OutputDocumentStrategy {
+    serialized_output(
+        arb_environment_tool_grant_view()
+            .prop_map(|grant| crate::model::environment::EnvironmentToolGrantGetView { grant }),
+    )
+}
+
 fn arb_environment_tool_grant_delete_result() -> OutputDocumentStrategy {
     serialized_output(arb_uuid().prop_map(|id| {
         crate::model::environment::EnvironmentToolGrantDeleteView {
@@ -5138,6 +5156,34 @@ fn sample_tool_release() -> golem_common::model::tool_release::ToolRelease {
         state_changed_at: fixed_datetime(),
         state_changed_by: owner_account_id,
     }
+}
+
+fn sample_deployed_tool() -> golem_common::model::tool::DeployedRegisteredTool {
+    let release = sample_tool_release();
+    golem_common::model::tool::DeployedRegisteredTool {
+        deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
+        release_id: Some(release.id),
+        definition: release.definition,
+        source: release.source,
+        owner_account_id: release.owner_account_id,
+        owner_account_email: golem_common::model::account::AccountEmail::new(
+            "owner@example.com".to_string(),
+        ),
+        metadata_version: release.metadata_version,
+        metadata_digest: release.metadata_digest,
+    }
+}
+
+fn arb_deployed_tool_result() -> OutputDocumentStrategy {
+    serialized_output(Just(crate::model::tool_deployment::DeployedToolView {
+        tool: sample_deployed_tool(),
+    }))
+}
+
+fn arb_deployed_tool_list_result() -> OutputDocumentStrategy {
+    serialized_output(Just(crate::model::tool_deployment::DeployedToolListView {
+        tools: vec![sample_deployed_tool()],
+    }))
 }
 
 fn arb_tool_release_result() -> OutputDocumentStrategy {

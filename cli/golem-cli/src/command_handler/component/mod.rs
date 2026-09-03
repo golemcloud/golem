@@ -931,6 +931,17 @@ impl ComponentCommandHandler {
                         continue;
                     }
                 };
+                if let Some(declaration) = app.tool_declarations().get(&name) {
+                    if declaration.value.release.is_some()
+                        || declaration
+                            .value
+                            .component
+                            .as_ref()
+                            .is_some_and(|selected| selected != component_name)
+                    {
+                        continue;
+                    }
+                }
                 if let Err(errors) = validate_tool(definition) {
                     issues.push(ToolValidationIssue::error(
                         ToolValidationPhase::StructuralMetadata,
@@ -957,26 +968,24 @@ impl ComponentCommandHandler {
         }
 
         for (tool_name, declaration) in app.tool_declarations() {
-            let Some(release_source) = declaration.value.source.as_ref() else {
+            let Some(release) = declaration.value.release.as_ref() else {
                 continue;
             };
-            let grant = release_grants
-                .iter()
-                .find(|grant| match &release_source.registry {
-                    app_raw::RegistrySubject::ById(reference) => {
-                        grant.release.id == reference.release_id
-                    }
-                    app_raw::RegistrySubject::ByCoordinates(reference) => {
-                        grant.release_owner.email.as_str() == reference.account
-                            && grant.release.name.as_str() == reference.name
-                            && grant.release.version == reference.version
-                    }
-                });
+            let grant = release_grants.iter().find(|grant| match release {
+                app_raw::RegistrySubject::ById(reference) => {
+                    grant.release.id == reference.release_id
+                }
+                app_raw::RegistrySubject::ByCoordinates(reference) => {
+                    grant.release_owner.email.as_str() == reference.account
+                        && grant.release.name.as_str() == reference.name
+                        && grant.release.version == reference.version
+                }
+            });
             let Some(grant) = grant else {
                 issues.push(ToolValidationIssue::error(
                     ToolValidationPhase::DeclarationDiscoveryIdentity,
                     ToolValidationCode::ReleaseNotGranted,
-                    ToolEntityPath::tool(tool_name, "tools.source.registry"),
+                    ToolEntityPath::tool(tool_name, "tools.release"),
                     Some(declaration.source.clone()),
                     "Published tool release was not found among the active grants for this environment",
                 ));
@@ -986,7 +995,7 @@ impl ComponentCommandHandler {
                 issues.push(ToolValidationIssue::error(
                     ToolValidationPhase::DeclarationDiscoveryIdentity,
                     ToolValidationCode::InvalidName,
-                    ToolEntityPath::tool(tool_name, "tools.source.registry"),
+                    ToolEntityPath::tool(tool_name, "tools.release"),
                     Some(declaration.source.clone()),
                     format!(
                         "Declaration key must equal resolved published tool name '{}'",
@@ -1016,7 +1025,7 @@ impl ComponentCommandHandler {
         }
 
         for (tool_name, declaration) in app.tool_declarations() {
-            if declaration.value.source.is_none() && !implementations.contains_key(tool_name) {
+            if declaration.value.release.is_none() && !implementations.contains_key(tool_name) {
                 issues.push(ToolValidationIssue::error(
                     ToolValidationPhase::DeclarationDiscoveryIdentity,
                     ToolValidationCode::MissingImplementation,
@@ -1070,21 +1079,6 @@ impl ComponentCommandHandler {
             })
             .collect::<BTreeMap<_, _>>();
         let resolved_agents = app.resolve_agents(&agent_components)?;
-        let environment_bindings = resolve_tool_binding_map(
-            app.selected_environment()
-                .tools_merge_mode
-                .unwrap_or_default(),
-            app.selected_environment().tools.clone().unwrap_or_default(),
-        );
-
-        validate_tool_binding_references(
-            &mut issues,
-            &environment_bindings,
-            "environments.tools",
-            None,
-            app.selected_environment_source(),
-            &implementations,
-        );
         for agent_name in agent_components.keys() {
             if let Some(agent) = resolved_agents.agent(agent_name) {
                 validate_tool_binding_references(
@@ -1122,21 +1116,6 @@ impl ComponentCommandHandler {
                 .tool_declarations()
                 .get(tool_name)
                 .map(|declaration| declaration.source.clone());
-            let environment_binding =
-                environment_bindings
-                    .get(tool_name.as_str())
-                    .and_then(|state| {
-                        resolve_tool_binding_input(
-                            &mut issues,
-                            tool_name,
-                            definition,
-                            owner,
-                            state,
-                            "environments.tools",
-                            None,
-                            app.selected_environment_source(),
-                        )
-                    });
 
             let mut agent_bindings = BTreeMap::new();
             for agent_name in agent_components.keys() {
@@ -1146,23 +1125,6 @@ impl ComponentCommandHandler {
                 let Some(state) = agent.tool_bindings().get(tool_name.as_str()) else {
                     continue;
                 };
-                if let (Some(environment_version), Some(agent_version)) = (
-                    environment_bindings
-                        .get(tool_name.as_str())
-                        .and_then(|binding| binding.version.as_ref()),
-                    state.version.as_ref(),
-                ) && environment_version != agent_version
-                {
-                    issues.push(ToolValidationIssue::error(
-                        ToolValidationPhase::LocalResolution,
-                        ToolValidationCode::EnvironmentAgentVersionMismatch,
-                        ToolEntityPath::agent(agent_name, format!("tools.{tool_name}.version")),
-                        Some(agent.source().to_path_buf()),
-                        format!(
-                            "Environment version '{environment_version}' does not match agent version '{agent_version}'"
-                        ),
-                    ));
-                }
                 if let Some(binding) = resolve_tool_binding_input(
                     &mut issues,
                     tool_name,
@@ -1176,7 +1138,7 @@ impl ComponentCommandHandler {
                     validate_effective_tool_binding(
                         &mut issues,
                         tool_name,
-                        environment_binding.as_ref(),
+                        None,
                         &binding,
                         agent_name,
                         agent.source(),
@@ -1264,7 +1226,7 @@ impl ComponentCommandHandler {
                     files: provision.properties.files,
                     plugins,
                 },
-                environment_binding,
+                environment_binding: None,
                 agent_bindings,
             };
 
@@ -1336,8 +1298,9 @@ impl ComponentCommandHandler {
                 issues.push(ToolValidationIssue::error(
                     ToolValidationPhase::DeclarationDiscoveryIdentity,
                     ToolValidationCode::MissingImplementation,
-                    ToolEntityPath::tool(tool_name, "environments.publishTools"),
-                    app.selected_environment_source().map(std::path::Path::to_path_buf),
+                    ToolEntityPath::tool(tool_name, "toolReleases"),
+                    app.selected_published_tools_source()
+                        .map(std::path::Path::to_path_buf),
                     format!("Published tool must resolve to exactly one local implementation, found {local_count}"),
                 ));
             }
@@ -2058,20 +2021,6 @@ impl ComponentCommandHandler {
             })
             .await
             .map_err(|err| anyhow!(err))
-    }
-}
-
-fn resolve_tool_binding_map(
-    merge_mode: crate::model::cascade::property::map::MapMergeMode,
-    bindings: indexmap::IndexMap<String, app_raw::ToolBinding>,
-) -> BTreeMap<String, ToolBindingState> {
-    match merge_mode {
-        crate::model::cascade::property::map::MapMergeMode::Remove => BTreeMap::new(),
-        crate::model::cascade::property::map::MapMergeMode::Upsert
-        | crate::model::cascade::property::map::MapMergeMode::Replace => bindings
-            .into_iter()
-            .map(|(name, binding)| (name, ToolBindingState::from_binding(binding)))
-            .collect(),
     }
 }
 
