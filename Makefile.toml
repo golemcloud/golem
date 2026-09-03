@@ -161,13 +161,11 @@ args = ["build", "--workspace", "--all-targets"]
 [tasks.build-all-bins-including-tests]
 dependencies = ["wit"]
 description = "Builds all executables in debug mode, including the single-executable golem and all tests"
-
-script_runner = "@duckscript"
-script = '''
-exec --fail-on-error cargo build --profile %{PROFILE}
-exec --fail-on-error cargo test --no-run --profile %{PROFILE}
-'''
-
+# A single cargo invocation is used on purpose: `cargo build` followed by `cargo test --no-run`
+# resolves features twice (dev-dependencies enable e.g. `golem-common/proptest` only in the second
+# pass), which recompiles every workspace crate. Building bins and tests together resolves once.
+command = "cargo"
+args = ["build", "--workspace", "--bins", "--tests", "--profile", "${PROFILE}"]
 
 [tasks.build-bins]
 dependencies = ["wit"]
@@ -692,6 +690,24 @@ script = '''
 cargo-test-r run --package integration-tests --test sharding -- --nocapture --report-time $JUNIT_OPTS
 '''
 
+# CI runs the sequential sharding suite as two jobs (see the `it` matrix in ci.yaml): the
+# coordinated scenarios and everything else. Together they cover exactly `integration-tests-group6`.
+[tasks.integration-tests-group6-coordinated]
+description = "Runs integration tests (group 6/11 - sharding, coordinated scenarios only)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS" = "20", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY" = "1s" }
+script = '''
+cargo-test-r run --package integration-tests --test sharding coordinated_scenario -- --nocapture --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group6-rest]
+description = "Runs integration tests (group 6/11 - sharding, everything except the coordinated scenarios)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS" = "20", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY" = "1s" }
+script = '''
+cargo-test-r run --package integration-tests --test sharding -- --skip coordinated_scenario --nocapture --report-time $JUNIT_OPTS
+'''
+
 [tasks.integration-tests-group7]
 description = "Runs integration tests (group 7/11 - otlp_plugin, plugins)"
 dependencies = ["build-bins-non-ci"]
@@ -763,28 +779,66 @@ description = "Runs all CLI integration tests with dev-release golem and golem-c
 env = { "GOLEM_CLI_TEST_BIN_PROFILE" = "dev-release" }
 run_task = "cli-integration-tests"
 
-# it-cli CI shards, split by module-level test-r tag (see the it-cli matrix in ci.yaml).
+# it-cli CI shards, split by test-r tags (see the it-cli matrix in ci.yaml and the `tag_suite!`
+# and `#[tag]` declarations under cli/golem-cli/tests). Shards that are a subset of a module-level
+# tag use `--skip` on the more specific tag so every test is in exactly one shard.
 [tasks.cli-integration-tests-agents]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
-description = "Runs the it-cli 'agents' shard (app::agents)"
+description = "Runs the it-cli 'agents' shard (app::agents without the guest-bridge and streaming tests)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents" -- --skip ":tag:agents_guest_bridge|agents_streaming" --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-agents-guest-bridge]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
+description = "Runs the it-cli 'agents_guest_bridge' shard (app::agents::*_guest_bridge_e2e)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents_guest_bridge" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-agents-streaming]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
+description = "Runs the it-cli 'agents_streaming' shard (app::agents streaming end-to-end tests)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents_streaming" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-bridge]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
-description = "Runs the it-cli 'bridge' shard (bridge_gen)"
+description = "Runs the it-cli 'bridge_gen' shard (bridge_gen without bridge_gen::rust)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:bridge_gen" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:bridge_gen" -- --skip ":tag:bridge_gen_rust" --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-bridge-rust]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
+description = "Runs the it-cli 'bridge_gen_rust' shard (bridge_gen::rust)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:bridge_gen_rust" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-deploy]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
+description = "Runs the it-cli 'deploy' shard (app modules other than agents and app)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:deploy" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-core]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
-description = "Runs the it-cli 'core' shard (everything not tagged agents/bridge_gen)"
+description = "Runs the it-cli 'core' shard (untagged tests, i.e. app::app)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
