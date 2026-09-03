@@ -611,7 +611,7 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
       input: TypedSchemaValue,
       stdin: Option[ToolInputStream]
     ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] = {
-      val completion = synchronized {
+      val completion = {
         if (revoked)
           return Future.failed(new ToolUnderlyingMisuseException(ToolUnderlyingMisuse.Revoked))
         if (inFlight)
@@ -634,19 +634,17 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
             }
         }
       invocation.onComplete { result =>
-        synchronized {
-          completion.tryComplete(result)
-          if (activeInvocation.exists(_ eq completion)) {
-            activeInvocation = None
-            inFlight = false
-          }
+        completion.tryComplete(result)
+        if (activeInvocation.exists(_ eq completion)) {
+          activeInvocation = None
+          inFlight = false
         }
       }
       completion.future
     }
 
     def revoke(): Future[Unit] = {
-      val active = synchronized {
+      val active = {
         revoked = true
         activeInvocation
       }
@@ -699,7 +697,7 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
       }
 
     def dispose(): Future[Unit] = {
-      val actions = synchronized {
+      val actions = {
         val inputs = outerStdin.filterNot(_ => outerStdinTransferred).toList.map(stream => () => stream.close())
         inputs ++ stdout.toList.map { case (_, stream) => () => stream.disposeIfOwned() }
       }
@@ -707,50 +705,44 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
     }
 
     def trackStdout(stream: ToolOutputStream): TrackedOutputStream =
-      synchronized {
-        stdout.collectFirst {
-          case (raw, tracked) if (raw eq stream) || (tracked eq stream) => tracked
-        }.getOrElse {
-          val tracked = new TrackedOutputStream(stream)
-          stdout += ((stream, tracked))
-          tracked
-        }
+      stdout.collectFirst {
+        case (raw, tracked) if (raw eq stream) || (tracked eq stream) => tracked
+      }.getOrElse {
+        val tracked = new TrackedOutputStream(stream)
+        stdout += ((stream, tracked))
+        tracked
       }
 
-    private def transfer(stream: AnyRef): Unit =
-      synchronized {
-        if (transferred.exists(_ eq stream))
-          throw new ToolUnderlyingMisuseException(ToolUnderlyingMisuse.StreamAlreadyTransferred)
-        transferred += stream
-        if (outerStdin.exists(_ eq stream)) outerStdinTransferred = true
-        stdout.collectFirst {
-          case (raw, tracked) if (raw eq stream) || (tracked eq stream) => tracked
-        }.foreach(_.transfer())
-      }
+    private def transfer(stream: AnyRef): Unit = {
+      if (transferred.exists(_ eq stream))
+        throw new ToolUnderlyingMisuseException(ToolUnderlyingMisuse.StreamAlreadyTransferred)
+      transferred += stream
+      if (outerStdin.exists(_ eq stream)) outerStdinTransferred = true
+      stdout.collectFirst {
+        case (raw, tracked) if (raw eq stream) || (tracked eq stream) => tracked
+      }.foreach(_.transfer())
+    }
   }
 
   private final class TrackedOutputStream(underlying: ToolOutputStream) extends ToolOutputStream {
     private var transferred = false
     private var closed      = false
 
-    def transfer(): Unit = synchronized {
+    def transfer(): Unit =
       transferred = true
-    }
 
     def release(): ToolOutputStream = underlying
 
-    def disposeIfOwned(): Future[Unit] = synchronized {
+    def disposeIfOwned(): Future[Unit] =
       if (transferred) Future.successful(())
       else close()
-    }
 
-    override private[golem] def close(): Future[Unit] = synchronized {
+    override private[golem] def close(): Future[Unit] =
       if (closed) Future.successful(())
       else {
         closed = true
         underlying.close()
       }
-    }
   }
 
   private def cleanup(action: => Future[Unit]): Future[Unit] =

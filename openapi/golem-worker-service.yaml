@@ -4695,7 +4695,6 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#FilesystemStorageUsageUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -4756,7 +4755,6 @@ components:
           SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
           FailedUpdate: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
           GrowMemory: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
-          FilesystemStorageUsageUpdate: '#/components/schemas/PublicOplogEntry_r#FilesystemStorageUsageUpdateParams'
           CreateResource: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
           DropResource: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
           Log: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -5155,18 +5153,6 @@ components:
             - FailedUpdate
             example: FailedUpdate
       - $ref: '#/components/schemas/r#FailedUpdateParams'
-    PublicOplogEntry_r#FilesystemStorageUsageUpdateParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - FilesystemStorageUsageUpdate
-            example: FilesystemStorageUsageUpdate
-      - $ref: '#/components/schemas/r#FilesystemStorageUsageUpdateParams'
     PublicOplogEntry_r#FinishSpanParams:
       allOf:
       - type: object
@@ -8233,19 +8219,6 @@ components:
           format: uint64
         details:
           type: string
-    r#FilesystemStorageUsageUpdateParams:
-      type: object
-      title: r#FilesystemStorageUsageUpdateParams
-      required:
-      - timestamp
-      - delta
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        delta:
-          type: integer
-          format: int64
     r#FinishSpanParams:
       type: object
       title: r#FinishSpanParams

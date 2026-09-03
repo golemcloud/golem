@@ -48,13 +48,13 @@ use golem_common::model::tool::{
     ToolBindingInput, ToolDeploymentMetadata, ToolName, ToolSource,
 };
 use golem_common::model::tool_release::ToolReleaseId;
-use golem_common::schema::AgentTypeSchema;
 use golem_common::schema::agent::reachable_defs;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::render;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::tool::validation::validate_tool;
 use golem_common::schema::validation::is_equivalent_cross_graph;
+use golem_common::schema::{AgentTypeSchema, RegisteredAgentTypeSchema};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
@@ -649,8 +649,7 @@ impl DeploymentContext {
         let mut all_compiled_mcps = Vec::new();
 
         for (domain, mcp_deployment) in &self.mcp_deployments {
-            let mut agent_type_implementers: golem_service_base::mcp::AgentTypeImplementers =
-                HashMap::new();
+            let mut registered_agent_types = Vec::new();
 
             let mut unique_scheme_names: HashSet<&SecuritySchemeName> = HashSet::new();
             for (agent_type, agent_options) in &mcp_deployment.agents {
@@ -664,13 +663,10 @@ impl DeploymentContext {
                     errors
                 );
 
-                agent_type_implementers.insert(
-                    agent_type.clone(),
-                    (
-                        registered_agent_type.implemented_by.component_id,
-                        registered_agent_type.implemented_by.component_revision,
-                    ),
-                );
+                registered_agent_types.push(RegisteredAgentTypeSchema {
+                    agent_type: registered_agent_type.agent_type.clone(),
+                    implemented_by: registered_agent_type.implemented_by.clone(),
+                });
 
                 if let Some(name) = &agent_options.security_scheme {
                     unique_scheme_names.insert(name);
@@ -703,10 +699,9 @@ impl DeploymentContext {
                 environment_id: self.environment.id,
                 deployment_revision,
                 domain: domain.clone(),
-                agent_type_implementers,
                 security_scheme_name,
                 security_scheme: None, // Will be resolved at runtime
-                registered_agent_types: Vec::new(),
+                registered_agent_types,
             };
             all_compiled_mcps.push(compiled_mcp);
         }
@@ -1289,6 +1284,7 @@ fn validate_final_http_api_router(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repo::model::deployment::{CompiledMcpData, DeploymentCompiledMcpRecord};
     use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId, AccountSummary};
     use golem_common::model::agent::{AgentMode, Snapshotting};
@@ -1298,6 +1294,9 @@ mod tests {
     use golem_common::model::component_metadata::{ComponentMetadata, KnownExports};
     use golem_common::model::environment::{EnvironmentId, EnvironmentName, EnvironmentRevision};
     use golem_common::model::json::NormalizedJsonValue;
+    use golem_common::model::mcp_deployment::{
+        McpDeployment, McpDeploymentAgentOptions, McpDeploymentId, McpDeploymentRevision,
+    };
     use golem_common::model::tool::{RemoteToolDeployment, SecretKeyScope, ToolProvisionConfig};
     use golem_common::model::tool_release::{
         ToolRelease, ToolReleaseById, ToolReleaseId, ToolReleaseLifecycle, ToolReleaseOrigin,
@@ -1311,6 +1310,8 @@ mod tests {
     use golem_common::schema::schema_type::{QuotaTokenSpec, SchemaType, SecretSpec};
     use golem_common::schema::schema_value::SchemaValue;
     use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
+    use golem_service_base::mcp::CompiledMcp;
+    use golem_service_base::repo::Blob;
     use serde_json::json;
     use std::collections::BTreeSet;
     use test_r::test;
@@ -1514,6 +1515,85 @@ mod tests {
                 webhook_domain_and_segments: None,
             },
         )
+    }
+
+    fn compile_test_mcp() -> (CompiledMcp, Vec<RegisteredAgentTypeSchema>) {
+        let environment = test_environment();
+        let domain = Domain("mcp.example.com".to_string());
+        let (agent_a_name, agent_a) = test_registered_agent_type("AgentA");
+        let (agent_b_name, agent_b) = test_registered_agent_type("AgentB");
+        let (agent_c_name, agent_c) = test_registered_agent_type("AgentC");
+        let expected = vec![
+            RegisteredAgentTypeSchema {
+                agent_type: agent_a.agent_type.clone(),
+                implemented_by: agent_a.implemented_by.clone(),
+            },
+            RegisteredAgentTypeSchema {
+                agent_type: agent_b.agent_type.clone(),
+                implemented_by: agent_b.implemented_by.clone(),
+            },
+        ];
+        let mcp_deployment = McpDeployment {
+            id: McpDeploymentId::new(),
+            revision: McpDeploymentRevision::INITIAL,
+            environment_id: environment.id,
+            domain: domain.clone(),
+            hash: diff::Hash::empty(),
+            agents: BTreeMap::from([
+                (agent_b_name.clone(), McpDeploymentAgentOptions::default()),
+                (agent_a_name.clone(), McpDeploymentAgentOptions::default()),
+            ]),
+            created_at: chrono::Utc::now(),
+        };
+        let context = DeploymentContext {
+            environment,
+            components: BTreeMap::new(),
+            http_api_deployments: BTreeMap::new(),
+            mcp_deployments: BTreeMap::from([(domain, mcp_deployment)]),
+            registered_agent_types: HashMap::from([
+                (agent_a_name, agent_a),
+                (agent_b_name, agent_b),
+                (agent_c_name, agent_c),
+            ]),
+        };
+        let mut errors = Vec::new();
+        let mut compiled = context.compile_mcp_deployments(
+            AccountId::new(),
+            golem_common::model::deployment::DeploymentRevision::INITIAL,
+            &HashMap::new(),
+            &mut errors,
+        );
+
+        assert!(errors.is_empty());
+        assert_eq!(compiled.len(), 1);
+
+        (compiled.pop().unwrap(), expected)
+    }
+
+    #[test]
+    fn compile_mcp_deployments_includes_selected_registered_agent_types() {
+        let (compiled, expected) = compile_test_mcp();
+
+        assert_eq!(compiled.registered_agent_types, expected);
+    }
+
+    #[test]
+    fn compiled_mcp_blob_round_trip_preserves_registered_agent_types() {
+        let (compiled, expected) = compile_test_mcp();
+        let record = DeploymentCompiledMcpRecord::from_model(compiled);
+        let serialized = record.mcp_data.serialize().unwrap().clone();
+        let mcp_data: Blob<CompiledMcpData> = Blob::deserialze(serialized).unwrap();
+        let restored = CompiledMcp::try_from(DeploymentCompiledMcpRecord {
+            account_id: record.account_id,
+            account_email: record.account_email,
+            environment_id: record.environment_id,
+            deployment_revision_id: record.deployment_revision_id,
+            domain: record.domain,
+            mcp_data,
+        })
+        .unwrap();
+
+        assert_eq!(restored.registered_agent_types, expected);
     }
 
     #[test]

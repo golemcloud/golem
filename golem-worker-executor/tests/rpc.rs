@@ -1452,6 +1452,187 @@ async fn receive_invocation_session(
 #[test]
 #[timeout("2 minutes")]
 #[tracing::instrument]
+async fn typescript_streaming_guest_abi_e2e(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+    let agent_id = agent_id!("TsStreamingRpcTarget", "typescript-guest-abi");
+    let worker_agent_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
+    let input = golem_api_grpc::proto::golem::schema::SchemaValue {
+        value: Some(schema_value::Value::RecordValue(RecordValue {
+            fields: vec![golem_api_grpc::proto::golem::schema::SchemaValue {
+                value: Some(schema_value::Value::StreamReference(
+                    SchemaValueStreamReference { stream_id: 1 },
+                )),
+            }],
+        })),
+    };
+    let start = InvocationRequest {
+        request: Some(invocation_request::Request::Start(InvocationStart {
+            agent_id: Some(worker_agent_id.into()),
+            method_name: Some("transform".to_string()),
+            input: Some(input),
+            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            environment_id: Some(component.environment_id.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
+            attempt_id: Some(uuid::Uuid::new_v4().into()),
+            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            ..Default::default()
+        })),
+    };
+    let mut state = InvocationSessionState::default();
+    state
+        .validate_trusted_request(&start)
+        .map_err(anyhow::Error::msg)?;
+    let (requests, receiver) = mpsc::channel(8);
+    requests.send(start).await?;
+    let mut responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+
+    let accepted = responses.message().await?.ok_or_else(|| {
+        anyhow::anyhow!("TypeScript streaming invocation ended before acceptance")
+    })?;
+    state
+        .validate_response(&accepted)
+        .map_err(anyhow::Error::msg)?;
+    let accepted = match accepted.response {
+        Some(invocation_response::Response::Accepted(accepted)) => accepted,
+        other => anyhow::bail!("expected TypeScript streaming acceptance, got {other:?}"),
+    };
+    let [input_mapping] = accepted.stream_mappings.as_slice() else {
+        anyhow::bail!(
+            "expected one TypeScript input stream mapping, got {}",
+            accepted.stream_mappings.len()
+        );
+    };
+    assert_eq!(input_mapping.transport_stream_id, 1);
+    let durable_stream_id = input_mapping
+        .handle
+        .as_ref()
+        .and_then(|handle| handle.stream_id)
+        .ok_or_else(|| anyhow::anyhow!("TypeScript input mapping omitted its durable stream ID"))?;
+
+    for (sequence, value) in [(0_u64, 2_u32), (1, 3)] {
+        let item = InvocationRequest {
+            request: Some(invocation_request::Request::InputItem(InputStreamItem {
+                transport_stream_id: 1,
+                sequence,
+                payload: Some(input_stream_item::Payload::Value(
+                    SchemaValue::U32(value)
+                        .try_into()
+                        .map_err(anyhow::Error::msg)?,
+                )),
+                durable_stream_id: Some(durable_stream_id),
+                epoch: accepted.epoch,
+            })),
+        };
+        state
+            .validate_trusted_request(&item)
+            .map_err(anyhow::Error::msg)?;
+        requests.send(item).await?;
+    }
+    let end = InvocationRequest {
+        request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+            transport_stream_id: 1,
+            sequence: 2,
+            durable_stream_id: Some(durable_stream_id),
+            epoch: accepted.epoch,
+        })),
+    };
+    state
+        .validate_trusted_request(&end)
+        .map_err(anyhow::Error::msg)?;
+    requests.send(end).await?;
+
+    let mut output_stream_id = None;
+    let mut output_values = Vec::new();
+    let mut input_acks = 0;
+    let mut output_ends = 0;
+    let mut finished_successfully = false;
+    while let Some(response) = responses.message().await? {
+        state
+            .validate_response(&response)
+            .map_err(anyhow::Error::msg)?;
+        match response.response {
+            Some(invocation_response::Response::InputAck(_)) => input_acks += 1,
+            Some(invocation_response::Response::Result(result)) => {
+                let value = match result.result {
+                    Some(invocation_session_result::Result::MethodResult(value)) => value,
+                    other => anyhow::bail!("expected TypeScript transform result, got {other:?}"),
+                };
+                let stream_id = match value.value {
+                    Some(schema_value::Value::StreamReference(reference)) => reference.stream_id,
+                    other => anyhow::bail!("expected TypeScript transform stream, got {other:?}"),
+                };
+                let [mapping] = result.new_stream_mappings.as_slice() else {
+                    anyhow::bail!(
+                        "expected one TypeScript output stream mapping, got {}",
+                        result.new_stream_mappings.len()
+                    );
+                };
+                assert_eq!(mapping.transport_stream_id, stream_id);
+                output_stream_id = Some(stream_id);
+            }
+            Some(invocation_response::Response::OutputItem(item)) => {
+                assert_eq!(Some(item.transport_stream_id), output_stream_id);
+                let value = match item.value.and_then(|value| value.value) {
+                    Some(schema_value::Value::U32Value(value)) => value,
+                    other => anyhow::bail!("expected TypeScript transform u32 item, got {other:?}"),
+                };
+                output_values.push(value);
+            }
+            Some(invocation_response::Response::OutputEnd(end)) => {
+                assert_eq!(Some(end.transport_stream_id), output_stream_id);
+                output_ends += 1;
+            }
+            Some(invocation_response::Response::Finished(finished)) => {
+                finished_successfully = matches!(
+                    finished.outcome,
+                    Some(invocation_session_completion::Outcome::Success(_))
+                );
+            }
+            Some(invocation_response::Response::Rejected(rejected)) => {
+                anyhow::bail!(
+                    "TypeScript streaming invocation rejected: {}",
+                    rejected.error
+                )
+            }
+            Some(other) => anyhow::bail!("unexpected TypeScript streaming response: {other:?}"),
+            None => anyhow::bail!("empty TypeScript streaming response"),
+        }
+    }
+
+    assert!(state.is_complete());
+    assert_eq!(input_acks, 3);
+    assert_eq!(output_values, vec![20, 30]);
+    assert_eq!(output_ends, 1);
+    assert!(finished_successfully);
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
 async fn generated_rust_client_streaming_rpc_e2e(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1606,6 +1787,181 @@ async fn generated_rust_client_streaming_rpc_e2e(
         )
         .await?
         .into_typed::<u64>()?;
+    assert_eq!((first, second), (1, 2));
+    executor.check_oplog_is_queryable(&caller).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn typescript_client_streaming_rpc_e2e(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+    let caller_agent_id = agent_id!("TsStreamingRpcCaller", "typescript-client-streaming");
+    let caller = executor
+        .start_agent(&component.id, caller_agent_id.clone())
+        .await?;
+
+    let result = invoke_agent_session(
+        &executor,
+        &component,
+        &caller_agent_id,
+        "run",
+        data_value!(),
+    )
+    .await?
+    .map_err(anyhow::Error::msg)?;
+    let SchemaValue::Record { fields } = result else {
+        panic!("expected TypeScript streaming RPC report record");
+    };
+    assert_eq!(fields.len(), 12);
+    assert_eq!(
+        fields[0],
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::U32(1),
+                SchemaValue::U32(2),
+                SchemaValue::U32(3)
+            ]
+        }
+    );
+    assert_eq!(
+        fields[1],
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::U32(4),
+                SchemaValue::U32(5),
+                SchemaValue::U32(6)
+            ]
+        }
+    );
+    assert_eq!(
+        fields[2],
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::U32(70),
+                SchemaValue::U32(80),
+                SchemaValue::U32(90)
+            ]
+        }
+    );
+    assert_eq!(
+        fields[3],
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::U32(12),
+                SchemaValue::U32(13),
+                SchemaValue::U32(14)
+            ]
+        }
+    );
+    assert_eq!(
+        fields[4],
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::String("left".to_string()),
+                SchemaValue::String("right".to_string())
+            ]
+        }
+    );
+    assert_eq!(
+        fields[5],
+        SchemaValue::List {
+            elements: vec![SchemaValue::U32(10), SchemaValue::U32(11)]
+        }
+    );
+    assert_eq!(
+        fields[6],
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::String("first".to_string()),
+                SchemaValue::String("second".to_string())
+            ]
+        }
+    );
+    assert_eq!(
+        fields[7],
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::List {
+                    elements: vec![SchemaValue::U32(1), SchemaValue::U32(2)]
+                },
+                SchemaValue::List {
+                    elements: vec![
+                        SchemaValue::U32(3),
+                        SchemaValue::U32(4),
+                        SchemaValue::U32(5)
+                    ]
+                }
+            ]
+        }
+    );
+    assert_eq!(
+        fields[8],
+        SchemaValue::List {
+            elements: vec![
+                SchemaValue::String("a".to_string()),
+                SchemaValue::String("b".to_string())
+            ]
+        }
+    );
+    assert_eq!(
+        fields[9],
+        SchemaValue::List {
+            elements: (0..64).map(SchemaValue::U32).collect()
+        }
+    );
+    assert_eq!(fields[10], SchemaValue::U32(100));
+    assert_eq!(fields[11], SchemaValue::U32(42));
+
+    let producer_error = invoke_agent_session(
+        &executor,
+        &component,
+        &caller_agent_id,
+        "callProducerError",
+        data_value!(),
+    )
+    .await?
+    .expect_err("TypeScript producer stream error must fail the invocation session");
+    assert!(
+        producer_error.contains("Component trapped")
+            || producer_error.contains("ts-producer-failed"),
+        "unexpected TypeScript producer error: {producer_error}"
+    );
+
+    let stream_free_caller_id =
+        agent_id!("TsStreamingRpcCaller", "typescript-stream-free-after-error");
+    executor
+        .start_agent(&component.id, stream_free_caller_id.clone())
+        .await?;
+    let first = executor
+        .invoke_and_await_agent(
+            &component,
+            &stream_free_caller_id,
+            "callStreamFree",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u32>()?;
+    let second = executor
+        .invoke_and_await_agent(
+            &component,
+            &stream_free_caller_id,
+            "callStreamFree",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u32>()?;
     assert_eq!((first, second), (1, 2));
     executor.check_oplog_is_queryable(&caller).await?;
     Ok(())

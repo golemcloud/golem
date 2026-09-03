@@ -297,8 +297,8 @@ async fn test_account_usage(deps: &Deps) {
 }
 
 #[test]
-async fn test_storage_usage_history(deps: &Deps) {
-    crate::repo::common::test_storage_usage_history(deps).await;
+async fn test_account_usage_history(deps: &Deps) {
+    crate::repo::common::test_account_usage_history(deps).await;
 }
 
 #[test]

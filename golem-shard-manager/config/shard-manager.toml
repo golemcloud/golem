@@ -3,14 +3,7 @@ http_port = 8081
 number_of_shards = 1024
 rebalance_threshold = 0.1
 runtime_metrics_sampling_interval = "5s"
-
-[db]
-type = "Sqlite"
-
-[db.config]
-database = "golem_shard_manager.db"
-foreign_keys = false
-max_connections = 10
+shard_lease_duration = "1m"
 
 [grpc]
 port = 9092
@@ -28,6 +21,14 @@ silent = false
 type = "Grpc"
 
 [health_check.mode.config]
+
+[persistence]
+type = "Sqlite"
+
+[persistence.config]
+database = "golem_shard_manager.db"
+foreign_keys = false
+max_connections = 10
 
 [quota]
 definition_staleness_ttl = "5m"
@@ -144,71 +145,72 @@ type = "Disabled"
 # number_of_shards = 1024
 # rebalance_threshold = 0.1
 # runtime_metrics_sampling_interval = "5s"
-# 
-# [db]
-# type = "Sqlite"
-# 
-# [db.config]
-# database = "golem_shard_manager.db"
-# foreign_keys = false
-# max_connections = 10
-# 
+# shard_lease_duration = "1m"
+#
 # [grpc]
 # port = 9092
-# 
+#
 # [grpc.tls]
 # type = "Disabled"
-# 
+#
 # [grpc.tls.config]
-# 
+#
 # [health_check]
 # delay = "1s"
 # silent = false
-# 
+#
 # [health_check.mode]
 # type = "K8s"
-# 
+#
 # [health_check.mode.config]
 # namespace = "namespace"
-# 
+#
+# [persistence]
+# type = "Sqlite"
+#
+# [persistence.config]
+# database = "golem_shard_manager.db"
+# foreign_keys = false
+# max_connections = 10
+#
 # [quota]
 # definition_staleness_ttl = "5m"
 # lease_duration = "1m"
 # min_executors = 2
-# 
+#
 # [registry_service]
 # connect_timeout = "10s"
 # host = "localhost"
 # max_message_size = 52428800
 # port = 8080
-# 
+#
 # [registry_service.invalidation_event_subscriber]
 # initial_backoff = "100ms"
 # max_backoff = "30s"
-# 
+#
 # [registry_service.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
-# 
+#
 # [registry_service.tls]
 # type = "Disabled"
-# 
+#
 # [registry_service.tls.config]
-# 
+#
 # [resource_definition_fetcher]
 # cache_eviction_period = "1m"
 # cache_max_capacity = 1024
 # cache_ttl = "5m"
-# 
+#
 # [tracing]
 # console = false
 # dtor_friendly = false
 # file_name = "shard-manager.log"
 # file_truncate = true
-# 
+#
 # [tracing.file]
 # ansi = false
 # compact = false
@@ -221,13 +223,13 @@ type = "Disabled"
 # span_events_active = false
 # span_events_full = false
 # without_time = false
-# 
+#
 # [tracing.otlp]
 # enabled = false
 # host = "localhost"
 # port = 4318
 # service_name = "golem"
-# 
+#
 # [tracing.stderr]
 # ansi = false
 # compact = false
@@ -240,7 +242,7 @@ type = "Disabled"
 # span_events_active = false
 # span_events_full = false
 # without_time = false
-# 
+#
 # [tracing.stdout]
 # ansi = true
 # compact = false
@@ -253,29 +255,170 @@ type = "Disabled"
 # span_events_active = false
 # span_events_full = false
 # without_time = false
-# 
+#
 # [worker_executors]
 # assign_shards_timeout = "5s"
 # connect_timeout = "10s"
 # health_check_timeout = "2s"
 # max_message_size = 33554432
 # revoke_shards_timeout = "5s"
-# 
+#
 # [worker_executors.retries]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
-# 
+#
 # [worker_executors.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
-# 
+#
 # [worker_executors.tls]
 # type = "Disabled"
-# 
+#
+# [worker_executors.tls.config]
+
+## Generated from example config: with etcd persistence (distributed mode)
+# http_port = 8081
+# number_of_shards = 1024
+# rebalance_threshold = 0.1
+# runtime_metrics_sampling_interval = "5s"
+# shard_lease_duration = "1m"
+#
+# [grpc]
+# port = 9092
+#
+# [grpc.tls]
+# type = "Disabled"
+#
+# [grpc.tls.config]
+#
+# [health_check]
+# delay = "10s"
+# silent = false
+#
+# [health_check.mode]
+# type = "Grpc"
+#
+# [health_check.mode.config]
+#
+# [persistence]
+# type = "Etcd"
+#
+# [persistence.config]
+# connect_timeout = "10s"
+# endpoints = ["http://localhost:2379"]
+# request_timeout = "5s"
+#
+# [quota]
+# definition_staleness_ttl = "5m"
+# lease_duration = "1m"
+# min_executors = 2
+#
+# [registry_service]
+# connect_timeout = "10s"
+# host = "localhost"
+# max_message_size = 52428800
+# port = 8080
+#
+# [registry_service.invalidation_event_subscriber]
+# initial_backoff = "100ms"
+# max_backoff = "30s"
+#
+# [registry_service.retries_on_unavailable]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+#
+# [registry_service.tls]
+# type = "Disabled"
+#
+# [registry_service.tls.config]
+#
+# [resource_definition_fetcher]
+# cache_eviction_period = "1m"
+# cache_max_capacity = 1024
+# cache_ttl = "5m"
+#
+# [tracing]
+# console = false
+# dtor_friendly = false
+# file_name = "shard-manager.log"
+# file_truncate = true
+#
+# [tracing.file]
+# ansi = false
+# compact = false
+# enabled = false
+# json = true
+# json_flatten = true
+# json_flatten_span = true
+# json_source_location = false
+# pretty = false
+# span_events_active = false
+# span_events_full = false
+# without_time = false
+#
+# [tracing.otlp]
+# enabled = false
+# host = "localhost"
+# port = 4318
+# service_name = "golem"
+#
+# [tracing.stderr]
+# ansi = false
+# compact = false
+# enabled = false
+# json = false
+# json_flatten = false
+# json_flatten_span = false
+# json_source_location = false
+# pretty = false
+# span_events_active = false
+# span_events_full = false
+# without_time = false
+#
+# [tracing.stdout]
+# ansi = true
+# compact = false
+# enabled = true
+# json = false
+# json_flatten = true
+# json_flatten_span = true
+# json_source_location = false
+# pretty = false
+# span_events_active = false
+# span_events_full = false
+# without_time = false
+#
+# [worker_executors]
+# assign_shards_timeout = "5s"
+# connect_timeout = "10s"
+# health_check_timeout = "2s"
+# max_message_size = 33554432
+# revoke_shards_timeout = "5s"
+#
+# [worker_executors.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+#
+# [worker_executors.retries_on_unavailable]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+#
+# [worker_executors.tls]
+# type = "Disabled"
+#
 # [worker_executors.tls.config]

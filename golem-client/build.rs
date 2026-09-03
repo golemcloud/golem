@@ -51,16 +51,20 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             // account usage
             (
-                "StorageUsage",
-                "golem_common::model::account_usage::StorageUsage",
+                "AccountUsage",
+                "golem_common::model::account_usage::AccountUsage",
             ),
             (
-                "StorageUsageHistory",
-                "golem_common::model::account_usage::StorageUsageHistory",
+                "AccountUsageMetrics",
+                "golem_common::model::account_usage::AccountUsageMetrics",
             ),
             (
-                "StorageUsageMetrics",
-                "golem_common::model::account_usage::StorageUsageMetrics",
+                "AccountUsageMetering",
+                "golem_common::model::account_usage::AccountUsageMetering",
+            ),
+            (
+                "MeteringStatus",
+                "golem_common::model::account_usage::MeteringStatus",
             ),
             (
                 "StorageLimit",
@@ -71,8 +75,8 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::account_usage::SetStorageLimit",
             ),
             (
-                "StorageUsagePeriod",
-                "golem_common::model::account_usage::StorageUsagePeriod",
+                "AccountUsagePeriod",
+                "golem_common::model::account_usage::AccountUsagePeriod",
             ),
             (
                 "MemoryLimit",

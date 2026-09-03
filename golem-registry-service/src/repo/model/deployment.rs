@@ -55,8 +55,8 @@ use golem_common::model::tool::{
     CompiledToolBinding, RegisteredTool, ToolDeploymentState, ToolName, ToolProvisionConfig,
     ToolSource,
 };
-use golem_common::schema::AgentTypeSchema;
 use golem_common::schema::tool::Tool;
+use golem_common::schema::{AgentTypeSchema, RegisteredAgentTypeSchema};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
 use golem_service_base::model::component::Component;
@@ -1033,9 +1033,9 @@ impl DeploymentRevisionCreationRecord {
 #[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub struct CompiledMcpData {
-    pub implementers: golem_service_base::mcp::AgentTypeImplementers,
     #[desert(default)]
     pub security_scheme_name: Option<SecuritySchemeName>,
+    pub registered_agent_types: Vec<RegisteredAgentTypeSchema>,
 }
 
 #[derive(FromRow)]
@@ -1057,8 +1057,8 @@ impl DeploymentCompiledMcpRecord {
             deployment_revision_id: compiled_mcp.deployment_revision.into(),
             domain: compiled_mcp.domain.0.clone(),
             mcp_data: Blob::new(CompiledMcpData {
-                implementers: compiled_mcp.agent_type_implementers,
                 security_scheme_name: compiled_mcp.security_scheme_name.clone(),
+                registered_agent_types: compiled_mcp.registered_agent_types,
             }),
         }
     }
@@ -1076,10 +1076,9 @@ impl TryFrom<DeploymentCompiledMcpRecord> for CompiledMcp {
             environment_id: EnvironmentId(value.environment_id),
             deployment_revision: value.deployment_revision_id.try_into()?,
             domain: Domain(value.domain),
-            agent_type_implementers: mcp_data.implementers,
             security_scheme_name: mcp_data.security_scheme_name,
             security_scheme: None, // Will be resolved at runtime
-            registered_agent_types: Vec::new(),
+            registered_agent_types: mcp_data.registered_agent_types,
         })
     }
 }

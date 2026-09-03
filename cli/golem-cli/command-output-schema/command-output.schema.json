@@ -724,7 +724,9 @@
         "memoryGbSeconds",
         "durableStorageGbMonth",
         "ephemeralStorageGbMonth",
-        "period"
+        "period",
+        "asOf",
+        "metering"
       ],
       "properties": {
         "$type": {
@@ -746,7 +748,15 @@
           "type": "number"
         },
         "period": {
-          "$ref": "#/definitions/StorageUsagePeriod"
+          "$ref": "#/definitions/AccountUsagePeriod"
+        },
+        "asOf": {
+          "description": "When the registry last received a usage snapshot for this period, or when it produced an empty snapshot.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "metering": {
+          "$ref": "#/definitions/AccountUsageMetering"
         }
       },
       "additionalProperties": false
@@ -766,8 +776,42 @@
         }
       ]
     },
-    "StorageUsagePeriod": {
+    "AccountUsageMetering": {
       "type": "object",
+      "description": "Collection state for each customer-visible usage dimension. Both storage dimensions use the filesystem meter.",
+      "required": [
+        "compute",
+        "memory",
+        "durableStorage",
+        "ephemeralStorage"
+      ],
+      "properties": {
+        "compute": {
+          "$ref": "#/definitions/MeteringStatus"
+        },
+        "memory": {
+          "$ref": "#/definitions/MeteringStatus"
+        },
+        "durableStorage": {
+          "$ref": "#/definitions/MeteringStatus"
+        },
+        "ephemeralStorage": {
+          "$ref": "#/definitions/MeteringStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "MeteringStatus": {
+      "type": "string",
+      "enum": [
+        "enabled",
+        "disabled",
+        "unknown"
+      ]
+    },
+    "AccountUsagePeriod": {
+      "type": "object",
+      "description": "A UTC calendar month in YYYY-MM form.",
       "required": [
         "year",
         "month"
@@ -4530,7 +4574,6 @@
         { "$ref": "#/definitions/PublicOplogEntrySuccessfulUpdate" },
         { "$ref": "#/definitions/PublicOplogEntryFailedUpdate" },
         { "$ref": "#/definitions/PublicOplogEntryGrowMemory" },
-        { "$ref": "#/definitions/PublicOplogEntryFilesystemStorageUsageUpdate" },
         { "$ref": "#/definitions/PublicOplogEntryCreateResource" },
         { "$ref": "#/definitions/PublicOplogEntryDropResource" },
         { "$ref": "#/definitions/PublicOplogEntryLog" },
@@ -4750,12 +4793,6 @@
       "type": "object",
       "required": ["type", "timestamp", "delta"],
       "properties": { "type": { "const": "GrowMemory" }, "timestamp": { "type": "string" }, "delta": { "type": "integer", "minimum": 0 } },
-      "additionalProperties": false
-    },
-    "PublicOplogEntryFilesystemStorageUsageUpdate": {
-      "type": "object",
-      "required": ["type", "timestamp", "delta"],
-      "properties": { "type": { "const": "FilesystemStorageUsageUpdate" }, "timestamp": { "type": "string" }, "delta": { "type": "integer" } },
       "additionalProperties": false
     },
     "PublicOplogEntryCreateResource": {
