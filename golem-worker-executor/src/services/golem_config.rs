@@ -1692,6 +1692,44 @@ pub struct OplogSweepConfig {
     /// not grow with how far into the namespace it sits. Raising this raises the work a tick does
     /// in proportion, and nothing worse.
     pub max_scanned_per_tick: usize,
+    /// Wall-clock bound on one tick, after which the tick stops at its next boundary and reports
+    /// itself truncated.
+    ///
+    /// The count budgets above bound how much work a tick does; this bounds how long it holds the
+    /// executor's indexed-storage concurrency while doing it, and under a degraded store those are
+    /// not the same quantity. `PostgresIndexedStorage` puts one semaphore
+    /// (`max_concurrent_ops`) in front of the pool and every caller shares it, the invocation path
+    /// included. A tick sized in operations is brief when each operation is milliseconds and runs
+    /// for minutes when each is seconds, so without a time bound the sweep stops being a periodic
+    /// user of that semaphore and becomes a continuous one, at exactly the moment the invocation
+    /// path can least afford it.
+    ///
+    /// Measured, not assumed: chaos scenario S23 delays the indexed cluster by 500ms and was run
+    /// twice against the same image, once with the sweep off and once on. Off, two executors
+    /// aborted; on, seven did, and the promise stream fell to 0% of its baseline throughput
+    /// instead of merely slowing. Nothing else differed.
+    ///
+    /// **Untuned.** 30s is half the default interval, so the duty cycle stays under half even when
+    /// every operation is slow, before the backoff below takes it lower. A perf pass should pick
+    /// this properly.
+    #[serde(with = "humantime_serde")]
+    pub max_tick_duration: Duration,
+    /// How many intervals the loop may wait after a tick that hit `max_tick_duration`, at most.
+    ///
+    /// A tick cut short by its deadline is evidence the store is slow, and running the next one on
+    /// schedule would add load to a store already failing to keep up. So the wait doubles after
+    /// each such tick and resets on the first that finishes inside its deadline. This is
+    /// backpressure the sweep can apply to itself: nothing else tells it what the storage layer is
+    /// doing, and the alternative is competing with invocations for the semaphore during precisely
+    /// the incident the executor is trying to survive.
+    ///
+    /// Deferring archiving costs nothing durable. The work list is the layer itself, so a skipped
+    /// tick leaves the same agents to be found later; only the latency of moving a stranded oplog
+    /// grows, against a default `archive_interval` of a day.
+    ///
+    /// **Untuned**, like the deadline above. 8 caps the wait at eight intervals, eight minutes at
+    /// the defaults.
+    pub max_backoff_intervals: u32,
     /// Upper bound on the table remembering each agent's previous index. Losing an entry costs one
     /// extra tick of latency for that agent and nothing else, because the work list lives in
     /// storage. A pass that would exceed it leaves the agents past the bound untracked for that
@@ -1719,6 +1757,16 @@ impl SafeDisplay for OplogSweepConfig {
         );
         let _ = writeln!(
             &mut result,
+            "max tick duration: {:?}",
+            self.max_tick_duration
+        );
+        let _ = writeln!(
+            &mut result,
+            "max backoff intervals: {}",
+            self.max_backoff_intervals
+        );
+        let _ = writeln!(
+            &mut result,
             "max tracked agents: {}",
             self.max_tracked_agents
         );
@@ -1735,6 +1783,8 @@ impl Default for OplogSweepConfig {
             max_concurrency: 4,
             max_archives_per_tick: 256,
             max_scanned_per_tick: 4096,
+            max_tick_duration: Duration::from_secs(30),
+            max_backoff_intervals: 8,
             max_tracked_agents: 100_000,
         }
     }

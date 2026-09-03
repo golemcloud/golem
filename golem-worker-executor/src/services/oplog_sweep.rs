@@ -163,6 +163,25 @@ const MAX_ARCHIVE_STEPS: u32 = 16;
 /// The shortest a tick interval is allowed to be. A misconfigured zero would otherwise spin.
 const MIN_INTERVAL: Duration = Duration::from_millis(100);
 
+/// How many intervals to wait before the next tick, given how the last one ended.
+///
+/// Doubling rather than stepping, because the thing being waited out is a store under load and
+/// the cost of waiting too long is only latency on work that is already deferred by a day. The
+/// reset is deliberately to `1` and not to the previous value: one tick that finished inside its
+/// deadline is the store saying it has capacity again, and the sweep should take it rather than
+/// walk back down.
+///
+/// Pure so the decision is testable without running the loop; the deadline that produces
+/// `over_deadline` is enforced by cancelling the tick's token, which is the same path shutdown
+/// already uses and is covered by its own tests.
+fn next_backoff(current: u32, over_deadline: bool, cap: u32) -> u32 {
+    if over_deadline {
+        current.saturating_mul(2).min(cap.max(1))
+    } else {
+        1
+    }
+}
+
 /// What a read-only probe concluded about one agent.
 enum Decision {
     /// Nothing left to do, and the outcome is final.
@@ -443,6 +462,14 @@ impl OplogSweeper {
     /// for the step in flight; a tick stops at the next boundary rather than running to
     /// completion.
     ///
+    /// A tick is bounded in time as well as in work, and the loop backs off while that bound keeps
+    /// being hit. The two budgets are not interchangeable: `max_scanned_per_tick` and
+    /// `max_archives_per_tick` say how much a tick does, `max_tick_duration` says how long it may
+    /// hold the executor's shared indexed-storage concurrency doing it, and a store whose
+    /// operations went from milliseconds to seconds turns the same work into minutes of holding.
+    /// Chaos scenario S23 measured what that costs: with the sweep off two executors aborted under
+    /// a 500ms indexed delay, with it on seven did. See `OplogSweepConfig::max_tick_duration`.
+    ///
     /// Returns immediately on either of two conditions, which differ in what is left behind.
     /// Disabled by config leaves `ScheduledAction::ArchiveOplog` as the only archiving mechanism,
     /// and `Worker::schedule_oplog_archive_if_needed` reads the same flag so that the ephemeral
@@ -454,14 +481,57 @@ impl OplogSweeper {
         if !self.config.enabled || self.routes.is_empty() {
             return;
         }
+        // Floored, because a zero interval would spin the loop rather than disable it. `enabled`
+        // is how the sweep is turned off.
+        let interval = self.config.interval.max(MIN_INTERVAL);
+        // Intervals to wait before the next tick. Doubles while ticks keep hitting their deadline
+        // and returns to one the moment a tick finishes inside it. See
+        // `OplogSweepConfig::max_backoff_intervals` for why the sweep has to derive this from its
+        // own behaviour rather than being told.
+        let mut backoff: u32 = 1;
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => break,
-                // Floored, because a zero interval would spin the loop rather than disable it.
-                // `enabled` is how the sweep is turned off.
-                _ = tokio::time::sleep(self.config.interval.max(MIN_INTERVAL)) => {}
+                _ = tokio::time::sleep(interval.saturating_mul(backoff)) => {}
             }
-            let report = self.sweep_once(&shutdown).await;
+
+            // A child of the shutdown token, so a tick still stops on shutdown, plus a deadline of
+            // its own. Cancelling it is how the deadline is enforced: every boundary in
+            // `sweep_once` that already tests the token for shutdown becomes a place the tick can
+            // stop for time as well, and each of them already marks the report truncated. That is
+            // the whole reason the deadline is expressed this way rather than threaded through the
+            // loops -- an archive step is never cut between its append below and its drop above,
+            // which is the invariant shutdown is written around and this inherits for free.
+            let tick = shutdown.child_token();
+            let sweep = self.sweep_once(&tick);
+            let deadline = tokio::time::sleep(self.config.max_tick_duration);
+            tokio::pin!(sweep, deadline);
+            let report = loop {
+                tokio::select! {
+                    report = &mut sweep => break report,
+                    // Guarded, because a completed `Sleep` polls ready forever and would otherwise
+                    // spin this select once the deadline has passed.
+                    _ = &mut deadline, if !tick.is_cancelled() => {
+                        tick.cancel();
+                    }
+                }
+            };
+
+            // Shutdown cancels the child too, and a tick cut short by shutdown says nothing about
+            // the store, so it must not feed the backoff. The loop is about to exit anyway.
+            let over_deadline = tick.is_cancelled() && !shutdown.is_cancelled();
+            if over_deadline {
+                backoff = next_backoff(backoff, true, self.config.max_backoff_intervals);
+                debug!(
+                    scanned = report.scanned(),
+                    archived = report.archived(),
+                    backoff_intervals = backoff,
+                    "Oplog sweep tick hit its deadline; backing off"
+                );
+            } else {
+                backoff = next_backoff(backoff, false, self.config.max_backoff_intervals);
+            }
+
             if report.unassigned {
                 debug!("Oplog sweep tick skipped: this executor holds no shard assignment");
             } else if report.archived() > 0 {
@@ -1003,6 +1073,43 @@ mod tests {
         assert_eq!(assess(None, first), Verdict::Wait);
         assert_eq!(assess(Some(first), second), Verdict::Wait);
         assert_eq!(assess(Some(second), second), Verdict::Move);
+    }
+
+    #[test]
+    fn the_backoff_doubles_while_ticks_keep_running_past_their_deadline() {
+        assert_eq!(next_backoff(1, true, 8), 2);
+        assert_eq!(next_backoff(2, true, 8), 4);
+        assert_eq!(next_backoff(4, true, 8), 8);
+    }
+
+    #[test]
+    fn the_backoff_stops_at_the_cap() {
+        assert_eq!(
+            next_backoff(8, true, 8),
+            8,
+            "doubling must not pass the cap"
+        );
+        assert_eq!(
+            next_backoff(u32::MAX, true, 8),
+            8,
+            "and must not overflow on the way there"
+        );
+    }
+
+    /// The reset is what keeps a single slow patch from muting the sweep for the rest of the
+    /// pod's life. One tick inside its deadline is enough.
+    #[test]
+    fn one_tick_inside_its_deadline_returns_the_sweep_to_full_pace() {
+        assert_eq!(next_backoff(8, false, 8), 1);
+        assert_eq!(next_backoff(1, false, 8), 1);
+    }
+
+    /// A cap of zero would otherwise multiply the wait to nothing and spin the loop, which is the
+    /// failure `MIN_INTERVAL` guards against on the other knob.
+    #[test]
+    fn a_zero_cap_is_read_as_one_rather_than_disabling_the_wait() {
+        assert_eq!(next_backoff(1, true, 0), 1);
+        assert_eq!(next_backoff(4, true, 0), 1);
     }
 
     #[test]
