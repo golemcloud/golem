@@ -28,9 +28,22 @@ mod tool_middleware;
 
 inherit_test_dep!(Tracing);
 
-// Tag for the it-cli `agents` CI shard. Must live in the `app` module so the tag's module-path
-// prefix resolves to `app::agents`.
+// Tags for the it-cli CI shards. They must live in the `app` module so the tag's module-path
+// prefix resolves to `app::<module>`.
+//
+// The `agents` module is split further by per-test `#[tag(agents_guest_bridge)]` and
+// `#[tag(agents_streaming)]` attributes; the `agents` CI shard skips those two tags.
 tag_suite!(agents, agents);
+// Everything except `app::agents` and `app::app` runs in the `deploy` shard; the untagged
+// remainder (`:tag:`) is the `core` shard, which is only `app::app`.
+tag_suite!(account, deploy);
+tag_suite!(build_and_deploy_all, deploy);
+tag_suite!(cards, deploy);
+tag_suite!(directory_source_ifs, deploy);
+tag_suite!(moonbit_tool_middleware, deploy);
+tag_suite!(plugins, deploy);
+tag_suite!(scala_tool_middleware, deploy);
+tag_suite!(tool_middleware, deploy);
 
 use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;

@@ -16,7 +16,7 @@ use indoc::{formatdoc, indoc};
 use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
-use test_r::{inherit_test_dep, test, timeout};
+use test_r::{inherit_test_dep, tag, test, timeout};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
@@ -226,6 +226,7 @@ fn assert_generated_driver(output: std::process::Output, language: &str, marker:
 }
 
 #[test]
+#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_streaming_invocation_cli_end_to_end() {
     let ctx = streaming_invocation_context().await;
@@ -1011,6 +1012,7 @@ async fn test_streaming_invocation_cli_end_to_end() {
 }
 
 #[test]
+#[tag(agents_streaming)]
 #[timeout("30 minutes")]
 async fn test_generated_streaming_bridges_end_to_end() {
     let ctx = streaming_invocation_context().await;
@@ -1505,6 +1507,7 @@ async fn test_rust_counter() {
 /// direct guest ABI and native same-component agent RPC. This does not depend
 /// on generated cross-component bridges or public streaming bridge clients.
 #[test]
+#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_scala_streaming_rpc_e2e() {
     let mut ctx = TestContext::new();
@@ -2273,6 +2276,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 /// assertions accordingly — only then does this test validate the generated
 /// command path and input encoding against the provider.
 #[test]
+#[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]
 async fn test_rust_tool_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
@@ -2591,6 +2595,7 @@ async fn test_mixed_agent_and_tool_component_deployment_e2e() {
 /// linking against the generated crate. The deployment and invocation also prove
 /// the generated guest client reaches the worker executor's Wasm RPC path.
 #[test]
+#[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]
 async fn test_rust_agent_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
@@ -2756,6 +2761,7 @@ fn add_ts_guest_bridge_source(ctx: &TestContext, package_name: &str, generated_s
 }
 
 #[test]
+#[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]
 async fn test_ts_agent_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
@@ -2873,6 +2879,7 @@ async fn test_ts_agent_guest_bridge_e2e() {
 }
 
 #[test]
+#[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]
 async fn test_ts_tool_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
@@ -3038,6 +3045,7 @@ async fn test_ts_tool_guest_bridge_e2e() {
 }
 
 #[test]
+#[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]
 async fn test_moonbit_agent_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
@@ -3174,6 +3182,7 @@ async fn test_moonbit_agent_guest_bridge_e2e() {
 }
 
 #[test]
+#[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]
 async fn test_moonbit_tool_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
