@@ -317,7 +317,15 @@ const SETTLE_MARGIN: Duration = Duration::from_secs(30);
 /// that never happened, which is a worse mistake than the one it describes: the
 /// run would look like a broken harness rather than like a composition that
 /// landed too late to mean anything.
-const SECONDARY_WAIT_MARGIN: Duration = Duration::from_secs(60);
+///
+/// Sized against the workflow's own worst case rather than picked round. It
+/// gives Chaos Mesh 120s to confirm the injection, so a signal can appear as
+/// late as the injection fraction plus 120s. At MF1's half-way fraction that is
+/// the whole window plus 60s, and a margin equal to that would be a tie.
+/// Doubling it leaves the driver certain to see a signal the workflow actually
+/// wrote, which matters because `secondary-outside-primary` tells a reader far
+/// more than `secondary-never-injected` does.
+const SECONDARY_WAIT_MARGIN: Duration = Duration::from_secs(120);
 
 /// How many targets to sample after the baseline to prove actions are firing at
 /// all.
