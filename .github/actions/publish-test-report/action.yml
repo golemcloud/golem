@@ -16,7 +16,7 @@ runs:
       with:
         report-path: "**/target/ctrf-*.json"
         upload-artifact: 'true'
-        artifact-name: ${{ inputs.artifact-name }}
+        artifact-name: ${{ inputs.artifact-name }}-attempt${{ github.run_attempt }}
         summary: true
         summary-report: true
         failed-report: true
