@@ -555,7 +555,6 @@ impl AgentCommandHandler {
                     idempotency_key,
                     stdin_format,
                     stdout_format,
-                    selected_component_id: component.id.0,
                     selected_agent_name,
                     session_mode,
                 },

@@ -796,6 +796,11 @@ impl AtomicResourceEntry {
                 rpc_call_count_delta: rpc_count,
                 durable_storage_byte_seconds_delta,
                 ephemeral_storage_byte_seconds_delta,
+                metering: golem_service_base::clients::registry::ResourceUsageMetering {
+                    compute: self.metering.compute,
+                    memory: self.metering.memory,
+                    filesystem: self.metering.filesystem,
+                },
             },
             durable_memory_gb_seconds_delta,
             ephemeral_memory_gb_seconds_delta,
@@ -1592,6 +1597,38 @@ mod tests {
         assert_eq!(captured.update.memory_gb_seconds_delta, 0);
         assert_eq!(captured.update.durable_storage_byte_seconds_delta, 0);
         assert_eq!(captured.update.ephemeral_storage_byte_seconds_delta, 0);
+        assert!(!captured.update.metering.compute);
+        assert!(!captured.update.metering.memory);
+        assert!(!captured.update.metering.filesystem);
+    }
+
+    #[test]
+    fn usage_update_reports_configured_metering_state() {
+        let entry = AtomicResourceEntry::new_with_all_limits_and_metering(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            ResourceUsageMeteringConfig {
+                compute: true,
+                memory: false,
+                filesystem: true,
+            },
+        );
+
+        let captured = entry
+            .capture_usage_update(0)
+            .expect("stale limit refresh still produces an update");
+
+        assert!(captured.update.metering.compute);
+        assert!(!captured.update.metering.memory);
+        assert!(captured.update.metering.filesystem);
     }
 
     #[test]
