@@ -202,6 +202,9 @@ impl ShardManager for GrpcShardManager {
                             let request = RegisterRequest {
                                 port: *port as i32,
                                 pod_name: pod_name.clone(),
+                                // W1 (ticket 4, WIRE): inert until EX generates the
+                                // executor UUID and threads it through this trait.
+                                executor_id: String::new(),
                             };
                             Box::pin(client.register(request))
                         })

@@ -116,6 +116,10 @@ impl ShardManagerService for ShardManagerServiceImpl {
                 golem::shardmanager::v1::RegisterSuccess {
                     number_of_shards: self.get_routing_table_internal().await.number_of_shards
                         as u32,
+                    // W1 (ticket 4, WIRE): inert until SM makes Register an out-of-loop
+                    // writer that returns the real lease (D9).
+                    shard_epochs: vec![],
+                    expires_at: None,
                 },
             )),
             Err(error) => {
@@ -129,6 +133,42 @@ impl ShardManagerService for ShardManagerServiceImpl {
 
         Ok(Response::new(golem::shardmanager::v1::RegisterResponse {
             result: Some(result),
+        }))
+    }
+
+    // W1 STUB (ticket 4, WIRE). build.rs configures tonic_prost_build without
+    // `generate_default_stubs`, so the generated ShardManagerService trait has
+    // no default bodies and this impl must cover every RPC the proto declares.
+    // SM replaces this with the real handler in the lease-protocol commit (plan
+    // step 5). It answers ShardLeaseError::internal so that no caller can
+    // mistake a not-implemented answer for a granted or renewed lease.
+    async fn renew_shard_lease(
+        &self,
+        _request: tonic::Request<golem::shardmanager::v1::RenewShardLeaseRequest>,
+    ) -> Result<Response<golem::shardmanager::v1::RenewShardLeaseResponse>, tonic::Status> {
+        Ok(Response::new(
+            golem::shardmanager::v1::RenewShardLeaseResponse {
+                result: Some(
+                    golem::shardmanager::v1::renew_shard_lease_response::Result::Failure(
+                        shard_lease_not_implemented("RenewShardLease"),
+                    ),
+                ),
+            },
+        ))
+    }
+
+    // W1 STUB (ticket 4, WIRE). See renew_shard_lease above; SM replaces this
+    // with the lenient deregister handler.
+    async fn deregister(
+        &self,
+        _request: tonic::Request<golem::shardmanager::v1::DeregisterRequest>,
+    ) -> Result<Response<golem::shardmanager::v1::DeregisterResponse>, tonic::Status> {
+        Ok(Response::new(golem::shardmanager::v1::DeregisterResponse {
+            result: Some(
+                golem::shardmanager::v1::deregister_response::Result::Failure(
+                    shard_lease_not_implemented("Deregister"),
+                ),
+            ),
         }))
     }
 
@@ -353,6 +393,21 @@ impl ShardManagerService for ShardManagerServiceImpl {
                 },
             )),
         }
+    }
+}
+
+// W1 STUB HELPER (ticket 4, WIRE). Deleted together with the two stub handlers
+// above when SM implements the shard lease protocol. The error code is spelled
+// out in full on purpose: W1 adds no `use` that would go unused the moment the
+// stubs are replaced.
+fn shard_lease_not_implemented(rpc: &str) -> golem::shardmanager::v1::ShardLeaseError {
+    golem::shardmanager::v1::ShardLeaseError {
+        error: Some(golem::shardmanager::v1::shard_lease_error::Error::Internal(
+            golem::common::ErrorBody {
+                error: format!("{rpc} is not implemented"),
+                code: golem_common::base_model::api::error_code::INTERNAL_UNKNOWN.to_string(),
+            },
+        )),
     }
 }
 
