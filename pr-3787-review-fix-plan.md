@@ -46,7 +46,7 @@ documented verification commands are all complete.
 | P5 | Centralize no-body attachment publication | **Complete** | 4, 16, 27 | P1, P4 |
 | P6 | Make execution mode and attachment admission replay-deterministic | **Complete** | 3, 5 | P1, P5 |
 | P7a | Fix the Rust started-invocation caller contract | **Complete** | 7–9 | P1, P5 |
-| P7b | Fix the TypeScript started-invocation caller contract | Not started | 11 | P1, P5 |
+| P7b | Fix the TypeScript started-invocation caller contract | **Complete** | 11 | P1, P5 |
 | P7c | Fix the Scala started-invocation caller contract | **Blocked** | 13 | Stable GOL-96 integration base |
 | P8 | Replace Scala middleware streams with transfer-only handles | **Blocked** | 14 | Stable GOL-96 integration base |
 | P9a | Add Scala provider export-boundary ownership | **Blocked** | 15, 26 | P8; stable GOL-96 integration base |
@@ -114,7 +114,18 @@ documented verification commands are all complete.
   capable/incapable calls, and the capable filesystem effect. Its executor integration test,
   SDK/executor clippy, all scoped formatting, and diff whitespace checks pass. Logs are under
   `.amp/pr-3787-tests/p7a-*`. Oracle's follow-up review approved the corrected phase with no
-  remaining blockers.
+  remaining blockers. Recorded in local commit `773ac2871`.
+- **P7b — Complete (2026-09-03):** the host bridge now immediately converts
+  `future.get()` into a non-rejecting settled envelope. Dynamic and generated clients retain and
+  transform only that envelope; the public `result` getter creates a rejecting promise on explicit
+  access, while `collect()` consumes the envelope directly. Direct tests cover ignored host
+  rejection, explicit mapped rejection, and synchronous stdout-validation failure without an
+  `unhandledRejection`. All 705 TypeScript SDK tests pass (20 skipped), both generated-client
+  compile tests pass, and a force-rebuilt TypeScript fixture passes the real worker-executor
+  streaming integration. Typecheck/build, SDK lint (six unrelated existing warnings), scoped
+  Prettier, Rust formatting, CLI clippy, and diff whitespace checks pass. Logs are under
+  `.amp/pr-3787-tests/p7b-*`. GOL-95's `AgentStream` remains untouched. Oracle found no blockers
+  and returned `APPROVED`.
 
 ## Invariants that govern every fix
 
@@ -546,14 +557,14 @@ requests so each SDK can be reviewed and verified independently.
 
 ### P7b — TypeScript
 
-- [ ] Immediately attach fulfillment and rejection handlers to the bridge's host `future.get()`.
-- [ ] Store only a non-rejecting settled-result envelope internally.
-- [ ] Expose a rejecting result promise lazily through a getter or method when the caller explicitly
+- [x] Immediately attach fulfillment and rejection handlers to the bridge's host `future.get()`.
+- [x] Store only a non-rejecting settled-result envelope internally.
+- [x] Expose a rejecting result promise lazily through a getter or method when the caller explicitly
       asks for it.
-- [ ] Make `collect()` consume the settled envelope directly.
-- [ ] Test that ignored failed results and synchronous stdout validation produce no
+- [x] Make `collect()` consume the settled envelope directly.
+- [x] Test that ignored failed results and synchronous stdout validation produce no
       `unhandledrejection`, while explicit result access still rejects correctly.
-- [ ] Keep this change separate from GOL-95's `AgentStream` implementation in `agentStream.ts`.
+- [x] Keep this change separate from GOL-95's `AgentStream` implementation in `agentStream.ts`.
 
 ### P7c — Scala
 
@@ -782,6 +793,9 @@ Append an entry whenever a workstream changes status or a design gate is resolve
 | 2026-09-03 | P7a | Awaiting Oracle approval | Implemented one shared lazy result driver/cache and result-driven stdout wrapper. Focused driver and API-shape tests, all 134 feature-enabled SDK library tests, rebuilt fixture, real generated-client capable/incapable and multi-observer integration coverage, SDK/executor clippy, formatting, and whitespace checks pass. |
 | 2026-09-03 | P7a | Oracle correction applied | Replaced latest-observer source registration with a stable driver-owned fan-out waker. A deterministic distinct-waker test drops the latest observer, completes the source, and proves the surviving observer wakes and receives the cached result from the one source factory. All 135 SDK library tests, the force-rebuilt real generated-client integration, SDK clippy, formatting, and whitespace checks pass. |
 | 2026-09-03 | P7a | Complete | Oracle's follow-up review found no blockers and returned `APPROVED`; it confirmed the stable fan-out closes observer cancellation races while preserving exactly-one-get, affine result, error, stdout, and cancellation semantics. |
+| 2026-09-03 | P7b | In progress | Auditing the TypeScript bridge's eager rejecting result promise, collect path, generated API surface, and existing rejection-handling coverage without importing unpublished GOL-95 changes. |
+| 2026-09-03 | P7b | Awaiting Oracle approval | Host `future.get()` rejection is immediately settled into a non-rejecting envelope; dynamic/generated clients preserve that invariant, public result access is lazy, and `collect()` consumes the envelope. All 705 SDK tests (20 skipped), two generated-client compile tests, a force-rebuilt real TypeScript tool-streaming executor integration, typecheck/build, lint, formatting, clippy, and whitespace checks pass. GOL-95 files remain untouched. |
+| 2026-09-03 | P7b | Complete | Oracle's holistic review found no blockers and returned `APPROVED`; it confirmed immediate host rejection handling, the non-rejecting internal envelope invariant, lazy public rejection, result-before-stdout collect precedence, and dynamic/generated RPC/custom-error fidelity. |
 
 ## Definition of done
 

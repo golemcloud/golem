@@ -141,7 +141,7 @@ describe('public bridge runtime', () => {
       undefined,
       false,
     );
-    const result = await invocation.result;
+    const result = await bridge.resultFromSettledToolResult(invocation.settledResult);
     expect(result.result?.value).toEqual(bridge.v.string('ok'));
     expect(ToolRpc).toHaveBeenCalledWith('git');
   });
@@ -193,7 +193,7 @@ describe('public bridge runtime', () => {
   it('forwards cancellation to a transport invocation whose cancel method uses its receiver', () => {
     const rawInvocation = {
       cancelled: false,
-      result: new Promise<never>(() => {}),
+      settledResult: new Promise<never>(() => {}),
       cancel() {
         this.cancelled = true;
       },
@@ -234,10 +234,13 @@ describe('public bridge runtime', () => {
     };
     const runtime = bridge.createToolClientRuntime('broken-result', {
       start: () => ({
-        result: Promise.resolve({
-          result: {
-            graph: { typeNodes: [], defs: [], root: 0 },
-            value: { valueNodes: [], root: 0 },
+        settledResult: Promise.resolve({
+          status: 'fulfilled',
+          value: {
+            result: {
+              graph: { typeNodes: [], defs: [], root: 0 },
+              value: { valueNodes: [], root: 0 },
+            },
           },
         }),
         stdout,
@@ -254,7 +257,7 @@ describe('public bridge runtime', () => {
       undefined,
       true,
     );
-    await expect(invocation.result).rejects.toThrow();
+    await expect(bridge.resultFromSettledToolResult(invocation.settledResult)).rejects.toThrow();
     const chunks = [];
     for await (const item of invocation.stdout!) chunks.push(item);
     expect(chunks).toEqual([{ tag: 'ok', val: Uint8Array.of(1, 2) }]);
@@ -275,7 +278,10 @@ describe('public bridge runtime', () => {
     };
     const runtime = bridge.createToolClientRuntime('valid-result', {
       start: () => ({
-        result: Promise.resolve({ result: bridge.typedSchemaValueToWit(typed) }),
+        settledResult: Promise.resolve({
+          status: 'fulfilled',
+          value: { result: bridge.typedSchemaValueToWit(typed) },
+        }),
         stdout,
         cancel: vi.fn(),
       }),
@@ -290,7 +296,9 @@ describe('public bridge runtime', () => {
       undefined,
       true,
     );
-    await expect(invocation.result).resolves.toEqual({ result: typed });
+    await expect(bridge.resultFromSettledToolResult(invocation.settledResult)).resolves.toEqual({
+      result: typed,
+    });
     expect(invocation.stdout).toBe(stdout);
     expect(close).not.toHaveBeenCalled();
   });

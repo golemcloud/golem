@@ -901,12 +901,14 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
     );
     assert!(source.contains("base.typedSchemaValueConforms(expectedGraph, typed)"));
     assert!(source.contains(
-        "base.startedToolInvocation(invocation.stdout, result, () => invocation.cancel())"
+        "base.startedToolInvocation(invocation.stdout, settledResult, () => invocation.cancel())"
     ));
     assert!(source.contains("invocation.cancel(); throw protocol('tool invocation did not provide declared stdout stream')"));
     assert!(source.contains("tool result did not contain a value"));
     assert!(source.contains("tool result unexpectedly contained a value"));
-    assert!(source.contains("const result = invocation.result.then((invocationResult)"));
+    assert!(source.contains(
+        "const settledResult = base.mapSettledToolResult(invocation.settledResult, (invocationResult)"
+    ));
     assert!(source.contains("export type ColorMode"));
     assert!(!source.contains("golem-ts-bridge"));
     assert!(!source.contains("kind: 'record'"));
@@ -942,6 +944,8 @@ fn guest_tool_with_unstructured_result_compiles() {
         .unwrap()
         .generate()
         .unwrap();
+    let source = std::fs::read_to_string(package_dir.join(format!("{package_name}.ts"))).unwrap();
+    assert!(source.contains("const invocationOutcome = await invocation.settledResult"));
     install_and_build(&package_dir);
 }
 

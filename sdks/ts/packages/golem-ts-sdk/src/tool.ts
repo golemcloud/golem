@@ -27,7 +27,10 @@ import type {
 } from 'golem:tool/common@0.1.0';
 import type { ByteStreamItem } from 'golem:tool/host@0.1.0';
 import {
+  mapSettledToolResult,
+  resultFromSettledToolResult,
   startedToolInvocation,
+  type SettledToolResult,
   type StartedToolInvocation,
   type ToolInputStream,
 } from './internal/tool/startedToolInvocation';
@@ -767,7 +770,7 @@ export interface UniversalToolMiddlewareOptions<Name extends string> {
 
 export interface ToolClientInvocationResult {
   readonly stdout?: AsyncIterable<ByteStreamItem>;
-  readonly result: Promise<{ readonly result?: WireTypedSchemaValue }>;
+  readonly settledResult: Promise<SettledToolResult<{ readonly result?: WireTypedSchemaValue }>>;
   cancel(): void;
 }
 
@@ -1715,12 +1718,18 @@ function createToolClientMethod(
         throw mapFailure(error, { phase: 'invoke', body: commandBody, callName });
       }
 
-      const result = invocation.result
-        .then((terminal) => decodeToolClientResult(commandBody, terminal, callName))
-        .catch((error: unknown) => {
-          throw mapFailure(error, { phase: 'result', body: commandBody, callName });
-        });
-      if (!commandBody.stdout) return result;
+      const settledResult = mapSettledToolResult(
+        invocation.settledResult,
+        (terminal) => {
+          try {
+            return decodeToolClientResult(commandBody, terminal, callName);
+          } catch (error) {
+            throw mapFailure(error, { phase: 'result', body: commandBody, callName });
+          }
+        },
+        (error) => mapFailure(error, { phase: 'result', body: commandBody, callName }),
+      );
+      if (!commandBody.stdout) return resultFromSettledToolResult(settledResult);
       if (!invocation.stdout) {
         invocation.cancel();
         throw mapFailure(new Error('required stdout stream is missing'), {
@@ -1737,14 +1746,14 @@ function createToolClientMethod(
           callName,
         });
       }
-      return startedToolInvocation(invocation.stdout, result, () => invocation.cancel());
+      return startedToolInvocation(invocation.stdout, settledResult, () => invocation.cancel());
     }
   };
 }
 
 function decodeToolClientResult(
   body: ExtendedCommandBody,
-  invocation: Awaited<ToolClientInvocationResult['result']>,
+  invocation: { readonly result?: WireTypedSchemaValue },
   callName: string,
 ): unknown {
   const hasResult = invocation.result !== undefined;

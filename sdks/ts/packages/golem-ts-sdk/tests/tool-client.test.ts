@@ -63,10 +63,16 @@ class FakeTransport implements ToolClientTransport {
     try {
       response = this.respond(invocation);
     } catch (error) {
-      return { result: Promise.reject(error), cancel: vi.fn() };
+      return {
+        settledResult: Promise.resolve({ status: 'rejected', reason: error }),
+        cancel: vi.fn(),
+      };
     }
     return {
-      result: Promise.resolve({ result: response.result }),
+      settledResult: Promise.resolve({
+        status: 'fulfilled',
+        value: { result: response.result },
+      }),
       stdout: withStdout ? (response.stdout ?? streamItems(bytes())) : undefined,
       cancel: vi.fn(),
     };
@@ -428,7 +434,7 @@ describe('tool runtime client', () => {
     );
     const rawInvocation = {
       cancelled: false,
-      result: new Promise<never>(() => undefined),
+      settledResult: new Promise<never>(() => undefined),
       stdout: streamItems(bytes()),
       cancel() {
         this.cancelled = true;
@@ -473,7 +479,11 @@ describe('tool runtime client', () => {
     try {
       client(definition, {
         transport: {
-          start: () => ({ result: Promise.resolve({}), stdout: null as never, cancel: vi.fn() }),
+          start: () => ({
+            settledResult: Promise.resolve({ status: 'fulfilled', value: {} }),
+            stdout: null as never,
+            cancel: vi.fn(),
+          }),
         },
       })['null-stdout']({});
     } catch (error) {
@@ -498,7 +508,7 @@ describe('tool runtime client', () => {
       client(definition, {
         transport: {
           start: () => ({
-            result: Promise.resolve({}),
+            settledResult: Promise.resolve({ status: 'fulfilled', value: {} }),
             stdout: 'invalid' as never,
             cancel: vi.fn(),
           }),
@@ -890,6 +900,85 @@ describe('tool runtime client', () => {
     expect(ToolRpc).toHaveBeenCalledWith('default');
     expect(asyncInvokeAndAwait).toHaveBeenCalledTimes(2);
     expect(asyncInvokeAndAwait.mock.calls.every(([path]) => deepEqual(path, []))).toBe(true);
+  });
+
+  it('keeps a rejected host result handled until a started invocation result is accessed', async () => {
+    const rpcError = { tag: 'denied', val: 'not allowed' } satisfies RpcError;
+    vi.mocked(createStdout).mockReturnValueOnce([{}, streamItems(bytes())] as never);
+    vi.mocked(ToolRpc).mockImplementationOnce(
+      () =>
+        ({
+          asyncInvokeAndAwait: vi.fn(() => ({
+            get: () => Promise.reject(rpcError),
+            cancel: vi.fn(),
+          })),
+        }) as never,
+    );
+    const definition = toolDefinition('rejected-host-result').body((body) =>
+      body.stdout({ required: true }).returns(z.void()),
+    );
+    const unhandled: unknown[] = [];
+    const recordUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', recordUnhandled);
+
+    try {
+      const invocation = client(definition)['rejected-host-result']({});
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+
+      const failure = await rejectionOf(invocation.result);
+      expect(failure).toBeInstanceOf(ToolCallError);
+      expect(failure).toMatchObject({ cause: { tag: 'rpc', error: rpcError } });
+    } finally {
+      process.off('unhandledRejection', recordUnhandled);
+    }
+  });
+
+  it('handles a rejected host result when stdout validation throws synchronously', async () => {
+    const rpcError = { tag: 'denied', val: 'not allowed' } satisfies RpcError;
+    const cancel = vi.fn();
+    vi.mocked(createStdout).mockReturnValueOnce([{}, undefined] as never);
+    vi.mocked(ToolRpc).mockImplementationOnce(
+      () =>
+        ({
+          asyncInvokeAndAwait: vi.fn(() => ({
+            get: () => Promise.reject(rpcError),
+            cancel,
+          })),
+        }) as never,
+    );
+    const definition = toolDefinition('invalid-host-stdout').body((body) =>
+      body.stdout({ required: true }).returns(z.void()),
+    );
+    const unhandled: unknown[] = [];
+    const recordUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', recordUnhandled);
+
+    try {
+      let failure: unknown;
+      try {
+        client(definition)['invalid-host-stdout']({});
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(failure).toBeInstanceOf(ToolCallError);
+      expect(failure).toMatchObject({
+        cause: {
+          tag: 'rpc',
+          error: {
+            tag: 'protocol-error',
+            val: expect.stringContaining('stdout stream is missing'),
+          },
+        },
+      });
+      expect(cancel).toHaveBeenCalledOnce();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', recordUnhandled);
+    }
   });
 
   it('passes stdin readable streams and stdout async iterables through the default ToolRpc', async () => {

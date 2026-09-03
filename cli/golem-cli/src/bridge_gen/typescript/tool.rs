@@ -267,15 +267,17 @@ impl TypeScriptToolBridgeGenerator {
         self.write_invocation_error(out, body, error_type, "      ");
         out.push_str("    }\n");
         if body.stdout.is_some() {
-            out.push_str("    if (invocation.stdout === undefined) { invocation.cancel(); throw protocol('tool invocation did not provide declared stdout stream'); }\n    const result = invocation.result.then((invocationResult) => {\n      try {\n");
+            out.push_str("    if (invocation.stdout === undefined) { invocation.cancel(); throw protocol('tool invocation did not provide declared stdout stream'); }\n    const settledResult = base.mapSettledToolResult(invocation.settledResult, (invocationResult) => {\n      try {\n");
             self.write_result(out, body)?;
-            out.push_str("      } catch (error) { throw protocol('invalid tool result', error); }\n    }).catch((error) => {\n");
+            out.push_str("      } catch (error) { throw protocol('invalid tool result', error); }\n    }, (error) => {\n");
             self.write_invocation_error(out, body, error_type, "      ");
-            out.push_str("    });\n    return base.startedToolInvocation(invocation.stdout, result, () => invocation.cancel());\n");
+            out.push_str("    });\n    return base.startedToolInvocation(invocation.stdout, settledResult, () => invocation.cancel());\n");
         } else {
-            out.push_str("    let invocationResult: base.ToolInvocationResult;\n    try { invocationResult = await invocation.result; } catch (error) {\n");
+            out.push_str("    const invocationOutcome = await invocation.settledResult;\n    if (invocationOutcome.status === 'rejected') { const error = invocationOutcome.reason;\n");
             self.write_invocation_error(out, body, error_type, "      ");
-            out.push_str("    }\n    try {\n");
+            out.push_str(
+                "    }\n    const invocationResult = invocationOutcome.value;\n    try {\n",
+            );
             self.write_result(out, body)?;
             out.push_str("    } catch (error) { if ((error as any)?.tag === 'rpc') throw error; throw protocol('invalid tool result', error); }\n");
         }

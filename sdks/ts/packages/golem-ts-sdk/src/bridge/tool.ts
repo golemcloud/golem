@@ -17,10 +17,19 @@ import {
   typedSchemaValueToWit,
   type TypedSchemaValue,
 } from '../internal/schema-model';
-import type { ToolInputStream } from '../internal/tool/startedToolInvocation';
+import {
+  mapSettledToolResult,
+  settleToolResult,
+  type SettledToolResult,
+  type ToolInputStream,
+} from '../internal/tool/startedToolInvocation';
 
 export {
+  mapSettledToolResult,
+  resultFromSettledToolResult,
+  settleToolResult,
   startedToolInvocation,
+  type SettledToolResult,
   type StartedToolInvocation,
   type ToolInputStream,
 } from '../internal/tool/startedToolInvocation';
@@ -31,7 +40,9 @@ export interface ToolInvocationResult {
 
 export interface RawToolInvocation {
   readonly stdout?: AsyncIterable<ByteStreamItem>;
-  readonly result: Promise<Awaited<ReturnType<FutureInvokeResult['get']>>>;
+  readonly settledResult: Promise<
+    SettledToolResult<Awaited<ReturnType<FutureInvokeResult['get']>>>
+  >;
   cancel(): void;
 }
 
@@ -57,10 +68,11 @@ export function createToolClientTransport(toolName: string): ToolClientTransport
         inputEndpoints?.[1],
         outputEndpoints?.[0],
       );
+      const settledResult = settleToolResult(future.get());
       if (inputEndpoints) void pumpToolStdin(stdin!, inputEndpoints[0], inputEndpoints[2]);
       return {
         stdout: outputEndpoints?.[1],
-        result: future.get(),
+        settledResult,
         cancel: () => future.cancel(),
       };
     },
@@ -122,7 +134,7 @@ export interface ToolClientRuntime {
     stdout: boolean,
   ): {
     stdout?: AsyncIterable<ByteStreamItem>;
-    result: Promise<ToolInvocationResult>;
+    settledResult: Promise<SettledToolResult<ToolInvocationResult>>;
     cancel(): void;
   };
 }
@@ -136,7 +148,7 @@ export function createToolClientRuntime(
       const invocation = transport.start(commandPath, typedSchemaValueToWit(input), stdin, stdout);
       return {
         stdout: invocation.stdout,
-        result: invocation.result.then((value) => ({
+        settledResult: mapSettledToolResult(invocation.settledResult, (value) => ({
           result: value.result === undefined ? undefined : typedSchemaValueFromWit(value.result),
         })),
         cancel: () => invocation.cancel(),

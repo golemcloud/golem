@@ -16,6 +16,10 @@ import type { ByteStreamFailure, ByteStreamItem } from 'golem:tool/host@0.1.0';
 
 export type ToolInputStream = ReadableStream<Uint8Array>;
 
+export type SettledToolResult<Result> =
+  | { readonly status: 'fulfilled'; readonly value: Result }
+  | { readonly status: 'rejected'; readonly reason: unknown };
+
 export interface StartedToolInvocation<Result> {
   readonly stdout: ReadableStream<Uint8Array>;
   readonly result: Promise<Result>;
@@ -23,20 +27,64 @@ export interface StartedToolInvocation<Result> {
   collect(): Promise<{ result: Result; stdout: Uint8Array }>;
 }
 
+export function settleToolResult<Result>(
+  result: PromiseLike<Result>,
+): Promise<SettledToolResult<Result>> {
+  return Promise.resolve(result).then(
+    (value): SettledToolResult<Result> => ({ status: 'fulfilled', value }),
+    (reason: unknown): SettledToolResult<Result> => ({ status: 'rejected', reason }),
+  );
+}
+
+export function mapSettledToolResult<Input, Result>(
+  settledResult: PromiseLike<SettledToolResult<Input>>,
+  mapValue: (value: Input) => Result,
+  mapReason: (reason: unknown) => unknown = (reason) => reason,
+): Promise<SettledToolResult<Result>> {
+  return Promise.resolve(settledResult).then(
+    (outcome): SettledToolResult<Result> => {
+      if (outcome.status === 'rejected') {
+        try {
+          return { status: 'rejected', reason: mapReason(outcome.reason) };
+        } catch (reason) {
+          return { status: 'rejected', reason };
+        }
+      }
+      try {
+        return { status: 'fulfilled', value: mapValue(outcome.value) };
+      } catch (reason) {
+        return { status: 'rejected', reason };
+      }
+    },
+    (reason: unknown): SettledToolResult<Result> => ({ status: 'rejected', reason }),
+  );
+}
+
+export function resultFromSettledToolResult<Result>(
+  settledResult: PromiseLike<SettledToolResult<Result>>,
+): Promise<Result> {
+  return Promise.resolve(settledResult).then((outcome) => {
+    if (outcome.status === 'rejected') throw outcome.reason;
+    return outcome.value;
+  });
+}
+
 export function startedToolInvocation<Result>(
   stdout: AsyncIterable<ByteStreamItem>,
-  result: Promise<Result>,
+  settledResult: Promise<SettledToolResult<Result>>,
   cancel: () => void,
 ): StartedToolInvocation<Result> {
   const stream = readableToolStdout(stdout);
   return {
     stdout: stream,
-    result,
+    get result() {
+      return resultFromSettledToolResult(settledResult);
+    },
     cancel,
     async collect() {
-      const [resultOutcome, stdoutOutcome] = await Promise.allSettled([
-        result,
-        collectReadableStream(stream),
+      const [resultOutcome, stdoutOutcome] = await Promise.all([
+        settledResult,
+        settleToolResult(collectReadableStream(stream)),
       ]);
       if (resultOutcome.status === 'rejected') {
         throw resultOutcome.reason;
