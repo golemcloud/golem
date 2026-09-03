@@ -1709,9 +1709,10 @@ pub struct OplogSweepConfig {
     /// aborted; on, seven did, and the promise stream fell to 0% of its baseline throughput
     /// instead of merely slowing. Nothing else differed.
     ///
-    /// **Untuned.** 30s is half the default interval, so the duty cycle stays under half even when
-    /// every operation is slow, before the backoff below takes it lower. A perf pass should pick
-    /// this properly.
+    /// **Untuned.** 30s is half the default interval. Note that this aims the duty cycle rather
+    /// than bounding it: a tick stops at its next boundary, never inside an archive step, so a
+    /// store slow enough can overrun the deadline by a whole step. The backoff below is what
+    /// takes a persistently slow sweep further down. A perf pass should pick both properly.
     #[serde(with = "humantime_serde")]
     pub max_tick_duration: Duration,
     /// How many intervals the loop may wait after a tick that hit `max_tick_duration`, at most.

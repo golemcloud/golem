@@ -1032,7 +1032,7 @@ pub mod oplog {
         .unwrap();
         static ref OPLOG_SWEEP_TRUNCATED_TOTAL: CounterVec = register_counter_vec!(
             "oplog_sweep_truncated_total",
-            "Oplog sweep ticks that hit a budget before reaching the end of the namespace",
+            "Oplog sweep ticks that hit a budget or their deadline before reaching the end of the namespace",
             &["route"]
         )
         .unwrap();

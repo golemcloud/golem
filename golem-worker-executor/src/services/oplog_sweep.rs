@@ -163,6 +163,10 @@ const MAX_ARCHIVE_STEPS: u32 = 16;
 /// The shortest a tick interval is allowed to be. A misconfigured zero would otherwise spin.
 const MIN_INTERVAL: Duration = Duration::from_millis(100);
 
+/// The shortest a tick deadline is allowed to be. A misconfigured zero would cut every tick at its
+/// first boundary, which is not a disabled sweep but a sweep that runs and archives nothing.
+const MIN_TICK_DURATION: Duration = Duration::from_secs(1);
+
 /// How many intervals to wait before the next tick, given how the last one ended.
 ///
 /// Doubling rather than stepping, because the thing being waited out is a store under load and
@@ -465,10 +469,9 @@ impl OplogSweeper {
     /// A tick is bounded in time as well as in work, and the loop backs off while that bound keeps
     /// being hit. The two budgets are not interchangeable: `max_scanned_per_tick` and
     /// `max_archives_per_tick` say how much a tick does, `max_tick_duration` says how long it may
-    /// hold the executor's shared indexed-storage concurrency doing it, and a store whose
-    /// operations went from milliseconds to seconds turns the same work into minutes of holding.
-    /// Chaos scenario S23 measured what that costs: with the sweep off two executors aborted under
-    /// a 500ms indexed delay, with it on seven did. See `OplogSweepConfig::max_tick_duration`.
+    /// hold the executor's shared indexed-storage concurrency doing it. See
+    /// `OplogSweepConfig::max_tick_duration` for why those are not the same quantity under a
+    /// degraded store, and what measured it.
     ///
     /// Returns immediately on either of two conditions, which differ in what is left behind.
     /// Disabled by config leaves `ScheduledAction::ArchiveOplog` as the only archiving mechanism,
@@ -484,6 +487,10 @@ impl OplogSweeper {
         // Floored, because a zero interval would spin the loop rather than disable it. `enabled`
         // is how the sweep is turned off.
         let interval = self.config.interval.max(MIN_INTERVAL);
+        // Floored for the same reason, though the failure it prevents is quieter: a zero deadline
+        // would cancel every tick before it reached an agent, so the sweep would keep ticking and
+        // keep archiving nothing.
+        let tick_deadline = self.config.max_tick_duration.max(MIN_TICK_DURATION);
         // Intervals to wait before the next tick. Doubles while ticks keep hitting their deadline
         // and returns to one the moment a tick finishes inside it. See
         // `OplogSweepConfig::max_backoff_intervals` for why the sweep has to derive this from its
@@ -497,17 +504,26 @@ impl OplogSweeper {
 
             // A child of the shutdown token, so a tick still stops on shutdown, plus a deadline of
             // its own. Cancelling it is how the deadline is enforced: every boundary in
-            // `sweep_once` that already tests the token for shutdown becomes a place the tick can
-            // stop for time as well, and each of them already marks the report truncated. That is
-            // the whole reason the deadline is expressed this way rather than threaded through the
-            // loops -- an archive step is never cut between its append below and its drop above,
-            // which is the invariant shutdown is written around and this inherits for free.
+            // `sweep_once` that already tests the token becomes a place the tick can stop for time
+            // as well. That is the whole reason the deadline is expressed this way rather than
+            // threaded through the loops -- an archive step is never cut between its append below
+            // and its drop above, which is the invariant shutdown is written around and this
+            // inherits for free.
+            //
+            // The boundaries inside a route mark that route truncated. The one between routes does
+            // not: it drops the routes not yet reached from the report entirely, so once the stack
+            // has more than one ephemeral source a deadline can end a tick that reports nothing
+            // truncated. Harmless to the oplog, misleading in the metric.
             let tick = shutdown.child_token();
             let sweep = self.sweep_once(&tick);
-            let deadline = tokio::time::sleep(self.config.max_tick_duration);
+            let deadline = tokio::time::sleep(tick_deadline);
             tokio::pin!(sweep, deadline);
             let report = loop {
                 tokio::select! {
+                    // Biased, so a sweep that completed in the same poll the deadline elapsed is
+                    // read as completed. Random choice would let an on-time tick take the deadline
+                    // arm, and `over_deadline` below would then double the wait after it.
+                    biased;
                     report = &mut sweep => break report,
                     // Guarded, because a completed `Sleep` polls ready forever and would otherwise
                     // spin this select once the deadline has passed.
@@ -548,7 +564,10 @@ impl OplogSweeper {
     /// Runs one tick over every route. Never fails: a storage error ends the affected route's tick
     /// and the next one retries, because the work list is the layer itself. A tick is usually a
     /// fraction of a scan pass, which is what `passes` and [`Self::finish_pass`] track.
-    async fn sweep_once(&self, shutdown: &CancellationToken) -> SweepReport {
+    ///
+    /// The token is the tick's own rather than the executor's: cancelling it stops the tick at its
+    /// next boundary, which is how both shutdown and `max_tick_duration` are enforced.
+    async fn sweep_once(&self, cancel: &CancellationToken) -> SweepReport {
         // Without an assignment every agent would look like someone else's, and archiving an
         // agent this executor may not own is what the shard check is for. A zero-shard assignment
         // is the same state in a different shape: `ShardService` installs
@@ -564,11 +583,11 @@ impl OplogSweeper {
 
         let mut routes = Vec::with_capacity(self.routes.len());
         for route in &self.routes {
-            if shutdown.is_cancelled() {
+            if cancel.is_cancelled() {
                 break;
             }
             let report = self
-                .sweep_route(route, &assignment, shutdown)
+                .sweep_route(route, &assignment, cancel)
                 .instrument(info_span!("oplog_sweep", route = %route.id))
                 .await;
             routes.push((route.id, report));
@@ -584,7 +603,7 @@ impl OplogSweeper {
         &self,
         route: &Route,
         assignment: &ShardAssignment,
-        shutdown: &CancellationToken,
+        cancel: &CancellationToken,
     ) -> RouteReport {
         let started = Instant::now();
         let mut resume = self.cursors.lock().await.get(&route.id).cloned();
@@ -617,7 +636,7 @@ impl OplogSweeper {
         // never move and the tick would traverse the whole thing. Bound the pages as well.
         let page_budget = scan_budget.div_ceil(page_size).max(1);
         loop {
-            if shutdown.is_cancelled() {
+            if cancel.is_cancelled() {
                 truncated = true;
                 break;
             }
@@ -693,10 +712,10 @@ impl OplogSweeper {
             HashMap::with_capacity(components.len());
         for component_id in components {
             // Same boundary as the archive phase below. A cold cache makes each of these a
-            // registry call, and there is one per component the page turned up, so a shutdown
-            // should not have to wait the list out. Leaving the rest unresolved costs nothing:
-            // once cancelled, the archive phase declines every agent anyway.
-            if shutdown.is_cancelled() {
+            // registry call, and there is one per component the page turned up, so a cancelled
+            // tick should not have to wait the list out. Leaving the rest unresolved costs
+            // nothing: once cancelled, the archive phase declines every agent anyway.
+            if cancel.is_cancelled() {
                 break;
             }
             let resolved = self.environment_of(component_id).await;
@@ -706,12 +725,12 @@ impl OplogSweeper {
         // Now the deletes. One stream over the whole list rather than fixed batches, because the
         // cost of an agent varies with how much its layers hold and a batch would run at the speed
         // of its slowest member. The cancellation check sits before an agent and never inside one,
-        // so a shutdown finishes the agents under way and starts no more.
+        // so a cancelled tick finishes the agents under way and starts no more.
         let archived: Vec<Option<Outcome>> = stream::iter(pending)
             .map(|agent_id| {
                 let environment_id = environments.get(&agent_id.component_id).copied().flatten();
                 async move {
-                    if shutdown.is_cancelled() {
+                    if cancel.is_cancelled() {
                         return None;
                     }
                     Some(self.archive_agent(route, agent_id, environment_id).await)
