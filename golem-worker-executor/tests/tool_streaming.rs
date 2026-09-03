@@ -4772,6 +4772,8 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
     let input = b"terminal-before-publication".to_vec();
     let output_path = "/capable-terminal-crash.bin";
+    let mut child_completion_gate =
+        executor.gate_next_live_entity_body_completion(&worker_id, "streaming");
 
     let call = executor.invoke_and_await_agent(
         &caller_component,
@@ -4788,6 +4790,18 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
         .map_err(|_| anyhow::anyhow!("original retained child checkpoint timed out"))?
         .ok_or_else(|| anyhow::anyhow!("crash checkpoint server stopped"))?;
         assert_eq!(original_child_gate.name, "capable-terminal-retained-child");
+        original_child_gate
+            .release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("original retained child gate dropped before release"))?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            child_completion_gate.entered(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("original retained child completion gate timed out"))?;
+        let mut replayed_child_completion =
+            executor.gate_next_incomplete_entity_reconstruction(&worker_id, "streaming");
 
         let terminal_boundary = tokio::time::timeout(std::time::Duration::from_secs(30), async {
             loop {
@@ -4854,7 +4868,18 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
                             )
                         })
                         .count();
-                    if durable_effects == 1 {
+                    let child_has_terminal = oplog.iter().any(|entry| {
+                        matches!(
+                            &entry.entry,
+                            PublicOplogEntry::End(params)
+                                if params.start_index == child_start
+                        ) || matches!(
+                            &entry.entry,
+                            PublicOplogEntry::Cancelled(params)
+                                if params.start_index == child_start
+                        )
+                    });
+                    if durable_effects == 1 && !child_has_terminal {
                         break (
                             outer_start,
                             child_start,
@@ -4885,16 +4910,14 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
             None,
         );
         executor.simulated_crash(&worker_id).await?;
-        drop(original_child_gate.release);
+        drop(child_completion_gate);
 
-        let replayed_child_gate = tokio::time::timeout(
+        tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            checkpoint_arrivals.recv(),
+            replayed_child_completion.entered(),
         )
         .await
-        .map_err(|_| anyhow::anyhow!("replayed retained child checkpoint timed out"))?
-        .ok_or_else(|| anyhow::anyhow!("crash checkpoint server stopped"))?;
-        assert_eq!(replayed_child_gate.name, "capable-terminal-retained-child");
+        .map_err(|_| anyhow::anyhow!("replayed retained child completion timed out"))?;
 
         tokio::time::timeout(std::time::Duration::from_secs(30), async {
             loop {
@@ -4917,10 +4940,7 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
         })
         .await
         .map_err(|_| anyhow::anyhow!("fresh capable replay attachments were not reconstructed"))?;
-        replayed_child_gate
-            .release
-            .send(())
-            .map_err(|_| anyhow::anyhow!("replayed retained child gate dropped before release"))?;
+        replayed_child_completion.release();
 
         let published_gate = tokio::time::timeout(
             std::time::Duration::from_secs(30),

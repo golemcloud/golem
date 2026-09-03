@@ -848,6 +848,28 @@ impl TestWorkerExecutor {
             .gate_next_completed_entity_reconstruction(agent_id.clone())
     }
 
+    /// Pauses the next live entity body after its guest export returns but before its durable
+    /// terminal is selected.
+    pub fn gate_next_live_entity_body_completion(
+        &self,
+        agent_id: &AgentId,
+        entity_name: &str,
+    ) -> EntityReconstructionBodyGateHandle {
+        self.additional_test_deps
+            .gate_next_live_entity_body_completion(agent_id.clone(), entity_name.to_string())
+    }
+
+    /// Pauses the next matching incomplete-replay entity body after its guest export returns but
+    /// before the original durable Start receives a terminal.
+    pub fn gate_next_incomplete_entity_reconstruction(
+        &self,
+        agent_id: &AgentId,
+        entity_name: &str,
+    ) -> EntityReconstructionBodyGateHandle {
+        self.additional_test_deps
+            .gate_next_incomplete_entity_reconstruction(agent_id.clone(), entity_name.to_string())
+    }
+
     /// Pauses the next successful agent invocation after the guest call and its tail work finish,
     /// but before the success is persisted to the owner oplog.
     pub fn gate_next_agent_invocation_success(
@@ -1909,8 +1931,12 @@ impl WorkerCtx for TestWorkerCtx {
     }
 
     fn entity_invocation_body_hook(&self) -> Option<Arc<dyn EntityInvocationBodyHook>> {
+        let entity_name = self
+            .durable_ctx
+            .entity_invocation_scope()
+            .map(|scope| scope.activation().entity().name().to_string());
         self.additional_test_deps
-            .entity_invocation_body_hook(self.agent_id.clone())
+            .entity_invocation_body_hook(self.agent_id.clone(), entity_name)
     }
 
     async fn create(
@@ -3916,11 +3942,49 @@ impl AdditionalTestDeps {
         &self,
         agent_id: AgentId,
     ) -> EntityReconstructionBodyGateHandle {
+        self.gate_next_entity_body_completion(
+            agent_id,
+            InvocationExecutionMode::ReplayingCompleted,
+            None,
+        )
+    }
+
+    fn gate_next_live_entity_body_completion(
+        &self,
+        agent_id: AgentId,
+        entity_name: String,
+    ) -> EntityReconstructionBodyGateHandle {
+        self.gate_next_entity_body_completion(
+            agent_id,
+            InvocationExecutionMode::Live,
+            Some(entity_name),
+        )
+    }
+
+    fn gate_next_incomplete_entity_reconstruction(
+        &self,
+        agent_id: AgentId,
+        entity_name: String,
+    ) -> EntityReconstructionBodyGateHandle {
+        self.gate_next_entity_body_completion(
+            agent_id,
+            InvocationExecutionMode::ReplayingIncomplete,
+            Some(entity_name),
+        )
+    }
+
+    fn gate_next_entity_body_completion(
+        &self,
+        agent_id: AgentId,
+        execution_mode: InvocationExecutionMode,
+        entity_name: Option<String>,
+    ) -> EntityReconstructionBodyGateHandle {
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
         let gate = Arc::new(EntityReconstructionBodyGate {
             entered_tx: std::sync::Mutex::new(Some(entered_tx)),
             release: tokio::sync::Semaphore::new(0),
-            execution_mode: Some(InvocationExecutionMode::ReplayingCompleted),
+            execution_mode: Some(execution_mode),
+            entity_name,
         });
         self.entity_reconstruction_body_gates
             .lock()
@@ -3962,6 +4026,7 @@ impl AdditionalTestDeps {
             entered_tx: std::sync::Mutex::new(Some(entered_tx)),
             release: tokio::sync::Semaphore::new(0),
             execution_mode: None,
+            entity_name: None,
         });
         self.entity_body_start_gates
             .lock()
@@ -3980,6 +4045,7 @@ impl AdditionalTestDeps {
     fn entity_invocation_body_hook(
         &self,
         agent_id: AgentId,
+        entity_name: Option<String>,
     ) -> Option<Arc<dyn EntityInvocationBodyHook>> {
         let gated = self
             .entity_reconstruction_body_gates
@@ -3999,6 +4065,7 @@ impl AdditionalTestDeps {
         (gated || start_gated || divergent).then(|| {
             Arc::new(TestEntityInvocationBodyHook {
                 agent_id,
+                entity_name,
                 gates: self.entity_reconstruction_body_gates.clone(),
                 start_gates: self.entity_body_start_gates.clone(),
                 divergences: self.divergent_entity_reconstructions.clone(),
@@ -4325,6 +4392,7 @@ struct EntityReconstructionBodyGate {
     entered_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     release: tokio::sync::Semaphore,
     execution_mode: Option<InvocationExecutionMode>,
+    entity_name: Option<String>,
 }
 
 struct AgentInvocationSuccessGate {
@@ -4414,6 +4482,7 @@ impl Drop for EntityReconstructionBodyGateHandle {
 
 struct TestEntityInvocationBodyHook {
     agent_id: AgentId,
+    entity_name: Option<String>,
     gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
     start_gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
     divergences: Arc<std::sync::Mutex<HashSet<AgentId>>>,
@@ -4460,14 +4529,17 @@ impl EntityInvocationBodyHook for TestEntityInvocationBodyHook {
     }
 
     async fn before_completion(&self, execution_mode: InvocationExecutionMode) {
-        let gate = self.gates.lock().unwrap().get(&self.agent_id).cloned();
-        if gate
-            .as_ref()
-            .is_some_and(|gate| gate.execution_mode != Some(execution_mode))
-        {
-            return;
-        }
-        let gate = self.gates.lock().unwrap().remove(&self.agent_id);
+        let gate = {
+            let mut gates = self.gates.lock().unwrap();
+            let matches = gates.get(&self.agent_id).is_some_and(|gate| {
+                gate.execution_mode == Some(execution_mode)
+                    && gate
+                        .entity_name
+                        .as_ref()
+                        .is_none_or(|expected| self.entity_name.as_ref() == Some(expected))
+            });
+            matches.then(|| gates.remove(&self.agent_id)).flatten()
+        };
         if let Some(gate) = gate {
             if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
                 let _ = entered_tx.send(());
