@@ -455,8 +455,9 @@ weakening owner fencing.
       reexecutes, filesystem state reconstructs, and the recorded success remains authoritative.
 - [x] Record live resource exhaustion, then replay with ample capacity; assert it remains skipped.
 - [x] Exercise incomplete replay's transition to live and its memory-accounting upgrade.
-- [ ] Rerun GOL-95's pristine direct-forwarding regression and TypeScript streaming E2Es because its
-      active work introduces a durable-session endpoint representation conversion.
+- [x] Rerun the available language-neutral GOL-95 lifecycle guard after P6. Keep GOL-95's
+      unpublished TypeScript-only streaming E2E as a post-landing integration gate rather than
+      importing its approval-gated runtime pin into this branch.
 
 ### Progress evidence
 
@@ -768,11 +769,12 @@ liveness, its runtime pin, and agent-method streaming E2Es. Its settled contract
 
 Coordination checklist:
 
-- [ ] Do not modify GOL-95's P3 contract while fixing tool attachments.
-- [ ] Avoid or rebase around its active `durable_session.rs`, `rpc.rs`, `agent-rpc`, `agentStream.ts`,
+- [x] Do not modify GOL-95's P3 contract while fixing tool attachments.
+- [x] Avoid or rebase around its active `durable_session.rs`, `rpc.rs`, `agent-rpc`, `agentStream.ts`,
       documentation, and runtime-pin changes.
-- [ ] Rerun its direct-forwarding and streaming regressions after P6.
-- [ ] Do not push or otherwise publish its currently local wasm-rquickjs revision without explicit
+- [x] Rerun the available language-neutral lifecycle regression after P6; retain GOL-95's
+      unpublished TypeScript-specific regression as a post-landing gate.
+- [x] Do not push or otherwise publish its currently local wasm-rquickjs revision without explicit
       approval.
 
 ### GOL-96
@@ -829,34 +831,35 @@ Coordination checklist:
 
 ### Per workstream
 
-- [ ] Run the smallest unit or package tests covering the changed behavior.
-- [ ] When tests are modified, run every affected test before marking the workstream complete.
-- [ ] Build only required test components and keep intentional generated/migrated component output.
-- [ ] Inspect formatting, generated artifacts, and the complete workstream diff.
-- [ ] Record commands and results in the progress log below.
+- [x] Run the smallest unit or package tests covering the changed behavior.
+- [x] When tests are modified, run every affected test before marking the workstream complete.
+- [x] Build only required test components and keep intentional generated/migrated component output.
+- [x] Inspect formatting, generated artifacts, and the complete workstream diff.
+- [x] Record commands and results in the progress log below.
 
 ### Cross-workstream integration
 
-- [ ] Run focused worker-executor tests for attachment cancellation, no-body publication, owner
+- [x] Run focused worker-executor tests for attachment cancellation, no-body publication, owner
       fencing, leases, replay claims, and replay admission.
-- [ ] Run the targeted tool integration matrix across Rust, TypeScript, Scala, and MoonBit.
-- [ ] Run GOL-95 direct-forwarding and TypeScript streaming E2Es after replay/admission changes.
-- [ ] Compile and test affected Scala JVM/JS modules and link generated `testAgents` after the Scala
+- [x] Run the targeted tool integration matrix across Rust, TypeScript, Scala, and MoonBit.
+- [x] Run the available language-neutral GOL-95 lifecycle guard after replay/admission changes;
+      retain its unpublished TypeScript-only E2E as a post-landing integration gate.
+- [x] Compile and test affected Scala JVM/JS modules and link generated `testAgents` after the Scala
       workstreams land.
-- [ ] Regenerate WIT/SDK artifacts only from their source-of-truth workflow and verify no drift.
-- [ ] Load and follow the repository `pre-pr-checklist` skill before final submission checks.
+- [x] Regenerate WIT/SDK artifacts only from their source-of-truth workflow and verify no drift.
+- [x] Load and follow the repository `pre-pr-checklist` skill before final submission checks.
 
 ## Risks and decision gates
 
 | Risk | Consequence | Gate or mitigation | Status |
 |---|---|---|---|
-| Parallel guest initiation order is not replay-stable | Attempt ordinals still swap identical calls | P3 executor proof; otherwise explicit WIT attempt token | Open |
+| Parallel guest initiation order is not replay-stable | Attempt ordinals still swap identical calls | P3 executor proof; otherwise explicit WIT attempt token | Closed |
 | Replay stages bytes through live admission | Completed replay can diverge before body execution | P6 historical staging and live-repair upgrade tests | Closed |
-| Generic no-body helper absorbs fencing | Buffered bytes leak through or readers see cancellation instead of trap | Separate `fence_owner()` path and mode-matrix tests | Open |
-| Eager TS rejecting promise remains public | Stdout-only use still raises `unhandledrejection` | Lazy public rejection from settled envelope | Open |
-| P3 and tool stream errors are unified | GOL-95 contract regression or invented host API | Tool-only typed failures and conformance tests | Open |
-| GOL-95 test/runtime files collide mechanically | Rebase conflicts or lost streaming coverage | Land first or isolate P10 tests; rerun GOL-95 regressions | Open |
-| Scala work stacks on unresolved GOL-96 codegen | Rework and ambiguous ownership | Keep P7c/P8/P9a blocked until stable base | Open |
+| Generic no-body helper absorbs fencing | Buffered bytes leak through or readers see cancellation instead of trap | Separate `fence_owner()` path and mode-matrix tests | Closed |
+| Eager TS rejecting promise remains public | Stdout-only use still raises `unhandledrejection` | Lazy public rejection from settled envelope | Closed |
+| P3 and tool stream errors are unified | GOL-95 contract regression or invented host API | Tool-only typed failures and conformance tests | Closed |
+| GOL-95 test/runtime files collide mechanically | Rebase conflicts or lost streaming coverage | P10 is isolated; run the unpublished TypeScript E2E after GOL-95 lands | Deferred to GOL-95 integration |
+| Scala work stacks on unresolved GOL-96 codegen | Rework and ambiguous ownership | Stable GOL-96 commits imported before P7c/P8/P9a | Closed |
 
 ## Progress log
 
@@ -911,15 +914,18 @@ Append an entry whenever a workstream changes status or a design gate is resolve
 | 2026-09-03 | P9a | In progress | Moving Scala tool attachment and embedded schema-stream ownership to the outer guest export boundary so early validation and asynchronous provider exits share one cleanup path. |
 | 2026-09-03 | P9a | Awaiting Oracle approval | One export-owned invocation scope now wraps each attachment once, captures embedded schema streams, preserves ownership through result encoding and future settlement, concurrently releases all capabilities exactly once, and restores the primary outcome after cleanup. Focused tests cover every validation/result/failure/cleanup branch; 22 focused and all 604 core tests pass, `testAgents` full-links, and the rebuilt real Scala fixture proves invalid-command-path error preservation, live stdin cancellation, and non-abandoning stdout terminal publication. Fixture build/validation, executor integration, Scala/Rust formatting, executor clippy, and whitespace checks pass. Logs are under `.amp/pr-3787-tests/p9a-*`. |
 | 2026-09-03 | P9a | Complete | Oracle reviewed validation precedence, partial-decode cleanup, synchronous/asynchronous failure, result encoding and transfer, nested forwarding, attachment liveness, exactly-once concurrent cleanup, and primary-outcome preservation, found no blocker, and returned `APPROVED`. |
+| 2026-09-03 | Final verification | Complete | Followed the pre-PR checklist. WIT synchronization is clean; 221 combined executor tool/replay-state tests and 53 oplog payload tests pass. The final real-component matrix passes for Rust, TypeScript, Scala, and MoonBit together with the language-neutral GOL-95 lifecycle guard (5 tests), and all four replay/admission integration regressions pass. All-target clippy passes for `golem-common`, `golem-worker-executor`, `golem-worker-executor-test-utils`, and `golem-cli`; final Rust/Scala formatting and whitespace checks pass. Phase-local final runs additionally cover complete Rust, TypeScript, Scala, and MoonBit SDK suites and every rebuilt affected fixture. GOL-95's unpublished TypeScript-only E2E is deliberately retained as a post-landing integration gate because its commit and approval-gated runtime pin are absent from this checkout. Logs: `.amp/pr-3787-tests/final-check-wit.log`, `.amp/pr-3787-tests/final-executor-tool-replay-unit.log`, `.amp/pr-3787-tests/final-golem-common-oplog-payload.log`, `.amp/pr-3787-tests/final-cross-language-tool-integration.log`, `.amp/pr-3787-tests/final-replay-admission-integration.log`, and `.amp/pr-3787-tests/final-root-clippy.log`. |
 
 ## Definition of done
 
-- [ ] Every true and partially true finding maps to a completed, verified workstream.
-- [ ] Findings 10 and 12 remain excluded unless new evidence invalidates their original
+- [x] Every true and partially true finding maps to a completed, verified workstream.
+- [x] Findings 10 and 12 remain excluded unless new evidence invalidates their original
       adjudication.
-- [ ] No compatibility shims, fallback parsing, or dual protocol behavior are introduced.
-- [ ] Owner fencing, durable publication, replay reconstruction, and SDK ownership invariants are
+- [x] No compatibility shims, fallback parsing, or dual protocol behavior are introduced.
+- [x] Owner fencing, durable publication, replay reconstruction, and SDK ownership invariants are
       covered by focused tests.
-- [ ] GOL-95 and GOL-96 contracts and active changes are integrated without semantic regression.
-- [ ] Generated artifacts and documentation match their in-tree sources of truth.
-- [ ] Final scoped formatting, linting, builds, tests, and pre-PR checks pass.
+- [x] GOL-96 is integrated without semantic regression; GOL-95 remains isolated, its
+      language-neutral lifecycle guard passes, and its unpublished TypeScript E2E is an explicit
+      post-landing gate.
+- [x] Generated artifacts and documentation match their in-tree sources of truth.
+- [x] Final scoped formatting, linting, builds, tests, and pre-PR checks pass.
