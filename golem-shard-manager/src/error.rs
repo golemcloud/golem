@@ -34,6 +34,10 @@ impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
             }
         };
 
+        // Taken before the match moves `value`: the stale-epoch arm reports the variant's own
+        // message, which names the shard, the claimant and both epochs.
+        let value_message = value.to_string();
+
         match value {
             ShardManagerError::NoSourceIpForPod => error(
                 shard_manager_error::Error::InvalidRequest,
@@ -73,6 +77,19 @@ impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
             ShardManagerError::ConcurrentModification => error(
                 shard_manager_error::Error::Unknown,
                 "Concurrent modification of the persisted shard state".to_string(),
+                api::error_code::CONCURRENT_UPDATE,
+            ),
+            // Both lease refusals are client errors, not server faults: `InvalidRequest` is what
+            // `ShardManagerTraceErrorKind::is_expected` treats as expected, so a stale claim does
+            // not read as an incident. The codes match the quota counterparts below.
+            ShardManagerError::ShardLeaseNotFound { executor_id } => error(
+                shard_manager_error::Error::InvalidRequest,
+                format!("Did not find a shard lease for executor {executor_id}"),
+                api::error_code::RESOURCE_NOT_FOUND,
+            ),
+            ShardManagerError::StaleShardEpoch { .. } => error(
+                shard_manager_error::Error::InvalidRequest,
+                value_message.clone(),
                 api::error_code::CONCURRENT_UPDATE,
             ),
             ShardManagerError::LeadershipLost { .. } => error(
@@ -115,6 +132,42 @@ impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
                 details,
                 api::error_code::INTERNAL_UNKNOWN,
             ),
+        }
+    }
+}
+
+/// The failure of a shard lease operation, as `RenewShardLease` and `Deregister` report it.
+///
+/// The **arm** carries the semantics and is what the executor branches on: `lease_not_found` means
+/// re-register with a fresh id, `stale_epoch` means keep the current set and retry, and `internal`
+/// is transport-class - keep the lease and try again. The body is taken from the
+/// [`golem::shardmanager::v1::ShardManagerError`] mapping above so no code string is written twice;
+/// that is also what keeps `CONCURRENT_UPDATE` on the `internal` arm of a lost compare-and-swap,
+/// where `QuotaError` would have flattened it to `INTERNAL_UNKNOWN`.
+impl From<ShardManagerError> for golem::shardmanager::v1::ShardLeaseError {
+    fn from(value: ShardManagerError) -> golem::shardmanager::v1::ShardLeaseError {
+        use golem::shardmanager::v1::shard_lease_error as grpc_shard_lease_error;
+
+        let arm: fn(golem::common::ErrorBody) -> grpc_shard_lease_error::Error = match &value {
+            ShardManagerError::ShardLeaseNotFound { .. } => {
+                grpc_shard_lease_error::Error::LeaseNotFound
+            }
+            ShardManagerError::StaleShardEpoch { .. } => grpc_shard_lease_error::Error::StaleEpoch,
+            _ => grpc_shard_lease_error::Error::Internal,
+        };
+
+        let body = match golem::shardmanager::v1::ShardManagerError::from(value).error {
+            Some(shard_manager_error::Error::InvalidRequest(body))
+            | Some(shard_manager_error::Error::Timeout(body))
+            | Some(shard_manager_error::Error::Unknown(body)) => body,
+            None => golem::common::ErrorBody {
+                error: "unknown shard lease error".to_string(),
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+            },
+        };
+
+        golem::shardmanager::v1::ShardLeaseError {
+            error: Some(arm(body)),
         }
     }
 }

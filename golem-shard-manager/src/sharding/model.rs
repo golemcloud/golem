@@ -18,7 +18,7 @@ use chrono::{DateTime, Utc};
 use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem;
 use golem_common::model::{Pod, ShardId};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::net::IpAddr;
@@ -355,6 +355,46 @@ impl ShardLeaseState {
         orphaned
     }
 
+    /// Restarts the lease clock of `executor_id`. `false` if it holds no lease.
+    ///
+    /// Only the clock moves: a renewal never touches a shard assignment and never advances an
+    /// epoch, which is what lets an executor assert the set it holds without the assertion racing
+    /// the manager.
+    pub fn renew_lease(
+        &mut self,
+        executor_id: ExecutorId,
+        now: DateTime<Utc>,
+        lease_ttl: Duration,
+    ) -> bool {
+        match self.executor_leases.get_mut(&executor_id) {
+            Some(lease) => {
+                lease.granted_at = now;
+                lease.expires_at = now + lease_ttl;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Restarts the lease clock of every listed executor that still holds one, and reports how
+    /// many were re-granted.
+    ///
+    /// Persisted expiries are absolute, so after any outage longer than the lease every one of them
+    /// is in the past and the first housekeeping would evict a cluster that is perfectly healthy.
+    /// A shard manager coming up re-grants to exactly the executors its startup health check just
+    /// found alive.
+    pub fn regrant_leases(
+        &mut self,
+        executors: &HashSet<ExecutorId>,
+        now: DateTime<Utc>,
+        lease_ttl: Duration,
+    ) -> usize {
+        executors
+            .iter()
+            .filter(|executor_id| self.renew_lease(**executor_id, now, lease_ttl))
+            .count()
+    }
+
     pub fn contains_shard(&self, shard_id: ShardId) -> bool {
         shard_id.value() >= 0 && (shard_id.value() as usize) < self.number_of_shards
     }
@@ -428,7 +468,21 @@ impl ShardLeaseState {
             .map(|entry| entry.epoch)
     }
 
-    pub fn apply_rebalance(&mut self, rebalance: &Rebalance) {
+    /// Applies `rebalance`, and reports the executors whose push is now stale and has to be
+    /// repeated.
+    ///
+    /// The epoch of every planned assignment was decided when the plan was computed and has
+    /// already been pushed to its target, so it is applied rather than re-minted: minting again
+    /// here would store an epoch the executor was never told. That holds only while the epoch is
+    /// still *fresh* - strictly above the highest epoch recorded for that shard. `Register` writes
+    /// outside the loop and transfers a restarted instance's shards inline, so between the push and
+    /// this apply the recorded epoch can have caught up with the carried one. Storing it anyway
+    /// would leave two live executors believing they hold the same shard at the same epoch, which
+    /// is exactly the pair an oplog fence cannot tell apart. So a fresh epoch is minted instead and
+    /// the target is reported back, for a full push that tells it the epoch it actually holds; the
+    /// cost is one pass in which that executor is fenced out rather than admitted.
+    pub fn apply_rebalance(&mut self, rebalance: &Rebalance) -> BTreeSet<ExecutorId> {
+        let mut stale_pushes: BTreeSet<ExecutorId> = BTreeSet::new();
         for (executor_id, shard_ids) in &rebalance.get_assignments().assignments {
             if !self.has_executor(*executor_id) {
                 warn!(
@@ -439,12 +493,23 @@ impl ShardLeaseState {
                 continue;
             }
             for shard_id in shard_ids {
-                // The epoch was decided when the plan was computed, from the same state this is
-                // applied to, and it is what was already pushed to the executor. Re-minting it here
-                // would hand the executor an epoch one behind the stored one.
-                let epoch = rebalance
-                    .epoch_for(*shard_id)
-                    .unwrap_or_else(|| self.next_epoch_for(*executor_id, *shard_id));
+                let epoch = match rebalance.epoch_for(*shard_id) {
+                    Some(carried) if self.epoch_is_fresh(*shard_id, carried) => carried,
+                    Some(carried) => {
+                        let minted = self.next_epoch_for(*executor_id, *shard_id);
+                        warn!(
+                            executor_id = %executor_id,
+                            shard_id = %shard_id,
+                            planned_epoch = %carried,
+                            minted_epoch = %minted,
+                            "Planned shard epoch was overtaken before the plan was applied; \
+                             minting a fresh one and repeating the push"
+                        );
+                        stale_pushes.insert(*executor_id);
+                        minted
+                    }
+                    None => self.next_epoch_for(*executor_id, *shard_id),
+                };
                 self.assign_shard_with_epoch(*executor_id, *shard_id, epoch);
             }
         }
@@ -454,6 +519,16 @@ impl ShardLeaseState {
             }
         }
         debug_assert!(self.check_invariants().is_ok());
+        stale_pushes
+    }
+
+    /// Whether `epoch` is still above every epoch ever recorded for `shard_id`, and so may be
+    /// stored without two holders ending up on the same `(shard, epoch)`.
+    fn epoch_is_fresh(&self, shard_id: ShardId, epoch: ShardEpoch) -> bool {
+        match self.shard_epochs.get(&shard_id) {
+            Some(high_water) => epoch > *high_water,
+            None => true,
+        }
     }
 
     pub fn take_pending_rebalance(&mut self) -> BTreeSet<ShardId> {
@@ -1075,7 +1150,11 @@ mod tests {
         assert_eq!(rebalance.epoch_for(shard(1)), Some(ShardEpoch(1)));
         assert_eq!(rebalance.epoch_for(shard(2)), None);
 
-        shard_state.apply_rebalance(&rebalance);
+        let stale_pushes = shard_state.apply_rebalance(&rebalance);
+        assert!(
+            stale_pushes.is_empty(),
+            "a plan applied to the state it was built from carries fresh epochs"
+        );
 
         assert_eq!(
             shard_state.shards_for_executor(executor(1)),
@@ -1090,13 +1169,103 @@ mod tests {
         assert_eq!(shard_state.epoch_for_shard(shard(2)), Some(ShardEpoch(0)));
         assert!(shard_state.check_invariants().is_ok());
 
-        // applying the same plan again is a no-op (idempotent assignments, guarded unassignments)
-        shard_state.apply_rebalance(&rebalance);
+        // Applying the same plan again is a no-op on the state (idempotent assignments, guarded
+        // unassignments). The carried epoch is no longer above the recorded one - this very apply
+        // put it there - so it is re-minted, which for an unchanged owner is the same value; the
+        // target is reported for a repeat push, which is a redundant push, never a wrong one.
+        let stale_pushes = shard_state.apply_rebalance(&rebalance);
+        assert_eq!(stale_pushes, BTreeSet::from([executor(2)]));
         assert_eq!(
             shard_state.shards_for_executor(executor(2)),
             Some(shards(&[0, 1]))
         );
         assert_eq!(shard_state.epoch_for_shard(shard(0)), Some(ShardEpoch(1)));
+    }
+
+    #[test]
+    // S11: `Register` writes outside the loop, so between the moment a plan's epochs were pushed to
+    // their target and the moment the plan is applied, a restarted instance registering at a known
+    // address can inherit the same shard and mint the same epoch inline. Storing the carried epoch
+    // then would leave two live executors on the same `(shard, epoch)`, which is exactly the pair
+    // an oplog fence cannot tell apart.
+    fn a_planned_epoch_overtaken_before_the_apply_is_re_minted_and_reported() {
+        let mut shard_state = shard_state_with(4, &[(1, 1, &[0, 1, 2, 3]), (2, 2, &[])]);
+
+        // the plan: shard 0 moves from executor 1 to executor 2, at epoch 1
+        let mut assignments = Assignments::new();
+        assignments.assign(executor(2), shard(0));
+        let mut unassignments = Unassignments::new();
+        unassignments.unassign(executor(1), shard(0));
+        let rebalance = Rebalance::new(assignments, unassignments, &shard_state);
+        assert_eq!(rebalance.epoch_for(shard(0)), Some(ShardEpoch(1)));
+
+        // ...and before it is applied, executor 1 is replaced at its own address by a restart,
+        // which inherits shard 0 inline and mints epoch 1 for it too
+        shard_state.add_executor(executor(3), addr(1), None, t0(), TTL);
+        assert_eq!(shard_state.epoch_for_shard(shard(0)), Some(ShardEpoch(1)));
+
+        let stale_pushes = shard_state.apply_rebalance(&rebalance);
+
+        assert_eq!(
+            shard_state.epoch_for_shard(shard(0)),
+            Some(ShardEpoch(2)),
+            "the carried epoch was stored although the high-water mark had caught up with it"
+        );
+        assert_eq!(
+            shard_state.shard_assignments[&shard(0)].executor_id,
+            executor(2)
+        );
+        assert_eq!(
+            stale_pushes,
+            BTreeSet::from([executor(2)]),
+            "the executor that was pushed the overtaken epoch must be queued for a full push"
+        );
+        assert!(shard_state.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn renew_lease_moves_only_the_clock() {
+        let mut shard_state = shard_state_with(4, &[(1, 1, &[0, 1])]);
+        let later = t0() + chrono::Duration::seconds(30);
+
+        assert!(shard_state.renew_lease(executor(1), later, TTL));
+        let lease = &shard_state.executor_leases[&executor(1)];
+        assert_eq!(lease.granted_at, later);
+        assert_eq!(lease.expires_at, later + chrono::Duration::seconds(60));
+        assert_eq!(
+            shard_state.shards_for_executor(executor(1)),
+            Some(shards(&[0, 1]))
+        );
+        assert_eq!(shard_state.epoch_for_shard(shard(0)), Some(ShardEpoch(0)));
+
+        assert!(!shard_state.renew_lease(executor(9), later, TTL));
+    }
+
+    #[test]
+    fn regrant_leases_restarts_the_clock_of_the_listed_executors_only() {
+        let mut shard_state = shard_state_with(4, &[(1, 1, &[0, 1]), (2, 2, &[2, 3])]);
+        let later = t0() + chrono::Duration::seconds(3600);
+
+        // executor 9 holds no lease and must not create one
+        let regranted =
+            shard_state.regrant_leases(&HashSet::from([executor(1), executor(9)]), later, TTL);
+
+        assert_eq!(regranted, 1);
+        assert_eq!(
+            shard_state.executor_leases[&executor(1)].expires_at,
+            later + chrono::Duration::seconds(60)
+        );
+        assert_eq!(
+            shard_state.executor_leases[&executor(2)].expires_at,
+            t0() + chrono::Duration::seconds(60)
+        );
+        assert!(!shard_state.has_executor(executor(9)));
+
+        // the re-granted lease survives the housekeeping that evicts the one left behind
+        let evicted = shard_state.housekeep(later);
+        assert_eq!(evicted, vec![(executor(2), shards(&[2, 3]))]);
+        assert!(shard_state.has_executor(executor(1)));
+        assert_eq!(shard_state.pending_rebalance, shards(&[2, 3]));
     }
 
     #[test]
