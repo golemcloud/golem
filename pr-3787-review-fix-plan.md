@@ -51,7 +51,7 @@ documented verification commands are all complete.
 | P8 | Replace Scala middleware streams with transfer-only handles | **Blocked** | 14 | Stable GOL-96 integration base |
 | P9a | Add Scala provider export-boundary ownership | **Blocked** | 15, 26 | P8; stable GOL-96 integration base |
 | P9b | Add MoonBit provider failure and cleanup support | **Complete** | 20–22, 26 | P0, P5 |
-| P9c | Preserve typed TypeScript tool-stream failures | Not started | 20 | P0, P5 |
+| P9c | Preserve typed TypeScript tool-stream failures | **Complete** | 20 | P0, P5 |
 | P10 | Finish contract and integration conformance | Not started | 8, 19, 23, 25 | Owning workstreams; GOL-95 coordination |
 
 ## Execution progress log
@@ -665,12 +665,29 @@ the full rerun evidence.
 
 ### P9c — TypeScript tool-stream failure fidelity
 
-- [ ] Add or use a tool-specific typed source error contract for known `byte-stream-failure`
+- [x] Add or use a tool-specific typed source error contract for known `byte-stream-failure`
       variants.
-- [ ] Preserve known variants through adapters and map only unknown source exceptions to generic
+- [x] Preserve known variants through adapters and map only unknown source exceptions to generic
       failure.
-- [ ] Do not add a recoverable error terminal to TypeScript `AgentStream` or the P3 host ABI.
-- [ ] Test every known variant and an unknown exception.
+- [x] Do not add a recoverable error terminal to TypeScript `AgentStream` or the P3 host ABI.
+- [x] Test every known variant and an unknown exception.
+
+Status: **Complete.** The public, tool-only `ToolStreamError` retains the exact WIT
+`byte-stream-failure` value. Caller stdin pumps and provider stdout adapters preserve that value;
+ordinary JavaScript exceptions still map to `failed(message)`. Incoming provider stdin and caller
+stdout expose the same typed error, allowing composed streams to retain cancellation, abandonment,
+resource exhaustion, and explicit failure identity without changing `AgentStream` or the P3 ABI.
+The complete four-variant matrix is covered in client/provider unit tests, including the unknown
+exception fallback. A rebuilt TypeScript provider/caller fixture additionally round-trips an
+explicit `resource-exhausted` stdout terminal while preserving its independently successful
+structured result. All 721 SDK tests pass (20 skipped), along with SDK build/typecheck, template and
+fixture rebuilds, WASM validation, the real `typescript_generated_client_streams_live` executor
+integration, lint, Prettier, Rust formatting, executor clippy, and whitespace checks. Logs:
+`.amp/pr-3787-tests/p9c-ts-sdk-final.log`,
+`.amp/pr-3787-tests/p9c-ts-agent-template-final.log`,
+`.amp/pr-3787-tests/p9c-ts-fixture-build-final.log`, and
+`.amp/pr-3787-tests/p9c-typescript-executor-integration-final.log`. Oracle found no blockers and
+returned `APPROVED`.
 
 ## P10 — Contract and integration conformance
 
@@ -841,6 +858,9 @@ Append an entry whenever a workstream changes status or a design gate is resolve
 | 2026-09-03 | P9b | Awaiting Oracle approval | Dedicated provider capability, typed failure preservation, source-backed stdout errors, missing-attachment cleanup, generated artifacts, docs, fixtures, and examples are complete. All 265 SDK and 299 generator tests, MoonBit checks/info/fmt, Golem application and fixture builds, the real executor success/explicit-failure E2E, Rust fmt/clippy, shellcheck, and whitespace checks pass. |
 | 2026-09-03 | P9b | Oracle corrections applied | Shielded typed stdin-terminal publication during real task cancellation and made source cleanup explicit; added callback-backed provider lifecycle/concurrency/closed-writer tests; corrected published generator documentation and documented middleware-only raw sinks. All 270 SDK and 299 generator tests, scoped MoonBit checks/info/fmt, rebuilt applications and fixture, the real executor integration, Rust fmt/clippy, shellcheck, and whitespace checks pass. Awaiting revised Oracle approval. |
 | 2026-09-03 | P9b | Complete | Oracle's follow-up review found all three blockers resolved and returned `APPROVED`; no concrete P9b blockers remain. |
+| 2026-09-03 | P9c | In progress | Adding a TypeScript tool-only stream error contract so all four `byte-stream-failure` variants survive caller/provider adapters while unknown JavaScript exceptions remain generic `failed` terminals. |
+| 2026-09-03 | P9c | Awaiting Oracle approval | Added the public `ToolStreamError`, preserved every typed terminal through all caller/provider adapters, retained generic fallback only for unknown JavaScript exceptions, and added a real provider-to-caller `resource-exhausted` round trip. All 721 SDK tests, SDK/template/fixture builds, WASM validation, executor integration, lint, formatting, clippy, and whitespace checks pass. |
+| 2026-09-03 | P9c | Complete | Oracle reviewed the public API, all four adapter directions, error identity, result/stdout independence, cleanup, and the full unit/integration matrix, found no blockers, and returned `APPROVED`. |
 
 ## Definition of done
 

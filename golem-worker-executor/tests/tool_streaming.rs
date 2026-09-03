@@ -5074,6 +5074,17 @@ async fn typescript_generated_client_streams_live(
     assert_eq!(evidence.output, b"ts-marker:typescript-live");
     assert_eq!(evidence.bytes_read, 15);
 
+    let failure: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "typedStdoutFailure",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(failure, "resource-exhausted");
+
     Ok(())
 }
 

@@ -4,6 +4,7 @@ import {
   method,
   s,
   toolDefinition,
+  ToolStreamError,
 } from "@golemcloud/golem-ts-sdk";
 import { z } from "zod/v4";
 
@@ -27,6 +28,10 @@ const Caller = defineAgent({
     markerBeforeEof: method({
       input: { payload: s.bytes() },
       returns: Evidence,
+    }),
+    typedStdoutFailure: method({
+      input: {},
+      returns: z.string(),
     }),
   },
 });
@@ -82,6 +87,30 @@ Caller.implement({
         offset += chunk.byteLength;
       }
       return { output, bytesRead };
+    },
+    async typedStdoutFailure() {
+      const stdin = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close();
+        },
+      });
+      const invocation = client(streamingTool)["ts-streaming"]({
+        mode: "resource-exhausted",
+        stdin,
+      });
+      const [result, stdout] = await Promise.allSettled([
+        invocation.result,
+        invocation.stdout.getReader().read(),
+      ]);
+      if (result.status === "rejected") throw result.reason;
+      if (result.value !== 0n) {
+        throw new Error(`Unexpected structured result ${result.value}`);
+      }
+      if (stdout.status === "fulfilled") {
+        throw new Error("Expected typed stdout failure");
+      }
+      if (!(stdout.reason instanceof ToolStreamError)) throw stdout.reason;
+      return stdout.reason.failure.tag;
     },
   },
 });

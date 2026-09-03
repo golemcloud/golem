@@ -16,6 +16,22 @@ import type { ByteStreamFailure, ByteStreamItem } from 'golem:tool/host@0.1.0';
 
 export type ToolInputStream = ReadableStream<Uint8Array>;
 
+export class ToolStreamError extends Error {
+  readonly failure: ByteStreamFailure;
+
+  constructor(failure: ByteStreamFailure) {
+    super(`tool stream failed: ${streamFailureMessage(failure)}`);
+    this.name = 'ToolStreamError';
+    this.failure = failure;
+  }
+}
+
+export function toolStreamFailureFromError(error: unknown): ByteStreamFailure {
+  return error instanceof ToolStreamError
+    ? error.failure
+    : { tag: 'failed', val: error instanceof Error ? error.message : String(error) };
+}
+
 export type SettledToolResult<Result> =
   | { readonly status: 'fulfilled'; readonly value: Result }
   | { readonly status: 'rejected'; readonly reason: unknown };
@@ -104,7 +120,7 @@ function readableToolStdout(source: AsyncIterable<ByteStreamItem>): ReadableStre
       const next = await iterator.next();
       if (next.done) return controller.close();
       if (next.value.tag === 'err') {
-        controller.error(new Error(`tool stdout failed: ${streamFailureMessage(next.value.val)}`));
+        controller.error(new ToolStreamError(next.value.val));
         return;
       }
       if (next.value.val.byteLength === 0) {

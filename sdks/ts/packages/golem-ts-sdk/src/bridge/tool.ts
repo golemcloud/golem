@@ -20,6 +20,7 @@ import {
 import {
   mapSettledToolResult,
   settleToolResult,
+  toolStreamFailureFromError,
   type SettledToolResult,
   type ToolInputStream,
 } from '../internal/tool/startedToolInvocation';
@@ -29,6 +30,7 @@ export {
   resultFromSettledToolResult,
   settleToolResult,
   startedToolInvocation,
+  ToolStreamError,
   type SettledToolResult,
   type StartedToolInvocation,
   type ToolInputStream,
@@ -110,7 +112,7 @@ async function pumpToolStdin(
       await writer.write(next.value.value);
     }
   } catch (error) {
-    const reason: ByteStreamFailure = { tag: 'failed', val: errorMessage(error) };
+    const reason: ByteStreamFailure = toolStreamFailureFromError(error);
     try {
       await writer.fail(reason);
     } catch {
@@ -222,8 +224,5 @@ export function splitToolRpcError<Declared>(
   if (error.tag !== 'remote-tool-error' || error.val.tag !== 'custom-error')
     return { tag: 'rpc', error };
   return { tag: 'tool', error: decodeCustomError(typedSchemaValueFromWit(error.val.val)) };
-}
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 export type { RpcError, ToolError };

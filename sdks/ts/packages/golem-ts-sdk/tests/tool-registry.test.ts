@@ -16,6 +16,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod/v4';
 import {
   KeyValue,
+  ToolStreamError,
   c,
   command,
   err,
@@ -29,6 +30,14 @@ import { ToolRegistry } from '../src/internal/registry/toolRegistry';
 import { CanonicalInputModel } from '../src/internal/tool';
 import { t, typedSchemaValueFromWit, typedSchemaValueToWit, v } from '../src/internal/schema-model';
 import { tool } from '../src';
+import type { ByteStreamFailure } from 'golem:tool/host@0.1.0';
+
+const streamFailures = [
+  { tag: 'cancelled' },
+  { tag: 'abandoned' },
+  { tag: 'resource-exhausted' },
+  { tag: 'failed', val: 'source failed' },
+] satisfies ByteStreamFailure[];
 
 beforeEach(() => {
   ToolRegistry.clearForTests();
@@ -1206,6 +1215,33 @@ describe('tool guest exports', () => {
       expect(iteratorReturn).toHaveBeenCalledOnce();
     });
 
+    it.each(streamFailures)('preserves the $tag stdin failure for the handler', async (failure) => {
+      async function* failedInput() {
+        yield { tag: 'err' as const, val: failure };
+      }
+      let received: unknown;
+      toolDefinition('failed-stdin')
+        .body((body) => body.stdin({ required: true }).returns(z.void()))
+        .implement({
+          'failed-stdin': async (_, context) => {
+            try {
+              await context.stdin.getReader().read();
+            } catch (error) {
+              received = error;
+            }
+            return ok(undefined);
+          },
+        });
+
+      await expect(
+        tool.invoke('failed-stdin', [], invocationInput('failed-stdin'), failedInput(), undefined, {
+          tag: 'anonymous',
+        }),
+      ).resolves.toEqual({ result: undefined });
+      expect(received).toBeInstanceOf(ToolStreamError);
+      expect(received).toMatchObject({ failure });
+    });
+
     it('writes handler stdout bytes through the supplied endpoint', async () => {
       toolDefinition('write-stdout')
         .body((body) => body.stdout({ required: true }).returns(z.void()))
@@ -1304,6 +1340,35 @@ describe('tool guest exports', () => {
       expect(output.fail).toHaveBeenCalledWith({ tag: 'failed', val: reason.message });
       expect(output.finish).not.toHaveBeenCalled();
     });
+
+    it.each(streamFailures)(
+      'preserves an explicitly typed $tag stdout failure',
+      async (failure) => {
+        toolDefinition('typed-abort-stdout')
+          .body((body) => body.stdout({ required: true }).returns(z.void()))
+          .implement({
+            'typed-abort-stdout': async (_, context) => {
+              await context.stdout.getWriter().abort(new ToolStreamError(failure));
+              return ok(undefined);
+            },
+          });
+
+        const output = stdoutWriter();
+        await expect(
+          tool.invoke(
+            'typed-abort-stdout',
+            [],
+            invocationInput('typed-abort-stdout'),
+            undefined,
+            output,
+            { tag: 'anonymous' },
+          ),
+        ).resolves.toEqual({ result: undefined });
+        expect(output.fail).toHaveBeenCalledOnce();
+        expect(output.fail).toHaveBeenCalledWith(failure);
+        expect(output.finish).not.toHaveBeenCalled();
+      },
+    );
 
     it('preserves an explicitly failed stdout alongside a declared tool error', async () => {
       const reason = new Error('handler aborted stdout');

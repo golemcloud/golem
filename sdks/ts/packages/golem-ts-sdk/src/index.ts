@@ -43,6 +43,7 @@ import {
 } from './internal/tool/invocationResult';
 import { closeAsyncIterable } from './internal/tool/asyncIterable';
 import { awaitAbortable, throwIfAborted } from './internal/pollableUtils';
+import { ToolStreamError, toolStreamFailureFromError } from './internal/tool/startedToolInvocation';
 import './schema/zod';
 import './schema/valibot';
 import './schema/arktype';
@@ -185,6 +186,7 @@ export * from './rdbms';
 export * as http from './http';
 export * as bridge from './bridge';
 export type { StartedToolInvocation } from './bridge/tool';
+export { ToolStreamError } from './internal/tool/startedToolInvocation';
 
 let resolvedAgent: ResolvedAgent | undefined = undefined;
 let initializationPrincipal: Principal | undefined = undefined;
@@ -484,9 +486,7 @@ async function pullInput(
     }
 
     if (next.value.tag === 'err') {
-      throw new Error(
-        `tool stdin failed: ${next.value.val.tag === 'failed' ? next.value.val.val : next.value.val.tag}`,
-      );
+      throw new ToolStreamError(next.value.val);
     }
     if (next.value.val.byteLength === 0) throw new TypeError('tool stdin yielded an empty chunk');
     controller.enqueue(next.value.val);
@@ -546,7 +546,7 @@ function createToolOutputStream(writer: ToolStdoutWriter): ToolOutputStreamAdapt
     if (!terminated) {
       terminated = true;
       try {
-        await writer.fail({ tag: 'failed', val: errorMessage(abortReason) });
+        await writer.fail(toolStreamFailureFromError(abortReason));
       } catch {
         // An endpoint terminal selected by the handler remains authoritative.
       }

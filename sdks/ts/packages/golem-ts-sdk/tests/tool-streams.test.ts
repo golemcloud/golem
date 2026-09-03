@@ -2,7 +2,15 @@
 // Licensed under the Golem Source License v1.1
 
 import { describe, expect, it, vi } from 'vitest';
-import { settleToolResult, startedToolInvocation } from '../src/bridge/tool';
+import type { ByteStreamFailure } from 'golem:tool/host@0.1.0';
+import { settleToolResult, startedToolInvocation, ToolStreamError } from '../src/bridge/tool';
+
+const streamFailures = [
+  { tag: 'cancelled' },
+  { tag: 'abandoned' },
+  { tag: 'resource-exhausted' },
+  { tag: 'failed', val: 'source failed' },
+] satisfies ByteStreamFailure[];
 
 async function* chunks(...values: Uint8Array[]) {
   for (const value of values) yield { tag: 'ok' as const, val: value };
@@ -85,18 +93,18 @@ describe('started tool invocations', () => {
     });
   });
 
-  it('surfaces a terminal attachment failure', async () => {
+  it.each(streamFailures)('preserves the $tag stdout attachment failure', async (failure) => {
     async function* failed() {
-      yield { tag: 'err' as const, val: { tag: 'cancelled' as const } };
+      yield { tag: 'err' as const, val: failure };
     }
     const invocation = startedToolInvocation(
       failed(),
       settleToolResult(Promise.resolve(undefined)),
       vi.fn(),
     );
-    await expect(invocation.stdout.getReader().read()).rejects.toThrow(
-      'tool stdout failed: cancelled',
-    );
+    const read = invocation.stdout.getReader().read();
+    await expect(read).rejects.toBeInstanceOf(ToolStreamError);
+    await expect(read).rejects.toMatchObject({ failure });
   });
 
   it('keeps stdout consumable after a structured result failure', async () => {
