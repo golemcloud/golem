@@ -62,8 +62,8 @@ use crate::durable_host::{
     AtomicRegionLease, BeginReplayToLive, DurableScopeKind, DurableWorkerCtx, FinishReplayToLive,
     PendingReplayToLive, PublicDurableWorkerState,
 };
-use crate::services::HasWorker;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, PendingUpload};
+use crate::services::{HasShutdownToken, HasWorker};
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use std::fmt::Display;
 

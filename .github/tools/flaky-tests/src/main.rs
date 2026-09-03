@@ -1,11 +1,11 @@
 use flaky_tests::{
-    ArtifactContext, ISSUE_MARKER, ISSUE_TITLE, Observation, aggregate, attempt_from_artifact_name,
-    is_report_artifact, observations_from_archive, render_report, select_job_url,
+    ArtifactContext, ISSUE_MARKER, ISSUE_TITLE, Observation, aggregate, consolidated_artifact_name,
+    observations_from_archive, render_report, select_job_url,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -24,7 +24,6 @@ struct WorkflowRun {
     #[serde(default = "default_attempt")]
     run_attempt: u32,
     created_at: String,
-    run_started_at: Option<String>,
     head_branch: Option<String>,
     html_url: String,
 }
@@ -45,6 +44,12 @@ struct Artifact {
     created_at: String,
     #[serde(default)]
     expired: bool,
+    workflow_run: ArtifactWorkflowRun,
+}
+
+#[derive(Clone, Deserialize)]
+struct ArtifactWorkflowRun {
+    id: u64,
 }
 
 #[derive(Deserialize)]
@@ -88,7 +93,7 @@ struct Issues {
 struct ArtifactWork {
     run: WorkflowRun,
     artifact: Artifact,
-    attempts: Arc<BTreeMap<u32, WorkflowRun>>,
+    attempt: u32,
 }
 
 struct Args {
@@ -106,19 +111,11 @@ struct GitHub {
     repo: String,
 }
 
-impl GitHub {
-    fn read(&self, endpoint: &str, fields: &[(&str, String)]) -> Result<Vec<u8>> {
-        let mut args = vec![
-            "api".to_string(),
-            "--method".to_string(),
-            "GET".to_string(),
-            endpoint.to_string(),
-        ];
-        for (name, value) in fields {
-            args.extend(["-f".to_string(), format!("{name}={value}")]);
-        }
-        command_output(&args, None, 3).map(|output| output.stdout)
-    }
+trait GitHubApi: Sync {
+    fn repo(&self) -> &str;
+    fn read(&self, endpoint: &str, fields: &[(&str, String)]) -> Result<Vec<u8>>;
+    fn write(&self, endpoint: &str, method: &str, value: &Value) -> Result<Vec<u8>>;
+    fn graphql(&self, query: &str, node_id: &str, write: bool) -> Result<Value>;
 
     fn read_json<T: DeserializeOwned>(
         &self,
@@ -134,6 +131,63 @@ impl GitHub {
         method: &str,
         value: &Value,
     ) -> Result<T> {
+        Ok(serde_json::from_slice(
+            &self.write(endpoint, method, value)?,
+        )?)
+    }
+
+    fn download_artifact(&self, id: u64) -> Result<Vec<u8>> {
+        self.read(
+            &format!("/repos/{}/actions/artifacts/{id}/zip", self.repo()),
+            &[],
+        )
+    }
+
+    fn paginated<T, F>(
+        &self,
+        endpoint: &str,
+        mut extract: F,
+        fields: &[(&str, String)],
+    ) -> Result<Vec<T>>
+    where
+        T: DeserializeOwned,
+        F: FnMut(Value) -> Result<Vec<T>>,
+    {
+        let mut result = Vec::new();
+        for page in 1.. {
+            let mut page_fields = fields.to_vec();
+            page_fields.extend([("per_page", "100".to_string()), ("page", page.to_string())]);
+            let value: Value = self.read_json(endpoint, &page_fields)?;
+            let values = extract(value)?;
+            let count = values.len();
+            result.extend(values);
+            if count < 100 {
+                return Ok(result);
+            }
+        }
+        unreachable!()
+    }
+}
+
+impl GitHubApi for GitHub {
+    fn repo(&self) -> &str {
+        &self.repo
+    }
+
+    fn read(&self, endpoint: &str, fields: &[(&str, String)]) -> Result<Vec<u8>> {
+        let mut args = vec![
+            "api".to_string(),
+            "--method".to_string(),
+            "GET".to_string(),
+            endpoint.to_string(),
+        ];
+        for (name, value) in fields {
+            args.extend(["-f".to_string(), format!("{name}={value}")]);
+        }
+        command_output(&args, None, 3).map(|output| output.stdout)
+    }
+
+    fn write(&self, endpoint: &str, method: &str, value: &Value) -> Result<Vec<u8>> {
         let args = [
             "api".to_string(),
             "--method".to_string(),
@@ -144,35 +198,7 @@ impl GitHub {
         ];
         let input = serde_json::to_vec(value)?;
         let output = command_output(&args, Some(&input), 0)?;
-        Ok(serde_json::from_slice(&output.stdout)?)
-    }
-
-    fn download_artifact(&self, id: u64) -> Result<Vec<u8>> {
-        self.read(
-            &format!("/repos/{}/actions/artifacts/{id}/zip", self.repo),
-            &[],
-        )
-    }
-
-    fn paginated<T, F>(&self, endpoint: &str, mut extract: F) -> Result<Vec<T>>
-    where
-        T: DeserializeOwned,
-        F: FnMut(Value) -> Result<Vec<T>>,
-    {
-        let mut result = Vec::new();
-        for page in 1.. {
-            let value: Value = self.read_json(
-                endpoint,
-                &[("per_page", "100".to_string()), ("page", page.to_string())],
-            )?;
-            let values = extract(value)?;
-            let count = values.len();
-            result.extend(values);
-            if count < 100 {
-                return Ok(result);
-            }
-        }
-        unreachable!()
+        Ok(output.stdout)
     }
 
     fn graphql(&self, query: &str, node_id: &str, write: bool) -> Result<Value> {
@@ -219,6 +245,12 @@ fn command_output(args: &[String], input: Option<&[u8]>, retries: u32) -> Result
         }
         last_error = String::from_utf8_lossy(&output.stderr).trim().to_string();
         if attempt < retries {
+            eprintln!(
+                "GitHub request failed; retrying (attempt={}/{}, error={})",
+                attempt + 1,
+                retries + 1,
+                last_error
+            );
             thread::sleep(Duration::from_secs(1 << attempt));
         }
     }
@@ -280,7 +312,7 @@ fn parse_args() -> Result<Args> {
     })
 }
 
-fn collect_runs(github: &GitHub, args: &Args, now: u64) -> Result<Vec<WorkflowRun>> {
+fn collect_runs<G: GitHubApi>(github: &G, args: &Args, now: u64) -> Result<Vec<WorkflowRun>> {
     if !args.run_ids.is_empty() {
         return args
             .run_ids
@@ -322,64 +354,46 @@ fn collect_runs(github: &GitHub, args: &Args, now: u64) -> Result<Vec<WorkflowRu
     Ok(runs.into_values().collect())
 }
 
-fn collect_attempts(github: &GitHub, run: &WorkflowRun) -> Result<BTreeMap<u32, WorkflowRun>> {
-    if run.run_attempt == 1 {
-        return Ok(BTreeMap::from([(1, run.clone())]));
-    }
-    (1..=run.run_attempt)
-        .map(|attempt| {
-            let endpoint = format!(
-                "/repos/{}/actions/runs/{}/attempts/{attempt}",
-                github.repo, run.id
-            );
-            Ok((attempt, github.read_json(&endpoint, &[])?))
-        })
-        .collect()
-}
-
-fn collect_artifacts(github: &GitHub, runs: &[WorkflowRun]) -> Result<Vec<ArtifactWork>> {
+fn collect_artifacts<G: GitHubApi>(github: &G, runs: &[WorkflowRun]) -> Result<Vec<ArtifactWork>> {
+    let runs_by_id = runs
+        .iter()
+        .map(|run| (run.id, run))
+        .collect::<HashMap<_, _>>();
+    let max_attempt = runs.iter().map(|run| run.run_attempt).max().unwrap_or(1);
     let mut work = Vec::new();
-    for run in runs {
-        let attempts = Arc::new(collect_attempts(github, run)?);
-        let endpoint = format!("/repos/{}/actions/runs/{}/artifacts", github.repo, run.id);
-        let artifacts = github.paginated(&endpoint, |value| {
-            Ok(serde_json::from_value::<Artifacts>(value)?.artifacts)
-        })?;
-        work.extend(
-            artifacts
-                .into_iter()
-                .filter(|artifact| !artifact.expired && is_report_artifact(&artifact.name))
-                .map(|artifact| ArtifactWork {
-                    run: run.clone(),
+    let endpoint = format!("/repos/{}/actions/artifacts", github.repo());
+    for attempt in 1..=max_attempt {
+        let name = consolidated_artifact_name(attempt);
+        let artifacts = github.paginated(
+            &endpoint,
+            |value| Ok(serde_json::from_value::<Artifacts>(value)?.artifacts),
+            &[("name", name.clone())],
+        )?;
+        for artifact in artifacts {
+            if artifact.expired || artifact.name != name {
+                continue;
+            }
+            if let Some(run) = runs_by_id.get(&artifact.workflow_run.id) {
+                work.push(ArtifactWork {
+                    run: (*run).clone(),
                     artifact,
-                    attempts: attempts.clone(),
-                }),
+                    attempt,
+                });
+            }
+        }
+        eprintln!(
+            "Scanned consolidated artifacts (attempt={attempt}/{max_attempt}, reports={})",
+            work.len()
         );
     }
     Ok(work)
 }
 
-fn infer_attempt(artifact: &Artifact, attempts: &BTreeMap<u32, WorkflowRun>) -> u32 {
-    if let Some(attempt) = attempt_from_artifact_name(&artifact.name) {
-        return attempt;
-    }
-    attempts
-        .iter()
-        .filter_map(|(number, run)| {
-            run.run_started_at
-                .as_ref()
-                .filter(|started| *started <= &artifact.created_at)
-                .map(|started| (*number, started))
-        })
-        .max_by_key(|(_, started)| *started)
-        .map(|(number, _)| number)
-        .unwrap_or(1)
-}
-
-fn download_reports(github: &GitHub, work: Vec<ArtifactWork>) -> Result<Vec<Observation>> {
+fn download_reports<G: GitHubApi>(github: &G, work: Vec<ArtifactWork>) -> Result<Vec<Observation>> {
+    let total = work.len();
     let queue = Arc::new(Mutex::new(VecDeque::from(work)));
     let (sender, receiver) = mpsc::channel();
-    thread::scope(|scope| {
+    thread::scope(|scope| -> Result<Vec<Observation>> {
         for _ in 0..8 {
             let queue = queue.clone();
             let sender = sender.clone();
@@ -394,7 +408,7 @@ fn download_reports(github: &GitHub, work: Vec<ArtifactWork>) -> Result<Vec<Obse
                         .and_then(|bytes| {
                             let context = ArtifactContext {
                                 run_id: work.run.id,
-                                attempt: infer_attempt(&work.artifact, &work.attempts),
+                                attempt: work.attempt,
                                 branch: work.run.head_branch.unwrap_or_default(),
                                 seen_at: work.artifact.created_at,
                                 artifact_name: work.artifact.name,
@@ -409,30 +423,45 @@ fn download_reports(github: &GitHub, work: Vec<ArtifactWork>) -> Result<Vec<Obse
             });
         }
         drop(sender);
-    });
 
-    let mut observations = Vec::new();
-    for result in receiver {
-        observations.extend(result?);
-    }
-    Ok(observations)
+        let mut observations = Vec::new();
+        for (index, result) in receiver.into_iter().enumerate() {
+            observations.extend(result?);
+            if (index + 1) % 25 == 0 || index + 1 == total {
+                eprintln!(
+                    "Downloaded test reports (completed={}/{}, observations={})",
+                    index + 1,
+                    total,
+                    observations.len()
+                );
+            }
+        }
+        Ok(observations)
+    })
 }
 
-fn add_job_links(github: &GitHub, observations: &mut [Observation]) -> Result<()> {
+fn add_job_links<G: GitHubApi>(
+    github: &G,
+    observations: &mut [Observation],
+    candidates: &HashSet<String>,
+) -> Result<()> {
     let mut jobs_by_attempt = HashMap::<(u64, u32), Vec<Job>>::new();
-    for observation in observations
-        .iter_mut()
-        .filter(|observation| observation.status == "failed")
-    {
+    for observation in observations.iter_mut().filter(|observation| {
+        observation.status == "failed" && candidates.contains(&observation.name)
+    }) {
         let key = (observation.run_id, observation.attempt);
         if let std::collections::hash_map::Entry::Vacant(entry) = jobs_by_attempt.entry(key) {
             let endpoint = format!(
                 "/repos/{}/actions/runs/{}/attempts/{}/jobs",
-                github.repo, observation.run_id, observation.attempt
+                github.repo(),
+                observation.run_id,
+                observation.attempt
             );
-            let jobs = github.paginated(&endpoint, |value| {
-                Ok(serde_json::from_value::<Jobs>(value)?.jobs)
-            })?;
+            let jobs = github.paginated(
+                &endpoint,
+                |value| Ok(serde_json::from_value::<Jobs>(value)?.jobs),
+                &[],
+            )?;
             entry.insert(jobs);
         }
         let fallback = format!("{}/attempts/{}", observation.run_url, observation.attempt);
@@ -447,13 +476,13 @@ fn add_job_links(github: &GitHub, observations: &mut [Observation]) -> Result<()
     Ok(())
 }
 
-fn find_issue(github: &GitHub) -> Result<Option<Issue>> {
+fn find_issue<G: GitHubApi>(github: &G) -> Result<Option<Issue>> {
     let response: Issues = github.read_json(
         "/search/issues",
         &[
             (
                 "q",
-                format!("repo:{} is:issue in:title \"{ISSUE_TITLE}\"", github.repo),
+                format!("repo:{} is:issue in:title \"{ISSUE_TITLE}\"", github.repo()),
             ),
             ("per_page", "100".to_string()),
         ],
@@ -476,20 +505,14 @@ fn find_issue(github: &GitHub) -> Result<Option<Issue>> {
     Ok(exact)
 }
 
-fn ensure_label(github: &GitHub) -> Result<()> {
-    let endpoint = format!("/repos/{}/labels/flaky-test", github.repo);
-    let args = vec![
-        "api".to_string(),
-        "--method".to_string(),
-        "GET".to_string(),
-        endpoint,
-    ];
-    let output = command_output(&args, None, 3);
+fn ensure_label<G: GitHubApi>(github: &G) -> Result<()> {
+    let endpoint = format!("/repos/{}/labels/flaky-test", github.repo());
+    let output = github.read(&endpoint, &[]);
     match output {
         Ok(_) => Ok(()),
         Err(error) if error.to_string().contains("HTTP 404") => {
             let _: Value = github.write_json(
-                &format!("/repos/{}/labels", github.repo),
+                &format!("/repos/{}/labels", github.repo()),
                 "POST",
                 &json!({
                     "name": "flaky-test",
@@ -503,7 +526,7 @@ fn ensure_label(github: &GitHub) -> Result<()> {
     }
 }
 
-fn pin_issue(github: &GitHub, issue: &Issue) -> Result<()> {
+fn pin_issue<G: GitHubApi>(github: &G, issue: &Issue) -> Result<()> {
     let query = "query($id:ID!){node(id:$id){... on Issue{isPinned}}}";
     let value = github.graphql(query, &issue.node_id, false)?;
     if value
@@ -518,7 +541,7 @@ fn pin_issue(github: &GitHub, issue: &Issue) -> Result<()> {
     Ok(())
 }
 
-fn upsert_issue(github: &GitHub, existing: Option<Issue>, body: &str) -> Result<String> {
+fn upsert_issue<G: GitHubApi>(github: &G, existing: Option<Issue>, body: &str) -> Result<String> {
     ensure_label(github)?;
     let issue: Issue = if let Some(existing) = existing {
         let mut labels = existing
@@ -528,7 +551,7 @@ fn upsert_issue(github: &GitHub, existing: Option<Issue>, body: &str) -> Result<
             .collect::<HashSet<_>>();
         labels.insert("flaky-test".to_string());
         github.write_json(
-            &format!("/repos/{}/issues/{}", github.repo, existing.number),
+            &format!("/repos/{}/issues/{}", github.repo(), existing.number),
             "PATCH",
             &json!({
                 "title": ISSUE_TITLE,
@@ -539,7 +562,7 @@ fn upsert_issue(github: &GitHub, existing: Option<Issue>, body: &str) -> Result<
         )?
     } else {
         github.write_json(
-            &format!("/repos/{}/issues", github.repo),
+            &format!("/repos/{}/issues", github.repo()),
             "POST",
             &json!({"title": ISSUE_TITLE, "body": body, "labels": ["flaky-test"]}),
         )?
@@ -579,26 +602,56 @@ fn format_timestamp(seconds: u64) -> String {
     )
 }
 
-fn main() -> Result<()> {
-    let args = parse_args()?;
-    let github = GitHub {
-        repo: args.repo.clone(),
-    };
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    let runs = collect_runs(&github, &args, now)?;
-    let work = collect_artifacts(&github, &runs)?;
+fn generate_report<G: GitHubApi>(
+    github: &G,
+    args: &Args,
+    now: u64,
+) -> Result<(String, Option<Issue>)> {
+    eprintln!(
+        "Discovering CI runs (repository={}, workflow={}, window_days={})",
+        args.repo, args.workflow, args.days
+    );
+    let runs = collect_runs(github, args, now)?;
+    eprintln!("Discovered CI runs (runs={})", runs.len());
+    eprintln!("Discovering test-report artifacts");
+    let work = collect_artifacts(github, &runs)?;
     let artifact_count = work.len();
-    let mut observations = download_reports(&github, work)?;
-    add_job_links(&github, &mut observations)?;
+    let analyzed_run_count = work
+        .iter()
+        .map(|work| work.run.id)
+        .collect::<HashSet<_>>()
+        .len();
+    eprintln!("Discovered test-report artifacts (reports={artifact_count})");
+    eprintln!("Downloading and parsing test reports (workers=8)");
+    let mut observations = download_reports(github, work)?;
+    eprintln!("Parsed test reports (observations={})", observations.len());
+    let candidate_names = aggregate(observations.clone())
+        .into_iter()
+        .map(|test| test.name)
+        .collect::<HashSet<_>>();
+    eprintln!(
+        "Resolving failing job links (candidate_tests={})",
+        candidate_names.len()
+    );
+    add_job_links(github, &mut observations, &candidate_names)?;
+    eprintln!("Aggregating flaky-test signals");
     let candidates = aggregate(observations);
+    let active_count = candidates.iter().filter(|test| test.is_active()).count();
+    eprintln!(
+        "Aggregated flaky-test signals (active={}, recently_resolved={})",
+        active_count,
+        candidates.len() - active_count
+    );
     let existing = if args.update_issue {
-        find_issue(&github)?
+        eprintln!("Looking up the known-flaky-tests issue");
+        find_issue(github)?
     } else {
         None
     };
     let generated = format_timestamp(now).replace('T', " ").replace('Z', " UTC");
     let body = render_report(
         &candidates,
+        analyzed_run_count,
         runs.len(),
         artifact_count,
         args.days,
@@ -609,23 +662,196 @@ fn main() -> Result<()> {
             .unwrap_or_default(),
         args.limit,
     );
-    if let Some(output) = args.output {
+    Ok((body, existing))
+}
+
+fn main() -> Result<()> {
+    let args = parse_args()?;
+    let github = GitHub {
+        repo: args.repo.clone(),
+    };
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let (body, existing) = generate_report(&github, &args, now)?;
+    if let Some(output) = &args.output {
         fs::write(output, &body)?;
     } else {
         print!("{body}");
     }
-    if let Some(summary) = args.summary {
+    if let Some(summary) = &args.summary {
         fs::write(summary, &body)?;
     }
     if args.update_issue {
+        eprintln!("Updating and pinning the known-flaky-tests issue");
         eprintln!("Updated {}", upsert_issue(&github, existing, &body)?);
     }
+    eprintln!("Flaky-test report completed");
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+
+    struct FakeGitHub {
+        reads: Mutex<Vec<String>>,
+        writes: Mutex<Vec<(String, String)>>,
+        graphql_writes: Mutex<usize>,
+        first_archive: Vec<u8>,
+        second_archive: Vec<u8>,
+        existing_issue: bool,
+        label_exists: bool,
+        pinned: bool,
+    }
+
+    impl FakeGitHub {
+        fn new(existing_issue: bool, label_exists: bool, pinned: bool) -> Self {
+            Self {
+                reads: Mutex::new(Vec::new()),
+                writes: Mutex::new(Vec::new()),
+                graphql_writes: Mutex::new(0),
+                first_archive: report_archive(
+                    "unit-tests-report-attempt1",
+                    json!([
+                        {"name": "suite::flip", "status": "failed", "duration": 10},
+                        {"name": "suite::retry", "status": "passed", "duration": 20, "retries": 2}
+                    ]),
+                ),
+                second_archive: report_archive(
+                    "unit-tests-report-attempt2",
+                    json!([
+                        {"name": "suite::flip", "status": "passed", "duration": 30},
+                        {"name": "suite::retry", "status": "passed", "duration": 40}
+                    ]),
+                ),
+                existing_issue,
+                label_exists,
+                pinned,
+            }
+        }
+
+        fn issue_json() -> Value {
+            json!({
+                "number": 42,
+                "title": ISSUE_TITLE,
+                "body": ISSUE_MARKER,
+                "node_id": "issue-node",
+                "html_url": "https://example.test/issues/42",
+                "labels": [{"name": "triage"}]
+            })
+        }
+    }
+
+    impl GitHubApi for FakeGitHub {
+        fn repo(&self) -> &str {
+            "test/repo"
+        }
+
+        fn read(&self, endpoint: &str, fields: &[(&str, String)]) -> Result<Vec<u8>> {
+            self.reads.lock().unwrap().push(endpoint.to_string());
+            let value = match endpoint {
+                "/repos/test/repo/actions/runs/1" => json!({
+                    "id": 1,
+                    "run_attempt": 2,
+                    "created_at": "2026-09-03T10:00:00Z",
+                    "head_branch": "main",
+                    "html_url": "https://example.test/runs/1"
+                }),
+                "/repos/test/repo/actions/artifacts" => {
+                    let name = fields
+                        .iter()
+                        .find(|(key, _)| *key == "name")
+                        .map(|(_, value)| value.as_str())
+                        .unwrap();
+                    let (id, created_at) = match name {
+                        "ci-test-reports-attempt1" => (11, "2026-09-03T10:30:00Z"),
+                        "ci-test-reports-attempt2" => (12, "2026-09-03T11:30:00Z"),
+                        _ => return Err(other_error(format!("unexpected artifact name {name}"))),
+                    };
+                    json!({"artifacts": [{
+                        "id": id,
+                        "name": name,
+                        "created_at": created_at,
+                        "expired": false,
+                        "workflow_run": {"id": 1}
+                    }]})
+                }
+                "/repos/test/repo/actions/artifacts/11/zip" => {
+                    return Ok(self.first_archive.clone());
+                }
+                "/repos/test/repo/actions/artifacts/12/zip" => {
+                    return Ok(self.second_archive.clone());
+                }
+                "/repos/test/repo/actions/runs/1/attempts/1/jobs"
+                | "/repos/test/repo/actions/runs/1/attempts/2/jobs" => json!({"jobs": [{
+                    "name": "unit-tests-and-checks",
+                    "html_url": "https://example.test/jobs/unit-tests"
+                }]}),
+                "/search/issues" => json!({
+                    "items": if self.existing_issue { vec![Self::issue_json()] } else { vec![] }
+                }),
+                "/repos/test/repo/labels/flaky-test" if self.label_exists => {
+                    json!({"name": "flaky-test"})
+                }
+                "/repos/test/repo/labels/flaky-test" => {
+                    return Err(other_error("gh failed (HTTP 404)".to_string()));
+                }
+                _ => return Err(other_error(format!("unexpected read: {endpoint}"))),
+            };
+            Ok(serde_json::to_vec(&value)?)
+        }
+
+        fn write(&self, endpoint: &str, method: &str, _value: &Value) -> Result<Vec<u8>> {
+            self.writes
+                .lock()
+                .unwrap()
+                .push((method.to_string(), endpoint.to_string()));
+            let value = if endpoint.ends_with("/labels") {
+                json!({})
+            } else {
+                Self::issue_json()
+            };
+            Ok(serde_json::to_vec(&value)?)
+        }
+
+        fn graphql(&self, _query: &str, _node_id: &str, write: bool) -> Result<Value> {
+            if write {
+                *self.graphql_writes.lock().unwrap() += 1;
+                Ok(json!({"data": {"pinIssue": {"issue": {"id": "issue-node"}}}}))
+            } else {
+                Ok(json!({"data": {"node": {"isPinned": self.pinned}}}))
+            }
+        }
+    }
+
+    fn report_archive(artifact_name: &str, tests: Value) -> Vec<u8> {
+        let mut output = Cursor::new(Vec::new());
+        {
+            let mut archive = zip::ZipWriter::new(&mut output);
+            archive
+                .start_file(
+                    format!("{artifact_name}/ctrf-report.json"),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+            write!(archive, "{}", json!({"results": {"tests": tests}})).unwrap();
+            archive.finish().unwrap();
+        }
+        output.into_inner()
+    }
+
+    fn test_args(update_issue: bool) -> Args {
+        Args {
+            repo: "test/repo".to_string(),
+            workflow: "ci.yaml".to_string(),
+            days: 30,
+            run_ids: vec![1],
+            limit: 100,
+            output: None,
+            summary: None,
+            update_issue,
+        }
+    }
 
     #[test]
     fn formats_unix_dates() {
@@ -634,26 +860,54 @@ mod tests {
     }
 
     #[test]
-    fn infers_historical_artifact_attempt_from_creation_time() {
-        let artifact = Artifact {
-            id: 1,
-            name: "unit-tests-report".to_string(),
-            created_at: "2026-09-03T11:30:00Z".to_string(),
-            expired: false,
-        };
-        let run = |started: &str| WorkflowRun {
-            id: 1,
-            run_attempt: 2,
-            created_at: "2026-09-03T10:00:00Z".to_string(),
-            run_started_at: Some(started.to_string()),
-            head_branch: Some("main".to_string()),
-            html_url: "https://example.test/runs/1".to_string(),
-        };
-        let attempts = BTreeMap::from([
-            (1, run("2026-09-03T10:00:00Z")),
-            (2, run("2026-09-03T11:00:00Z")),
-        ]);
+    fn exercises_collection_aggregation_and_issue_creation_without_processes() {
+        let github = FakeGitHub::new(false, false, false);
 
-        assert_eq!(infer_attempt(&artifact, &attempts), 2);
+        let (body, existing) = generate_report(&github, &test_args(true), 1_788_480_000).unwrap();
+
+        assert!(existing.is_none());
+        assert!(body.contains("**1 of 1** CI runs"));
+        assert!(body.contains("<code>suite::flip</code> | 7"));
+        assert!(body.contains("<code>suite::retry</code> | 3"));
+        assert!(body.contains("[log 1](https://example.test/jobs/unit-tests)"));
+        assert_eq!(
+            github
+                .reads
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|endpoint| endpoint.as_str() == "/repos/test/repo/actions/artifacts")
+                .count(),
+            2
+        );
+        assert_eq!(
+            upsert_issue(&github, existing, &body).unwrap(),
+            "https://example.test/issues/42"
+        );
+        assert_eq!(
+            github.writes.lock().unwrap().as_slice(),
+            &[
+                ("POST".to_string(), "/repos/test/repo/labels".to_string()),
+                ("POST".to_string(), "/repos/test/repo/issues".to_string())
+            ]
+        );
+        assert_eq!(*github.graphql_writes.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn updates_an_existing_labelled_and_pinned_issue() {
+        let github = FakeGitHub::new(true, true, true);
+        let (body, existing) = generate_report(&github, &test_args(true), 1_788_480_000).unwrap();
+
+        upsert_issue(&github, existing, &body).unwrap();
+
+        assert_eq!(
+            github.writes.lock().unwrap().as_slice(),
+            &[(
+                "PATCH".to_string(),
+                "/repos/test/repo/issues/42".to_string()
+            )]
+        );
+        assert_eq!(*github.graphql_writes.lock().unwrap(), 0);
     }
 }

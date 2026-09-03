@@ -3,9 +3,12 @@ use serde::Deserialize;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
+use std::path::Path;
 
 pub const ISSUE_TITLE: &str = "Known flaky tests";
 pub const ISSUE_MARKER: &str = "<!-- known-flaky-tests:v1 -->";
+pub const CLEAN_RUNS_TO_RESOLVE: usize = 10;
+pub const CONSOLIDATED_REPORT_PREFIX: &str = "ci-test-reports-attempt";
 
 #[derive(Clone, Debug)]
 pub struct Observation {
@@ -44,7 +47,8 @@ pub struct TestStats {
     pub main_failures: u64,
     pub main_failure_runs: HashSet<u64>,
     pub durations: Vec<f64>,
-    pub last_seen: String,
+    pub last_flaky: String,
+    pub clean_runs_since_flaky: usize,
     pub links: Vec<String>,
     pub flips: u64,
 }
@@ -62,6 +66,61 @@ impl TestStats {
         self.flips * 5
             + self.retried_runs.len() as u64 * 3
             + self.main_failure_runs.len() as u64 * 2
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.clean_runs_since_flaky < CLEAN_RUNS_TO_RESOLVE
+    }
+}
+
+#[derive(Default)]
+struct RunEvidence {
+    seen_at: String,
+    statuses: HashMap<u32, HashSet<String>>,
+    retries: u64,
+    main_failure: bool,
+}
+
+impl RunEvidence {
+    fn is_flip(&self) -> bool {
+        let failed = self
+            .statuses
+            .iter()
+            .filter(|(_, statuses)| statuses.contains("failed"))
+            .map(|(attempt, _)| *attempt);
+        let passed = self
+            .statuses
+            .iter()
+            .filter(|(_, statuses)| statuses.contains("passed"))
+            .map(|(attempt, _)| *attempt)
+            .collect::<Vec<_>>();
+        failed.into_iter().any(|failed_attempt| {
+            passed
+                .iter()
+                .any(|passed_attempt| failed_attempt < *passed_attempt)
+        })
+    }
+
+    fn is_flaky_signal(&self) -> bool {
+        self.retries > 0 || self.main_failure || self.is_flip()
+    }
+
+    fn is_clean(&self) -> bool {
+        self.retries == 0
+            && self
+                .statuses
+                .values()
+                .any(|statuses| statuses.contains("passed"))
+            && !self
+                .statuses
+                .values()
+                .any(|statuses| statuses.contains("failed"))
+    }
+
+    fn was_executed(&self) -> bool {
+        self.statuses
+            .values()
+            .any(|statuses| statuses.contains("passed") || statuses.contains("failed"))
     }
 }
 
@@ -98,6 +157,13 @@ pub fn observations_from_archive(
         if !file.name().ends_with(".json") {
             continue;
         }
+        let artifact_name = Path::new(file.name())
+            .components()
+            .next()
+            .and_then(|component| component.as_os_str().to_str())
+            .filter(|name| is_report_artifact(name))
+            .unwrap_or(&context.artifact_name)
+            .to_string();
         let mut json = String::new();
         file.read_to_string(&mut json)
             .map_err(|error| error.to_string())?;
@@ -122,7 +188,7 @@ pub fn observations_from_archive(
                 attempt: context.attempt,
                 branch: context.branch.clone(),
                 seen_at: context.seen_at.clone(),
-                artifact_name: context.artifact_name.clone(),
+                artifact_name: artifact_name.clone(),
                 run_url: context.run_url.clone(),
                 job_url: None,
             });
@@ -139,9 +205,22 @@ pub fn observations_from_archive(
 pub fn aggregate(mut observations: Vec<Observation>) -> Vec<TestStats> {
     observations.sort_by(|left, right| left.seen_at.cmp(&right.seen_at));
     let mut stats = HashMap::<String, TestStats>::new();
-    let mut statuses = HashMap::<(String, u64, u32), HashSet<String>>::new();
+    let mut evidence = HashMap::<(String, u64), RunEvidence>::new();
 
     for observation in observations {
+        let run = evidence
+            .entry((observation.name.clone(), observation.run_id))
+            .or_default();
+        if observation.seen_at > run.seen_at {
+            run.seen_at = observation.seen_at.clone();
+        }
+        run.statuses
+            .entry(observation.attempt)
+            .or_default()
+            .insert(observation.status.clone());
+        run.retries += observation.retries;
+        run.main_failure |= observation.status == "failed" && observation.branch == "main";
+
         let test = stats
             .entry(observation.name.clone())
             .or_insert_with(|| TestStats {
@@ -155,24 +234,14 @@ pub fn aggregate(mut observations: Vec<Observation>) -> Vec<TestStats> {
                 main_failures: 0,
                 main_failure_runs: HashSet::new(),
                 durations: Vec::new(),
-                last_seen: String::new(),
+                last_flaky: String::new(),
+                clean_runs_since_flaky: 0,
                 links: Vec::new(),
                 flips: 0,
             });
         test.observations += 1;
         test.runs.insert(observation.run_id);
         test.durations.push(observation.duration);
-        if observation.seen_at > test.last_seen {
-            test.last_seen = observation.seen_at.clone();
-        }
-        statuses
-            .entry((
-                observation.name.clone(),
-                observation.run_id,
-                observation.attempt,
-            ))
-            .or_default()
-            .insert(observation.status.clone());
 
         if observation.retries > 0 {
             test.retries += observation.retries;
@@ -192,29 +261,31 @@ pub fn aggregate(mut observations: Vec<Observation>) -> Vec<TestStats> {
         }
     }
 
-    let mut attempts = HashMap::<(String, u64), HashMap<u32, HashSet<String>>>::new();
-    for ((name, run_id, attempt), values) in statuses {
-        attempts
-            .entry((name, run_id))
-            .or_default()
-            .insert(attempt, values);
+    for ((name, _), run) in &evidence {
+        let test = stats.get_mut(name).expect("test stats must exist");
+        if run.is_flip() {
+            test.flips += 1;
+        }
+        if run.is_flaky_signal() && run.seen_at > test.last_flaky {
+            test.last_flaky = run.seen_at.clone();
+        }
     }
-    for ((name, _), run_attempts) in attempts {
-        let failed = run_attempts
+
+    for test in stats.values_mut() {
+        let mut later_runs = evidence
             .iter()
-            .filter(|(_, values)| values.contains("failed"))
-            .map(|(attempt, _)| *attempt);
-        let passed = run_attempts
-            .iter()
-            .filter(|(_, values)| values.contains("passed"))
-            .map(|(attempt, _)| *attempt)
+            .filter(|((name, _), run)| {
+                name == &test.name && run.seen_at > test.last_flaky && run.was_executed()
+            })
+            .map(|(_, run)| run)
             .collect::<Vec<_>>();
-        if failed.into_iter().any(|failed_attempt| {
-            passed
-                .iter()
-                .any(|passed_attempt| failed_attempt < *passed_attempt)
-        }) {
-            stats.get_mut(&name).expect("test stats must exist").flips += 1;
+        later_runs.sort_by(|left, right| left.seen_at.cmp(&right.seen_at));
+        for run in later_runs {
+            if run.is_clean() {
+                test.clean_runs_since_flaky += 1;
+            } else {
+                test.clean_runs_since_flaky = 0;
+            }
         }
     }
 
@@ -224,15 +295,16 @@ pub fn aggregate(mut observations: Vec<Observation>) -> Vec<TestStats> {
         .collect::<Vec<_>>();
     candidates.sort_by(|left, right| {
         right
-            .score()
-            .cmp(&left.score())
+            .is_active()
+            .cmp(&left.is_active())
+            .then_with(|| right.score().cmp(&left.score()))
             .then_with(|| {
                 right
                     .fail_rate()
                     .partial_cmp(&left.fail_rate())
                     .unwrap_or(Ordering::Equal)
             })
-            .then_with(|| right.last_seen.cmp(&left.last_seen))
+            .then_with(|| right.last_flaky.cmp(&left.last_flaky))
             .then_with(|| right.name.cmp(&left.name))
     });
     candidates
@@ -249,10 +321,10 @@ pub fn report_job_name(artifact_name: &str) -> String {
     } else if base.starts_with("integration-tests-group") {
         base.to_string()
     } else if let Some(shard) = base.strip_prefix("cli-integration-tests-") {
-        let shard = if shard == "bridge" {
-            "bridge_gen"
-        } else {
-            shard
+        let shard = match shard {
+            "bridge" => "bridge_gen".to_string(),
+            "bridge-rust" => "bridge_gen_rust".to_string(),
+            shard => shard.replace('-', "_"),
         };
         format!("it-cli ({shard})")
     } else {
@@ -281,6 +353,10 @@ pub fn attempt_from_artifact_name(name: &str) -> Option<u32> {
         .filter(|(prefix, value)| prefix.ends_with("-report") && !value.is_empty())
         .and_then(|(_, value)| value.parse().ok())
         .filter(|value| *value > 0)
+}
+
+pub fn consolidated_artifact_name(attempt: u32) -> String {
+    format!("{CONSOLIDATED_REPORT_PREFIX}{attempt}")
 }
 
 pub fn is_report_artifact(name: &str) -> bool {
@@ -334,37 +410,17 @@ fn checked_tests(body: &str) -> HashSet<String> {
         .collect()
 }
 
-pub fn render_report(
-    candidates: &[TestStats],
-    run_count: usize,
-    artifact_count: usize,
-    days: u64,
-    generated: &str,
-    existing_body: &str,
-    limit: usize,
-) -> String {
-    let shown = candidates.iter().take(limit).collect::<Vec<_>>();
-    let claimed = checked_tests(existing_body);
-    let mut lines = vec![
-        ISSUE_MARKER.to_string(),
-        format!("# {ISSUE_TITLE}"),
-        String::new(),
-        format!(
-            "Generated {generated} from **{run_count}** CI runs and **{artifact_count}** test-report artifacts in the last **{days} days**."
-        ),
-        String::new(),
-        "Score = 5 × cross-attempt flips + 3 × runs with in-run retries + 2 × runs failing on `main`. Failures seen only on a feature branch are not treated as flaky unless they later pass in another attempt of the same run.".to_string(),
-        String::new(),
-        "| Test | Score | Runs | Failures | Flips | Retries | Main failures | Fail rate | p50 | p95 | Last seen | Failing jobs |".to_string(),
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |".to_string(),
-    ];
-    if shown.is_empty() {
-        lines.push(
-            "| No known flaky tests in this window | 0 | 0 | 0 | 0 | 0 | 0 | 0% | — | — | — | — |"
-                .to_string(),
-        );
+fn append_table(lines: &mut Vec<String>, tests: &[&TestStats], empty_message: &str) {
+    lines.extend([
+        "| Test | Score | Runs | Failures | Flips | Retries | Main failures | Fail rate | Clean runs | Last flaky | p50 | p95 | Failing jobs |".to_string(),
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | --- |".to_string(),
+    ]);
+    if tests.is_empty() {
+        lines.push(format!(
+            "| {empty_message} | 0 | 0 | 0 | 0 | 0 | 0 | 0% | 0 | — | — | — | — |"
+        ));
     }
-    for test in &shown {
+    for test in tests {
         let links = if test.links.is_empty() {
             "—".to_string()
         } else {
@@ -379,7 +435,7 @@ pub fn render_report(
                 .join(" ")
         };
         lines.push(format!(
-            "| <code>{}</code> | {} | {} | {} | {} | {} | {} | {:.1}% | {:.0} ms | {:.0} ms | {} | {} |",
+            "| <code>{}</code> | {} | {} | {} | {} | {} | {} | {:.1}% | {} | {} | {:.0} ms | {:.0} ms | {} |",
             html_escape(&test.name),
             test.score(),
             test.runs.len(),
@@ -388,17 +444,64 @@ pub fn render_report(
             test.retries,
             test.main_failures,
             test.fail_rate() * 100.0,
+            test.clean_runs_since_flaky,
+            test.last_flaky.get(..10).unwrap_or(&test.last_flaky),
             percentile(&test.durations, 0.50),
             percentile(&test.durations, 0.95),
-            test.last_seen.get(..10).unwrap_or(&test.last_seen),
             links
         ));
     }
-    lines.extend([String::new(), "## Claim a test".to_string(), String::new()]);
-    if shown.is_empty() {
+}
+
+pub fn render_report(
+    candidates: &[TestStats],
+    analyzed_run_count: usize,
+    discovered_run_count: usize,
+    artifact_count: usize,
+    days: u64,
+    generated: &str,
+    existing_body: &str,
+    limit: usize,
+) -> String {
+    let shown = candidates.iter().take(limit).collect::<Vec<_>>();
+    let active = shown
+        .iter()
+        .copied()
+        .filter(|test| test.is_active())
+        .collect::<Vec<_>>();
+    let resolved = shown
+        .iter()
+        .copied()
+        .filter(|test| !test.is_active())
+        .collect::<Vec<_>>();
+    let claimed = checked_tests(existing_body);
+    let mut lines = vec![
+        ISSUE_MARKER.to_string(),
+        format!("# {ISSUE_TITLE}"),
+        String::new(),
+        format!(
+            "Generated {generated} from **{analyzed_run_count} of {discovered_run_count}** CI runs and **{artifact_count}** consolidated test-report artifacts in the last **{days} days**. Runs before consolidated report collection was enabled are excluded."
+        ),
+        String::new(),
+        "Score = 5 × cross-attempt flips + 3 × runs with in-run retries + 2 × runs failing on `main`. Failures seen only on a feature branch are not treated as flaky unless they later pass in another attempt of the same run.".to_string(),
+        String::new(),
+        format!(
+            "A test moves to recently resolved after **{CLEAN_RUNS_TO_RESOLVE} consecutive clean runs** following its last flaky signal. It remains visible there until that signal leaves the rolling window."
+        ),
+        String::new(),
+        "## Active flaky tests".to_string(),
+        String::new(),
+    ];
+    append_table(&mut lines, &active, "No active flaky tests in this window");
+    lines.extend([
+        String::new(),
+        "## Claim an active test".to_string(),
+        String::new(),
+    ]);
+    if active.is_empty() {
         lines.push("No tests to claim.".to_string());
     }
-    for test in &shown {
+    for test in &active {
         let mark = if claimed.contains(&test.name) {
             "x"
         } else {
@@ -410,11 +513,21 @@ pub fn render_report(
             encode_test_name(&test.name)
         ));
     }
-    if candidates.len() > limit {
+    lines.extend([
+        String::new(),
+        "## Recently resolved".to_string(),
+        String::new(),
+    ]);
+    append_table(
+        &mut lines,
+        &resolved,
+        "No recently resolved flaky tests in this window",
+    );
+    if candidates.len() > shown.len() {
         lines.extend([
             String::new(),
             format!(
-                "Showing the top {} of {} known flaky tests.",
+                "Showing the top {} of {} known flaky tests across both sections.",
                 shown.len(),
                 candidates.len()
             ),
@@ -528,6 +641,106 @@ mod tests {
     }
 
     #[test]
+    fn resolves_only_after_ten_consecutive_clean_runs() {
+        let mut nine_clean = vec![observation(
+            "suite::flaky",
+            "passed",
+            1,
+            1,
+            "feature",
+            1,
+            10.0,
+        )];
+        nine_clean.extend(
+            (2..=10).map(|run| observation("suite::flaky", "passed", run, 1, "main", 0, 10.0)),
+        );
+
+        let active = aggregate(nine_clean.clone());
+        assert!(active[0].is_active());
+        assert_eq!(active[0].clean_runs_since_flaky, 9);
+
+        nine_clean.push(observation(
+            "suite::flaky",
+            "passed",
+            11,
+            1,
+            "main",
+            0,
+            10.0,
+        ));
+        let resolved = aggregate(nine_clean);
+        assert!(!resolved[0].is_active());
+        assert_eq!(resolved[0].clean_runs_since_flaky, 10);
+        assert_eq!(resolved[0].last_flaky, "2026-09-03T10:01:01Z");
+
+        let report = render_report(&resolved, 11, 11, 11, 30, "2026-09-03 12:00 UTC", "", 100);
+        assert!(report.contains("## Recently resolved"));
+        assert!(report.contains("No active flaky tests in this window"));
+        assert!(!report.contains("- [ ] <code>suite::flaky</code>"));
+    }
+
+    #[test]
+    fn later_non_clean_run_resets_the_clean_streak() {
+        let mut observations = vec![observation(
+            "suite::flaky",
+            "passed",
+            1,
+            1,
+            "feature",
+            1,
+            10.0,
+        )];
+        observations.extend(
+            (2..=11).map(|run| observation("suite::flaky", "passed", run, 1, "main", 0, 10.0)),
+        );
+        observations.push(observation(
+            "suite::flaky",
+            "failed",
+            12,
+            1,
+            "feature",
+            0,
+            10.0,
+        ));
+
+        let result = aggregate(observations);
+
+        assert!(result[0].is_active());
+        assert_eq!(result[0].clean_runs_since_flaky, 0);
+    }
+
+    #[test]
+    fn report_limit_caps_total_tests_across_sections() {
+        let mut observations = vec![observation(
+            "suite::active",
+            "passed",
+            1,
+            1,
+            "feature",
+            1,
+            10.0,
+        )];
+        observations.push(observation(
+            "suite::resolved",
+            "passed",
+            20,
+            1,
+            "feature",
+            1,
+            10.0,
+        ));
+        observations.extend(
+            (21..=30).map(|run| observation("suite::resolved", "passed", run, 1, "main", 0, 10.0)),
+        );
+        let tests = aggregate(observations);
+
+        let report = render_report(&tests, 30, 30, 30, 30, "2026-09-03 12:00 UTC", "", 1);
+
+        assert!(report.contains("<code>suite::active</code>"));
+        assert!(!report.contains("<code>suite::resolved</code>"));
+    }
+
+    #[test]
     fn report_preserves_claimed_checkboxes() {
         let tests = aggregate(vec![observation(
             "suite::flaky",
@@ -538,13 +751,13 @@ mod tests {
             1,
             10.0,
         )]);
-        let first = render_report(&tests, 1, 1, 30, "2026-09-03 12:00 UTC", "", 100);
+        let first = render_report(&tests, 1, 1, 1, 30, "2026-09-03 12:00 UTC", "", 100);
         let claimed = first.replace(
             "- [ ] <code>suite::flaky</code>",
             "- [x] <code>suite::flaky</code>",
         );
 
-        let second = render_report(&tests, 2, 2, 30, "2026-09-10 12:00 UTC", &claimed, 100);
+        let second = render_report(&tests, 2, 2, 2, 30, "2026-09-10 12:00 UTC", &claimed, 100);
 
         assert!(second.contains("- [x] <code>suite::flaky</code>"));
     }
@@ -566,7 +779,7 @@ mod tests {
             "<!-- flaky-test:c3VpdGU6OmZsYWt5 -->\n",
         );
 
-        let rendered = render_report(&tests, 2, 2, 30, "2026-09-10 12:00 UTC", existing, 100);
+        let rendered = render_report(&tests, 2, 2, 2, 30, "2026-09-10 12:00 UTC", existing, 100);
 
         assert!(rendered.contains("- [x] <code>suite::flaky</code>"));
     }
@@ -581,6 +794,18 @@ mod tests {
         assert_eq!(
             select_job_url(jobs, "integration-tests-group1-report-attempt1", "fallback"),
             "group1-url"
+        );
+    }
+
+    #[test]
+    fn maps_cli_artifacts_to_matrix_job_names() {
+        assert_eq!(
+            report_job_name("cli-integration-tests-agents-guest-bridge-report-attempt1"),
+            "it-cli (agents_guest_bridge)"
+        );
+        assert_eq!(
+            report_job_name("cli-integration-tests-bridge-rust-report-attempt1"),
+            "it-cli (bridge_gen_rust)"
         );
     }
 
