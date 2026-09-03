@@ -38,7 +38,7 @@ object ToolMiddlewareGuest {
   private val invalidStdoutMessage =
     "tool middleware returned a non-JS tool stdout stream"
 
-  private val validateFinalStdout: ToolOutputStream => Either[String, Unit] = {
+  private val validateFinalStdout: ToolMiddlewareOutputHandle => Either[String, Unit] = {
     case _: JsMiddlewareOutputStream => Right(())
     case _                           => Left(invalidStdoutMessage)
   }
@@ -115,7 +115,7 @@ object ToolMiddlewareGuest {
   private final case class DecodedInvocation(
     toolMetadata: golem.tool.wire.WitTool,
     input: golem.schema.TypedSchemaValue,
-    stdin: Option[ToolInputStream],
+    stdin: Option[ToolMiddlewareInputHandle],
     principal: golem.Principal,
     wrapped: RawToolUnderlying
   )
@@ -151,8 +151,8 @@ object ToolMiddlewareGuest {
       def invoke(
         commandPath: List[String],
         input: golem.schema.TypedSchemaValue,
-        stdin: Option[ToolInputStream]
-      ): Future[Either[ToolInvokeError[golem.schema.TypedSchemaValue], ToolInvokeResult]] = {
+        stdin: Option[ToolMiddlewareInputHandle]
+      ): Future[Either[ToolInvokeError[golem.schema.TypedSchemaValue], ToolMiddlewareResult]] = {
         val call =
           try {
             val jsStdin = stdin.map {
@@ -201,13 +201,13 @@ object ToolMiddlewareGuest {
       case _: Throwable => None
     }
 
-  private def resultFromJs(result: JsInvocationResult): ToolInvokeResult =
-    ToolInvokeResult(
+  private def resultFromJs(result: JsInvocationResult): ToolMiddlewareResult =
+    ToolMiddlewareResult(
       result.result.toOption.map(value => SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(value))),
       result.stdout.toOption.map(new JsMiddlewareOutputStream(_))
     )
 
-  private def resultToJs(result: ToolInvokeResult): JsInvocationResult =
+  private def resultToJs(result: ToolMiddlewareResult): JsInvocationResult =
     JsInvocationResult(
       result.result
         .map(value => SchemaWireInterop.typedToJs(SchemaWire.typedSchemaValueToWit(value)))

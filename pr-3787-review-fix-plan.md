@@ -48,8 +48,8 @@ documented verification commands are all complete.
 | P7a | Fix the Rust started-invocation caller contract | **Complete** | 7–9 | P1, P5 |
 | P7b | Fix the TypeScript started-invocation caller contract | **Complete** | 11 | P1, P5 |
 | P7c | Fix the Scala started-invocation caller contract | **Complete** | 13 | Stable GOL-96 integration base imported |
-| P8 | Replace Scala middleware streams with transfer-only handles | **Blocked** | 14 | Stable GOL-96 integration base |
-| P9a | Add Scala provider export-boundary ownership | **Blocked** | 15, 26 | P8; stable GOL-96 integration base |
+| P8 | Replace Scala middleware streams with transfer-only handles | **Complete** | 14 | Stable GOL-96 integration base |
+| P9a | Add Scala provider export-boundary ownership | **Not started** | 15, 26 | P8; stable GOL-96 integration base |
 | P9b | Add MoonBit provider failure and cleanup support | **Complete** | 20–22, 26 | P0, P5 |
 | P9c | Preserve typed TypeScript tool-stream failures | **Complete** | 20 | P0, P5 |
 | P10 | Finish contract and integration conformance | **Complete** | 8, 19, 23, 25 | Owning workstreams; GOL-95 coordination |
@@ -579,17 +579,19 @@ and `2df530ced`, and Oracle approved the phase.
 
 ## P8 — Replace Scala middleware streams with transfer-only handles
 
-Status: **Blocked until GOL-96 provides a stable integration base.**
+Status: **Complete.** The stable GOL-96 integration base is imported, the middleware-only handle
+boundary is applied across the model, generated projections, macros, JS adapters, tests, fixtures,
+and documentation, and Oracle approved the phase.
 
 **Goal:** make the public middleware API express its actual opaque-transfer contract.
 
-- [ ] Introduce middleware-specific input/output handle types with no public byte read/write API.
-- [ ] Update middleware invocation/result types, `RawToolUnderlying`, ownership tracking, macros,
+- [x] Introduce middleware-specific input/output handle types with no public byte read/write API.
+- [x] Update middleware invocation/result types, `RawToolUnderlying`, ownership tracking, macros,
       JS adapters, documentation, and fixtures.
-- [ ] Preserve affine forwarding, selection, identity-based cleanup, sequential underlying calls,
+- [x] Preserve affine forwarding, selection, identity-based cleanup, sequential underlying calls,
       and post-settlement revocation.
-- [ ] Make the API change directly without aliases or compatibility wrappers.
-- [ ] Verify model JVM/JS tests, core tests, macros, generated consumers, and `testAgents` linking.
+- [x] Make the API change directly without aliases or compatibility wrappers.
+- [x] Verify model JVM/JS tests, core tests, macros, generated consumers, and `testAgents` linking.
 
 This workstream precedes P9a so Scala provider ownership is implemented once against the final
 handle contract.
@@ -598,7 +600,7 @@ handle contract.
 
 ### P9a — Scala export-boundary ownership
 
-Status: **Blocked by P8 and the GOL-96 integration base.**
+Status: **Not started.** P8 and the stable GOL-96 integration base are complete.
 
 - [ ] Begin invocation ownership at the outer WIT export boundary, before tool-name, command-path,
       and input validation.
@@ -871,6 +873,9 @@ Append an entry whenever a workstream changes status or a design gate is resolve
 | 2026-09-03 | P7c | In progress | Correcting Scala `ToolInvocation.collect` precedence so a declared tool error remains authoritative when stdout also fails, while preserving existing transport/component-failure precedence. |
 | 2026-09-03 | P7c | Awaiting Oracle approval | `ToolInvocation.collect` now returns an available declared `ToolError.Tool` before interpreting a simultaneous stdout failure, while failed result futures and `ToolError.Rpc` retain their previous precedence behavior. The focused `ToolClientSpec` passes on JVM and JS (7 tests each), all 314 model tests pass on each platform, and scalafmt plus whitespace checks are green. Logs: `.amp/pr-3787-tests/p7c-tool-client-targeted.log`, `.amp/pr-3787-tests/p7c-model-full.log`, `.amp/pr-3787-tests/p7c-scalafmt-check-final.log`, and `.amp/pr-3787-tests/p7c-diff-check.log`. |
 | 2026-09-03 | P7c | Complete | Oracle confirmed the precedence matrix, concurrent drain/result waiting, exhaustiveness, covariance, and regression coverage, and returned `APPROVED`. |
+| 2026-09-03 | P8 | In progress | Replacing middleware reuse of readable/writable tool stream types with dedicated transfer-only input/output handles and a middleware-specific result carrier, while preserving the existing affine ownership and lifecycle rules. |
+| 2026-09-03 | P8 | Awaiting Oracle approval | Added public transfer-only middleware input/output handles and a middleware-specific result carrier; ordinary readable/writable tool streams and clients remain unchanged. Updated all middleware model, macro, codegen, JS guest, ownership, docs, sbt test-agent, and Mill fixture surfaces. Focused ownership/macro/codegen/core tests pass (11 JVM, 11 JS, 42 macros, 15 codegen, 14 core); broad Scala 3 suites pass (314 model JVM, 314 model JS, 595 core, 110 macros, 161 codegen) and `testAgents/fullLinkJS` succeeds. All 161 codegen tests also pass on Scala 2.12, `sbtPlugin/test` succeeds, the real Mill 1.1.8 fixture compiles, and the Scala test component force-builds through `golem-cli`. Final scalafmt and whitespace checks pass. Logs: `.amp/pr-3787-tests/p8-focused-scala-tests-initial.log`, `.amp/pr-3787-tests/p8-scala-full.log`, `.amp/pr-3787-tests/p8-scala-cross-version-plugin.log`, `.amp/pr-3787-tests/p8-mill-fixture-compile.log`, and `.amp/pr-3787-tests/p8-scala-test-component-build-final.log`. |
+| 2026-09-03 | P8 | Complete | Oracle reviewed the complete public contract, generated/macro surfaces, JS conversions, affine ownership and cleanup behavior, regressions, and verification evidence, found no blockers, and returned `APPROVED`. |
 
 ## Definition of done
 

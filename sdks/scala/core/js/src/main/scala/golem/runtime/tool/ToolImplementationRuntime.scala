@@ -122,14 +122,14 @@ object JsToolOutputStream {
 }
 
 /** Adapts the middleware ABI's legacy `stream<u8>` stdin. */
-final class JsMiddlewareInputStream(val underlying: JsWasiInputStream) extends ToolInputStream {
+final class JsMiddlewareInputStream(val underlying: JsWasiInputStream) extends ToolMiddlewareInputHandle {
   private val lifecycle = new JsMiddlewareStreamLifecycle(() => underlying.asyncIterator())
 
   override private[golem] def close(): Future[Unit] = lifecycle.close()
 }
 
 /** Adapts the middleware ABI's legacy result-carried stdout stream. */
-final class JsMiddlewareOutputStream(val underlying: JsWasiOutputStream) extends ToolOutputStream {
+final class JsMiddlewareOutputStream(val underlying: JsWasiOutputStream) extends ToolMiddlewareOutputHandle {
   private val lifecycle = new JsMiddlewareStreamLifecycle(() => underlying.asyncIterator())
 
   override private[golem] def close(): Future[Unit] = lifecycle.close()
