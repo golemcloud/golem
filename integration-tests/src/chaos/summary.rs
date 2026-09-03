@@ -48,6 +48,7 @@
 //! handful of suspect keys on it, which the workflow turns into ready-made trace
 //! queries. One global counter would have produced a haystack instead.
 
+use crate::chaos::composed::ComposedFaultReport;
 use crate::chaos::fires::ScheduleFireReport;
 use crate::chaos::history::{Outcome, Phase, Stream};
 use crate::chaos::outage::StorageFaultReport;
@@ -616,6 +617,10 @@ pub struct ChaosSummary {
         skip_serializing_if = "Option::is_none"
     )]
     pub storage_fault: Option<StorageFaultReport>,
+    /// How the two faults of a composed scenario lined up. Absent for the
+    /// scenarios that inject one, which is all of them but the `MF` codes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composed_fault: Option<ComposedFaultReport>,
     /// Shard-ownership samples, in the order they were taken. Empty for
     /// scenarios that do not sample executor assignments.
     ///
@@ -753,6 +758,7 @@ impl ChaosSummary {
             resurrection: None,
             rollback: None,
             storage_fault: None,
+            composed_fault: None,
             ownership: Vec::new(),
             attention,
             notes: Vec::new(),
@@ -893,6 +899,21 @@ impl ChaosSummary {
         self.attention.extend(report.attention_lines());
         self.notes.extend(report.note_lines());
         self.storage_fault = Some(report);
+        self
+    }
+
+    /// Attaches the composed-fault account and hoists everything it wants a
+    /// human to see into [`Self::attention`].
+    ///
+    /// Same split as the others, with one line that is context on every run
+    /// rather than only on a bad one: where in the enclosing window the second
+    /// fault landed. Every figure in the rest of the report was measured on a
+    /// cluster under two faults, and a reader who does not know when the second
+    /// one arrived cannot place any of them.
+    pub fn with_composed_fault(mut self, report: ComposedFaultReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.composed_fault = Some(report);
         self
     }
 

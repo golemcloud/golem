@@ -14,10 +14,11 @@
 
 //! Chaos scenario implementations.
 //!
-//! One module per scenario code, except where two codes are the same
-//! choreography under different settings: `storage_fault` runs S14, S16, S17,
-//! S18 and S22, which differ in which store the fault is aimed at, what the
-//! fault does to it, and for how long. Each
+//! One module per scenario code, except where several codes are the same
+//! choreography under different settings: `storage_fault` runs S14, S15, S16,
+//! S17, S18, S22 and S23, the S15A/S15B/S15C eliminations and the composed MF1,
+//! which differ in which store the fault is aimed at, what the fault does to
+//! it, for how long, and whether a second fault is injected inside it. Each
 //! module owns its phase choreography — which is the part that differs, and the
 //! part worth reading — while everything around it lives here: where artifacts go, how a signal failure becomes a
 //! termination reason, how a routing table is sampled, and how a result is
@@ -138,6 +139,7 @@ pub fn build_result(config: &ScenarioConfig, outcome: ScenarioOutcome) -> ChaosR
         delete_selection: outcome.delete_selection,
         rollback: config.rollback.clone(),
         storage: config.storage.clone(),
+        composed: config.composed.clone(),
         retry_policy: config.retry_policy.clone(),
         scope: outcome.scope,
         summary: outcome.summary,

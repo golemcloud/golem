@@ -283,6 +283,9 @@ pub enum ChaosScenarioArg {
     /// mirror, and the one delay with no control stream: every agent commits
     /// its oplog to that cluster.
     S23,
+    /// The first composed fault: a worker-executor killed while the key-value
+    /// PostgreSQL cluster is unreachable.
+    Mf1,
 }
 
 /// Density subcommand action.

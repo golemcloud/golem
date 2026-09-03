@@ -29,8 +29,8 @@ use crate::chaos::scheduled::ScheduledSelection;
 use crate::chaos::split::PodSplit;
 use crate::chaos::summary::{ChaosSummary, TerminationReason};
 use crate::chaos::{
-    DeleteConfig, FaultConfig, IsolationConfig, PinnedConfig, PromiseConfig, RetryPolicy,
-    RevertConfig, RollbackConfig, ScheduledConfig, StorageConfig, WorkloadConfig,
+    ComposedConfig, DeleteConfig, FaultConfig, IsolationConfig, PinnedConfig, PromiseConfig,
+    RetryPolicy, RevertConfig, RollbackConfig, ScheduledConfig, StorageConfig, WorkloadConfig,
 };
 use chrono::{DateTime, Utc};
 use golem_test_framework::benchmark::RunMetadata;
@@ -190,6 +190,11 @@ pub struct ChaosResult {
     /// account was judged by. Present only for S16.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage: Option<StorageConfig>,
+    /// The second fault the run was configured to compose with the first, and
+    /// where in its window it was asked to land. Present only for the `MF`
+    /// codes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composed: Option<ComposedConfig>,
     pub retry_policy: RetryPolicy,
     pub scope: RunScope,
     pub summary: ChaosSummary,
@@ -271,6 +276,7 @@ mod tests {
             delete_selection: None,
             rollback: None,
             storage: None,
+            composed: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "env-1".to_string(),
@@ -1024,6 +1030,7 @@ mod sample_artifact {
             delete_selection: None,
             rollback: None,
             storage: None,
+            composed: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "0192f000-0000-7000-8000-000000000001".to_string(),
@@ -1247,6 +1254,7 @@ mod sample_artifact {
             delete_selection: None,
             rollback: None,
             storage: None,
+            composed: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "0192f000-0000-7000-8000-000000000001".to_string(),

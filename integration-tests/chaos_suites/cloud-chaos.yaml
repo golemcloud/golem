@@ -2216,3 +2216,159 @@ scenarios:
       delaySecs: 5
 
     signalTimeoutSecs: 1800
+
+  # ── MF1 ──────────────────────────────────────────────────────────────────
+  #
+  # The first composed fault: an executor killed while the key-value cluster is
+  # unreachable (GOL-381).
+  #
+  # Neither half is new. S16 takes the key-value cluster away for the length of
+  # an AWS failover and the platform absorbs it; S8 and S10 kill an executor
+  # under load and the platform recovers its shards. What is new is that each of
+  # those two faults leaves the platform a way out that the other one takes
+  # away.
+  #
+  # Under S16 nobody is lost. The shards nobody can currently read are still
+  # owned by a process that will read them when the store comes back, so the
+  # recovery is a matter of waiting. Under S8 the store that records the
+  # handover is working: the shard-manager reassigns, the survivor reads the
+  # running-workers set, and it knows which agents to bring up.
+  #
+  # Held together, a survivor has to take over shards while the running-workers
+  # set, the promises and the scheduler's schema are all behind the cut. That is
+  # the question, and it has no answer anywhere in the single-fault matrix.
+  #
+  # ── Why the window is 120s and not S16's 60s ─────────────────────────────
+  #
+  # Two constraints from opposite directions, and this is the only number in
+  # the entry that has to sit between them.
+  #
+  # The ceiling is the key-value retry budget, roughly 168s (see S16). Past it
+  # the recovery-index write in `status_flusher` exhausts and panics by design,
+  # every executor is replaced, and the run stops being about a kill during an
+  # outage and starts being S22 with an extra step. 120s leaves 48s of margin
+  # against the worst case, which is an operation issued at the instant of
+  # injection.
+  #
+  # The floor is what has to fit inside the *overlap*, which is half the window:
+  # the shard-manager has to notice the executor is gone, revoke and reassign
+  # its shards, and the survivor has to try to bring those agents up against a
+  # store it cannot reach. S16's 60s window would leave 30s for all of that, and
+  # a run that heals before the survivor has finished trying has not asked the
+  # question.
+  #
+  # ── The one thing this entry cannot check for you ────────────────────────
+  #
+  # `composed.minOverlapSecs` is judged after the fact, not enforced. Every
+  # other gate in this suite can refuse before the window is spent — S2's
+  # pairing gate, S9's forward leg, the fire-count proof below — because the
+  # driver still holds the run at that point. Here it does not: by the time the
+  # second fault is due the fault window belongs to the workflow. So a
+  # composition that missed is reported rather than prevented, and the report
+  # says so loudly enough that a reader cannot mistake it for a clean run.
+  - code: MF1
+    name: executor-kill-during-keyvalue-outage
+    enabled: true
+
+    fault:
+      # The enclosing fault, and the one whose window the phases follow. Every
+      # executor cut off from the key-value cluster, exactly as S16.
+      kind: network-partition
+      target: worker-executor
+      mode: all
+      # Named explicitly rather than left to the workflow's glob. A composed
+      # scenario has two manifests carrying its code, and picking between them
+      # by alphabetical order is not a decision anyone made.
+      manifest: networkchaos-mf1.yaml
+      # Must equal phases.faultSecs; see the note on S16.
+      durationSecs: 120
+
+    composed:
+      # The second fault, injected inside the first one's window and left in
+      # force until it heals. Recorded here for the archive; the workflow
+      # applies the manifest and the driver learns about it from the signal.
+      kind: pod-kill
+      target: worker-executor
+      manifest: podchaos-mf1.yaml
+      # Halfway. Late enough that the outage has plainly landed and the
+      # workload has stalled on it, early enough to leave a real window on the
+      # far side. The same knob S1's scale schedule uses, and for the same
+      # reason: the workflow holds the window, so a fraction of it is the only
+      # thing the two sides can agree on without a second clock.
+      afterFraction: 0.5
+      # Half of what the schedule can deliver, so an injection that took its
+      # time being confirmed still counts. Below this the two faults did meet,
+      # but with too little of the outage left for a shard reassignment to run
+      # into it, which is the whole experiment.
+      minOverlapSecs: 30
+
+    phases:
+      # S16's, unchanged. Long enough for cold starts, component loading and
+      # route warm-up to settle, and for the scheduler to be firing steadily.
+      baselineSecs: 300
+      # See the walk-through above for both bounds.
+      faultSecs: 120
+      # Longer than S16's 420. There is one more thing to wait for here: the
+      # killed executor has to be rescheduled, register with the shard-manager,
+      # take its shards back and reload the agents on them, and only then can
+      # the streams be said to have recovered. Scheduled actions registered
+      # during the outage still have to fall due and fire inside the run.
+      recoverySecs: 600
+
+    workload:
+      # S16's population, unchanged, so the two results are readable side by
+      # side. That comparability is the point of not tuning it: MF1's numbers
+      # only mean something against a run that had the outage and not the kill.
+      durableAgents: 200
+      ephemeralAgents: 50
+      # Zero on purpose. The scheduled stream is driven by the `scheduled` block
+      # below, because only its registrations carry a token into the target's
+      # fire log. Setting both is refused at load time.
+      scheduledAgents: 0
+      promiseAgents: 50
+      # No quota stream. A lease renewal failing would add a shard-manager
+      # failure mode to a run that already has two faults to attribute between.
+      quotaAgents: 0
+      ratePerSec: 100
+
+    scheduled:
+      # 100 targets, as S16 — and here they do a second job. The driver aims the
+      # kill at the executor owning the largest share of them, which is what
+      # turns the fire account's killed/elsewhere axis from a degenerate column
+      # into the run's own control group. In the ten single-fault storage codes
+      # nothing is killed and every target reads as `elsewhere`.
+      targets: 100
+      intervalMillis: 2000
+      leadSecs: 10
+      # Larger than S16's 240. The floor there was the outage itself; here it is
+      # the outage plus a shard reassignment that cannot complete until the
+      # store comes back. Recorded, not asserted, like every other budget here.
+      leaseBudgetSecs: 300
+
+    storage:
+      # The key-value Aurora cluster's writer endpoint. The same one S16 cuts,
+      # which is what makes the two runs comparable.
+      endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+
+      expect:
+        # Everything is behind this cut, as in S16. Quiet time is measured
+        # against the window's own edges, so the floor means the same thing at
+        # 120s as it does at 60s.
+        kind: whole-workload
+        quietFloorPercent: 50
+
+      # Doubled from S16's 120, and for a reason that is not slack: serving
+      # again here means an executor that did not exist when the store came back
+      # has to be scheduled, registered and reloaded first. Recorded, not
+      # asserted.
+      recoveryBudgetSecs: 240
+
+    retryPolicy:
+      # Identical to S16's, and load-bearing for the same reason: retrying only
+      # transport errors, once, under the same idempotency key is what lets a
+      # retry reveal double execution rather than hide it.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800

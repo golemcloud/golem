@@ -13,9 +13,9 @@
 // limitations under the License.
 
 //! Storage fault: the shared choreography behind S14, S15, S16, S17, S18, S22
-//! and S23, plus the S15A/S15B/S15C eliminations.
+//! and S23, plus the S15A/S15B/S15C eliminations and the composed MF1.
 //!
-//! All ten codes run this module. They differ in which store the fault is
+//! All eleven codes run this module. They differ in which store the fault is
 //! aimed at, what it does to that store and for how long, all of which are
 //! suite settings, and in what a reader should expect of the result:
 //!
@@ -66,7 +66,18 @@
 //!   `GOLEM__INDEXED_STORAGE__CONFIG__MAX_CONCURRENT_OPS`, a semaphore tighter
 //!   than the pool behind it.
 //!
-//! The driver is the same in all ten because the difference is one of
+//! * **MF1** (GOL-381) is the odd one out and the only code here that injects
+//!   more than one fault. It cuts the key-value cluster exactly as S16 does and
+//!   kills a worker-executor half way through that window. Everything below is
+//!   the same choreography with three additions, each guarded on the presence
+//!   of a `composed` block: the kill is aimed, a second fault signal is waited
+//!   for inside the window, and the shard assignment is sampled around it. What
+//!   it asks is not in the single-fault matrix at all — a survivor has to take
+//!   over shards while the running-workers set it needs to do that is behind
+//!   the cut. See [`crate::chaos::composed`] for how a composition that missed
+//!   is told apart from one that worked.
+//!
+//! The driver is the same in all eleven because the difference is one of
 //! expectation, not of choreography. Nothing below asserts on which outcome
 //! happened: the account it produces answers all ten questions, and the
 //! oracles that fail the build — the scheduled-fire account and the
@@ -228,10 +239,16 @@
 //! costs are not separable.
 //!
 //! One consequence worth stating plainly for anyone reading the result: the
-//! fire account's `group` axis is degenerate here. None of these scenarios
-//! names a pod to kill, so every target is reported as `elsewhere` and only the
-//! `window` axis carries information. The delays to read are the `during-fault`
-//! and `after-fault` cells against `before-fault`.
+//! fire account's `group` axis is degenerate for the ten single-fault codes.
+//! None of them names a pod to kill, so every target is reported as `elsewhere`
+//! and only the `window` axis carries information. The delays to read are the
+//! `during-fault` and `after-fault` cells against `before-fault`.
+//!
+//! MF1 is the exception and the reason the axis exists here at all. Its kill is
+//! aimed at the executor owning the largest share of the targets, so the
+//! `on-pod` group is the population whose actions had to be recovered by a
+//! survivor that could not read the scheduler's schema, and the `elsewhere`
+//! group is the control that was only ever inside the outage.
 //!
 //! ## What fails the run
 //!
@@ -253,19 +270,21 @@
 //! Run-by-run findings live in the per-scenario runbooks in golem-cloud, not
 //! here.
 
+use crate::chaos::composed::ComposedFaultReport;
 use crate::chaos::fires::{FaultWindow, ScheduleFireReport};
 use crate::chaos::history::{OperationHistory, OperationRecord, Outcome, Phase, Stream};
 use crate::chaos::outage::StorageFaultReport;
+use crate::chaos::ownership::OwnershipSample;
 use crate::chaos::prep::ChaosPrepManifest;
 use crate::chaos::probe;
 use crate::chaos::result::{ChaosResult, PhaseWindow, Phases, RunScope};
 use crate::chaos::scenarios::{
     OutputPaths, ScenarioOutcome, WARMUP_SETTLE, build_result, exactly_once_termination,
-    read_counters, readback_for, signal_termination, snapshot_routing, wait_for_settled_routing,
-    write_outputs,
+    read_counters, readback_for, sample_ownership, signal_termination, snapshot_routing,
+    wait_for_settled_routing, write_outputs,
 };
-use crate::chaos::scheduled;
-use crate::chaos::signal::{BaselineReady, FaultSignals};
+use crate::chaos::scheduled::{self, ScheduledSelection};
+use crate::chaos::signal::{BaselineReady, FaultInjected, FaultSignals, FaultTarget};
 use crate::chaos::summary::{
     AgentReadback, ChaosSummary, ExactlyOnceReport, Note, TerminationReason,
 };
@@ -289,6 +308,17 @@ use tracing::{info, warn};
 /// storage outage is precisely the thing that makes work late.
 const SETTLE_MARGIN: Duration = Duration::from_secs(30);
 
+/// How long past the enclosing fault window a composed run keeps waiting for
+/// its second fault.
+///
+/// The workflow injects the second fault at a fraction of the window and then
+/// waits for Chaos Mesh to report it active, which is not instant. Without this
+/// margin a slow injection near the end of the window would be recorded as one
+/// that never happened, which is a worse mistake than the one it describes: the
+/// run would look like a broken harness rather than like a composition that
+/// landed too late to mean anything.
+const SECONDARY_WAIT_MARGIN: Duration = Duration::from_secs(60);
+
 /// How many targets to sample after the baseline to prove actions are firing at
 /// all.
 ///
@@ -309,6 +339,12 @@ pub async fn run(
     let workload_config = config.require_workload()?;
     let scheduled_config = config.require_scheduled()?;
     let storage_config = config.require_storage()?;
+    // Present only for the `MF` codes. Fetched through the checked accessor so
+    // a malformed block fails here rather than half way through the window.
+    let composed_config = match config.composed {
+        Some(_) => Some(config.require_composed()?),
+        None => None,
+    };
     let history = OperationHistory::new(code.as_str());
     let key_prefix = crate::chaos::scenario_key_prefix(code);
 
@@ -351,6 +387,13 @@ pub async fn run(
     let mut fault_id = None;
     let mut fault_target_observed = None;
     let mut attention_extra: Vec<Note> = Vec::new();
+    // All four are empty for the ten single-fault codes and stay out of the
+    // result entirely, rather than appearing as empty accounts that would read
+    // as "checked, nothing found".
+    let mut ownership_samples: Vec<OwnershipSample> = Vec::new();
+    let mut selection: Option<ScheduledSelection> = None;
+    let mut secondary: Option<FaultInjected> = None;
+    let mut composed_report: Option<ComposedFaultReport> = None;
 
     // Every early return below goes through `finish`, so an abort produces the
     // same artifact shape as a completed run, with fewer phases filled in.
@@ -363,6 +406,12 @@ pub async fn run(
                 fault_injected_at,
             );
             summary.absorb(attention_extra.clone());
+            if !ownership_samples.is_empty() {
+                summary = summary.with_ownership(ownership_samples.clone());
+            }
+            if let Some(report) = composed_report.clone() {
+                summary = summary.with_composed_fault(report);
+            }
             if let Some(report) = $fires {
                 summary = summary.with_schedule_fires(report);
             }
@@ -385,7 +434,7 @@ pub async fn run(
                     summary,
                     termination_reason: $reason,
                     pinned_selection: None,
-                    scheduled_selection: None,
+                    scheduled_selection: selection.clone(),
                     promise_selection: None,
                     isolation_selection: None,
                     revert_selection: None,
@@ -408,6 +457,48 @@ pub async fn run(
     info!("{code}: warmed {warmed} agents, settling {WARMUP_SETTLE:?}");
     tokio::time::sleep(WARMUP_SETTLE).await;
 
+    // ── Aim the second fault ────────────────────────────────────────────────
+    //
+    // Only the composed codes have one. The enclosing fault is aimed at every
+    // executor and needs nothing chosen, but the kill inside it does, and the
+    // choice has to be made before the baseline for the same reason S10 makes
+    // it there: a run that cannot be aimed should not spend a maintenance
+    // window proving it.
+    //
+    // Aimed at the executor owning the largest share of the schedule targets,
+    // which is exactly what S10 aims at. That is worth more here than anywhere
+    // else in this module: the fire account already splits its targets into the
+    // ones on the killed executor and the ones elsewhere, and in the ten
+    // single-fault codes that axis is degenerate because nothing is killed. A
+    // composed run is the first one that fills it in, and the survivors are its
+    // control group for a scheduler that cannot reach its own schema.
+    if composed_config.is_some() {
+        let chosen = match scheduled::select(&ctx, deps, &targets).await {
+            Ok(chosen) => chosen,
+            Err(e) => {
+                warn!("{code}: could not aim the second fault at an executor: {e:#}");
+                let records = history.snapshot();
+                finish!(
+                    TerminationReason::FaultTargetUnverified {
+                        detail: format!("{e:#}"),
+                    },
+                    &records,
+                    Vec::new(),
+                    None,
+                    None,
+                    None
+                );
+            }
+        };
+        info!(
+            "{code}: second fault aimed at {} ({} of {} targets on it)",
+            chosen.pod_address,
+            chosen.on_pod.len(),
+            targets.len()
+        );
+        selection = Some(chosen);
+    }
+
     // ── Baseline ────────────────────────────────────────────────────────────
     info!(
         "{code}: baseline phase, mixed workload at {} ops/s plus {} schedule targets, for {:?}",
@@ -420,6 +511,12 @@ pub async fn run(
     let schedules = scheduled::start(ctx.clone(), &targets, scheduled_config);
     tokio::time::sleep(config.phases.baseline()).await;
     routing_snapshots.push(snapshot_routing(deps, "before-fault").await);
+    // Only for the composed codes. The single-fault ones kill nothing, so every
+    // sample would report the same assignment and the findings that only exist
+    // between two samples would never fire.
+    if composed_config.is_some() {
+        ownership_samples.push(sample_ownership(deps, "before-fault", None, true).await);
+    }
     if let Some(window) = phases.baseline.as_mut() {
         window.end(Utc::now());
     }
@@ -498,14 +595,41 @@ pub async fn run(
     );
 
     // ── Signal: ready for the fault ─────────────────────────────────────────
+    //
+    // A single-fault code has nothing to aim: the partition is between every
+    // executor and one endpoint outside the cluster, so there is no pod for the
+    // driver to choose and no ownership to verify. A composed code names the
+    // executor its kill has to hit, and re-checks the division first — the
+    // baseline has just run for five minutes, and a selection made before it is
+    // a claim about a cluster that has had time to move underneath it.
+    let mut fault_target = None;
+    if let Some(chosen) = &selection {
+        if let Err(e) = scheduled::verify_ownership(&ctx, deps, chosen).await {
+            warn!("{code}: target ownership no longer holds, refusing to inject: {e:#}");
+            stop_workloads!();
+            let records = history.snapshot();
+            finish!(
+                TerminationReason::FaultTargetUnverified {
+                    detail: format!("{e:#}"),
+                },
+                &records,
+                Vec::new(),
+                None,
+                None,
+                None
+            );
+        }
+        fault_target = Some(FaultTarget {
+            pod_address: chosen.pod_address.clone(),
+            pod_ip: chosen.pod_ip.clone(),
+            owned_agents: chosen.on_pod.clone(),
+        });
+    }
     signals.write_baseline_ready(&BaselineReady {
         scenario_code: code.as_str().to_string(),
         ready_at: Utc::now(),
         baseline_operations,
-        // Nothing to aim. The partition is between every executor and one
-        // endpoint outside the cluster, so there is no pod for the driver to
-        // choose and no ownership to verify.
-        fault_target: None,
+        fault_target,
     })?;
 
     // ── Fault ───────────────────────────────────────────────────────────────
@@ -539,6 +663,38 @@ pub async fn run(
     ctx.phase.set(Phase::Fault);
     phases.fault = Some(PhaseWindow::started(injected.injected_at));
 
+    // ── The second fault ────────────────────────────────────────────────────
+    //
+    // Bounded by the enclosing window rather than by the generous signal
+    // timeout every other wait here uses. A second fault that has not landed by
+    // the time the first one heals is never going to land inside it, and a
+    // driver still blocked on it would sleep through the heal it measures
+    // recovery from.
+    //
+    // A wait that runs out is not an abort. The run still has an enclosing
+    // fault, a workload and every account below this one; what it does not have
+    // is the composition, and the report says exactly that rather than the run
+    // ending with nothing.
+    if composed_config.is_some() {
+        let deadline = config.phases.fault() + SECONDARY_WAIT_MARGIN;
+        match signals.await_secondary_fault(deadline).await {
+            Ok(signal) => {
+                info!(
+                    "{code}: second fault {} ({} on {}) reported active at {}",
+                    signal.fault_id, signal.kind, signal.target, signal.injected_at
+                );
+                ownership_samples.push(
+                    sample_ownership(deps, "after-kill", ownership_samples.last(), false).await,
+                );
+                routing_snapshots.push(snapshot_routing(deps, "after-kill").await);
+                secondary = Some(signal);
+            }
+            Err(e) => {
+                warn!("{code}: no secondary-fault signal arrived within {deadline:?}: {e}");
+            }
+        }
+    }
+
     let recovered = match signals.await_fault_recovered(config.signal_timeout()).await {
         Ok(recovered) => recovered,
         Err(e) => {
@@ -562,6 +718,24 @@ pub async fn run(
     fault_recovered_at = Some(recovered.recovered_at);
     if let Some(window) = phases.fault.as_mut() {
         window.end(recovered.recovered_at);
+    }
+
+    // Built here rather than at the end, so an abort during recovery or
+    // read-back still says whether the two faults ever met. Every account below
+    // this point describes a cluster that was under both of them, and a reader
+    // who cannot tell that from a reader who cannot tell the difference is the
+    // failure this report exists to prevent.
+    if let Some(composed) = composed_config {
+        let report = ComposedFaultReport::build(
+            &injected,
+            fault_recovered_at,
+            secondary.as_ref(),
+            composed.min_overlap(),
+        );
+        for finding in &report.findings {
+            warn!("{code}: {}: {}", finding.violation, finding.detail);
+        }
+        composed_report = Some(report);
     }
 
     // ── Recovery ────────────────────────────────────────────────────────────
@@ -592,6 +766,10 @@ pub async fn run(
         )));
     }
     routing_snapshots.push(snapshot_routing(deps, "after-recovery").await);
+    if composed_config.is_some() {
+        ownership_samples
+            .push(sample_ownership(deps, "after-recovery", ownership_samples.first(), true).await);
+    }
 
     // ── Read-back ───────────────────────────────────────────────────────────
     let settle = settle_before_readback(scheduled_config);
@@ -609,14 +787,21 @@ pub async fn run(
         recovered_at: fault_recovered_at,
     });
 
+    let killed_targets: BTreeSet<String> = selection
+        .as_ref()
+        .map(|chosen| chosen.on_pod.iter().cloned().collect())
+        .unwrap_or_default();
     let fires = ScheduleFireReport::build(
         &records,
         &logs,
         scheduled_config.lead(),
         fault_window,
-        // Empty on purpose: nothing was killed, so every target belongs to the
-        // report's `elsewhere` group and only its window axis carries meaning.
-        &BTreeSet::new(),
+        // Empty for the ten single-fault codes: nothing is killed, so every
+        // target belongs to the report's `elsewhere` group and only its window
+        // axis carries meaning. A composed run fills it in with the targets the
+        // killed executor owned, which is what turns the survivors into a
+        // control group.
+        &killed_targets,
         scheduled_config.lease_budget(),
     );
     info!(

@@ -34,6 +34,7 @@
 //!    engine here — see [`summary`] for what is measured and the narrow set of
 //!    conditions that fail a run outright.
 
+pub mod composed;
 pub mod deletions;
 pub mod errors;
 pub mod fires;
@@ -136,6 +137,18 @@ pub enum ScenarioCode {
     /// primary, but the first layer of the stack it does open is a compressed
     /// archive on the same indexed storage.
     S23,
+    /// The first composed fault: a worker-executor killed while the key-value
+    /// PostgreSQL cluster is unreachable.
+    ///
+    /// Not a harder S16 and not a slower S8. Each of those two faults on its
+    /// own leaves the platform a way out that the other one takes away: S16
+    /// keeps every executor, so the shards nobody can read are at least still
+    /// owned by a process that will read them when the store comes back, and S8
+    /// takes an executor away while the store that records the handover is
+    /// working. Held together, an executor's shards have to move to a survivor
+    /// that cannot reach the running-workers set, the promises or the
+    /// scheduler's schema.
+    MF1,
 }
 
 impl ScenarioCode {
@@ -163,13 +176,14 @@ impl ScenarioCode {
             ScenarioCode::S15B => "S15B",
             ScenarioCode::S15C => "S15C",
             ScenarioCode::S23 => "S23",
+            ScenarioCode::MF1 => "MF1",
         }
     }
 
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 22] = [
+    pub const ALL: [ScenarioCode; 23] = [
         ScenarioCode::S1,
         ScenarioCode::S2,
         ScenarioCode::S3,
@@ -192,6 +206,7 @@ impl ScenarioCode {
         ScenarioCode::S18,
         ScenarioCode::S22,
         ScenarioCode::S23,
+        ScenarioCode::MF1,
     ];
 
     pub fn parse(s: &str) -> Option<Self> {
@@ -1107,6 +1122,56 @@ pub struct ScaleDuringFaultConfig {
     pub steps: Vec<ScaleStep>,
 }
 
+/// The second fault of a composed scenario, and where in the first one's window
+/// it lands (GOL-381).
+///
+/// The suite's one-fault scenarios describe their fault entirely in
+/// [`FaultConfig`], which the workflow turns into one manifest applied for
+/// `phases.faultSecs`. A composed scenario keeps all of that for its *enclosing*
+/// fault and adds this: a second manifest, applied part way through, and left in
+/// force until the enclosing fault heals.
+///
+/// The asymmetry is deliberate. Both faults could have been listed as peers,
+/// and then every phase boundary in the driver would have had two candidate
+/// windows to follow and neither would obviously be the right one. One fault
+/// owning the window keeps the phases meaning what they mean everywhere else in
+/// the suite, and reduces the second fault to a point inside them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComposedConfig {
+    /// Fault kind of the second fault, e.g. `pod-kill`. Recorded so the result
+    /// says what the run was configured to compose; the driver does not act on
+    /// it.
+    pub kind: String,
+    /// What the second fault is aimed at, e.g. `worker-executor`.
+    pub target: String,
+    /// The manifest the workflow applies for it, by file name.
+    ///
+    /// Named rather than derived. The workflow finds a scenario's manifest by
+    /// its code, and a composed scenario has two files sharing that code, so
+    /// leaving the choice to a glob would make the second fault depend on
+    /// alphabetical order.
+    pub manifest: String,
+    /// How far into the enclosing fault's window the second fault lands, as a
+    /// fraction of it. The same knob [`ScaleStep`] uses, and for the same
+    /// reason: the workflow holds the window, so a fraction of it is the only
+    /// thing either side can agree on without a second clock.
+    pub after_fraction: f64,
+    /// The least time both faults must be in force at once for the run to be a
+    /// composition rather than two faults in a row.
+    ///
+    /// Judged after the fact rather than enforced: the driver cannot refuse the
+    /// second fault, because by the time it is due the fault window already
+    /// belongs to the workflow. See [`crate::chaos::composed`].
+    pub min_overlap_secs: u64,
+}
+
+impl ComposedConfig {
+    pub fn min_overlap(&self) -> Duration {
+        Duration::from_secs(self.min_overlap_secs)
+    }
+}
+
 /// Settings for the shard-ownership oracle (GOL-364).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1180,6 +1245,10 @@ pub struct ScenarioConfig {
     /// that do not.
     #[serde(default)]
     pub scale_during_fault: Option<ScaleDuringFaultConfig>,
+    /// The second fault, for the `MF` codes. Absent for every scenario that
+    /// injects one fault.
+    #[serde(default)]
+    pub composed: Option<ComposedConfig>,
     #[serde(default)]
     pub retry_policy: RetryPolicy,
     /// How long the driver waits for each workflow signal before aborting.
@@ -1326,6 +1395,68 @@ impl ScenarioConfig {
                 self.code
             )
         })
+    }
+
+    /// The composed-fault block. See [`Self::require_workload`].
+    ///
+    /// Checked rather than merely fetched, because every one of these mistakes
+    /// costs a maintenance window and produces a result that reads as a clean
+    /// composed run. A fraction outside the window puts the second fault
+    /// outside the first one; an overlap floor the window cannot supply fails
+    /// every run on a gate no configuration could ever satisfy.
+    pub fn require_composed(&self) -> anyhow::Result<&ComposedConfig> {
+        let config = self.composed.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "chaos scenario {} needs a `composed` block in the suite YAML",
+                self.code
+            )
+        })?;
+        if !(0.0..1.0).contains(&config.after_fraction) || config.after_fraction <= 0.0 {
+            anyhow::bail!(
+                "chaos scenario {}: composed.afterFraction is {}, and only a fraction strictly                  inside the fault window puts the second fault inside the first one",
+                self.code,
+                config.after_fraction
+            );
+        }
+        if config.manifest.trim().is_empty() {
+            anyhow::bail!(
+                "chaos scenario {}: composed.manifest is empty, so the workflow would have to                  guess which of this scenario's manifests is the second fault",
+                self.code
+            );
+        }
+        if config.min_overlap_secs == 0 {
+            anyhow::bail!(
+                "chaos scenario {}: composed.minOverlapSecs is 0, which is met by a second fault                  landing at the last instant of the window",
+                self.code
+            );
+        }
+        // The kill has to be aimed, and the driver aims it at the executor
+        // owning the largest share of the schedule targets. That is a coupling
+        // between this block and the `scheduled` one, so it is checked where a
+        // mistake costs a build rather than where it costs the maintenance
+        // window the driver would spend discovering there was nothing to aim
+        // at.
+        if !self.drives_stream(Stream::Scheduled) {
+            anyhow::bail!(
+                "chaos scenario {}: a composed run aims its second fault at the executor owning                  the most schedule targets, and this entry registers none",
+                self.code
+            );
+        }
+        // What the schedule can actually deliver, assuming both injections are
+        // instant. They are not — Chaos Mesh has to report `AllInjected` first
+        // — so a floor equal to this is already unreachable in practice, and
+        // the check is a floor on nonsense rather than a tight bound.
+        let available = self.phases.fault_secs as f64 * (1.0 - config.after_fraction);
+        if (config.min_overlap_secs as f64) > available {
+            anyhow::bail!(
+                "chaos scenario {}: composed.minOverlapSecs is {}, but a second fault injected at                  {} of a {}s window leaves at most {available:.0}s of overlap, so no run could                  ever meet it",
+                self.code,
+                config.min_overlap_secs,
+                config.after_fraction,
+                self.phases.fault_secs
+            );
+        }
+        Ok(config)
     }
 
     /// Whether this scenario's configuration actually produces operations on a
@@ -1620,6 +1751,7 @@ impl ChaosSuite {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_test_framework::benchmark::ChaosScenarioArg;
     use test_r::test;
 
     /// Path of the checked-in suite, resolved from the crate root so the test
@@ -1730,6 +1862,7 @@ mod tests {
                 rollback: None,
                 relay: None,
                 storage: None,
+                composed: None,
                 ownership: None,
                 scale_during_fault: None,
                 retry_policy: RetryPolicy::default(),
@@ -1769,6 +1902,7 @@ mod tests {
             rollback: None,
             relay: None,
             storage: None,
+            composed: None,
             revert: Some(RevertConfig {
                 agents: 10,
                 increments_per_round: increments,
@@ -1864,6 +1998,7 @@ mod tests {
                 },
                 recovery_budget_secs: 120,
             }),
+            composed: None,
             revert: None,
             ownership: None,
             scale_during_fault: None,
@@ -2074,6 +2209,55 @@ mod tests {
         }
     }
 
+    /// The workflow selects a scenario with `--scenario "${CODE,,}"`, so every
+    /// code in the registry has to be accepted by the CLI in exactly that form.
+    ///
+    /// This is a trap rather than a formality. `clap` derives the accepted
+    /// spelling from the *Rust* variant name by kebab-casing it, and the two
+    /// enums are in different crates with no compiler-visible link between
+    /// them. A variant whose name kebab-cases to something other than its own
+    /// lowercased code — or a code added to the registry with no CLI variant at
+    /// all — fails at the moment the runner invokes the driver, which is after
+    /// the cluster has been wiped and scaled up.
+    #[test]
+    fn every_scenario_code_is_selectable_the_way_the_workflow_spells_it() {
+        use clap::ValueEnum;
+        for code in ScenarioCode::ALL {
+            let spelling = code.as_str().to_lowercase();
+            assert!(
+                ChaosScenarioArg::from_str(&spelling, false).is_ok(),
+                "the CLI does not accept --scenario {spelling}, which is how the workflow                  spells {code}"
+            );
+        }
+    }
+
+    /// A composed run is a different kind of result from a single-fault one:
+    /// every number in it was measured on a cluster under two faults at once,
+    /// and comparing it against a scenario that had one would be wrong. The
+    /// `MF` prefix is how a reader tells them apart at a glance, in the suite
+    /// YAML, in the S3 bucket and in the runbook index.
+    ///
+    /// Nothing in the driver enforces that: `storage_fault` will happily
+    /// compose a fault for any code that declares one. So the convention is
+    /// held here instead, where breaking it costs a build.
+    #[test]
+    fn only_an_mf_code_composes_two_faults() {
+        let suite = ChaosSuite::load(suite_path()).unwrap();
+        for entry in &suite.scenarios {
+            if entry.composed.is_none() {
+                continue;
+            }
+            let code = entry.scenario_code().unwrap();
+            assert!(
+                code.as_str().starts_with("MF"),
+                "{code} composes a second fault but does not carry an MF code, so its result                  would be read as a single-fault run"
+            );
+            // Every rule the accessor holds, applied to the checked-in entry
+            // rather than only to a hand-built one in a test.
+            entry.require_composed().unwrap();
+        }
+    }
+
     /// The gate that fails a run when nothing fired has to tell "no fire was
     /// observed" apart from "no fire was asked for". S15A's first run was lost
     /// to that distinction: it registers no targets, so the gate aborted it
@@ -2163,6 +2347,12 @@ mod tests {
                     entry.require_workload().unwrap();
                     entry.require_scheduled().unwrap();
                     entry.require_storage().unwrap();
+                }
+                ScenarioCode::MF1 => {
+                    entry.require_workload().unwrap();
+                    entry.require_scheduled().unwrap();
+                    entry.require_storage().unwrap();
+                    entry.require_composed().unwrap();
                 }
             }
         }
