@@ -359,6 +359,8 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
     }
 }
 
+const INVOCATION_LOOP_DROP_STACK_SIZE: usize = 8 * 1024 * 1024;
+
 /// The worker invocation loops spawned by one executor.
 ///
 /// Every loop is bound to the executor's lifetime: when the executor's shutdown token is
@@ -386,10 +388,15 @@ impl InvocationLoops {
     ) -> JoinHandle<()> {
         let shutdown_token = self.shutdown_token.clone();
         self.tracker.spawn(async move {
+            let mut invocation_loop = Box::pin(invocation_loop);
             tokio::select! {
                 biased;
-                _ = shutdown_token.cancelled() => {}
-                _ = invocation_loop => {}
+                _ = shutdown_token.cancelled() => {
+                    // Suspended Wasmtime calls form a deeply nested future tree whose destructor
+                    // can exhaust Tokio's default worker-thread stack.
+                    stacker::grow(INVOCATION_LOOP_DROP_STACK_SIZE, move || drop(invocation_loop));
+                }
+                _ = &mut invocation_loop => {}
             }
         })
     }
