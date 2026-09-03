@@ -35,14 +35,13 @@ use golem_common::model::oplog::public_oplog_entry::{
     CommittedRemoteTransactionParams, CompletionDeliveredParams, CompletionDiscardedParams,
     CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
     EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
-    FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams, HostStreamFrameParams,
-    InterruptedParams, JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
-    SnapshotParams, StartParams, StartSpanParams, StreamCancelParams, StreamEndParams,
-    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams,
-    SuspendParams,
+    FinishSpanParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
+    LogParams, NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams,
+    PendingUpdateParams, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams,
+    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
@@ -668,11 +667,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     timestamp,
                     delta,
                 }))
-            }
-            OplogEntry::FilesystemStorageUsageUpdate { timestamp, delta } => {
-                Ok(PublicOplogEntry::FilesystemStorageUsageUpdate(
-                    FilesystemStorageUsageUpdateParams { timestamp, delta },
-                ))
             }
             OplogEntry::CreateResource {
                 timestamp,

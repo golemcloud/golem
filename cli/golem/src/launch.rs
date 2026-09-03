@@ -41,8 +41,8 @@ use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentWebhooksServiceConfig, EnvironmentStateServiceConfig,
     FilesystemStorageConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
     IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
-    KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, SchedulerStorageConfig,
-    WorkerServiceGrpcConfig,
+    KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceUsageMeteringConfig,
+    SchedulerStorageConfig, WorkerServiceGrpcConfig,
 };
 use golem_worker_service::WorkerService;
 use golem_worker_service::config::{
@@ -69,6 +69,7 @@ pub struct LaunchArgs {
     pub ports_file: Option<PathBuf>,
     pub data_dir: PathBuf,
     pub agent_filesystem_root: Option<PathBuf>,
+    pub resource_usage_metering: ResourceUsageMeteringConfig,
 }
 
 impl LaunchArgs {
@@ -313,7 +314,7 @@ fn shard_manager_config(
             port: 0,
             ..Default::default()
         },
-        db: DbConfig::Sqlite(DbSqliteConfig {
+        persistence: golem_shard_manager::config::PersistenceConfig::Sqlite(DbSqliteConfig {
             database: args
                 .data_dir
                 .join("shard_manager.db")
@@ -398,6 +399,7 @@ fn worker_executor_config(
             ..Default::default()
         },
         resource_limits: ResourceLimitsConfig::default(),
+        resource_usage_metering: args.resource_usage_metering,
         agent_types_service: AgentTypesServiceConfig::Grpc(
             golem_worker_executor::services::golem_config::AgentTypesServiceGrpcConfig {
                 ..Default::default()

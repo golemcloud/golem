@@ -152,7 +152,7 @@ private final class JsMiddlewareStreamLifecycle(iterator: () => JsByteStreamIter
 
   private var closed: Option[Future[Unit]] = None
 
-  def close(): Future[Unit] = synchronized {
+  def close(): Future[Unit] =
     closed.getOrElse {
       val result =
         try {
@@ -174,7 +174,6 @@ private final class JsMiddlewareStreamLifecycle(iterator: () => JsByteStreamIter
       closed = Some(result)
       result
     }
-  }
 }
 
 /**

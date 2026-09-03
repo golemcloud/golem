@@ -15,21 +15,23 @@
 use wasmtime::component::Resource;
 
 use crate::durable_host::DurableWorkerCtx;
-use crate::durable_host::authorization::targets::CanonicalGuestPath;
-use crate::durable_host::filesystem::remember_path;
+use crate::wasi_filesystem::push_agent_descriptor;
 use crate::workerctx::WorkerCtx;
-use wasmtime_wasi::filesystem::WasiFilesystemView as _;
+use golem_common::model::entity::FilesystemCapability;
 use wasmtime_wasi::p2::bindings::filesystem::preopens::{Descriptor, Host};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_directories(&mut self) -> wasmtime::Result<Vec<(Resource<Descriptor>, String)>> {
-        let mut view = self.as_wasi_view();
-        let current_dirs = Host::get_directories(&mut view.filesystem()).await?;
-        for (descriptor, guest_path) in &current_dirs {
-            let path = CanonicalGuestPath::new(if guest_path == "." { "/" } else { guest_path })
-                .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
-            remember_path(self, descriptor.rep(), path);
+        if self.filesystem_capability() == FilesystemCapability::Incapable {
+            return Ok(Vec::new());
         }
-        Ok(current_dirs)
+        let preopen = self.filesystem_preopen();
+        Ok(vec![
+            (
+                push_agent_descriptor(self, preopen.clone())?,
+                "/".to_string(),
+            ),
+            (push_agent_descriptor(self, preopen)?, ".".to_string()),
+        ])
     }
 }

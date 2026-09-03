@@ -931,7 +931,7 @@ impl EntityInvocationDurability {
 
         let replay = async {
             Ok(
-                match handle.replay_reconstruction_access(store, get_ctx).await? {
+                match Box::pin(handle.replay_reconstruction_access(store, get_ctx)).await? {
                     ReconstructionReplayOutcome::Replayed(response) => {
                         EntityReconstructionResolution::Replayed(response)
                     }

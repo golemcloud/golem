@@ -34,6 +34,17 @@ documented verification commands are all complete.
 - [x] Fast-forward the implementation branch to the reviewed PR 3787 revision.
 - [x] Complete every workstream in this plan.
 
+## Final main integration
+
+- [x] Fetch `origin/main` at
+      [`0f357e943`](https://github.com/golemcloud/golem/commit/0f357e94377847f5b2bad323757236e168f577ce),
+      which contains landed GOL-95 and GOL-96.
+- [x] Merge and resolve main's filesystem, memory-accounting, worker-lifecycle, TypeScript
+      streaming, and Scala streaming conflicts while preserving the tool-invocation invariants.
+- [x] Complete the post-merge unit, executor-integration, SDK, formatting, and lint checks.
+- [x] Obtain Oracle approval of the resolved and verified integration.
+- [x] Create the local merge commit. No push is authorized by this plan.
+
 ## Workstream status
 
 | ID | Workstream | Status | Findings | Dependency |
@@ -249,9 +260,9 @@ contracts:
   read cancellation followed by a resumed read on the same attachment. Log:
   `.amp/pr-3787-tests/p1-rust-tool-streaming-integration.log`.
 - `output_consumer_cancel_after_result_remains_a_valid_terminal_session`: passed as the available
-  language-neutral GOL-95 contract guard. The TypeScript-specific
-  `typescript_client_streaming_rpc_e2e` guard belongs to unlanded GOL-95 commit `4ac70d6995` and is
-  intentionally not imported into this branch. Log:
+  language-neutral GOL-95 contract guard. At this phase, the TypeScript-specific
+  `typescript_client_streaming_rpc_e2e` guard had not yet landed and was therefore deferred to the
+  final main integration. Log:
   `.amp/pr-3787-tests/p1-gol95-language-neutral-guard.log`.
 - Rust formatting checks and `cargo clippy -p golem-worker-executor --lib --tests -- -D warnings`
   passed. Clippy log: `.amp/pr-3787-tests/p1-clippy.log`.
@@ -455,9 +466,8 @@ weakening owner fencing.
       reexecutes, filesystem state reconstructs, and the recorded success remains authoritative.
 - [x] Record live resource exhaustion, then replay with ample capacity; assert it remains skipped.
 - [x] Exercise incomplete replay's transition to live and its memory-accounting upgrade.
-- [x] Rerun the available language-neutral GOL-95 lifecycle guard after P6. Keep GOL-95's
-      unpublished TypeScript-only streaming E2E as a post-landing integration gate rather than
-      importing its approval-gated runtime pin into this branch.
+- [x] Rerun both the language-neutral and TypeScript-specific GOL-95 lifecycle E2Es after the final
+      main merge against rebuilt SDK/template and fixture artifacts.
 
 ### Progress evidence
 
@@ -503,9 +513,10 @@ weakening owner fencing.
   `.amp/pr-3787-tests/p6-oracle5-final-cancel-after-result.log`. The durable live-upgrade rejection
   guard also passes after the final correction; its log is
   `.amp/pr-3787-tests/p6-oracle5-final-incomplete-upgrade-rejection.log`.
-- The TypeScript-specific GOL-95 test `typescript_client_streaming_rpc_e2e` remains unavailable on
-  this branch because GOL-95 commit `4ac70d6995` is local and unpublished. It will be rerun at the
-  final coordination gate once that integration base is available.
+- The TypeScript-specific GOL-95 test `typescript_client_streaming_rpc_e2e` was unavailable during
+  P6. GOL-95 subsequently landed through
+  [`f788952b7`](https://github.com/golemcloud/golem/commit/f788952b7), so the test and its
+  language-neutral companion are now required post-merge integration gates.
 - The Rust and scalability fixtures required by these tests were rebuilt and copied with the Golem
   CLI; the resulting scalability lockfiles are intentional generated outputs. Rust formatting,
   diff whitespace, and
@@ -745,8 +756,8 @@ documentation and genuine generated-client coverage.
 - [x] Keep generator/compiler subprocess execution in CLI integration tests.
 - [x] This is distinct from GOL-95's native TypeScript `clientFor` agent-stream tests and its
       generated Rust client regression.
-- [x] Land after GOL-95 or isolate it from `golem-worker-executor/tests/rpc.rs` and the shared
-      `agent-rpc` fixture to avoid mechanical conflicts.
+- [x] The implementation was initially isolated from GOL-95's `rpc.rs` and shared `agent-rpc`
+      fixture, then integrated after GOL-95 landed through the final main merge.
 
 ### Tool byte-stream conformance
 
@@ -759,7 +770,9 @@ documentation and genuine generated-client coverage.
 ### GOL-95
 
 GOL-95 owns TypeScript `AgentStream`, P3 JavaScript iterator lifecycle, wasm-rquickjs scheduler
-liveness, its runtime pin, and agent-method streaming E2Es. Its settled contract is:
+liveness, its runtime pin, and agent-method streaming E2Es. It landed on main through
+[`f788952b7`](https://github.com/golemcloud/golem/commit/f788952b7), including wasm-rquickjs 0.4.3.
+Its settled contract is:
 
 - readable drop is observed cooperatively on a subsequent failed producer write;
 - it does not interrupt an arbitrary pending source `next()`;
@@ -772,19 +785,18 @@ Coordination checklist:
 - [x] Do not modify GOL-95's P3 contract while fixing tool attachments.
 - [x] Avoid or rebase around its active `durable_session.rs`, `rpc.rs`, `agent-rpc`, `agentStream.ts`,
       documentation, and runtime-pin changes.
-- [x] Rerun the available language-neutral lifecycle regression after P6; retain GOL-95's
-      unpublished TypeScript-specific regression as a post-landing gate.
-- [x] Do not push or otherwise publish its currently local wasm-rquickjs revision without explicit
-      approval.
+- [x] After merging main, rebuild the TypeScript SDK template and `agent-rpc` fixture, then rerun
+      both `output_consumer_cancel_after_result_remains_a_valid_terminal_session` and
+      `typescript_client_streaming_rpc_e2e`.
 
 ### GOL-96
 
 GOL-96 owns Scala `AgentStream` lifecycle/state, affine transfer, schema/wire interop, invocation
-ownership for agent methods, Scala target/caller fixtures, and their E2Es. It is stable in local
-commits `164acf0d63c1660e182f6407347f094a0deb4078` and
-`aa6ff73e2ceb4994583f0d281ce1ab333ed49cca`. Those exact changes were imported from the local
-`golem-5` checkout as cherry-picks `31a7569f4` and `2df530ced`; no later branch commits or GOL-95
-changes were imported.
+ownership for agent methods, Scala target/caller fixtures, and their E2Es. Its stable local commits
+were initially imported as cherry-picks `31a7569f4` and `2df530ced`; the finalized work has since
+landed on main through
+[`0f357e943`](https://github.com/golemcloud/golem/commit/0f357e94377847f5b2bad323757236e168f577ce)
+and is being reconciled by the final main merge.
 
 Coordination checklist:
 
@@ -793,6 +805,8 @@ Coordination checklist:
 - [x] Import the stable GOL-96 base through the requested local patch before starting P7c/P8/P9a.
 - [x] Reuse GOL-96's ownership principles, not its P3 stream types or terminal semantics.
 - [x] Keep tool conformance tests separate from the GOL-95/GOL-96 agent-stream lifecycle matrix.
+- [x] Merge main's finalized Scala stream implementation while preserving the tool-specific
+      transfer-only middleware handles and provider ownership boundary.
 
 ## Finding coverage
 
@@ -842,8 +856,8 @@ Coordination checklist:
 - [x] Run focused worker-executor tests for attachment cancellation, no-body publication, owner
       fencing, leases, replay claims, and replay admission.
 - [x] Run the targeted tool integration matrix across Rust, TypeScript, Scala, and MoonBit.
-- [x] Run the available language-neutral GOL-95 lifecycle guard after replay/admission changes;
-      retain its unpublished TypeScript-only E2E as a post-landing integration gate.
+- [x] After the final main merge, rerun both the language-neutral and TypeScript-specific GOL-95
+      lifecycle E2Es against rebuilt SDK/template and fixture artifacts.
 - [x] Compile and test affected Scala JVM/JS modules and link generated `testAgents` after the Scala
       workstreams land.
 - [x] Regenerate WIT/SDK artifacts only from their source-of-truth workflow and verify no drift.
@@ -858,7 +872,7 @@ Coordination checklist:
 | Generic no-body helper absorbs fencing | Buffered bytes leak through or readers see cancellation instead of trap | Separate `fence_owner()` path and mode-matrix tests | Closed |
 | Eager TS rejecting promise remains public | Stdout-only use still raises `unhandledrejection` | Lazy public rejection from settled envelope | Closed |
 | P3 and tool stream errors are unified | GOL-95 contract regression or invented host API | Tool-only typed failures and conformance tests | Closed |
-| GOL-95 test/runtime files collide mechanically | Rebase conflicts or lost streaming coverage | P10 is isolated; run the unpublished TypeScript E2E after GOL-95 lands | Deferred to GOL-95 integration |
+| GOL-95 test/runtime files collide mechanically | Rebase conflicts or lost streaming coverage | Resolve the main merge, rebuild the shared fixture, and run both lifecycle E2Es | Integration in progress |
 | Scala work stacks on unresolved GOL-96 codegen | Rework and ambiguous ownership | Stable GOL-96 commits imported before P7c/P8/P9a | Closed |
 
 ## Progress log
@@ -890,7 +904,7 @@ Append an entry whenever a workstream changes status or a design gate is resolve
 | 2026-09-03 | P7a | Awaiting Oracle approval | Implemented one shared lazy result driver/cache and result-driven stdout wrapper. Focused driver and API-shape tests, all 134 feature-enabled SDK library tests, rebuilt fixture, real generated-client capable/incapable and multi-observer integration coverage, SDK/executor clippy, formatting, and whitespace checks pass. |
 | 2026-09-03 | P7a | Oracle correction applied | Replaced latest-observer source registration with a stable driver-owned fan-out waker. A deterministic distinct-waker test drops the latest observer, completes the source, and proves the surviving observer wakes and receives the cached result from the one source factory. All 135 SDK library tests, the force-rebuilt real generated-client integration, SDK clippy, formatting, and whitespace checks pass. |
 | 2026-09-03 | P7a | Complete | Oracle's follow-up review found no blockers and returned `APPROVED`; it confirmed the stable fan-out closes observer cancellation races while preserving exactly-one-get, affine result, error, stdout, and cancellation semantics. |
-| 2026-09-03 | P7b | In progress | Auditing the TypeScript bridge's eager rejecting result promise, collect path, generated API surface, and existing rejection-handling coverage without importing unpublished GOL-95 changes. |
+| 2026-09-03 | P7b | In progress | Auditing the TypeScript bridge's eager rejecting result promise, collect path, generated API surface, and existing rejection-handling coverage before GOL-95 became available through main. |
 | 2026-09-03 | P7b | Awaiting Oracle approval | Host `future.get()` rejection is immediately settled into a non-rejecting envelope; dynamic/generated clients preserve that invariant, public result access is lazy, and `collect()` consumes the envelope. All 705 SDK tests (20 skipped), two generated-client compile tests, a force-rebuilt real TypeScript tool-streaming executor integration, typecheck/build, lint, formatting, clippy, and whitespace checks pass. GOL-95 files remain untouched. |
 | 2026-09-03 | P7b | Complete | Oracle's holistic review found no blockers and returned `APPROVED`; it confirmed immediate host rejection handling, the non-rejecting internal envelope invariant, lazy public rejection, result-before-stdout collect precedence, and dynamic/generated RPC/custom-error fidelity. |
 | 2026-09-03 | P9b | In progress | Replacing the MoonBit provider's raw stdout sink with a dedicated typed capability, preserving typed source failures, and closing generated missing-attachment cleanup gaps. |
@@ -914,7 +928,10 @@ Append an entry whenever a workstream changes status or a design gate is resolve
 | 2026-09-03 | P9a | In progress | Moving Scala tool attachment and embedded schema-stream ownership to the outer guest export boundary so early validation and asynchronous provider exits share one cleanup path. |
 | 2026-09-03 | P9a | Awaiting Oracle approval | One export-owned invocation scope now wraps each attachment once, captures embedded schema streams, preserves ownership through result encoding and future settlement, concurrently releases all capabilities exactly once, and restores the primary outcome after cleanup. Focused tests cover every validation/result/failure/cleanup branch; 22 focused and all 604 core tests pass, `testAgents` full-links, and the rebuilt real Scala fixture proves invalid-command-path error preservation, live stdin cancellation, and non-abandoning stdout terminal publication. Fixture build/validation, executor integration, Scala/Rust formatting, executor clippy, and whitespace checks pass. Logs are under `.amp/pr-3787-tests/p9a-*`. |
 | 2026-09-03 | P9a | Complete | Oracle reviewed validation precedence, partial-decode cleanup, synchronous/asynchronous failure, result encoding and transfer, nested forwarding, attachment liveness, exactly-once concurrent cleanup, and primary-outcome preservation, found no blocker, and returned `APPROVED`. |
-| 2026-09-03 | Final verification | Complete | Followed the pre-PR checklist. WIT synchronization is clean; 221 combined executor tool/replay-state tests and 53 oplog payload tests pass. The final real-component matrix passes for Rust, TypeScript, Scala, and MoonBit together with the language-neutral GOL-95 lifecycle guard (5 tests), and all four replay/admission integration regressions pass. All-target clippy passes for `golem-common`, `golem-worker-executor`, `golem-worker-executor-test-utils`, and `golem-cli`; final Rust/Scala formatting and whitespace checks pass. Phase-local final runs additionally cover complete Rust, TypeScript, Scala, and MoonBit SDK suites and every rebuilt affected fixture. GOL-95's unpublished TypeScript-only E2E is deliberately retained as a post-landing integration gate because its commit and approval-gated runtime pin are absent from this checkout. Logs: `.amp/pr-3787-tests/final-check-wit.log`, `.amp/pr-3787-tests/final-executor-tool-replay-unit.log`, `.amp/pr-3787-tests/final-golem-common-oplog-payload.log`, `.amp/pr-3787-tests/final-cross-language-tool-integration.log`, `.amp/pr-3787-tests/final-replay-admission-integration.log`, and `.amp/pr-3787-tests/final-root-clippy.log`. |
+| 2026-09-03 | Final verification | Complete | Followed the pre-PR checklist before the main integration. WIT synchronization is clean; 221 combined executor tool/replay-state tests and 53 oplog payload tests pass. The real-component matrix passes for Rust, TypeScript, Scala, and MoonBit together with the language-neutral GOL-95 lifecycle guard (5 tests), and all four replay/admission integration regressions pass. All-target clippy passes for `golem-common`, `golem-worker-executor`, `golem-worker-executor-test-utils`, and `golem-cli`; final Rust/Scala formatting and whitespace checks pass. Phase-local final runs additionally cover complete Rust, TypeScript, Scala, and MoonBit SDK suites and every rebuilt affected fixture. Logs: `.amp/pr-3787-tests/final-check-wit.log`, `.amp/pr-3787-tests/final-executor-tool-replay-unit.log`, `.amp/pr-3787-tests/final-golem-common-oplog-payload.log`, `.amp/pr-3787-tests/final-cross-language-tool-integration.log`, `.amp/pr-3787-tests/final-replay-admission-integration.log`, and `.amp/pr-3787-tests/final-root-clippy.log`. |
+| 2026-09-03 | Final main integration | In progress | Fetched and merged `origin/main` at `0f357e943`, which includes GOL-95 and GOL-96. All conflicts are resolved; the merged Rust packages compile, the Scala model/core suites pass, the TypeScript SDK/template rebuild is complete, Rust formatting and Scala scalafmt checks pass, and focused post-merge tests plus final Oracle review remain in progress. |
+| 2026-09-03 | Final main integration | Awaiting Oracle approval | Reconciled main's replacement filesystem architecture and finalized GOL-95/GOL-96 stream implementations with the branch's typed execution modes, replay claims, memory admission, lifecycle fencing, tool operation state, and transfer-only middleware handles. Reopened generation-checked entity admission immediately before replay preparation and moved entity draining to retain the pre-signal active owner. Main's enlarged async call graph initially overflowed the default Tokio worker stack during incomplete tool replay; boxing the accepted tool execution and durable replay-access futures restores the default-stack contract without changing behavior. Package checks pass; Scala model JVM/JS and core pass 318/318/603 tests; the TypeScript stream suite passes 14 tests; 202 focused executor unit tests, all four replay/admission integrations, and both GOL-95 lifecycle E2Es pass against rebuilt artifacts. All-target package clippy passes, Rust/Scala formatting and merge-marker/whitespace checks are clean. Strict `-D warnings` clippy has only 16 macOS-only warnings in main's unchanged `sandbox_filesystem` files; the merge-specific warning was fixed. Logs: `.amp/pr-3787-tests/main-merge-final-focused-unit.log`, `.amp/pr-3787-tests/main-merge-replay-regression-suite.log`, `.amp/pr-3787-tests/main-merge-typescript-streaming-rpc-e2e.log`, `.amp/pr-3787-tests/main-merge-output-consumer-cancel.log`, `.amp/pr-3787-tests/main-merge-final-clippy-nonstrict.log`, `.amp/pr-3787-tests/main-merge-final-clippy-strict.log`, `.amp/pr-3787-tests/main-merge-final-rustfmt.log`, and `.amp/pr-3787-tests/main-merge-final-scalafmt.log`. |
+| 2026-09-03 | Final main integration | Complete | Oracle reviewed the resolved filesystem, lifecycle, replay, memory, TypeScript, and Scala integration; it explicitly approved the generation-checked admission reopening, pre-signal owner drain, and async stack boundaries with no blockers. The local merge commit includes all six required unstaged integration fixes and this final progress record. Nothing was pushed. |
 
 ## Definition of done
 
@@ -924,8 +941,7 @@ Append an entry whenever a workstream changes status or a design gate is resolve
 - [x] No compatibility shims, fallback parsing, or dual protocol behavior are introduced.
 - [x] Owner fencing, durable publication, replay reconstruction, and SDK ownership invariants are
       covered by focused tests.
-- [x] GOL-96 is integrated without semantic regression; GOL-95 remains isolated, its
-      language-neutral lifecycle guard passes, and its unpublished TypeScript E2E is an explicit
-      post-landing gate.
+- [x] GOL-95 and GOL-96 are integrated from main without semantic regression, and both GOL-95
+      lifecycle E2Es pass against rebuilt artifacts.
 - [x] Generated artifacts and documentation match their in-tree sources of truth.
 - [x] Final scoped formatting, linting, builds, tests, and pre-PR checks pass.

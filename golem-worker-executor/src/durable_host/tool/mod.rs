@@ -2431,14 +2431,14 @@ where
             )
         });
     let failed_resources = Arc::new(Mutex::new(None));
-    let execution_future = execute_accepted_tool_call_inner(
+    let execution_future = Box::pin(execute_accepted_tool_call_inner(
         accessor,
         accepted,
         stdout,
         execution,
         failed_resources.clone(),
         inner_supervisor_started,
-    );
+    ));
     let execution_future = async {
         if execution.is_some_and(|execution| !execution.cancellable) {
             crate::durable_host::without_entity_cancellation(execution_future).await

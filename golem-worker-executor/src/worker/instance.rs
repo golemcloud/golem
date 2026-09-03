@@ -20,33 +20,26 @@ use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOperations};
 use crate::model::ExecutionStatus;
 use crate::services::active_agents::WorkerComponentCharge;
-use crate::services::agent_storage_meter::AgentStorageMeter;
-use crate::services::file_loader::{FileLoader, FileUseToken};
+use crate::services::agent_filesystem::FilesystemGenerationHandle;
 use crate::services::oplog::{CommitLevel, Oplog};
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::{HasActiveAgents, HasComponentService, HasWasmtimeEngine};
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
 use golem_common::model::OwnedAgentId;
-use golem_common::model::agent::AgentMode;
-use golem_common::model::component::{AgentFilePermissions, InitialAgentFile};
 use golem_common::model::entity::{
     EntityActivation, EntityInvocationScope, ExecutableTarget, FilesystemCapability,
     InvocationExecutionMode, OwnerRuntime,
 };
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::component::Component as ComponentMetadata;
-use std::collections::HashMap;
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
-use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use tempfile::TempDir;
 use tracing::warn;
 use wasmtime::component::{Component, Instance};
 use wasmtime::{AsContextMut, Store, StoreMemory, UpdateDeadline};
@@ -69,310 +62,6 @@ pub(super) fn allocated_linear_memory_bytes<T>(
                 .ok_or(LinearMemoryEnumerationError::Overflow),
             StoreMemory::Shared(_) => Err(LinearMemoryEnumerationError::Shared),
         })
-}
-
-/// Owner-scoped filesystem root shared by the primary Store and every filesystem-capable entity
-/// Store. Each Store receives separate WASI resources over this path; lifecycle generation changes
-/// only after all entity bodies have been fenced.
-pub struct OwnerFilesystem {
-    root: Mutex<Option<Arc<OwnerFilesystemRoot>>>,
-    generation: AtomicU64,
-    active: AtomicBool,
-    provisioned_files: tokio::sync::Mutex<HashMap<PathBuf, OwnerProvisionedFile>>,
-}
-
-pub struct OwnerFilesystemAttachment {
-    root: Arc<OwnerFilesystemRoot>,
-    generation: u64,
-}
-
-#[derive(Clone)]
-pub(crate) enum OwnerProvisionedFile {
-    ReadOnly {
-        file: InitialAgentFile,
-        token: FileUseToken,
-    },
-    ReadWrite {
-        file: InitialAgentFile,
-    },
-}
-
-pub(crate) struct OwnerFilesystemProvisioning {
-    pub(crate) files: HashMap<PathBuf, OwnerProvisionedFile>,
-    pub(crate) new_read_write_bytes: u64,
-}
-
-impl OwnerProvisionedFile {
-    fn declaration(&self) -> &InitialAgentFile {
-        match self {
-            Self::ReadOnly { file, .. } | Self::ReadWrite { file } => file,
-        }
-    }
-}
-
-enum OwnerFilesystemRoot {
-    Temp(TempDir),
-    Deterministic(PathBuf),
-}
-
-impl OwnerFilesystemRoot {
-    fn path(&self) -> &Path {
-        match self {
-            Self::Temp(directory) => directory.path(),
-            Self::Deterministic(directory) => directory,
-        }
-    }
-
-    fn clear(&self) -> Result<(), WorkerExecutorError> {
-        for entry in std::fs::read_dir(self.path()).map_err(|error| {
-            WorkerExecutorError::runtime(format!(
-                "Failed to inspect owner filesystem {}: {error}",
-                self.path().display()
-            ))
-        })? {
-            let path = entry
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
-                .path();
-            let result = if path.is_dir() {
-                std::fs::remove_dir_all(&path)
-            } else {
-                std::fs::remove_file(&path)
-            };
-            result.map_err(|error| {
-                WorkerExecutorError::runtime(format!(
-                    "Failed to clear owner filesystem path {}: {error}",
-                    path.display()
-                ))
-            })?;
-        }
-        Ok(())
-    }
-}
-
-impl Drop for OwnerFilesystemRoot {
-    fn drop(&mut self) {
-        if let Self::Deterministic(path) = self
-            && path.exists()
-        {
-            let _ = std::fs::remove_dir_all(path);
-        }
-    }
-}
-
-impl OwnerFilesystem {
-    fn new() -> Self {
-        Self {
-            root: Mutex::new(None),
-            generation: AtomicU64::new(0),
-            active: AtomicBool::new(false),
-            provisioned_files: tokio::sync::Mutex::new(HashMap::new()),
-        }
-    }
-
-    pub async fn begin_primary_generation(
-        &self,
-        lane: &OwnerLane,
-        deterministic_root_dir: Option<&Path>,
-        owner_id: &OwnedAgentId,
-    ) -> Result<OwnerFilesystemAttachment, WorkerExecutorError> {
-        let _exclusive = lane.acquire_exclusive().await;
-        self.active.store(false, Ordering::Release);
-        self.provisioned_files.lock().await.clear();
-        let mut root = self.root.lock().unwrap();
-        let root = match root.as_mut() {
-            Some(root) => {
-                root.clear()?;
-                root.clone()
-            }
-            None => {
-                let created = Arc::new(if let Some(base) = deterministic_root_dir {
-                    let path = base
-                        .join(owner_id.environment_id.to_string())
-                        .join(owner_id.agent_id.component_id.to_string())
-                        .join(owner_id.agent_id.agent_name_encoded());
-                    std::fs::create_dir_all(&path).map_err(|error| {
-                        WorkerExecutorError::runtime(format!(
-                            "Failed to create deterministic owner directory {}: {error}",
-                            path.display()
-                        ))
-                    })?;
-                    OwnerFilesystemRoot::Deterministic(path)
-                } else {
-                    OwnerFilesystemRoot::Temp(
-                        tempfile::Builder::new()
-                            .prefix("golem")
-                            .tempdir()
-                            .map_err(|error| {
-                                WorkerExecutorError::runtime(format!(
-                                    "Failed to create owner temporary directory: {error}"
-                                ))
-                            })?,
-                    )
-                });
-                *root = Some(created.clone());
-                created
-            }
-        };
-        let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
-        self.active.store(true, Ordering::Release);
-        Ok(OwnerFilesystemAttachment { root, generation })
-    }
-
-    pub(crate) fn attach_entity(&self) -> Result<OwnerFilesystemAttachment, WorkerExecutorError> {
-        if !self.active.load(Ordering::Acquire) {
-            return Err(WorkerExecutorError::runtime(
-                "Owner filesystem has no active primary generation",
-            ));
-        }
-        let root = self.root.lock().unwrap().clone().ok_or_else(|| {
-            WorkerExecutorError::runtime("Owner filesystem has no active primary generation")
-        })?;
-        let attachment = OwnerFilesystemAttachment {
-            root,
-            generation: self.generation.load(Ordering::Acquire),
-        };
-        self.validate(&attachment)?;
-        Ok(attachment)
-    }
-
-    pub(crate) fn fence(&self) {
-        self.active.store(false, Ordering::Release);
-        self.generation.fetch_add(1, Ordering::AcqRel);
-    }
-
-    pub(crate) async fn acquire_inspection(
-        &self,
-        lane: &OwnerLane,
-        attachment: &OwnerFilesystemAttachment,
-    ) -> Result<super::owner_lane::OwnerLaneExclusiveGuard, WorkerExecutorError> {
-        let exclusive = lane.acquire_exclusive().await;
-        self.validate(attachment)?;
-        Ok(exclusive)
-    }
-
-    pub(crate) async fn provision(
-        &self,
-        attachment: &OwnerFilesystemAttachment,
-        file_loader: &Arc<FileLoader>,
-        environment_id: EnvironmentId,
-        files: &[InitialAgentFile],
-    ) -> Result<OwnerFilesystemProvisioning, WorkerExecutorError> {
-        self.validate(attachment)?;
-        let mut provisioned_files = self.provisioned_files.lock().await;
-        self.validate(attachment)?;
-
-        let mut requested = HashMap::new();
-        let mut new_read_write_bytes = 0u64;
-        for file in files {
-            let path = attachment
-                .path()
-                .join(PathBuf::from(file.path.to_rel_string()));
-            if let Some(existing) = provisioned_files.get(&path) {
-                if existing.declaration() != file {
-                    return Err(WorkerExecutorError::FileSystemError {
-                        path: file.path.to_rel_string(),
-                        reason: "Conflicting owner filesystem provision declarations".to_string(),
-                    });
-                }
-                requested.insert(path, existing.clone());
-                continue;
-            }
-
-            let provisioned = match file.permissions {
-                AgentFilePermissions::ReadOnly => {
-                    let token = file_loader
-                        .get_read_only_to(environment_id, file.content_hash, &path, file.size)
-                        .await?;
-                    OwnerProvisionedFile::ReadOnly {
-                        file: file.clone(),
-                        token,
-                    }
-                }
-                AgentFilePermissions::ReadWrite => {
-                    file_loader
-                        .get_read_write_to(environment_id, file.content_hash, &path)
-                        .await?;
-                    new_read_write_bytes = new_read_write_bytes.saturating_add(file.size);
-                    OwnerProvisionedFile::ReadWrite { file: file.clone() }
-                }
-            };
-            self.validate(attachment)?;
-            provisioned_files.insert(path.clone(), provisioned.clone());
-            requested.insert(path, provisioned);
-        }
-
-        Ok(OwnerFilesystemProvisioning {
-            files: requested,
-            new_read_write_bytes,
-        })
-    }
-
-    pub(crate) async fn preflight_provisioning(
-        &self,
-        attachment: &OwnerFilesystemAttachment,
-        files: &[InitialAgentFile],
-    ) -> Result<u64, WorkerExecutorError> {
-        self.validate(attachment)?;
-        let provisioned_files = self.provisioned_files.lock().await;
-        self.validate(attachment)?;
-        let mut requested = HashMap::<PathBuf, &InitialAgentFile>::new();
-        let mut new_read_write_bytes = 0u64;
-        for file in files {
-            let path = attachment
-                .path()
-                .join(PathBuf::from(file.path.to_rel_string()));
-            let existing_declaration = provisioned_files
-                .get(&path)
-                .map(OwnerProvisionedFile::declaration)
-                .or_else(|| requested.get(&path).copied());
-            if let Some(existing) = existing_declaration {
-                if existing != file {
-                    return Err(WorkerExecutorError::FileSystemError {
-                        path: file.path.to_rel_string(),
-                        reason: "Conflicting owner filesystem provision declarations".to_string(),
-                    });
-                }
-                continue;
-            }
-            if file.permissions == AgentFilePermissions::ReadWrite {
-                new_read_write_bytes = new_read_write_bytes.saturating_add(file.size);
-            }
-            requested.insert(path, file);
-        }
-        Ok(new_read_write_bytes)
-    }
-
-    fn validate(&self, attachment: &OwnerFilesystemAttachment) -> Result<(), WorkerExecutorError> {
-        let generation = self.generation.load(Ordering::Acquire);
-        if !self.active.load(Ordering::Acquire) || attachment.generation != generation {
-            return Err(WorkerExecutorError::runtime(format!(
-                "Owner filesystem generation {} is fenced (active generation: {generation})",
-                attachment.generation
-            )));
-        }
-        let matches_root = self
-            .root
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|root| Arc::ptr_eq(root, &attachment.root));
-        if !matches_root {
-            return Err(WorkerExecutorError::runtime(
-                "Owner filesystem attachment belongs to a stale root",
-            ));
-        }
-        Ok(())
-    }
-}
-
-impl OwnerFilesystemAttachment {
-    pub fn path(&self) -> &Path {
-        self.root.path()
-    }
-
-    pub fn generation(&self) -> u64 {
-        self.generation
-    }
 }
 
 struct StoreFuelGuard<Ctx: crate::workerctx::FuelManagement + 'static> {
@@ -741,29 +430,20 @@ impl OwnerExecution {
 pub struct OwnerRuntimeResources {
     resource_limits: Arc<AtomicResourceEntry>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    filesystem: Arc<OwnerFilesystem>,
-    filesystem_storage_usage: AtomicU64,
-    storage_meter: AgentStorageMeter,
+    // This weak lifecycle handle lets entity Stores attach during reconstruction or residence
+    // without sharing or owning the AgentFilesystem itself.
+    filesystem_generation: Mutex<Option<FilesystemGenerationHandle>>,
 }
 
 impl OwnerRuntimeResources {
     pub(crate) fn new(
         resource_limits: Arc<AtomicResourceEntry>,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-        agent_mode: AgentMode,
-        filesystem_storage_usage: u64,
     ) -> Self {
         Self {
-            storage_meter: AgentStorageMeter::new(
-                agent_mode,
-                filesystem_storage_usage,
-                resource_limits.clone(),
-                std::time::Instant::now(),
-            ),
             resource_limits,
             execution_status,
-            filesystem: Arc::new(OwnerFilesystem::new()),
-            filesystem_storage_usage: AtomicU64::new(filesystem_storage_usage),
+            filesystem_generation: Mutex::new(None),
         }
     }
 
@@ -775,46 +455,24 @@ impl OwnerRuntimeResources {
         self.execution_status.clone()
     }
 
-    pub fn filesystem(&self) -> Arc<OwnerFilesystem> {
-        self.filesystem.clone()
+    pub(crate) fn activate_filesystem_generation(&self, generation: FilesystemGenerationHandle) {
+        *self.filesystem_generation.lock().unwrap() = Some(generation);
     }
 
-    pub fn storage_meter(&self) -> AgentStorageMeter {
-        self.storage_meter.clone()
-    }
-
-    pub fn filesystem_storage_usage(&self) -> u64 {
-        self.filesystem_storage_usage.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn acquire_filesystem_storage(&self, bytes: u64) -> u64 {
-        self.filesystem_storage_usage
-            .fetch_add(bytes, Ordering::AcqRel)
-            + bytes
-    }
-
-    pub(crate) fn reset_filesystem_storage_usage(&self, bytes: u64) {
-        let previous = self.filesystem_storage_usage.swap(bytes, Ordering::AcqRel);
-        match bytes.cmp(&previous) {
-            std::cmp::Ordering::Less => self
-                .storage_meter
-                .on_release(previous - bytes, std::time::Instant::now()),
-            std::cmp::Ordering::Greater => self
-                .storage_meter
-                .on_acquire(bytes - previous, std::time::Instant::now()),
-            std::cmp::Ordering::Equal => {}
-        }
-    }
-
-    pub(crate) fn release_filesystem_storage(&self, bytes: u64) -> u64 {
-        let mut released = 0;
-        self.filesystem_storage_usage
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                released = bytes.min(current);
-                Some(current - released)
+    pub(crate) fn filesystem_generation_handle(
+        &self,
+    ) -> Result<FilesystemGenerationHandle, WorkerExecutorError> {
+        self.filesystem_generation
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime("Owner filesystem has no active generation")
             })
-            .expect("filesystem usage update cannot fail");
-        released
+    }
+
+    pub(crate) fn fence_filesystem_generation(&self) {
+        self.filesystem_generation.lock().unwrap().take();
     }
 }
 
@@ -1380,14 +1038,9 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
 
 #[cfg(test)]
 mod tests {
-    use super::{OwnerFilesystem, StoreFuelGuard};
-    use crate::worker::owner_lane::OwnerLane;
+    use super::StoreFuelGuard;
     use crate::workerctx::FuelManagement;
-    use golem_common::model::component::ComponentId;
-    use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::AgentError;
-    use golem_common::model::oplog::OplogIndex;
-    use golem_common::model::{AgentId, OwnedAgentId};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
     use test_r::test;
@@ -1399,6 +1052,10 @@ mod tests {
     }
 
     impl FuelManagement for FuelTestContext {
+        fn fuel_metering_enabled(&self) -> bool {
+            true
+        }
+
         fn ensure_fuel(&mut self, _current_level: u64) -> Result<(), AgentError> {
             self.borrowed = true;
             Ok(())
@@ -1437,79 +1094,6 @@ mod tests {
         drop(StoreFuelGuard::new(store));
 
         assert_eq!(returned_at.load(Ordering::Acquire), 123);
-        Ok(())
-    }
-
-    #[test]
-    async fn owner_filesystem_generation_fences_stale_attachments_and_inspection_uses_lane()
-    -> anyhow::Result<()> {
-        let agent_id = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "owner-filesystem-generation-test".to_string(),
-        };
-        let owner_id = OwnedAgentId::new(EnvironmentId::new(), &agent_id);
-        let lane = OwnerLane::new(owner_id.clone());
-        let filesystem = Arc::new(OwnerFilesystem::new());
-        let first = filesystem
-            .begin_primary_generation(&lane, None, &owner_id)
-            .await?;
-        std::fs::write(first.path().join("old-generation"), b"old")?;
-        let entity = filesystem.attach_entity()?;
-
-        let primary = lane.enter_primary(OplogIndex::INITIAL)?.acquire().await?;
-        let inspecting_filesystem = filesystem.clone();
-        let inspecting_lane = lane.clone();
-        let inspection = tokio::spawn(async move {
-            inspecting_filesystem
-                .acquire_inspection(&inspecting_lane, &entity)
-                .await
-        });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert!(
-            !inspection.is_finished(),
-            "executor inspection must wait for the filesystem lane holder"
-        );
-        drop(primary);
-        drop(inspection.await??);
-
-        let primary = lane
-            .enter_primary(OplogIndex::from_u64(2))?
-            .acquire()
-            .await?;
-        let updating_filesystem = filesystem.clone();
-        let updating_lane = lane.clone();
-        let updating_owner = owner_id.clone();
-        let update = tokio::spawn(async move {
-            updating_filesystem
-                .begin_primary_generation(&updating_lane, None, &updating_owner)
-                .await
-        });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert!(
-            !update.is_finished(),
-            "filesystem generation update must wait for the active owner lane holder"
-        );
-        drop(primary);
-        let updated = update.await??;
-        assert!(updated.generation() > first.generation());
-        assert!(!updated.path().join("old-generation").exists());
-
-        filesystem.fence();
-        assert!(filesystem.attach_entity().is_err());
-        assert!(
-            filesystem.acquire_inspection(&lane, &first).await.is_err(),
-            "a fenced Store attachment must not inspect the root"
-        );
-
-        let second = filesystem
-            .begin_primary_generation(&lane, None, &owner_id)
-            .await?;
-        assert!(second.generation() > updated.generation());
-        assert!(!second.path().join("old-generation").exists());
-        assert!(
-            filesystem.acquire_inspection(&lane, &first).await.is_err(),
-            "an attachment from the previous root generation must remain stale"
-        );
         Ok(())
     }
 }

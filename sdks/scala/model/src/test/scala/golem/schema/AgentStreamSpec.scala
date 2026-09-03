@@ -245,6 +245,90 @@ object AgentStreamSpec extends ZIOSpecDefault {
             nestedError.getMessage.contains("closed")
           )
         }
+      },
+      test("streams that complete on their own leave their owner") {
+        ZIO.fromFuture { implicit ec =>
+          val owner         = new AgentStreamOwnership
+          var finalizations = 0
+          val stream        = AgentStreamOwnership.capture(owner) {
+            AgentStream.fromPull[String](
+              () => Future.successful(None),
+              () => {
+                finalizations += 1
+                Future.successful(())
+              }
+            )
+          }
+          val registered = owner.pendingEntries
+
+          for {
+            end     <- stream.pull()
+            released = owner.pendingEntries
+            _       <- owner.close()
+          } yield assertTrue(registered == 1, end.isEmpty, released == 0, finalizations == 1)
+        }
+      },
+      test("closed streams leave their owner once their finalizer completes") {
+        ZIO.fromFuture { implicit ec =>
+          val owner        = new AgentStreamOwnership
+          val finalization = Promise[Unit]()
+          val stream       = AgentStreamOwnership.capture(owner) {
+            AgentStream.fromPull[String](() => Future.successful(Some("value")), () => finalization.future)
+          }
+
+          val closing      = stream.close()
+          val whileClosing = owner.pendingEntries
+          finalization.success(())
+
+          closing.map(_ => assertTrue(whileClosing == 1, owner.pendingEntries == 0))
+        }
+      },
+      test("committed transfers leave the invocation owner") {
+        ZIO.fromFuture { implicit ec =>
+          val owner  = new AgentStreamOwnership
+          val stream = AgentStreamOwnership.capture(owner) {
+            AgentStream.fromPull[SchemaValue](() => Future.successful(None))
+          }
+          val handle   = stream.moveToSchemaValueStream(identity)
+          val endpoint = handle.take().get
+          val moved    = owner.pendingEntries
+          endpoint.commitTransfer()
+          val committed = owner.pendingEntries
+
+          for {
+            _ <- owner.close()
+            _ <- endpoint.dispose()
+          } yield assertTrue(moved == 1, committed == 0)
+        }
+      },
+      test("derived streams release the shared entry only when the outermost stream finalizes") {
+        ZIO.fromFuture { implicit ec =>
+          val owner = new AgentStreamOwnership
+          val inner = AgentStreamOwnership.capture(owner) {
+            AgentStream.fromPull[SchemaValue](() => Future.successful(Some(SchemaValue.StringValue("a"))))
+          }
+          val endpoint = inner.moveToSchemaValueStream(identity).take().get
+          val encoded  = endpoint.asInstanceOf[GuestSchemaValueStream.Native].value
+          val outer    = implicitly[FromSchema[AgentStream[String]]]
+            .fromValue(SchemaValue.StreamValue(GuestSchemaValueStreamHandle.endpoint(endpoint)))
+            .toOption
+            .get
+            .map(_.toUpperCase)
+
+          for {
+            first     <- outer.pull()
+            _         <- encoded.close()
+            afterInner = owner.pendingEntries
+            failure   <- outer.pull().failed
+            afterOuter = owner.pendingEntries
+            _         <- owner.close()
+          } yield assertTrue(
+            first.contains("A"),
+            afterInner == 1,
+            failure.getMessage.contains("closed"),
+            afterOuter == 0
+          )
+        }
       }
     )
 }
