@@ -810,7 +810,7 @@ impl WorkerService for DefaultWorkerService {
         let shard_assignment = self.shard_service.try_get_current_assignment();
         let mut result: Vec<GetWorkerMetadataResult> = vec![];
         if let Some(shard_assignment) = shard_assignment {
-            for shard_id in shard_assignment.shard_ids {
+            for shard_id in shard_assignment.shard_ids() {
                 let key = Self::running_in_shard_key(&shard_id);
                 let mut shard_worker = self.enum_workers_at_key(&key).await;
                 result.append(&mut shard_worker);

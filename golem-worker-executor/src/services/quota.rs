@@ -1173,13 +1173,17 @@ mod tests {
     use super::*;
     use chrono::Duration as ChronoDuration;
     use golem_common::model::quota::{ResourceLimit, ResourceRateLimit, TimePeriod};
-    use golem_common::model::{Pod, RoutingTable};
-    use golem_service_base::clients::shard_manager::ShardManagerError;
+    use golem_common::model::{Pod, RoutingTable, ShardEpoch, ShardId};
+    use golem_service_base::clients::shard_manager::{
+        ShardLease, ShardLeaseError, ShardManagerError, ShardRegistration,
+    };
     use pretty_assertions::assert_eq;
     use pretty_assertions::assert_matches;
+    use std::collections::BTreeMap;
     use std::net::{IpAddr, Ipv4Addr};
     use std::sync::Mutex as StdMutex;
     use test_r::test;
+    use uuid::Uuid;
 
     test_r::enable!();
 
@@ -1335,7 +1339,24 @@ mod tests {
             &self,
             _port: u16,
             _pod_name: Option<String>,
-        ) -> Result<u32, ShardManagerError> {
+            _executor_id: Uuid,
+        ) -> Result<ShardRegistration, ShardManagerError> {
+            unimplemented!()
+        }
+
+        async fn renew_shard_lease(
+            &self,
+            _executor_id: Uuid,
+            _shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+        ) -> Result<ShardLease, ShardLeaseError> {
+            unimplemented!()
+        }
+
+        async fn deregister(
+            &self,
+            _executor_id: Uuid,
+            _shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+        ) -> Result<(), ShardLeaseError> {
             unimplemented!()
         }
 

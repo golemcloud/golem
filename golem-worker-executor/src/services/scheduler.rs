@@ -757,7 +757,7 @@ mod tests {
     use golem_common::model::worker::AgentConfigEntryDto;
     use golem_common::model::{
         AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, OwnedAgentId, PromiseId,
-        RetryConfig, ScheduleId, ScheduledAction, ShardAssignment, ShardId,
+        RetryConfig, ScheduleId, ScheduledAction, ShardAssignment, ShardEpoch, ShardId,
     };
     use golem_common::schema::SchemaValue;
     use golem_common::serialization::serialize;
@@ -1056,7 +1056,11 @@ mod tests {
 
     fn create_shard_service_mock() -> Arc<dyn ShardService> {
         let result = Arc::new(ShardServiceDefault::new());
-        result.register(1, &HashSet::from_iter(vec![ShardId::new(0)]));
+        result.register(
+            1,
+            &HashMap::from([(ShardId::new(0), ShardEpoch::default())]),
+            None,
+        );
         result
     }
 
@@ -1289,10 +1293,7 @@ mod tests {
         );
         assert_eq!(insert_attempts.load(Ordering::SeqCst), 3);
 
-        let assignment = ShardAssignment {
-            number_of_shards: 1,
-            shard_ids: HashSet::from_iter([ShardId::new(0)]),
-        };
+        let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
         let claimed = storage
             .claim_due(
                 DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
@@ -1379,10 +1380,7 @@ mod tests {
 
         svc.cancel(schedule_id).await;
 
-        let assignment = ShardAssignment {
-            number_of_shards: 1,
-            shard_ids: HashSet::from_iter([ShardId::new(0)]),
-        };
+        let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
         let claimed = storage
             .claim_due(
                 DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
@@ -1439,10 +1437,7 @@ mod tests {
             schedule_id
         );
 
-        let assignment = ShardAssignment {
-            number_of_shards: 1,
-            shard_ids: HashSet::from_iter([ShardId::new(0)]),
-        };
+        let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
         let claimed = storage
             .claim_due(
                 DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
@@ -2008,10 +2003,7 @@ mod tests {
             .await
             .unwrap();
 
-        let assignment = ShardAssignment {
-            number_of_shards: 1,
-            shard_ids: HashSet::from_iter([ShardId::new(0)]),
-        };
+        let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
         let now = DateTime::from_str("2023-07-17T10:06:00Z").unwrap();
 
         let first = storage
@@ -2048,10 +2040,7 @@ mod tests {
             .await
             .unwrap();
 
-        let assignment = ShardAssignment {
-            number_of_shards: 1,
-            shard_ids: HashSet::from_iter([ShardId::new(0)]),
-        };
+        let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
         let first = storage
             .claim_due(
                 DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
@@ -2099,10 +2088,7 @@ mod tests {
             .await
             .unwrap();
 
-        let assignment = ShardAssignment {
-            number_of_shards: 1,
-            shard_ids: HashSet::from_iter([ShardId::new(0)]),
-        };
+        let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
         let claimed = storage
             .claim_due(
                 DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
@@ -2166,14 +2152,8 @@ mod tests {
             .await
             .unwrap();
 
-        let unassigned = ShardAssignment {
-            number_of_shards: 2,
-            shard_ids: HashSet::from_iter([other_shard]),
-        };
-        let assigned = ShardAssignment {
-            number_of_shards: 2,
-            shard_ids: HashSet::from_iter([shard]),
-        };
+        let unassigned = ShardAssignment::unexpiring(2, [other_shard]);
+        let assigned = ShardAssignment::unexpiring(2, [shard]);
         let now = DateTime::from_str("2023-07-17T10:06:00Z").unwrap();
 
         assert!(
@@ -2198,10 +2178,7 @@ mod tests {
         let storage = Arc::new(InMemorySchedulerStorage::new());
         let action = complete_promise_action(promise(agent("inst1"), 101));
         let shard = ShardId::new(0);
-        let assignment = ShardAssignment {
-            number_of_shards: 1,
-            shard_ids: HashSet::from_iter([shard]),
-        };
+        let assignment = ShardAssignment::unexpiring(1, [shard]);
         let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
         let now = DateTime::from_str("2023-07-17T10:06:00Z").unwrap();
         let schedule_id = ScheduleId::fresh();

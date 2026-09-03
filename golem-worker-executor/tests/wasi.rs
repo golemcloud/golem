@@ -2009,7 +2009,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
     deps: &WorkerExecutorTestDependencies,
     initial_file_system: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_api_grpc::proto::golem::shardmanager::ShardId;
+    use golem_api_grpc::proto::golem::shardmanager::{ShardEpochEntry, ShardId};
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         AssignShardsRequest, RevokeShardsRequest, assign_shards_response, revoke_shards_response,
     };
@@ -2095,11 +2095,17 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
     assert!(!executor.worker_is_loaded(&owned_agent_id).await);
     let assigned = client
         .assign_shards(AssignShardsRequest {
-            shard_ids: vec![shard],
-            // W1 (ticket 4, WIRE): inert; EX rewrites this call site in plan step 6.
-            shard_epochs: vec![],
+            // W2 (ticket 4, WIRE) replaces field 1 with `reserved`; nothing
+            // populates it any more.
+            shard_ids: vec![],
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(shard),
+                epoch: 0,
+            }],
+            // `None` means the lease never expires, so this round trip does not
+            // depend on a clock.
             expires_at: None,
-            number_of_shards: 0,
+            number_of_shards: 1,
         })
         .await?
         .into_inner();

@@ -191,8 +191,14 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     fn create_shard_manager_service(
         &self,
         shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        shard_service: Arc<dyn ShardService>,
+        shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<dyn ShardManagerService> {
-        Arc::new(crate::services::shard_manager::GrpcShardManagerService::new(shard_manager_client))
+        crate::services::shard_manager::GrpcShardManagerService::new(
+            shard_manager_client,
+            shard_service,
+            shutdown_token,
+        )
     }
 
     fn create_quota_service(
@@ -852,8 +858,11 @@ pub async fn create_worker_executor_impl<
             ),
         );
 
-    let shard_manager_service =
-        bootstrap.create_shard_manager_service(shard_manager_client.clone());
+    let shard_manager_service = bootstrap.create_shard_manager_service(
+        shard_manager_client.clone(),
+        shard_service.clone(),
+        shutdown_token.clone(),
+    );
 
     let quota_service = bootstrap.create_quota_service(
         shard_manager_client,

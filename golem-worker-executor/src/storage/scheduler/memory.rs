@@ -94,7 +94,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
                     && entry
                         .lease_until_ms
                         .is_none_or(|lease_until| lease_until <= now_ms)
-                    && assignment.shard_ids.contains(&entry.shard_id)
+                    && assignment.contains(&entry.shard_id)
             })
             .map(|(id, entry)| (*id, entry.due_at_ms))
             .collect();
@@ -131,9 +131,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
             .lock()
             .unwrap()
             .values()
-            .filter(|entry| {
-                entry.due_at_ms <= now_ms && assignment.shard_ids.contains(&entry.shard_id)
-            })
+            .filter(|entry| entry.due_at_ms <= now_ms && assignment.contains(&entry.shard_id))
             .count() as u64)
     }
 
