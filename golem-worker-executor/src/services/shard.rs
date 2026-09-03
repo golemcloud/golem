@@ -58,8 +58,9 @@ pub trait ShardService: Send + Sync {
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: Option<DateTime<Utc>>,
     ) -> Result<(), WorkerExecutorError>;
-    /// Drops every shard. Used when the shard manager no longer knows this
-    /// executor's lease, so it owns nothing until it re-registers.
+    /// Drops every shard and lapses the lease (ruling E14). Used when the shard
+    /// manager no longer knows this executor's lease: it owns nothing and is
+    /// not ready until a re-registration installs a fresh grant.
     fn clear_assignment(&self);
     fn current_assignment(&self) -> Result<ShardAssignment, WorkerExecutorError>;
     fn try_get_current_assignment(&self) -> Option<ShardAssignment>;
@@ -226,13 +227,15 @@ impl ShardService for ShardServiceDefault {
     }
 
     fn clear_assignment(&self) {
+        let now = Utc::now();
         self.with_write_shard_assignment(|shard_assignment| {
             if let Some(shard_assignment) = shard_assignment {
                 debug!(
                     shard_ids_current = shard_assignment.shard_ids().join(", "),
                     "ShardService.clear_assignment"
                 );
-                shard_assignment.clear();
+                // Ruling E14: lapsed as of now, not "never expires".
+                shard_assignment.clear(now);
                 record_assigned_shard_count(0);
             }
         })
@@ -255,4 +258,159 @@ fn sharding_not_ready_error() -> WorkerExecutorError {
 /// exactly what a caller should do when an executor's shard lease has lapsed.
 fn shard_lease_expired_error() -> WorkerExecutorError {
     WorkerExecutorError::ShardingNotReady
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration as ChronoDuration;
+    use golem_common::model::component::ComponentId;
+    use test_r::test;
+    use uuid::Uuid;
+
+    test_r::enable!();
+
+    /// Big enough that distinct agent ids land on distinct shards, small enough
+    /// that the search below always finds one.
+    const SHARDS: usize = 8;
+
+    fn epochs(entries: impl IntoIterator<Item = (i64, u64)>) -> HashMap<ShardId, ShardEpoch> {
+        entries
+            .into_iter()
+            .map(|(shard_id, epoch)| (ShardId::new(shard_id), ShardEpoch(epoch)))
+            .collect()
+    }
+
+    /// An agent id that routes to `shard`, found by search because
+    /// `ShardId::from_agent_id` is a hash.
+    fn agent_on_shard(shard: i64) -> AgentId {
+        let component_id = ComponentId(Uuid::nil());
+        for candidate in 0..10_000 {
+            let agent_id = AgentId {
+                component_id,
+                agent_id: format!("agent-{candidate}"),
+            };
+            if ShardId::from_agent_id(&agent_id, SHARDS) == ShardId::new(shard) {
+                return agent_id;
+            }
+        }
+        panic!("no agent id in the search space routes to shard {shard}");
+    }
+
+    fn service_holding(
+        shard_epochs: &HashMap<ShardId, ShardEpoch>,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> ShardServiceDefault {
+        let service = ShardServiceDefault::new();
+        service.register(SHARDS, shard_epochs, expires_at);
+        service
+    }
+
+    fn lapsed() -> Option<DateTime<Utc>> {
+        Some(Utc::now() - ChronoDuration::seconds(1))
+    }
+
+    fn live() -> Option<DateTime<Utc>> {
+        Some(Utc::now() + ChronoDuration::seconds(60))
+    }
+
+    /// Plan D2: `AssignShards` says "your shards are exactly these". Anything
+    /// absent is dropped, and the sweep in `assign_shards_internal` restarts
+    /// exactly the agents the new set rejects.
+    #[test]
+    fn a_full_replace_push_drops_unlisted_shards_and_their_agents() {
+        let service = service_holding(&epochs([(0, 1), (1, 1)]), None);
+        let on_dropped = agent_on_shard(0);
+        let on_kept = agent_on_shard(1);
+        assert!(service.check_worker(&on_dropped).is_ok());
+        assert!(service.check_worker(&on_kept).is_ok());
+
+        service
+            .assign_shards(SHARDS, &epochs([(1, 1)]), None)
+            .unwrap();
+
+        assert_eq!(
+            service.current_assignment().unwrap().shard_id_set(),
+            HashSet::from([ShardId::new(1)]),
+            "a shard absent from the push must be dropped, not merged"
+        );
+        assert!(
+            service.check_worker(&on_dropped).is_err(),
+            "an agent on a dropped shard is what the restart sweep picks up"
+        );
+        assert!(service.check_worker(&on_kept).is_ok());
+    }
+
+    /// The self-fence. Ruling E12/E4: it surfaces as `ShardingNotReady`, which
+    /// the worker service answers by refreshing its routing table and retrying.
+    #[test]
+    fn admission_is_refused_once_the_lease_has_lapsed() {
+        let agent = agent_on_shard(0);
+        let service = service_holding(&epochs([(0, 3)]), live());
+        assert!(service.is_ready());
+        assert!(service.check_admission(&agent).is_ok());
+
+        service.update_lease(&epochs([(0, 3)]), lapsed()).unwrap();
+
+        assert!(
+            matches!(
+                service.check_admission(&agent),
+                Err(WorkerExecutorError::ShardingNotReady)
+            ),
+            "the fence must surface as ShardingNotReady, not as an opaque Unknown"
+        );
+        assert!(!service.is_ready(), "and the scheduler must stop claiming");
+    }
+
+    /// Routing decisions stay pure set membership: a fenced answer here would
+    /// send the call straight back to this executor.
+    #[test]
+    fn routing_checks_are_not_fenced_by_a_lapsed_lease() {
+        let agent = agent_on_shard(0);
+        let service = service_holding(&epochs([(0, 3)]), lapsed());
+
+        assert!(
+            service.check_worker(&agent).is_ok(),
+            "routing must still say 'mine' for a shard this executor holds"
+        );
+        assert!(
+            service.check_admission(&agent).is_err(),
+            "while admission is fenced"
+        );
+    }
+
+    /// `None` means "never expires": the single binary and the debugging
+    /// service must not fence themselves at boot.
+    #[test]
+    fn a_lease_without_an_expiry_never_fences() {
+        let agent = agent_on_shard(0);
+        let service = service_holding(&epochs([(0, 0)]), None);
+
+        assert!(service.is_ready());
+        assert!(service.check_admission(&agent).is_ok());
+        assert!(service.check_worker(&agent).is_ok());
+    }
+
+    /// Ruling E14: clearing after `LeaseNotFound` leaves the lease lapsed, not
+    /// never-expiring, so admission keeps refusing until a re-registration
+    /// installs a fresh grant.
+    #[test]
+    fn clearing_the_assignment_leaves_the_lease_lapsed() {
+        let agent = agent_on_shard(0);
+        let service = service_holding(&epochs([(0, 3)]), live());
+
+        service.clear_assignment();
+
+        let assignment = service.current_assignment().unwrap();
+        assert!(assignment.is_empty(), "every shard is dropped");
+        assert!(
+            assignment.expires_at.is_some(),
+            "ruling E14: a cleared lease is lapsed, never 'never expires'"
+        );
+        assert!(!service.is_ready());
+        assert!(matches!(
+            service.check_admission(&agent),
+            Err(WorkerExecutorError::ShardingNotReady)
+        ));
+    }
 }
