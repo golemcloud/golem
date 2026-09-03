@@ -33,7 +33,12 @@ declare module 'golem:tool/host@0.1.0' {
   export function getTool(name: string): RegisteredTool | undefined;
   /**
    * Creates caller stdin endpoints. The writer and closure watcher remain
-   * with the caller; the source is moved into one invocation.
+   * with the caller; the source is moved into one invocation. Before passing
+   * the source to `invoke-and-await`, either select a writer terminal or drive
+   * the writer concurrently with the invocation. An open source is valid
+   * while a concurrent producer can make progress; writing only after the
+   * synchronous invocation returns can deadlock. SDK convenience adapters
+   * must start their producer pump before awaiting the invocation terminal.
    */
   export function createStdin(): [ToolStdinWriter, ToolStdin, ToolStdinClosed];
   /**
@@ -93,7 +98,9 @@ declare module 'golem:tool/host@0.1.0' {
     constructor(toolName: string);
     /**
      * Waits for the structured terminal. Callers that supplied stdout must
-     * drive this wait and the already-created reader concurrently.
+     * drive this wait and the already-created reader concurrently. Callers
+     * that manually created an open stdin must likewise drive its writer
+     * concurrently; see `create-stdin`.
      * @throws RpcError
      */
     invokeAndAwait(commandPath: string[], input: TypedSchemaValue, stdin: ToolStdin | undefined, stdout: ToolStdout | undefined): Promise<InvocationResult>;
