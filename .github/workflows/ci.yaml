@@ -835,6 +835,24 @@ jobs:
           copy-to-target: 'true'
           fail-on-cache-miss: 'true'
 
+      - name: Setup MoonBit
+        if: matrix.chunk.needs-moonbit
+        uses: hustcer/setup-moonbit@v1
+        with:
+          version: ${{ env.MOONBIT_INSTALL_VERSION }}
+          core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update MoonBit workspace dependencies
+        if: matrix.chunk.needs-moonbit
+        run: moon update
+        working-directory: sdks/moonbit
+
+      - name: Install wasm-tools
+        if: matrix.chunk.needs-moonbit
+        run: cargo binstall --force --locked wasm-tools@1.248.0
+
       - name: Restore built TS SDK
         if: matrix.chunk.needs-node
         uses: actions/cache/restore@v5

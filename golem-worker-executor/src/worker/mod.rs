@@ -4264,7 +4264,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .with_consumer_journal(self.durable_stream_consumer_journal())
         .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
         match result {
-            Ok(()) => streams.complete().await,
+            Ok(()) => streams.complete_or_defer_for_forwarded_inputs().await,
             Err(details) => streams.fail(details).await,
         }
         .map_err(WorkerExecutorError::runtime)?;

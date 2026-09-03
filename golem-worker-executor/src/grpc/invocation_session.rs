@@ -1167,6 +1167,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 send_worker_failure(&responses, error).await;
                 return;
             }
+            if let Err(error) = durable_streams.complete().await {
+                send_protocol_failure(&responses, error).await;
+                return;
+            }
             if let Err(error) = durable_streams.pump_input_cancellations(&responses).await {
                 send_protocol_failure(&responses, error).await;
                 return;
@@ -1722,6 +1726,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
         if let Some(result) = already_finished {
             send_resumed_finished(&responses, result).await;
+            drop(responses);
+            let _ = forwarder.await;
+            return;
+        }
+        if let Err(error) = streams.complete().await {
+            send_protocol_failure(&responses, error).await;
+            drop(responses);
+            let _ = forwarder.await;
+            return;
+        }
+        if let Err(error) = streams.pump_input_cancellations(&responses).await {
+            send_protocol_failure(&responses, error).await;
             drop(responses);
             let _ = forwarder.await;
             return;

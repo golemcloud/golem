@@ -178,6 +178,10 @@ pub enum DropEvent {
     /// point, since drain points are deterministic replay points; otherwise the span is derived
     /// (no span oplog entries exist) and is finished in memory only.
     FinishSpan { span_id: SpanId, durable: bool },
+    /// A guest dropped a durable readable stream endpoint synchronously. Wasmtime cannot await
+    /// the durable consumer intent or source cancellation from the resource destructor, so the
+    /// next safe worker-access window performs both before invocation progress can overtake them.
+    CancelDroppedDurableInput { cancellation: DroppedDurableInput },
 }
 
 struct AccessDropEventDrainGuard {
@@ -367,6 +371,16 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                 finish_span_in_memory(ctx, &span_id)
                     .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?;
             }
+        }
+        DropEvent::CancelDroppedDurableInput { cancellation } => {
+            cancellation.cancel().await.map_err(|error| {
+                TerminalCallError::new(
+                    WorkerExecutorError::runtime(format!(
+                        "failed to cancel dropped durable stream: {error}"
+                    )),
+                    ambient_trap_context(ctx),
+                )
+            })?;
         }
     }
     Ok(())
@@ -635,6 +649,23 @@ where
                     if first_error.is_none() {
                         first_error = Some(TerminalCallError::new(
                             err,
+                            store.with(|mut access| {
+                                let ctx = get_ctx(access.data_mut());
+                                ambient_trap_context(ctx)
+                            }),
+                        ));
+                    }
+                } else {
+                    recorded += 1;
+                }
+            }
+            DropEvent::CancelDroppedDurableInput { cancellation } => {
+                if let Err(error) = cancellation.cancel().await {
+                    if first_error.is_none() {
+                        first_error = Some(TerminalCallError::new(
+                            WorkerExecutorError::runtime(format!(
+                                "failed to cancel dropped durable stream: {error}"
+                            )),
                             store.with(|mut access| {
                                 let ctx = get_ctx(access.data_mut());
                                 ambient_trap_context(ctx)

@@ -3328,6 +3328,24 @@ impl DurableStreamProducer {
         Ok(())
     }
 
+    pub(crate) async fn has_open_forwarded_session_input(
+        &self,
+        session_key: &StreamSessionKeyV1,
+    ) -> bool {
+        let index = self.index.lock().await;
+        let Some(mappings) = index.session_stream_mappings.get(session_key) else {
+            return false;
+        };
+        mappings.iter().any(|(handle, role)| {
+            *role == SessionStreamRoleV1::Input
+                && mappings.contains(&(handle.clone(), SessionStreamRoleV1::Output))
+                && index
+                    .streams
+                    .get(&handle.stream_id)
+                    .is_some_and(|stream| !stream.terminal)
+        })
+    }
+
     pub(crate) async fn finish_session(
         &self,
         session_key: StreamSessionKeyV1,
