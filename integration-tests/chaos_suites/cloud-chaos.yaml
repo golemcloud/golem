@@ -1362,14 +1362,14 @@ scenarios:
       # `network-partition` and `pod-kill`, none of which this is.
       kind: network-delay
       target: worker-executor
-      # Every executor, as in the other four. A cache that is slow for only some
-      # executors is a routing fault wearing a cache's clothes.
+      # Every executor, as in every other storage scenario. A cache that is slow
+      # for only some executors is a routing fault wearing a cache's clothes.
       mode: all
       # Must equal phases.faultSecs; see the note on S16.
       durationSecs: 300
 
     phases:
-      # Same as the other four, so all five are comparable.
+      # Same as every other storage scenario, so they stay comparable.
       baselineSecs: 300
       # Longer than any of the others, and not for the reason S18's window is
       # long. Nothing times out under a 500ms delay — an ephemeral operation
@@ -1411,9 +1411,9 @@ scenarios:
       endpoint: master.golem-redis-dev.intsie.use1.cache.amazonaws.com
 
       expect:
-        # Neither of the rules the other four use. Under a delay nothing is
-        # supposed to fall silent, so silence is not available as evidence that
-        # the fault landed and time has to stand in for it.
+        # Neither of the rules a cut uses. Under a delay nothing is supposed to
+        # fall silent, so silence is not available as evidence that the fault
+        # landed and time has to stand in for it.
         kind: latency-degradation
 
         # `ephemeral` alone, for the reason S18 measured rather than predicted:
@@ -1463,10 +1463,10 @@ scenarios:
       recoveryBudgetSecs: 60
 
     retryPolicy:
-      # Identical to the other four. Not load-bearing here the way it is in S18,
-      # because nothing should time out and so nothing should retry — but a
-      # retry count above zero would itself be a finding, and leaving the policy
-      # the same is what makes that comparable.
+      # Identical to every other storage scenario. Not load-bearing here the
+      # way it is in S18, because nothing should time out and so nothing should
+      # retry — but a retry count above zero would itself be a finding, and
+      # leaving the policy the same is what makes that comparable.
       transportOnly: true
       maxRetries: 1
       delaySecs: 5
@@ -1561,9 +1561,10 @@ scenarios:
       recoverySecs: 420
 
     workload:
-      # Identical to the other five, deliberately, even though GOL-374 asks for
-      # "promise- and schedule-heavy" work and a reweighted population would
-      # press the pools harder. Two of the six storage runs are a matched pair
+      # Identical to the other full-workload storage scenarios, deliberately,
+      # even though GOL-374 asks for "promise- and schedule-heavy" work and a
+      # reweighted population would
+      # press the pools harder. Two of the storage runs are a matched pair
       # and comparability is what makes the pair worth anything; and the durable
       # stream turns out to be the heaviest user of this cluster anyway, at two
       # synchronous writes per invocation. Deliberately overloading the pool is
@@ -1646,8 +1647,8 @@ scenarios:
       recoveryBudgetSecs: 60
 
     retryPolicy:
-      # Identical to the other five. Nothing should time out and so nothing
-      # should retry; a retry count above zero is itself a finding.
+      # Identical to every other storage scenario. Nothing should time out and
+      # so nothing should retry; a retry count above zero is itself a finding.
       transportOnly: true
       maxRetries: 1
       delaySecs: 5
@@ -1683,13 +1684,20 @@ scenarios:
   # agents, so a constant here would give ephemeral 100/s alone and 33/s in a
   # threesome, and the comparison would be between three different ephemeral
   # workloads rather than between three fault environments. Each entry sets the
-  # rate that holds ephemeral at the ~34/s S15 measured it at.
+  # rate that holds ephemeral near the ~33/s S15 ran it at. Near, not at: S15
+  # and S15C give it 100/3 = 33.33/s while S15B and S15A give it 34/s, a 2%
+  # spread left uncorrected because S15A and S15B have already been run at 34
+  # and changing the rate now would break comparison with their results.
   #
-  # One confound cannot be removed the same way. `MAX_IN_FLIGHT / active.len()`
-  # gives ephemeral a budget of 1024, 512 and 341 across the three, against 256
-  # in S15, and that ceiling is a constant in the driver rather than a suite
-  # setting. It bounds throughput, not latency, and latency is what this series
-  # reads, so it is recorded rather than corrected.
+  # A second confound is not removable the same way. `MAX_IN_FLIGHT /
+  # active.len()` gives ephemeral a budget of 1024, 512 and 341 across S15A,
+  # S15B and S15C, and that ceiling is a constant in the driver rather than a
+  # suite setting. It bounds throughput, not latency, and latency is what this
+  # series reads, so it is recorded rather than corrected. It does *not*
+  # separate S15C from S15: `active` counts only streams with agents in the
+  # workload block, and S15 leaves `scheduledAgents` at zero because its
+  # scheduled stream comes from the separate emitter, so both run three streams
+  # at 341 and that pair is free of this confound entirely.
   #
   # ── Why the scheduled block is present with zero targets ───────────────────
   #
@@ -1995,6 +2003,7 @@ scenarios:
       ephemeralAgents: 50
       scheduledAgents: 0
       promiseAgents: 50
+      quotaAgents: 0
       ratePerSec: 100
 
     scheduled:

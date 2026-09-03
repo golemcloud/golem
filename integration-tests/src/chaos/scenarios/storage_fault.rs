@@ -13,9 +13,9 @@
 // limitations under the License.
 
 //! Storage fault: the shared choreography behind S14, S15, S16, S17, S18, S22
-//! and S23.
+//! and S23, plus the S15A/S15B/S15C eliminations.
 //!
-//! All seven codes run this module. They differ in which store the fault is
+//! All ten codes run this module. They differ in which store the fault is
 //! aimed at, what it does to that store and for how long, all of which are
 //! suite settings, and in what a reader should expect of the result:
 //!
@@ -48,6 +48,14 @@
 //!   opposite set of streams, and it carries a risk the Redis delay does not:
 //!   this side's connection pools are bounded and its failure path is a panic.
 //!   See the suite entry for the arithmetic.
+//! * **S15A**, **S15B** and **S15C** are S15 with streams taken away rather
+//!   than scenarios of their own: same fault, same endpoint, same phases, one
+//!   stream added back per entry, so whichever addition first makes `ephemeral`
+//!   suffer names the interaction. S15A drives `ephemeral` alone and so names
+//!   no slowed stream at all: its whole claim sits on the other side of the
+//!   expectation, that `ephemeral` stays steady. That is the one case where an
+//!   empty `slowed` list is the claim rather than an omission. See the suite
+//!   entries.
 //! * **S23** (GOL-525) slows the indexed cluster instead of cutting it, so it
 //!   is to S14 what S15 is to S16, and it fills the last empty cell of the
 //!   matrix. It is the only delay here with no control stream, because every
@@ -58,9 +66,9 @@
 //!   `GOLEM__INDEXED_STORAGE__CONFIG__MAX_CONCURRENT_OPS`, a semaphore tighter
 //!   than the pool behind it.
 //!
-//! The driver is the same in all seven because the difference is one of
+//! The driver is the same in all ten because the difference is one of
 //! expectation, not of choreography. Nothing below asserts on which outcome
-//! happened: the account it produces answers all seven questions, and the
+//! happened: the account it produces answers all ten questions, and the
 //! oracles that fail the build — the scheduled-fire account and the
 //! exactly-once account — are the ones every one of them shares.
 //!
@@ -207,6 +215,11 @@
 //! [`crate::chaos::scheduled`] instead and leave `scheduledAgents` at zero in
 //! the mixed workload. Setting both is refused at load time — see
 //! `ScenarioConfig::require_storage`.
+//!
+//! An entry may also leave the loop undriven altogether by setting
+//! `scheduled.targets` to zero, which is what the S15 eliminations do. The
+//! fire-count gate then has nothing to gate, and is skipped rather than failing
+//! a run for observing no fires it never asked for.
 //!
 //! S14 is where that lag reads most directly. Its cut leaves the scheduler on
 //! the healthy cluster, so claims and acknowledgements keep their timing and
@@ -472,10 +485,16 @@ pub async fn run(
             None
         );
     }
+    let fires = if drives_scheduled {
+        format!(
+            "{sampled} fires across a sample of {} targets",
+            FIRE_PROOF_SAMPLE.min(targets.len())
+        )
+    } else {
+        "scheduled stream not driven".to_string()
+    };
     info!(
-        "{code}: baseline complete ({baseline_operations} confirmed ops, {sampled} fires across a \
-         sample of {} targets), signalling readiness",
-        FIRE_PROOF_SAMPLE.min(targets.len())
+        "{code}: baseline complete ({baseline_operations} confirmed ops, {fires}), signalling readiness"
     );
 
     // ── Signal: ready for the fault ─────────────────────────────────────────
