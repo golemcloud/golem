@@ -15,9 +15,9 @@
 use crate::ShardLeaseState;
 use crate::error::ShardManagerTraceErrorKind;
 use crate::quota::QuotaService;
-use crate::sharding::ExecutorAddr;
 use crate::sharding::error::ShardManagerError;
 use crate::sharding::shard_management::ShardManagement;
+use crate::sharding::{ExecutorAddr, ExecutorId, RegisterAck};
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerService;
 use golem_common::model::Pod;
@@ -25,8 +25,10 @@ use golem_common::recorded_grpc_api_request;
 use std::net::IpAddr;
 use std::num::TryFromIntError;
 use std::sync::Arc;
+use std::time::SystemTime;
 use tonic::Response;
 use tracing::{Instrument, debug};
+use uuid::Uuid;
 
 pub struct ShardManagerServiceImpl {
     shard_management: Arc<ShardManagement>,
@@ -49,16 +51,17 @@ impl ShardManagerServiceImpl {
 
     async fn register_internal(
         &self,
+        executor_id: ExecutorId,
         pod: Pod,
         pod_name: Option<String>,
-    ) -> Result<(), ShardManagerError> {
-        debug!("Received request to register executor at: {}", pod);
-        let executor_id = self
+    ) -> Result<RegisterAck, ShardManagerError> {
+        debug!(executor_id = %executor_id, "Received request to register executor at: {}", pod);
+        let ack = self
             .shard_management
-            .register_executor(ExecutorAddr::from(pod), pod_name)
-            .await;
+            .register_executor(executor_id, ExecutorAddr::from(pod), pod_name)
+            .await?;
         debug!(executor_id = %executor_id, addr = %pod, "Registered executor");
-        Ok(())
+        Ok(ack)
     }
 }
 
@@ -97,29 +100,33 @@ impl ShardManagerService for ShardManagerServiceImpl {
 
         let request = request.into_inner();
 
+        // Before anything touches the state: an executor that cannot name itself has no identity to
+        // renew or deregister a lease with.
+        let executor_id = parse_executor_id(&request.executor_id)?;
+
         let record = recorded_grpc_api_request!(
             "register",
             source_ip = source_ip.to_string(),
             port = &request.port.to_string(),
             pod_name = request.pod_name(),
+            executor_id = executor_id.to_string(),
         );
 
         let pod = make_pod(source_ip, request.port)?;
 
         let response = self
-            .register_internal(pod, request.pod_name)
+            .register_internal(executor_id, pod, request.pod_name)
             .instrument(record.span.clone())
             .await;
 
         let result = match response {
-            Ok(_) => record.succeed(golem::shardmanager::v1::register_response::Result::Success(
+            Ok(ack) => record.succeed(golem::shardmanager::v1::register_response::Result::Success(
                 golem::shardmanager::v1::RegisterSuccess {
-                    number_of_shards: self.get_routing_table_internal().await.number_of_shards
-                        as u32,
-                    // W1 (ticket 4, WIRE): inert until SM makes Register an out-of-loop
-                    // writer that returns the real lease (D9).
-                    shard_epochs: vec![],
-                    expires_at: None,
+                    number_of_shards: ack.number_of_shards as u32,
+                    shard_epochs: shard_epoch_entries(&ack.grant),
+                    expires_at: Some(prost_types::Timestamp::from(SystemTime::from(
+                        ack.grant.expires_at,
+                    ))),
                 },
             )),
             Err(error) => {
@@ -409,6 +416,30 @@ fn shard_lease_not_implemented(rpc: &str) -> golem::shardmanager::v1::ShardLease
             },
         )),
     }
+}
+
+/// The executor-generated UUID that identifies a shard lease. Empty or malformed is a client
+/// error, refused before any state is touched.
+fn parse_executor_id(raw: &str) -> Result<ExecutorId, tonic::Status> {
+    if raw.is_empty() {
+        return Err(tonic::Status::invalid_argument("missing executor_id"));
+    }
+    Uuid::parse_str(raw)
+        .map(ExecutorId)
+        .map_err(|err| tonic::Status::invalid_argument(format!("invalid executor_id: {err}")))
+}
+
+fn shard_epoch_entries(
+    grant: &crate::sharding::ShardLeaseGrant,
+) -> Vec<golem::shardmanager::ShardEpochEntry> {
+    grant
+        .shard_epochs
+        .iter()
+        .map(|(shard_id, epoch)| golem::shardmanager::ShardEpochEntry {
+            shard_id: Some((*shard_id).into()),
+            epoch: epoch.0,
+        })
+        .collect()
 }
 
 fn make_pod(ip: IpAddr, port: i32) -> Result<Pod, tonic::Status> {

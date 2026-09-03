@@ -147,6 +147,38 @@ pub struct ExecutorShards {
     pub shard_ids: BTreeSet<ShardId>,
 }
 
+/// What the manager hands an executor when it grants or renews a shard lease: the complete set of
+/// shards that executor owns with the ownership epoch of each, and the absolute time the lease
+/// lapses if it is not renewed.
+///
+/// `BTreeMap` rather than `HashMap` so the encoded `repeated ShardEpochEntry` is deterministic and
+/// a recorded push can be asserted on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShardLeaseGrant {
+    pub shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+    pub expires_at: DateTime<Utc>,
+}
+
+/// The acknowledgement of a registration: the granted lease plus the cluster shard count, which
+/// only `Register` carries.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegisterAck {
+    pub number_of_shards: usize,
+    pub grant: ShardLeaseGrant,
+}
+
+/// The complete shard set the manager wants one executor to hold, the ownership epoch of each
+/// shard, the absolute time that executor's lease lapses, and the cluster shard count.
+///
+/// This is the whole of `AssignShardsRequest`: the push is a full replace, so the executor holds
+/// exactly `shard_epochs` afterwards and drops everything else.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShardAssignmentPush {
+    pub shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+    pub expires_at: DateTime<Utc>,
+    pub number_of_shards: usize,
+}
+
 pub type ExecutorAddrs = BTreeMap<ExecutorId, ExecutorAddr>;
 
 impl ShardLeaseState {
@@ -211,6 +243,33 @@ impl ShardLeaseState {
                 .map(|(shard_id, _)| *shard_id)
                 .collect(),
         )
+    }
+
+    /// The lease `executor_id` currently holds, or `None` if it holds none.
+    pub fn lease_grant_for(&self, executor_id: ExecutorId) -> Option<ShardLeaseGrant> {
+        let lease = self.executor_leases.get(&executor_id)?;
+        Some(ShardLeaseGrant {
+            shard_epochs: self
+                .shard_assignments
+                .iter()
+                .filter(|(_, entry)| entry.executor_id == executor_id)
+                .map(|(shard_id, entry)| (*shard_id, entry.epoch))
+                .collect(),
+            expires_at: lease.expires_at,
+        })
+    }
+
+    /// The full-replace payload for `executor_id`, or `None` if it holds no lease.
+    ///
+    /// An executor that holds a lease but no shards still gets a payload: an empty `shard_epochs`
+    /// is how the manager tells it to drop everything it thinks it owns.
+    pub fn assignment_push_for(&self, executor_id: ExecutorId) -> Option<ShardAssignmentPush> {
+        self.lease_grant_for(executor_id)
+            .map(|grant| ShardAssignmentPush {
+                shard_epochs: grant.shard_epochs,
+                expires_at: grant.expires_at,
+                number_of_shards: self.number_of_shards,
+            })
     }
 
     pub fn executor_shard_sets(&self) -> Vec<ExecutorShards> {
@@ -307,7 +366,37 @@ impl ShardLeaseState {
             .collect()
     }
 
+    /// The ownership epoch `shard_id` takes when it is assigned to `executor_id`: unchanged while
+    /// the owner stays the same, one past the highest epoch ever recorded for that shard when the
+    /// owner changes.
+    ///
+    /// Pure, and the single definition of the rule: [`Self::assign_shard`] mints with it, and
+    /// [`Rebalance`] uses it to decide a plan's epochs at plan time so that the epoch pushed to an
+    /// executor is the one that is later stored.
+    pub fn next_epoch_for(&self, executor_id: ExecutorId, shard_id: ShardId) -> ShardEpoch {
+        match self.shard_assignments.get(&shard_id) {
+            Some(entry) if entry.executor_id == executor_id => entry.epoch,
+            _ => match self.shard_epochs.get(&shard_id) {
+                Some(last) => last.next(),
+                None => ShardEpoch::initial(),
+            },
+        }
+    }
+
     pub fn assign_shard(&mut self, executor_id: ExecutorId, shard_id: ShardId) -> ShardEpoch {
+        let epoch = self.next_epoch_for(executor_id, shard_id);
+        self.assign_shard_with_epoch(executor_id, shard_id, epoch);
+        epoch
+    }
+
+    /// Records an assignment whose epoch was decided earlier, by [`Self::next_epoch_for`] against
+    /// the state this assignment is applied to.
+    fn assign_shard_with_epoch(
+        &mut self,
+        executor_id: ExecutorId,
+        shard_id: ShardId,
+        epoch: ShardEpoch,
+    ) {
         debug_assert!(
             self.has_executor(executor_id),
             "assigning shard {shard_id} to executor {executor_id} without a lease"
@@ -317,18 +406,10 @@ impl ShardLeaseState {
             "assigning shard {shard_id} outside 0..{}",
             self.number_of_shards
         );
-        let epoch = match self.shard_assignments.get(&shard_id) {
-            Some(entry) if entry.executor_id == executor_id => entry.epoch,
-            _ => match self.shard_epochs.get(&shard_id) {
-                Some(last) => last.next(),
-                None => ShardEpoch::initial(),
-            },
-        };
         self.shard_assignments
             .insert(shard_id, ShardAssignmentEntry { executor_id, epoch });
         self.shard_epochs.insert(shard_id, epoch);
         self.pending_rebalance.remove(&shard_id);
-        epoch
     }
 
     pub fn unassign_shard(&mut self, owner: ExecutorId, shard_id: ShardId) -> bool {
@@ -358,7 +439,13 @@ impl ShardLeaseState {
                 continue;
             }
             for shard_id in shard_ids {
-                self.assign_shard(*executor_id, *shard_id);
+                // The epoch was decided when the plan was computed, from the same state this is
+                // applied to, and it is what was already pushed to the executor. Re-minting it here
+                // would hand the executor an epoch one behind the stored one.
+                let epoch = rebalance
+                    .epoch_for(*shard_id)
+                    .unwrap_or_else(|| self.next_epoch_for(*executor_id, *shard_id));
+                self.assign_shard_with_epoch(*executor_id, *shard_id, epoch);
             }
         }
         for (executor_id, shard_ids) in &rebalance.get_unassignments().unassignments {
@@ -980,7 +1067,13 @@ mod tests {
         let mut unassignments = Unassignments::new();
         unassignments.unassign(executor(1), shard(0));
         unassignments.unassign(executor(1), shard(1));
-        let rebalance = Rebalance::new(assignments, unassignments);
+        let rebalance = Rebalance::new(assignments, unassignments, &shard_state);
+
+        // The epochs are decided when the plan is built, because that is what the executors are
+        // pushed before the plan is applied.
+        assert_eq!(rebalance.epoch_for(shard(0)), Some(ShardEpoch(1)));
+        assert_eq!(rebalance.epoch_for(shard(1)), Some(ShardEpoch(1)));
+        assert_eq!(rebalance.epoch_for(shard(2)), None);
 
         shard_state.apply_rebalance(&rebalance);
 

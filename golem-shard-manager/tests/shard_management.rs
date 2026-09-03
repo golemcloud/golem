@@ -17,8 +17,8 @@ use chrono::{DateTime, Utc};
 use golem_common::model::{Pod, ShardId};
 use golem_shard_manager::{
     ExecutorAddr, ExecutorId, ExternalRevision, HealthCheck, HealthCheckError, NO_REVISION,
-    RoutingTablePersistence, ShardEpoch, ShardLeaseState, ShardManagement, ShardManagerError,
-    WorkerExecutorService,
+    RoutingTablePersistence, ShardAssignmentPush, ShardEpoch, ShardLeaseState, ShardManagement,
+    ShardManagerError, WorkerExecutorService,
 };
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr};
@@ -155,7 +155,9 @@ struct TestWorkerExecutors {
     local_assignments: Arc<Mutex<HashMap<Pod, BTreeSet<ShardId>>>>,
     failed_assignments: Arc<Mutex<HashMap<Pod, usize>>>,
     failed_revocations: Arc<Mutex<HashMap<Pod, usize>>>,
-    failed_reconciliations: Arc<Mutex<HashMap<Pod, usize>>>,
+    /// Every full-replace push, in order, with the epochs and expiry it carried. `commands`
+    /// records only the shard ids, so this is where a test looks at what else travelled.
+    pushes: Arc<Mutex<Vec<(Pod, ShardAssignmentPush)>>>,
     /// Every command sent to an executor, in order, whether or not it succeeded.
     ///
     /// `local_assignments` records only the net effect, so no-op commands - exactly what a leader
@@ -188,8 +190,14 @@ impl TestWorkerExecutors {
         self.failed_revocations.lock().await.insert(pod, count);
     }
 
-    async fn fail_next_reconciliations(&self, pod: Pod, count: usize) {
-        self.failed_reconciliations.lock().await.insert(pod, count);
+    async fn pushes_to(&self, pod: Pod) -> Vec<ShardAssignmentPush> {
+        self.pushes
+            .lock()
+            .await
+            .iter()
+            .filter(|(pushed_to, _)| *pushed_to == pod)
+            .map(|(_, push)| push.clone())
+            .collect()
     }
 
     async fn record(&self, command: &str, pod: Pod, shard_ids: &BTreeSet<ShardId>) {
@@ -220,19 +228,18 @@ impl WorkerExecutorService for TestWorkerExecutors {
     async fn assign_shards(
         &self,
         pod: &Pod,
-        shard_ids: &BTreeSet<ShardId>,
+        assignment: &ShardAssignmentPush,
     ) -> Result<(), ShardManagerError> {
-        self.record("assign", *pod, shard_ids).await;
+        let shard_ids: BTreeSet<ShardId> = assignment.shard_epochs.keys().copied().collect();
+        self.record("assign", *pod, &shard_ids).await;
+        self.pushes.lock().await.push((*pod, assignment.clone()));
         if Self::should_fail(&self.failed_assignments, *pod).await {
             return Err(ShardManagerError::Timeout);
         }
 
-        self.local_assignments
-            .lock()
-            .await
-            .entry(*pod)
-            .or_default()
-            .extend(shard_ids.iter().copied());
+        // A full replace: the executor holds exactly what the push names and drops the rest.
+        // Extending instead of inserting is what this stops.
+        self.local_assignments.lock().await.insert(*pod, shard_ids);
         Ok(())
     }
 
@@ -253,24 +260,6 @@ impl WorkerExecutorService for TestWorkerExecutors {
         if let Some(local_assignment) = self.local_assignments.lock().await.get_mut(pod) {
             local_assignment.retain(|shard_id| !shard_ids.contains(shard_id));
         }
-        Ok(())
-    }
-
-    async fn set_shard_assignment(
-        &self,
-        pod: &Pod,
-        _number_of_shards: usize,
-        shard_ids: &BTreeSet<ShardId>,
-    ) -> Result<(), ShardManagerError> {
-        self.record("set-assignment", *pod, shard_ids).await;
-        if Self::should_fail(&self.failed_reconciliations, *pod).await {
-            return Err(ShardManagerError::Timeout);
-        }
-
-        self.local_assignments
-            .lock()
-            .await
-            .insert(*pod, shard_ids.clone());
         Ok(())
     }
 }
@@ -537,9 +526,15 @@ async fn reconnecting_pod_clears_stale_local_shards() {
         [0].into_iter().map(ShardId::new).collect()
     );
 
-    let new_executor_id = shard_management
-        .register_executor(existing_pod.into(), Some("worker-executor-0".to_string()))
-        .await;
+    let new_executor_id = executor(3);
+    shard_management
+        .register_executor(
+            new_executor_id,
+            existing_pod.into(),
+            Some("worker-executor-0".to_string()),
+        )
+        .await
+        .expect("the registration should have been persisted");
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     assert_eq!(
@@ -621,8 +616,13 @@ async fn failed_assignment_is_retried_from_unassigned_shards() {
     .await;
 
     shard_management
-        .register_executor(new_pod.into(), Some("worker-executor-1".to_string()))
-        .await;
+        .register_executor(
+            executor(2),
+            new_pod.into(),
+            Some("worker-executor-1".to_string()),
+        )
+        .await
+        .expect("the registration should have been persisted");
 
     wait_for_local_assignment(&worker_executors, old_pod, shard_ids(&[2, 3])).await;
     wait_for_local_assignment(&worker_executors, new_pod, shard_ids(&[0, 1])).await;
@@ -656,8 +656,13 @@ async fn failed_revoke_is_retried_without_assigning_to_new_executor_first() {
     .await;
 
     shard_management
-        .register_executor(new_pod.into(), Some("worker-executor-1".to_string()))
-        .await;
+        .register_executor(
+            executor(2),
+            new_pod.into(),
+            Some("worker-executor-1".to_string()),
+        )
+        .await
+        .expect("the registration should have been persisted");
 
     wait_for_local_assignment(&worker_executors, old_pod, shard_ids(&[2, 3])).await;
     wait_for_local_assignment(&worker_executors, new_pod, shard_ids(&[0, 1])).await;
@@ -699,13 +704,20 @@ async fn failed_reconnect_reconciliation_is_retried() {
     worker_executors
         .set_local_assignment(existing_pod, &[0])
         .await;
+    // The full-replace push *is* the reconciliation now, so a failed assign to this pod is what
+    // the retry path has to recover from.
     worker_executors
-        .fail_next_reconciliations(existing_pod, 1)
+        .fail_next_assignments(existing_pod, 1)
         .await;
 
     shard_management
-        .register_executor(existing_pod.into(), Some("worker-executor-0".to_string()))
-        .await;
+        .register_executor(
+            executor(3),
+            existing_pod.into(),
+            Some("worker-executor-0".to_string()),
+        )
+        .await
+        .expect("the registration should have been persisted");
 
     wait_for_local_assignment(&worker_executors, existing_pod, BTreeSet::new()).await;
 
@@ -744,9 +756,29 @@ async fn same_address_reregistration_transfers_shards_and_reconciles() {
         .set_local_assignment(restarted_pod, &[])
         .await;
 
-    let new_executor_id = shard_management
-        .register_executor(restarted_pod.into(), Some("worker-executor-0".to_string()))
-        .await;
+    let new_executor_id = executor(3);
+    let ack = shard_management
+        .register_executor(
+            new_executor_id,
+            restarted_pod.into(),
+            Some("worker-executor-0".to_string()),
+        )
+        .await
+        .expect("the registration should have been persisted");
+
+    // The acknowledgement is the lease itself: the inherited shards with their advanced epochs,
+    // and a real expiry.
+    assert_eq!(ack.number_of_shards, 4);
+    assert_eq!(
+        ack.grant.shard_epochs,
+        [
+            (ShardId::new(0), ShardEpoch(1)),
+            (ShardId::new(1), ShardEpoch(1)),
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert!(ack.grant.expires_at > granted_at());
 
     wait_for_local_assignment(&worker_executors, restarted_pod, shard_ids(&[0, 1])).await;
     assert_eq!(
@@ -779,6 +811,25 @@ async fn same_address_reregistration_transfers_shards_and_reconciles() {
     assert!(shard_state.pending_rebalance.is_empty());
     assert!(shard_state.get_unassigned_shards().is_empty());
 
+    // The push that reconciled the restarted instance carried the epochs it is now fenced on,
+    // and the cluster shard count its routing needs - not just the shard ids.
+    let last_push = worker_executors
+        .pushes_to(restarted_pod)
+        .await
+        .pop()
+        .expect("the restarted executor should have been pushed its full set");
+    assert_eq!(
+        last_push.shard_epochs,
+        [
+            (ShardId::new(0), ShardEpoch(1)),
+            (ShardId::new(1), ShardEpoch(1)),
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert_eq!(last_push.number_of_shards, 4);
+    assert!(last_push.expires_at > granted_at());
+
     // every persisted state along the way kept all four shards routable
     for (_, written) in persistence.writes.lock().await.iter() {
         assert!(
@@ -786,6 +837,81 @@ async fn same_address_reregistration_transfers_shards_and_reconciles() {
             "shards became unassigned during re-registration: {written}"
         );
     }
+
+    join_set.abort_all();
+}
+
+#[test]
+// The client retries `Register` on every error, so a lost response re-sends the same executor_id.
+// That retry has to refresh the lease it already granted: creating a second one, or treating the
+// executor as a replacement of itself, would advance the epoch of every shard it never stopped
+// owning and fence it out of them.
+async fn a_repeated_registration_of_the_same_executor_refreshes_its_lease() {
+    let existing_pod = pod(1, 9000);
+    let new_pod = pod(2, 9001);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+
+    let (shard_management, persistence, mut join_set) = new_shard_management(
+        shard_state_with_executors(
+            4,
+            vec![(
+                executor(1),
+                existing_pod,
+                "worker-executor-0",
+                &[0, 1, 2, 3],
+            )],
+        ),
+        worker_executors.clone(),
+    )
+    .await;
+
+    let new_executor = executor(2);
+    let first = shard_management
+        .register_executor(
+            new_executor,
+            ExecutorAddr::from(new_pod),
+            Some("worker-executor-1".into()),
+        )
+        .await
+        .expect("the registration should have been persisted");
+    // Nothing is assigned yet: `AssignShards` delivers the initial set.
+    assert!(first.grant.shard_epochs.is_empty());
+
+    wait_for_local_assignment(&worker_executors, new_pod, shard_ids(&[0, 1])).await;
+
+    let retried = shard_management
+        .register_executor(
+            new_executor,
+            ExecutorAddr::from(new_pod),
+            Some("worker-executor-1".into()),
+        )
+        .await
+        .expect("the retried registration should have been persisted");
+
+    // The same shards, at the same epochs, and a lease that was extended rather than replaced.
+    assert_eq!(
+        retried.grant.shard_epochs,
+        [
+            (ShardId::new(0), ShardEpoch(1)),
+            (ShardId::new(1), ShardEpoch(1)),
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert!(retried.grant.expires_at >= first.grant.expires_at);
+
+    let shard_state = persistence.latest().await;
+    assert_eq!(shard_state.executor_count(), 2);
+    assert_eq!(
+        shard_state.executor_for_addr(new_pod.into()),
+        Some(new_executor)
+    );
+    assert_eq!(shards_at(&shard_state, new_pod), shard_ids(&[0, 1]));
+    assert_eq!(
+        shard_state.epoch_for_shard(ShardId::new(0)),
+        Some(ShardEpoch(1)),
+        "the retry advanced the epoch, so it was treated as a replacement"
+    );
 
     join_set.abort_all();
 }
@@ -818,12 +944,18 @@ async fn a_persistence_failure_leaves_the_state_untouched_and_stops_the_loop() {
     persistence
         .fail_writes(vec![Some(ShardManagerError::ConcurrentModification)])
         .await;
-    let new_executor = shard_management
+    let new_executor = executor(2);
+    let registered = shard_management
         .register_executor(
+            new_executor,
             ExecutorAddr::from(new_pod),
             Some("worker-executor-1".into()),
         )
         .await;
+    assert!(
+        registered.is_err(),
+        "a registration whose persist was refused must not be acknowledged, got {registered:?}"
+    );
 
     let outcome = tokio::time::timeout(Duration::from_secs(5), join_set.join_next())
         .await
@@ -866,16 +998,25 @@ async fn a_persistence_failure_after_the_rebalance_was_executed_stops_the_loop()
     )
     .await;
 
-    // Let the registration persist, then fail the persist of the applied rebalance.
+    // Let the registration and the loop's first persist through, then fail the persist of the
+    // applied rebalance. Three entries, not two: `Register` performs its own write now, before
+    // the pass it wakes up does its two.
     persistence
-        .fail_writes(vec![None, Some(ShardManagerError::ConcurrentModification)])
+        .fail_writes(vec![
+            None,
+            None,
+            Some(ShardManagerError::ConcurrentModification),
+        ])
         .await;
-    let new_executor = shard_management
+    let new_executor = executor(2);
+    shard_management
         .register_executor(
+            new_executor,
             ExecutorAddr::from(new_pod),
             Some("worker-executor-1".into()),
         )
-        .await;
+        .await
+        .expect("the registration's own write was let through");
 
     let outcome = tokio::time::timeout(Duration::from_secs(5), join_set.join_next())
         .await
@@ -937,14 +1078,22 @@ async fn readers_cannot_observe_a_state_that_is_still_being_persisted() {
 
     let (entered, release) = persistence.block_next_write().await;
 
-    let _ = shard_management
-        .register_executor(
-            ExecutorAddr::from(new_pod),
-            Some("worker-executor-1".into()),
-        )
-        .await;
+    // Spawned: `register_executor` performs the blocked write itself and does not return until it
+    // completes.
+    let registering = tokio::spawn({
+        let shard_management = shard_management.clone();
+        async move {
+            shard_management
+                .register_executor(
+                    executor(2),
+                    ExecutorAddr::from(new_pod),
+                    Some("worker-executor-1".into()),
+                )
+                .await
+        }
+    });
 
-    // Signalled from inside `write`, which the loop calls while holding the guard.
+    // Signalled from inside `write`, which the caller runs while holding the guard.
     tokio::time::timeout(Duration::from_secs(5), entered)
         .await
         .expect("the loop should have reached a write")
@@ -961,8 +1110,14 @@ async fn readers_cannot_observe_a_state_that_is_still_being_persisted() {
     );
 
     release.send(()).expect("the write should still be waiting");
+    registering
+        .await
+        .expect("the registration task should not panic")
+        .expect("the registration should have been persisted");
 
-    wait_for_writes(&persistence, 4).await;
+    // Five: two from the startup pass, the registration's own write, then the two of the pass it
+    // wakes up. Waiting for all of them is what keeps the comparison below off an in-flight write.
+    wait_for_writes(&persistence, 5).await;
     let after = tokio::time::timeout(Duration::from_secs(5), shard_management.current_snapshot())
         .await
         .expect("the read lock must be free once the persist completed");
@@ -998,29 +1153,40 @@ async fn a_persist_interrupted_mid_flight_leaves_the_state_untouched() {
     // leaving it suspended for the abort to interrupt.
     let (entered, _release) = persistence.block_next_write().await;
 
-    let new_executor = shard_management
-        .register_executor(
-            ExecutorAddr::from(new_pod),
-            Some("worker-executor-1".into()),
-        )
-        .await;
+    let new_executor = executor(2);
+    let registering = tokio::spawn({
+        let shard_management = shard_management.clone();
+        async move {
+            shard_management
+                .register_executor(
+                    new_executor,
+                    ExecutorAddr::from(new_pod),
+                    Some("worker-executor-1".into()),
+                )
+                .await
+        }
+    });
 
     tokio::time::timeout(Duration::from_secs(5), entered)
         .await
-        .expect("the loop should have reached a write")
+        .expect("the registration should have reached a write")
         .expect("the gate should have been signalled");
 
-    // Draining is what makes the abort observable: the loop future - and with it the write guard -
-    // is dropped only once the task is reaped.
+    // The interrupted caller: `Register` writes out of the loop now, so aborting its task is the
+    // request handler dropped when its client disconnects. Draining to `None` is what makes the
+    // abort observable - the future, and with it the write guard, is only dropped once the task
+    // has actually been reaped.
+    registering.abort();
+    let _ = registering.await;
     join_set.abort_all();
     while join_set.join_next().await.is_some() {}
 
     let after = tokio::time::timeout(Duration::from_secs(5), shard_management.current_snapshot())
         .await
-        .expect("the aborted pass must have released the write lock");
+        .expect("the aborted write must have released the write lock");
     assert_eq!(
         after, before,
-        "the interrupted pass left its mutation in the live state. Every reader now serves a \
+        "the interrupted write left its mutation in the live state. Every reader now serves a \
          registration that was never persisted, and the cached external revision still refers to \
          the state before it, so every later compare-and-swap fails."
     );
@@ -1141,12 +1307,18 @@ async fn a_non_conflict_persistence_error_stops_the_loop_the_same_way() {
             "injected backend failure".into(),
         ))])
         .await;
-    let new_executor = shard_management
+    let new_executor = executor(2);
+    let registered = shard_management
         .register_executor(
+            new_executor,
             ExecutorAddr::from(new_pod),
             Some("worker-executor-1".into()),
         )
         .await;
+    assert!(
+        registered.is_err(),
+        "a registration whose persist was refused must not be acknowledged, got {registered:?}"
+    );
 
     let outcome = tokio::time::timeout(Duration::from_secs(5), join_set.join_next())
         .await
@@ -1234,12 +1406,17 @@ async fn a_demoted_leaders_fenced_write_fails_before_any_executor_command() {
             create_revision: 41,
         })])
         .await;
-    shard_management
+    let registered = shard_management
         .register_executor(
+            executor(2),
             ExecutorAddr::from(new_pod),
             Some("worker-executor-1".into()),
         )
         .await;
+    assert!(
+        registered.is_err(),
+        "a write refused for a lost fence must not acknowledge the registration, got {registered:?}"
+    );
 
     let outcome = tokio::time::timeout(Duration::from_secs(5), join_set.join_next())
         .await
@@ -1271,11 +1448,12 @@ async fn a_demoted_leaders_fenced_write_fails_before_any_executor_command() {
 }
 
 #[test]
-// A known gap, asserted rather than fixed: `register_executor` acknowledges as soon as the
-// registration is queued, so an executor can be told it is registered by a leader whose next write
-// is refused - left holding no shards, unrecorded, and waiting on a routing table it is not in.
-// Fixing it means acknowledging after the persist; until then this test pins the broken shape.
-async fn a_registration_acknowledged_before_a_failed_persist_orphans_the_executor() {
+// The gap ticket 3 characterised, closed: `register_executor` persists the lease and only then
+// acknowledges, so a registration whose write is refused is refused to the executor too. Nothing
+// is stored, nothing is pushed, and the leader whose fenced write was rejected stops - the write
+// happens outside the loop now, so the error reaches the loop through the fail-stop slot rather
+// than out of the pass that would otherwise have performed it.
+async fn a_registration_is_refused_when_its_persist_fails_and_stops_the_leader() {
     let existing_pod = pod(1, 9000);
     let new_pod = pod(2, 9001);
     let worker_executors = Arc::new(TestWorkerExecutors::default());
@@ -1301,33 +1479,54 @@ async fn a_registration_acknowledged_before_a_failed_persist_orphans_the_executo
         })])
         .await;
 
-    let new_executor = shard_management
+    let new_executor = executor(2);
+    let registered = shard_management
         .register_executor(
+            new_executor,
             ExecutorAddr::from(new_pod),
             Some("worker-executor-1".into()),
         )
         .await;
+
+    // No acknowledgement: the executor learns that it is not registered, and retries.
+    let err = registered.expect_err(
+        "the registration was acknowledged although its write was refused, so the executor now \
+         believes it is registered with a leader that has been replaced",
+    );
+    assert!(
+        matches!(err, ShardManagerError::LeadershipLost { .. }),
+        "the caller should see the refusal that actually happened, got {err:?}"
+    );
 
     let outcome = tokio::time::timeout(Duration::from_secs(5), join_set.join_next())
         .await
         .expect("the shard management loop should have stopped")
         .expect("the loop task should exist")
         .expect("the loop task should not panic");
+    let loop_err = outcome.expect_err("a lost fence must end the loop");
     assert!(
-        outcome.is_err(),
-        "the loop must end with the persistence error, got {outcome:?}"
+        matches!(
+            loop_err.downcast_ref::<ShardManagerError>(),
+            Some(ShardManagerError::LeadershipLost { .. })
+        ),
+        "the loop ended, but not with the lost fence that ended it: {loop_err:#}"
     );
 
     assert!(
+        !shard_management
+            .current_snapshot()
+            .await
+            .has_executor(new_executor),
+        "the refused registration is in the in-memory state"
+    );
+    assert!(
         !persistence.latest().await.has_executor(new_executor),
-        "the persisted state now holds the executor whose registration was refused. That is the \
-         fix, not the gap - if `Register` has started acknowledging after the persist, this test \
-         has to say so rather than keep asserting the old shape."
+        "the refused registration reached the store"
     );
     assert!(
         worker_executors.local_assignment(new_pod).await.is_empty(),
-        "the orphaned executor was given shards, so it is not orphaned - it is a second owner of \
-         shards the routing table does not record."
+        "the executor whose registration was refused was given shards, so it is a second owner of \
+         shards the routing table does not record"
     );
 }
 
