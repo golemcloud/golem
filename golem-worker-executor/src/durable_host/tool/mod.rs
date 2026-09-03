@@ -1607,6 +1607,11 @@ where
                 input,
             })
     });
+    if operation.is_rejected() {
+        return Err(anyhow!(
+            "owner generation was fenced before tool operation registration"
+        ));
+    }
 
     Ok(ToolCallPreparation::Ready(PreparedToolCall {
         stdin,
@@ -2506,20 +2511,13 @@ where
             requested_failure_kind = requested_winner.kind_label(),
             "Classifying accepted tool operation failure"
         );
-        let selected_owner_failure = owner_operations
-            .select_owner_failure(requested_winner)
-            .await;
+        cleanup_operation.select_failure(requested_winner).await;
         let winner = owner_operations
             .selected_owner_failure()
             .expect("failed accepted tool operation must select an owner winner");
         let preserve_exact_trap = matches!(&winner, operation::OwnerFailureWinner::Trap(_));
-        let owns_owner_failure_cleanup = selected_owner_failure
-            || preserve_exact_trap
-                && matches!(
-                    cleanup_operation.winner_if_active(),
-                    Some(operation::ToolOperationWinner::Trap)
-                );
-        if owns_owner_failure_cleanup {
+        let owner_failure_cleanup = cleanup_operation.claim_owner_failure_cleanup();
+        if owner_failure_cleanup.is_some() {
             if let Some(active_agent) = active_agent {
                 active_agent.fence_entity_bodies(winner).await;
             } else {
@@ -2535,7 +2533,9 @@ where
             *error = settlement_error.into();
         }
         cleanup_operation.settle().await;
-        if owns_owner_failure_cleanup {
+        if let Some(owner_failure_cleanup) = owner_failure_cleanup {
+            owner_operations.wait_owner_settled().await;
+            owner_operations.complete_owner_failure_cleanup(owner_failure_cleanup);
             primary.interrupt_current_execution();
         }
     }

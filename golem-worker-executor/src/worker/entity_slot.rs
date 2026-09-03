@@ -45,6 +45,7 @@ struct ActiveEntityInvocation {
     mode: InvocationExecutionMode,
     linear_memory: Option<LinearMemoryTracker>,
     abort: Option<AbortHandle>,
+    body_finished: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -138,9 +139,20 @@ impl EntitySlot {
         state.fence_generation = state.fence_generation.wrapping_add(1);
         let mut active = state.active.keys().cloned().collect::<Vec<_>>();
         for invocation in state.active.values() {
-            if let Some(abort) = &invocation.abort {
+            if !invocation.body_finished
+                && let Some(abort) = &invocation.abort
+            {
                 abort.abort();
             }
+        }
+        let previous_count = state.active.len();
+        state
+            .active
+            .retain(|_, invocation| !invocation.body_finished);
+        let finished_removed = state.active.len() != previous_count;
+        drop(state);
+        if finished_removed {
+            self.drained.notify_waiters();
         }
         active.sort_by_key(EntityInvocationId::start_index);
         active
@@ -179,6 +191,7 @@ impl EntitySlot {
             mode: scope.mode(),
             linear_memory: None,
             abort: None,
+            body_finished: false,
         };
         match state.active.entry(invocation_id.clone()) {
             Entry::Vacant(entry) => {
@@ -225,6 +238,23 @@ pub(crate) struct EntitySlotRegistration {
 }
 
 impl EntitySlotRegistration {
+    pub(crate) fn body_finished(&mut self) {
+        let Some(invocation_id) = self.invocation_id.as_ref() else {
+            return;
+        };
+        let mut state = self.slot.state.lock().unwrap();
+        if state.accepting {
+            if let Some(invocation) = state.active.get_mut(invocation_id) {
+                invocation.body_finished = true;
+            }
+            return;
+        }
+        state.active.remove(invocation_id);
+        self.invocation_id = None;
+        drop(state);
+        self.slot.drained.notify_waiters();
+    }
+
     pub(crate) fn attach_linear_memory(
         &self,
         linear_memory: LinearMemoryTracker,

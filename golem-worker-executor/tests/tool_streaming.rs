@@ -3997,8 +3997,9 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         let mut reconstruction_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
         let mut reconstruction_body =
             executor.gate_next_completed_entity_reconstruction(&worker_id);
+        // Keep the original gate unresolved while recovery starts so the custom call cannot gain
+        // a terminal during teardown.
         executor.simulated_crash(&worker_id).await?;
-        drop(original_custom.release);
         let reconstruction_start = tokio::time::timeout(
             std::time::Duration::from_secs(30),
             reconstruction_claim.entered(),
@@ -4043,6 +4044,7 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
             .release
             .send(())
             .map_err(|_| anyhow::anyhow!("replayed custom-effect gate was dropped"))?;
+        drop(original_custom.release);
         Ok::<_, anyhow::Error>(())
     };
     let _ = tokio::try_join!(invocation, crash_and_validate)?;

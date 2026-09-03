@@ -4588,7 +4588,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
         if self
             .owner_execution
             .tool_operations()
-            .selected_owner_failure()
+            .interruptible_owner_failure()
             .is_some()
         {
             return Some(InterruptKind::Interrupt(Timestamp::now_utc()));
