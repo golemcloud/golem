@@ -327,6 +327,21 @@ const SETTLE_MARGIN: Duration = Duration::from_secs(30);
 /// more than `secondary-never-injected` does.
 const SECONDARY_WAIT_MARGIN: Duration = Duration::from_secs(120);
 
+/// How long after the second fault lands before the shard assignment is sampled
+/// a second time.
+///
+/// The first sample is taken the instant Chaos Mesh confirms the kill, which is
+/// before anything can have reacted to it: the shard-manager has not noticed the
+/// pod is gone, so that sample is the assignment as it stood at the kill. Useful
+/// as a reference, useless as an observation.
+///
+/// What MF1 is actually for shows up in the second one — shards revoked from the
+/// dead executor, and a survivor that cannot complete the assignment because the
+/// running-workers set it has to read is behind the cut. The shard-manager gives
+/// `assign_shards` 5s and retries it 5 times, so the interesting state exists for
+/// tens of seconds and this has to land inside them.
+const REASSIGNMENT_SETTLE: Duration = Duration::from_secs(30);
+
 /// How many targets to sample after the baseline to prove actions are firing at
 /// all.
 ///
@@ -696,6 +711,26 @@ pub async fn run(
                 );
                 routing_snapshots.push(snapshot_routing(deps, "after-kill").await);
                 secondary = Some(signal);
+
+                // Then again once the shard-manager has had time to react.
+                // Capped at half of what is left of the window, so the sample
+                // cannot land after the heal and describe a cluster that had
+                // its storage back — which would report the reassignment as
+                // having worked all along.
+                if let Some(composed) = composed_config {
+                    let remaining = config
+                        .phases
+                        .fault()
+                        .mul_f64((1.0 - composed.after_fraction).max(0.0));
+                    let settle = REASSIGNMENT_SETTLE.min(remaining / 2);
+                    info!("{code}: sampling shard assignment again in {settle:?}");
+                    tokio::time::sleep(settle).await;
+                    ownership_samples.push(
+                        sample_ownership(deps, "during-fault", ownership_samples.last(), false)
+                            .await,
+                    );
+                    routing_snapshots.push(snapshot_routing(deps, "during-fault").await);
+                }
             }
             Err(e) => {
                 warn!("{code}: no secondary-fault signal arrived within {deadline:?}: {e}");
