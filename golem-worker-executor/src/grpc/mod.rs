@@ -165,6 +165,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         info!(port, "Registering worker executor");
 
+        // Ruling E15: a re-registration after `LeaseNotFound` must announce the
+        // new assignment exactly as this function and `assign_shards_internal`
+        // do. The renewal loop cannot name `Ctx`, so it is handed this hook —
+        // installed before `register`, which is what starts that loop.
+        let hook_services = services.clone();
+        worker_executor
+            .shard_manager_service()
+            .set_assignment_changed_hook(Arc::new(move || {
+                let services = hook_services.clone();
+                Box::pin(async move { Ctx::on_shard_assignment_changed(&services).await })
+            }));
+
         let pod_name = std::env::var_os("POD_NAME").map(|s| s.to_string_lossy().to_string());
         let shard_assignment = worker_executor
             .shard_manager_service()

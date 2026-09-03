@@ -624,11 +624,16 @@ impl ShardAssignment {
         }
     }
 
-    /// Drops every shard, keeping `number_of_shards`. Used when the shard
-    /// manager no longer knows this executor's lease.
-    pub fn clear(&mut self) {
+    /// Drops every shard, keeping `number_of_shards`, and leaves the lease
+    /// **lapsed** as of `now`. Used when the shard manager no longer knows this
+    /// executor's lease.
+    ///
+    /// Ruling E14: the expiry is not reset to `None`, because `None` means
+    /// "never expires". A cleared assignment must read as not ready, so
+    /// admission keeps refusing until a re-registration installs a fresh grant.
+    pub fn clear(&mut self, now: DateTime<Utc>) {
         self.shard_epochs.clear();
-        self.expires_at = None;
+        self.expires_at = Some(now);
     }
 
     /// The single place the never-expires rule is spelled: a `None` expiry is
@@ -1742,5 +1747,63 @@ impl RdbmsPoolKey {
 impl Display for RdbmsPoolKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.masked_address())
+    }
+}
+
+#[cfg(test)]
+mod shard_assignment_tests {
+    use super::{ShardAssignment, ShardEpoch, ShardId};
+    use chrono::{Duration as ChronoDuration, Utc};
+    use std::collections::HashMap;
+    use test_r::test;
+
+    test_r::enable!();
+
+    fn epochs(entries: impl IntoIterator<Item = (i64, u64)>) -> HashMap<ShardId, ShardEpoch> {
+        entries
+            .into_iter()
+            .map(|(shard_id, epoch)| (ShardId::new(shard_id), ShardEpoch(epoch)))
+            .collect()
+    }
+
+    /// Plan D2: the push says "exactly these"; anything absent is dropped.
+    #[test]
+    fn set_shards_replaces_the_set_rather_than_merging_into_it() {
+        let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0), ShardId::new(1)]);
+
+        assignment.set_shards(8, &epochs([(1, 4)]), None);
+
+        assert!(!assignment.contains(&ShardId::new(0)));
+        assert_eq!(assignment.epoch_of(&ShardId::new(1)), Some(ShardEpoch(4)));
+        assert_eq!(assignment.len(), 1);
+    }
+
+    /// Ruling E14: `clear()` lapses the lease as of `now`. `None` would mean
+    /// "never expires", which would leave a fenced executor reading as ready.
+    #[test]
+    fn clear_lapses_the_lease_instead_of_making_it_unexpiring() {
+        let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
+        let now = Utc::now();
+        assert!(assignment.lease_is_live(now));
+
+        assignment.clear(now);
+
+        assert!(assignment.is_empty());
+        assert_eq!(assignment.expires_at, Some(now));
+        assert!(
+            !assignment.lease_is_live(now),
+            "ruling E14: a cleared assignment is lapsed, not never-expiring"
+        );
+        assert!(!assignment.lease_is_live(now + ChronoDuration::seconds(1)));
+    }
+
+    /// The single-shard implementations and the debugging service run with no
+    /// expiry at all and must never fence themselves.
+    #[test]
+    fn a_lease_without_an_expiry_is_always_live() {
+        let assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
+
+        assert!(assignment.lease_is_live(Utc::now()));
+        assert!(assignment.lease_is_live(Utc::now() + ChronoDuration::days(365)));
     }
 }

@@ -827,3 +827,61 @@ pub fn from_protobuf_resource_description(
     };
     Ok((key, value))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{ShardAssignment, ShardEpoch, ShardId};
+    use std::collections::HashMap;
+    use test_r::test;
+
+    test_r::enable!();
+
+    /// Ruling E17: the round trip goes through the free conversion functions
+    /// themselves — they are what `AssignShards` and `RenewShardLease` use on
+    /// both sides of the wire. Ruling E16: `epoch_of` is how a reader of the
+    /// pushed set gets a shard's ownership generation back out.
+    #[test]
+    fn epochs_survive_a_push_round_trip() {
+        let pushed: HashMap<ShardId, ShardEpoch> = HashMap::from([
+            (ShardId::new(0), ShardEpoch(1)),
+            (ShardId::new(7), ShardEpoch(42)),
+            (ShardId::new(1023), ShardEpoch(0)),
+        ]);
+
+        let on_the_wire = shard_epochs_to_proto(pushed.clone());
+        assert_eq!(on_the_wire.len(), 3);
+
+        let received: HashMap<ShardId, ShardEpoch> =
+            shard_epochs_from_proto(on_the_wire).expect("a well-formed push decodes");
+        assert_eq!(received, pushed);
+
+        let mut assignment = ShardAssignment::default();
+        assignment.set_shards(1024, &received, None);
+
+        assert_eq!(assignment.epoch_of(&ShardId::new(0)), Some(ShardEpoch(1)));
+        assert_eq!(assignment.epoch_of(&ShardId::new(7)), Some(ShardEpoch(42)));
+        assert_eq!(
+            assignment.epoch_of(&ShardId::new(1023)),
+            Some(ShardEpoch(0))
+        );
+        assert_eq!(
+            assignment.epoch_of(&ShardId::new(5)),
+            None,
+            "a shard absent from the push has no epoch here"
+        );
+    }
+
+    #[test]
+    fn an_entry_without_a_shard_id_is_rejected_rather_than_silently_dropped() {
+        let on_the_wire = vec![golem::shardmanager::ShardEpochEntry {
+            shard_id: None,
+            epoch: 3,
+        }];
+
+        let decoded: Result<HashMap<ShardId, ShardEpoch>, String> =
+            shard_epochs_from_proto(on_the_wire);
+
+        assert!(decoded.is_err());
+    }
+}
