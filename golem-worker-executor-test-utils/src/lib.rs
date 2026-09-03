@@ -798,6 +798,15 @@ impl TestWorkerExecutor {
             .await
     }
 
+    /// Arms a one-shot gate that leaves the next `Snapshot` oplog append for `agent_id` pending
+    /// forever, so dropping the executor simulates a crash between the invocation completing and
+    /// its automatic snapshot becoming durable.
+    pub async fn abort_next_snapshot_append(&self, agent_id: &AgentId) -> SnapshotAppendGateHandle {
+        self.additional_test_deps
+            .abort_next_snapshot_append(agent_id.clone())
+            .await
+    }
+
     /// Arms a one-shot gate immediately before the next discriminated p3 HTTP consume-body scope
     /// `End` is appended for `agent_id`. Must be armed before the invocation appends the scope's
     /// `Start` (the gate is consulted when tracking scope `Start` appends too).
@@ -3098,6 +3107,25 @@ impl TestOplog {
         gate.abort_append.load(Ordering::SeqCst)
     }
 
+    /// Returns `true` when an armed snapshot append gate intercepts this `Snapshot` append; the
+    /// caller must then leave the append pending forever.
+    async fn abort_snapshot_append(&self) -> bool {
+        let Some(gate) = self
+            .additional_test_deps
+            .snapshot_append_gate(&self.owned_agent_id.agent_id)
+            .await
+        else {
+            return false;
+        };
+        if !gate.armed.swap(false, Ordering::SeqCst) {
+            return false;
+        }
+        if let Some(reached_tx) = gate.reached_tx.lock().unwrap().take() {
+            let _ = reached_tx.send(());
+        }
+        true
+    }
+
     /// Recognizes the `End` of a tracked consume-body scope `Start`.
     fn is_consume_body_scope_end(&self, entry: &OplogEntry) -> bool {
         let OplogEntry::End { start_index, .. } = entry else {
@@ -3203,6 +3231,9 @@ impl Oplog for TestOplog {
         if self.is_consume_body_scope_end(&entry)
             && self.pause_before_consume_body_scope_end().await
         {
+            return std::future::pending().await;
+        }
+        if matches!(entry, OplogEntry::Snapshot { .. }) && self.abort_snapshot_append().await {
             return std::future::pending().await;
         }
         let track_scope_start = Self::is_consume_body_scope_start(&entry);
@@ -3618,6 +3649,10 @@ pub struct AdditionalTestDeps {
     consume_body_scope_start_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyScopeStartGate>>>,
     consume_body_scope_end_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyScopeEndGate>>>,
     consume_body_reply_defer_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyReplyDeferGate>>>,
+    /// One-shot gates leaving an agent's next `Snapshot` append pending forever inside the
+    /// [`TestOplog`] wrapper, so dropping the executor simulates a crash after the preceding
+    /// invocation completed but before its snapshot became durable.
+    snapshot_append_gates: Arc<scc::HashMap<AgentId, Arc<SnapshotAppendGate>>>,
     /// Captured once on first call to [`TestWorkerCtx::create`]. Used by the
     /// read-only test helpers (`worker_is_loaded`,
     /// `worker_eviction_class`, `worker_memory_requirement`) to observe
@@ -3646,6 +3681,7 @@ impl AdditionalTestDeps {
             consume_body_scope_start_gates: Arc::new(scc::HashMap::new()),
             consume_body_scope_end_gates: Arc::new(scc::HashMap::new()),
             consume_body_reply_defer_gates: Arc::new(scc::HashMap::new()),
+            snapshot_append_gates: Arc::new(scc::HashMap::new()),
             active_agents: Arc::new(std::sync::OnceLock::new()),
         }
     }
@@ -3736,6 +3772,28 @@ impl AdditionalTestDeps {
         agent_id: &AgentId,
     ) -> Option<Arc<ConsumeBodyScopeEndGate>> {
         self.consume_body_scope_end_gates
+            .read_async(agent_id, |_, gate| gate.clone())
+            .await
+    }
+
+    /// Arms a one-shot gate that leaves the given agent's next `Snapshot` append pending forever,
+    /// so the snapshot never becomes durable. Re-arming replaces a previously fired gate.
+    pub async fn abort_next_snapshot_append(&self, agent_id: AgentId) -> SnapshotAppendGateHandle {
+        let (reached_tx, reached_rx) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(SnapshotAppendGate {
+            armed: AtomicBool::new(true),
+            reached_tx: std::sync::Mutex::new(Some(reached_tx)),
+        });
+        self.snapshot_append_gates
+            .entry_async(agent_id)
+            .await
+            .and_modify(|existing| *existing = gate.clone())
+            .or_insert_with(|| gate.clone());
+        SnapshotAppendGateHandle { reached_rx }
+    }
+
+    async fn snapshot_append_gate(&self, agent_id: &AgentId) -> Option<Arc<SnapshotAppendGate>> {
+        self.snapshot_append_gates
             .read_async(agent_id, |_, gate| gate.clone())
             .await
     }
@@ -4007,6 +4065,24 @@ impl ConsumeBodyScopeEndGateHandle {
 impl Drop for ConsumeBodyScopeEndGateHandle {
     fn drop(&mut self) {
         self.gate.release.add_permits(1);
+    }
+}
+
+struct SnapshotAppendGate {
+    armed: AtomicBool,
+    reached_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
+pub struct SnapshotAppendGateHandle {
+    reached_rx: tokio::sync::oneshot::Receiver<()>,
+}
+
+impl SnapshotAppendGateHandle {
+    /// Resolves once the gated `Snapshot` append has been intercepted and left pending.
+    pub async fn reached(&mut self) {
+        (&mut self.reached_rx)
+            .await
+            .expect("the snapshot append gate was dropped without firing");
     }
 }
 

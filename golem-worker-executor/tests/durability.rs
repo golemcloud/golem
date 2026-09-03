@@ -20,13 +20,13 @@ use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::oplog::{
     MultipartPartData, OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex, PublicSnapshotData,
 };
-use golem_common::model::{AgentEvent, AgentStatus, OwnedAgentId};
+use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
-    start_with_snapshot_policy,
+    LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, start, start_with_snapshot_policy,
 };
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
@@ -110,6 +110,59 @@ pub(crate) async fn assert_snapshot_recovery_failed(
     })
     .await
     .expect("Timed out waiting for snapshot recovery event");
+}
+
+/// Expects a successful snapshot load followed by the snapshot being abandoned because the replayed
+/// tail diverged from the recorded oplog.
+pub(crate) async fn assert_snapshot_recovery_abandoned(
+    events: &mut UnboundedReceiver<LogEvent>,
+    expected_error: &str,
+) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut loaded_index = None;
+        while let Some(event) = events.recv().await {
+            match AgentEvent::try_from(event) {
+                Ok(AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. }) => {
+                    assert!(
+                        loaded_index.is_none(),
+                        "Snapshot recovery unexpectedly succeeded twice"
+                    );
+                    loaded_index = Some(snapshot_index);
+                }
+                Ok(AgentEvent::SnapshotRecoveryFailed {
+                    snapshot_index,
+                    error,
+                    ..
+                }) => {
+                    assert_eq!(
+                        loaded_index,
+                        Some(snapshot_index),
+                        "Snapshot recovery failed before the snapshot was loaded: {error}"
+                    );
+                    assert!(
+                        error.contains(expected_error),
+                        "Snapshot was abandoned with unexpected error: {error}"
+                    );
+                    return;
+                }
+                _ => {}
+            }
+        }
+        panic!("Worker event stream ended before the snapshot was abandoned");
+    })
+    .await
+    .expect("Timed out waiting for the snapshot to be abandoned");
+}
+
+async fn count_snapshots(
+    executor: &TestWorkerExecutor,
+    worker_id: &AgentId,
+) -> anyhow::Result<usize> {
+    let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+    Ok(oplog
+        .iter()
+        .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+        .count())
 }
 
 #[test]
@@ -1560,6 +1613,109 @@ async fn ts_sqlite_multipart_snapshot_recovery(
     );
 
     // Add more data after recovery to verify databases are functional
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "addItem", data_value!("cherry"))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "addLog", data_value!("recovered"))
+        .await?;
+
+    let state_after_more = executor
+        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
+        .await?;
+
+    let state_after_str = state_after_more.into_typed::<String>()?;
+    let state_after_json: serde_json::Value = serde_json::from_str(&state_after_str)?;
+    assert_eq!(state_after_json["label"], "after-init");
+    assert_eq!(
+        state_after_json["items"],
+        serde_json::json!(["apple", "banana", "cherry"])
+    );
+    assert_eq!(
+        state_after_json["logs"],
+        serde_json::json!(["started", "recovered"])
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    Ok(())
+}
+
+/// Simulates a crash between an invocation completing and its automatic snapshot becoming durable.
+/// The restarted worker loads the previous snapshot and replays the recorded invocation as a tail,
+/// but the SQLite state restored from the snapshot makes the guest issue a different host-call
+/// sequence than the recorded one. The executor must abandon the snapshot and fall back to a full
+/// replay instead of failing the worker.
+#[test]
+#[tracing::instrument]
+async fn ts_sqlite_snapshot_tail_divergence_falls_back_to_full_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, constructor_parameter_echo)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SqliteSnapshotAgent", "sqlite-tail-divergence");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "addItem", data_value!("apple"))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "addItem", data_value!("banana"))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "addLog", data_value!("started"))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "setLabel", data_value!("after-init"))
+        .await?;
+
+    let snapshots_before = count_snapshots(&executor, &worker_id).await?;
+    assert!(
+        snapshots_before > 0,
+        "Expected automatic snapshots before the gated invocation"
+    );
+
+    // The snapshot taken after this invocation never becomes durable, so recovery has to load the
+    // snapshot taken after `setLabel` and replay the recorded `getState` on top of it.
+    let mut snapshot_gate = executor.abort_next_snapshot_append(&worker_id).await;
+    let state_before = executor
+        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
+        .await?;
+    tokio::time::timeout(Duration::from_secs(20), snapshot_gate.reached())
+        .await
+        .expect("Timed out waiting for the automatic snapshot append");
+
+    assert_eq!(
+        count_snapshots(&executor, &worker_id).await?,
+        snapshots_before,
+        "The snapshot of the gated invocation must not be durable"
+    );
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let mut events = executor.capture_output(&worker_id).await?;
+
+    let state_after = executor
+        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
+        .await?;
+    assert_snapshot_recovery_abandoned(&mut events, "diverged from the recorded oplog").await;
+
+    assert_eq!(
+        state_before, state_after,
+        "Agent state should be preserved by the full replay fallback"
+    );
+
     executor
         .invoke_and_await_agent(&component, &agent_id, "addItem", data_value!("cherry"))
         .await?;
