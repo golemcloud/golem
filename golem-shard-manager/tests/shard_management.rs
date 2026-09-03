@@ -155,6 +155,11 @@ struct TestWorkerExecutors {
     failed_assignments: Arc<Mutex<HashMap<Pod, usize>>>,
     failed_revocations: Arc<Mutex<HashMap<Pod, usize>>>,
     failed_reconciliations: Arc<Mutex<HashMap<Pod, usize>>>,
+    /// Every command sent to an executor, in order, whether or not it succeeded.
+    ///
+    /// `local_assignments` records only the net effect, so no-op commands - exactly what a leader
+    /// that has lost the fence would still issue - leave no trace there.
+    commands: Arc<Mutex<Vec<String>>>,
 }
 
 impl TestWorkerExecutors {
@@ -186,6 +191,17 @@ impl TestWorkerExecutors {
         self.failed_reconciliations.lock().await.insert(pod, count);
     }
 
+    async fn record(&self, command: &str, pod: Pod, shard_ids: &BTreeSet<ShardId>) {
+        self.commands
+            .lock()
+            .await
+            .push(format!("{command} {pod} {shard_ids:?}"));
+    }
+
+    async fn commands_sent(&self) -> Vec<String> {
+        self.commands.lock().await.clone()
+    }
+
     async fn should_fail(failures: &Arc<Mutex<HashMap<Pod, usize>>>, pod: Pod) -> bool {
         let mut failures = failures.lock().await;
         if let Some(count) = failures.get_mut(&pod)
@@ -205,6 +221,7 @@ impl WorkerExecutorService for TestWorkerExecutors {
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
+        self.record("assign", *pod, shard_ids).await;
         if Self::should_fail(&self.failed_assignments, *pod).await {
             return Err(ShardManagerError::Timeout);
         }
@@ -227,6 +244,7 @@ impl WorkerExecutorService for TestWorkerExecutors {
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
+        self.record("revoke", *pod, shard_ids).await;
         if Self::should_fail(&self.failed_revocations, *pod).await {
             return Err(ShardManagerError::Timeout);
         }
@@ -243,6 +261,7 @@ impl WorkerExecutorService for TestWorkerExecutors {
         _number_of_shards: usize,
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
+        self.record("set-assignment", *pod, shard_ids).await;
         if Self::should_fail(&self.failed_reconciliations, *pod).await {
             return Err(ShardManagerError::Timeout);
         }
@@ -258,12 +277,22 @@ impl WorkerExecutorService for TestWorkerExecutors {
 #[derive(Clone, Debug)]
 struct TestHealthCheck {
     healthy: Arc<Mutex<HashMap<Pod, bool>>>,
+    /// Pod whose check never answers, standing in for an executor that went silent.
+    never_answers: Option<Pod>,
 }
 
 impl TestHealthCheck {
     fn all_healthy() -> Self {
         Self {
             healthy: Arc::new(Mutex::new(HashMap::new())),
+            never_answers: None,
+        }
+    }
+
+    fn never_answering_at(pod: Pod) -> Self {
+        Self {
+            never_answers: Some(pod),
+            ..Self::all_healthy()
         }
     }
 }
@@ -271,6 +300,9 @@ impl TestHealthCheck {
 #[async_trait]
 impl HealthCheck for TestHealthCheck {
     async fn health_check(&self, pod: Pod, _pod_name: Option<String>) -> bool {
+        if self.never_answers == Some(pod) {
+            std::future::pending::<()>().await;
+        }
         self.healthy.lock().await.get(&pod).copied().unwrap_or(true)
     }
 }
@@ -747,12 +779,10 @@ async fn same_address_reregistration_transfers_shards_and_reconciles() {
 }
 
 #[test]
-// Snapshot-and-rollback: a failed persist restores the in-memory state, and the loop
-// does not carry on against a store it can no longer trust - the task ends with the error, so
-// the process restarts and re-reads. A revision conflict in particular means another shard
-// manager is writing the state; the cached revision is deliberately not refreshed, because it is
-// the fencing token and the loser of it has to stop.
-async fn a_persistence_failure_rolls_back_the_state_and_stops_the_loop() {
+// The loop ends with the error rather than carry on against a store it can no longer trust, so
+// the process restarts and re-reads. On a conflict the cached revision is deliberately not
+// refreshed: it is the fencing token, and the loser of it has to stop.
+async fn a_persistence_failure_leaves_the_state_untouched_and_stops_the_loop() {
     let existing_pod = pod(1, 9000);
     let new_pod = pod(2, 9001);
     let worker_executors = Arc::new(TestWorkerExecutors::default());
@@ -793,8 +823,6 @@ async fn a_persistence_failure_rolls_back_the_state_and_stops_the_loop() {
         "the loop must end with the persistence error, got {outcome:?}"
     );
 
-    // Rolled back: the registration reached neither memory nor the store, and nothing was pushed
-    // to the executor that never made it in.
     let after = shard_management.current_snapshot().await;
     assert!(!after.has_executor(new_executor));
     assert_eq!(after, before);
@@ -930,6 +958,65 @@ async fn readers_cannot_observe_a_state_that_is_still_being_persisted() {
 }
 
 #[test]
+// A caller dropped mid-persist - an aborted task, a handler whose client disconnected - releases
+// the write lock through the guard's `Drop` and never runs the code after the await. Mutating a
+// clone is what keeps that harmless: there is nothing left to undo by code that will not run.
+async fn a_persist_interrupted_mid_flight_leaves_the_state_untouched() {
+    let existing_pod = pod(1, 9000);
+    let new_pod = pod(2, 9001);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+
+    let (shard_management, persistence, mut join_set) = new_shard_management(
+        shard_state_with_executors(
+            4,
+            vec![(
+                executor(1),
+                existing_pod,
+                "worker-executor-0",
+                &[0, 1, 2, 3],
+            )],
+        ),
+        worker_executors.clone(),
+    )
+    .await;
+    let before = shard_management.current_snapshot().await;
+    let persisted_before = persistence.latest().await;
+
+    // `_release` is held to the end of the test: dropping it would let the write finish instead of
+    // leaving it suspended for the abort to interrupt.
+    let (entered, _release) = persistence.block_next_write().await;
+
+    let new_executor = shard_management
+        .register_executor(
+            ExecutorAddr::from(new_pod),
+            Some("worker-executor-1".into()),
+        )
+        .await;
+
+    tokio::time::timeout(Duration::from_secs(5), entered)
+        .await
+        .expect("the loop should have reached a write")
+        .expect("the gate should have been signalled");
+
+    // Draining is what makes the abort observable: the loop future - and with it the write guard -
+    // is dropped only once the task is reaped.
+    join_set.abort_all();
+    while join_set.join_next().await.is_some() {}
+
+    let after = tokio::time::timeout(Duration::from_secs(5), shard_management.current_snapshot())
+        .await
+        .expect("the aborted pass must have released the write lock");
+    assert_eq!(
+        after, before,
+        "the interrupted pass left its mutation in the live state. Every reader now serves a \
+         registration that was never persisted, and the cached external revision still refers to \
+         the state before it, so every later compare-and-swap fails."
+    );
+    assert!(!after.has_executor(new_executor));
+    assert_eq!(persistence.latest().await, persisted_before);
+}
+
+#[test]
 // First boot through the loop: nothing is stored, so the very first write must be guarded on
 // NO_REVISION. Getting this wrong is rejected by both real backends, not silently tolerated.
 async fn the_first_write_on_an_empty_store_uses_no_revision() {
@@ -1010,11 +1097,10 @@ async fn the_first_write_uses_the_revision_read_at_startup() {
 }
 
 #[test]
-// The rollback arm is not specific to a revision conflict. A backend failure that says nothing
+// The failure arm is not specific to a revision conflict. A backend failure that says nothing
 // about revisions leaves the store in an unknown state - the write may or may not have landed -
-// so it is rolled back and stops the loop exactly like a conflict does, and the loop surfaces the
-// backend's own error rather than a generic one.
-async fn a_non_conflict_persistence_error_is_rolled_back_the_same_way() {
+// so it fail-stops like a conflict, surfacing the backend's own error rather than a generic one.
+async fn a_non_conflict_persistence_error_stops_the_loop_the_same_way() {
     let existing_pod = pod(1, 9000);
     let new_pod = pod(2, 9001);
     let worker_executors = Arc::new(TestWorkerExecutors::default());
@@ -1063,4 +1149,167 @@ async fn a_non_conflict_persistence_error_is_rolled_back_the_same_way() {
     assert_eq!(after, before);
     assert_eq!(persistence.latest().await, persisted_before);
     assert!(worker_executors.local_assignment(new_pod).await.is_empty());
+}
+
+#[test]
+// Without the bound, a leader elected while an executor is silent never reaches its gRPC bind,
+// while its leader gauge already reads 1.
+async fn the_initial_health_check_cannot_pin_startup() {
+    let silent_pod = pod(1, 9000);
+    let shard_state = shard_state_with_executors(
+        4,
+        vec![(executor(1), silent_pod, "worker-executor-1", &[0, 1, 2, 3])],
+    );
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let persistence = TestPersistence::new(shard_state);
+    let health_check = Arc::new(TestHealthCheck::never_answering_at(silent_pod));
+    let mut join_set = JoinSet::new();
+
+    let started = tokio::time::timeout(
+        Duration::from_secs(5),
+        ShardManagement::new_with_initial_health_check_timeout(
+            Arc::new(persistence.clone()),
+            worker_executors,
+            health_check,
+            0.0,
+            LEASE_TTL,
+            &mut join_set,
+            Duration::from_secs(1),
+        ),
+    )
+    .await
+    .expect("startup was pinned by the health check that never answers");
+    started.expect("failed to create shard management");
+
+    join_set.abort_all();
+}
+
+#[test]
+// A refused write is a demoted leader's only notice of demotion, so it has to stop it before any
+// command reaches an executor: the new leader is already planning from the state that write was
+// refused against, so shards handed out after it are ones it believes it has placed elsewhere.
+async fn a_demoted_leaders_fenced_write_fails_before_any_executor_command() {
+    let existing_pod = pod(1, 9000);
+    let new_pod = pod(2, 9001);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+
+    let (shard_management, persistence, mut join_set) = new_shard_management(
+        shard_state_with_executors(
+            4,
+            vec![(
+                executor(1),
+                existing_pod,
+                "worker-executor-0",
+                &[0, 1, 2, 3],
+            )],
+        ),
+        worker_executors.clone(),
+    )
+    .await;
+
+    // The startup pass has already commanded the executor it found; only what follows this mark
+    // belongs to the demoted pass.
+    let before = worker_executors.commands_sent().await;
+
+    persistence
+        .fail_writes(vec![Some(ShardManagerError::LeadershipLost {
+            leader_key: "/golem/shard-manager/leader/6c2f".to_string(),
+            create_revision: 41,
+        })])
+        .await;
+    shard_management
+        .register_executor(
+            ExecutorAddr::from(new_pod),
+            Some("worker-executor-1".into()),
+        )
+        .await;
+
+    let outcome = tokio::time::timeout(Duration::from_secs(5), join_set.join_next())
+        .await
+        .expect(
+            "the shard management loop is still running after a write was refused for a lost \
+             fence, so it is about to command executors on a topology it no longer owns",
+        )
+        .expect("the loop task should exist")
+        .expect("the loop task should not panic");
+
+    let err = outcome.expect_err("a lost fence must end the loop");
+    assert!(
+        matches!(
+            err.downcast_ref::<ShardManagerError>(),
+            Some(ShardManagerError::LeadershipLost { .. })
+        ),
+        "the loop ended, but not with the lost fence that ended it: {err:#}"
+    );
+
+    // The ordering under test: persist before apply, so an unpersisted plan is never applied.
+    let after = worker_executors.commands_sent().await;
+    assert_eq!(
+        after,
+        before,
+        "a leader whose fenced write was refused still sent {:?} to executors. It has already \
+         been replaced, so those shards are ones the new leader believes it has placed elsewhere.",
+        &after[before.len()..]
+    );
+}
+
+#[test]
+// A known gap, asserted rather than fixed: `register_executor` acknowledges as soon as the
+// registration is queued, so an executor can be told it is registered by a leader whose next write
+// is refused - left holding no shards, unrecorded, and waiting on a routing table it is not in.
+// Fixing it means acknowledging after the persist; until then this test pins the broken shape.
+async fn a_registration_acknowledged_before_a_failed_persist_orphans_the_executor() {
+    let existing_pod = pod(1, 9000);
+    let new_pod = pod(2, 9001);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+
+    let (shard_management, persistence, mut join_set) = new_shard_management(
+        shard_state_with_executors(
+            4,
+            vec![(
+                executor(1),
+                existing_pod,
+                "worker-executor-0",
+                &[0, 1, 2, 3],
+            )],
+        ),
+        worker_executors.clone(),
+    )
+    .await;
+
+    persistence
+        .fail_writes(vec![Some(ShardManagerError::LeadershipLost {
+            leader_key: "/golem/shard-manager/leader/6c2f".to_string(),
+            create_revision: 41,
+        })])
+        .await;
+
+    let new_executor = shard_management
+        .register_executor(
+            ExecutorAddr::from(new_pod),
+            Some("worker-executor-1".into()),
+        )
+        .await;
+
+    let outcome = tokio::time::timeout(Duration::from_secs(5), join_set.join_next())
+        .await
+        .expect("the shard management loop should have stopped")
+        .expect("the loop task should exist")
+        .expect("the loop task should not panic");
+    assert!(
+        outcome.is_err(),
+        "the loop must end with the persistence error, got {outcome:?}"
+    );
+
+    assert!(
+        !persistence.latest().await.has_executor(new_executor),
+        "the persisted state now holds the executor whose registration was refused. That is the \
+         fix, not the gap - if `Register` has started acknowledging after the persist, this test \
+         has to say so rather than keep asserting the old shape."
+    );
+    assert!(
+        worker_executors.local_assignment(new_pod).await.is_empty(),
+        "the orphaned executor was given shards, so it is not orphaned - it is a second owner of \
+         shards the routing table does not record."
+    );
 }

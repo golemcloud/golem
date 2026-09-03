@@ -75,6 +75,21 @@ impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
                 "Concurrent modification of the persisted shard state".to_string(),
                 api::error_code::CONCURRENT_UPDATE,
             ),
+            ShardManagerError::LeadershipLost { .. } => error(
+                shard_manager_error::Error::Unknown,
+                "Leadership of the shard manager was lost".to_string(),
+                api::error_code::INTERNAL_SHARDING_NOT_READY,
+            ),
+            ShardManagerError::LeaseLostWhileCampaigning(lost) => error(
+                shard_manager_error::Error::Unknown,
+                lost.to_string(),
+                api::error_code::INTERNAL_SHARDING_NOT_READY,
+            ),
+            ShardManagerError::ShutdownRequested => error(
+                shard_manager_error::Error::Unknown,
+                "The shard manager is shutting down".to_string(),
+                api::error_code::INTERNAL_SHARDING_NOT_READY,
+            ),
             ShardManagerError::RepoError(err) => error(
                 shard_manager_error::Error::Unknown,
                 err.to_string(),
