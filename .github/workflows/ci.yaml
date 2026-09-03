@@ -485,6 +485,46 @@ jobs:
           artifact-name: '${{ matrix.group.name }}-report'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+  consolidate-test-reports:
+    name: consolidate-test-reports
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    needs:
+      - unit-tests-and-checks
+      - worker-tests
+      - it
+      - it-cli
+    steps:
+      - name: Download test reports for this attempt
+        uses: actions/download-artifact@v8
+        with:
+          pattern: '*-report-attempt${{ github.run_attempt }}'
+          path: tmp/test-reports
+          merge-multiple: false
+      - name: Preserve the source artifact name for a single report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ -f tmp/test-reports/ctrf-report.json ]]; then
+            mapfile -t artifact_names < <(
+              gh api --paginate "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+                --jq ".artifacts[].name | select(endswith(\"-report-attempt${GITHUB_RUN_ATTEMPT}\"))"
+            )
+            if [[ "${#artifact_names[@]}" -ne 1 ]]; then
+              echo "Expected one report artifact for attempt ${GITHUB_RUN_ATTEMPT}, found ${#artifact_names[@]}" >&2
+              exit 1
+            fi
+            mkdir -p "tmp/test-reports/${artifact_names[0]}"
+            mv tmp/test-reports/ctrf-report.json "tmp/test-reports/${artifact_names[0]}/"
+          fi
+      - name: Upload consolidated test reports
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-test-reports-attempt${{ github.run_attempt }}
+          path: tmp/test-reports
+          if-no-files-found: error
+          retention-days: 35
+
   scala-sdk-integration-tests:
     runs-on: blacksmith-8vcpu-ubuntu-2204
     needs:
