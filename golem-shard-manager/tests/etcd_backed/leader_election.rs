@@ -27,8 +27,9 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test};
-use tokio::sync::oneshot;
+use tokio::sync::{Notify, oneshot};
 use tokio::time::{Instant, timeout};
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 use uuid::Uuid;
 
@@ -1436,4 +1437,202 @@ async fn the_watchdog_is_armed_from_the_handshake_not_from_the_spawn(etcd: &Arc<
          did not require."
     );
     info!(?since_handshake, ?since_spawn, "Watchdog fired");
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+async fn a_reconnect_that_succeeds_re_arms_the_watchdog(etcd: &Arc<DockerEtcd>) {
+    let lease_ttl = TEST_LEASE_TTL * 2;
+    let proxy = BreakableProxy::start(&etcd.client_url()).await;
+    let config = EtcdConfig {
+        endpoints: vec![proxy.url()],
+        leader_lease_ttl: lease_ttl,
+        ..election_config(etcd)
+    };
+    let election = LeaderElection::connect(&config, unique_election_name())
+        .await
+        .expect("Connecting the election client through the proxy should succeed");
+    let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
+        .await
+        .expect("The campaign should not hang")
+        .expect("Winning an uncontested campaign should succeed");
+
+    let granted_ttl = elected.granted_ttl;
+    let renewal_interval = LeaseKeepAlive::renewal_interval(granted_ttl);
+    let keepalive = tokio::spawn(elected.keepalive.run());
+
+    // Let one renewal be acknowledged, then silence the connection and let the deadline run most
+    // of the way down, so an un-re-armed watchdog has only a sliver of it left.
+    tokio::time::sleep(renewal_interval).await;
+    let silent_since = Instant::now();
+    proxy.black_hole();
+    tokio::time::sleep(granted_ttl / 2).await;
+
+    // Restored first, so the reconnect that the closed socket triggers can actually succeed.
+    proxy.restore();
+    proxy.drop_all_connections().await;
+
+    let gave_up = timeout(granted_ttl / 2, keepalive).await;
+    assert!(
+        gave_up.is_err(),
+        "The keepalive reported the lease lost {:?} after the connection went silent, having \
+         reconnected successfully in between. etcd renewed the lease for a full {granted_ttl:?} \
+         when it answered that reconnect, so the watchdog is still counting from a renewal that \
+         predates the break and a working connection is being read as a lost lease.",
+        silent_since.elapsed()
+    );
+}
+
+/// Every key currently queued under one election name.
+async fn keys_under(etcd: &DockerEtcd, election_name: &str) -> Vec<Vec<u8>> {
+    inspection_client(etcd)
+        .await
+        .kv_client()
+        .get(
+            format!("{election_name}/"),
+            Some(GetOptions::new().with_prefix()),
+        )
+        .await
+        .expect("Reading the election prefix should succeed")
+        .kvs()
+        .iter()
+        .map(|kv| kv.key().to_vec())
+        .collect()
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+
+async fn a_dropped_campaign_that_had_already_won_leaves_no_key_behind(etcd: &Arc<DockerEtcd>) {
+    let election_name = unique_election_name();
+    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
+        .await
+        .expect("Connecting the election client should succeed")
+        // Holds the attempt inside its confirming read: the campaign is won, so the key exists on
+        // the lease, and the attempt is still in flight and therefore droppable.
+        .with_confirm_hook(|_| Some(ShardManagerError::Timeout));
+
+    {
+        let mut campaign = std::pin::pin!(election.campaign_until_elected());
+        let still_confirming = timeout(TEST_LEASE_TTL / 2, &mut campaign).await;
+        assert!(
+            still_confirming.is_err(),
+            "The campaign finished instead of retrying its confirming read, so this test never \
+             reaches the window it is about: a won campaign that is then abandoned."
+        );
+        assert!(
+            !keys_under(etcd, &election_name).await.is_empty(),
+            "The campaign has not created its election key yet, so there is nothing for the \
+             cleanup under test to leave behind."
+        );
+    }
+
+    election.revoke_pending_lease().await;
+
+    assert!(
+        keys_under(etcd, &election_name).await.is_empty(),
+        "The abandoned campaign's key is still queued on a lease nothing renews. It had already \
+         won, so etcd has no cancelled RPC to resign, and every other replica now waits out that \
+         lease behind a campaign that no longer exists."
+    );
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A shutdown that lands while the won campaign is still confirming its key has to be seen there:
+// the alternative is to wait the confirm's whole budget out. Either way it leaves through the
+// revoke, so the key the win is holding is released.
+async fn a_shutdown_during_the_confirming_read_releases_the_lease_at_once(etcd: &Arc<DockerEtcd>) {
+    let election_name = unique_election_name();
+    let shutdown = CancellationToken::new();
+    // The hook both holds the attempt inside its confirming read and reports when it got there,
+    // so the shutdown is sent inside that window and nowhere else.
+    let confirming = Arc::new(Notify::new());
+    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
+        .await
+        .expect("Connecting the election client should succeed")
+        .with_shutdown(shutdown.clone())
+        .with_confirm_hook({
+            let confirming = confirming.clone();
+            move |_| {
+                confirming.notify_one();
+                Some(ShardManagerError::Timeout)
+            }
+        });
+    let campaign = tokio::spawn(async move { election.campaign_until_elected().await });
+
+    timeout(CAMPAIGN_TIMEOUT, confirming.notified())
+        .await
+        .expect("The campaign should be won and reach its confirming read");
+    shutdown.cancel();
+
+    let outcome = timeout(Duration::from_millis(500), campaign)
+        .await
+        .expect(
+            "The campaign ignored the shutdown for the whole of its confirming budget. A pod \
+             being rolled sits there for most of a lease TTL before it can begin to stop.",
+        )
+        .expect("The campaign task should not panic");
+    let err = outcome
+        .err()
+        .expect("A campaign asked to stop must report that, not finish starting");
+    assert!(
+        matches!(err, ShardManagerError::ShutdownRequested),
+        "A campaign asked to stop must report that, but ended with: {err}"
+    );
+    assert!(
+        keys_under(etcd, &election_name).await.is_empty(),
+        "The stopped campaign's key is still queued: the shutdown left without the revoke, so \
+         every other replica waits out this lease behind a campaign that has already exited."
+    );
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A reconnect whose own handshake is answered with a zero TTL has learned the lease is gone; that
+// is a loss to report now, not a fault to retry until the watchdog gives up on its own.
+async fn a_reconnect_that_finds_the_lease_gone_reports_it_as_expired(etcd: &Arc<DockerEtcd>) {
+    let proxy = BreakableProxy::start(&etcd.client_url()).await;
+    let config = EtcdConfig {
+        endpoints: vec![proxy.url()],
+        ..election_config(etcd)
+    };
+    let election = LeaderElection::connect(&config, unique_election_name())
+        .await
+        .expect("Connecting the election client through the proxy should succeed");
+    let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
+        .await
+        .expect("The campaign should not hang")
+        .expect("Winning an uncontested campaign should succeed");
+    let lease_id = elected.lease_id;
+    let granted_ttl = elected.granted_ttl;
+    let keepalive = tokio::spawn(elected.keepalive.run());
+
+    // Silence the connection, take the lease away behind its back, then break the connection so
+    // the keepalive reconnects - and is told, on that handshake, that its lease no longer exists.
+    tokio::time::sleep(LeaseKeepAlive::renewal_interval(granted_ttl)).await;
+    proxy.black_hole();
+    inspection_client(etcd)
+        .await
+        .lease_client()
+        .revoke(lease_id)
+        .await
+        .expect("Revoking the lease out of band should succeed");
+    proxy.restore();
+    let broken_at = Instant::now();
+    proxy.drop_all_connections().await;
+
+    let lost = timeout(granted_ttl, keepalive)
+        .await
+        .expect("The keepalive should report the loss well inside one TTL of the reconnect")
+        .expect("The keepalive task should not panic");
+    assert_eq!(
+        lost.reason,
+        LeaseLossReason::LeaseExpired,
+        "The reconnect was told the lease is gone and reported {} instead, {:?} after the break: \
+         a lease etcd has already expired was kept alive in this replica's belief until the \
+         watchdog ran out on its own.",
+        lost.reason,
+        broken_at.elapsed()
+    );
 }

@@ -440,6 +440,7 @@ async fn a_task_that_dies_during_the_campaign_fails_startup(etcd: &Arc<DockerEtc
         .await
         .expect("The first replica should win an uncontested campaign and finish starting")
         .expect("The leader's startup should report its ports");
+    let already_queued = campaigner_keys(etcd).await;
 
     let mut join_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
     // Fails only once the standby is already inside the campaign.
@@ -478,6 +479,22 @@ async fn a_task_that_dies_during_the_campaign_fails_startup(etcd: &Arc<DockerEtc
     assert!(
         message.contains("simulated background task failure"),
         "The failure should carry the original task error as its cause, but was: {message}"
+    );
+
+    timeout(Duration::from_millis(500), async {
+        while campaigner_keys(etcd)
+            .await
+            .difference(&already_queued)
+            .next()
+            .is_some()
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect(
+        "The abandoned campaign left its key in etcd's queue on a lease nothing renews, so the \
+         next election waits out that lease behind a replica that never started.",
     );
 }
 
@@ -1675,4 +1692,34 @@ async fn a_standby_that_cannot_reach_etcd_does_not_export_itself_as_the_leader(
         let _ = timeout(STARTUP_TIMEOUT, wedged).await;
     }
     wedged_tasks.abort_all();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+async fn the_drain_waits_for_its_tasks_before_releasing_the_leadership(etcd: &Arc<DockerEtcd>) {
+    wipe_state(etcd).await;
+    let shutdown = CancellationToken::new();
+    let (details, mut join_set) = start_leader(&distributed_config(etcd), shutdown.clone()).await;
+
+    const BUSY: Duration = Duration::from_millis(600);
+    join_set.spawn(async move {
+        std::thread::sleep(BUSY);
+        std::future::pending::<()>().await;
+        Ok(())
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    shutdown.cancel();
+    let draining_since = Instant::now();
+    golem_shard_manager::serve_until_stopped(details, join_set, shutdown)
+        .await
+        .expect("A shutdown is a clean stop, not a failure");
+    let drained = draining_since.elapsed();
+
+    assert!(
+        drained >= BUSY - Duration::from_millis(150),
+        "The drain returned after {drained:?}, before a task that was still running could stop. \
+         The leadership is released as soon as it returns, so that task could command an executor \
+         after a standby had already taken over."
+    );
 }

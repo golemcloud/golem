@@ -28,7 +28,7 @@ use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep, sleep_until, timeout};
 use tokio_util::sync::CancellationToken;
@@ -141,8 +141,8 @@ pub struct LeaseLost {
 /// [`LeaseKeepAlive`] so the anchoring rule can be tested without a live stream.
 struct RenewalWatchdog {
     ttl: Duration,
-    /// When this replica stops believing it holds the lease, measured from the last renewal etcd
-    /// acknowledged.
+    /// When this replica stops believing it holds the lease: one TTL after the *send* of the last
+    /// renewal etcd acknowledged, since that is when etcd's own clock on the lease restarted.
     deadline: Instant,
     /// Send times of renewals not yet acknowledged, oldest first. etcd answers a stream in order,
     /// and the send is the earlier of the two instants, so a watchdog that errs gives the lease up
@@ -151,11 +151,12 @@ struct RenewalWatchdog {
 }
 
 impl RenewalWatchdog {
-    /// Starts the belief window at `acknowledged_at`, which has to be an instant etcd answered.
-    fn armed_at(acknowledged_at: Instant, ttl: Duration) -> Self {
+    /// Starts the belief window at `sent_at`: the instant the handshake was sent, which etcd has
+    /// since answered.
+    fn armed_at(sent_at: Instant, ttl: Duration) -> Self {
         Self {
             ttl,
-            deadline: acknowledged_at + ttl,
+            deadline: sent_at + ttl,
             unacknowledged: VecDeque::new(),
         }
     }
@@ -182,6 +183,12 @@ impl RenewalWatchdog {
     /// by its successor.
     fn forget_unacknowledged(&mut self) {
         self.unacknowledged.clear();
+    }
+
+    /// Re-arms from a renewal acknowledged outside the response stream - the one `keep_alive`
+    /// performs when a reconnect succeeds.
+    fn rearm_at(&mut self, sent_at: Instant) {
+        self.deadline = sent_at + self.ttl;
     }
 }
 
@@ -258,8 +265,9 @@ impl LeaseKeepAlive {
         }
     }
 
-    /// Replaces a broken keeper and stream, retrying until the watchdog deadline. The deadline is
-    /// the only bound and is never moved here; only an acknowledged renewal may move it.
+    /// Replaces a broken keeper and stream, retrying until the watchdog deadline, which is the only
+    /// bound. A reconnect that succeeds has renewed the lease, so it re-arms the watchdog from its
+    /// own send, as any acknowledged renewal does.
     async fn reconnect(
         &mut self,
         reason: LeaseLossReason,
@@ -279,13 +287,16 @@ impl LeaseKeepAlive {
             }
 
             let attempt = std::cmp::min(self.request_timeout, remaining);
+            let attempt_sent = Instant::now();
             match timeout(attempt, self.lease_client.keep_alive(self.lease_id)).await {
                 Ok(Ok((keeper, stream))) => {
                     self.keeper = keeper;
                     self.stream = stream;
                     self.watchdog.forget_unacknowledged();
+                    self.watchdog.rearm_at(attempt_sent);
                     return Ok(());
                 }
+                Ok(Err(err)) if is_lease_gone(&err) => return Err(LeaseLossReason::LeaseExpired),
                 Ok(Err(err)) => warn!(
                     lease_id = self.lease_id,
                     error = %err,
@@ -388,6 +399,9 @@ pub struct LeaderElection {
     /// Counts every confirming read this election has made, across campaigns, so that the hook can
     /// name one attempt out of the whole run rather than one per campaign.
     confirm_attempts: AtomicU32,
+    /// The lease of the attempt in flight, or 0. Set after the grant and cleared when the attempt
+    /// finishes, so a caller that drops the campaign can still revoke what it left behind.
+    pending_lease: AtomicI64,
 }
 
 impl LeaderElection {
@@ -405,6 +419,7 @@ impl LeaderElection {
             shutdown: CancellationToken::new(),
             confirm_hook: None,
             confirm_attempts: AtomicU32::new(0),
+            pending_lease: AtomicI64::new(0),
         })
     }
 
@@ -446,27 +461,28 @@ impl LeaderElection {
             "Campaigning for shard manager leadership"
         );
 
-        // Cancelling between attempts drops the in-flight `campaign_once`, so its compensating
-        // revoke may not run and that lease then expires on its own; it holds only a queue slot.
-        tokio::select! {
-            biased;
-            _ = self.shutdown.cancelled() => Err(ShardManagerError::ShutdownRequested),
-            result = self.campaign_loop() => result,
-        }
+        self.campaign_loop().await
     }
 
-    /// Separate from [`Self::campaign_until_elected`] only so shutdown is observed for the whole
-    /// of it; a replica that cannot reach etcd lives here, not inside a campaign.
     async fn campaign_loop(&self) -> Result<Elected, ShardManagerError> {
         let mut backoff = RETRY_MIN;
 
         loop {
+            if self.shutdown.is_cancelled() {
+                return Err(ShardManagerError::ShutdownRequested);
+            }
+
             match self.campaign_once().await {
                 Ok(elected) => return Ok(elected),
                 Err(err) if err.is_retriable() => {
                     metrics::record_campaign_attempt_failure();
                     warn!(error = %err, retry_in = ?backoff, "Campaign attempt failed; retrying");
-                    sleep_until(Instant::now() + backoff).await;
+                    tokio::select! {
+                        _ = sleep_until(Instant::now() + backoff) => {}
+                        _ = self.shutdown.cancelled() => {
+                            return Err(ShardManagerError::ShutdownRequested);
+                        }
+                    }
                     backoff = std::cmp::min(backoff * 2, RETRY_MAX);
                 }
                 Err(err) => return Err(err),
@@ -480,6 +496,7 @@ impl LeaderElection {
         let ttl_secs = self.lease_ttl.as_secs() as i64;
         let grant = self.bounded(lease_client.grant(ttl_secs, None)).await?;
         let lease_id = grant.id();
+        self.pending_lease.store(lease_id, Ordering::SeqCst);
         let granted_ttl = Duration::from_secs(grant.ttl().max(0) as u64);
         if granted_ttl != self.lease_ttl {
             warn!(
@@ -493,11 +510,16 @@ impl LeaderElection {
             .campaign_with_lease(&mut lease_client, lease_id, granted_ttl)
             .await
         {
-            Ok(elected) => Ok(elected),
+            Ok(elected) => {
+                // The lease now belongs to the leadership, which releases it.
+                self.pending_lease.store(0, Ordering::SeqCst);
+                Ok(elected)
+            }
             Err(err) => {
                 // Every failure past the grant comes back here. A lease left held parks the
                 // server's queue for a full TTL - and once the campaign is won, it is holding the
-                // election itself.
+                // election itself. The slot is cleared only after the revoke, so an attempt dropped
+                // during it still leaves the lease findable.
                 if let Err(revoke_failed) = self.bounded(lease_client.revoke(lease_id)).await {
                     warn!(
                         error = %revoke_failed,
@@ -506,6 +528,7 @@ impl LeaderElection {
                          attached to it will block the queue until the lease expires"
                     );
                 }
+                self.pending_lease.store(0, Ordering::SeqCst);
                 Err(err)
             }
         }
@@ -519,14 +542,13 @@ impl LeaderElection {
         lease_id: i64,
         granted_ttl: Duration,
     ) -> Result<Elected, ShardManagerError> {
+        let handshake_sent = Instant::now();
         let (keeper, stream) = self.bounded(lease_client.keep_alive(lease_id)).await?;
         let mut keepalive = LeaseKeepAlive {
             lease_id,
             keeper,
             stream,
-            // The handshake above only returns once etcd has answered it with a positive TTL, so
-            // this instant is a renewal etcd acknowledged - the one the watchdog measures from.
-            watchdog: RenewalWatchdog::armed_at(Instant::now(), granted_ttl),
+            watchdog: RenewalWatchdog::armed_at(handshake_sent, granted_ttl),
             lease_client: lease_client.clone(),
             request_timeout: self.request_timeout,
         };
@@ -564,6 +586,9 @@ impl LeaderElection {
             lost = keepalive.drive() => {
                 return Err(ShardManagerError::LeaseLostWhileCampaigning(lost));
             }
+            // Leaves through `campaign_once`'s revoke like every other error, so a shutdown here
+            // releases the lease the win is holding rather than waiting the confirm out.
+            _ = self.shutdown.cancelled() => return Err(ShardManagerError::ShutdownRequested),
             confirmed = self.confirm_fence_is_live(&fence, lease_id, confirm_budget) => confirmed?,
         }
 
@@ -663,6 +688,26 @@ impl LeaderElection {
         bounded(self.request_timeout, request).await
     }
 
+    /// Revokes the lease of an attempt that was dropped rather than returned.
+    pub async fn revoke_pending_lease(&self) {
+        let lease_id = self.pending_lease.swap(0, Ordering::SeqCst);
+        if lease_id == 0 {
+            return;
+        }
+
+        let mut lease_client = self.client.lease_client();
+        match self.bounded(lease_client.revoke(lease_id)).await {
+            Ok(_) => info!(lease_id, "Revoked the lease of an abandoned campaign"),
+            Err(err) if is_lease_not_found(&err) => {}
+            Err(err) => warn!(
+                error = %err,
+                lease_id,
+                "Cannot revoke the lease of an abandoned campaign; any election key on it will \
+                 block the queue until the lease expires"
+            ),
+        }
+    }
+
     /// The value recorded by whichever replica currently holds the leadership, for diagnostics.
     pub async fn current_leader(&self) -> Result<Option<String>, ShardManagerError> {
         let mut election_client = self.client.election_client();
@@ -689,6 +734,11 @@ fn is_lease_not_found(err: &ShardManagerError) -> bool {
         ShardManagerError::EtcdError(etcd_client::Error::GRpcStatus(status))
             if status.message().contains("requested lease not found")
     )
+}
+
+/// `etcd-client`'s own answer when a keepalive handshake is met with a zero TTL.
+fn is_lease_gone(err: &etcd_client::Error) -> bool {
+    matches!(err, etcd_client::Error::LeaseKeepAliveError(message) if message.contains("lease not found"))
 }
 
 /// Whether etcd refused a leader lookup because the election has no leader.

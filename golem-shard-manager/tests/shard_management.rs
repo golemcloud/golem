@@ -23,6 +23,7 @@ use golem_shard_manager::{
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::test;
 use tokio::sync::{Mutex, oneshot};
@@ -279,6 +280,9 @@ struct TestHealthCheck {
     healthy: Arc<Mutex<HashMap<Pod, bool>>>,
     /// Pod whose check never answers, standing in for an executor that went silent.
     never_answers: Option<Pod>,
+    /// Every probe made, whatever it answered: a replica that must not contact executors yet is
+    /// caught by this, not by what the probes returned.
+    probes: Arc<AtomicUsize>,
 }
 
 impl TestHealthCheck {
@@ -286,7 +290,12 @@ impl TestHealthCheck {
         Self {
             healthy: Arc::new(Mutex::new(HashMap::new())),
             never_answers: None,
+            probes: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    fn probe_count(&self) -> usize {
+        self.probes.load(Ordering::SeqCst)
     }
 
     fn never_answering_at(pod: Pod) -> Self {
@@ -300,6 +309,7 @@ impl TestHealthCheck {
 #[async_trait]
 impl HealthCheck for TestHealthCheck {
     async fn health_check(&self, pod: Pod, _pod_name: Option<String>) -> bool {
+        self.probes.fetch_add(1, Ordering::SeqCst);
         if self.never_answers == Some(pod) {
             std::future::pending::<()>().await;
         }
@@ -384,6 +394,7 @@ async fn new_shard_management(
     TestPersistence,
     JoinSet<anyhow::Result<()>>,
 ) {
+    let number_of_shards = shard_state.number_of_shards;
     let persistence = TestPersistence::new(shard_state);
     let health_check = Arc::new(TestHealthCheck::all_healthy());
     let mut join_set = JoinSet::new();
@@ -394,6 +405,7 @@ async fn new_shard_management(
         health_check,
         0.0,
         LEASE_TTL,
+        number_of_shards,
         &mut join_set,
     )
     .await
@@ -1031,6 +1043,7 @@ async fn the_first_write_on_an_empty_store_uses_no_revision() {
         health_check,
         0.0,
         LEASE_TTL,
+        4,
         &mut join_set,
     )
     .await
@@ -1056,6 +1069,7 @@ async fn the_first_write_uses_the_revision_read_at_startup() {
         vec![(executor(1), existing_pod, "worker-executor-0", &[0])],
     );
 
+    let number_of_shards = shard_state.number_of_shards;
     let persistence = TestPersistence::at_revision(shard_state, 7);
     let health_check = Arc::new(TestHealthCheck::all_healthy());
     let mut join_set = JoinSet::new();
@@ -1066,6 +1080,7 @@ async fn the_first_write_uses_the_revision_read_at_startup() {
         health_check,
         0.0,
         LEASE_TTL,
+        number_of_shards,
         &mut join_set,
     )
     .await
@@ -1161,6 +1176,7 @@ async fn the_initial_health_check_cannot_pin_startup() {
         vec![(executor(1), silent_pod, "worker-executor-1", &[0, 1, 2, 3])],
     );
     let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let number_of_shards = shard_state.number_of_shards;
     let persistence = TestPersistence::new(shard_state);
     let health_check = Arc::new(TestHealthCheck::never_answering_at(silent_pod));
     let mut join_set = JoinSet::new();
@@ -1173,6 +1189,7 @@ async fn the_initial_health_check_cannot_pin_startup() {
             health_check,
             0.0,
             LEASE_TTL,
+            number_of_shards,
             &mut join_set,
             Duration::from_secs(1),
         ),
@@ -1311,5 +1328,66 @@ async fn a_registration_acknowledged_before_a_failed_persist_orphans_the_executo
         worker_executors.local_assignment(new_pod).await.is_empty(),
         "the orphaned executor was given shards, so it is not orphaned - it is a second owner of \
          shards the routing table does not record."
+    );
+}
+
+#[test]
+async fn a_shard_count_mismatch_is_refused_before_the_worker_can_act() {
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let existing_pod = pod(1, 9000);
+    let shard_state = shard_state_with_executors(
+        4,
+        vec![(
+            executor(1),
+            existing_pod,
+            "worker-executor-0",
+            &[0, 1, 2, 3],
+        )],
+    );
+    let persistence = TestPersistence::new(shard_state);
+    let health_check = Arc::new(TestHealthCheck::all_healthy());
+    let mut join_set = JoinSet::new();
+
+    let started = ShardManagement::new(
+        Arc::new(persistence.clone()),
+        worker_executors.clone(),
+        health_check.clone(),
+        0.0,
+        LEASE_TTL,
+        8,
+        &mut join_set,
+    )
+    .await;
+
+    let err = started.err().expect(
+        "A replica configured for a different shard count than the stored state must refuse to \
+         start: the stored value governs routing, so continuing would route at a count this \
+         replica does not believe in.",
+    );
+    assert!(
+        err.to_string().contains("configured for 8"),
+        "The refusal should name the configured count, but was: {err}"
+    );
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        persistence.attempt_count().await,
+        0,
+        "The mismatched replica wrote to the store before it was refused, so the check ran after \
+         the worker had already begun acting on state it should never have loaded."
+    );
+    assert!(
+        worker_executors.commands_sent().await.is_empty(),
+        "The mismatched replica commanded an executor before it was refused."
+    );
+    assert_eq!(
+        health_check.probe_count(),
+        0,
+        "The mismatched replica probed an executor before it was refused: the check ran after the \
+         health check rather than straight after the state was read."
+    );
+    assert!(
+        join_set.is_empty(),
+        "The mismatched replica spawned its worker before the check refused it."
     );
 }

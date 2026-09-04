@@ -105,36 +105,51 @@ async fn campaign_watching_startup(
     election: &LeaderElection,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> anyhow::Result<Elected> {
-    let mut campaign = std::pin::pin!(election.campaign_until_elected());
+    // Scoped so the campaign future is dropped before the cleanup below: while it is alive it
+    // borrows `election`, and it is precisely a dropped campaign that leaves a lease behind.
+    let outcome = {
+        let mut campaign = std::pin::pin!(election.campaign_until_elected());
 
-    loop {
-        tokio::select! {
-            elected = &mut campaign => return Ok(elected?),
-            joined = join_set.join_next(), if !join_set.is_empty() => match joined {
-                Some(Err(err)) => {
-                    return Err(anyhow::Error::new(err)
-                        .context("a shard manager task panicked while campaigning for leadership"));
+        loop {
+            tokio::select! {
+                elected = &mut campaign => break elected.map_err(anyhow::Error::from),
+                joined = join_set.join_next(), if !join_set.is_empty() => match joined {
+                    Some(Err(err)) => {
+                        break Err(anyhow::Error::new(err).context(
+                            "a shard manager task panicked while campaigning for leadership",
+                        ));
+                    }
+                    Some(Ok(Err(err))) => {
+                        break Err(err
+                            .context("a shard manager task failed while campaigning for leadership"));
+                    }
+                    Some(Ok(Ok(()))) => {
+                        warn!("A shard manager task finished while campaigning for leadership")
+                    }
+                    None => {}
                 }
-                Some(Ok(Err(err))) => {
-                    return Err(err
-                        .context("a shard manager task failed while campaigning for leadership"));
-                }
-                Some(Ok(Ok(()))) => {
-                    warn!("A shard manager task finished while campaigning for leadership")
-                }
-                None => {}
             }
         }
+    };
+
+    if outcome.is_err() {
+        election.revoke_pending_lease().await;
     }
+    outcome
 }
 
-fn ensure_shard_count_matches(stored: usize, configured: usize) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        stored == configured,
-        "the persisted shard lease state was written with {stored} shards, but this shard manager \
-         is configured for {configured}. The stored value governs routing, so starting would \
-         silently ignore the configuration; changing the shard count is not supported."
-    );
+pub(crate) fn ensure_shard_count_matches(
+    stored: usize,
+    configured: usize,
+) -> Result<(), ShardManagerError> {
+    if stored != configured {
+        return Err(ShardManagerError::Internal(format!(
+            "the persisted shard lease state was written with {stored} shards, but this shard \
+             manager is configured for {configured}. The stored value governs routing, so \
+             starting would silently ignore the configuration; changing the shard count is not \
+             supported."
+        )));
+    }
     Ok(())
 }
 
@@ -400,15 +415,11 @@ pub async fn run(
                 health_check.clone(),
                 shard_manager_config.rebalance_threshold,
                 shard_manager_config.shard_lease_duration,
+                shard_manager_config.number_of_shards,
                 join_set,
             )
             .await?,
         );
-
-        ensure_shard_count_matches(
-            shard_management.current_snapshot().await.number_of_shards,
-            shard_manager_config.number_of_shards,
-        )?;
 
         self::sharding::healthcheck_loop::start_health_check_loop(
             shard_management.clone(),
@@ -468,9 +479,9 @@ pub async fn run(
     let grpc_port = match started {
         Ok(grpc_port) => grpc_port,
         Err(err) => {
-            // Stop the tasks before releasing the leadership, so nothing writes state after a
-            // standby can take over.
-            join_set.abort_all();
+            // Awaited, not just requested: a task still running could reach an executor after a
+            // standby has taken over.
+            join_set.shutdown().await;
             release_leadership(leadership.as_ref()).await;
             return Err(err);
         }
@@ -500,6 +511,9 @@ async fn release_leadership(leadership: Option<&LeadershipHandle>) {
 
 /// Runs the shard manager until a task fails, until every task has finished, or until `shutdown`
 /// fires, releasing the leadership on the way out of all three.
+///
+/// Every path stops the tasks and *waits* for them before the lease is released, so no executor
+/// command can be in flight once another replica may be leading.
 pub async fn serve_until_stopped(
     details: RunDetails,
     mut join_set: JoinSet<anyhow::Result<()>>,
@@ -510,12 +524,12 @@ pub async fn serve_until_stopped(
             joined = join_set.join_next() => match joined {
                 Some(Ok(Ok(()))) => warn!("A shard manager task finished"),
                 Some(Ok(Err(err))) => {
-                    join_set.abort_all();
+                    join_set.shutdown().await;
                     release_leadership(details.leadership.as_ref()).await;
                     return Err(err.context("a shard manager task failed"));
                 }
                 Some(Err(panicked)) => {
-                    join_set.abort_all();
+                    join_set.shutdown().await;
                     release_leadership(details.leadership.as_ref()).await;
                     return Err(anyhow::Error::new(panicked)
                         .context("a shard manager task panicked"));
@@ -526,7 +540,7 @@ pub async fn serve_until_stopped(
                 }
             },
             _ = shutdown.cancelled() => {
-                join_set.abort_all();
+                join_set.shutdown().await;
                 release_leadership(details.leadership.as_ref()).await;
                 return Ok(());
             }

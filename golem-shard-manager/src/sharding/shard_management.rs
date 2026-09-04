@@ -61,6 +61,7 @@ impl ShardManagement {
         health_check: Arc<dyn HealthCheck>,
         threshold: f64,
         lease_ttl: Duration,
+        number_of_shards: usize,
         join_set: &mut JoinSet<anyhow::Result<()>>,
     ) -> Result<Self, ShardManagerError> {
         Self::new_with_initial_health_check_timeout(
@@ -69,6 +70,7 @@ impl ShardManagement {
             health_check,
             threshold,
             lease_ttl,
+            number_of_shards,
             join_set,
             INITIAL_HEALTH_CHECK_TIMEOUT,
         )
@@ -84,6 +86,7 @@ impl ShardManagement {
         health_check: Arc<dyn HealthCheck>,
         threshold: f64,
         lease_ttl: Duration,
+        number_of_shards: usize,
         join_set: &mut JoinSet<anyhow::Result<()>>,
         initial_health_check_timeout: Duration,
     ) -> Result<Self, ShardManagerError> {
@@ -97,9 +100,15 @@ impl ShardManagement {
                 }
             };
 
+        // Before the health check and before the worker is spawned: past this point the worker can
+        // persist state and command executors, and a replica that disagrees with the stored shard
+        // count must do neither.
+        crate::ensure_shard_count_matches(shard_state.number_of_shards, number_of_shards)?;
+
         info!("Initial healthcheck started");
 
-        let executors = shard_state.get_executors_with_addrs();
+        let executors: Vec<(ExecutorId, ExecutorAddr, Option<String>)> =
+            shard_state.get_executors_with_addrs();
         let unhealthy_executors = match timeout(
             initial_health_check_timeout,
             get_unhealthy_executors(&health_check, &executors),
