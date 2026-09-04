@@ -154,7 +154,7 @@ files. Regenerate with the script, which requires this exact revision of the
 
 ```sh
 cargo install --locked --git https://github.com/golemcloud/wit-bindgen \
-  --rev e759a320fdd1ecad92dc484af59cfc0c5fff38c6 wit-bindgen-cli
+  --rev ca14d9bbd6c6474dfbcdb68806fb4e30f1ee2efb wit-bindgen-cli
 ```
 
 The pin incorporates Bytecode Alliance's draft
@@ -165,12 +165,12 @@ exports required by this SDK.
 
 ```sh
 cd golem_sdk
-moon run script bindgen          # or: bash scripts/regen-bindings.sh
+./scripts/regen-bindings.sh
 ```
 
 The script (`scripts/regen-bindings.sh`):
 1. Refuses to run unless `wit-bindgen --version` identifies the pinned fork revision.
-2. Runs `wit-bindgen moonbit ./wit --derive-show --derive-eq --derive-error --project-name golemcloud/golem_sdk --ignore-stub` directly against the P3 WIT. Async exports remain async.
+2. Runs `wit-bindgen moonbit ./wit --derive-debug --derive-eq --derive-error --project-name golemcloud/golem_sdk --ignore-stub` directly against the P3 WIT. Async exports remain async.
 3. Fixes an `s8`/`s16` double sign-extension bug (the generated code does a signed
    load *and* subtracts `0x100`/`0x10000`; the spurious subtraction is stripped).
 4. Removes an emitted `moon.pkg.json` only where a sibling hand-maintained `moon.pkg` owns the
@@ -297,14 +297,14 @@ list of `Variant(case_idx, Some(payload))`. Nesting a multimodal type inside
 
 The `golem_sdk_tools` CLI automates the boilerplate that connects user agent definitions to the
 runtime. It parses `.mbt` source with `moonbitlang/parser`, constructs AST nodes, and emits MoonBit
-source via `moonbitlang/formatter`. Two subcommands:
+source via `moonbitlang/parser/fmt`. Two subcommands:
 
 #### `reexports` subcommand
 
 ```sh
 cd golem_sdk_tools
-moon run cmd -- reexports <sdk-path> <target-dir>
-# e.g.: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/golem_moonbit_examples
+moon run cmd -- reexports <sdk-path> <target-dir> --role <role>
+# e.g.: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/golem_moonbit_examples --role ordinary
 ```
 
 Generates `golem_reexports.mbt` (re-exports the WASM entry points — `cabi_realloc`, `wasmExport*` —
@@ -316,8 +316,8 @@ from the SDK's `gen` package) and updates the target `moon.pkg`: it ensures the
 
 ```sh
 cd golem_sdk_tools
-moon run cmd -- agents <package-dir>
-# e.g.: moon run cmd -- agents ../golem_sdk_example1
+moon run cmd -- agents <project-root> --component-dir <component-dir> --role <role>
+# e.g.: moon run cmd -- agents ../golem_sdk_example1 --component-dir golem_moonbit_examples --role ordinary
 ```
 
 Generates, from source annotations:
@@ -454,16 +454,16 @@ machinery (`#derive.text_languages` / `#derive.mime_types`) or the old carriers.
 # In golem_sdk/ (the library, WASM target):
 moon check --target wasm          # Type-check
 moon build --target wasm          # Build
-moon test --target wasm           # Run tests
+./scripts/run-sdk-tests.sh         # Run tests with Golem host-import support
 moon info && moon fmt             # Regenerate .mbti and format
-moon run script bindgen           # Regenerate with the exact pinned Golem wit-bindgen fork
+./scripts/regen-bindings.sh        # Regenerate with the exact pinned Golem wit-bindgen fork
 
 # In golem_sdk_tools/ (the codegen CLI, native target):
 moon check
 moon test
 moon info && moon fmt
-moon run cmd -- reexports <sdk-path> <target-dir>
-moon run cmd -- agents <package-dir>
+moon run cmd -- reexports <sdk-path> <target-dir> --role <role>
+moon run cmd -- agents <project-root> --component-dir <component-dir> --role <role>
 
 # In golem_sdk_example1/ (the example/template):
 moon check --target wasm
@@ -509,7 +509,8 @@ published to mooncakes.io for the release template to work.
 - The SDK library targets WASM only — use `moon check --target wasm` frequently.
 - Prefer `inspect()` snapshot tests (`moon test --update`); use `assert_eq` for structural checks.
 - Run `moon fmt` for changed MoonBit source and `moon info` when public interfaces change; review generated `.mbti` diffs.
-- Run targeted `moon test <package-or-file>` commands first. Use module-wide tests for broad or unclear impact.
+- Run targeted `./scripts/run-sdk-tests.sh <package-or-file>` commands first. Use the script without
+  arguments for module-wide tests; it supplies Golem host imports for generated WASM packages.
 
 ## Important Technical Notes
 
@@ -527,7 +528,7 @@ published to mooncakes.io for the release template to work.
 ## Dependencies & Tools
 
 - **wit-bindgen** — Golem's fork pinned at
-  `e759a320fdd1ecad92dc484af59cfc0c5fff38c6`. It combines draft upstream PR #1659's MoonBit
+  `ca14d9bbd6c6474dfbcdb68806fb4e30f1ee2efb`. It combines draft upstream PR #1659's MoonBit
   component-model async support with Golem's outline-lift, named-memory-lowering, and export
   disambiguation changes, and emits deterministic bindings. Bindings are regenerated via
   `scripts/regen-bindings.sh`, which rejects any other generator revision and applies the s8/s16
@@ -535,6 +536,6 @@ published to mooncakes.io for the release template to work.
 - **wasm-tools** — `component embed` (adds WIT type info) and `component new` (creates the Component
   Model WASM).
 - **moon** — MoonBit build tool.
-- **moonbitlang/parser** (0.2.5) — source parsing + AST construction for `golem_sdk_tools`.
-- **moonbitlang/formatter** (0.1.5) — emitting generated MoonBit source from AST.
-- **moonbitlang/x** (0.4.39) — filesystem + env args for `golem_sdk_tools`.
+- **moonbitlang/parser** (0.3.18) — source parsing, AST construction, and formatting for `golem_sdk_tools`.
+- **moonbitlang/lexer** (0.3.15) — lexer primitives used by the parser integration.
+- **moonbitlang/x** (0.5.1) — filesystem + env args for `golem_sdk_tools`.

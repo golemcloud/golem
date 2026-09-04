@@ -116,6 +116,23 @@ object SchemaValueCodec {
     case UrlValue(v)      => node("url", Json.obj("url" -> Json.string(v)))
     case DatetimeValue(v) => node("datetime", Json.obj("value" -> Json.string(v)))
     case DurationValue(v) => node("duration", Json.obj("nanoseconds" -> Json.fromLong(v)))
+    case QuantityValue(mantissa, scale, unit) =>
+      node(
+        "quantity",
+        Json.obj(
+          "mantissa" -> Json.fromLong(mantissa),
+          "scale" -> Json.fromInt(scale),
+          "unit" -> Json.string(unit)
+        )
+      )
+
+    case StreamReferenceValue(provisional, token, _) =>
+      val reference = (provisional, token) match {
+        case (Some(value), None) => Json.obj("provisionalRef" -> Json.string(value))
+        case (None, Some(value)) => Json.obj("streamToken" -> Json.string(value))
+        case _ => throw BridgeException("A stream reference must contain exactly one reference")
+      }
+      Json.obj("$stream" -> reference)
 
     case UnionValue(unionTag, body) =>
       node("union", Json.obj("tag" -> Json.string(unionTag), "body" -> toJson(body)))
@@ -255,6 +272,10 @@ object SchemaValueCodec {
     case DurationValue(x) => x
     case o                => mismatch("duration", o)
   }
+  def asBinary(v: SchemaValue): (Vector[Byte], Option[String]) = v match {
+    case BinaryValue(bytes, mimeType) => (bytes, mimeType)
+    case o => mismatch("binary", o)
+  }
 
   def recordFields(v: SchemaValue): List[SchemaValue] = v match {
     case RecordValue(fields) => fields
@@ -301,6 +322,11 @@ object SchemaValueCodec {
     case o                          => mismatch("union", o)
   }
 
+  def streamReference(v: SchemaValue): (Option[String], Option[String]) = v match {
+    case StreamReferenceValue(provisional, token, _) => (provisional, token)
+    case o => mismatch("stream reference", o)
+  }
+
   /** Returns a required composite payload, throwing on a missing one. */
   def requiredPayload(payload: Option[SchemaValue], context: String): SchemaValue =
     payload.getOrElse(throw BridgeException(s"Missing payload for $context"))
@@ -339,11 +365,26 @@ object SchemaValueCodec {
   // --- Decoding ------------------------------------------------------------
 
   def fromJson(json: Json): Either[String, SchemaValue] =
-    for {
+    Json.field(json, "$stream") match {
+      case Some(reference) =>
+        val members = Json.asObject(reference)
+        members.flatMap { fields =>
+          val names = fields.map(_._1)
+          if (names.distinct.size != names.size || names.exists(name => name != "provisionalRef" && name != "streamToken"))
+            Left("malformed stream reference")
+          else Right(())
+        }.flatMap { _ =>
+        val provisional = Json.field(reference, "provisionalRef").map(Json.asString).map(_.map(Some(_))).getOrElse(Right(None))
+        val token = Json.field(reference, "streamToken").map(Json.asString).map(_.map(Some(_))).getOrElse(Right(None))
+        for { p <- provisional; t <- token; _ <- if (p.isDefined ^ t.isDefined) Right(()) else Left("stream reference must have exactly one member") }
+        yield StreamReferenceValue(p, t, StreamSession.currentBinding)
+        }
+      case None => for {
       kind    <- Json.requireField(json, "kind").flatMap(Json.asString)
       value   <- Json.requireField(json, "value")
       decoded <- decode(kind, value)
     } yield decoded
+    }
 
   private def decode(kind: String, value: Json): Either[String, SchemaValue] = kind match {
     case "bool"   => Json.asBoolean(value).map(BoolValue(_))
@@ -419,6 +460,12 @@ object SchemaValueCodec {
       field(value, "nanoseconds")
         .flatMap(n => ranged(n, MinI64, MaxI64, "duration nanoseconds"))
         .map(n => DurationValue(n.toLong))
+    case "quantity" =>
+      for {
+        mantissa <- field(value, "mantissa").flatMap(n => ranged(n, MinI64, MaxI64, "quantity mantissa"))
+        scale    <- field(value, "scale").flatMap(n => ranged(n, MinI32, MaxI32, "quantity scale"))
+        unit     <- field(value, "unit").flatMap(Json.asString)
+      } yield QuantityValue(mantissa.toLong, scale.toInt, unit)
 
     case "union" =>
       for {

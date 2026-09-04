@@ -31,32 +31,32 @@ pub struct Duration {
 
 ///|
 pub fn Duration::nanos(value : UInt64) -> Duration {
-  { repr: DurationRepr::Nanos(value) }
+  { repr: DurationRepr::Nanos(value), }
 }
 
 ///|
 pub fn Duration::micros(value : UInt64) -> Duration {
-  { repr: DurationRepr::Micros(value) }
+  { repr: DurationRepr::Micros(value), }
 }
 
 ///|
 pub fn Duration::millis(value : UInt64) -> Duration {
-  { repr: DurationRepr::Millis(value) }
+  { repr: DurationRepr::Millis(value), }
 }
 
 ///|
 pub fn Duration::seconds(value : UInt64) -> Duration {
-  { repr: DurationRepr::Seconds(value) }
+  { repr: DurationRepr::Seconds(value), }
 }
 
 ///|
 pub fn Duration::minutes(value : UInt64) -> Duration {
-  { repr: DurationRepr::Minutes(value) }
+  { repr: DurationRepr::Minutes(value), }
 }
 
 ///|
 pub fn Duration::hours(value : UInt64) -> Duration {
-  { repr: DurationRepr::Hours(value) }
+  { repr: DurationRepr::Hours(value), }
 }
 
 ///|
@@ -82,7 +82,7 @@ pub struct Props {
 
 ///|
 pub fn Props::custom(name : String) -> Props {
-  { key: name }
+  { key: name, }
 }
 
 ///|
@@ -174,32 +174,32 @@ pub struct Value {
 
 ///|
 pub fn Value::text(value : String) -> Value {
-  { repr: ValueRepr::Text(value) }
+  { repr: ValueRepr::Text(value), }
 }
 
 ///|
 pub fn Value::integer(value : Int64) -> Value {
-  { repr: ValueRepr::Integer(value) }
+  { repr: ValueRepr::Integer(value), }
 }
 
 ///|
 pub fn Value::boolean(value : Bool) -> Value {
-  { repr: ValueRepr::Boolean(value) }
+  { repr: ValueRepr::Boolean(value), }
 }
 
 ///|
 pub fn Value::int(value : Int) -> Value {
-  { repr: ValueRepr::Int(value) }
+  { repr: ValueRepr::Int(value), }
 }
 
 ///|
 pub fn Value::uint(value : UInt) -> Value {
-  { repr: ValueRepr::UInt(value) }
+  { repr: ValueRepr::UInt(value), }
 }
 
 ///|
 pub fn Value::uint64(value : UInt64) -> Value {
-  { repr: ValueRepr::UInt64(value) }
+  { repr: ValueRepr::UInt64(value), }
 }
 
 ///|
@@ -250,82 +250,82 @@ pub struct Predicate {
 
 ///|
 pub fn Predicate::always() -> Predicate {
-  { repr: PredicateRepr::Always }
+  { repr: PredicateRepr::Always, }
 }
 
 ///|
 pub fn Predicate::never() -> Predicate {
-  { repr: PredicateRepr::Never }
+  { repr: PredicateRepr::Never, }
 }
 
 ///|
 pub fn Predicate::eq(property : Props, value : Value) -> Predicate {
-  { repr: PredicateRepr::Eq(property~, value~) }
+  { repr: PredicateRepr::Eq(property~, value~), }
 }
 
 ///|
 pub fn Predicate::neq(property : Props, value : Value) -> Predicate {
-  { repr: PredicateRepr::Neq(property~, value~) }
+  { repr: PredicateRepr::Neq(property~, value~), }
 }
 
 ///|
 pub fn Predicate::gt(property : Props, value : Value) -> Predicate {
-  { repr: PredicateRepr::Gt(property~, value~) }
+  { repr: PredicateRepr::Gt(property~, value~), }
 }
 
 ///|
 pub fn Predicate::gte(property : Props, value : Value) -> Predicate {
-  { repr: PredicateRepr::Gte(property~, value~) }
+  { repr: PredicateRepr::Gte(property~, value~), }
 }
 
 ///|
 pub fn Predicate::lt(property : Props, value : Value) -> Predicate {
-  { repr: PredicateRepr::Lt(property~, value~) }
+  { repr: PredicateRepr::Lt(property~, value~), }
 }
 
 ///|
 pub fn Predicate::lte(property : Props, value : Value) -> Predicate {
-  { repr: PredicateRepr::Lte(property~, value~) }
+  { repr: PredicateRepr::Lte(property~, value~), }
 }
 
 ///|
 pub fn Predicate::exists(property : Props) -> Predicate {
-  { repr: PredicateRepr::Exists(property) }
+  { repr: PredicateRepr::Exists(property), }
 }
 
 ///|
 pub fn Predicate::one_of(property : Props, values : Array[Value]) -> Predicate {
-  { repr: PredicateRepr::OneOf(property~, values~) }
+  { repr: PredicateRepr::OneOf(property~, values~), }
 }
 
 ///|
 pub fn Predicate::matches_glob(property : Props, pattern : String) -> Predicate {
-  { repr: PredicateRepr::MatchesGlob(property~, pattern~) }
+  { repr: PredicateRepr::MatchesGlob(property~, pattern~), }
 }
 
 ///|
 pub fn Predicate::starts_with(property : Props, prefix : String) -> Predicate {
-  { repr: PredicateRepr::StartsWith(property~, prefix~) }
+  { repr: PredicateRepr::StartsWith(property~, prefix~), }
 }
 
 ///|
 pub fn Predicate::contains(property : Props, substring : String) -> Predicate {
-  { repr: PredicateRepr::Contains(property~, substring~) }
+  { repr: PredicateRepr::Contains(property~, substring~), }
 }
 
 ///|
 pub fn Predicate::and_(left : Predicate, right : Predicate) -> Predicate {
-  { repr: PredicateRepr::And(left~, right~) }
+  { repr: PredicateRepr::And(left~, right~), }
 }
 
 ///|
 pub fn Predicate::or_(left : Predicate, right : Predicate) -> Predicate {
-  { repr: PredicateRepr::Or(left~, right~) }
+  { repr: PredicateRepr::Or(left~, right~), }
 }
 
 ///|
 pub fn Predicate::not_(inner : Predicate) -> Predicate {
-  { repr: PredicateRepr::Not(inner) }
+  { repr: PredicateRepr::Not(inner), }
 }
 
 ///|
@@ -364,37 +364,37 @@ pub struct Policy {
 
 ///|
 pub fn Policy::immediate() -> Policy {
-  { repr: PolicyRepr::Immediate }
+  { repr: PolicyRepr::Immediate, }
 }
 
 ///|
 pub fn Policy::never() -> Policy {
-  { repr: PolicyRepr::Never }
+  { repr: PolicyRepr::Never, }
 }
 
 ///|
 pub fn Policy::periodic(delay : Duration) -> Policy {
-  { repr: PolicyRepr::Periodic(delay) }
+  { repr: PolicyRepr::Periodic(delay), }
 }
 
 ///|
 pub fn Policy::exponential(base_delay : Duration, factor : Double) -> Policy {
-  { repr: PolicyRepr::Exponential(base_delay~, factor~) }
+  { repr: PolicyRepr::Exponential(base_delay~, factor~), }
 }
 
 ///|
 pub fn Policy::fibonacci(first : Duration, second : Duration) -> Policy {
-  { repr: PolicyRepr::Fibonacci(first~, second~) }
+  { repr: PolicyRepr::Fibonacci(first~, second~), }
 }
 
 ///|
 pub fn Policy::max_retries(self : Policy, max_retries : UInt) -> Policy {
-  { repr: PolicyRepr::CountBox(max_retries~, inner=self) }
+  { repr: PolicyRepr::CountBox(max_retries~, inner=self), }
 }
 
 ///|
 pub fn Policy::within(self : Policy, limit : Duration) -> Policy {
-  { repr: PolicyRepr::TimeBox(limit~, inner=self) }
+  { repr: PolicyRepr::TimeBox(limit~, inner=self), }
 }
 
 ///|
@@ -403,37 +403,37 @@ pub fn Policy::clamp(
   min_delay : Duration,
   max_delay : Duration,
 ) -> Policy {
-  { repr: PolicyRepr::Clamp(min_delay~, max_delay~, inner=self) }
+  { repr: PolicyRepr::Clamp(min_delay~, max_delay~, inner=self), }
 }
 
 ///|
 pub fn Policy::add_delay(self : Policy, delay : Duration) -> Policy {
-  { repr: PolicyRepr::AddDelay(delay~, inner=self) }
+  { repr: PolicyRepr::AddDelay(delay~, inner=self), }
 }
 
 ///|
 pub fn Policy::with_jitter(self : Policy, factor : Double) -> Policy {
-  { repr: PolicyRepr::Jitter(factor~, inner=self) }
+  { repr: PolicyRepr::Jitter(factor~, inner=self), }
 }
 
 ///|
 pub fn Policy::only_when(self : Policy, predicate : Predicate) -> Policy {
-  { repr: PolicyRepr::FilteredOn(predicate~, inner=self) }
+  { repr: PolicyRepr::FilteredOn(predicate~, inner=self), }
 }
 
 ///|
 pub fn Policy::and_then(self : Policy, other : Policy) -> Policy {
-  { repr: PolicyRepr::AndThen(left=self, right=other) }
+  { repr: PolicyRepr::AndThen(left=self, right=other), }
 }
 
 ///|
 pub fn Policy::union(self : Policy, other : Policy) -> Policy {
-  { repr: PolicyRepr::Union(left=self, right=other) }
+  { repr: PolicyRepr::Union(left=self, right=other), }
 }
 
 ///|
 pub fn Policy::intersect(self : Policy, other : Policy) -> Policy {
-  { repr: PolicyRepr::Intersect(left=self, right=other) }
+  { repr: PolicyRepr::Intersect(left=self, right=other), }
 }
 
 ///|
@@ -458,7 +458,7 @@ pub struct NamedPolicy {
 
 ///|
 pub fn NamedPolicy::named(name : String, policy : Policy) -> NamedPolicy {
-  { name, priority: 0, predicate: Predicate::always(), policy }
+  { name, priority: 0, predicate: Predicate::always(), policy, }
 }
 
 ///|
@@ -514,7 +514,7 @@ fn make_property_comparison(
   property : Props,
   value : Value,
 ) -> @retry.PropertyComparison raise RetryBuilderError {
-  { property_name: property.key(), value: value.to_raw() }
+  { property_name: property.key(), value: value.to_raw(), }
 }
 
 ///|
@@ -522,7 +522,7 @@ fn make_property_pattern(
   property : Props,
   pattern : String,
 ) -> @retry.PropertyPattern {
-  { property_name: property.key(), pattern }
+  { property_name: property.key(), pattern, }
 }
 
 ///|
@@ -619,11 +619,11 @@ fn push_policy_node(
       })
     PolicyRepr::CountBox(max_retries~, inner~) => {
       let inner_idx = push_policy_node(inner, nodes)
-      @retry.PolicyNode::CountBox({ max_retries, inner: inner_idx })
+      @retry.PolicyNode::CountBox({ max_retries, inner: inner_idx, })
     }
     PolicyRepr::TimeBox(limit~, inner~) => {
       let inner_idx = push_policy_node(inner, nodes)
-      @retry.PolicyNode::TimeBox({ limit: limit.to_nanos(), inner: inner_idx })
+      @retry.PolicyNode::TimeBox({ limit: limit.to_nanos(), inner: inner_idx, })
     }
     PolicyRepr::Clamp(min_delay~, max_delay~, inner~) => {
       let min_nanos = min_delay.to_nanos()
@@ -642,7 +642,7 @@ fn push_policy_node(
     }
     PolicyRepr::AddDelay(delay~, inner~) => {
       let inner_idx = push_policy_node(inner, nodes)
-      @retry.PolicyNode::AddDelay({ delay: delay.to_nanos(), inner: inner_idx })
+      @retry.PolicyNode::AddDelay({ delay: delay.to_nanos(), inner: inner_idx, })
     }
     PolicyRepr::Jitter(factor~, inner~) => {
       if !is_finite(factor) || factor < 0.0 {
@@ -651,7 +651,7 @@ fn push_policy_node(
         )
       }
       let inner_idx = push_policy_node(inner, nodes)
-      @retry.PolicyNode::Jitter({ factor, inner: inner_idx })
+      @retry.PolicyNode::Jitter({ factor, inner: inner_idx, })
     }
     PolicyRepr::FilteredOn(predicate~, inner~) => {
       let inner_idx = push_policy_node(inner, nodes)

@@ -1,7 +1,4 @@
 ///|
-pub(all) enum NoToolError {}
-
-///|
 pub(all) enum RpcError {
   Protocol(String)
   Denied(String)
@@ -13,12 +10,6 @@ pub(all) enum RpcError {
 pub(all) enum ToolError[E] {
   Rpc(RpcError)
   Tool(E)
-}
-
-///|
-pub(all) struct InvocationResult {
-  result : @model.TypedSchemaValue?
-  stdout : @async-core.Stream[Byte]?
 }
 
 ///|
@@ -39,7 +30,7 @@ pub(all) struct ToolClient {
 
 ///|
 pub fn ToolClient::new(tool_name : String) -> ToolClient {
-  { rpc: @toolHost.ToolRpc::tool_rpc(tool_name) }
+  { rpc: @toolHost.ToolRpc::tool_rpc(tool_name), }
 }
 
 ///|
@@ -103,7 +94,7 @@ pub async fn[E] invoke_and_await(
         Some(stdin) => stdin.drop_sync()
         None => ()
       }
-      return Err(tool_protocol_error("failed to encode tool input: \{e}"))
+      return Err(tool_protocol_error("failed to encode tool input: \{Repr(e)}"))
     }
   }
   let wire_result = match
@@ -168,14 +159,16 @@ fn[E] decode_invocation_result(
             Some(stdout) => stdout.drop_sync()
             None => ()
           }
-          return Err(tool_protocol_error("failed to decode tool result: \{e}"))
+          return Err(
+            tool_protocol_error("failed to decode tool result: \{Repr(e)}"),
+          )
         }
       }
       Some(decoded_value)
     }
     None => None
   }
-  Ok({ result: decoded, stdout: result.stdout })
+  Ok({ result: decoded, stdout: result.stdout, })
 }
 
 ///|
@@ -343,7 +336,7 @@ fn[T : @schema.FromSchema, E] decode_expected_value(
   try @schema.from_value_as(value.value) catch {
     e => {
       value.value.release_resources(drops)
-      Err(tool_protocol_error("failed to decode tool result: \{e}"))
+      Err(tool_protocol_error("failed to decode tool result: \{Repr(e)}"))
     }
   } noraise {
     decoded => Ok(decoded)
@@ -354,11 +347,7 @@ fn[T : @schema.FromSchema, E] decode_expected_value(
 fn[E : @schema.FromSchema] decode_custom_tool_error(
   value : @model.TypedSchemaValue,
 ) -> Result[E, String] {
-  try @schema.from_value_as(value.value) catch {
-    e => Err("failed to decode remote tool error: \{e}")
-  } noraise {
-    decoded => Ok(decoded)
-  }
+  @toolCore.decode_custom_error(value)
 }
 
 ///|
@@ -389,7 +378,9 @@ fn[E] map_remote_tool_error(
     @toolCommon.ToolError::CustomError(value) => {
       let decoded = @model_host.typed_schema_value_from_wit(value) catch {
         e =>
-          return tool_protocol_error("failed to decode remote tool error: \{e}")
+          return tool_protocol_error(
+            "failed to decode remote tool error: \{Repr(e)}",
+          )
       }
       match decode_error(decoded) {
         Ok(error) => ToolError::Tool(error)

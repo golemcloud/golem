@@ -27,7 +27,10 @@ use crate::bridge_gen::typescript::javascript::escape_js_ident;
 use crate::bridge_gen::typescript::ts_writer::{
     FunctionWriter, TsAnonymousFunctionWriter, TsFunctionWriter, TsWriter, indent,
 };
-use crate::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
+use crate::bridge_gen::{
+    BridgeGenerator, BridgeMode, bridge_client_directory_name, projected_input_schema_graph,
+    projected_schema_graph,
+};
 use crate::fs;
 use crate::sdk_overrides::{sdk_overrides, workspace_root};
 use anyhow::anyhow;
@@ -35,8 +38,9 @@ use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{AgentConfigSource, AgentMode};
 use golem_common::schema::agent::{
     AgentConfigDeclarationSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
+    contains_stream_in_graph,
 };
-use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef, reachable_defs};
+use golem_common::schema::graph::{SchemaGraph, reachable_defs};
 use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::schema_type::{
     BinaryRestrictions, SchemaType, TextRestrictions, UnionSpec, VariantCaseType,
@@ -48,6 +52,7 @@ use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use indoc::formatdoc;
 use serde_json::json;
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 /// User-supplied input shape for a constructor or method, derived from an
 /// [`InputSchema`]. Multimodal input (a single user field whose schema is the
@@ -74,8 +79,10 @@ enum TsOutput {
 struct ExternalConstructorNames {
     config_parameters: Vec<String>,
     parameters: String,
+    public_parameters: String,
     phantom_id: String,
     agent_config: String,
+    public_config: String,
     config: String,
     create_response: String,
 }
@@ -107,6 +114,7 @@ pub struct TypeScriptBridgeGenerator {
     same_language: bool,
     mode: TypeScriptBridgeMode,
     schema_graphs: RefCell<schema_graph::SchemaGraphRegistry>,
+    streaming_type_names: HashMap<String, String>,
 }
 
 impl BridgeGenerator for TypeScriptBridgeGenerator {
@@ -196,13 +204,31 @@ impl TypeScriptBridgeGenerator {
             naming.fresh("__golemSchemaGraphs")
         };
         reserved.push(schema_graph_registry_name.clone());
+        let type_naming = TypeNaming::new_with_reserved_names(
+            &agent_type,
+            same_language,
+            reserved.into_iter().map(TypeScriptTypeName::from),
+        )?;
+        let mut used_names = type_naming
+            .types()
+            .map(|(_, name)| name.to_string())
+            .collect::<HashSet<_>>();
+        used_names.insert(agent_type.type_name.0.clone());
+        let mut streaming_type_names = HashMap::new();
+        for (_, name) in type_naming.types() {
+            let original = name.to_string();
+            let base = format!("{original}Streaming");
+            let mut candidate = base.clone();
+            let mut suffix = 2;
+            while !used_names.insert(candidate.clone()) {
+                candidate = format!("{base}{suffix}");
+                suffix += 1;
+            }
+            streaming_type_names.insert(original, candidate);
+        }
         Ok(Self {
             target_path: target_path.to_path_buf(),
-            type_naming: TypeNaming::new_with_reserved_names(
-                &agent_type,
-                same_language,
-                reserved.into_iter().map(TypeScriptTypeName::from),
-            )?,
+            type_naming,
             agent_type,
             testing,
             same_language,
@@ -210,6 +236,7 @@ impl TypeScriptBridgeGenerator {
             schema_graphs: RefCell::new(schema_graph::SchemaGraphRegistry::new(
                 schema_graph_registry_name,
             )),
+            streaming_type_names,
         })
     }
 
@@ -286,21 +313,13 @@ impl TypeScriptBridgeGenerator {
             .collect()
     }
 
-    /// Resolve a [`SchemaType::Ref`] against [`TypeNaming::graph`] and return
-    /// the def body. For inline schema types this returns the input
-    /// unchanged.
+    /// Resolve all [`SchemaType::Ref`] indirections against [`TypeNaming::graph`].
+    /// For inline schema types this returns the input unchanged.
     fn resolve_ref<'a>(&'a self, typ: &'a SchemaType) -> &'a SchemaType {
-        match typ {
-            SchemaType::Ref { id, .. } => {
-                let def: &SchemaTypeDef = self
-                    .type_naming
-                    .graph()
-                    .lookup(id)
-                    .expect("Ref points to a def in the shared graph");
-                &def.body
-            }
-            other => other,
-        }
+        self.type_naming
+            .graph()
+            .resolve_ref(typ)
+            .expect("bridge schemas contain only resolvable references")
     }
 
     fn bridge_package_dep(testing: bool) -> anyhow::Result<String> {
@@ -360,6 +379,9 @@ impl TypeScriptBridgeGenerator {
                     "typescript": "^5.9",
                     "tsx": "^4.7",
                     "@types/node": "^25",
+                },
+                "pnpm": {
+                    "onlyBuiltDependencies": ["esbuild"],
                 }
             }
         };
@@ -400,15 +422,22 @@ impl TypeScriptBridgeGenerator {
     /// should never be part of the generated NPM package outside of Golem's internal tests.
     fn generate_test(&self, path: &Utf8Path) -> anyhow::Result<()> {
         let mut writer = TsWriter::new();
+        let mut body = TsWriter::new();
         let helper_names = self.test_method_helper_names();
 
         self.generate_test_imports(&mut writer);
-        self.generate_test_type_definitions(&mut writer)?;
-        self.generate_test_read_stdin_helper(&mut writer);
-        self.generate_test_method_functions(&mut writer, &helper_names)?;
-        self.generate_test_functions_map(&mut writer, &helper_names);
-        self.generate_test_main_handler(&mut writer, &helper_names)?;
-        self.generate_test_entry_point(&mut writer);
+        self.generate_test_type_definitions(&mut body)?;
+        self.generate_test_read_stdin_helper(&mut body);
+        self.generate_test_method_functions(&mut body, &helper_names)?;
+        self.generate_test_functions_map(&mut body, &helper_names);
+        self.generate_test_main_handler(&mut body, &helper_names)?;
+        self.generate_test_entry_point(&mut body);
+        let schema_graphs = self.schema_graphs.borrow().definitions();
+        if !schema_graphs.is_empty() {
+            writer.write_line("");
+            writer.write_line(schema_graphs);
+        }
+        writer.write_line(body.finish_string());
 
         writer.finish(path)
     }
@@ -449,6 +478,9 @@ impl TypeScriptBridgeGenerator {
     ) -> anyhow::Result<()> {
         // Generate test functions for each method using the same code generators as the main library
         for (method_def, names) in self.agent_type.methods.iter().zip(helper_names) {
+            if method_def.uses_streams(&self.agent_type.schema) {
+                continue;
+            }
             self.generate_test_method_encode_input(writer, method_def, &names[0])?;
             writer.write_line("");
             self.generate_test_method_decode_input(writer, method_def, &names[1])?;
@@ -565,7 +597,10 @@ impl TypeScriptBridgeGenerator {
         // Create a map of available functions
         writer.write_line("const testFunctions: { [key: string]: () => Promise<void> | void } = {");
         writer.indent();
-        for names in helper_names {
+        for (method_def, names) in self.agent_type.methods.iter().zip(helper_names) {
+            if method_def.uses_streams(&self.agent_type.schema) {
+                continue;
+            }
             for name in names {
                 writer.write_line(format!("{name},"));
             }
@@ -907,6 +942,22 @@ impl TypeScriptBridgeGenerator {
         self.schema_graphs.borrow_mut().intern(graph)
     }
 
+    fn public_codec(&self, typ: &SchemaType) -> String {
+        let graph = projected_schema_graph(self.type_naming.graph(), typ);
+        let graph = self.schema_graphs.borrow_mut().intern(graph);
+        format!("base.publicValueCodec({graph})")
+    }
+
+    fn public_input_codec(&self, input: &InputSchema) -> String {
+        let graph = projected_input_schema_graph(self.type_naming.graph(), input);
+        let graph = self.schema_graphs.borrow_mut().intern(graph);
+        format!("base.publicValueCodec({graph})")
+    }
+
+    fn validate_public_value(&self, value: &str, typ: &SchemaType, policy: &str) -> String {
+        format!("{}.validate({value}, {policy:?})", self.public_codec(typ))
+    }
+
     fn generate_guest_remote_method(
         &self,
         writer: &mut TsWriter,
@@ -1025,12 +1076,46 @@ impl TypeScriptBridgeGenerator {
     /// Generates a type definition and an encode/decode function pair for custom types used
     /// by the agent.
     pub(crate) fn generate_ts_type_definitions(&self, writer: &mut TsWriter) -> anyhow::Result<()> {
+        if self.has_external_streams() {
+            for (typ, name) in self.type_naming.types() {
+                writer.write_line(format!(
+                    "export type {} = {};",
+                    self.streaming_type_name(name),
+                    self.streaming_type_definition(typ)?
+                ));
+            }
+        }
         for (typ, name) in self.type_naming.types() {
             self.generate_ts_schema_type_def(writer, name, typ)?;
-            self.generate_ts_schema_type_encode(writer, name, typ)?;
-            self.generate_ts_schema_type_decode(writer, name, typ)?;
+            if !self.has_external_streams()
+                || !contains_stream_in_graph(&self.agent_type.schema, typ)
+            {
+                self.generate_ts_schema_type_encode(writer, name, typ)?;
+                self.generate_ts_schema_type_decode(writer, name, typ)?;
+            }
+            if self.has_external_streams() {
+                writer.write_line(format!(
+                    "function encodePublic{name}(value: {}, stream: any): any {{ return {}; }}",
+                    self.streaming_type_name(name),
+                    self.encode_public_value_body("value", typ, "stream")?
+                ));
+                writer.write_line(format!(
+                    "function decodePublic{name}(value: any, stream: any): {} {{ return {}; }}",
+                    self.streaming_type_name(name),
+                    self.decode_public_value_body("value", typ)?
+                ));
+            }
         }
         Ok(())
+    }
+
+    fn has_external_streams(&self) -> bool {
+        self.mode == TypeScriptBridgeMode::ExternalRest
+            && self
+                .agent_type
+                .methods
+                .iter()
+                .any(|method| method.uses_streams(&self.agent_type.schema))
     }
 
     /// Generates the agent client class
@@ -1060,6 +1145,14 @@ impl TypeScriptBridgeGenerator {
     /// We store the encoded parameters, phantom ID, and agent ID of the targeted agent.
     fn generate_ts_class_fields(&self, writer: &mut TsWriter) {
         writer.declare_field("parameters", "base.SchemaValue", None);
+        if self.has_external_streams() {
+            writer.declare_field("publicParameters", "base.PublicValue", None);
+            writer.declare_field(
+                "publicConfig",
+                "Array<{ path: string[]; value: base.PublicValue }>",
+                None,
+            );
+        }
         writer.declare_field("phantomId", "base.PhantomId | undefined", None);
         if self.agent_type.mode == AgentMode::Ephemeral {
             writer.declare_field("#agentConfig", "base.AgentConfigEntry[]", None);
@@ -1081,7 +1174,18 @@ impl TypeScriptBridgeGenerator {
         if self.agent_type.mode == AgentMode::Durable {
             constructor.param("agentId", "base.AgentId");
         }
+        if self.has_external_streams() {
+            constructor.param("publicParameters", "base.PublicValue");
+            constructor.param(
+                "publicConfig",
+                "Array<{ path: string[]; value: base.PublicValue }>",
+            );
+        }
         constructor.write_line("this.parameters = parameters;");
+        if self.has_external_streams() {
+            constructor.write_line("this.publicParameters = publicParameters;");
+            constructor.write_line("this.publicConfig = publicConfig;");
+        }
         constructor.write_line("this.phantomId = phantomId;");
         if self.agent_type.mode == AgentMode::Ephemeral {
             constructor.write_line("this.#agentConfig = agentConfig;");
@@ -1167,11 +1271,16 @@ impl TypeScriptBridgeGenerator {
             &self.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
+        self.write_public_constructor_parameters(&mut get, &names)?;
+        self.write_empty_public_config(&mut get, &names);
         get.write_line(format!("const {} = undefined;", names.phantom_id));
         self.write_create_agent_call(&mut get, config_var, "[]", &names);
         get.write_line(format!(
-            "return new {class_name}({}, {}, {}.agentId);",
-            names.parameters, names.phantom_id, names.create_response
+            "return new {class_name}({}, {}, {}.agentId{});",
+            names.parameters,
+            names.phantom_id,
+            names.create_response,
+            self.external_public_constructor_args(&names)
         ));
 
         Ok(())
@@ -1200,10 +1309,15 @@ impl TypeScriptBridgeGenerator {
             &self.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
+        self.write_public_constructor_parameters(&mut get_phantom, &names)?;
+        self.write_empty_public_config(&mut get_phantom, &names);
         self.write_create_agent_call(&mut get_phantom, config_var, "[]", &names);
         get_phantom.write_line(format!(
-            "return new {class_name}({}, {}, {}.agentId);",
-            names.parameters, names.phantom_id, names.create_response
+            "return new {class_name}({}, {}, {}.agentId{});",
+            names.parameters,
+            names.phantom_id,
+            names.create_response,
+            self.external_public_constructor_args(&names)
         ));
 
         Ok(())
@@ -1232,18 +1346,25 @@ impl TypeScriptBridgeGenerator {
             &self.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
+        self.write_public_constructor_parameters(&mut new_phantom, &names)?;
+        self.write_empty_public_config(&mut new_phantom, &names);
         if self.agent_type.mode == AgentMode::Ephemeral {
             new_phantom.write_line(format!("const {} = undefined;", names.phantom_id));
             new_phantom.write_line(format!(
-                "return new {class_name}({}, {}, []);",
-                names.parameters, names.phantom_id
+                "return new {class_name}({}, {}, []{});",
+                names.parameters,
+                names.phantom_id,
+                self.external_public_constructor_args(&names)
             ));
         } else {
             new_phantom.write_line(format!("const {} = uuidv4();", names.phantom_id));
             self.write_create_agent_call(&mut new_phantom, config_var, "[]", &names);
             new_phantom.write_line(format!(
-                "return new {class_name}({}, {}, {}.agentId);",
-                names.parameters, names.phantom_id, names.create_response
+                "return new {class_name}({}, {}, {}.agentId{});",
+                names.parameters,
+                names.phantom_id,
+                names.create_response,
+                self.external_public_constructor_args(&names)
             ));
         }
 
@@ -1303,12 +1424,16 @@ impl TypeScriptBridgeGenerator {
             &self.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
+        self.write_public_constructor_parameters(&mut method, &names)?;
         method.write_line(format!("const {} = undefined;", names.phantom_id));
         self.write_config_encoding(&mut method, local_configs, &names)?;
         self.write_create_agent_call(&mut method, config_var, &names.agent_config, &names);
         method.write_line(format!(
-            "return new {class_name}({}, {}, {}.agentId);",
-            names.parameters, names.phantom_id, names.create_response
+            "return new {class_name}({}, {}, {}.agentId{});",
+            names.parameters,
+            names.phantom_id,
+            names.create_response,
+            self.external_public_constructor_args(&names)
         ));
 
         Ok(())
@@ -1339,11 +1464,15 @@ impl TypeScriptBridgeGenerator {
             &self.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
+        self.write_public_constructor_parameters(&mut method, &names)?;
         self.write_config_encoding(&mut method, local_configs, &names)?;
         self.write_create_agent_call(&mut method, config_var, &names.agent_config, &names);
         method.write_line(format!(
-            "return new {class_name}({}, {}, {}.agentId);",
-            names.parameters, names.phantom_id, names.create_response
+            "return new {class_name}({}, {}, {}.agentId{});",
+            names.parameters,
+            names.phantom_id,
+            names.create_response,
+            self.external_public_constructor_args(&names)
         ));
 
         Ok(())
@@ -1374,6 +1503,7 @@ impl TypeScriptBridgeGenerator {
             &self.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
+        self.write_public_constructor_parameters(&mut method, &names)?;
         method.write_line(if self.agent_type.mode == AgentMode::Ephemeral {
             format!("const {} = undefined;", names.phantom_id)
         } else {
@@ -1382,14 +1512,20 @@ impl TypeScriptBridgeGenerator {
         self.write_config_encoding(&mut method, local_configs, &names)?;
         if self.agent_type.mode == AgentMode::Ephemeral {
             method.write_line(format!(
-                "return new {class_name}({}, {}, {});",
-                names.parameters, names.phantom_id, names.agent_config
+                "return new {class_name}({}, {}, {}{});",
+                names.parameters,
+                names.phantom_id,
+                names.agent_config,
+                self.external_public_constructor_args(&names)
             ));
         } else {
             self.write_create_agent_call(&mut method, config_var, &names.agent_config, &names);
             method.write_line(format!(
-                "return new {class_name}({}, {}, {}.agentId);",
-                names.parameters, names.phantom_id, names.create_response
+                "return new {class_name}({}, {}, {}.agentId{});",
+                names.parameters,
+                names.phantom_id,
+                names.create_response,
+                self.external_public_constructor_args(&names)
             ));
         }
 
@@ -1423,8 +1559,10 @@ impl TypeScriptBridgeGenerator {
         Ok(ExternalConstructorNames {
             config_parameters,
             parameters: naming.fresh("parameters"),
+            public_parameters: naming.fresh("publicParameters"),
             phantom_id: naming.fresh("phantomId"),
             agent_config: naming.fresh("agentConfig"),
+            public_config: naming.fresh("publicConfig"),
             config: naming.fresh("__config"),
             create_response: naming.fresh("__createResponse"),
         })
@@ -1438,7 +1576,11 @@ impl TypeScriptBridgeGenerator {
         config_names: &[String],
     ) -> anyhow::Result<()> {
         for (config, param_name) in local_configs.iter().zip(config_names) {
-            let param_type = self.type_reference(&config.value_type)?;
+            let param_type = if self.has_external_streams() {
+                self.streaming_type_reference(&config.value_type)?
+            } else {
+                self.type_reference(&config.value_type)?
+            };
             writer.param(&format!("{param_name}?"), &param_type);
         }
         Ok(())
@@ -1455,24 +1597,78 @@ impl TypeScriptBridgeGenerator {
             "const {}: base.AgentConfigEntry[] = [];",
             names.agent_config
         ));
+        if self.has_external_streams() {
+            writer.write_line(format!(
+                "const {}: Array<{{ path: string[]; value: base.PublicValue }}> = [];",
+                names.public_config
+            ));
+        }
         for (config, param_name) in local_configs.iter().zip(&names.config_parameters) {
-            let path_array = config
-                .path
-                .iter()
-                .map(|s| format!("\"{}\"", s))
-                .collect::<Vec<_>>()
-                .join(", ");
+            let path = serde_json::to_string(&config.path)?;
             let encoded_value = self.encode_schema_value(param_name, &config.value_type)?;
             writer.write_line(format!("if ({param_name} !== undefined) {{"));
             writer.indent();
             writer.write_line(format!(
-                "{}.push({{ path: [{path_array}], value: {encoded_value} }});",
+                "{}.push({{ path: {path}, value: {encoded_value} }});",
                 names.agent_config
             ));
+            if self.has_external_streams() {
+                let public_value = self.encode_public_value_with_stream(
+                    param_name,
+                    &config.value_type,
+                    "((_value: any) => { throw new Error('configuration streams are unsupported'); })",
+                )?;
+                let public_value =
+                    self.validate_public_value(&public_value, &config.value_type, "none");
+                writer.write_line(format!(
+                    "{}.push({{ path: {path}, value: {public_value} }});",
+                    names.public_config
+                ));
+            }
             writer.unindent();
             writer.write_line("}");
         }
         Ok(())
+    }
+
+    fn write_public_constructor_parameters(
+        &self,
+        writer: &mut TsFunctionWriter<'_>,
+        names: &ExternalConstructorNames,
+    ) -> anyhow::Result<()> {
+        if self.has_external_streams() {
+            let value = self.encode_public_input_with_stream(
+                &self.agent_type.constructor.input_schema,
+                "((_value: any) => { throw new Error('constructor streams are unsupported'); })",
+            )?;
+            writer.write_line(format!(
+                "const {} = {}.validate({value}, 'none');",
+                names.public_parameters,
+                self.public_input_codec(&self.agent_type.constructor.input_schema)
+            ));
+        }
+        Ok(())
+    }
+
+    fn write_empty_public_config(
+        &self,
+        writer: &mut TsFunctionWriter<'_>,
+        names: &ExternalConstructorNames,
+    ) {
+        if self.has_external_streams() {
+            writer.write_line(format!(
+                "const {}: Array<{{ path: string[]; value: base.PublicValue }}> = [];",
+                names.public_config
+            ));
+        }
+    }
+
+    fn external_public_constructor_args(&self, names: &ExternalConstructorNames) -> String {
+        if self.has_external_streams() {
+            format!(", {}, {}", names.public_parameters, names.public_config)
+        } else {
+            String::new()
+        }
     }
 
     /// Generates a private helper method for getting the global configuration and failing if it is missing
@@ -1546,6 +1742,9 @@ impl TypeScriptBridgeGenerator {
         method_def: &AgentMethodSchema,
         member_name: &str,
     ) -> anyhow::Result<()> {
+        if method_def.uses_streams(&self.agent_type.schema) {
+            return self.generate_ts_streaming_remote_method(writer, method_def, member_name);
+        }
         let get_server_config_fn = self.build_get_server_config_fn();
         let get_around_invoke_hook_fn = self.build_get_around_invoke_hook_fn();
         let get_method_request_fn = self.build_get_method_request_fn(method_def);
@@ -1584,6 +1783,448 @@ impl TypeScriptBridgeGenerator {
         );
 
         Ok(())
+    }
+
+    fn generate_ts_streaming_remote_method(
+        &self,
+        writer: &mut TsWriter,
+        method: &AgentMethodSchema,
+        member_name: &str,
+    ) -> anyhow::Result<()> {
+        let args = self.streaming_input_type_list(&method.input_schema)?;
+        let result = self.streaming_output_result_type(&method.output_schema)?;
+        let mut encode = TsAnonymousFunctionWriter::new();
+        encode.param("__args", &format!("[{args}]"));
+        encode.param("stream", "any");
+        self.destructure_args_tuple(
+            &mut encode,
+            "__args",
+            &method.input_schema,
+            "__multimodalInput",
+        )?;
+        encode.write("return ");
+        let encoded_input = self.encode_public_input(&method.input_schema)?;
+        encode.write_line(format!(
+            "{}.validate({encoded_input}, 'provisional');",
+            self.public_input_codec(&method.input_schema)
+        ));
+        let decode_expr = match &method.output_schema {
+            OutputSchema::Unit => "undefined".to_string(),
+            OutputSchema::Single(typ) => {
+                let validated = self.validate_public_value("value", typ, "stable");
+                self.decode_public_value(&validated, typ)?
+            }
+        };
+        writer.write_doc(&method.description);
+        writer.write_line(format!(
+            "readonly {member_name}: base.StreamingRemoteMethod<[{args}], {result}> = base.createStreamingRemoteMethod(() => this.__getConfig().server, () => ({{ application: this.__getConfig().application, environment: this.__getConfig().environment, agentType: {:?}, constructorParameters: this.publicParameters, phantomId: this.phantomId, config: this.publicConfig, method: {:?} }}), {}, (value: any, stream: any) => {decode_expr});",
+            self.agent_type.type_name.0, method.name, encode.build().trim()
+        ));
+        Ok(())
+    }
+
+    fn encode_public_input(&self, input: &InputSchema) -> anyhow::Result<String> {
+        self.encode_public_input_with_stream(input, "stream")
+    }
+
+    fn encode_public_input_with_stream(
+        &self,
+        input: &InputSchema,
+        stream: &str,
+    ) -> anyhow::Result<String> {
+        match self.ts_input(input)? {
+            TsInput::Params(params) => {
+                let fields = user_supplied_fields(input);
+                Ok(format!(
+                    "({{{}}})",
+                    fields
+                        .iter()
+                        .zip(params.iter())
+                        .map(|(field, (parameter, typ))| Ok(format!(
+                            "{}: {}",
+                            serde_json::to_string(&field.name)?,
+                            self.encode_public_value_with_stream(parameter, typ, stream)?
+                        )))
+                        .collect::<anyhow::Result<Vec<_>>>()?
+                        .join(", ")
+                ))
+            }
+            TsInput::Multimodal(cases) => {
+                let fields = user_supplied_fields(input);
+                let [field] = fields.as_slice() else {
+                    anyhow::bail!("multimodal input must have exactly one user-supplied field")
+                };
+                let value = self.encode_public_value_with_stream(
+                    MULTIMODAL_INPUT_NAME,
+                    &SchemaType::List {
+                        element: Box::new(SchemaType::Variant {
+                            cases: cases
+                                .into_iter()
+                                .map(|(name, payload)| VariantCaseType {
+                                    name,
+                                    payload: Some(payload),
+                                    metadata: Default::default(),
+                                })
+                                .collect(),
+                            metadata: Default::default(),
+                        }),
+                        metadata: Default::default(),
+                    },
+                    stream,
+                )?;
+                Ok(format!(
+                    "({{{}: {value}}})",
+                    serde_json::to_string(&field.name)?
+                ))
+            }
+        }
+    }
+
+    fn encode_public_value_with_stream(
+        &self,
+        value: &str,
+        typ: &SchemaType,
+        stream: &str,
+    ) -> anyhow::Result<String> {
+        if let Some(name) = self.type_naming.type_name_for_type(typ) {
+            return Ok(format!("encodePublic{name}({value}, {stream})"));
+        }
+        self.encode_public_value_body(value, typ, stream)
+    }
+
+    fn encode_public_value_body(
+        &self,
+        value: &str,
+        typ: &SchemaType,
+        stream: &str,
+    ) -> anyhow::Result<String> {
+        Ok(match typ {
+            SchemaType::S64 { .. } | SchemaType::U64 { .. } => format!("({value}).toString()"),
+            SchemaType::Bool { .. }
+            | SchemaType::S8 { .. }
+            | SchemaType::S16 { .. }
+            | SchemaType::S32 { .. }
+            | SchemaType::U8 { .. }
+            | SchemaType::U16 { .. }
+            | SchemaType::U32 { .. }
+            | SchemaType::Char { .. }
+            | SchemaType::String { .. }
+            | SchemaType::Path { .. }
+            | SchemaType::Url { .. }
+            | SchemaType::Datetime { .. } => value.to_string(),
+            SchemaType::F32 { .. } | SchemaType::F64 { .. } => format!(
+                "((v: number) => Number.isNaN(v) ? {{ $float: 'nan' }} : v === Number.POSITIVE_INFINITY ? {{ $float: 'positive-infinity' }} : v === Number.NEGATIVE_INFINITY ? {{ $float: 'negative-infinity' }} : v)({value})"
+            ),
+            SchemaType::Duration { .. } => format!("({{ nanoseconds: ({value}).toString() }})"),
+            SchemaType::Quantity { .. } => format!(
+                "({{ mantissa: ({value}).mantissa.toString(), scale: ({value}).scale, unit: ({value}).unit }})"
+            ),
+            SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => format!(
+                "Array.from({value} as Iterable<any>).map((item: any) => {})",
+                self.encode_public_value_with_stream("item", element, stream)?
+            ),
+            SchemaType::Tuple { elements, .. } => format!(
+                "[{}]",
+                elements
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| self.encode_public_value_with_stream(
+                        &format!("{value}[{i}]"),
+                        t,
+                        stream
+                    ))
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(", ")
+            ),
+            SchemaType::Record { fields, .. } => format!(
+                "({{{}}})",
+                fields
+                    .iter()
+                    .zip(self.member_names(fields.iter().map(|f| f.name.as_str())))
+                    .map(|(f, n)| Ok(format!(
+                        "{}: {}",
+                        serde_json::to_string(&f.name)?,
+                        self.encode_public_value_with_stream(
+                            &format!("{value}.{n}"),
+                            &f.body,
+                            stream
+                        )?
+                    )))
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(", ")
+            ),
+            SchemaType::Option { inner, .. } => format!(
+                "({value} === undefined ? {{ $option: 'none' }} : {{ $option: 'some', value: {} }})",
+                self.encode_public_value_with_stream(value, inner, stream)?
+            ),
+            SchemaType::Stream {
+                inner: Some(element),
+                ..
+            } => {
+                let wire_kind = match self.resolve_ref(element) {
+                    SchemaType::U8 { .. } => "u8",
+                    SchemaType::Binary { .. } => "binary",
+                    _ => "json",
+                };
+                let encoded = self.encode_public_value_with_stream("item", element, stream)?;
+                let encoded = self.validate_public_value(&encoded, element, "provisional");
+                format!(
+                    "({stream})({value}, (item: any) => {encoded}, {:?})",
+                    wire_kind
+                )
+            }
+            SchemaType::Binary { .. } => format!(
+                "({{ bytes: Buffer.from(({value}).bytes).toString('base64'), ...(({value}).mimeType !== undefined ? {{ mimeType: ({value}).mimeType }} : {{}}) }})"
+            ),
+            SchemaType::Text { .. } => value.to_string(),
+            SchemaType::Map {
+                key, value: val, ..
+            } => format!(
+                "Array.from(({value} as Map<any,any>).entries()).map(([key,val]) => [{}, {}])",
+                self.encode_public_value_with_stream("key", key, stream)?,
+                self.encode_public_value_with_stream("val", val, stream)?
+            ),
+            SchemaType::Enum { .. } => value.to_string(),
+            SchemaType::Flags { flags, .. } => {
+                let names = self.member_names(flags.iter().map(String::as_str));
+                format!(
+                    "[{}].filter((entry: [string, string]) => ({value} as any)[entry[1]]).map((entry: [string, string]) => entry[0])",
+                    flags
+                        .iter()
+                        .zip(names)
+                        .map(|(wire, member)| Ok(format!(
+                            "[{}, {}]",
+                            serde_json::to_string(wire)?,
+                            serde_json::to_string(&member)?
+                        )))
+                        .collect::<anyhow::Result<Vec<_>>>()?
+                        .join(",")
+                )
+            }
+            SchemaType::Variant { cases, .. } => format!(
+                "((v:any) => {{ {} throw new Error('unknown variant'); }})({value})",
+                cases
+                    .iter()
+                    .map(|c| Ok(match &c.payload {
+                        Some(t) => format!(
+                            "if(v.tag === {:?}) return {{ $case: {:?}, value: {} }};",
+                            c.name,
+                            c.name,
+                            self.encode_public_value_with_stream("v.val", t, stream)?
+                        ),
+                        None => format!(
+                            "if(v.tag === {:?}) return {{ $case: {:?} }};",
+                            c.name, c.name
+                        ),
+                    }))
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(" ")
+            ),
+            SchemaType::Result { spec, .. } => {
+                let ok = spec
+                    .ok
+                    .as_deref()
+                    .map(|t| self.encode_public_value_with_stream("v.ok", t, stream))
+                    .transpose()?;
+                let err = spec
+                    .err
+                    .as_deref()
+                    .map(|t| self.encode_public_value_with_stream("v.err", t, stream))
+                    .transpose()?;
+                format!(
+                    "((v:any) => 'ok' in v ? {{ $result: 'ok'{} }} : {{ $result: 'err'{} }})({value})",
+                    ok.map(|x| format!(", value: {x}")).unwrap_or_default(),
+                    err.map(|x| format!(", value: {x}")).unwrap_or_default()
+                )
+            }
+            SchemaType::Union { spec, .. } => format!(
+                "((v:any) => {{ {} throw new Error('unknown union'); }})({value})",
+                spec.branches
+                    .iter()
+                    .map(|b| Ok(format!(
+                        "if(v.tag === {:?}) return {{ $union: {:?}, value: {} }};",
+                        b.tag,
+                        b.tag,
+                        self.encode_public_value_with_stream("v.val", &b.body, stream)?
+                    )))
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(" ")
+            ),
+            SchemaType::Ref { id, .. } => {
+                let definition = self
+                    .type_naming
+                    .graph()
+                    .lookup(id)
+                    .ok_or_else(|| anyhow!("missing public schema ref {id}"))?;
+                self.encode_public_value_with_stream(value, &definition.body, stream)?
+            }
+            other => anyhow::bail!("unsupported public streaming value: {other:?}"),
+        })
+    }
+
+    fn decode_public_value(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
+        if let Some(name) = self.type_naming.type_name_for_type(typ) {
+            return Ok(format!("decodePublic{name}({value}, stream)"));
+        }
+        self.decode_public_value_body(value, typ)
+    }
+
+    fn decode_public_value_body(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
+        Ok(match typ {
+            SchemaType::S64 { .. } | SchemaType::U64 { .. } => format!("BigInt({value})"),
+            SchemaType::Stream {
+                inner: Some(element),
+                ..
+            } => {
+                let wire_kind = match self.resolve_ref(element) {
+                    SchemaType::U8 { .. } => "u8",
+                    SchemaType::Binary { .. } => "binary",
+                    _ => "json",
+                };
+                let validated = self.validate_public_value("item", element, "stable");
+                format!(
+                    "stream(({value} as any).$stream.streamToken, (item:any) => {}, {:?}, {:?})",
+                    self.decode_public_value(&validated, element)?,
+                    format!("{element:?}"),
+                    wire_kind
+                )
+            }
+            SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => format!(
+                "({value} as any[]).map((item:any) => {})",
+                self.decode_public_value("item", element)?
+            ),
+            SchemaType::Record { fields, .. } => format!(
+                "({{{}}})",
+                fields
+                    .iter()
+                    .zip(self.member_names(fields.iter().map(|f| f.name.as_str())))
+                    .map(|(f, n)| Ok(format!(
+                        "{n}: {}",
+                        self.decode_public_value(
+                            &format!("({value} as any)[{:?}]", f.name),
+                            &f.body
+                        )?
+                    )))
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(", ")
+            ),
+            SchemaType::Tuple { elements, .. } => format!(
+                "[{}]",
+                elements
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| {
+                        self.decode_public_value(&format!("({value} as any)[{i}]"), t)
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(", ")
+            ),
+            SchemaType::Option { inner, .. } => format!(
+                "(({value} as any).$option === 'none' ? undefined : {})",
+                self.decode_public_value(&format!("({value} as any).value"), inner)?
+            ),
+            SchemaType::Binary { .. } => format!(
+                "({{ bytes: Uint8Array.from(Buffer.from(({value} as any).bytes, 'base64')), mimeType: ({value} as any).mimeType }})"
+            ),
+            SchemaType::Duration { .. } => format!("BigInt(({value} as any).nanoseconds)"),
+            SchemaType::Quantity { .. } => format!(
+                "({{ mantissa: BigInt(({value} as any).mantissa), scale: ({value} as any).scale, unit: ({value} as any).unit }})"
+            ),
+            SchemaType::Map {
+                key, value: val, ..
+            } => format!(
+                "new Map(({value} as any[]).map(([key,val]) => [{},{}]))",
+                self.decode_public_value("key", key)?,
+                self.decode_public_value("val", val)?
+            ),
+            SchemaType::Variant { cases, .. } => format!(
+                "((v:any) => {{ {} throw new Error('unknown variant'); }})({value})",
+                cases
+                    .iter()
+                    .map(|case| Ok(match &case.payload {
+                        Some(payload) => format!(
+                            "if(v.$case === {:?}) return {{ tag: {:?}, val: {} }};",
+                            case.name,
+                            case.name,
+                            self.decode_public_value("v.value", payload)?
+                        ),
+                        None => format!(
+                            "if(v.$case === {:?}) return {{ tag: {:?} }};",
+                            case.name, case.name
+                        ),
+                    }))
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(" ")
+            ),
+            SchemaType::Result { spec, .. } => {
+                let ok = spec
+                    .ok
+                    .as_deref()
+                    .map(|typ| self.decode_public_value("v.value", typ))
+                    .transpose()?;
+                let err = spec
+                    .err
+                    .as_deref()
+                    .map(|typ| self.decode_public_value("v.value", typ))
+                    .transpose()?;
+                format!(
+                    "((v:any) => v.$result === 'ok' ? {{ ok: {} }} : {{ err: {} }})({value})",
+                    ok.unwrap_or_else(|| "undefined".to_string()),
+                    err.unwrap_or_else(|| "undefined".to_string())
+                )
+            }
+            SchemaType::Union { spec, .. } => format!(
+                "((v:any) => {{ {} throw new Error('unknown union'); }})({value})",
+                spec.branches
+                    .iter()
+                    .map(|branch| Ok(format!(
+                        "if(v.$union === {:?}) return {{ tag: {:?}, val: {} }};",
+                        branch.tag,
+                        branch.tag,
+                        self.decode_public_value("v.value", &branch.body)?
+                    )))
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(" ")
+            ),
+            SchemaType::Flags { flags, .. } => format!(
+                "({{{}}})",
+                flags
+                    .iter()
+                    .zip(self.member_names(flags.iter().map(String::as_str)))
+                    .map(|(wire, member)| Ok(format!(
+                        "{member}: ({value} as string[]).includes({})",
+                        serde_json::to_string(wire)?
+                    )))
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(", ")
+            ),
+            SchemaType::F32 { .. } | SchemaType::F64 { .. } => format!(
+                "((v: any): number => typeof v === 'number' ? v : v.$float === 'nan' ? Number.NaN : v.$float === 'positive-infinity' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY)({value})"
+            ),
+            SchemaType::Bool { .. }
+            | SchemaType::S8 { .. }
+            | SchemaType::S16 { .. }
+            | SchemaType::S32 { .. }
+            | SchemaType::U8 { .. }
+            | SchemaType::U16 { .. }
+            | SchemaType::U32 { .. }
+            | SchemaType::Char { .. }
+            | SchemaType::String { .. }
+            | SchemaType::Text { .. }
+            | SchemaType::Path { .. }
+            | SchemaType::Url { .. }
+            | SchemaType::Datetime { .. }
+            | SchemaType::Enum { .. } => value.to_string(),
+            SchemaType::Ref { id, .. } => {
+                let definition = self
+                    .type_naming
+                    .graph()
+                    .lookup(id)
+                    .ok_or_else(|| anyhow!("missing public schema ref {id}"))?;
+                self.decode_public_value(value, &definition.body)?
+            }
+            other => anyhow::bail!("unsupported public streaming decode: {other:?}"),
+        })
     }
 
     /// Builds the function that extracts the configured server for the remote method implementation
@@ -2445,6 +3086,12 @@ impl TypeScriptBridgeGenerator {
                     "((n: any) => {{ {arms} throw new Error(`Unknown union branch tag ${{n.value.tag}}`); }})({value})"
                 )
             }
+            SchemaType::Text { .. } if self.has_external_streams() => format!(
+                "((n: any) => ({{ text: n.value.text, language: n.value.language }}))({value})"
+            ),
+            SchemaType::Binary { .. } if self.has_external_streams() => format!(
+                "((n: any) => ({{ bytes: Uint8Array.from(n.value.bytes), mimeType: n.value.mimeType }}))({value})"
+            ),
             SchemaType::Text { .. } | SchemaType::Binary { .. } => {
                 return Err(anyhow!(
                     "Bare text/binary rich scalars have no TypeScript bridge surface; \
@@ -2463,10 +3110,10 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Duration { .. } => {
                 format!("((n: any) => BigInt(n.value.nanoseconds))({value})")
             }
-            // Capability / quantity / WASI-P3 nodes are not part of the agent
-            // IO surface exercised by the bridge today.
-            SchemaType::Quantity { .. }
-            | SchemaType::Secret { .. }
+            SchemaType::Quantity { .. } => format!(
+                "((n: any) => ({{ mantissa: BigInt(n.value.mantissa), scale: n.value.scale, unit: n.value.unit }}))({value})"
+            ),
+            SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
@@ -2488,7 +3135,11 @@ impl TypeScriptBridgeGenerator {
         typ: &SchemaType,
     ) -> anyhow::Result<String> {
         if let Some(name) = self.type_naming.type_name_for_type(typ) {
-            return Ok(format!("encode{}({})", name, value));
+            return Ok(if self.has_external_streams() {
+                format!("encode{}(({}) as any)", name, value)
+            } else {
+                format!("encode{}({})", name, value)
+            });
         }
         self.encode_schema_value_body(value, typ)
     }
@@ -2813,6 +3464,12 @@ impl TypeScriptBridgeGenerator {
                     "((v: any) => {{ {arms} throw new Error(`Unknown union branch ${{v.tag}}`); }})({value})"
                 )
             }
+            SchemaType::Text { .. } if self.has_external_streams() => format!(
+                "{{ kind: 'text', value: {{ text: ({value}).text, ...(({value}).language !== undefined ? {{ language: ({value}).language }} : {{}}) }} }}"
+            ),
+            SchemaType::Binary { .. } if self.has_external_streams() => format!(
+                "{{ kind: 'binary', value: {{ bytes: Array.from(({value}).bytes), ...(({value}).mimeType !== undefined ? {{ mimeType: ({value}).mimeType }} : {{}}) }} }}"
+            ),
             SchemaType::Text { .. } | SchemaType::Binary { .. } => {
                 return Err(anyhow!(
                     "Bare text/binary rich scalars have no TypeScript bridge surface; \
@@ -2829,12 +3486,12 @@ impl TypeScriptBridgeGenerator {
                 format!("{{ kind: 'datetime', value: {{ value: {value} }} }}")
             }
             SchemaType::Duration { .. } => {
-                format!("{{ kind: 'duration', value: {{ nanoseconds: Number({value}) }} }}")
+                format!("{{ kind: 'duration', value: {{ nanoseconds: {value} }} }}")
             }
-            // Capability / quantity / WASI-P3 nodes are not part of the agent
-            // IO surface exercised by the bridge today.
-            SchemaType::Quantity { .. }
-            | SchemaType::Secret { .. }
+            SchemaType::Quantity { .. } => format!(
+                "{{ kind: 'quantity', value: {{ mantissa: ({value}).mantissa, scale: ({value}).scale, unit: ({value}).unit }} }}"
+            ),
+            SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
@@ -2923,6 +3580,19 @@ impl TypeScriptBridgeGenerator {
         })
     }
 
+    fn streaming_input_type_list(&self, input: &InputSchema) -> anyhow::Result<String> {
+        Ok(match self.ts_input(input)? {
+            TsInput::Params(params) => params
+                .iter()
+                .map(|(_, schema)| self.streaming_type_reference(schema))
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .join(", "),
+            TsInput::Multimodal(cases) => {
+                format!("({})[]", self.streaming_multimodal_tagged_union(&cases)?)
+            }
+        })
+    }
+
     /// Renders a `Union` schema as a TypeScript discriminated union matching
     /// the `{ tag, val }` shape produced by the encode/decode helpers.
     fn union_tagged_type(&self, spec: &UnionSpec) -> anyhow::Result<String> {
@@ -2954,6 +3624,22 @@ impl TypeScriptBridgeGenerator {
             .join(" | "))
     }
 
+    fn streaming_multimodal_tagged_union(
+        &self,
+        cases: &[(String, SchemaType)],
+    ) -> anyhow::Result<String> {
+        Ok(cases
+            .iter()
+            .map(|(name, schema)| {
+                Ok(format!(
+                    "{{ type: '{name}'; value: {} }}",
+                    self.streaming_type_reference(schema)?
+                ))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?
+            .join(" | "))
+    }
+
     /// Writes the comma-separated parameter names for destructuring the input.
     fn write_parameter_name_list(
         &self,
@@ -2981,15 +3667,22 @@ impl TypeScriptBridgeGenerator {
         match self.ts_input(input)? {
             TsInput::Params(params) => {
                 for (name, schema) in &params {
-                    writer.param(name, &self.type_reference(schema)?);
+                    let typ = if self.has_external_streams() {
+                        self.streaming_type_reference(schema)?
+                    } else {
+                        self.type_reference(schema)?
+                    };
+                    writer.param(name, &typ);
                 }
                 Ok(())
             }
             TsInput::Multimodal(cases) => {
-                writer.param(
-                    MULTIMODAL_INPUT_NAME,
-                    &format!("({})[]", self.multimodal_tagged_union(&cases)?),
-                );
+                let union = if self.has_external_streams() {
+                    self.streaming_multimodal_tagged_union(&cases)?
+                } else {
+                    self.multimodal_tagged_union(&cases)?
+                };
+                writer.param(MULTIMODAL_INPUT_NAME, &format!("({union})[]"));
                 Ok(())
             }
         }
@@ -3002,6 +3695,257 @@ impl TypeScriptBridgeGenerator {
             TsOutput::Multimodal(cases) => {
                 format!("({})[]", self.multimodal_tagged_union(&cases)?)
             }
+        })
+    }
+
+    fn streaming_output_result_type(&self, output: &OutputSchema) -> anyhow::Result<String> {
+        Ok(match self.ts_output(output)? {
+            TsOutput::Unit => "void".to_string(),
+            TsOutput::Single(schema) => self.streaming_type_reference(&schema)?,
+            TsOutput::Multimodal(cases) => {
+                format!("({})[]", self.streaming_multimodal_tagged_union(&cases)?)
+            }
+        })
+    }
+
+    fn streaming_type_name(&self, name: &TypeScriptTypeName) -> &str {
+        self.streaming_type_names
+            .get(&name.to_string())
+            .expect("every generated TypeScript type has a streaming type name")
+    }
+
+    fn streaming_type_reference(&self, typ: &SchemaType) -> anyhow::Result<String> {
+        if let Some(name) = self.type_naming.type_name_for_type(typ) {
+            return Ok(self.streaming_type_name(name).to_string());
+        }
+        if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
+            return Ok(self.unstructured_text_type(restrictions));
+        }
+        if let Some(restrictions) = unstructured_binary_restrictions(self.type_naming.graph(), typ)?
+        {
+            return Ok(self.unstructured_binary_type(restrictions));
+        }
+        Ok(match typ {
+            SchemaType::String { .. }
+            | SchemaType::Char { .. }
+            | SchemaType::Path { .. }
+            | SchemaType::Url { .. }
+            | SchemaType::Datetime { .. } => "string".to_string(),
+            SchemaType::Enum { .. } => self.streaming_type_definition(typ)?,
+            SchemaType::F64 { .. }
+            | SchemaType::F32 { .. }
+            | SchemaType::U32 { .. }
+            | SchemaType::S32 { .. }
+            | SchemaType::U16 { .. }
+            | SchemaType::S16 { .. }
+            | SchemaType::U8 { .. }
+            | SchemaType::S8 { .. } => "number".to_string(),
+            SchemaType::U64 { .. } | SchemaType::S64 { .. } | SchemaType::Duration { .. } => {
+                "bigint".to_string()
+            }
+            SchemaType::Bool { .. } => "boolean".to_string(),
+            SchemaType::Option { inner, .. } => {
+                format!("{} | undefined", self.streaming_type_reference(inner)?)
+            }
+            SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+                if matches!(**element, SchemaType::U8 { .. }) {
+                    "Uint8Array".to_string()
+                } else {
+                    format!("{}[]", self.streaming_type_reference(element)?)
+                }
+            }
+            SchemaType::Tuple { elements, .. } => format!(
+                "[{}]",
+                elements
+                    .iter()
+                    .map(|item| self.streaming_type_reference(item))
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(", ")
+            ),
+            SchemaType::Result { spec, .. } => {
+                let ok = spec
+                    .ok
+                    .as_deref()
+                    .map(|typ| self.streaming_type_reference(typ))
+                    .transpose()?
+                    .unwrap_or_else(|| "void".to_string());
+                let err = spec
+                    .err
+                    .as_deref()
+                    .map(|typ| self.streaming_type_reference(typ))
+                    .transpose()?
+                    .unwrap_or_else(|| "void".to_string());
+                format!("base.JsonResult<{ok}, {err}>")
+            }
+            SchemaType::Variant { .. } | SchemaType::Flags { .. } | SchemaType::Record { .. } => {
+                self.streaming_type_definition(typ)?
+            }
+            SchemaType::Ref { .. } => self.streaming_type_reference(self.resolve_ref(typ))?,
+            SchemaType::Map { key, value, .. } => format!(
+                "Map<{}, {}>",
+                self.streaming_type_reference(key)?,
+                self.streaming_type_reference(value)?
+            ),
+            SchemaType::Union { spec, .. } => spec
+                .branches
+                .iter()
+                .map(|branch| {
+                    Ok(format!(
+                        "{{ tag: '{}'; val: {} }}",
+                        branch.tag,
+                        self.streaming_type_reference(&branch.body)?
+                    ))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .join(" | "),
+            SchemaType::Stream {
+                inner: Some(inner), ..
+            } => format!(
+                "base.AgentStream<{}>",
+                self.streaming_type_reference(inner)?
+            ),
+            SchemaType::Binary { .. } => "base.AgentBinary".to_string(),
+            SchemaType::Text { .. } => "base.AgentText".to_string(),
+            SchemaType::Quantity { .. } => "base.QuantityValue".to_string(),
+            SchemaType::Secret { .. }
+            | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
+            | SchemaType::Future { .. }
+            | SchemaType::Stream { inner: None, .. } => anyhow::bail!(
+                "Cannot emit public TypeScript streaming type for unsupported schema variant: {typ:?}"
+            ),
+        })
+    }
+
+    fn streaming_type_definition(&self, typ: &SchemaType) -> anyhow::Result<String> {
+        Ok(match self.resolve_ref(typ) {
+            SchemaType::Variant { cases, .. } => cases
+                .iter()
+                .map(|case| match &case.payload {
+                    Some(payload) => Ok(format!(
+                        "{{ tag: '{}'; val: {} }}",
+                        case.name,
+                        self.streaming_type_reference(payload)?
+                    )),
+                    None => Ok(format!("{{ tag: '{}' }}", case.name)),
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .join(" | "),
+            SchemaType::Result { spec, .. } => {
+                let ok = spec
+                    .ok
+                    .as_deref()
+                    .map(|typ| self.streaming_type_reference(typ))
+                    .transpose()?
+                    .unwrap_or_else(|| "void".to_string());
+                let err = spec
+                    .err
+                    .as_deref()
+                    .map(|typ| self.streaming_type_reference(typ))
+                    .transpose()?
+                    .unwrap_or_else(|| "void".to_string());
+                format!("base.JsonResult<{ok}, {err}>")
+            }
+            SchemaType::Option { inner, .. } => {
+                format!("{} | undefined", self.streaming_type_reference(inner)?)
+            }
+            SchemaType::Enum { cases, .. } => cases
+                .iter()
+                .map(|case| format!("{case:?}"))
+                .collect::<Vec<_>>()
+                .join(" | "),
+            SchemaType::Flags { flags, .. } => format!(
+                "{{\n{}\n}}",
+                self.member_names(flags.iter().map(String::as_str))
+                    .iter()
+                    .map(|name| format!("  {name}: boolean;"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+            SchemaType::Record { fields, .. } => format!(
+                "{{\n{}\n}}",
+                fields
+                    .iter()
+                    .zip(self.member_names(fields.iter().map(|field| field.name.as_str())))
+                    .map(|(field, name)| match &field.body {
+                        SchemaType::Option { inner, .. } => Ok(format!(
+                            "  {name}?: {};",
+                            self.streaming_type_reference(inner)?
+                        )),
+                        other => Ok(format!(
+                            "  {name}: {};",
+                            self.streaming_type_reference(other)?
+                        )),
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join("\n")
+            ),
+            SchemaType::Tuple { elements, .. } => format!(
+                "[{}]",
+                elements
+                    .iter()
+                    .map(|item| self.streaming_type_reference(item))
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(", ")
+            ),
+            SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+                if matches!(**element, SchemaType::U8 { .. }) {
+                    "Uint8Array".to_string()
+                } else {
+                    format!("{}[]", self.streaming_type_reference(element)?)
+                }
+            }
+            SchemaType::Map { key, value, .. } => format!(
+                "Map<{}, {}>",
+                self.streaming_type_reference(key)?,
+                self.streaming_type_reference(value)?
+            ),
+            SchemaType::Union { spec, .. } => spec
+                .branches
+                .iter()
+                .map(|branch| {
+                    Ok(format!(
+                        "{{ tag: '{}'; val: {} }}",
+                        branch.tag,
+                        self.streaming_type_reference(&branch.body)?
+                    ))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .join(" | "),
+            SchemaType::String { .. }
+            | SchemaType::Char { .. }
+            | SchemaType::Path { .. }
+            | SchemaType::Url { .. }
+            | SchemaType::Datetime { .. } => "string".to_string(),
+            SchemaType::F64 { .. }
+            | SchemaType::F32 { .. }
+            | SchemaType::U32 { .. }
+            | SchemaType::S32 { .. }
+            | SchemaType::U16 { .. }
+            | SchemaType::S16 { .. }
+            | SchemaType::U8 { .. }
+            | SchemaType::S8 { .. } => "number".to_string(),
+            SchemaType::U64 { .. } | SchemaType::S64 { .. } | SchemaType::Duration { .. } => {
+                "bigint".to_string()
+            }
+            SchemaType::Bool { .. } => "boolean".to_string(),
+            SchemaType::Stream {
+                inner: Some(inner), ..
+            } => format!(
+                "base.AgentStream<{}>",
+                self.streaming_type_reference(inner)?
+            ),
+            SchemaType::Binary { .. } => "base.AgentBinary".to_string(),
+            SchemaType::Text { .. } => "base.AgentText".to_string(),
+            SchemaType::Quantity { .. } => "base.QuantityValue".to_string(),
+            SchemaType::Ref { .. } => unreachable!("Ref was resolved before streaming definition"),
+            SchemaType::Secret { .. }
+            | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
+            | SchemaType::Future { .. }
+            | SchemaType::Stream { inner: None, .. } => anyhow::bail!(
+                "Cannot emit public TypeScript streaming definition for unsupported schema variant: {typ:?}"
+            ),
         })
     }
 
@@ -3090,6 +4034,24 @@ impl TypeScriptBridgeGenerator {
                     // Bare text/binary rich scalars have no TS surface; the
                     // ergonomic wrapper types are reached only via the
                     // role-marked unstructured variant intercepted above.
+                    SchemaType::Binary { .. }
+                        if self.mode == TypeScriptBridgeMode::ExternalRest
+                            && self.has_external_streams() =>
+                    {
+                        Ok("base.AgentBinary".to_string())
+                    }
+                    SchemaType::Text { .. }
+                        if self.mode == TypeScriptBridgeMode::ExternalRest
+                            && self.has_external_streams() =>
+                    {
+                        Ok("base.AgentText".to_string())
+                    }
+                    SchemaType::Quantity { .. }
+                        if self.mode == TypeScriptBridgeMode::ExternalRest
+                            && self.has_external_streams() =>
+                    {
+                        Ok("base.QuantityValue".to_string())
+                    }
                     SchemaType::Text { .. } | SchemaType::Binary { .. } => Err(anyhow!(
                         "Bare text/binary rich scalars have no TypeScript bridge type; \
                          wrap them in the unstructured text/binary variant ({typ:?})"
@@ -3114,6 +4076,9 @@ impl TypeScriptBridgeGenerator {
                     SchemaType::Url { .. } => Ok("string".to_string()),
                     SchemaType::Datetime { .. } => Ok("string".to_string()),
                     SchemaType::Duration { .. } => Ok("bigint".to_string()),
+                    SchemaType::Stream {
+                        inner: Some(inner), ..
+                    } => Ok(format!("base.AgentStream<{}>", self.type_reference(inner)?)),
                     // Capability / quantity / WASI-P3 nodes are not part of the
                     // agent IO surface exercised by the bridge today.
                     SchemaType::Quantity { .. }
@@ -3121,7 +4086,7 @@ impl TypeScriptBridgeGenerator {
                     | SchemaType::QuotaToken { .. }
                     | SchemaType::PermissionCard { .. }
                     | SchemaType::Future { .. }
-                    | SchemaType::Stream { .. } => Err(anyhow!(
+                    | SchemaType::Stream { inner: None, .. } => Err(anyhow!(
                         "Cannot emit TypeScript type reference for unsupported schema variant: {typ:?}"
                     )),
                 }
@@ -3266,9 +4231,30 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Url { .. } => Ok("string".to_string()),
             SchemaType::Datetime { .. } => Ok("string".to_string()),
             SchemaType::Duration { .. } => Ok("bigint".to_string()),
+            SchemaType::Stream {
+                inner: Some(inner), ..
+            } => Ok(format!("base.AgentStream<{}>", self.type_reference(inner)?)),
             // Bare text/binary rich scalars have no TS surface; the ergonomic
             // wrapper types are reached only via the role-marked unstructured
             // variant intercepted in `type_reference`.
+            SchemaType::Binary { .. }
+                if self.mode == TypeScriptBridgeMode::ExternalRest
+                    && self.has_external_streams() =>
+            {
+                Ok("base.AgentBinary".to_string())
+            }
+            SchemaType::Text { .. }
+                if self.mode == TypeScriptBridgeMode::ExternalRest
+                    && self.has_external_streams() =>
+            {
+                Ok("base.AgentText".to_string())
+            }
+            SchemaType::Quantity { .. }
+                if self.mode == TypeScriptBridgeMode::ExternalRest
+                    && self.has_external_streams() =>
+            {
+                Ok("base.QuantityValue".to_string())
+            }
             SchemaType::Text { .. } | SchemaType::Binary { .. } => Err(anyhow!(
                 "Bare text/binary rich scalars have no TypeScript bridge type; \
                  wrap them in the unstructured text/binary variant ({typ:?})"
@@ -3280,7 +4266,7 @@ impl TypeScriptBridgeGenerator {
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
-            | SchemaType::Stream { .. } => Err(anyhow!(
+            | SchemaType::Stream { inner: None, .. } => Err(anyhow!(
                 "Cannot emit TypeScript type definition for unsupported schema variant: {typ:?}"
             )),
         }
@@ -3339,5 +4325,74 @@ impl TypeScriptBridgeGenerator {
     /// These are internal generated names, not user-facing API names, so always use PascalCase.
     fn to_method_pascal(&self, name: &str) -> String {
         name.to_upper_camel_case()
+    }
+}
+
+#[cfg(test)]
+mod streaming_tests {
+    use super::*;
+    use golem_common::model::Empty;
+    use golem_common::model::agent::{AgentTypeName, Snapshotting};
+    use golem_common::schema::{AgentConstructorSchema, NamedField, SchemaGraph};
+    use tempfile::TempDir;
+    use test_r::test;
+
+    #[test]
+    fn external_recursive_streaming_method_uses_websocket_only_for_direct_invocation() {
+        let nested_input = SchemaType::list(SchemaType::stream(Some(SchemaType::binary(
+            BinaryRestrictions::default(),
+        ))));
+        let recursive_output = SchemaType::option(SchemaType::stream(Some(SchemaType::list(
+            SchemaType::stream(Some(SchemaType::u8())),
+        ))));
+        let agent_type = AgentTypeSchema {
+            type_name: AgentTypeName("StreamingFixture".to_string()),
+            description: String::new(),
+            source_language: "rust".to_string(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters(vec![]),
+            },
+            methods: vec![AgentMethodSchema {
+                name: "exchange".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters(vec![NamedField::user_supplied(
+                    "lanes",
+                    nested_input,
+                )]),
+                output_schema: OutputSchema::Single(Box::new(recursive_output)),
+                http_endpoint: vec![],
+                read_only: None,
+            }],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![],
+        };
+        let dir = TempDir::new().unwrap();
+        let target = Utf8Path::from_path(dir.path()).unwrap();
+        let mut generator = TypeScriptBridgeGenerator::new(agent_type, target, false).unwrap();
+        generator.generate().unwrap();
+
+        let client = std::fs::read_to_string(target.join("streaming-fixture-client.ts")).unwrap();
+        assert!(
+            client.contains("base.AgentStream<base.AgentBinary>[]"),
+            "{client}"
+        );
+        assert!(
+            client.contains("base.AgentStream<base.AgentStream<number>[]> | undefined"),
+            "{client}"
+        );
+        assert!(
+            client.contains("base.createStreamingRemoteMethod"),
+            "{client}"
+        );
+        assert!(!client.contains("readonly exchange:") || !client.contains("exchange.trigger"));
+        assert!(!client.contains("exchange.schedule"));
     }
 }

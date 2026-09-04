@@ -11,6 +11,7 @@ Run Golem benchmarks with distributed tracing enabled and analyze the resulting 
 
 - Docker and Docker Compose installed
 - The monitoring stack defined in `integration-tests/monitoring/docker-compose.yml`
+- The benchmark WASM components built with `cargo make build-benchmark-components` (see Step 1.5)
 - The Golem service binaries built with **release** profile: `cargo build --release -p golem-worker-executor ...` (see Step 1.5)
 - The benchmark runner binary built with **benchmarks** profile: `cargo build --profile benchmarks -p integration-tests --bin benchmarks` (see Step 1.5)
 
@@ -30,7 +31,16 @@ This starts:
 
 ## Step 1.5: Build Binaries
 
-Two separate builds are required:
+Build the benchmark components and both sets of native binaries from the repository root.
+
+### Benchmark components
+
+```shell
+cargo make build-benchmark-components
+```
+
+This builds the WASM components selected by the `benchmarks` component group. Rebuild them when
+their sources, SDKs, WIT inputs, or component build tooling change.
 
 ### Service binaries (release profile)
 
@@ -98,15 +108,15 @@ Run the benchmark using the benchmarks-profile binary:
 
 | Name | Description | Recommended quick-run parameters |
 |------|-------------|----------------------------------|
-| `cold-start-unknown-small` | First-time invocation of a never-instantiated small component | `--size 1,5,10 --length 2 --cluster-size 1` (with and without `--disable-compilation-cache`) |
-| `cold-start-unknown-medium` | First-time invocation of a never-instantiated medium component | `--size 1,5,10 --length 5 --cluster-size 1` (with and without `--disable-compilation-cache`) |
-| `latency-small` | Cold and hot invocation latency for a small component | `--size 100,500,1000 --length 2 --cluster-size 1` |
-| `latency-medium` | Cold and hot invocation latency for a medium component | `--size 100,500,1000 --length 5 --cluster-size 1` |
-| `sleep` | Measures sleep/suspend overhead | `--size 10,100,500 --length 10000 --cluster-size 1` |
-| `durability-overhead` | Measures the overhead of durable execution | `--size 10,100,1000 --length 5000 --cluster-size 1` |
-| `throughput-echo` | Throughput benchmark with echo workload | `--size 1,10,100 --length 1000 --cluster-size 1,5` |
-| `throughput-large-input` | Throughput benchmark with large input payloads | `--size 1,10 --length 100,10000,100000 --cluster-size 1,5` |
-| `throughput-cpu-intensive` | Throughput benchmark with CPU-intensive workload | `--size 1,10 --length 100 --cluster-size 1,5` |
+| `cold-start-unknown-small` | First-time invocation of a never-instantiated small component | `--size 1 --size 5 --size 10 --length 2 --cluster-size 1` (with and without `--disable-compilation-cache`) |
+| `cold-start-unknown-medium` | First-time invocation of a never-instantiated medium component | `--size 1 --size 5 --size 10 --length 5 --cluster-size 1` (with and without `--disable-compilation-cache`) |
+| `latency-small` | Cold and hot invocation latency for a small component | `--size 100 --size 500 --size 1000 --length 2 --cluster-size 1` |
+| `latency-medium` | Cold and hot invocation latency for a medium component | `--size 100 --size 500 --size 1000 --length 5 --cluster-size 1` |
+| `sleep` | Measures sleep/suspend overhead | `--size 10 --size 100 --size 500 --length 10000 --cluster-size 1` |
+| `durability-overhead` | Measures the overhead of durable execution | `--size 10 --size 100 --size 1000 --length 5000 --cluster-size 1` |
+| `throughput-echo` | Throughput benchmark with echo workload | `--size 1 --size 10 --size 100 --length 1000 --cluster-size 1 --cluster-size 5` |
+| `throughput-large-input` | Throughput benchmark with large input payloads | `--size 1 --size 10 --length 100 --length 10000 --length 100000 --cluster-size 1 --cluster-size 5` |
+| `throughput-cpu-intensive` | Throughput benchmark with CPU-intensive workload | `--size 1 --size 10 --length 100 --cluster-size 1 --cluster-size 5` |
 
 ### Example: single benchmark with tracing
 
@@ -130,7 +140,8 @@ Benchmark suites are YAML files in `integration-tests/benchmark_suites/`. They d
 ./target/benchmarks/benchmarks \
   --otlp \
   suite \
-  --path integration-tests/benchmark_suites/quick-all.yaml
+  integration-tests/benchmark_suites/quick-all.yaml \
+  spawned
 ```
 
 Available suites:
@@ -143,8 +154,9 @@ Suite results can be saved to JSON:
 ./target/benchmarks/benchmarks \
   --otlp \
   suite \
-  --path integration-tests/benchmark_suites/quick-all.yaml \
-  --save-to-json tmp/benchmark-results.json
+  --save-to-json tmp/benchmark-results.json \
+  integration-tests/benchmark_suites/quick-all.yaml \
+  spawned
 ```
 
 ### Additional CLI flags

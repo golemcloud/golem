@@ -111,6 +111,7 @@ use golem_registry_service::services::{
     permission_share::PermissionShareService,
     plan::PlanService,
 };
+use golem_service_base::clients::registry::ResourceUsageMetering;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::db::{postgres::PostgresPool, sqlite::SqlitePool};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
@@ -4275,7 +4276,9 @@ pub async fn test_account_usage(deps: &Deps) {
     }
 }
 
-pub async fn test_storage_usage_history(deps: &Deps) {
+pub async fn test_account_usage_history(deps: &Deps) {
+    use golem_service_base::model::auth::AuthCtx;
+
     let account = deps.create_account().await;
     let previous_month = SqlDateTime::new(Utc::now() - chrono::Duration::days(40));
     let older_month = SqlDateTime::new(Utc::now() - chrono::Duration::days(80));
@@ -4288,6 +4291,14 @@ pub async fn test_storage_usage_history(deps: &Deps) {
     usage.add_change(UsageType::MonthlyDurableAgentStorageByteSeconds, 123);
     usage.add_change(UsageType::MonthlyEphemeralStorageByteSeconds, 456);
     usage.add_change(UsageType::MonthlyGasLimit, 789);
+    usage.add_change(UsageType::MonthlyMemoryGbSeconds, 321);
+    usage.metering = Some(
+        golem_service_base::clients::registry::ResourceUsageMetering {
+            compute: true,
+            memory: false,
+            filesystem: true,
+        },
+    );
     deps.account_usage_repo.add(&usage).await.unwrap();
 
     let mut older_usage = deps
@@ -4301,9 +4312,9 @@ pub async fn test_storage_usage_history(deps: &Deps) {
 
     let history = deps
         .account_usage_repo
-        .get_storage_history(
+        .get_usage_history(
             account.revision.account_id,
-            golem_common::model::account_usage::StorageUsagePeriod {
+            golem_common::model::account_usage::AccountUsagePeriod {
                 year: Utc::now().year(),
                 month: Utc::now().month(),
             },
@@ -4316,6 +4327,27 @@ pub async fn test_storage_usage_history(deps: &Deps) {
     assert_eq!(history[0].durable_storage_byte_seconds, 123);
     assert_eq!(history[0].ephemeral_storage_byte_seconds, 456);
     assert_eq!(history[0].compute_fuel, 789);
+    assert_eq!(history[0].memory_gb_seconds, 321);
+    assert_eq!(
+        history[0].metering,
+        Some(ResourceUsageMetering {
+            compute: true,
+            memory: false,
+            filesystem: true,
+        })
+    );
+
+    let service_history = deps
+        .account_usage_service()
+        .get_usage_history(AccountId(account.revision.account_id), 1, &AuthCtx::System)
+        .await
+        .unwrap();
+    assert_eq!(service_history.len(), 1);
+    assert_eq!(service_history[0].usage.memory_gb_seconds, 321);
+    assert_eq!(
+        service_history[0].usage.metering.memory,
+        golem_common::model::account_usage::MeteringStatus::Disabled
+    );
 }
 
 fn compare_created_to_requested_account(
@@ -5474,6 +5506,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     let result = svc
@@ -5507,6 +5540,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     let result = svc
@@ -5531,6 +5565,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     let result = svc
@@ -5554,6 +5589,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 123,
             ephemeral_storage_byte_seconds_delta: 456,
             memory_gb_seconds_delta: 12,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     svc.update_resource_usage(updates, &AuthCtx::System)
@@ -5570,6 +5606,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 10,
             ephemeral_storage_byte_seconds_delta: 20,
             memory_gb_seconds_delta: 3,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     svc.update_resource_usage(updates, &AuthCtx::System)
@@ -5628,6 +5665,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     let result = svc
@@ -5661,6 +5699,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     let result = svc
@@ -5685,6 +5724,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     let result = svc
@@ -5722,6 +5762,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     http_updates.insert(
@@ -5733,6 +5774,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     let result = svc
@@ -5764,6 +5806,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     rpc_updates.insert(
@@ -5775,6 +5818,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
     let result = svc

@@ -1,6 +1,10 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "golemcloud/golem_sdk/interface/golem/quota/types"
 
+import {
+  "moonbitlang/core/debug",
+}
+
 // Values
 pub fn merge(@golemcloud/golem_sdk/interface/golem/core/types.QuotaToken, @golemcloud/golem_sdk/interface/golem/core/types.QuotaToken) -> Unit
 
@@ -15,13 +19,12 @@ pub fn split(@golemcloud/golem_sdk/interface/golem/core/types.QuotaToken, UInt64
 // Types and methods
 pub(all) struct FailedReservation {
   estimated_wait_nanos : UInt64?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct Reservation(Int) derive(Eq, Show)
+pub(all) struct Reservation(Int) derive(Eq, @debug.Debug)
 pub fn Reservation::commit(Self, UInt64) -> Unit
 pub fn Reservation::drop(Self) -> Unit
 
 // Type aliases
 
 // Traits
-

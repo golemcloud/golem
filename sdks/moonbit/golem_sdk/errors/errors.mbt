@@ -18,11 +18,9 @@ pub async fn[T : @schema.IntoSchema] custom_error_of(
   value : T,
 ) -> @common.AgentError {
   let typed = @schema.try_into_typed_schema_value(value)
-  let wire = @model.typed_schema_value_to_wit_async(typed) catch {
-    error => {
-      typed.value.release_resources(@model_host.resource_drops())
-      raise error
-    }
+  let wire = {
+    errdefer typed.value.release_resources(@model_host.resource_drops())
+    @model.typed_schema_value_to_wit_async(typed)
   }
   @common.AgentError::CustomError(wire)
 }
@@ -34,14 +32,14 @@ pub async fn[T : @schema.IntoSchema] custom_error_of(
 pub fn custom_error(message : String) -> @common.AgentError {
   let typed = try @schema.try_into_typed_schema_value(message) catch {
     // Unreachable: a `String` schema graph is always well-formed and encodable.
-    e => abort("failed to encode custom agent error: \{e}")
+    e => abort("failed to encode custom agent error: \{repr(e)}")
   } noraise {
     value => value
   }
   try
     @common.AgentError::CustomError(@model.typed_schema_value_to_wit(typed))
   catch {
-    e => abort("failed to encode custom agent error: \{e}")
+    e => abort("failed to encode custom agent error: \{repr(e)}")
   } noraise {
     error => error
   }
@@ -94,14 +92,8 @@ fn[T : @schema.FromSchema] decode_custom_error_with_resource_drops(
   match error {
     CustomError(typed) => {
       let decoded = @model.typed_schema_value_from_wit(typed, drops)
-      try Some(@schema.from_value_as(decoded.value)) catch {
-        error => {
-          decoded.value.release_resources(drops)
-          raise error
-        }
-      } noraise {
-        value => value
-      }
+      errdefer decoded.value.release_resources(drops)
+      Some(@schema.from_value_as(decoded.value))
     }
     _ => None
   }

@@ -389,12 +389,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
 
         let mut subscription = self.events().subscribe();
-        Worker::start_if_needed(worker.clone()).await?;
-        if worker.is_loading() {
+        let start_attempt = Worker::start_if_needed(worker.clone()).await?;
+        if let Some(start_attempt) = start_attempt {
             match subscription
                 .wait_for(|event| match event {
-                    Event::WorkerLoaded { agent_id, result }
-                        if agent_id == &owned_agent_id.agent_id =>
+                    Event::WorkerLoaded {
+                        agent_id,
+                        start_attempt: event_attempt,
+                        result,
+                    } if agent_id == &owned_agent_id.agent_id
+                        && event_attempt == &start_attempt =>
                     {
                         Some(result.clone())
                     }

@@ -18,21 +18,20 @@ use self::error::LimitExceededError;
 use super::account::{AccountError, AccountService};
 use crate::repo::account_usage::AccountUsageRepo;
 use crate::repo::model::account_usage::{
-    AccountUsage as RepoAccountUsage, StorageUsageHistoryRecord, UsageType,
-    byte_seconds_to_gb_month, fuel_to_gcu,
+    AccountUsage as RepoAccountUsage, AccountUsageRecord, UsageType,
 };
-use crate::repo::model::plan::PlanRecord;
 use crate::services::account_usage::error::AccountUsageError;
 use chrono::{TimeZone, Utc};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::account_usage::{
-    StorageLimit, StorageUsage, StorageUsageHistory, StorageUsageMetrics, StorageUsagePeriod,
+    AccountUsage, AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod, MeteringStatus,
+    byte_seconds_to_gb_month, fuel_to_gcu,
 };
 use golem_common::model::card::owner::AccountOwnerPattern;
 use golem_common::model::card::{
     AccountUsageResourcePattern, AccountUsageVerb, ClassPermissionTarget, PermissionTarget,
 };
-use golem_common::model::plan::PlanName;
+use golem_service_base::clients::registry::ResourceUsageMetering;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::AuthorizationError;
 use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
@@ -48,6 +47,7 @@ pub struct ResourceUsageUpdate {
     pub durable_storage_byte_seconds_delta: i64,
     pub ephemeral_storage_byte_seconds_delta: i64,
     pub memory_gb_seconds_delta: i64,
+    pub metering: ResourceUsageMetering,
 }
 
 pub struct AccountUsageService {
@@ -216,6 +216,7 @@ impl AccountUsageService {
                         UsageType::MonthlyMemoryGbSeconds,
                         update.memory_gb_seconds_delta,
                     );
+                    account_usage.metering = Some(update.metering);
 
                     tracing::debug!(
                         %account_id,
@@ -295,61 +296,49 @@ impl AccountUsageService {
         Ok(account_usage.resource_limits())
     }
 
-    pub async fn get_storage_usage(
+    pub async fn get_usage(
         &self,
         account_id: AccountId,
         auth: &AuthCtx,
-    ) -> Result<StorageUsage, AccountUsageError> {
-        self.get_storage_usage_for_period(account_id, StorageUsagePeriod::current(), auth)
+    ) -> Result<AccountUsage, AccountUsageError> {
+        self.get_usage_for_period(account_id, AccountUsagePeriod::current(), auth)
             .await
     }
 
-    pub async fn get_storage_usage_for_period(
+    pub async fn get_usage_for_period(
         &self,
         account_id: AccountId,
-        period: StorageUsagePeriod,
+        period: AccountUsagePeriod,
         auth: &AuthCtx,
-    ) -> Result<StorageUsage, AccountUsageError> {
-        self.authorize_storage_usage(account_id, auth).await?;
-        let account_usage = self.get_account_usage_at(account_id, None, period).await?;
-        Ok(Self::storage_usage(
-            account_id,
-            &account_usage.plan,
-            account_usage.storage_limit.clone(),
-            account_usage.max_memory_per_worker.clone(),
-            account_usage.monthly_memory_gb_seconds.clone(),
-            StorageUsageHistoryRecord {
-                period,
-                compute_fuel: account_usage.usage(UsageType::MonthlyGasLimit),
-                memory_gb_seconds: account_usage.usage(UsageType::MonthlyMemoryGbSeconds),
-                durable_storage_byte_seconds: account_usage
-                    .usage(UsageType::MonthlyDurableAgentStorageByteSeconds),
-                ephemeral_storage_byte_seconds: account_usage
-                    .usage(UsageType::MonthlyEphemeralStorageByteSeconds),
-            },
-        ))
+    ) -> Result<AccountUsage, AccountUsageError> {
+        self.authorize_usage(account_id, auth).await?;
+        let report = self
+            .account_usage_repo
+            .get_usage_report(account_id.0, period)
+            .await?;
+        Ok(Self::usage(account_id, report))
     }
 
-    pub async fn get_storage_usage_history(
+    pub async fn get_usage_history(
         &self,
         account_id: AccountId,
         last: usize,
         auth: &AuthCtx,
-    ) -> Result<Vec<StorageUsageHistory>, AccountUsageError> {
-        let current_period = StorageUsagePeriod::current();
-        self.authorize_storage_usage(account_id, auth).await?;
+    ) -> Result<Vec<AccountUsage>, AccountUsageError> {
+        let current_period = AccountUsagePeriod::current();
+        self.authorize_usage(account_id, auth).await?;
         let history = self
             .account_usage_repo
-            .get_storage_history(account_id.0, current_period, last)
+            .get_usage_history(account_id.0, current_period, last)
             .await?;
 
         Ok(history
             .into_iter()
-            .map(|history| Self::storage_usage_history(account_id, history))
+            .map(|report| Self::usage(account_id, report))
             .collect())
     }
 
-    async fn authorize_storage_usage(
+    async fn authorize_usage(
         &self,
         account_id: AccountId,
         auth: &AuthCtx,
@@ -363,44 +352,39 @@ impl AccountUsageService {
         Ok(())
     }
 
-    fn storage_usage(
-        account_id: AccountId,
-        plan: &PlanRecord,
-        storage_limit: StorageLimit,
-        max_memory_per_agent: golem_common::model::account_usage::MemoryLimit,
-        monthly_memory_gb_seconds: golem_common::model::account_usage::MemoryLimit,
-        usage: StorageUsageHistoryRecord,
-    ) -> StorageUsage {
-        StorageUsage {
+    fn usage(account_id: AccountId, report: AccountUsageRecord) -> AccountUsage {
+        let metering = report.metering.map_or_else(
+            || AccountUsageMetering {
+                compute: MeteringStatus::Unknown,
+                memory: MeteringStatus::Unknown,
+                durable_storage: MeteringStatus::Unknown,
+                ephemeral_storage: MeteringStatus::Unknown,
+            },
+            |metering| {
+                let filesystem = metering_status(metering.filesystem);
+                AccountUsageMetering {
+                    compute: metering_status(metering.compute),
+                    memory: metering_status(metering.memory),
+                    durable_storage: filesystem,
+                    ephemeral_storage: filesystem,
+                }
+            },
+        );
+        AccountUsage {
             account_id,
-            plan_id: plan.plan_id.into(),
-            plan_name: PlanName(plan.name.clone()),
-            usage: Self::storage_usage_metrics(usage),
-            max_storage_per_agent: storage_limit,
-            max_memory_per_agent,
-            monthly_memory_gb_seconds,
-        }
-    }
-
-    fn storage_usage_history(
-        account_id: AccountId,
-        usage: StorageUsageHistoryRecord,
-    ) -> StorageUsageHistory {
-        StorageUsageHistory {
-            account_id,
-            usage: Self::storage_usage_metrics(usage),
-        }
-    }
-
-    fn storage_usage_metrics(usage: StorageUsageHistoryRecord) -> StorageUsageMetrics {
-        StorageUsageMetrics {
-            period: usage.period,
-            compute_gcu: fuel_to_gcu(usage.compute_fuel),
-            memory_gb_seconds: usage.memory_gb_seconds,
-            durable_storage_gb_month: byte_seconds_to_gb_month(usage.durable_storage_byte_seconds),
-            ephemeral_storage_gb_month: byte_seconds_to_gb_month(
-                usage.ephemeral_storage_byte_seconds,
-            ),
+            usage: AccountUsageMetrics {
+                period: report.period,
+                as_of: report.as_of.unwrap_or_else(Utc::now),
+                compute_gcu: fuel_to_gcu(report.compute_fuel),
+                memory_gb_seconds: report.memory_gb_seconds,
+                durable_storage_gb_month: byte_seconds_to_gb_month(
+                    report.durable_storage_byte_seconds,
+                ),
+                ephemeral_storage_gb_month: byte_seconds_to_gb_month(
+                    report.ephemeral_storage_byte_seconds,
+                ),
+                metering,
+            },
         }
     }
 
@@ -409,7 +393,7 @@ impl AccountUsageService {
         account_id: AccountId,
         usage_type: Option<UsageType>,
     ) -> Result<RepoAccountUsage, AccountUsageError> {
-        self.get_account_usage_at(account_id, usage_type, StorageUsagePeriod::current())
+        self.get_account_usage_at(account_id, usage_type, AccountUsagePeriod::current())
             .await
     }
 
@@ -417,12 +401,12 @@ impl AccountUsageService {
         &self,
         account_id: AccountId,
         usage_type: Option<UsageType>,
-        period: StorageUsagePeriod,
+        period: AccountUsagePeriod,
     ) -> Result<RepoAccountUsage, AccountUsageError> {
         let date = SqlDateTime::new(
             Utc.with_ymd_and_hms(period.year, period.month, 1, 0, 0, 0)
                 .single()
-                .expect("validated storage usage period"),
+                .expect("validated account usage period"),
         );
         let usage = match usage_type {
             Some(usage_type) => {
@@ -454,6 +438,14 @@ impl AccountUsageService {
         }
 
         Ok(())
+    }
+}
+
+fn metering_status(enabled: bool) -> MeteringStatus {
+    if enabled {
+        MeteringStatus::Enabled
+    } else {
+        MeteringStatus::Disabled
     }
 }
 
@@ -494,6 +486,7 @@ mod tests {
     use super::*;
     use crate::repo::model::account_usage::{AccountUsage, UsageType};
     use crate::repo::model::plan::PlanRecord;
+    use golem_common::model::account_usage::StorageLimit;
     use golem_service_base::repo::NumericU64;
     use std::collections::BTreeMap;
     use test_r::test;
@@ -557,6 +550,7 @@ mod tests {
                 ceiling: u64::MAX,
                 user_configurable: false,
             },
+            metering: None,
             changes: BTreeMap::new(),
         }
     }

@@ -48,8 +48,11 @@ async fn my_action(
 
 ### 3. Request/response types
 
-- Define types in `golem-common/src/model/` with `poem_openapi::Object` derive
-- If the type is used in the generated client, add it to the type mapping in `golem-client/build.rs`
+- Follow the neighboring API's ownership boundary: shared domain/API types live in
+  `golem-common`, while endpoint-specific request/response types can live beside the API module.
+  Derive the required `poem_openapi` traits there.
+- Endpoint-local OpenAPI types are generated into the client normally. Add a mapping in
+  `golem-client/build.rs` only when client generation should reuse an existing shared Rust type.
 
 ## After Modifying Endpoints
 
@@ -77,7 +80,7 @@ The build script declares `rerun-if-changed` for both the root and crate-local Y
 
 ### Step 3: If new types are used in the client
 
-Add type mappings in `golem-client/build.rs` to the `gen()` call's type replacement list. This maps OpenAPI schema names to existing Rust types from `golem-common` or `golem-wasm`.
+Add type mappings in `golem-client/build.rs` to the `gen()` call's type replacement list. This maps OpenAPI schema names to existing shared Rust types, usually from `golem-common`.
 
 ### Step 4: Verify affected behavior
 
@@ -94,7 +97,7 @@ Do not require `cargo make build` after these targeted checks unless shared requ
 
 1. Endpoint method added with `#[oai]` annotation
 2. New API struct registered in `api/mod.rs` `Apis` tuple and `make_open_api_service` (if applicable)
-3. Request/response types defined in `golem-common` with `poem_openapi::Object`
+3. Request/response types placed beside the endpoint or in `golem-common` according to neighboring ownership, with the required `poem_openapi` derives
 4. Type mappings added in `golem-client/build.rs` (if applicable)
 5. `cargo make generate-openapi` run — staged changes include both `openapi/*.yaml` **and** `docs/src/content/next/rest-api/*.mdx`
 6. `cargo build -p golem-client` run

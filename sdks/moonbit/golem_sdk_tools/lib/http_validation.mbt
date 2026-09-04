@@ -1,6 +1,6 @@
 ///|
 fn string_to_lower(s : String) -> String {
-  let sb = StringBuilder::new()
+  let sb = StringBuilder()
   for ch in s {
     sb.write_char(ch.to_ascii_lowercase())
   }

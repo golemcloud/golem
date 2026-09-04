@@ -100,12 +100,30 @@ impl GeneratedPackage {
             .arg("check")
             .arg("--target")
             .arg("native")
+            .arg("--deny-warn")
             .current_dir(self.module_dir())
             .output()
             .expect("failed to run moon; is it installed?");
         assert!(
             output.status.success(),
             "moon check failed in {}:\nstdout:\n{}\nstderr:\n{}",
+            self.module_dir(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    fn test_native(&self) {
+        let output = std::process::Command::new("moon")
+            .arg("test")
+            .arg("--target")
+            .arg("native")
+            .current_dir(self.module_dir())
+            .output()
+            .expect("failed to run moon; is it installed?");
+        assert!(
+            output.status.success(),
+            "moon test failed in {}:\nstdout:\n{}\nstderr:\n{}",
             self.module_dir(),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
@@ -162,6 +180,7 @@ fn moon_check_wasm(path: &std::path::Path) {
         .arg("check")
         .arg("--target")
         .arg("wasm")
+        .arg("--deny-warn")
         .output()
         .expect("failed to run moon; is it installed?");
     assert!(
@@ -536,6 +555,25 @@ fn guest_tool_mode_moon_checks_fixed_codec_type_name_collision() {
     moon_check_wasm(dir.path());
 }
 
+// PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
+#[test]
+fn guest_tool_mode_marks_substring_collision_parameter_used() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let mut tool = phase_eight_tool();
+    tool.commands.nodes[0]
+        .body
+        .as_mut()
+        .unwrap()
+        .positionals
+        .fixed[3]
+        .name = "mod".into();
+    let mut generator = MoonBitToolBridgeGenerator::new(tool, target, true).unwrap();
+    generator.generate().unwrap();
+
+    moon_check_wasm(dir.path());
+}
+
 #[test]
 fn guest_mode_reserves_unstructured_support_type_names() {
     let user_type = def(
@@ -558,6 +596,7 @@ fn guest_mode_reserves_unstructured_support_type_names() {
         .arg("check")
         .arg("--target")
         .arg("wasm")
+        .arg("--deny-warn")
         .output()
         .expect("failed to run moon; is it installed?");
     assert!(
@@ -573,7 +612,7 @@ fn guest_mode_emits_standalone_schema_value_codecs_and_moon_checks() {
     let guest = generate_without_check(kitchen_sink_agent(), MoonBitBridgeMode::GuestWasmRpc);
     let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
 
-    assert!(source.contains("pub suberror CodecError"));
+    assert!(source.contains("pub(all) suberror CodecError"));
     assert!(source.contains("-> @model.SchemaValue"));
     assert!(source.contains("@model.SchemaValue::FixedList("));
     assert!(source.contains("@model.SchemaValue::Datetime("));
@@ -588,6 +627,7 @@ fn guest_mode_emits_standalone_schema_value_codecs_and_moon_checks() {
         .arg("check")
         .arg("--target")
         .arg("wasm")
+        .arg("--deny-warn")
         .output()
         .expect("failed to run moon; is it installed?");
     assert!(
@@ -1067,9 +1107,11 @@ fn guest_mode_unstructured_text_encoder_rejects_disallowed_language() {
     std::fs::write(
         guest.path().join("client/unstructured_wbtest.mbt"),
         r#"test "unstructured text encoder enforces language restrictions" {
-  let result = try? encode_Media({ body: Inline("bonjour", Some("fr")) })
-  guard result is Err(CodecError(_)) else {
-    fail("expected CodecError for a disallowed language")
+  try encode_Media({ body: Inline("bonjour", Some("fr")) }) catch {
+    CodecError(_) => ()
+    _ => fail("expected CodecError for a disallowed language")
+  } noraise {
+    _ => fail("expected CodecError for a disallowed language")
   }
 }
 "#,
@@ -1225,9 +1267,11 @@ fn guest_mode_fixed_list_encoder_rejects_wrong_length() {
     std::fs::write(
         guest.path().join("client/fixed_wbtest.mbt"),
         r#"test "fixed-list length is checked" {
-  let result = try? encode_Fixed({ values: [1U] })
-  guard result is Err(CodecError(_)) else {
-    fail("expected CodecError")
+  try encode_Fixed({ values: [1U] }) catch {
+    CodecError(_) => ()
+    _ => fail("expected CodecError")
+  } noraise {
+    _ => fail("expected CodecError")
   }
 }
 "#,
@@ -1268,9 +1312,11 @@ fn guest_mode_narrow_integer_encoder_rejects_out_of_range_value() {
     std::fs::write(
         guest.path().join("client/narrow_wbtest.mbt"),
         r#"test "s8 range is checked" {
-  let result = try? encode_Narrow({ value: 128 })
-  guard result is Err(CodecError(_)) else {
-    fail("expected CodecError for an out-of-range s8")
+  try encode_Narrow({ value: 128 }) catch {
+    CodecError(_) => ()
+    _ => fail("expected CodecError for an out-of-range s8")
+  } noraise {
+    _ => fail("expected CodecError for an out-of-range s8")
   }
 }
 "#,
@@ -1315,9 +1361,11 @@ fn guest_mode_narrow_integer_decoder_rejects_out_of_range_values() {
     std::fs::write(
         guest.path().join("client/narrow_decode_wbtest.mbt"),
         r#"fn assert_decode_rejected(value : @model.SchemaValue) -> Unit raise {
-  let result = try? decode_Narrow(value)
-  guard result is Err(CodecError(_)) else {
-    fail("expected CodecError for an out-of-range narrow integer")
+  try decode_Narrow(value) catch {
+    CodecError(_) => ()
+    _ => fail("expected CodecError for an out-of-range narrow integer")
+  } noraise {
+    _ => fail("expected CodecError for an out-of-range narrow integer")
   }
 }
 
@@ -1511,7 +1559,7 @@ fn generated_project_layout_is_correct(#[tagged_as("counter_agent")] pkg: &Gener
 
     let mod_json = std::fs::read_to_string(dir.join("moon.mod.json")).unwrap();
     assert!(mod_json.contains("\"name\": \"counter-agent-client\""));
-    assert!(mod_json.contains("\"moonbitlang/async\": \"0.19.2\""));
+    assert!(mod_json.contains("\"moonbitlang/async\": \"0.21.2\""));
 
     for runtime_file in [
         "schema_value.mbt",
@@ -2078,4 +2126,214 @@ fn unstructured_text_and_binary_restrictions_are_enforced() {
     assert!(client.contains(
         "@runtime.unstructured_binary_from_schema_value(\"output\", value, [\"image/png\"])"
     ));
+}
+
+#[test]
+fn external_recursive_stream_client_compiles() {
+    let recursive = TypeId::new("streaming.Node");
+    let mut agent_type = agent(
+        "StreamingAgent",
+        "rust",
+        vec![],
+        vec![method(
+            "exchange",
+            vec![field(
+                "roots",
+                SchemaType::list(SchemaType::ref_to(recursive.clone())),
+            )],
+            Some(SchemaType::option(SchemaType::stream(Some(
+                SchemaType::binary(BinaryRestrictions::default()),
+            )))),
+        )],
+        vec![def(
+            "streaming.Node",
+            SchemaType::record(vec![
+                named_field("name", SchemaType::string()),
+                named_field(
+                    "children",
+                    SchemaType::list(SchemaType::ref_to(TypeId::new("streaming.Node"))),
+                ),
+                named_field(
+                    "events",
+                    SchemaType::stream(Some(SchemaType::stream(Some(SchemaType::u8())))),
+                ),
+            ]),
+        )],
+        AgentMode::Durable,
+    );
+    agent_type.source_language = "rust".to_string();
+    let pkg = GeneratedPackage::new(agent_type);
+    let client = pkg.client_source();
+    assert!(client.contains("@runtime.invoke_streaming_agent"));
+    assert!(client.contains("wire_kind=\"u8\""));
+    assert!(!client.contains("trigger_exchange"));
+    assert!(!client.contains("schedule_exchange"));
+    let runtime_manifest =
+        std::fs::read_to_string(pkg.module_dir().join("runtime/moon.pkg")).unwrap();
+    assert!(runtime_manifest.contains("\"streaming-agent-client/runtime/ws_adapter\" @websocket"));
+    assert!(!runtime_manifest.contains("__GOLEM_MODULE__"));
+    assert!(
+        pkg.module_dir()
+            .join("runtime/ws_adapter/client.mbt")
+            .exists()
+    );
+    std::fs::copy(
+        workspace_root()
+            .unwrap()
+            .join("golem-client/tests/fixtures/stream-session-v1/binary-messages.json"),
+        pkg.module_dir().join("binary-messages.json"),
+    )
+    .unwrap();
+    for fixture in ["json-messages.json", "malformed.json"] {
+        std::fs::copy(
+            workspace_root()
+                .unwrap()
+                .join("golem-client/tests/fixtures/stream-session-v1")
+                .join(fixture),
+            pkg.module_dir().join(fixture),
+        )
+        .unwrap();
+    }
+    let mod_path = pkg.module_dir().join("moon.mod.json");
+    let mut module: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&mod_path).unwrap()).unwrap();
+    module["deps"]["moonbitlang/x"] = serde_json::json!("0.4.39");
+    std::fs::write(&mod_path, serde_json::to_string_pretty(&module).unwrap()).unwrap();
+    let manifest_path = pkg.module_dir().join("runtime/moon.pkg");
+    let mut manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    manifest = manifest.replacen("import {", "import {\n  \"moonbitlang/x/fs\" @fs,", 1);
+    std::fs::write(&manifest_path, manifest).unwrap();
+    std::fs::write(
+        pkg.module_dir().join("runtime/frozen_fixture_wbtest.mbt"),
+        r#"///|
+test "binary codec matches every frozen public v1 frame" {
+  let fixture = expect_object(parse_strict_json(@fs.read_file_to_string("binary-messages.json")))
+  let vectors = expect_array(get_field(fixture, "vectors"))
+  for vector in vectors {
+    let object = expect_object(vector)
+    ignore(expect_string(get_field(object, "name")))
+    let metadata = parse_strict_json(expect_string(get_field(object, "metadata")))
+    let payload_hex = expect_string(get_field(object, "payloadHex"))
+    let payload = Bytes::makei(payload_hex.length() / 2, i => {
+      let pair = payload_hex.substring(start=i * 2, end=i * 2 + 2)
+      @string.parse_int(pair[:], base=16).to_byte()
+    })
+    let actual = pvc_base64_encode(encode_binary_envelope(metadata, payload))
+    assert_true(actual == expect_string(get_field(object, "frameBase64")))
+  }
+}
+
+///|
+test "text codec directly consumes frozen canonical and malformed fixtures" {
+  let messages = expect_object(parse_strict_json(@fs.read_file_to_string("json-messages.json")))
+  for vector in expect_array(get_field(messages, "vectors")) {
+    let canonical = expect_string(get_field(expect_object(vector), "canonical"))
+    assert_eq(parse_strict_json(canonical).stringify(), canonical)
+  }
+  let malformed = expect_object(parse_strict_json(@fs.read_file_to_string("malformed.json")))
+  for vector in expect_array(get_field(malformed, "vectors")) {
+    let object = expect_object(vector)
+    if expect_string(get_field(object, "name")) == "invalid-json" {
+      assert_true((try? parse_strict_json(expect_string(get_field(object, "input")))) is Err(_))
+    }
+  }
+}
+"#,
+    )
+    .unwrap();
+    pkg.test_native();
+}
+
+// GOL-100 requires input ownership to move into an invocation, so a stream
+// already consumed directly must not subsequently be registered as an input.
+#[test]
+fn provisional_consumed_stream_cannot_be_registered_as_invocation_input() {
+    let pkg = GeneratedPackage::new(agent(
+        "AffineStreamAgent",
+        "rust",
+        vec![],
+        vec![method(
+            "consume",
+            vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+            None,
+        )],
+        vec![],
+        AgentMode::Durable,
+    ));
+    std::fs::write(
+        pkg.module_dir()
+            .join("runtime/provisional_affine_wbtest.mbt"),
+        r#"///|
+async test "consumed stream cannot move into an invocation" {
+  let stream = AgentStream::from_next(async fn() { None })
+  ignore(stream.next())
+  let context = StreamEncodeContext::new()
+  inspect(
+    (try? register_input_stream(
+      context,
+      stream,
+      async fn(value) { U8Value(value) },
+      u8_public_codec(),
+    )) is Err(_),
+    content="true",
+  )
+}
+"#,
+    )
+    .unwrap();
+    pkg.test_native();
+}
+
+// GOL-100 requires input ownership to move into an invocation, so application
+// code must not retain cancellation or drop authority after registration.
+#[test]
+fn provisional_invocation_owned_stream_rejects_application_cancel_and_drop() {
+    let pkg = GeneratedPackage::new(agent(
+        "MovedStreamAgent",
+        "rust",
+        vec![],
+        vec![method(
+            "consume",
+            vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+            None,
+        )],
+        vec![],
+        AgentMode::Durable,
+    ));
+    std::fs::write(
+        pkg.module_dir()
+            .join("runtime/provisional_moved_cancel_wbtest.mbt"),
+        r#"///|
+async test "invocation-owned stream rejects application cancellation" {
+  let mut cancellations = 0
+  let cancel_stream = AgentStream::from_next(
+    async fn() { None },
+    on_cancel=async fn(_) { cancellations += 1 },
+  )
+  let drop_stream = AgentStream::from_next(
+    async fn() { None },
+    on_cancel=async fn(_) { cancellations += 1 },
+  )
+  let context = StreamEncodeContext::new()
+  ignore(register_input_stream(
+    context,
+    cancel_stream,
+    async fn(value) { U8Value(value) },
+    u8_public_codec(),
+  ))
+  ignore(register_input_stream(
+    context,
+    drop_stream,
+    async fn(value) { U8Value(value) },
+    u8_public_codec(),
+  ))
+  let cancel_rejected = (try? cancel_stream.cancel()) is Err(_)
+  let drop_rejected = (try? drop_stream.drop()) is Err(_)
+  inspect([cancel_rejected, drop_rejected], content="[true, true]")
+  inspect(cancellations, content="0")
+}
+"#,
+    )
+    .unwrap();
+    pkg.test_native();
 }

@@ -33,7 +33,7 @@ pub mod build_tool {
     pub const CARGO_MIN: &str = "1.94.0";
     pub const NODE_MIN: &str = "24.11.0";
     pub const NPM_MIN: &str = "11.6.2";
-    pub const MOON_MIN: &str = "0.1.20260409";
+    pub const MOON_MIN: &str = "0.1.20260827";
     pub const JAVA_MIN: &str = "17.0.0";
     pub const WASM_TOOLS_MIN: &str = "1.227.1";
 }
@@ -63,15 +63,15 @@ pub mod rust_dep {
 
 pub mod scala_dep {
     pub const SCALA_VERSION: &str = "3.8.2";
-    pub const SCALAJS_PLUGIN_VERSION: &str = "1.20.2";
+    pub const SCALAJS_PLUGIN_VERSION: &str = "1.22.0";
     pub const SBT_VERSION: &str = "1.12.0";
     /// zio-blocks (schema/JSON) library used by the generated Scala bridge
     /// client runtime for JSON parsing and rendering.
-    pub const ZIO_BLOCKS_VERSION: &str = "0.0.43";
+    pub const ZIO_BLOCKS_VERSION: &str = "0.0.51";
 }
 
 pub mod moonbit_dep {
-    pub const ASYNC_VERSION: &str = "0.19.2";
+    pub const ASYNC_VERSION: &str = "0.21.2";
 }
 
 pub mod ai {

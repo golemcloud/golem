@@ -38,7 +38,7 @@ pub fn create() -> WebhookHandler {
     Err(@agent_host.WebhookError::InternalError(message)) =>
       abort("webhook creation failed: " + message)
   }
-  { url, promise_id }
+  { url, promise_id, }
 }
 
 ///|
@@ -56,7 +56,7 @@ pub async fn WebhookHandler::wait(
   self : WebhookHandler,
 ) -> WebhookRequestPayload {
   let data = @api.await_promise(self.promise_id)
-  { payload: data }
+  { payload: data, }
 }
 
 ///|

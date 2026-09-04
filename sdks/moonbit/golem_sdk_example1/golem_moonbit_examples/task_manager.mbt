@@ -26,7 +26,7 @@ struct TaskManager {
 ///|
 /// Creates a new empty task manager
 fn TaskManager::new() -> TaskManager {
-  { tasks: [] }
+  { tasks: [], }
 }
 
 ///|

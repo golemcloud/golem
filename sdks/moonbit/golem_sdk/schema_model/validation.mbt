@@ -30,8 +30,8 @@
 /// `QuantityMinGreaterThanMax`, `QuantityComparisonOverflow`, and
 /// `InvalidTextRegex` — see the file header for the rationale).
 pub suberror SchemaError {
-  DuplicateTypeId(TypeId)
-  DanglingRef(TypeId)
+  DuplicateTypeId(String)
+  DanglingRef(String)
   EmptyVariant
   EmptyEnum
   EmptyUnion
@@ -62,7 +62,7 @@ pub suberror SchemaError {
   /// JSON wire (option-of-option, option-of-union-with-nullable-branch,
   /// option-of-ref-resolving-to-nullable). `inner` is a short description.
   NullableNesting(inner~ : String)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 // ============================================================
 // Driver
@@ -76,7 +76,7 @@ pub fn validate_graph(graph : SchemaGraph) -> Array[SchemaError] {
   let errors : Array[SchemaError] = []
 
   // 1. duplicate type-id pass.
-  let seen_ids : Map[TypeId, Unit] = Map::new()
+  let seen_ids : Map[String, Unit] = Map([])
   for def in graph.defs {
     if !set_insert(seen_ids, def.id) {
       errors.push(DuplicateTypeId(def.id))
@@ -84,7 +84,7 @@ pub fn validate_graph(graph : SchemaGraph) -> Array[SchemaError] {
   }
 
   // 2. set of known ids (for dangling-ref detection).
-  let known : Map[TypeId, Unit] = Map::new()
+  let known : Map[String, Unit] = Map([])
   for def in graph.defs {
     known[def.id] = ()
   }
@@ -104,7 +104,7 @@ pub fn validate_graph(graph : SchemaGraph) -> Array[SchemaError] {
 ///|
 /// Insert `key` into the set. Returns `true` if it was newly inserted, `false`
 /// if it was already present (mirrors Rust `HashSet::insert`).
-fn set_insert(set : Map[TypeId, Unit], key : TypeId) -> Bool {
+fn set_insert(set : Map[String, Unit], key : String) -> Bool {
   if set.contains(key) {
     false
   } else {
@@ -115,7 +115,7 @@ fn set_insert(set : Map[TypeId, Unit], key : TypeId) -> Bool {
 
 ///|
 /// Resolve a named definition's body by id.
-fn lookup_def(graph : SchemaGraph, id : TypeId) -> SchemaType? {
+fn lookup_def(graph : SchemaGraph, id : String) -> SchemaType? {
   for d in graph.defs {
     if d.id == id {
       return Some(d.body)
@@ -132,13 +132,13 @@ fn lookup_def(graph : SchemaGraph, id : TypeId) -> SchemaType? {
 fn check_type(
   graph : SchemaGraph,
   ty : SchemaType,
-  known : Map[TypeId, Unit],
+  known : Map[String, Unit],
   errors : Array[SchemaError],
 ) -> Unit {
   match ty.body {
     Ref(id) => if !known.contains(id) { errors.push(DanglingRef(id)) }
     Record(fields) => {
-      let seen : Map[String, Unit] = Map::new()
+      let seen : Map[String, Unit] = Map([])
       for f in fields {
         if !set_insert(seen, f.name) {
           errors.push(DuplicateFieldName(f.name))
@@ -150,7 +150,7 @@ fn check_type(
       if cases.is_empty() {
         errors.push(EmptyVariant)
       }
-      let seen : Map[String, Unit] = Map::new()
+      let seen : Map[String, Unit] = Map([])
       for c in cases {
         if !set_insert(seen, c.name) {
           errors.push(DuplicateVariantCase(c.name))
@@ -165,7 +165,7 @@ fn check_type(
       if cases.is_empty() {
         errors.push(EmptyEnum)
       }
-      let seen : Map[String, Unit] = Map::new()
+      let seen : Map[String, Unit] = Map([])
       for c in cases {
         if !set_insert(seen, c) {
           errors.push(DuplicateEnumCase(c))
@@ -176,7 +176,7 @@ fn check_type(
       if flags.is_empty() {
         errors.push(EmptyFlags)
       }
-      let seen : Map[String, Unit] = Map::new()
+      let seen : Map[String, Unit] = Map([])
       for fl in flags {
         if !set_insert(seen, fl) {
           errors.push(DuplicateFlagName(fl))
@@ -202,7 +202,7 @@ fn check_type(
       check_type(graph, value, known, errors)
     }
     Option(inner) => {
-      if is_nullable(graph, inner, Map::new()) {
+      if is_nullable(graph, inner, Map([])) {
         errors.push(NullableNesting(inner=describe_nullable(inner)))
       }
       check_type(graph, inner, known, errors)
@@ -246,22 +246,21 @@ fn check_type(
 /// Whether `ty` resolves (through a cycle-aware ref chain) to a primitive type
 /// accepted as a map key.
 fn is_primitive_key_resolved(graph : SchemaGraph, ty : SchemaType) -> Bool {
-  let visited : Map[TypeId, Unit] = Map::new()
-  loop ty {
-    cur =>
-      match cur.body {
-        Ref(id) =>
-          if visited.contains(id) {
-            break false
-          } else {
-            visited[id] = ()
-            match lookup_def(graph, id) {
-              Some(b) => continue b
-              None => break false
-            }
+  let visited : Map[String, Unit] = Map([])
+  for cur = ty {
+    match cur.body {
+      Ref(id) =>
+        if visited.contains(id) {
+          break false
+        } else {
+          visited[id] = ()
+          match lookup_def(graph, id) {
+            Some(b) => continue b
+            None => break false
           }
-        other => break is_primitive_key(other)
-      }
+        }
+      other => break is_primitive_key(other)
+    }
   }
 }
 
@@ -296,7 +295,7 @@ fn is_primitive_key(body : SchemaTypeBody) -> Bool {
 fn is_nullable(
   graph : SchemaGraph,
   ty : SchemaType,
-  visited : Map[TypeId, Unit],
+  visited : Map[String, Unit],
 ) -> Bool {
   match ty.body {
     Option(_) => true
@@ -403,13 +402,13 @@ fn check_binary_restrictions(
 fn validate_union(
   graph : SchemaGraph,
   branches : Array[UnionBranch],
-  known : Map[TypeId, Unit],
+  known : Map[String, Unit],
   errors : Array[SchemaError],
 ) -> Unit {
   if branches.is_empty() {
     errors.push(EmptyUnion)
   }
-  let seen : Map[String, Unit] = Map::new()
+  let seen : Map[String, Unit] = Map([])
   for branch in branches {
     if !set_insert(seen, branch.tag) {
       errors.push(DuplicateUnionTag(branch.tag))
@@ -440,7 +439,7 @@ fn check_union_branch(
   branch : UnionBranch,
   errors : Array[SchemaError],
 ) -> Unit {
-  let shape = resolved_shape(graph, branch.body, Map::new())
+  let shape = resolved_shape(graph, branch.body, Map([]))
   match branch.discriminator {
     @types.Prefix(_) | @types.Suffix(_) | @types.Contains(_) =>
       if !(shape is StringShape) {
@@ -475,8 +474,7 @@ fn check_union_branch(
             Some(field_ty) =>
               match fd.literal {
                 Some(_) =>
-                  if !(resolved_shape(graph, field_ty, Map::new())
-                    is StringShape) {
+                  if !(resolved_shape(graph, field_ty, Map([])) is StringShape) {
                     errors.push(
                       UnionFieldEqualsLiteralOnNonStringField(
                         tag=branch.tag,
@@ -514,7 +512,7 @@ priv enum BodyShape {
 fn resolved_shape(
   graph : SchemaGraph,
   ty : SchemaType,
-  visited : Map[TypeId, Unit],
+  visited : Map[String, Unit],
 ) -> BodyShape {
   match ty.body {
     Ref(id) => {
@@ -565,7 +563,7 @@ priv enum DiscriminatorPairClassification {
   Reject(String)
   Disjoint
   Indeterminate
-} derive(Eq, Debug)
+}
 
 ///|
 fn classify_discriminator_pair(
@@ -669,7 +667,7 @@ fn discriminator_classification_kind(
 
 ///|
 test "discriminator_pair_classification_matches_portable_matrix" {
-  let fe = (name, literal) => @types.FieldEquals({ field_name: name, literal })
+  let fe = (name, literal) => @types.FieldEquals({ field_name: name, literal, })
   let cases : Array[
     (String, @types.DiscriminatorRule, @types.DiscriminatorRule, Int),
   ] = [

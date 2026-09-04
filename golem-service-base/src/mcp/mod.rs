@@ -18,16 +18,11 @@ use golem_common::base_model::account::AccountId;
 use golem_common::base_model::deployment::DeploymentRevision;
 use golem_common::base_model::domain_registration::Domain;
 use golem_common::base_model::environment::EnvironmentId;
-use golem_common::model::agent::AgentTypeName;
-use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::schema::RegisteredAgentTypeSchema;
-use std::collections::HashMap;
 
 use crate::custom_api::SecuritySchemeDetails;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::security_scheme::SecuritySchemeName;
-
-pub type AgentTypeImplementers = HashMap<AgentTypeName, (ComponentId, ComponentRevision)>;
 
 #[derive(Clone)]
 pub struct CompiledMcp {
@@ -36,14 +31,7 @@ pub struct CompiledMcp {
     pub environment_id: EnvironmentId,
     pub deployment_revision: DeploymentRevision,
     pub domain: Domain,
-    pub agent_type_implementers: AgentTypeImplementers,
     pub security_scheme_name: Option<SecuritySchemeName>,
     pub security_scheme: Option<SecuritySchemeDetails>, // Resolved at runtime
     pub registered_agent_types: Vec<RegisteredAgentTypeSchema>,
-}
-
-impl CompiledMcp {
-    pub fn agent_types(&self) -> Vec<AgentTypeName> {
-        self.agent_type_implementers.keys().cloned().collect()
-    }
 }

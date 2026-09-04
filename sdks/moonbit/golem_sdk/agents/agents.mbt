@@ -14,7 +14,7 @@ priv struct AgentState {
 ///|
 /// Creates a new empty agent state.
 fn AgentState::new() -> AgentState {
-  { registered_agents: @hashmap.new(), agent_instance: None }
+  { registered_agents: @hashmap.HashMap([]), agent_instance: None, }
 }
 
 ///|

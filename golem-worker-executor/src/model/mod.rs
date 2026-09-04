@@ -64,18 +64,24 @@ impl ShardAssignmentCheck for ShardAssignment {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SnapshotSource {
+    Automatic,
+    ManualUpdate,
+}
+
 /// Worker-specific configuration. These values are used to initialize the worker, and they can
 /// be different for each worker.
 #[derive(Clone, Debug)]
 pub struct AgentConfig {
     pub deleted_regions: DeletedRegions,
     pub total_linear_memory_size: u64,
-    pub current_filesystem_storage_usage: u64,
     pub component_revision_for_replay: ComponentRevision,
     pub created_by: AccountId,
     pub created_by_email: AccountEmail,
     pub initial_agent_config: Vec<TypedAgentConfigEntry>,
     pub last_snapshot_index: Option<OplogIndex>,
+    pub last_snapshot_source: Option<SnapshotSource>,
     pub agent_effective_surface: EffectiveSurface,
     pub owner_component_metadata: Option<Arc<Component>>,
 }
@@ -84,24 +90,24 @@ impl AgentConfig {
     pub fn new(
         deleted_regions: DeletedRegions,
         total_linear_memory_size: u64,
-        current_filesystem_storage_usage: u64,
         component_revision_for_replay: ComponentRevision,
         created_by: AccountId,
         created_by_email: AccountEmail,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         last_snapshot_index: Option<OplogIndex>,
+        last_snapshot_source: Option<SnapshotSource>,
         agent_effective_surface: EffectiveSurface,
         owner_component_metadata: Option<Arc<Component>>,
     ) -> AgentConfig {
         AgentConfig {
             deleted_regions,
             total_linear_memory_size,
-            current_filesystem_storage_usage,
             component_revision_for_replay,
             created_by,
             created_by_email,
             initial_agent_config,
             last_snapshot_index,
+            last_snapshot_source,
             agent_effective_surface,
             owner_component_metadata,
         }
@@ -395,12 +401,6 @@ impl TrapType {
                         }
                         Some(GolemSpecificWasmTrap::WorkerExceededRpcCallLimit) => {
                             make_error(AgentError::ExceededRpcCallLimit)
-                        }
-                        Some(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage) => {
-                            make_error(AgentError::NodeOutOfFilesystemStorage)
-                        }
-                        Some(GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit) => {
-                            make_error(AgentError::AgentExceededFilesystemStorageLimit)
                         }
                         Some(GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted) => {
                             match agent_mode {

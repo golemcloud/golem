@@ -173,6 +173,17 @@ impl<T: Clone> DurableLiveStreamBus<T> {
     async fn reader_count(&self) -> usize {
         self.state.lock().await.readers.len()
     }
+
+    #[cfg(test)]
+    pub(crate) async fn hold_state_lock_until(
+        &self,
+        acquired: tokio::sync::oneshot::Sender<()>,
+        release: tokio::sync::oneshot::Receiver<()>,
+    ) {
+        let _state = self.state.lock().await;
+        let _ = acquired.send(());
+        let _ = release.await;
+    }
 }
 
 pub(crate) struct DurableLiveStreamSubscription<T> {

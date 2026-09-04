@@ -56,7 +56,7 @@ Create `project/plugins.sbt`:
 
 ```scala
 addSbtPlugin("dev.zio" % "zio-golem-sbt" % "<SDK_VERSION>")
-addSbtPlugin("org.scala-js" % "sbt-scalajs" % "1.20.2")
+addSbtPlugin("org.scala-js" % "sbt-scalajs" % "1.22.0")
 ```
 
 ### Enable `GolemPlugin` (automatic registration)

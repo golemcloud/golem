@@ -1,0 +1,13 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/gen-agent-tool-middleware"
+
+// Values
+pub fn mbt_ffi_cabi_realloc(Int, Int, Int, Int) -> Int
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits

@@ -21,7 +21,6 @@ pub fn generate_reexports(
     let fun_decl : @syntax.FunDecl = {
       type_name: None,
       name: make_binder(fn_.user_name),
-      has_error: None,
       is_async: None,
       decl_params: Some(to_list(params)),
       params_loc: dummy_loc,
@@ -36,10 +35,8 @@ pub fn generate_reexports(
     impls.push(
       @syntax.Impl::TopFuncDef(
         fun_decl~,
-        decl_body=@syntax.DeclBody::DeclBody(
-          local_types=to_list([]),
-          expr=call_expr,
-        ),
+        decl_body=@syntax.DeclBody::DeclBody(expr=call_expr),
+        where_clause=None,
         loc=dummy_loc,
       ),
     )

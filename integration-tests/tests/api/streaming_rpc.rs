@@ -14,17 +14,12 @@
 
 use futures::{SinkExt, StreamExt};
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
-use golem_api_grpc::proto::golem::schema::{
-    RecordValue, SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, SecretValue,
-    schema_value,
-};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::{
-    InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationRejectionReason,
-    InvocationRequest, InvocationResponse, InvocationStart, PublicInvocationRequest,
-    PublicInvocationStart, ResumeAttach, ResumeOperation, input_stream_item, invocation_request,
-    invocation_response, invocation_session_completion, invocation_session_result,
-    public_invocation_request,
+    InvocationRejectionReason, InvocationRequest, InvocationStart,
+    ResumeAttach as PrivateResumeAttach, ResumeOperation as PrivateResumeOperation,
+    invocation_request, invocation_response, invocation_session_completion,
+    invocation_session_result,
 };
 use golem_client::model::ComponentDto;
 use golem_common::base_model::durable_stream::AttachmentId;
@@ -32,18 +27,23 @@ use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::invocation_session_public::{
+    DecimalU64, INVOCATION_SESSION_SUBPROTOCOL, INVOCATION_SESSION_VERSION, InvocationSelector,
+    PublicClientMessage, PublicErrorCode, PublicInvocationOutcome, PublicInvocationResult,
+    PublicResumeOperation, PublicServerMessage, PublicStreamDirection, decode_server_text,
+    encode_text,
+};
 use golem_common::model::{AgentId, IdempotencyKey, RoutingTable};
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use prost::Message as ProstMessage;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
+use tokio_tungstenite::tungstenite::http::header::{AUTHORIZATION, SEC_WEBSOCKET_PROTOCOL};
 use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
@@ -54,6 +54,19 @@ type PublicInvocationSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStre
 async fn connect_public_invocation_socket(
     deps: &EnvBasedTestDependencies,
     token: Option<&TokenSecret>,
+) -> Result<PublicInvocationSocket, WebSocketError> {
+    connect_public_invocation_socket_with_subprotocol(
+        deps,
+        token,
+        Some(INVOCATION_SESSION_SUBPROTOCOL),
+    )
+    .await
+}
+
+async fn connect_public_invocation_socket_with_subprotocol(
+    deps: &EnvBasedTestDependencies,
+    token: Option<&TokenSecret>,
+    subprotocol: Option<&str>,
 ) -> Result<PublicInvocationSocket, WebSocketError> {
     let worker_service = deps.worker_service();
     let url = format!(
@@ -68,33 +81,46 @@ async fn connect_public_invocation_socket(
             format!("Bearer {}", token.secret()).parse().unwrap(),
         );
     }
-    tokio_tungstenite::connect_async(request)
-        .await
-        .map(|(socket, _)| socket)
+    if let Some(subprotocol) = subprotocol {
+        request
+            .headers_mut()
+            .insert(SEC_WEBSOCKET_PROTOCOL, subprotocol.parse().unwrap());
+    }
+    let (socket, response) = tokio_tungstenite::connect_async(request).await?;
+    if subprotocol == Some(INVOCATION_SESSION_SUBPROTOCOL) {
+        assert_eq!(
+            response
+                .headers()
+                .get(SEC_WEBSOCKET_PROTOCOL)
+                .and_then(|value| value.to_str().ok()),
+            Some(INVOCATION_SESSION_SUBPROTOCOL)
+        );
+    }
+    Ok(socket)
 }
 
 async fn send_public_request(
     socket: &mut PublicInvocationSocket,
-    request: &PublicInvocationRequest,
+    request: &PublicClientMessage,
 ) -> anyhow::Result<()> {
     socket
-        .send(Message::Binary(request.encode_to_vec().into()))
+        .send(Message::Text(encode_text(request)?.into()))
         .await?;
     Ok(())
 }
 
 async fn receive_public_response(
     socket: &mut PublicInvocationSocket,
-) -> anyhow::Result<InvocationResponse> {
+) -> anyhow::Result<PublicServerMessage> {
     loop {
         match socket.next().await {
-            Some(Ok(Message::Binary(payload))) => {
-                return InvocationResponse::decode(payload).map_err(Into::into);
+            Some(Ok(Message::Text(text))) => {
+                return decode_server_text(text.as_bytes()).map_err(Into::into);
             }
             Some(Ok(Message::Ping(payload))) => socket.send(Message::Pong(payload)).await?,
             Some(Ok(Message::Pong(_))) | Some(Ok(Message::Frame(_))) => {}
-            Some(Ok(Message::Text(text))) => {
-                anyhow::bail!("public invocation returned unexpected text frame: {text}")
+            Some(Ok(Message::Binary(_))) => {
+                anyhow::bail!("public invocation returned an unexpected binary frame")
             }
             Some(Ok(Message::Close(close))) => {
                 anyhow::bail!("public invocation closed before its next response: {close:?}")
@@ -110,56 +136,45 @@ fn public_start(
     environment_name: &str,
     agent_name: &str,
     method_name: &str,
-    method_parameters: ProtoSchemaValue,
-) -> PublicInvocationRequest {
-    let constructor_parameters = SchemaValue::Record {
-        fields: vec![SchemaValue::String(agent_name.to_string())],
+    method_parameters: serde_json::Value,
+) -> PublicClientMessage {
+    PublicClientMessage::InvocationStart {
+        attempt_id: uuid::Uuid::new_v4(),
+        config: Vec::new(),
+        idempotency_key: IdempotencyKey::fresh().value,
+        method_parameters,
+        selector: Box::new(InvocationSelector {
+            agent_type: "StreamingRpcTarget".to_string(),
+            application: application_name.to_string(),
+            constructor_parameters: serde_json::json!({ "name": agent_name }),
+            environment: environment_name.to_string(),
+            method: method_name.to_string(),
+            phantom_id: None,
+        }),
+        version: INVOCATION_SESSION_VERSION,
     }
-    .try_into()
-    .unwrap();
-
-    PublicInvocationRequest {
-        request: Some(public_invocation_request::Request::Start(
-            PublicInvocationStart {
-                application_name: application_name.to_string(),
-                environment_name: environment_name.to_string(),
-                agent_type_name: "StreamingRpcTarget".to_string(),
-                constructor_parameters: Some(constructor_parameters),
-                phantom_id: None,
-                config: Vec::new(),
-                method_name: method_name.to_string(),
-                method_parameters: Some(method_parameters),
-                idempotency_key: Some(IdempotencyKey::fresh().into()),
-                attempt_id: Some(uuid::Uuid::new_v4().into()),
-                expected_callee_fingerprint: None,
-            },
-        )),
-    }
-}
-
-fn proto_record(fields: Vec<SchemaValue>) -> ProtoSchemaValue {
-    SchemaValue::Record { fields }.try_into().unwrap()
 }
 
 async fn run_public_session(
     deps: &EnvBasedTestDependencies,
     token: &TokenSecret,
-    start: PublicInvocationRequest,
-) -> anyhow::Result<Vec<InvocationResponse>> {
+    start: PublicClientMessage,
+) -> anyhow::Result<Vec<PublicServerMessage>> {
     let mut socket = connect_public_invocation_socket(deps, Some(token)).await?;
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_public_request(&start)
-        .map_err(anyhow::Error::msg)?;
     send_public_request(&mut socket, &start).await?;
 
     let mut responses = Vec::new();
-    while !state.is_complete() {
+    loop {
         let response = receive_public_response(&mut socket).await?;
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
+        let terminal = matches!(
+            response,
+            PublicServerMessage::InvocationRejected { .. }
+                | PublicServerMessage::InvocationFinished { .. }
+        );
         responses.push(response);
+        if terminal {
+            break;
+        }
     }
     match socket.next().await {
         Some(Ok(Message::Close(_))) => {}
@@ -171,69 +186,44 @@ async fn run_public_session(
 async fn resume_public_input_with_end(
     deps: &EnvBasedTestDependencies,
     token: &TokenSecret,
-    acceptance: InvocationAccepted,
-    transport_stream_id: u64,
+    session_token: String,
+    input_channel: u32,
 ) -> anyhow::Result<()> {
-    let durable_stream_id = acceptance
-        .stream_mappings
-        .iter()
-        .find(|mapping| mapping.transport_stream_id == transport_stream_id)
-        .and_then(|mapping| mapping.handle.as_ref())
-        .and_then(|handle| handle.stream_id)
-        .ok_or_else(|| anyhow::anyhow!("acceptance omitted its input stream mapping"))?;
-    let resume = PublicInvocationRequest {
-        request: Some(public_invocation_request::Request::ResumeAttach(
-            ResumeAttach {
-                idempotency_key: acceptance.idempotency_key,
-                agent_id: acceptance.agent_id,
-                environment_id: acceptance.environment_id,
-                attachment_id: acceptance.attachment_id,
-                attempt_id: Some(uuid::Uuid::new_v4().into()),
-                expected_callee_fingerprint: acceptance.callee_fingerprint,
-                expected_epoch: acceptance.epoch,
-                operation: ResumeOperation::Resume as i32,
-                cursors: Vec::new(),
-                auth_ctx: None,
-                principal: None,
-            },
-        )),
+    let resume = PublicClientMessage::ResumeAttach {
+        attempt_id: uuid::Uuid::new_v4(),
+        operation: PublicResumeOperation::Resume,
+        output_cursors: Vec::new(),
+        session_token,
+        version: INVOCATION_SESSION_VERSION,
     };
     let mut socket = connect_public_invocation_socket(deps, Some(token)).await?;
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_public_request(&resume)
-        .map_err(anyhow::Error::msg)?;
     send_public_request(&mut socket, &resume).await?;
     let resumed = receive_public_response(&mut socket).await?;
-    state
-        .validate_response(&resumed)
-        .map_err(anyhow::Error::msg)?;
-    let resumed_epoch = match resumed.response {
-        Some(invocation_response::Response::Accepted(accepted)) => {
-            assert_eq!(accepted.epoch, acceptance.epoch + 1);
-            accepted.epoch
-        }
+    let resumed_channel = match resumed {
+        PublicServerMessage::InvocationAccepted { mappings, .. } => mappings
+            .into_iter()
+            .find(|mapping| {
+                mapping.direction == PublicStreamDirection::Input
+                    && mapping.input_high_water.as_ref().is_some_and(|high_water| {
+                        high_water.sequence == DecimalU64(0) && !high_water.terminal
+                    })
+            })
+            .map(|mapping| mapping.channel)
+            .ok_or_else(|| anyhow::anyhow!("resume omitted its fresh input channel"))?,
         other => anyhow::bail!("detached public invocation did not resume: {other:?}"),
     };
-    let end = PublicInvocationRequest {
-        request: Some(public_invocation_request::Request::InputEnd(
-            InputStreamEnd {
-                transport_stream_id,
-                sequence: 0,
-                durable_stream_id: Some(durable_stream_id),
-                epoch: resumed_epoch,
-            },
-        )),
+    assert_ne!(resumed_channel, input_channel);
+    let end = PublicClientMessage::InputStreamEnd {
+        channel: resumed_channel,
+        sequence: DecimalU64(0),
+        version: INVOCATION_SESSION_VERSION,
     };
-    state
-        .validate_public_request(&end)
-        .map_err(anyhow::Error::msg)?;
     send_public_request(&mut socket, &end).await?;
-    while !state.is_complete() {
+    loop {
         let response = receive_public_response(&mut socket).await?;
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
+        if matches!(response, PublicServerMessage::InvocationFinished { .. }) {
+            break;
+        }
     }
     Ok(())
 }
@@ -451,26 +441,31 @@ async fn grpc_invocation_session_routes_resume_and_takeover(
     ))
     .await?;
 
-    for operation in [ResumeOperation::Resume, ResumeOperation::Takeover] {
+    for operation in [
+        PrivateResumeOperation::Resume,
+        PrivateResumeOperation::Takeover,
+    ] {
         let idempotency_key = IdempotencyKey::fresh();
         let request = InvocationRequest {
-            request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
-                idempotency_key: Some(idempotency_key.clone().into()),
-                agent_id: Some(agent_id.clone().into()),
-                environment_id: Some(environment_id.into()),
-                attachment_id: Some(
-                    AttachmentId::primary(environment_id, &agent_id, &idempotency_key)?
-                        .0
-                        .into(),
-                ),
-                attempt_id: Some(uuid::Uuid::new_v4().into()),
-                expected_callee_fingerprint: Some(uuid::Uuid::new_v4().into()),
-                expected_epoch: 1,
-                operation: operation as i32,
-                cursors: Vec::new(),
-                auth_ctx: Some(AuthCtx::System.into()),
-                principal: Some(Default::default()),
-            })),
+            request: Some(invocation_request::Request::ResumeAttach(
+                PrivateResumeAttach {
+                    idempotency_key: Some(idempotency_key.clone().into()),
+                    agent_id: Some(agent_id.clone().into()),
+                    environment_id: Some(environment_id.into()),
+                    attachment_id: Some(
+                        AttachmentId::primary(environment_id, &agent_id, &idempotency_key)?
+                            .0
+                            .into(),
+                    ),
+                    attempt_id: Some(uuid::Uuid::new_v4().into()),
+                    expected_callee_fingerprint: Some(uuid::Uuid::new_v4().into()),
+                    expected_epoch: 1,
+                    operation: operation as i32,
+                    cursors: Vec::new(),
+                    auth_ctx: Some(AuthCtx::System.into()),
+                    principal: Some(Default::default()),
+                },
+            )),
         };
         let mut state = InvocationSessionState::default();
         state
@@ -592,28 +587,31 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
             environment_name,
             &agent_name,
             "ping",
-            proto_record(Vec::new()),
+            serde_json::json!({}),
         ),
     )
     .await?;
     assert_eq!(scalar.len(), 3);
     assert!(matches!(
-        scalar[0].response,
-        Some(invocation_response::Response::Accepted(_))
+        scalar[0],
+        PublicServerMessage::InvocationAccepted { .. }
     ));
-    let Some(invocation_response::Response::Result(result)) = &scalar[1].response else {
+    let PublicServerMessage::InvocationResult {
+        mappings,
+        result: PublicInvocationResult::Value { value },
+        ..
+    } = &scalar[1]
+    else {
         anyhow::bail!("scalar public invocation did not return a result")
     };
-    let Some(invocation_session_result::Result::MethodResult(value)) = &result.result else {
-        anyhow::bail!("scalar public invocation returned no method value")
-    };
-    assert_eq!(
-        SchemaValue::try_from(value.clone()).map_err(anyhow::Error::msg)?,
-        SchemaValue::U64(42)
-    );
+    assert!(mappings.is_empty());
+    assert_eq!(value, &serde_json::json!("42"));
     assert!(matches!(
-        scalar[2].response,
-        Some(invocation_response::Response::Finished(_))
+        scalar[2],
+        PublicServerMessage::InvocationFinished {
+            outcome: PublicInvocationOutcome::Success,
+            ..
+        }
     ));
 
     let produced = run_public_session(
@@ -624,32 +622,42 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
             environment_name,
             &agent_name,
             "produce",
-            proto_record(vec![SchemaValue::List {
-                elements: vec![
-                    SchemaValue::U32(3),
-                    SchemaValue::U32(5),
-                    SchemaValue::U32(8),
-                ],
-            }]),
+            serde_json::json!({ "values": [3, 5, 8] }),
         ),
     )
     .await?;
     assert_eq!(produced.len(), 7);
-    let Some(invocation_response::Response::Result(result)) = &produced[1].response else {
+    let PublicServerMessage::InvocationResult {
+        mappings,
+        result: PublicInvocationResult::Value { value },
+        ..
+    } = &produced[1]
+    else {
         anyhow::bail!("streaming public invocation did not return an initial result")
     };
-    let Some(invocation_session_result::Result::MethodResult(result_value)) = &result.result else {
-        anyhow::bail!("streaming public invocation returned no method value")
+    let [output_mapping] = mappings.as_slice() else {
+        anyhow::bail!("streaming result did not expose exactly one output stream")
     };
-    let Some(schema_value::Value::StreamReference(stream)) = &result_value.value else {
-        anyhow::bail!("streaming public invocation did not return a stream reference")
-    };
+    assert_eq!(output_mapping.direction, PublicStreamDirection::Output);
+    assert_eq!(
+        value,
+        &serde_json::json!({
+            "$stream": { "streamToken": output_mapping.stream_token.clone() }
+        })
+    );
     let items = produced[2..5]
         .iter()
-        .map(|response| match &response.response {
-            Some(invocation_response::Response::OutputItem(item)) => {
-                assert_eq!(item.transport_stream_id, stream.stream_id);
-                SchemaValue::try_from(item.value.clone().unwrap()).unwrap()
+        .enumerate()
+        .map(|(expected_sequence, response)| match response {
+            PublicServerMessage::OutputStreamItem {
+                channel,
+                sequence,
+                value,
+                ..
+            } => {
+                assert_eq!(*channel, output_mapping.channel);
+                assert_eq!(*sequence, DecimalU64(expected_sequence as u64));
+                value.clone()
             }
             other => panic!("expected output item, got {other:?}"),
         })
@@ -657,151 +665,127 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     assert_eq!(
         items,
         vec![
-            SchemaValue::U32(3),
-            SchemaValue::U32(5),
-            SchemaValue::U32(8)
+            serde_json::json!(3),
+            serde_json::json!(5),
+            serde_json::json!(8)
         ]
     );
     assert!(matches!(
-        produced[5].response,
-        Some(invocation_response::Response::OutputEnd(_))
+        produced[5],
+        PublicServerMessage::OutputStreamEnd {
+            channel,
+            sequence: DecimalU64(3),
+            ..
+        } if channel == output_mapping.channel
     ));
     assert!(matches!(
-        produced[6].response,
-        Some(invocation_response::Response::Finished(_))
+        produced[6],
+        PublicServerMessage::InvocationFinished {
+            outcome: PublicInvocationOutcome::Success,
+            ..
+        }
     ));
 
-    let input_stream_id = 71;
-    let stream_input = ProtoSchemaValue {
-        value: Some(schema_value::Value::RecordValue(RecordValue {
-            fields: vec![ProtoSchemaValue {
-                value: Some(schema_value::Value::StreamReference(
-                    SchemaValueStreamReference {
-                        stream_id: input_stream_id,
-                    },
-                )),
-            }],
-        })),
-    };
+    let input_reference = uuid::Uuid::new_v4();
     let start = public_start(
         application_name,
         environment_name,
         &agent_name,
         "consume",
-        stream_input,
+        serde_json::json!({
+            "input": { "$stream": { "provisionalRef": input_reference } }
+        }),
     );
     let mut socket = connect_public_invocation_socket(deps, Some(&user.token)).await?;
-    let mut state = InvocationSessionState::default();
-    state
-        .validate_public_request(&start)
-        .map_err(anyhow::Error::msg)?;
     send_public_request(&mut socket, &start).await?;
     let accepted = receive_public_response(&mut socket).await?;
-    state
-        .validate_response(&accepted)
-        .map_err(anyhow::Error::msg)?;
-    let (input_durable_stream_id, input_epoch) = match accepted.response.as_ref() {
-        Some(invocation_response::Response::Accepted(accepted)) => {
-            let mapping = accepted
-                .stream_mappings
-                .iter()
-                .find(|mapping| mapping.transport_stream_id == input_stream_id)
-                .ok_or_else(|| anyhow::anyhow!("acceptance omitted the input stream mapping"))?;
-            let stream_id = mapping
-                .handle
-                .as_ref()
-                .and_then(|handle| handle.stream_id)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("input stream mapping omitted its durable stream ID")
-                })?;
-            (stream_id, accepted.epoch)
-        }
+    let input_channel = match accepted {
+        PublicServerMessage::InvocationAccepted { mappings, .. } => mappings
+            .iter()
+            .find(|mapping| mapping.provisional_ref == Some(input_reference))
+            .map(|mapping| mapping.channel)
+            .ok_or_else(|| anyhow::anyhow!("acceptance omitted the input stream mapping"))?,
         other => anyhow::bail!("streaming input was not accepted: {other:?}"),
     };
 
     for (sequence, value) in [13_u32, 21].into_iter().enumerate() {
-        let request = PublicInvocationRequest {
-            request: Some(public_invocation_request::Request::InputItem(
-                InputStreamItem {
-                    transport_stream_id: input_stream_id,
-                    sequence: sequence as u64,
-                    payload: Some(input_stream_item::Payload::Value(
-                        SchemaValue::U32(value)
-                            .try_into()
-                            .map_err(anyhow::Error::msg)?,
-                    )),
-                    durable_stream_id: Some(input_durable_stream_id),
-                    epoch: input_epoch,
-                },
-            )),
+        let request = PublicClientMessage::InputStreamItem {
+            channel: input_channel,
+            sequence: DecimalU64(sequence as u64),
+            value: serde_json::json!(value),
+            version: INVOCATION_SESSION_VERSION,
         };
-        state
-            .validate_public_request(&request)
-            .map_err(anyhow::Error::msg)?;
         send_public_request(&mut socket, &request).await?;
         let ack = receive_public_response(&mut socket).await?;
-        state.validate_response(&ack).map_err(anyhow::Error::msg)?;
         assert!(matches!(
-            ack.response,
-            Some(invocation_response::Response::InputAck(_))
+            ack,
+            PublicServerMessage::InputStreamAck {
+                channel,
+                highest_contiguous_sequence,
+                terminal: false,
+                ..
+            } if channel == input_channel
+                && highest_contiguous_sequence == DecimalU64(sequence as u64 + 1)
         ));
     }
-    let end = PublicInvocationRequest {
-        request: Some(public_invocation_request::Request::InputEnd(
-            InputStreamEnd {
-                transport_stream_id: input_stream_id,
-                sequence: 2,
-                durable_stream_id: Some(input_durable_stream_id),
-                epoch: input_epoch,
-            },
-        )),
+    let end = PublicClientMessage::InputStreamEnd {
+        channel: input_channel,
+        sequence: DecimalU64(2),
+        version: INVOCATION_SESSION_VERSION,
     };
-    state
-        .validate_public_request(&end)
-        .map_err(anyhow::Error::msg)?;
     send_public_request(&mut socket, &end).await?;
     let mut consumed = None;
-    while !state.is_complete() {
+    loop {
         let response = receive_public_response(&mut socket).await?;
-        state
-            .validate_response(&response)
-            .map_err(anyhow::Error::msg)?;
-        if let Some(invocation_response::Response::Result(result)) = response.response
-            && let Some(invocation_session_result::Result::MethodResult(value)) = result.result
-        {
-            consumed = Some(SchemaValue::try_from(value).map_err(anyhow::Error::msg)?);
+        match response {
+            PublicServerMessage::InputStreamAck {
+                channel,
+                highest_contiguous_sequence: DecimalU64(2),
+                terminal: true,
+                ..
+            } => assert_eq!(channel, input_channel),
+            PublicServerMessage::InvocationResult {
+                result: PublicInvocationResult::Value { value },
+                ..
+            } => consumed = Some(value),
+            PublicServerMessage::InvocationFinished {
+                outcome: PublicInvocationOutcome::Success,
+                ..
+            } => break,
+            PublicServerMessage::InvocationRejected { code, message, .. } => {
+                anyhow::bail!("streaming input was rejected ({code:?}): {message}")
+            }
+            _ => {}
         }
     }
-    assert_eq!(
-        consumed,
-        Some(SchemaValue::List {
-            elements: vec![SchemaValue::U32(13), SchemaValue::U32(21)],
-        })
-    );
+    assert_eq!(consumed, Some(serde_json::json!([13, 21])));
 
-    let blocked_stream_id = 73;
+    let blocked_reference = uuid::Uuid::new_v4();
     let blocked = public_start(
         application_name,
         environment_name,
         &agent_name,
         "consume",
-        ProtoSchemaValue {
-            value: Some(schema_value::Value::RecordValue(RecordValue {
-                fields: vec![ProtoSchemaValue {
-                    value: Some(schema_value::Value::StreamReference(
-                        SchemaValueStreamReference {
-                            stream_id: blocked_stream_id,
-                        },
-                    )),
-                }],
-            })),
-        },
+        serde_json::json!({
+            "input": { "$stream": { "provisionalRef": blocked_reference } }
+        }),
     );
     let mut blocked_socket = connect_public_invocation_socket(deps, Some(&user.token)).await?;
     send_public_request(&mut blocked_socket, &blocked).await?;
     let accepted = receive_public_response(&mut blocked_socket).await?;
-    let blocked_acceptance = match accepted.response {
-        Some(invocation_response::Response::Accepted(accepted)) => accepted,
+    let (blocked_session_token, blocked_channel) = match accepted {
+        PublicServerMessage::InvocationAccepted {
+            mappings,
+            session_token,
+            ..
+        } => {
+            let channel = mappings
+                .iter()
+                .find(|mapping| mapping.provisional_ref == Some(blocked_reference))
+                .map(|mapping| mapping.channel)
+                .ok_or_else(|| anyhow::anyhow!("blocked input mapping was omitted"))?;
+            (session_token, channel)
+        }
         other => anyhow::bail!("blocked public invocation was not accepted: {other:?}"),
     };
     blocked_socket.close(None).await?;
@@ -818,7 +802,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     .map_err(|_| anyhow::anyhow!("blocked invocation close handshake timed out"))??;
     drop(blocked_socket);
 
-    resume_public_input_with_end(deps, &user.token, blocked_acceptance, blocked_stream_id).await?;
+    resume_public_input_with_end(deps, &user.token, blocked_session_token, blocked_channel).await?;
 
     let subsequent = run_public_session(
         deps,
@@ -828,16 +812,19 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
             environment_name,
             &agent_name,
             "ping",
-            proto_record(Vec::new()),
+            serde_json::json!({}),
         ),
     )
     .await?;
     assert!(subsequent.iter().any(|response| matches!(
-        response.response,
-        Some(invocation_response::Response::Finished(_))
+        response,
+        PublicServerMessage::InvocationFinished {
+            outcome: PublicInvocationOutcome::Success,
+            ..
+        }
     )));
 
-    let capability_stream_id = 75;
+    let capability_reference = uuid::Uuid::new_v4();
     let mut capability_socket = connect_public_invocation_socket(deps, Some(&user.token)).await?;
     send_public_request(
         &mut capability_socket,
@@ -846,53 +833,35 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
             environment_name,
             &agent_name,
             "consume",
-            ProtoSchemaValue {
-                value: Some(schema_value::Value::RecordValue(RecordValue {
-                    fields: vec![ProtoSchemaValue {
-                        value: Some(schema_value::Value::StreamReference(
-                            SchemaValueStreamReference {
-                                stream_id: capability_stream_id,
-                            },
-                        )),
-                    }],
-                })),
-            },
+            serde_json::json!({
+                "input": { "$stream": { "provisionalRef": capability_reference } }
+            }),
         ),
     )
     .await?;
     let accepted = receive_public_response(&mut capability_socket).await?;
-    let capability_acceptance = match accepted.response {
-        Some(invocation_response::Response::Accepted(accepted)) => accepted,
+    let (capability_session_token, capability_channel) = match accepted {
+        PublicServerMessage::InvocationAccepted {
+            mappings,
+            session_token,
+            ..
+        } => {
+            let channel = mappings
+                .iter()
+                .find(|mapping| mapping.provisional_ref == Some(capability_reference))
+                .map(|mapping| mapping.channel)
+                .ok_or_else(|| anyhow::anyhow!("capability input mapping was omitted"))?;
+            (session_token, channel)
+        }
         other => anyhow::bail!("capability invocation was not accepted: {other:?}"),
     };
-    let capability_durable_stream_id = capability_acceptance
-        .stream_mappings
-        .iter()
-        .find(|mapping| mapping.transport_stream_id == capability_stream_id)
-        .and_then(|mapping| mapping.handle.as_ref())
-        .and_then(|handle| handle.stream_id)
-        .ok_or_else(|| anyhow::anyhow!("capability input mapping omitted its durable stream ID"))?;
-    let capability_epoch = capability_acceptance.epoch;
     send_public_request(
         &mut capability_socket,
-        &PublicInvocationRequest {
-            request: Some(public_invocation_request::Request::InputItem(
-                InputStreamItem {
-                    transport_stream_id: capability_stream_id,
-                    sequence: 0,
-                    payload: Some(input_stream_item::Payload::Value(ProtoSchemaValue {
-                        value: Some(schema_value::Value::RecordValue(RecordValue {
-                            fields: vec![ProtoSchemaValue {
-                                value: Some(schema_value::Value::SecretValue(
-                                    SecretValue::default(),
-                                )),
-                            }],
-                        })),
-                    })),
-                    durable_stream_id: Some(capability_durable_stream_id),
-                    epoch: capability_epoch,
-                },
-            )),
+        &PublicClientMessage::InputStreamItem {
+            channel: capability_channel,
+            sequence: DecimalU64(0),
+            value: serde_json::json!({ "$secret": { "token": "forged" } }),
+            version: INVOCATION_SESSION_VERSION,
         },
     )
     .await?;
@@ -917,8 +886,8 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     resume_public_input_with_end(
         deps,
         &user.token,
-        capability_acceptance,
-        capability_stream_id,
+        capability_session_token,
+        capability_channel,
     )
     .await?;
     tokio::time::timeout(
@@ -931,7 +900,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
                 environment_name,
                 &agent_name,
                 "ping",
-                proto_record(Vec::new()),
+                serde_json::json!({}),
             ),
         ),
     )
@@ -964,9 +933,20 @@ async fn public_websocket_invocation_enforces_auth_frames_and_rejections(
     ));
 
     let user = deps.user().await?;
+    for subprotocol in [None, Some("unsupported.invocation.v1")] {
+        let error =
+            connect_public_invocation_socket_with_subprotocol(deps, Some(&user.token), subprotocol)
+                .await
+                .expect_err("missing or unsupported subprotocol must reject the WebSocket upgrade");
+        assert!(matches!(
+            error,
+            WebSocketError::Http(response) if response.status().as_u16() == 400
+        ));
+    }
+
     for invalid_message in [
-        Message::Text("not protobuf".into()),
-        Message::Binary(vec![0xff, 0xff].into()),
+        Message::Text("not json".into()),
+        Message::Binary(vec![0x0a, 0x00].into()),
     ] {
         let mut socket = connect_public_invocation_socket(deps, Some(&user.token)).await?;
         socket.send(invalid_message).await?;
@@ -988,19 +968,18 @@ async fn public_websocket_invocation_enforces_auth_frames_and_rejections(
             "environment-that-does-not-exist",
             "missing-agent",
             "ping",
-            proto_record(Vec::new()),
+            serde_json::json!({}),
         ),
     )
     .await?;
     assert_eq!(rejected.len(), 1);
-    let Some(invocation_response::Response::Rejected(rejected)) = &rejected[0].response else {
+    let PublicServerMessage::InvocationRejected { code, message, .. } = &rejected[0] else {
         anyhow::bail!("unresolved public selector did not produce invocation-rejected")
     };
     assert_eq!(
-        rejected.reason(),
-        InvocationRejectionReason::NotFound,
-        "unexpected public rejection: {}",
-        rejected.error
+        *code,
+        PublicErrorCode::NotFound,
+        "unexpected public rejection: {message}"
     );
     Ok(())
 }

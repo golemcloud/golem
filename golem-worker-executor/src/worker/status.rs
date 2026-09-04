@@ -285,6 +285,7 @@ pub fn update_status_with_new_entries(
         last_manual_update_snapshot_index,
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
+        last_automatic_snapshot_component_revision,
     ) = calculate_update_fields(
         last_known.pending_updates,
         last_known.failed_updates,
@@ -295,6 +296,7 @@ pub fn update_status_with_new_entries(
         last_known.last_manual_update_snapshot_index,
         last_known.last_automatic_snapshot_index,
         last_known.last_automatic_snapshot_timestamp,
+        last_known.last_automatic_snapshot_component_revision,
         &deleted_regions,
         &new_entries,
     );
@@ -308,12 +310,6 @@ pub fn update_status_with_new_entries(
 
     let total_linear_memory_size = calculate_total_linear_memory_size(
         last_known.total_linear_memory_size,
-        &skipped_regions,
-        &new_entries,
-    );
-
-    let current_filesystem_storage_usage = calculate_current_filesystem_storage_usage(
-        last_known.current_filesystem_storage_usage,
         &skipped_regions,
         &new_entries,
     );
@@ -353,7 +349,6 @@ pub fn update_status_with_new_entries(
         component_size,
         owned_resources,
         total_linear_memory_size,
-        current_filesystem_storage_usage,
         active_plugins,
         oplog_processor_checkpoints,
         revoked_cards,
@@ -363,6 +358,7 @@ pub fn update_status_with_new_entries(
         last_manual_update_snapshot_index,
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
+        last_automatic_snapshot_component_revision,
         agent_mode,
     };
 
@@ -493,7 +489,6 @@ fn calculate_latest_worker_status(
             OplogEntry::FailedUpdate { .. } => {}
             OplogEntry::SuccessfulUpdate { .. } => {}
             OplogEntry::GrowMemory { .. } => {}
-            OplogEntry::FilesystemStorageUsageUpdate { .. } => {}
             OplogEntry::CreateResource { .. } => {}
             OplogEntry::DropResource { .. } => {}
             OplogEntry::Log { .. } => {
@@ -938,6 +933,7 @@ fn calculate_update_fields(
     initial_last_manual_update_snapshot_index: Option<OplogIndex>,
     initial_last_automatic_snapshot_index: Option<OplogIndex>,
     initial_last_automatic_snapshot_timestamp: Option<Timestamp>,
+    initial_last_automatic_snapshot_component_revision: Option<ComponentRevision>,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
@@ -950,6 +946,7 @@ fn calculate_update_fields(
     Option<OplogIndex>,
     Option<OplogIndex>,
     Option<Timestamp>,
+    Option<ComponentRevision>,
 ) {
     let mut pending_updates = initial_pending_updates;
     let mut failed_updates = initial_failed_updates;
@@ -960,6 +957,8 @@ fn calculate_update_fields(
     let mut last_manual_update_snapshot_index = initial_last_manual_update_snapshot_index;
     let mut last_automatic_snapshot_index = initial_last_automatic_snapshot_index;
     let mut last_automatic_snapshot_timestamp = initial_last_automatic_snapshot_timestamp;
+    let mut last_automatic_snapshot_component_revision =
+        initial_last_automatic_snapshot_component_revision;
 
     for (oplog_idx, entry) in entries {
         // Skipping entries in deleted regions (by revert)
@@ -1018,21 +1017,25 @@ fn calculate_update_fields(
                 revision = *target_revision;
                 size = *new_component_size;
 
+                let applied_update = pending_updates.pop_front();
+                last_automatic_snapshot_index = None;
+                last_automatic_snapshot_timestamp = None;
+                last_automatic_snapshot_component_revision = None;
+
                 if let Some(PendingUpdateRef {
                     kind: PendingUpdateKind::SnapshotBased,
                     oplog_index: applied_update_oplog_index,
                     ..
-                }) = pending_updates.pop_front()
+                }) = applied_update
                 {
                     component_revision_for_replay = *target_revision;
                     last_manual_update_snapshot_index = Some(applied_update_oplog_index);
-                    last_automatic_snapshot_index = None;
-                    last_automatic_snapshot_timestamp = None;
                 }
             }
             OplogEntry::Snapshot { timestamp, .. } => {
                 last_automatic_snapshot_index = Some(*oplog_idx);
                 last_automatic_snapshot_timestamp = Some(*timestamp);
+                last_automatic_snapshot_component_revision = Some(revision);
             }
             _ => {}
         }
@@ -1047,6 +1050,7 @@ fn calculate_update_fields(
         last_manual_update_snapshot_index,
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
+        last_automatic_snapshot_component_revision,
     )
 }
 
@@ -1149,38 +1153,6 @@ fn calculate_total_linear_memory_size(
         }
     }
     result
-}
-
-/// Accumulates `FilesystemStorageUsageUpdate` hint entries to reconstruct the current
-/// storage usage at any point in the oplog. Used to populate
-/// `AgentStatusRecord::current_filesystem_storage_usage` for pre-acquiring storage permits
-/// when a worker restarts.
-///
-/// Mirrors `calculate_total_linear_memory_size`: entries in skipped regions
-/// are excluded, and `Create` resets the counter to zero (a newly created worker
-/// has no written files yet).
-fn calculate_current_filesystem_storage_usage(
-    current: u64,
-    skipped_regions: &DeletedRegions,
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> u64 {
-    let mut result = current as i64;
-    for (idx, entry) in entries {
-        if skipped_regions.is_in_deleted_region(*idx) {
-            continue;
-        }
-
-        match entry {
-            OplogEntry::Create { .. } => {
-                result = 0;
-            }
-            OplogEntry::FilesystemStorageUsageUpdate { delta, .. } => {
-                result = result.saturating_add(*delta);
-            }
-            _ => {}
-        }
-    }
-    result.max(0) as u64
 }
 
 fn collect_resources(
@@ -1371,8 +1343,6 @@ fn is_worker_error_retriable(
         AgentError::PermanentError(_) => false,
         AgentError::ExceededHttpCallLimit => false,
         AgentError::ExceededRpcCallLimit => false,
-        AgentError::NodeOutOfFilesystemStorage => true,
-        AgentError::AgentExceededFilesystemStorageLimit => false,
         AgentError::AgentTerminatedByQuota(_) => false,
         AgentError::EphemeralSleepTooLong(_) => false,
         AgentError::EphemeralFuelExhausted(_) => false,
@@ -1452,39 +1422,6 @@ mod test {
     #[test]
     async fn empty() {
         let test_case = TestCase::builder(0).build();
-
-        run_test_case(test_case).await;
-    }
-
-    #[test]
-    async fn storage_usage_accumulated_from_deltas() {
-        let test_case = TestCase::builder(0)
-            .agent_invocation_started("a", vec![], IdempotencyKey::fresh())
-            .filesystem_storage_usage_update(1024)
-            .filesystem_storage_usage_update(2048)
-            .build();
-
-        run_test_case(test_case).await;
-    }
-
-    #[test]
-    async fn storage_usage_decremented_on_negative_delta() {
-        let test_case = TestCase::builder(0)
-            .agent_invocation_started("a", vec![], IdempotencyKey::fresh())
-            .filesystem_storage_usage_update(1024)
-            .filesystem_storage_usage_update(-512)
-            .build();
-
-        run_test_case(test_case).await;
-    }
-
-    #[test]
-    async fn storage_usage_clamped_at_zero_on_underflow() {
-        let test_case = TestCase::builder(0)
-            .agent_invocation_started("a", vec![], IdempotencyKey::fresh())
-            .filesystem_storage_usage_update(100)
-            .filesystem_storage_usage_update(-9999) // larger than total acquired
-            .build();
 
         run_test_case(test_case).await;
     }
@@ -2114,6 +2051,48 @@ mod test {
     }
 
     #[test]
+    async fn successful_auto_update_invalidates_automatic_snapshot() {
+        let update = UpdateDescription::Automatic {
+            target_revision: ComponentRevision::new(2).unwrap(),
+        };
+
+        let test_case = TestCase::builder(1)
+            .snapshot()
+            .pending_update(&update, |_| {})
+            .successful_update(update, 2000, &HashSet::new())
+            .build();
+        let final_status = &test_case.entries.last().unwrap().expected_status;
+
+        assert_eq!(final_status.last_automatic_snapshot_index, None);
+        assert_eq!(final_status.last_automatic_snapshot_timestamp, None);
+        assert_eq!(
+            final_status.last_automatic_snapshot_component_revision,
+            None
+        );
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn failed_auto_update_keeps_automatic_snapshot() {
+        let update = UpdateDescription::Automatic {
+            target_revision: ComponentRevision::new(2).unwrap(),
+        };
+
+        let test_case = TestCase::builder(1)
+            .snapshot()
+            .pending_update(&update, |_| {})
+            .failed_update(update)
+            .build();
+        let final_status = &test_case.entries.last().unwrap().expected_status;
+
+        assert_eq!(
+            final_status.last_automatic_snapshot_component_revision,
+            Some(ComponentRevision::new(1).unwrap())
+        );
+        run_test_case(test_case).await;
+    }
+
+    #[test]
     async fn snapshot_tracking_with_revert() {
         let k1 = IdempotencyKey::fresh();
 
@@ -2443,22 +2422,6 @@ mod test {
             )
         }
 
-        pub fn filesystem_storage_usage_update(self, delta: i64) -> Self {
-            self.add(
-                OplogEntry::FilesystemStorageUsageUpdate {
-                    timestamp: Timestamp::now_utc(),
-                    delta,
-                },
-                |mut status| {
-                    status.current_filesystem_storage_usage =
-                        (status.current_filesystem_storage_usage as i64)
-                            .saturating_add(delta)
-                            .max(0) as u64;
-                    status
-                },
-            )
-        }
-
         pub fn snapshot(self) -> Self {
             let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
             let timestamp = Timestamp::now_utc().rounded();
@@ -2473,6 +2436,8 @@ mod test {
                 move |mut status| {
                     status.last_automatic_snapshot_index = Some(oplog_idx);
                     status.last_automatic_snapshot_timestamp = Some(timestamp);
+                    status.last_automatic_snapshot_component_revision =
+                        Some(status.component_revision);
                     status
                 },
             )
@@ -2531,6 +2496,8 @@ mod test {
                 status.last_automatic_snapshot_index = old_status.last_automatic_snapshot_index;
                 status.last_automatic_snapshot_timestamp =
                     old_status.last_automatic_snapshot_timestamp;
+                status.last_automatic_snapshot_component_revision =
+                    old_status.last_automatic_snapshot_component_revision;
 
                 status
             })
@@ -2653,6 +2620,9 @@ mod test {
                 status.component_size = new_component_size;
                 status.component_revision = *update_description.target_revision();
                 status.active_plugins = new_active_plugins.clone();
+                status.last_automatic_snapshot_index = None;
+                status.last_automatic_snapshot_timestamp = None;
+                status.last_automatic_snapshot_component_revision = None;
 
                 if status.skipped_regions.is_overridden() {
                     status.skipped_regions.merge_override();
@@ -2667,8 +2637,6 @@ mod test {
                     status.component_revision_for_replay = target_revision;
                     status.last_manual_update_snapshot_index =
                         applied_update.map(|au| au.oplog_index);
-                    status.last_automatic_snapshot_index = None;
-                    status.last_automatic_snapshot_timestamp = None;
                 };
 
                 status
@@ -3381,103 +3349,6 @@ mod test {
         );
         assert_eq!(state.sending_up_to, OplogIndex::from_u64(10));
         assert_eq!(state.target_agent_id, None);
-    }
-
-    fn make_fs_entry(idx: u64, delta: i64) -> (OplogIndex, OplogEntry) {
-        (
-            OplogIndex::from_u64(idx),
-            OplogEntry::FilesystemStorageUsageUpdate {
-                timestamp: Timestamp::now_utc(),
-                delta,
-            },
-        )
-    }
-
-    fn make_create_entry(idx: u64) -> (OplogIndex, OplogEntry) {
-        use golem_common::base_model::account::AccountId;
-        use golem_common::base_model::component::{ComponentId, ComponentRevision};
-        use golem_common::base_model::environment::EnvironmentId;
-        use golem_common::model::AgentId;
-        let agent_id = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "w".to_string(),
-        };
-        (
-            OplogIndex::from_u64(idx),
-            OplogEntry::create(
-                agent_id,
-                AgentMode::Durable,
-                ComponentRevision::INITIAL,
-                vec![],
-                EnvironmentId::new(),
-                AccountId::new(),
-                None,
-                0,
-                0,
-                Default::default(),
-                vec![],
-                None,
-                Uuid::now_v7(),
-            ),
-        )
-    }
-
-    /// `FilesystemStorageUsageUpdate` entries inside a deleted (skipped) region
-    /// are excluded from `current_filesystem_storage_usage`. Only live entries count.
-    #[test]
-    fn filesystem_storage_usage_in_deleted_region_is_skipped() {
-        use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
-        let mut builder = DeletedRegionsBuilder::default();
-        // Mark indices 2..=4 as deleted.
-        builder.add(OplogRegion {
-            start: OplogIndex::from_u64(2),
-            end: OplogIndex::from_u64(4),
-        });
-        let deleted = builder.build();
-
-        let entries: BTreeMap<OplogIndex, OplogEntry> = BTreeMap::from([
-            make_fs_entry(2, 1024), // deleted — must be skipped
-            make_fs_entry(3, 2048), // deleted — must be skipped
-            make_fs_entry(5, 512),  // live
-        ]);
-
-        let result = super::calculate_current_filesystem_storage_usage(0, &deleted, &entries);
-        assert_eq!(
-            result, 512,
-            "only the live entry outside the deleted region counts"
-        );
-    }
-
-    /// A `Create` entry mid-oplog resets `current_filesystem_storage_usage` to zero,
-    /// discarding usage accumulated before it (including the seed).
-    #[test]
-    fn filesystem_storage_usage_reset_to_zero_on_create() {
-        let deleted = DeletedRegions::default();
-
-        let entries: BTreeMap<OplogIndex, OplogEntry> = BTreeMap::from([
-            make_fs_entry(1, 1024), // before Create → should be wiped
-            make_create_entry(2),   // resets counter to 0
-            make_fs_entry(3, 512),  // after Create → counts
-        ]);
-
-        // Seed with prior usage to confirm Create overrides the seed too.
-        let result = super::calculate_current_filesystem_storage_usage(999, &deleted, &entries);
-        assert_eq!(
-            result, 512,
-            "Create must reset usage to 0 before accumulating post-Create deltas"
-        );
-    }
-
-    /// `current` seed is used as the starting value when there are no `Create`
-    /// entries and no deleted regions.
-    #[test]
-    fn filesystem_storage_usage_uses_seed_when_no_create() {
-        let deleted = DeletedRegions::default();
-
-        let entries: BTreeMap<OplogIndex, OplogEntry> = BTreeMap::from([make_fs_entry(1, 512)]);
-
-        let result = super::calculate_current_filesystem_storage_usage(1024, &deleted, &entries);
-        assert_eq!(result, 1536, "seed + delta");
     }
 
     #[test]

@@ -155,6 +155,14 @@ async fn quota_token_capability_round_trips_and_is_redacted(
     )
     .await?;
 
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while received.load(Ordering::SeqCst) < 4 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("timed out waiting for all quota-token HTTP calls"))?;
+
     http_server.abort();
 
     // Reconstruction on the receiver side: the split token was rebuilt into a

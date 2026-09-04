@@ -1,4 +1,13 @@
 ///|
+fn[T] capture_http_path_error(
+  f : () -> T raise @lib.HttpPathParseError,
+) -> Result[T, @lib.HttpPathParseError] {
+  Ok(f()) catch {
+    error => Err(error)
+  }
+}
+
+///|
 test "simple literal path" {
   let (segments, query) = @lib.parse_path_and_query("/api/v1/items")
   debug_inspect(
@@ -183,7 +192,9 @@ test "query only" {
 
 ///|
 test "error: catch-all not at end" {
-  let result : Result[_, _] = try? @lib.parse_path_and_query("/{*rest}/more")
+  let result = capture_http_path_error(fn() raise @lib.HttpPathParseError {
+    @lib.parse_path_and_query("/{*rest}/more")
+  })
   debug_inspect(
     result,
     content=(
@@ -194,7 +205,9 @@ test "error: catch-all not at end" {
 
 ///|
 test "error: empty variable name" {
-  let result : Result[_, _] = try? @lib.parse_path_and_query("/api/{}")
+  let result = capture_http_path_error(fn() raise @lib.HttpPathParseError {
+    @lib.parse_path_and_query("/api/{}")
+  })
   debug_inspect(
     result,
     content=(
@@ -205,7 +218,9 @@ test "error: empty variable name" {
 
 ///|
 test "error: query value not a variable" {
-  let result : Result[_, _] = try? @lib.parse_path_and_query("/search?q=hello")
+  let result = capture_http_path_error(fn() raise @lib.HttpPathParseError {
+    @lib.parse_path_and_query("/search?q=hello")
+  })
   debug_inspect(
     result,
     content=(
@@ -231,7 +246,9 @@ test "parse_path_only success" {
 
 ///|
 test "parse_path_only error with query" {
-  let result : Result[_, _] = try? @lib.parse_path_only("/search?q={v}")
+  let result = capture_http_path_error(fn() raise @lib.HttpPathParseError {
+    @lib.parse_path_only("/search?q={v}")
+  })
   debug_inspect(
     result,
     content=(

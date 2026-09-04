@@ -142,6 +142,9 @@ pub struct DurableCallSession<Pair: HostPayloadPair, P: DropPolicy> {
     /// In-function retry decision logic. Also the home of the call's `DurableFunctionType` and
     /// captured `DurableExecutionState`.
     pub(super) retry: InFunctionRetryController,
+    /// Shared signal for process-equivalent executor teardown. See
+    /// [`DroppedCall::executor_shutdown`].
+    pub(super) executor_shutdown: tokio_util::sync::CancellationToken,
     /// Whether switching this call to live execution requires a recovered, synchronized agent
     /// permission-card authority boundary.
     pub(super) requires_agent_authority: bool,
@@ -308,7 +311,7 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
 }
 
 impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<Pair, P, Ctx> {
-    async fn switch_to_live(&self) {
+    async fn switch_to_live(&mut self) {
         self.replay_state.switch_to_live().await;
         self.linear_memory.switch_to_live();
     }
@@ -346,6 +349,75 @@ pub(crate) struct AccessClaimOptions {
     /// Ownership propagated from a resource created by an earlier observational call. When absent,
     /// initiation captures the current custom-invocation task context.
     pub(crate) observational_owner: Option<OplogIndex>,
+    pub(crate) scope_replay_recovery: ScopeReplayRecovery,
+}
+
+type ScopeReplayReadiness = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
+
+#[derive(Default)]
+pub(crate) enum ScopeReplayRecovery {
+    #[default]
+    Default,
+    Forbidden,
+    Reexecute {
+        readiness: Option<ScopeReplayReadiness>,
+    },
+}
+
+impl ScopeReplayRecovery {
+    pub(crate) fn reexecute_when(
+        readiness: impl Future<Output = Result<(), String>> + Send + 'static,
+    ) -> Self {
+        Self::Reexecute {
+            readiness: Some(Box::pin(readiness)),
+        }
+    }
+
+    fn can_reexecute_incomplete(&self, assume_idempotence: bool) -> bool {
+        match self {
+            Self::Default => assume_idempotence,
+            Self::Forbidden => false,
+            // `Reexecute` is only constructed for an effectively idempotent replayed
+            // request (idempotent method or the `assume_idempotence` override) with
+            // recorded resend metadata, so an existing but incomplete scope may
+            // re-execute (jump to live) — the same authorization the missing-`Start`
+            // recovery relies on. The readiness proof guards only the missing-`Start`
+            // path; request-body replayability is validated lazily before any network
+            // re-issue, refusing (retry-exempt) if the recording is incomplete.
+            Self::Reexecute { .. } => true,
+        }
+    }
+
+    async fn await_readiness(&mut self) -> Result<(), WorkerExecutorError> {
+        match self {
+            Self::Reexecute { readiness } => readiness
+                .take()
+                .expect("scope recovery readiness is awaited at most once")
+                .await
+                .map_err(WorkerExecutorError::runtime),
+            Self::Default | Self::Forbidden => Ok(()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod scope_replay_recovery_tests {
+    use super::ScopeReplayRecovery;
+    use test_r::test;
+
+    #[test]
+    fn reexecute_policy_authorizes_existing_incomplete_scope() {
+        let recovery = ScopeReplayRecovery::reexecute_when(async { Ok(()) });
+
+        assert!(recovery.can_reexecute_incomplete(true));
+        assert!(recovery.can_reexecute_incomplete(false));
+    }
+
+    #[test]
+    fn forbidden_policy_does_not_authorize_existing_incomplete_scope() {
+        assert!(!ScopeReplayRecovery::Forbidden.can_reexecute_incomplete(true));
+        assert!(!ScopeReplayRecovery::Forbidden.can_reexecute_incomplete(false));
+    }
 }
 
 struct ExecutedAccessStart<Pair: HostPayloadPair, P: DropPolicy> {
@@ -1007,7 +1079,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             prepared.unpersisted,
         );
         let scope_start = if starts_scope {
-            Some(Self::execute_access_scope_start(&prepared).await?)
+            Some(Self::execute_access_scope_start(&mut prepared).await?)
         } else {
             None
         };
@@ -1237,7 +1309,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     }
 
     async fn execute_access_scope_start<Ctx: WorkerCtx>(
-        prepared: &PreparedAccessStart<Pair, P, Ctx>,
+        prepared: &mut PreparedAccessStart<Pair, P, Ctx>,
     ) -> Result<AccessOpenedScope, (WorkerExecutorError, AccessStartCleanup)> {
         let function_type = prepared.retry.function_type().clone();
         // A caller-supplied discriminator makes the synthetic scope name unique among concurrent
@@ -1251,20 +1323,80 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             None => HostFunctionName::Custom("<scope:batched-write>".to_string()),
         };
         if prepared.is_live {
-            let entry = OplogEntry::Start {
-                timestamp: Timestamp::now_utc(),
-                parent_start_index: prepared.entity_parent_start_index,
-                function_name: scope_name,
-                invocation_id: None,
-                observational_owner: prepared.execution_scope.observational_owner,
-                request: None,
-                durable_function_type: function_type,
-            };
-            let begin_index = prepared
-                .public_state
-                .worker()
-                .add_and_commit_oplog(entry)
-                .await;
+            match &mut prepared.claim_options.scope_replay_recovery {
+                ScopeReplayRecovery::Forbidden => {
+                    return Err((
+                        WorkerExecutorError::runtime(
+                            "Recorded remote write scope was not completed and cannot be safely recovered",
+                        ),
+                        AccessStartCleanup {
+                            atomic_lease: prepared.atomic_lease.clone(),
+                        },
+                    ));
+                }
+                ScopeReplayRecovery::Reexecute { .. } => {
+                    if prepared.execution_scope.atomic_region.is_some()
+                        || prepared.execution_scope.observational_owner.is_some()
+                        || prepared.entity_parent_start_index.is_some()
+                    {
+                        return Err((
+                            WorkerExecutorError::runtime(
+                                "Recorded remote write scope cannot be recovered inside another durable scope",
+                            ),
+                            AccessStartCleanup {
+                                atomic_lease: prepared.atomic_lease.clone(),
+                            },
+                        ));
+                    }
+                    prepared
+                        .claim_options
+                        .scope_replay_recovery
+                        .await_readiness()
+                        .await
+                        .map_err(|err| {
+                            (
+                                err,
+                                AccessStartCleanup {
+                                    atomic_lease: prepared.atomic_lease.clone(),
+                                },
+                            )
+                        })?;
+                    match prepared
+                        .replay_state
+                        .claim_scope_start_or_recover_missing(
+                            &scope_name,
+                            &function_type,
+                            prepared.entity_parent_start_index,
+                        )
+                        .await
+                        .map_err(|err| {
+                            (
+                                err,
+                                AccessStartCleanup {
+                                    atomic_lease: prepared.atomic_lease.clone(),
+                                },
+                            )
+                        })? {
+                        ScopeStartClaimOutcome::MissingSwitchedToLive => {}
+                        ScopeStartClaimOutcome::Missing => unreachable!(
+                            "missing-scope recovery either claims the scope or switches live"
+                        ),
+                        ScopeStartClaimOutcome::Claimed { .. } => {
+                            return Err((
+                                WorkerExecutorError::runtime(
+                                    "Recorded remote write scope was already claimed after replay completed",
+                                ),
+                                AccessStartCleanup {
+                                    atomic_lease: prepared.atomic_lease.clone(),
+                                },
+                            ));
+                        }
+                    }
+                }
+                ScopeReplayRecovery::Default => {}
+            }
+            let begin_index =
+                Self::append_access_scope_start(prepared, scope_name, function_type).await;
             Ok(AccessOpenedScope {
                 begin_index,
                 replay_handle: None,
@@ -1275,22 +1407,69 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             // discriminator suffix). There is no plain-name fallback: a discriminated claim must
             // never steal a plain sibling scope, and P3 deploys on a clean database so every
             // replayed oplog was recorded with the discriminators already in place.
-            let (begin_index, replay_handle) = prepared
-                .replay_state
-                .claim_scope_start(
-                    &scope_name,
-                    &function_type,
-                    prepared.entity_parent_start_index,
-                )
-                .await
-                .map_err(|err| {
-                    (
-                        err,
-                        AccessStartCleanup {
-                            atomic_lease: prepared.atomic_lease.clone(),
-                        },
+            let can_recover_missing = matches!(
+                &prepared.claim_options.scope_replay_recovery,
+                ScopeReplayRecovery::Reexecute { .. }
+            ) && prepared.execution_scope.atomic_region.is_none()
+                && prepared.execution_scope.observational_owner.is_none()
+                && prepared.entity_parent_start_index.is_none();
+            let claim_result = if can_recover_missing {
+                prepared
+                    .replay_state
+                    .claim_scope_start_or_recover_missing_when_ready(
+                        &scope_name,
+                        &function_type,
+                        prepared.entity_parent_start_index,
+                        prepared
+                            .claim_options
+                            .scope_replay_recovery
+                            .await_readiness(),
                     )
-                })?;
+                    .await
+                    .map(|outcome| match outcome {
+                        ScopeStartClaimOutcome::Claimed {
+                            begin_index,
+                            handle,
+                        } => Some((begin_index, handle)),
+                        ScopeStartClaimOutcome::MissingSwitchedToLive => None,
+                        ScopeStartClaimOutcome::Missing => unreachable!(
+                            "missing-scope recovery either claims the scope or switches live"
+                        ),
+                    })
+            } else {
+                prepared
+                    .replay_state
+                    .claim_scope_start(
+                        &scope_name,
+                        &function_type,
+                        prepared.entity_parent_start_index,
+                    )
+                    .await
+                    .map(Some)
+            };
+            let claimed_scope = claim_result.map_err(|err| {
+                (
+                    err,
+                    AccessStartCleanup {
+                        atomic_lease: prepared.atomic_lease.clone(),
+                    },
+                )
+            })?;
+            let Some((begin_index, replay_handle)) = claimed_scope else {
+                prepared.linear_memory.switch_to_live();
+                let begin_index =
+                    Self::append_access_scope_start(prepared, scope_name, function_type).await;
+                prepared
+                    .public_state
+                    .worker()
+                    .reattach_worker_status()
+                    .await;
+                return Ok(AccessOpenedScope {
+                    begin_index,
+                    replay_handle: None,
+                    switched_to_live: true,
+                });
+            };
 
             if function_type == DurableFunctionType::WriteRemote
                 && !prepared.retry.durable_execution_state().assume_idempotence
@@ -1337,7 +1516,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     }),
                     OplogEntryLookupResult::NotFound {
                         violates_for_all: false,
-                    } if prepared.retry.durable_execution_state().assume_idempotence => {
+                    } if prepared
+                        .claim_options
+                        .scope_replay_recovery
+                        .can_reexecute_incomplete(
+                            prepared.retry.durable_execution_state().assume_idempotence,
+                        ) =>
+                    {
                         prepared.switch_to_live().await;
                         let deleted_region = OplogRegion {
                             start: begin_index.next(),
@@ -1381,6 +1566,26 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
     }
 
+    async fn append_access_scope_start<Ctx: WorkerCtx>(
+        prepared: &mut PreparedAccessStart<Pair, P, Ctx>,
+        scope_name: HostFunctionName,
+        function_type: DurableFunctionType,
+    ) -> OplogIndex {
+        prepared
+            .public_state
+            .worker()
+            .add_and_commit_oplog(OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: prepared.entity_parent_start_index,
+                function_name: scope_name,
+                invocation_id: None,
+                observational_owner: prepared.execution_scope.observational_owner,
+                request: None,
+                durable_function_type: function_type,
+            })
+            .await
+    }
+
     fn finish_access_start<Ctx: WorkerCtx>(
         ctx: &mut DurableWorkerCtx<Ctx>,
         executed: ExecutedAccessStart<Pair, P>,
@@ -1410,6 +1615,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             parked_undelivered_replay: false,
             execution_scope: executed.execution_scope,
             retry: executed.retry,
+            executor_shutdown: ctx.public_state.worker().shutdown_token(),
             requires_agent_authority: false,
             agent_auth_ctx: None,
             drop_sink: executed.drop_sink,
@@ -1679,6 +1885,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             begin_index: self.begin_index(),
             function_type: self.retry.function_type().clone(),
             request_upload: self.request_upload.clone(),
+            executor_shutdown: self.executor_shutdown.clone(),
             atomic_lease: self.execution_scope.atomic_lease.clone(),
             trap_context: self.trap_context(),
             live_call_permit,
@@ -3680,6 +3887,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             parked_undelivered_replay: false,
             execution_scope,
             retry: self.retry,
+            executor_shutdown: ctx.public_state.worker().shutdown_token(),
             requires_agent_authority: self.requires_agent_authority,
             agent_auth_ctx: self.agent_auth_ctx,
             drop_sink: self.drop_sink,
@@ -3733,6 +3941,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             parked_undelivered_replay: false,
             execution_scope,
             retry: self.retry,
+            executor_shutdown: ctx.public_state.worker().shutdown_token(),
             requires_agent_authority: self.requires_agent_authority,
             agent_auth_ctx: self.agent_auth_ctx,
             drop_sink: self.drop_sink,
@@ -3748,10 +3957,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for DurableCallSession<Pair, P> 
         if self.finished {
             return;
         }
+        if self.executor_shutdown.is_cancelled() {
+            self.execution_scope.release_atomic_lease();
+            tracing::debug!(
+                start_idx = %self.start_idx,
+                "durable call abandoned during executor shutdown"
+            );
+            return;
+        }
         if self.is_live {
             if self.persisted {
-                // A live call dropped without finish/cancel: run the compile-time drop policy.
                 let live_call_permit = self.live_call_permit.take();
+                // A live call dropped without finish/cancel: run the compile-time drop policy.
                 P::unfinished_drop(
                     self.dropped_call_snapshot(live_call_permit),
                     self.drop_sink.as_ref(),

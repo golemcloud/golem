@@ -12,15 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::byte_time_accumulator::{ByteTimeAccumulator, ByteTimeSettlement};
 use crate::services::resource_limits::AtomicResourceEntry;
 use golem_common::model::agent::AgentMode;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
 pub(crate) const BYTE_NANOSECONDS_PER_GB_SECOND: u128 = (1024_u128 * 1024 * 1024) * 1_000_000_000;
 
 #[derive(Clone, Debug)]
+/// Leaf meter for linear-memory byte-time and memory-limit state.
+///
+/// `ResourceUsageMeter` owns permit-window lifecycle transitions and invokes this meter
+/// under the transition lock shared with filesystem storage accounting.
 pub struct AgentMemoryMeter {
     inner: Arc<Inner>,
 }
@@ -28,8 +32,6 @@ pub struct AgentMemoryMeter {
 struct Inner {
     mode: AgentMode,
     entry: Weak<AtomicResourceEntry>,
-    protected_bytes: AtomicU64,
-    limit_exceeded: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     state: Mutex<State>,
 }
 
@@ -37,7 +39,6 @@ impl std::fmt::Debug for Inner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Inner")
             .field("mode", &self.mode)
-            .field("protected_bytes", &self.protected_bytes)
             .field("state", &self.state)
             .finish_non_exhaustive()
     }
@@ -48,9 +49,7 @@ struct State {
     bytes: u64,
     active: bool,
     stopped: bool,
-    last_sample: Instant,
-    pending_gb_seconds: i64,
-    pending_byte_nanoseconds: u128,
+    usage: ByteTimeAccumulator,
 }
 
 impl AgentMemoryMeter {
@@ -65,68 +64,42 @@ impl AgentMemoryMeter {
             inner: Arc::new(Inner {
                 mode,
                 entry: Arc::downgrade(&entry),
-                protected_bytes: AtomicU64::new(bytes),
-                limit_exceeded: Mutex::new(None),
                 state: Mutex::new(State {
                     bytes,
                     active,
                     stopped: false,
-                    last_sample: now,
-                    pending_gb_seconds: 0,
-                    pending_byte_nanoseconds: 0,
+                    usage: ByteTimeAccumulator::new(BYTE_NANOSECONDS_PER_GB_SECOND, now),
                 }),
             }),
         }
-    }
-
-    pub(crate) fn set_protected_bytes(&self, bytes: u64) {
-        self.inner.protected_bytes.store(bytes, Ordering::Release);
-    }
-
-    pub(crate) fn set_limit_exceeded_callback(&self, callback: Arc<dyn Fn() + Send + Sync>) {
-        *self.inner.limit_exceeded.lock().unwrap() = Some(callback);
-    }
-
-    pub(crate) fn clear_limit_exceeded_callback(&self) {
-        *self.inner.limit_exceeded.lock().unwrap() = None;
-    }
-
-    pub(crate) fn enforce_limit(&self, limit: u64) {
-        if self.protected_bytes_exceed(limit)
-            && let Some(callback) = self.inner.limit_exceeded.lock().unwrap().as_ref()
-        {
-            callback();
-        }
-    }
-
-    pub(crate) fn exceeds_current_limit(&self) -> bool {
-        self.inner
-            .entry
-            .upgrade()
-            .is_some_and(|entry| self.protected_bytes_exceed(entry.max_memory_limit() as u64))
-    }
-
-    fn protected_bytes_exceed(&self, limit: u64) -> bool {
-        self.inner.protected_bytes.load(Ordering::Acquire) > limit
     }
 
     pub fn is_same_meter(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 
-    pub fn resume(&self, bytes: u64, now: Instant) {
+    /// Changes only memory metering. Resource-window lifecycle transitions must use
+    /// `ResourceUsageMeter` so filesystem storage changes at the same timestamp.
+    pub fn resume(&self, bytes: u64, now: Instant) -> bool {
         self.inner.transition(now, |state| {
-            if !state.stopped {
+            if state.stopped {
+                false
+            } else {
                 state.bytes = bytes;
                 state.active = true;
+                true
             }
-        });
+        })
     }
 
+    /// Changes only memory metering. Resource-window lifecycle transitions must use
+    /// `ResourceUsageMeter` so filesystem storage changes at the same timestamp.
     pub fn pause(&self, now: Instant) {
         self.inner.transition(now, |state| state.active = false);
     }
 
+    /// Changes only memory metering. Resource-window lifecycle transitions must use
+    /// `ResourceUsageMeter` so filesystem storage changes at the same timestamp.
     pub fn stop(&self, now: Instant) {
         let settlement = {
             let mut state = self.inner.state.lock().unwrap();
@@ -139,9 +112,8 @@ impl AgentMemoryMeter {
                 Some(state.take_settlement())
             }
         };
-        if let Some((units, remainder)) = settlement {
-            self.inner.record(units);
-            self.inner.transfer_remainder(remainder);
+        if let Some(settlement) = settlement {
+            self.inner.record_settlement(settlement);
         }
     }
 
@@ -150,12 +122,18 @@ impl AgentMemoryMeter {
     }
 
     pub fn flush(&self, now: Instant) {
-        let units = {
-            let mut state = self.inner.state.lock().unwrap();
-            state.accrue(now);
-            std::mem::take(&mut state.pending_gb_seconds)
-        };
+        let units = self.take_units(now);
         self.inner.record(units);
+    }
+
+    pub(crate) fn take_units(&self, now: Instant) -> i64 {
+        let mut state = self.inner.state.lock().unwrap();
+        state.accrue(now);
+        state.usage.take_units()
+    }
+
+    pub(crate) fn take_settlement(&self) -> ByteTimeSettlement {
+        self.inner.state.lock().unwrap().take_settlement()
     }
 }
 
@@ -174,60 +152,38 @@ impl Inner {
         }
     }
 
-    fn transfer_remainder(&self, remainder: u128) {
-        if remainder != 0
-            && let Some(entry) = self.entry.upgrade()
-        {
-            entry.record_memory_remainder(self.mode, remainder);
+    fn record_settlement(&self, settlement: ByteTimeSettlement) {
+        if let Some(entry) = self.entry.upgrade() {
+            entry.record_memory_settlement(self.mode, settlement);
         }
     }
 }
 
 impl State {
     fn accrue(&mut self, now: Instant) {
-        if now <= self.last_sample {
-            return;
-        }
-
-        let elapsed = now.saturating_duration_since(self.last_sample).as_nanos();
-        self.last_sample = now;
-        if self.active && !self.stopped {
-            self.pending_byte_nanoseconds = self
-                .pending_byte_nanoseconds
-                .saturating_add((self.bytes as u128).saturating_mul(elapsed));
-        }
-
-        let units = self.pending_byte_nanoseconds / BYTE_NANOSECONDS_PER_GB_SECOND;
-        self.pending_byte_nanoseconds %= BYTE_NANOSECONDS_PER_GB_SECOND;
-        self.pending_gb_seconds = self
-            .pending_gb_seconds
-            .saturating_add(units.min(i64::MAX as u128) as i64);
+        let bytes = (self.active && !self.stopped).then_some(self.bytes);
+        self.usage.accrue(now, bytes);
     }
 
-    fn take_settlement(&mut self) -> (i64, u128) {
-        (
-            std::mem::take(&mut self.pending_gb_seconds),
-            std::mem::take(&mut self.pending_byte_nanoseconds),
-        )
+    fn take_settlement(&mut self) -> ByteTimeSettlement {
+        self.usage.take_settlement()
     }
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        let (units, remainder) = {
+        let settlement = {
             let state = self.state.get_mut().unwrap();
             state.accrue(Instant::now());
             state.take_settlement()
         };
-        self.record(units);
-        self.transfer_remainder(remainder);
+        self.record_settlement(settlement);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
     use test_r::test;
 
@@ -243,11 +199,11 @@ mod tests {
 
         meter.pause(now + Duration::from_secs(2));
         meter.pause(now + Duration::from_secs(3));
-        meter.resume(gib(1), now + Duration::from_secs(4));
-        meter.resume(gib(1), now + Duration::from_secs(5));
+        assert!(meter.resume(gib(1), now + Duration::from_secs(4)));
+        assert!(meter.resume(gib(1), now + Duration::from_secs(5)));
         meter.stop(now + Duration::from_secs(7));
         meter.stop(now + Duration::from_secs(8));
-        meter.resume(gib(1), now + Duration::from_secs(9));
+        assert!(!meter.resume(gib(1), now + Duration::from_secs(9)));
         meter.flush(now + Duration::from_secs(10));
 
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 5);
@@ -318,45 +274,13 @@ mod tests {
     }
 
     #[test]
-    fn lowered_limit_notifies_an_over_limit_meter() {
-        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let meter = AgentMemoryMeter::new(AgentMode::Durable, 10, true, entry, Instant::now());
-        meter.set_protected_bytes(20);
-        let notified = Arc::new(AtomicBool::new(false));
-        let notified_clone = notified.clone();
-        meter.set_limit_exceeded_callback(Arc::new(move || {
-            notified_clone.store(true, Ordering::Release);
-        }));
-
-        meter.enforce_limit(10);
-
-        assert!(notified.load(Ordering::Acquire));
-    }
-
-    #[test]
-    fn clearing_self_referencing_callback_releases_meter() {
-        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let meter = AgentMemoryMeter::new(AgentMode::Durable, 10, true, entry, Instant::now());
-        let weak_inner = Arc::downgrade(&meter.inner);
-        let callback_meter = meter.clone();
-        meter.set_limit_exceeded_callback(Arc::new(move || {
-            let _ = callback_meter.exceeds_current_limit();
-        }));
-
-        meter.clear_limit_exceeded_callback();
-        drop(meter);
-
-        assert!(weak_inner.upgrade().is_none());
-    }
-
-    #[test]
     fn normal_transitions_publish_only_on_flush() {
         let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
         let now = Instant::now();
         let meter = AgentMemoryMeter::new(AgentMode::Durable, gib(1), true, entry.clone(), now);
 
         meter.pause(now + Duration::from_secs(2));
-        meter.resume(gib(2), now + Duration::from_secs(3));
+        assert!(meter.resume(gib(2), now + Duration::from_secs(3)));
         meter.set_bytes(gib(3), now + Duration::from_secs(4));
         assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 0);
 

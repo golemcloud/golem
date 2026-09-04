@@ -18,6 +18,7 @@ use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::{DurableWorkerCtxView, SnapshotBoundaryBlocker};
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
 use crate::services::active_agents::ActiveAgents;
+use crate::services::agent_filesystem::{FilesystemGenerationHandle, OpenNode};
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -70,6 +71,20 @@ use wasmtime::{ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::p2::WasiHttpCtxView;
 use wasmtime_wasi_http::p3::WasiHttpView;
+
+pub struct WorkerFilesystemContext {
+    pub(crate) generation_handle: FilesystemGenerationHandle,
+    pub(crate) preopen: OpenNode,
+}
+
+impl WorkerFilesystemContext {
+    pub(crate) fn new(generation_handle: FilesystemGenerationHandle, preopen: OpenNode) -> Self {
+        Self {
+            generation_handle,
+            preopen,
+        }
+    }
+}
 
 /// Test-harness coordination for a P3 HTTP body reply that is ready before a
 /// guest cancels the matching stream read.
@@ -185,6 +200,8 @@ pub trait WorkerCtx:
         component_service: Arc<dyn ComponentService>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
+        filesystem: WorkerFilesystemContext,
+        linear_memory: crate::services::linear_memory::LinearMemoryTracker,
         worker_config: AgentConfig,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
@@ -201,7 +218,7 @@ pub trait WorkerCtx:
         runtime: OwnerRuntime,
         owner_execution: Arc<OwnerExecution>,
         owner_resources: Arc<OwnerRuntimeResources>,
-        filesystem: FilesystemCapability,
+        filesystem_capability: FilesystemCapability,
         executable_component: Component,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError>;
@@ -286,6 +303,9 @@ pub trait EntityInvocationManagement {
 ///passed to these functions.
 #[async_trait]
 pub trait FuelManagement {
+    /// Whether this deployment measures compute usage. Disabled metering is explicitly unlimited.
+    fn fuel_metering_enabled(&self) -> bool;
+
     /// Ensures fuel is available for continued execution, borrowing a new batch
     /// from the account pool if the current pre-paid batch is exhausted.
     /// Returns an error if the account has no remaining fuel.

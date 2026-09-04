@@ -27,6 +27,7 @@ enum CanonicalGrepError {
 ///|
 /// Search files for a regular expression.
 #derive.tool("canonical-grep", version="2.0.0")
+#warnings("-struct_never_constructed")
 struct CanonicalGrep {}
 
 ///|
@@ -145,6 +146,7 @@ enum CanonicalStashError {
 ///|
 /// Stupid content tracker.
 #derive.tool("canonical-git")
+#warnings("-struct_never_constructed")
 struct CanonicalGit {}
 
 ///|
@@ -185,7 +187,7 @@ pub fn CanonicalGit::commit(
   ignore(signoff)
   ignore(reset_author)
   ignore(output)
-  Ok({ hash: "", files_changed: 0, insertions: 0, deletions: 0 })
+  Ok({ hash: "", files_changed: 0, insertions: 0, deletions: 0, })
 }
 
 ///|
@@ -260,6 +262,7 @@ pub fn CanonicalGit::log(
 ///|
 /// Subcommands under `canonical-git remote`.
 #derive.tool("remote")
+#warnings("-struct_never_constructed")
 struct CanonicalRemote {}
 
 ///|
@@ -332,6 +335,7 @@ pub fn CanonicalRemote::set_url(
 ///|
 /// Subcommands under `canonical-git stash`, including an implicit root body.
 #derive.tool("stash")
+#warnings("-struct_never_constructed")
 struct CanonicalStash {}
 
 ///|
@@ -379,6 +383,7 @@ pub fn CanonicalStash::apply(
 ///|
 /// Numeric-bound parity fixture.
 #derive.tool("canonical-big-bound")
+#warnings("-struct_never_constructed")
 struct CanonicalBigBound {}
 
 ///|

@@ -36,10 +36,10 @@ CTRF (Common Test Report Format) JSON reports are attached as artifacts to the C
 
 ```shell
 # List available artifacts for the run:
-gh run view <run_id> --repo golemcloud/golem --json artifacts --jq '.artifacts[].name'
+gh api repos/golemcloud/golem/actions/runs/<run_id>/artifacts --jq '.artifacts[].name'
 
-# Download CTRF artifacts (names typically contain "ctrf" or "test-report"):
-gh run download <run_id> --repo golemcloud/golem --pattern '*ctrf*' --dir tmp/ctrf_reports/
+# Download the test-report artifacts produced by Golem's CI jobs:
+gh run download <run_id> --repo golemcloud/golem --pattern '*-report' --dir tmp/ctrf_reports/
 ```
 
 If CTRF artifacts exist, parse the JSON files to extract failed test names, error messages, and stack traces. CTRF files have this structure:
@@ -67,11 +67,7 @@ Filter for tests with `"status": "failed"` to find the failures.
 Search the downloaded log file for failure indicators:
 
 ```shell
-grep -n "FAILED" tmp/ci_log.txt
-grep -n "error\[" tmp/ci_log.txt
-grep -n "panic" tmp/ci_log.txt
-grep -n "timed out" tmp/ci_log.txt
-grep -n "test result:" tmp/ci_log.txt
+rg -n 'FAILED|error\[|panic|timed out|test result:' tmp/ci_log.txt
 ```
 
 Look for:

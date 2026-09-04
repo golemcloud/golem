@@ -11,50 +11,50 @@
 ///|
 test "typed_config_value preserves path and encodes a string value" {
   let cfg = typed_config_value(["section", "name"], "hello")
-  inspect(
+  debug_inspect(
     cfg.path,
     content=(
-      #|[section, name]
+      #|["section", "name"]
     ),
   )
-  inspect(cfg.value.value.root, content="0")
-  inspect(
+  debug_inspect(cfg.value.value.root, content="0")
+  debug_inspect(
     cfg.value.value.value_nodes,
     content=(
-      #|[StringValue(hello)]
+      #|[StringValue("hello")]
     ),
   )
   // The carried value is self-describing: a non-empty schema graph must
   // accompany the value tree (guards against a "value only, missing schema"
   // regression in the encode pipeline).
-  inspect(cfg.value.graph.type_nodes.length() > 0, content="true")
+  debug_inspect(cfg.value.graph.type_nodes.length() > 0, content="true")
 }
 
 ///|
 test "typed_config_value encodes an integer value" {
   let cfg = typed_config_value(["count"], 42)
-  inspect(
+  debug_inspect(
     cfg.path,
     content=(
-      #|[count]
+      #|["count"]
     ),
   )
-  inspect(cfg.value.value.value_nodes, content="[S32Value(42)]")
+  debug_inspect(cfg.value.value.value_nodes, content="[S32Value(42)]")
 }
 
 ///|
 test "typed_config_value encodes a list value" {
   let cfg = typed_config_value(["tags"], ["a", "b"])
-  inspect(
+  debug_inspect(
     cfg.path,
     content=(
-      #|[tags]
+      #|["tags"]
     ),
   )
-  inspect(
+  debug_inspect(
     cfg.value.value.value_nodes,
     content=(
-      #|[StringValue(a), StringValue(b), ListValue([0, 1])]
+      #|[StringValue("a"), StringValue("b"), ListValue([0, 1])]
     ),
   )
 }

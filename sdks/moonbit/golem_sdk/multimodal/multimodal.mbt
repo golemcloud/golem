@@ -105,7 +105,7 @@ pub impl[T : MultimodalModality] @schema.FromSchema for Multimodal[T] with fn fr
             )
         }
       }
-      { items: result }
+      { items: result, }
     }
     other =>
       raise @schema.FromSchemaError::shape_mismatch(

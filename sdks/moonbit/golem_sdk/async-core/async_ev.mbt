@@ -111,7 +111,7 @@ fn notify_subscriber(
 ) -> Unit {
   if ev.wakeups.get(waitable_set) is Some(wakeup) &&
     wakeup.reader == waitable_id {
-    guard event is StreamRead(i, { progress: 1, copy_result: Completed }) &&
+    guard! event is StreamRead(i, { progress: 1, copy_result: Completed }) &&
       i == waitable_id
     wakeup.reading = false
     wakeup.signaled = false
@@ -119,8 +119,8 @@ fn notify_subscriber(
     waitable_join(waitable_id, 0)
     return
   }
-  guard ev.subscribes.get(waitable_set) is Some(subscribers)
-  guard subscribers.get(waitable_id) is Some(subscriber)
+  guard! ev.subscribes.get(waitable_set) is Some(subscribers)
+  guard! subscribers.get(waitable_id) is Some(subscriber)
   subscriber.event = Some(event)
   subscriber.coro.each(Coroutine::wake)
   // Keep the delivered event discoverable until its waiter consumes it. A
@@ -204,7 +204,7 @@ pub fn with_waitableset(f : async () -> Unit) -> Int {
 #doc(hidden)
 pub fn task_returned() -> Unit {
   let waitable_set = current_waitableset()
-  guard ev.tasks.get(waitable_set) is Some(_)
+  guard! ev.tasks.get(waitable_set) is Some(_)
   ev.post_return_flush.set(waitable_set, true)
   ev.resolved.set(waitable_set, true)
 }
@@ -230,7 +230,7 @@ pub fn cb(event : Int, waitable_id : Int, code : Int) -> Int {
       next_callback(waitable_set)
     }
     TaskCancelled => {
-      guard ev.tasks.get(waitable_set) is Some(coro)
+      guard! ev.tasks.get(waitable_set) is Some(coro)
       ev.cancellations.set(waitable_set, Requested)
       coro.cancel()
       if ev.owned_coroutines.get(waitable_set) is Some(owned) {
@@ -271,8 +271,8 @@ let ev : EventLoop = {
 #doc(hidden)
 pub fn spawn_component_task_current(f : async () -> Unit) -> Unit {
   let waitable_set = current_waitableset()
-  guard ev.tasks.get(waitable_set) is Some(_)
-  guard ev.owned_coroutines.get(waitable_set) is Some(owned)
+  guard! ev.tasks.get(waitable_set) is Some(_)
+  guard! ev.owned_coroutines.get(waitable_set) is Some(owned)
   let coro = spawn_owned(
     async fn() -> Unit {
       let coro = current_coroutine()
@@ -351,9 +351,9 @@ fn arm_task_wakeup(waitable_set : WaitableSet) -> Unit {
     return
   }
   let result = task_wakeup_stream_read(wakeup.reader, 0, 1)
-  guard result == -1
+  guard! result == -1
   let subscribers = subscribers_for(waitable_set)
-  guard subscribers.get(wakeup.reader) is None
+  guard! subscribers.get(wakeup.reader) is None
   subscribers.set(wakeup.reader, { event: None, coro: Set([]) })
   waitable_join(wakeup.reader, waitable_set.0)
   wakeup.reading = true
@@ -367,7 +367,7 @@ fn signal_component_task(waitable_set : WaitableSet) -> Unit {
     return
   }
   let result = StreamResult::from(task_wakeup_stream_write(wakeup.writer, 0, 1))
-  guard result.progress == 1 && result.copy_result is Completed
+  guard! result.progress == 1 && result.copy_result is Completed
   wakeup.signaled = true
 }
 
@@ -407,8 +407,8 @@ fn cancel_waitable_event(
   cancel : () -> Events,
 ) -> Events {
   let waitable_set = WaitableSet(owner_task)
-  guard ev.subscribes.get(waitable_set) is Some(subscribers)
-  guard subscribers.get(waitable_id) is Some(subscriber)
+  guard! ev.subscribes.get(waitable_set) is Some(subscribers)
+  guard! subscribers.get(waitable_id) is Some(subscriber)
 
   // Baseline cancel-read is synchronous and traps while its endpoint belongs
   // to a waitable set. Detach before invoking the generated intrinsic.
@@ -451,7 +451,7 @@ async fn waitable_event(waitable_id : Int, immediate : Events?) -> Events {
         subscribers.set(waitable_id, subscriber)
         subscriber
       }
-      guard subscriber.event is None
+      guard! subscriber.event is None
       waitable_join(waitable_id, waitable_set.0)
       let coro = current_coroutine()
       subscriber.coro.add(coro)
@@ -528,7 +528,7 @@ pub async fn suspend_for_subtask(
   }
   for ;; {
     let subscribers = subscribers_for(waitable_set)
-    guard subscribers.get(task.handle) is None
+    guard! subscribers.get(task.handle) is None
     subscribers.set(task.handle, subscriber)
     waitable_join(task.handle, waitable_set.0)
     suspend() catch {
@@ -540,7 +540,7 @@ pub async fn suspend_for_subtask(
           // this coroutine. Once delivered, cancelling the subtask again
           // traps, so consume that event before requesting cancellation.
           if subscriber.event is Some(Subtask(i, state)) {
-            guard i == task.handle
+            guard! i == task.handle
             settle_arguments(state)
             match state {
               Returned => {
@@ -571,7 +571,7 @@ pub async fn suspend_for_subtask(
 
     // Subsequent state, return if finished
     if subscriber.event is Some(Subtask(i, state)) {
-      guard i == task.handle
+      guard! i == task.handle
       settle_arguments(state)
       match state {
         Returned => return
@@ -594,7 +594,7 @@ pub async fn suspend_for_future_read(idx : Int, val : Int) -> Unit {
     let result = FutureReadResult::from(val)
     waitable_event(idx, Some(FutureRead(idx, result)))
   }
-  guard event is FutureRead(i, result) && i == idx
+  guard! event is FutureRead(i, result) && i == idx
   match result {
     Completed => return
     Cancelled => raise FutureReadError::Cancelled
@@ -612,7 +612,7 @@ pub fn cancel_future_read(
   let event = cancel_waitable_event(owner_task, idx, () => {
     FutureRead(idx, FutureReadResult::from(cancel()))
   })
-  guard event is FutureRead(i, result) && i == idx
+  guard! event is FutureRead(i, result) && i == idx
   match result {
     Completed => true
     Cancelled => false
@@ -630,7 +630,7 @@ pub fn cancel_stream_read(
   let event = cancel_waitable_event(owner_task, idx, () => {
     StreamRead(idx, StreamResult::from(cancel()))
   })
-  guard event is StreamRead(i, result) && i == idx
+  guard! event is StreamRead(i, result) && i == idx
   result.progress
 }
 
@@ -641,7 +641,7 @@ pub fn cancel_stream_write(idx : Int, cancel : () -> Int) -> Int {
   let event = cancel_waitable_event(current_component_task_token(), idx, () => {
     StreamWrite(idx, StreamResult::from(cancel()))
   })
-  guard event is StreamWrite(i, result) && i == idx
+  guard! event is StreamWrite(i, result) && i == idx
   result.progress
 }
 
@@ -655,7 +655,7 @@ pub async fn suspend_for_future_write_terminal(idx : Int, val : Int) -> Bool? {
     let result = FutureWriteResult::from(val)
     waitable_event(idx, Some(FutureWrite(idx, result)))
   }
-  guard event is FutureWrite(i, result) && i == idx
+  guard! event is FutureWrite(i, result) && i == idx
   match result {
     Completed => Some(true)
     Dropped => Some(false)
@@ -673,7 +673,7 @@ pub async fn suspend_for_stream_read(idx : Int, val : Int) -> (Int, Bool) {
     let result = StreamResult::from(val)
     waitable_event(idx, Some(StreamRead(idx, result)))
   }
-  guard event is StreamRead(i, { progress, copy_result }) && i == idx
+  guard! event is StreamRead(i, { progress, copy_result }) && i == idx
   match copy_result {
     Completed => return (progress, false)
     Dropped => return (progress, true)
@@ -696,7 +696,7 @@ pub async fn suspend_for_stream_write(idx : Int, val : Int) -> (Int, Bool) {
     let result = StreamResult::from(val)
     waitable_event(idx, Some(StreamWrite(idx, result)))
   }
-  guard event is StreamWrite(i, { progress, copy_result }) && i == idx
+  guard! event is StreamWrite(i, { progress, copy_result }) && i == idx
   match copy_result {
     Completed => return (progress, false)
     Dropped => return (progress, true)

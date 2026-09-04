@@ -25,9 +25,11 @@ test "parameter failure rolls back an earlier decoded stream" {
   }
   assert_true(first_source.is_present())
   assert_true(first_owned.is_present())
-  let result : Result[Int, _] = try? decode_param_with_resource_drops(
-    fields, 1, "partial transfer", drops,
-  )
+  let result : Result[Int, _] = try
+    decode_param_with_resource_drops(fields, 1, "partial transfer", drops) |> Ok
+  catch {
+    e => Err(e)
+  }
   guard result is Err(@common.AgentError::InvalidInput(_)) else {
     fail("decoding the second stream as Int must fail")
   }

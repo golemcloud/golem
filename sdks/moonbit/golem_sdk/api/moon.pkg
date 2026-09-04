@@ -9,3 +9,5 @@ import {
   "golemcloud/golem_sdk/schema_model_host" @model_host,
   "moonbitlang/core/debug",
 }
+
+supported_targets = "+wasm"

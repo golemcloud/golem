@@ -22,7 +22,8 @@
 pub(all) struct AgentConfigEntry {
   path : Array[String]
   value : SchemaValue
-} derive(Debug)
+  codec : PublicValueCodec
+}
 
 ///|
 /// Response of a `POST /v1/agents/create-agent` request.
@@ -69,7 +70,7 @@ pub(all) struct ResolvedAgent {
   phantom_id : String?
   config : Array[AgentConfigEntry]
   agent_id : AgentId?
-} derive(Debug)
+}
 
 ///|
 fn encode_config_entry(entry : AgentConfigEntry) -> Json {

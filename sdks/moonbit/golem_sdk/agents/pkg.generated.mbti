@@ -138,4 +138,3 @@ pub(open) trait Snapshottable {
   fn save_snapshot(Self) -> Bytes
   fn load_snapshot(Self, Bytes) -> Result[Unit, String]
 }
-

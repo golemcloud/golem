@@ -3,6 +3,7 @@ package "golemcloud/golem_sdk/interface/golem/core/types"
 
 import {
   "golemcloud/golem_sdk/async-core",
+  "moonbitlang/core/debug",
 }
 
 // Values
@@ -15,36 +16,36 @@ pub fn uuid_to_string(Uuid) -> String
 // Types and methods
 pub(all) struct AccountId {
   uuid : Uuid
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct AgentId {
   component_id : ComponentId
   agent_id : String
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct BinaryRestrictions {
   mime_types : Array[String]?
   min_bytes : UInt?
   max_bytes : UInt?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct BinaryValuePayload {
   bytes : FixedArray[Byte]
   mime_type : String?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct CardId {
   uuid : Uuid
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct ComponentId {
   uuid : Uuid
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct Datetime {
   seconds : Int64
   nanoseconds : UInt
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum DiscriminatorRule {
   Prefix(String)
@@ -53,35 +54,35 @@ pub(all) enum DiscriminatorRule {
   Regex(String)
   FieldEquals(FieldDiscriminator)
   FieldAbsent(String)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct DurationValuePayload {
   nanoseconds : Int64
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct EnvironmentId {
   uuid : Uuid
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct FieldDiscriminator {
   field_name : String
   literal : String?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct FixedListSpec {
   element : Int
   length : UInt
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct MapEntry {
   key : Int
   value : Int
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct MapSpec {
   key : Int
   value : Int
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct MetadataEnvelope {
   doc : String?
@@ -89,31 +90,31 @@ pub(all) struct MetadataEnvelope {
   examples : Array[String]
   deprecated : String?
   role : Role?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct NamedFieldType {
   name : String
   body : Int
   metadata : MetadataEnvelope
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum NumericBound {
   Signed(Int64)
   Unsigned(UInt64)
   FloatBits(UInt64)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct NumericRestrictions {
   min : NumericBound?
   max : NumericBound?
   unit : String?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum PathDirection {
   INPUT
   OUTPUT
   IN_OUT
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn PathDirection::from(Int) -> Self
 pub fn PathDirection::ordinal(Self) -> Int
 
@@ -121,7 +122,7 @@ pub(all) enum PathKind {
   FILE
   DIRECTORY
   ANY
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn PathKind::from(Int) -> Self
 pub fn PathKind::ordinal(Self) -> Int
 
@@ -130,62 +131,62 @@ pub(all) struct PathSpec {
   kind : PathKind
   allowed_mime_types : Array[String]?
   allowed_extensions : Array[String]?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct PermissionCard(Int) derive(Eq, Show)
+pub(all) struct PermissionCard(Int) derive(Eq, @debug.Debug)
 pub fn PermissionCard::drop(Self) -> Unit
 
 pub(all) struct PermissionCardSpec {
   polymorphic : Bool
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct PromiseId {
   agent_id : AgentId
   oplog_idx : UInt64
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct QuantitySpec {
   base_unit : String
   allowed_suffixes : Array[String]
   min : QuantityValue?
   max : QuantityValue?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct QuantityValue {
   mantissa : Int64
   scale : Int
   unit : String
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct QuotaToken(Int) derive(Eq, Show)
+pub(all) struct QuotaToken(Int) derive(Eq, @debug.Debug)
 pub fn QuotaToken::drop(Self) -> Unit
 
 pub(all) struct QuotaTokenSpec {
   resource_name : String?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct ResultSpec {
   ok : Int?
   err : Int?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum ResultValuePayload {
   OkValue(Int?)
   ErrValue(Int?)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum Role {
   Multimodal
   UnstructuredText
   UnstructuredBinary
   Other(String)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct SchemaGraph {
   type_nodes : Array[SchemaTypeNode]
   defs : Array[SchemaTypeDef]
   root : Int
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum SchemaTypeBody {
   RefType(Int)
@@ -225,18 +226,18 @@ pub(all) enum SchemaTypeBody {
   PermissionCardType(PermissionCardSpec)
   FutureType(Int?)
   StreamType(Int?)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct SchemaTypeDef {
   id : String
   name : String?
   body : Int
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct SchemaTypeNode {
   body : SchemaTypeBody
   metadata : MetadataEnvelope
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum SchemaValueNode {
   BoolValue(Bool)
@@ -274,9 +275,9 @@ pub(all) enum SchemaValueNode {
   QuotaTokenHandle(QuotaToken)
   PermissionCardHandle(PermissionCard)
   StreamValue(SchemaValueStream)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct SchemaValueStream(Int) derive(Eq, Show)
+pub(all) struct SchemaValueStream(Int) derive(Eq, @debug.Debug)
 pub fn SchemaValueStream::drop(Self) -> Unit
 pub async fn SchemaValueStream::unwrap(Self) -> @async-core.Stream[SchemaValueTree]
 pub async fn SchemaValueStream::wrap(@async-core.Stream[SchemaValueTree]) -> Self
@@ -284,71 +285,70 @@ pub async fn SchemaValueStream::wrap(@async-core.Stream[SchemaValueTree]) -> Sel
 pub(all) struct SchemaValueTree {
   value_nodes : Array[SchemaValueNode]
   root : Int
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
-pub(all) struct Secret(Int) derive(Eq, Show)
+pub(all) struct Secret(Int) derive(Eq, @debug.Debug)
 pub fn Secret::drop(Self) -> Unit
 
 pub(all) struct SecretSpec {
   inner : Int
   category : String?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct TextRestrictions {
   languages : Array[String]?
   min_length : UInt?
   max_length : UInt?
   regex : String?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct TextValuePayload {
   text : String
   language : String?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct TypedSchemaValue {
   graph : SchemaGraph
   value : SchemaValueTree
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct UnionBranch {
   tag : String
   body : Int
   discriminator : DiscriminatorRule
   metadata : MetadataEnvelope
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct UnionSpec {
   branches : Array[UnionBranch]
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct UnionValuePayload {
   tag : String
   body : Int
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct UrlRestrictions {
   allowed_schemes : Array[String]?
   allowed_hosts : Array[String]?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct Uuid {
   high_bits : UInt64
   low_bits : UInt64
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct VariantCaseType {
   name : String
   payload : Int?
   metadata : MetadataEnvelope
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct VariantValuePayload {
   case : UInt
   payload : Int?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 // Type aliases
 
 // Traits
-

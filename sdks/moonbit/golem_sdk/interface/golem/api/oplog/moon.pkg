@@ -1,4 +1,4 @@
-warnings = "-44"
+warnings = "-44-33"
 
 import {
   "golemcloud/golem_sdk/interface/golem/api/context",
@@ -7,3 +7,5 @@ import {
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/wasi/clocks/system-clock",
 }
+
+supported_targets = "+wasm"

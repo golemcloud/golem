@@ -3,7 +3,9 @@ fn[T] expect_retry_builder_error(
   f : () -> T raise RetryBuilderError,
   expected : String,
 ) -> Unit raise {
-  let result : Result[T, RetryBuilderError] = try? f()
+  let result : Result[T, RetryBuilderError] = try f() |> Ok catch {
+    e => Err(e)
+  }
   guard result is Err(RetryBuilderError(message)) else {
     fail("Expected RetryBuilderError")
   }
@@ -57,9 +59,9 @@ test "policy builder flattens validated unary chain" {
         },
         inner: 1,
       }),
-      @retry.PolicyNode::TimeBox({ limit: 30000000000UL, inner: 2 }),
-      @retry.PolicyNode::CountBox({ max_retries: 5, inner: 3 }),
-      @retry.PolicyNode::Exponential({ base_delay: 250000000UL, factor: 2.0 }),
+      @retry.PolicyNode::TimeBox({ limit: 30000000000UL, inner: 2, }),
+      @retry.PolicyNode::CountBox({ max_retries: 5, inner: 3, }),
+      @retry.PolicyNode::Exponential({ base_delay: 250000000UL, factor: 2.0, }),
     ],
   }
 
@@ -77,7 +79,7 @@ test "policy builder flattens binary chain" {
     nodes: [
       @retry.PolicyNode::AndThen((1, 2)),
       @retry.PolicyNode::Immediate,
-      @retry.PolicyNode::Jitter({ factor: 0.0, inner: 3 }),
+      @retry.PolicyNode::Jitter({ factor: 0.0, inner: 3, }),
       @retry.PolicyNode::Periodic(1000000000UL),
     ],
   }
@@ -92,8 +94,8 @@ test "named policy builder defaults and overrides" {
   let default_expected : NamedRetryPolicy = {
     name: "default",
     priority: 0,
-    predicate: { nodes: [@retry.PredicateNode::PredTrue] },
-    policy: { nodes: [@retry.PolicyNode::Never] },
+    predicate: { nodes: [@retry.PredicateNode::PredTrue], },
+    policy: { nodes: [@retry.PolicyNode::Never], },
   }
   assert_eq(default_raw, default_expected)
 
@@ -116,7 +118,7 @@ test "named policy builder defaults and overrides" {
         }),
       ],
     },
-    policy: { nodes: [@retry.PolicyNode::Periodic(1000000000UL)] },
+    policy: { nodes: [@retry.PolicyNode::Periodic(1000000000UL)], },
   }
   assert_eq(custom_raw, custom_expected)
 }

@@ -51,6 +51,14 @@ type = "Disabled"
 
 [grpc.tls.config]
 
+[invocation_session_tokens]
+issuer = "local-worker-service"
+verify_only_keys = []
+
+[invocation_session_tokens.active_key]
+id = "local-development"
+key = "0udALeSRcimBmmLXm6iKY1jg4+IZNXv6LaFkdIQ4hLA="
+
 [registry_service]
 connect_timeout = "10s"
 host = "localhost"

@@ -5,3 +5,5 @@ import {
   "golemcloud/golem_sdk/schema_model" @model,
   "golemcloud/golem_sdk/schema_model_host" @model_host,
 }
+
+supported_targets = "+wasm"

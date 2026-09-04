@@ -34,7 +34,7 @@ pub(all) struct GuestQuotaTokenHandle {
 pub fn GuestQuotaTokenHandle::new(
   handle : @types.QuotaToken,
 ) -> GuestQuotaTokenHandle {
-  { cell: Some(handle) }
+  { cell: Some(handle), }
 }
 
 ///|
@@ -77,8 +77,8 @@ impl Eq for GuestQuotaTokenHandle with fn equal(self, other) {
 }
 
 ///|
-impl Show for GuestQuotaTokenHandle with fn output(self, logger) {
-  logger.write_string(
+impl Debug for GuestQuotaTokenHandle with fn to_repr(self) {
+  Repr::literal(
     if self.is_present() {
       "GuestQuotaTokenHandle(present)"
     } else {

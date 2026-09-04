@@ -11,7 +11,7 @@ let hex_chars : FixedArray[Char] = [
 
 ///|
 fn uint64_hex(value : UInt64, width : Int) -> String {
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for i = width - 1; i >= 0; i = i - 1 {
     let nibble = ((value >> (i * 4)) & 0xFUL).to_int()
     buf.write_char(hex_chars[nibble])
@@ -69,7 +69,7 @@ pub fn uuid_from_standard_string(
       "Invalid UUID string: expected 32 hex digits, got \{hex_count}",
     )
   }
-  { high_bits: hi, low_bits: lo }
+  { high_bits: hi, low_bits: lo, }
 }
 
 ///|
@@ -78,7 +78,7 @@ pub fn principal_to_json(principal : @common.Principal) -> Json {
   match principal {
     Anonymous => Json::object({ "tag": Json::string("anonymous") })
     Oidc(oidc) => {
-      let fields : Map[String, Json] = {}
+      let fields : Map[String, Json] = Map([])
       fields["sub"] = Json::string(oidc.sub)
       fields["issuer"] = Json::string(oidc.issuer)
       fields["email"] = match oidc.email {
@@ -218,7 +218,7 @@ pub fn principal_from_json(
         _ => raise JsonCodecError("Missing 'accountId' in golem-user principal")
       }
       @common.Principal::GolemUser({
-        account_id: { uuid: uuid_from_standard_string(account_id_str) },
+        account_id: { uuid: uuid_from_standard_string(account_id_str), },
       })
     }
     other => raise JsonCodecError("Unknown principal tag: \{other}")
@@ -248,7 +248,7 @@ fn agent_id_from_json(json : Json) -> @types.AgentId raise JsonCodecError {
     _ => raise JsonCodecError("Missing 'agentId' in agent val")
   }
   {
-    component_id: { uuid: uuid_from_standard_string(component_id_str) },
+    component_id: { uuid: uuid_from_standard_string(component_id_str), },
     agent_id,
   }
 }

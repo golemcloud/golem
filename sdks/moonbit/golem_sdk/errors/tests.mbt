@@ -34,17 +34,22 @@ test "custom_error round-trips a string message" {
   let err = custom_error("boom")
   guard err is CustomError(_) else { fail("expected CustomError") }
   let decoded : String? = decode_custom_error_for_test(err)
-  inspect(decoded, content="Some(boom)")
+  debug_inspect(
+    decoded,
+    content=(
+      #|Some("boom")
+    ),
+  )
 }
 
 ///|
 test "internal_error prefixes and round-trips" {
   let err = internal_error("disk full")
   let decoded : String? = decode_custom_error_for_test(err)
-  inspect(
+  debug_inspect(
     decoded,
     content=(
-      #|Some(Internal error: disk full)
+      #|Some("Internal error: disk full")
     ),
   )
 }
@@ -54,7 +59,7 @@ test "custom_error_of round-trips a typed (non-string) value" {
   let err = custom_error_of_for_test((42 : Int))
   guard err is CustomError(_) else { fail("expected CustomError") }
   let decoded : Int? = decode_custom_error_for_test(err)
-  inspect(decoded, content="Some(42)")
+  debug_inspect(decoded, content="Some(42)")
 }
 
 ///|
@@ -67,15 +72,17 @@ test "failed custom error conversion drops its decoded stream" {
   )
   let error = custom_error_of_for_test(stream)
   let dropped = [0]
-  let result : Result[Int?, _] = try? decode_custom_error_with_resource_drops(
-    error,
-    {
+  let result : Result[Int?, _] = try
+    decode_custom_error_with_resource_drops(error, {
       drop_secret: fn(_) {  },
       drop_quota_token: fn(_) {  },
       drop_stream: fn(_) { dropped[0] += 1 },
       drop_native_stream: fn(_) {  },
-    },
-  )
+    })
+    |> Ok
+  catch {
+    e => Err(e)
+  }
   guard result is Err(_) else {
     fail("decoding a stream custom error as Int must fail")
   }
@@ -88,27 +95,27 @@ test "custom_error carries a self-describing schema graph" {
   guard err is CustomError(typed) else { fail("expected CustomError") }
   // The payload must carry a non-empty schema graph alongside the value tree
   // (guards against a "value only, missing schema" encoding regression).
-  inspect(typed.graph.type_nodes.length() > 0, content="true")
+  debug_inspect(typed.graph.type_nodes.length() > 0, content="true")
 }
 
 ///|
 test "invalid_* helpers build the matching variants" {
-  inspect(
+  debug_inspect(
     invalid_input_error("bad"),
     content=(
-      #|InvalidInput(bad)
+      #|InvalidInput("bad")
     ),
   )
-  inspect(
+  debug_inspect(
     invalid_method_error("nope"),
     content=(
-      #|InvalidMethod(nope)
+      #|InvalidMethod("nope")
     ),
   )
-  inspect(
+  debug_inspect(
     invalid_type_error("wrong"),
     content=(
-      #|InvalidType(wrong)
+      #|InvalidType("wrong")
     ),
   )
 }
@@ -116,12 +123,14 @@ test "invalid_* helpers build the matching variants" {
 ///|
 test "decode_custom_error returns None for non-custom errors" {
   let decoded : String? = decode_custom_error_for_test(invalid_input_error("x"))
-  inspect(decoded, content="None")
+  debug_inspect(decoded, content="None")
 }
 
 ///|
 test "decode_custom_error raises on a type mismatch" {
   let err = custom_error("not a number")
-  let r : Result[Int?, _] = try? decode_custom_error_for_test(err)
+  let r : Result[Int?, _] = try decode_custom_error_for_test(err) |> Ok catch {
+    e => Err(e)
+  }
   guard r is Err(_) else { fail("expected a decode error") }
 }

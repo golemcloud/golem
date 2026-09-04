@@ -157,10 +157,9 @@ pub async fn get_agent_capabilities(
         }
 
         for method in &agent_type.methods {
-            // Validate (project to the legacy invoke model) before advertising
-            // anything for this method. If the capability cannot be projected,
-            // invoking it would always fail, so we skip both the tool/resource
-            // and its prompt instead of exposing a broken method.
+            // Validate the method for MCP export before advertising anything.
+            // If the capability cannot be exported, invoking it would always
+            // fail, so skip both the tool/resource and its prompt.
             let agent_method_mcp = McpAgentCapability::from_agent_method(
                 &account_id,
                 &account_email,

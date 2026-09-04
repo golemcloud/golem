@@ -25,17 +25,17 @@ use golem_common::model::oplog::public_oplog_entry::{
     CardInstalledParams, CardRevokedParams, CommittedRemoteTransactionParams,
     CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
     DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams,
-    ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams,
-    GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams, LogParams,
-    ManualUpdateParameters, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttributeValue, PublicDurableFunctionType, PublicSpanData,
-    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
-    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
-    StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
-    StreamSessionParams, StringAttributeValue, SuccessfulUpdateParams, SuspendParams,
-    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    ExitedParams, FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostStreamFrameParams,
+    InterruptedParams, JumpParams, LogParams, ManualUpdateParameters, NoOpParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PluginInstallationDescription, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RemoveRetryPolicyParams,
+    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
+    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, StreamCancelParams,
+    StreamEndParams, StreamItemsParams, StreamRegisteredParams, StreamSessionParams,
+    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
+    WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
     AgentInvocationOutputParameters, AgentTerminatedByQuotaError, EphemeralCannotSuspendError,
@@ -425,14 +425,6 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
             }),
             PublicOplogEntry::GrowMemory(GrowMemoryParams { timestamp, delta }) => {
                 Self::GrowMemory(oplog::GrowMemoryParameters {
-                    timestamp: timestamp.into(),
-                    delta,
-                })
-            }
-            PublicOplogEntry::FilesystemStorageUsageUpdate(
-                FilesystemStorageUsageUpdateParams { timestamp, delta },
-            ) => {
-                Self::FilesystemStorageUsageUpdate(oplog::FilesystemStorageUsageUpdateParameters {
                     timestamp: timestamp.into(),
                     delta,
                 })
@@ -1009,10 +1001,6 @@ impl From<oplog::WorkerError> for golem_common::model::oplog::AgentError {
             oplog::WorkerError::ExceededTableLimit => Self::ExceededTableLimit,
             oplog::WorkerError::ExceededHttpCallLimit => Self::ExceededHttpCallLimit,
             oplog::WorkerError::ExceededRpcCallLimit => Self::ExceededRpcCallLimit,
-            oplog::WorkerError::NodeOutOfFilesystemStorage => Self::NodeOutOfFilesystemStorage,
-            oplog::WorkerError::AgentExceededFilesystemStorageLimit => {
-                Self::AgentExceededFilesystemStorageLimit
-            }
             oplog::WorkerError::AgentTerminatedByQuota(inner) => {
                 Self::AgentTerminatedByQuota(AgentTerminatedByQuotaError {
                     environment_id: EnvironmentId(inner.environment_id.uuid.into()),
@@ -1324,10 +1312,6 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 details: params.details,
             }),
             oplog::OplogEntry::GrowMemory(params) => Ok(Self::GrowMemory {
-                timestamp: timestamp_from_datetime(params.timestamp),
-                delta: params.delta,
-            }),
-            oplog::OplogEntry::FilesystemStorageUsageUpdate(params) => Ok(Self::FilesystemStorageUsageUpdate {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 delta: params.delta,
             }),
@@ -1755,10 +1739,6 @@ impl From<golem_common::model::oplog::AgentError> for oplog::WorkerError {
             AgentError::ExceededTableLimit => Self::ExceededTableLimit,
             AgentError::ExceededHttpCallLimit => Self::ExceededHttpCallLimit,
             AgentError::ExceededRpcCallLimit => Self::ExceededRpcCallLimit,
-            AgentError::NodeOutOfFilesystemStorage => Self::NodeOutOfFilesystemStorage,
-            AgentError::AgentExceededFilesystemStorageLimit => {
-                Self::AgentExceededFilesystemStorageLimit
-            }
             AgentError::AgentTerminatedByQuota(inner) => {
                 Self::AgentTerminatedByQuota(oplog::AgentTerminatedByQuotaError {
                     environment_id: inner.environment_id.into(),
@@ -2100,12 +2080,6 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                     delta,
                 }))
             }
-            M::FilesystemStorageUsageUpdate { timestamp, delta } => Ok(
-                Self::FilesystemStorageUsageUpdate(oplog::FilesystemStorageUsageUpdateParameters {
-                    timestamp: timestamp.into(),
-                    delta,
-                }),
-            ),
             M::CardRevoked {
                 timestamp,
                 queued_event_index,

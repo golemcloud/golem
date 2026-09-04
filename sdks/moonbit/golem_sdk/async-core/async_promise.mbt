@@ -153,15 +153,13 @@ async fn[X] promised_future_get(cell : Ref[PromiseCell[X]]) -> X {
   match cell.val.state {
     Pending => {
       cell.val.reading = true
-      cell.val.ready.acquire() catch {
-        err => {
-          cell.val.reading = false
-          if cell.val.state is Pending {
-            cell.val.state = ReaderDropped
-          }
-          raise err
+      errdefer {
+        cell.val.reading = false
+        if cell.val.state is Pending {
+          cell.val.state = ReaderDropped
         }
       }
+      cell.val.ready.acquire()
       cell.val.reading = false
       consume_promised_future(cell)
     }

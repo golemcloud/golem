@@ -27,7 +27,7 @@ pub(all) struct Secret[T] {
   key : Array[String]
 }
 pub fn[T : @schema.IntoSchema + @schema.FromSchema] Secret::get(Self[T]) -> T raise @common.AgentError
-pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for Secret[T]
+pub impl[T : @schema.IntoSchema] ConfigField for Secret[T]
 
 // Type aliases
 
@@ -50,4 +50,3 @@ pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for T?
 pub impl[T : @schema.IntoSchema + @schema.FromSchema, E : @schema.IntoSchema + @schema.FromSchema] ConfigField for Result[T, E]
 pub impl ConfigField for Bytes
 pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for Array[T]
-

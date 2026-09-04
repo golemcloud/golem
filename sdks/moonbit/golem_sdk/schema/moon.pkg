@@ -6,7 +6,8 @@ import {
 }
 
 import {
-  "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/schema_model" @model,
 } for "test"
+
+supported_targets = "+wasm"

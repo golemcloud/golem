@@ -135,7 +135,7 @@ pub fn ToolInfo::client_pascal_case(self : Self) -> String {
 
 ///|
 pub fn moonbit_name_to_kebab_case(name : String) -> String {
-  let out = StringBuilder::new()
+  let out = StringBuilder()
   let chars = name.to_array()
   let mut wrote = false
   let mut dash = false
@@ -168,7 +168,7 @@ pub fn moonbit_name_to_kebab_case(name : String) -> String {
 
 ///|
 pub fn wire_to_pascal_case(name : String) -> String {
-  let out = StringBuilder::new()
+  let out = StringBuilder()
   let mut upper = true
   for ch in name {
     if ch == '-' || ch == '_' {
@@ -191,7 +191,7 @@ fn tool_fail(message : String) -> Unit raise ToolParseError {
 ///|
 fn tool_doc(doc : @syntax.DocString) -> String {
   let lines = doc.content.to_array()
-  lines.join("\n").trim().to_string()
+  lines.join("\n").trim().to_owned()
 }
 
 ///|
@@ -242,17 +242,10 @@ fn validate_type_member_tool_annotations(
   allow_error_case_annotations : Bool,
 ) -> Unit raise ToolParseError {
   match desc {
-    Record(fields~, constr_decl~) => {
+    Record(fields~) =>
       for field in fields {
         reject_tool_annotations(field.attrs, "a record field")
       }
-      if constr_decl is Some(record_constructor) {
-        reject_tool_annotations(
-          record_constructor.attrs,
-          "a record constructor",
-        )
-      }
-    }
     Variant(constrs) | Error(EnumPayload(constrs)) =>
       for constr in constrs {
         for attr in constr.attrs {
@@ -269,45 +262,20 @@ fn validate_type_member_tool_annotations(
 }
 
 ///|
-fn validate_local_type_tool_annotations(
-  local_types : @list.List[@syntax.LocalTypeDecl],
-) -> Unit raise ToolParseError {
-  for local_type in local_types {
-    validate_type_member_tool_annotations(local_type.components, false)
-  }
-}
-
-///|
-fn validate_decl_body_tool_annotations(
-  body : @syntax.DeclBody,
-) -> Unit raise ToolParseError {
-  match body {
-    DeclBody(local_types~, ..) =>
-      validate_local_type_tool_annotations(local_types)
-    DeclNone | DeclStubs(_) => ()
-  }
-}
-
-///|
 fn validate_unsupported_tool_annotations(
   impl_ : @syntax.Impl,
 ) -> Unit raise ToolParseError {
   match impl_ {
     TopTypeDef(decl) =>
       validate_type_member_tool_annotations(decl.components, true)
-    TopFuncDef(decl_body~, ..) => validate_decl_body_tool_annotations(decl_body)
-    TopImpl(attrs~, body~, ..) => {
+    TopFuncDef(..) => ()
+    TopImpl(attrs~, ..) =>
       reject_tool_annotations(attrs, "a trait implementation")
-      validate_decl_body_tool_annotations(body)
-    }
     TopImplRelation(attrs~, ..) =>
       reject_tool_annotations(attrs, "a trait implementation")
     TopLetDef(attrs~, ..) =>
       reject_tool_annotations(attrs, "a value declaration")
-    TopTest(attrs~, local_types~, ..) => {
-      reject_tool_annotations(attrs, "a test")
-      validate_local_type_tool_annotations(local_types)
-    }
+    TopTest(attrs~, ..) => reject_tool_annotations(attrs, "a test")
     TopTrait(decl) => {
       reject_tool_annotations(decl.attrs, "a trait")
       for trait_method in decl.methods {
@@ -322,8 +290,9 @@ fn validate_unsupported_tool_annotations(
         reject_tool_annotations(constr.attrs, "a view case")
       }
     }
-    TopExpr(local_types~, ..) =>
-      validate_local_type_tool_annotations(local_types)
+    TopExtend(attrs~, ..) =>
+      reject_tool_annotations(attrs, "an extension declaration")
+    TopExpr(..) | TopImport(..) => ()
   }
 }
 
@@ -362,8 +331,8 @@ fn derive_props(
   name : String,
 ) -> Array[@attribute.Prop]? {
   match attr.parsed {
-    Some(Ident({ qual: Some("derive"), name: n })) if n == name => Some([])
-    Some(Apply({ qual: Some("derive"), name: n }, props)) if n == name =>
+    Some(Ident({ qual: Some("derive"), name: n, })) if n == name => Some([])
+    Some(Apply({ qual: Some("derive"), name: n, }, props)) if n == name =>
       Some(props.to_array())
     _ => None
   }
@@ -377,7 +346,7 @@ fn attribute_space(ch : Char) -> Bool {
 ///|
 fn rewrite_command_alias_label(raw : String) -> String {
   let chars = raw.to_array()
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   let mut i = 0
   let mut in_string = false
   let mut escaped = false
@@ -542,7 +511,7 @@ fn parse_examples(
           tool_fail("#derive.example on " + owner + " requires a body")
           continue
         }
-        result.push({ body, title })
+        result.push({ body, title, })
       }
       None => ()
     }
@@ -745,8 +714,8 @@ fn parse_arg(
     "argument",
     owner,
   )
-  for alias in aliases {
-    require_tool_identifier(alias, "argument alias", owner)
+  for alias_name in aliases {
+    require_tool_identifier(alias_name, "argument alias", owner)
   }
   {
     source_param,
@@ -1080,7 +1049,7 @@ fn parse_command(
     "::" +
     decl.name.name
   let params : Array[(String, ToolParamType)] = []
-  for p in decl.decl_params.unwrap_or(@list.List::from_array([])) {
+  for p in decl.decl_params.unwrap_or(@list.List([])) {
     match p {
       Positional(binder~, ty=Some(ty)) => {
         if binder.name == "self" {
@@ -1231,7 +1200,7 @@ fn parse_command(
         for formatter in formatters {
           require_tool_identifier(formatter, "result formatter", owner)
         }
-        result = Some({ formatters, options, defaults })
+        result = Some({ formatters, options, defaults, })
       }
       Some((Some("derive"), "example")) | None => ()
       Some((Some("derive"), n)) if n == "prompt_hint" ||
@@ -1274,8 +1243,8 @@ fn parse_command(
   }
   let name = name_override.val.unwrap_or(mapped)
   require_tool_identifier(name, "command", owner)
-  for alias in aliases {
-    require_tool_identifier(alias, "command alias", owner)
+  for alias_name in aliases {
+    require_tool_identifier(alias_name, "command alias", owner)
   }
   let mut error_via_result = false
   let (success_type, error_type) : (ParamType?, ParamType?) = match
@@ -1348,7 +1317,7 @@ pub fn parse_tools(
   files : Array[(String, String)],
 ) -> Array[ToolInfo] raise ToolParseError {
   let impls : Array[@syntax.Impl] = []
-  let errors : Map[String, @syntax.TypeDecl] = {}
+  let errors : Map[String, @syntax.TypeDecl] = Map([])
   for pair in files {
     let (filename, source) = pair
     let (parsed, reports) = @parser.parse_string(source)
@@ -1371,8 +1340,8 @@ pub fn parse_tools(
     validate_unsupported_tool_annotations(impl_)
   }
   let result : Array[ToolInfo] = []
-  let by_source : Map[String, Int] = {}
-  let by_wire : Map[String, String] = {}
+  let by_source : Map[String, Int] = Map([])
+  let by_wire : Map[String, String] = Map([])
   for item in impls {
     match item {
       TopTypeDef(decl) =>
@@ -1402,7 +1371,7 @@ pub fn parse_tools(
                 )
               }
               match decl.components {
-                Record(fields~, ..) if fields.is_empty() => ()
+                Record(fields~) if fields.is_empty() => ()
                 _ =>
                   tool_fail(
                     "#derive.tool struct '" + decl.tycon + "' must be empty",
@@ -1531,7 +1500,7 @@ pub fn parse_tools(
       _ => ()
     }
   }
-  let used_error_types : Map[String, Unit] = {}
+  let used_error_types : Map[String, Unit] = Map([])
   for tool in result {
     for command in tool.commands {
       if command.error_type is Some(Simple(name)) {

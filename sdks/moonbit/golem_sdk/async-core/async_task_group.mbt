@@ -233,7 +233,7 @@ pub async fn[X] with_task_group(f : async (TaskGroup[X]) -> X) -> X {
       }
     }
   }
-  guard tg.children.is_empty()
+  guard! tg.children.is_empty()
   while tg.group_defer.pop() is Some(defer_block) {
     defer_block() catch {
       err => if tg.state is Done { tg.state = Fail(err) }

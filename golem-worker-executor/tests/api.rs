@@ -95,6 +95,43 @@ inherit_test_dep!(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+async fn all_disabled_resource_metering_allows_startup_and_execution(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.resource_usage_metering = Default::default();
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter_id = agent_id!("Counter", "unmetered-execution");
+
+    executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
 async fn dropping_executor_releases_services(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -3600,7 +3637,6 @@ async fn long_running_poll_loop_http_failures_are_retried(
         deps,
         &context,
         None,
-        None,
         Some(RetryConfig {
             max_attempts: 30,
             min_delay: Duration::from_millis(100),
@@ -4453,6 +4489,10 @@ async fn invocation_queue_is_persistent(
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
+    let first_poll_release = Arc::new(tokio::sync::Semaphore::new(0));
+    let first_poll_release_clone = first_poll_release.clone();
+    let (first_poll_entered_tx, first_poll_entered_rx) = tokio::sync::oneshot::channel();
+    let first_poll_entered_tx = Arc::new(Mutex::new(Some(first_poll_entered_tx)));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
 
@@ -4462,9 +4502,18 @@ async fn invocation_queue_is_persistent(
         async move {
             let route = Router::new().route(
                 "/poll",
-                get(move || async move {
-                    let body = response_clone.lock().unwrap();
-                    body.clone()
+                get(move || {
+                    let first_poll_release = first_poll_release_clone.clone();
+                    let first_poll_entered_tx = first_poll_entered_tx.clone();
+                    async move {
+                        let first_poll = first_poll_entered_tx.lock().unwrap().take();
+                        if let Some(entered) = first_poll {
+                            let _ = entered.send(());
+                            let permit = first_poll_release.acquire().await.unwrap();
+                            permit.forget();
+                        }
+                        response_clone.lock().unwrap().clone()
+                    }
                 }),
             );
 
@@ -4491,9 +4540,7 @@ async fn invocation_queue_is_persistent(
         .invoke_agent(&component, &agent_id, "start_polling", data_value!("done"))
         .await?;
 
-    executor
-        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
-        .await?;
+    tokio::time::timeout(Duration::from_secs(10), first_poll_entered_rx).await??;
 
     executor
         .invoke_agent(&component, &agent_id, "increment", data_value!())
@@ -4506,6 +4553,17 @@ async fn invocation_queue_is_persistent(
     executor
         .invoke_agent(&component, &agent_id, "increment", data_value!())
         .await?;
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let metadata = executor.get_worker_metadata(&worker_id).await?;
+            if metadata.pending_invocation_count == 3 {
+                break Ok::<(), WorkerExecutorError>(());
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await??;
 
     executor.interrupt(&worker_id).await?;
 
@@ -4515,22 +4573,18 @@ async fn invocation_queue_is_persistent(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
+    {
+        let mut response = response.lock().unwrap();
+        *response = "done".to_string();
+    }
+    first_poll_release.add_permits(1);
+
     drop(executor);
     let executor = start(deps, &context).await?;
 
     executor
         .invoke_agent(&component, &agent_id, "increment", data_value!())
         .await?;
-
-    // executor.log_output(&worker_id).await?;
-
-    executor
-        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
-        .await?;
-    {
-        let mut response = response.lock().unwrap();
-        *response = "done".to_string();
-    }
 
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())

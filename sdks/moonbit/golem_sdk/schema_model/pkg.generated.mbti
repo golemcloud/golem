@@ -4,6 +4,7 @@ package "golemcloud/golem_sdk/schema_model"
 import {
   "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
+  "moonbitlang/core/debug",
 }
 
 // Values
@@ -70,19 +71,19 @@ pub suberror SchemaError {
   TextLengthRangeInverted
   BinaryByteRangeInverted
   NullableNesting(inner~ : String)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub suberror SchemaFingerprintError {
   InvalidSchema(String)
   DuplicateSetValue(field~ : String, value~ : String)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub suberror SchemaModelError {
   EncodeError(String)
   DecodeError(String)
   MergeConflict(String)
   BuilderError(String)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 // Types and methods
 pub(all) struct EncodedAgentGraph {
@@ -145,13 +146,13 @@ pub fn[R] GuestSecretHandle::with_handle(Self, (@types.Secret) -> R) -> R?
 pub(all) struct MergedAgentGraph {
   defs : Array[SchemaTypeDef]
   roots : Array[SchemaType]
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct NamedFieldType {
   name : String
   body : SchemaType
   metadata : @types.MetadataEnvelope
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub struct SchemaBuilder {
   defs : Array[SchemaTypeDef]
@@ -166,24 +167,24 @@ pub fn SchemaBuilder::ref_(Self, String) -> SchemaType
 pub fn SchemaBuilder::register(Self, String, () -> SchemaType, String?) -> SchemaType
 pub fn SchemaBuilder::reserve(Self, String) -> Unit
 
-pub(all) struct SchemaFingerprintV1(FixedArray[Byte]) derive(Eq, Show)
+pub(all) struct SchemaFingerprintV1(FixedArray[Byte]) derive(Eq, @debug.Debug)
 pub fn SchemaFingerprintV1::as_bytes(Self) -> FixedArray[Byte]
 pub fn SchemaFingerprintV1::to_hex(Self) -> String
 
 pub(all) struct SchemaGraph {
   defs : Array[SchemaTypeDef]
   root : SchemaType
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct SchemaMapEntry {
   key : SchemaValue
   value : SchemaValue
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct SchemaType {
   body : SchemaTypeBody
   metadata : @types.MetadataEnvelope
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum SchemaTypeBody {
   Ref(String)
@@ -223,13 +224,13 @@ pub(all) enum SchemaTypeBody {
   PermissionCard(@types.PermissionCardSpec)
   Future(SchemaType?)
   Stream(SchemaType?)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct SchemaTypeDef {
   id : String
   name : String?
   body : SchemaType
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum SchemaValue {
   Bool(Bool)
@@ -268,7 +269,7 @@ pub(all) enum SchemaValue {
   QuotaToken(GuestQuotaTokenHandle)
   Stream(GuestSchemaValueStreamHandle)
   PermissionCard(GuestPermissionCardHandle)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn SchemaValue::release_resources(Self, SchemaValueResourceDrops) -> Unit
 
 pub(all) struct SchemaValueResourceDrops {
@@ -281,28 +282,27 @@ pub(all) struct SchemaValueResourceDrops {
 pub(all) struct SecretSpec {
   inner : SchemaType
   category : String?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct TypedSchemaValue {
   graph : SchemaGraph
   value : SchemaValue
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct UnionBranch {
   tag : String
   body : SchemaType
   discriminator : @types.DiscriminatorRule
   metadata : @types.MetadataEnvelope
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct VariantCaseType {
   name : String
   payload : SchemaType?
   metadata : @types.MetadataEnvelope
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 // Type aliases
 pub type TypeId = String
 
 // Traits
-

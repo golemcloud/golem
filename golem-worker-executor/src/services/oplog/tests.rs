@@ -3849,6 +3849,64 @@ async fn deleting_ephemeral_worker_fences_in_flight_archive_transfers(_tracing: 
     deleting_worker_fences_in_flight_archive_transfers_impl(AgentMode::Ephemeral).await;
 }
 
+#[test]
+async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage,
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let archive = Arc::new(CompressedOplogArchiveService::new(
+        indexed_storage,
+        1,
+        RetryConfig::default(),
+    ));
+    let service = MultiLayerOplogService::new(primary, nev![archive], 100, 1);
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "delete-with-open-oplog".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = service
+        .create(
+            &owned_agent_id,
+            AgentMode::Durable,
+            OplogEntry::no_op(),
+            make_agent_metadata(agent_id, account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    let current = oplog.current_oplog_index().await;
+
+    service.delete(&owned_agent_id, AgentMode::Durable).await;
+
+    assert_eq!(oplog.current_oplog_index().await, current);
+    assert!(!service.exists(&owned_agent_id, AgentMode::Durable).await);
+    let panic = AssertUnwindSafe(oplog.read_exact(OplogIndex::INITIAL, current.as_u64()))
+        .catch_unwind()
+        .await
+        .expect_err("exact read from the deleted storage must panic");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied());
+    assert_eq!(
+        message,
+        Some("Oplog read failed: missing oplog entries in range [1..=1]")
+    );
+}
+
 async fn deleting_worker_fences_in_flight_archive_transfers_impl(agent_mode: AgentMode) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());

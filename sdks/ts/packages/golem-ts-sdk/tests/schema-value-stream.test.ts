@@ -61,6 +61,16 @@ describe('schema-native AgentStream', () => {
     expect(pulls).toBe(1);
   });
 
+  it('normalizes a source iterator terminal value to undefined', async () => {
+    const stream = AgentStream.from({
+      [Symbol.asyncIterator]: () => ({
+        next: async () => ({ done: true as const, value: 42 }),
+      }),
+    });
+
+    expect(await stream.next()).toEqual({ done: true, value: undefined });
+  });
+
   it('preflights invalid siblings before moving a stream', async () => {
     const handle = nativeHandle();
     const value = v.tuple([v.stream(handle), v.u32(-1)]);
@@ -187,6 +197,38 @@ describe('schema-native AgentStream', () => {
     await stream.return();
     expect(pulls).toBe(1);
     expect(cancelled).toBe(true);
+  });
+
+  it('remains closed when source cleanup rejects from return', async () => {
+    const stream = AgentStream.from({
+      [Symbol.asyncIterator]: () => ({
+        next: async () => ({ done: false as const, value: 1 }),
+        return: async () => {
+          throw new Error('cleanup failed');
+        },
+      }),
+    });
+
+    await expect(stream.return()).rejects.toThrow('cleanup failed');
+    await expect(stream.next()).rejects.toThrow('AgentStream was already transferred or closed');
+  });
+
+  it('remains closed when source iterator initialization rejects from throw', async () => {
+    let initializationAttempts = 0;
+    const stream = AgentStream.from({
+      [Symbol.asyncIterator]: () => {
+        initializationAttempts += 1;
+        if (initializationAttempts === 1) {
+          throw new Error('iterator initialization failed');
+        }
+        return {
+          next: async () => ({ done: false as const, value: 1 }),
+        };
+      },
+    });
+
+    await expect(stream.throw('local failure')).rejects.toThrow('iterator initialization failed');
+    await expect(stream.next()).rejects.toThrow('AgentStream was already transferred or closed');
   });
 });
 

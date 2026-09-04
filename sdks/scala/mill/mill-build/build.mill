@@ -7,7 +7,7 @@ import mill.scalalib.*
 
 object `package` extends MillBuildRootModule {
   private def golemMillVersion = "1.1.8"
-  private def scalaJSVersion = "1.20.2"
+  private def scalaJSVersion = "1.22.0"
 
   private def repositorySources = Task.Sources(
     BuildCtx.workspaceRoot / "src",

@@ -20,4 +20,3 @@ pub fn typed_schema_value_from_wit(@types.TypedSchemaValue) -> @schema_model.Typ
 // Type aliases
 
 // Traits
-

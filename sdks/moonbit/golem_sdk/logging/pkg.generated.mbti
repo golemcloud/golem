@@ -44,4 +44,3 @@ pub fn Logger::with_name(Self, String) -> Self
 pub using @golemcloud/golem_sdk/interface/wasi/logging/logging {type Level}
 
 // Traits
-

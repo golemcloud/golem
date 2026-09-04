@@ -11,6 +11,9 @@ Run worker-executor tests with distributed tracing enabled and analyze the resul
 
 - Docker and Docker Compose installed
 - The monitoring stack defined in `integration-tests/monitoring/docker-compose.yml`
+- The test WASM components required by the selected test or group. Build them first using the
+  `modifying-test-components` skill; use `rebuild-all-test-components` only when a targeted build
+  cannot cover the affected set.
 
 ## Step 1: Start the Monitoring Stack
 
@@ -98,9 +101,11 @@ Open `http://localhost:16686` in a browser. Select service `worker-executor-test
 
 | Task | Tag | Description |
 |------|-----|-------------|
-| `worker-executor-tests-group1` | group1 | api, blobstore, keyvalue, http, rdbms, agent |
-| `worker-executor-tests-group2` | group2 | hot_update, transactions, observability |
-| `worker-executor-tests-group3` | group3 | durability, rpc, wasi, scalability, revert |
+| `worker-executor-tests-group1` | group1 | api, retry lifecycle, blobstore, keyvalue, HTTP, RDBMS, resource limits, oplog metrics, and tool discovery |
+| `worker-executor-tests-group2` | group2 | hot update, instance layer, transactions, observability, and retry policies; the task also runs `in_function_retry` and `storage_quota` separately |
+| `worker-executor-tests-group3` | group3 | RPC, WASI, and revert |
+| `worker-executor-tests-group4` | group4 | websocket, agent, TypeScript agent SDK, durability, scope cards, scalability, and readonly behavior |
+| `worker-executor-tests-misc` | untagged, rdbms_service, ignite_service | untagged coverage, agent extraction, and database-service variants |
 
 ## Step 4: Analyze Traces via Jaeger API
 

@@ -302,7 +302,7 @@ pub impl IntoSchema for Bytes with fn type_id() {
 ///|
 pub impl IntoSchema for Bytes with fn register_in(_b) {
   @model.schema_type(
-    Binary({ mime_types: None, min_bytes: None, max_bytes: None }),
+    Binary({ mime_types: None, min_bytes: None, max_bytes: None, }),
   )
 }
 

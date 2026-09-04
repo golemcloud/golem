@@ -21,6 +21,7 @@ use golem_cli::error::NonSuccessfulExit;
 use golem_cli::fs;
 use golem_cli::log::{LogColorize, log_warn_action};
 use golem_cli::model::app::ResolvedLocalServer;
+use golem_worker_executor::services::golem_config::ResourceUsageMeteringConfig;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::debug;
@@ -81,6 +82,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
             ports_file: args.ports_file.clone(),
             data_dir: data_dir.clone(),
             agent_filesystem_root: args.agent_filesystem_root.clone(),
+            resource_usage_metering: resource_usage_metering_from_env()?,
         })
         .await
         .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
@@ -117,7 +119,35 @@ fn launch_args_from_run_args_and_manifest(
     args: &RunArgs,
     ctx: &Context,
 ) -> anyhow::Result<LaunchArgs> {
-    launch_args_from_run_args_and_local_server(args, ctx.manifest_local_server())
+    launch_args_from_run_args_and_local_server(
+        args,
+        ctx.manifest_local_server(),
+        resource_usage_metering_from_env()?,
+    )
+}
+
+fn resource_usage_metering_from_env() -> anyhow::Result<ResourceUsageMeteringConfig> {
+    Ok(ResourceUsageMeteringConfig {
+        compute: metering_dimension_from_env("GOLEM__RESOURCE_USAGE_METERING__COMPUTE")?,
+        memory: metering_dimension_from_env("GOLEM__RESOURCE_USAGE_METERING__MEMORY")?,
+        filesystem: metering_dimension_from_env("GOLEM__RESOURCE_USAGE_METERING__FILESYSTEM")?,
+    })
+}
+
+fn metering_dimension_from_env(name: &str) -> anyhow::Result<bool> {
+    match std::env::var(name) {
+        Ok(value) => parse_metering_dimension(name, &value),
+        Err(std::env::VarError::NotPresent) => Ok(false),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("Failed to parse {name}: non-Unicode value")
+        }
+    }
+}
+
+fn parse_metering_dimension(name: &str, value: &str) -> anyhow::Result<bool> {
+    value
+        .parse()
+        .with_context(|| format!("Failed to parse {name}: {value}"))
 }
 
 fn data_dir_from_local_server(
@@ -132,6 +162,7 @@ fn data_dir_from_local_server(
 fn launch_args_from_run_args_and_local_server(
     args: &RunArgs,
     local_server: Option<&ResolvedLocalServer>,
+    resource_usage_metering: ResourceUsageMeteringConfig,
 ) -> anyhow::Result<LaunchArgs> {
     Ok(LaunchArgs {
         router_addr: args
@@ -163,6 +194,7 @@ fn launch_args_from_run_args_and_local_server(
             .agent_filesystem_root
             .clone()
             .or_else(|| local_server.and_then(|manifest| manifest.agent_filesystem_root.clone())),
+        resource_usage_metering,
     })
 }
 
@@ -219,6 +251,13 @@ mod tests {
     }
 
     #[test]
+    fn metering_dimension_values_are_validated() {
+        assert!(parse_metering_dimension("METERING", "true").unwrap());
+        assert!(!parse_metering_dimension("METERING", "false").unwrap());
+        assert!(parse_metering_dimension("METERING", "invalid").is_err());
+    }
+
+    #[test]
     fn manifest_local_server_values_are_used_when_cli_args_are_absent() {
         let manifest = local_server(LocalServer {
             router_addr: Some("127.0.0.1".to_string()),
@@ -230,8 +269,12 @@ mod tests {
             agent_filesystem_root: Some(PathBuf::from("/tmp/test-app/.golem/agents")),
         });
 
-        let args = launch_args_from_run_args_and_local_server(&RunArgs::default(), Some(&manifest))
-            .unwrap();
+        let args = launch_args_from_run_args_and_local_server(
+            &RunArgs::default(),
+            Some(&manifest),
+            ResourceUsageMeteringConfig::default(),
+        )
+        .unwrap();
 
         assert_eq!(args.router_addr, "127.0.0.1");
         assert_eq!(args.router_port, 9882);
@@ -270,7 +313,12 @@ mod tests {
             agent_filesystem_root: Some(PathBuf::from("cli-agents")),
         };
 
-        let args = launch_args_from_run_args_and_local_server(&run_args, Some(&manifest)).unwrap();
+        let args = launch_args_from_run_args_and_local_server(
+            &run_args,
+            Some(&manifest),
+            ResourceUsageMeteringConfig::default(),
+        )
+        .unwrap();
 
         assert_eq!(args.router_addr, "0.0.0.0");
         assert_eq!(args.router_port, 10000);

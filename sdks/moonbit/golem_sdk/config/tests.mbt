@@ -9,21 +9,24 @@
 ///|
 test "collect_entries_of - primitive String is a LOCAL declaration" {
   let entries = collect_entries_of(
-    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
     ["db", "url"],
   )
-  inspect(entries.length(), content="1")
-  inspect(entries[0].source, content="LOCAL")
-  inspect(
+  debug_inspect(entries.length(), content="1")
+  debug_inspect(entries[0].source, content="LOCAL")
+  debug_inspect(
     entries[0].path,
     content=(
-      #|[db, url]
+      #|["db", "url"]
     ),
   )
-  inspect(
+  debug_inspect(
     entries[0].value_type.root,
     content=(
-      #|{body: String, metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}
+      #|{
+      #|  body: String,
+      #|  metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|}
     ),
   )
 }
@@ -31,15 +34,26 @@ test "collect_entries_of - primitive String is a LOCAL declaration" {
 ///|
 test "collect_entries_of - Secret is a SECRET declaration over the inner type" {
   let entries = collect_entries_of(
-    (@schema.TypeTag::{  } : @schema.TypeTag[Secret[String]]),
+    (@schema.TypeTag::{ } : @schema.TypeTag[Secret[String]]),
     ["api", "key"],
   )
-  inspect(entries.length(), content="1")
-  inspect(entries[0].source, content="SECRET")
-  inspect(
+  debug_inspect(entries.length(), content="1")
+  debug_inspect(entries[0].source, content="SECRET")
+  debug_inspect(
     entries[0].value_type.root,
     content=(
-      #|{body: Secret({inner: {body: String, metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}, category: None}), metadata: {doc: None, aliases: [], examples: [], deprecated: None, role: None}}
+      #|{
+      #|  body: Secret(
+      #|    {
+      #|      inner: {
+      #|        body: String,
+      #|        metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|      },
+      #|      category: None,
+      #|    },
+      #|  ),
+      #|  metadata: { doc: None, aliases: [], examples: [], deprecated: None, role: None },
+      #|}
     ),
   )
 }
@@ -47,9 +61,9 @@ test "collect_entries_of - Secret is a SECRET declaration over the inner type" {
 ///|
 test "collect_entries_of - Option field is a LOCAL declaration" {
   let entries = collect_entries_of(
-    (@schema.TypeTag::{  } : @schema.TypeTag[Int?]),
+    (@schema.TypeTag::{ } : @schema.TypeTag[Int?]),
     ["timeout"],
   )
-  inspect(entries.length(), content="1")
-  inspect(entries[0].source, content="LOCAL")
+  debug_inspect(entries.length(), content="1")
+  debug_inspect(entries[0].source, content="LOCAL")
 }

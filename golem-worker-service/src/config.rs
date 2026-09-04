@@ -48,6 +48,7 @@ pub struct WorkerServiceConfig {
     pub component_service: ComponentServiceConfig,
     pub auth_service: AuthServiceConfig,
     pub webhook_callback_handler: WebhookCallbackHandlerConfig,
+    pub invocation_session_tokens: InvocationSessionTokenConfig,
     #[serde(default)]
     pub agent_resolution_cache: AgentResolutionCacheConfig,
 }
@@ -134,6 +135,13 @@ impl SafeDisplay for WorkerServiceConfig {
             self.webhook_callback_handler.to_safe_string_indented()
         );
 
+        let _ = writeln!(&mut result, "invocation session tokens:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.invocation_session_tokens.to_safe_string_indented()
+        );
+
         let _ = writeln!(&mut result, "agent resolution cache:");
         let _ = writeln!(
             &mut result,
@@ -165,6 +173,7 @@ impl Default for WorkerServiceConfig {
             component_service: ComponentServiceConfig::default(),
             auth_service: AuthServiceConfig::default(),
             webhook_callback_handler: WebhookCallbackHandlerConfig::default(),
+            invocation_session_tokens: InvocationSessionTokenConfig::default(),
             agent_resolution_cache: AgentResolutionCacheConfig::default(),
         }
     }
@@ -518,6 +527,53 @@ impl Default for WebhookCallbackHandlerConfig {
             ]),
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InvocationSessionTokenConfig {
+    pub issuer: String,
+    pub active_key: InvocationSessionTokenKeyConfig,
+    #[serde(default)]
+    pub verify_only_keys: Vec<InvocationSessionTokenKeyConfig>,
+}
+
+impl SafeDisplay for InvocationSessionTokenConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "issuer: {}", self.issuer);
+        let _ = writeln!(&mut result, "active_key_id: {}", self.active_key.id);
+        let verify_only_ids = self
+            .verify_only_keys
+            .iter()
+            .map(|key| key.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(&mut result, "verify_only_key_ids: [{verify_only_ids}]");
+        result
+    }
+}
+
+impl Default for InvocationSessionTokenConfig {
+    fn default() -> Self {
+        Self {
+            issuer: "local-worker-service".to_string(),
+            active_key: InvocationSessionTokenKeyConfig {
+                id: "local-development".to_string(),
+                key: Base64(vec![
+                    0xd2, 0xe7, 0x40, 0x2d, 0xe4, 0x91, 0x72, 0x29, 0x81, 0x9a, 0x62, 0xd7, 0x9b,
+                    0xa8, 0x8a, 0x63, 0x58, 0xe0, 0xe3, 0xe2, 0x19, 0x35, 0x7b, 0xfa, 0x2d, 0xa1,
+                    0x64, 0x74, 0x84, 0x38, 0x84, 0xb0,
+                ]),
+            },
+            verify_only_keys: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InvocationSessionTokenKeyConfig {
+    pub id: String,
+    pub key: Base64,
 }
 
 const CONFIG_FILE_NAME: &str = "config/worker-service.toml";

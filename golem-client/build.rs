@@ -10,18 +10,21 @@ fn main() {
     let root_yaml_path = PathBuf::from("../openapi/golem-service.yaml");
     let local_yaml_path = PathBuf::from("openapi/golem-service.yaml");
 
-    println!("cargo::rerun-if-changed={}", root_yaml_path.display());
-    println!("cargo::rerun-if-changed={}", local_yaml_path.display());
-
     println!("Starting code generation for Golem OpenAPI client.");
 
     println!("Output directory: {out_dir:?}");
     println!("Workspace OpenAPI file: {root_yaml_path:?}");
 
+    // Only the file this build actually reads from is tracked. The local copy is written by this
+    // script, so tracking it while it is (re)created would make the script stale on the very next
+    // cargo invocation and recompile golem-client and all of its dependents.
     if root_yaml_path.exists() {
+        println!("cargo::rerun-if-changed={}", root_yaml_path.display());
         // Copying the file to the crate so it gets packaged
         std::fs::create_dir_all(local_yaml_path.parent().unwrap()).unwrap();
         copy_if_different(root_yaml_path.clone(), local_yaml_path.clone()).unwrap();
+    } else {
+        println!("cargo::rerun-if-changed={}", local_yaml_path.display());
     };
     generate(local_yaml_path.clone(), out_dir)
 }
@@ -51,16 +54,20 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             // account usage
             (
-                "StorageUsage",
-                "golem_common::model::account_usage::StorageUsage",
+                "AccountUsage",
+                "golem_common::model::account_usage::AccountUsage",
             ),
             (
-                "StorageUsageHistory",
-                "golem_common::model::account_usage::StorageUsageHistory",
+                "AccountUsageMetrics",
+                "golem_common::model::account_usage::AccountUsageMetrics",
             ),
             (
-                "StorageUsageMetrics",
-                "golem_common::model::account_usage::StorageUsageMetrics",
+                "AccountUsageMetering",
+                "golem_common::model::account_usage::AccountUsageMetering",
+            ),
+            (
+                "MeteringStatus",
+                "golem_common::model::account_usage::MeteringStatus",
             ),
             (
                 "StorageLimit",
@@ -71,8 +78,8 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::account_usage::SetStorageLimit",
             ),
             (
-                "StorageUsagePeriod",
-                "golem_common::model::account_usage::StorageUsagePeriod",
+                "AccountUsagePeriod",
+                "golem_common::model::account_usage::AccountUsagePeriod",
             ),
             (
                 "MemoryLimit",

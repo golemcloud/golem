@@ -184,7 +184,7 @@ will only return the first 64 KiB of any larger file.
   let chunks : Array[FixedArray[Byte]] = []
   let mut offset : UInt64 = 0
   let mut done = false
-  while not(done) {
+  while !done {
     match fd.read(65536, offset) {
       Err(e) => return Err(e)
       Ok((chunk, eof)) => {

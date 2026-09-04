@@ -29,9 +29,9 @@ test "QuotaToken schema is a single capability node with no defs" {
   )
   inspect(graph.defs.length(), content="0")
   inspect(
-    graph.root.body,
+    repr(graph.root.body),
     content=(
-      #|QuotaToken({resource_name: None})
+      #|QuotaToken({ resource_name: None })
     ),
   )
 }
@@ -51,7 +51,7 @@ test "QuotaToken lowers to an opaque quota-token schema value" {
   let token = fake_token(0)
   let sv = @schema.to_value_as(token)
   guard sv is QuotaToken(_) else {
-    fail("expected a quota-token schema value, got \{sv}")
+    fail("expected a quota-token schema value, got \{repr(sv)}")
   }
 }
 
@@ -85,9 +85,11 @@ test "QuotaToken compound conversion rolls back through the source tree" {
     @model.SchemaValue::QuotaToken(handle),
     @model.SchemaValue::String("not a quota token"),
   ])
-  let result : Result[Array[QuotaToken], @schema.FromSchemaError] = try? @schema.from_value_as(
-    source,
-  )
+  let result : Result[Array[QuotaToken], @schema.FromSchemaError] = try
+    @schema.from_value_as(source) |> Ok
+  catch {
+    e => Err(e)
+  }
   guard result is Err(_) else {
     fail("the second array element must reject the conversion")
   }
@@ -106,9 +108,11 @@ test "QuotaToken compound conversion rolls back through the source tree" {
 ///|
 test "QuotaToken from_value rejects a non quota-token value" {
   let sv : @model.SchemaValue = String("not a token")
-  let r : Result[QuotaToken, @schema.FromSchemaError] = try? @schema.from_value_as(
-    sv,
-  )
+  let r : Result[QuotaToken, @schema.FromSchemaError] = try
+    @schema.from_value_as(sv) |> Ok
+  catch {
+    e => Err(e)
+  }
   guard r is Err(ShapeMismatch(_)) else {
     fail("expected a ShapeMismatch error")
   }

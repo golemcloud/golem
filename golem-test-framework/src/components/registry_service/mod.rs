@@ -173,6 +173,10 @@ async fn env_vars(
             "100000".to_string(),
         )
         .with(
+            "GOLEM__INITIAL_PLANS__DEFAULT__MAX_DISK_SPACE_PER_WORKER",
+            "10000000000000000".to_string(),
+        )
+        .with(
             "GOLEM__INITIAL_PLANS__UNLIMITED__PLAN_ID",
             admin_plan_id.to_string(),
         )

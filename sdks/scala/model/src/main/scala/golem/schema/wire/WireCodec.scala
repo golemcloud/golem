@@ -426,7 +426,7 @@ object SchemaWire {
             h.take()
             if (leftover.isEmpty) leftover = Some(i)
           case WitSchemaValueNode.StreamValue(h) if includeLifted || !liftedHandle(i) =>
-            h.take()
+            h.take().foreach(stream => AgentStreamOwnership.cleanup(stream.dispose()))
             if (leftover.isEmpty) leftover = Some(i)
           case WitSchemaValueNode.PermissionCardHandle(h) if includeLifted || !liftedHandle(i) =>
             h.take()
@@ -515,6 +515,24 @@ object SchemaWire {
   def typedSchemaValueToWit(tv: TypedSchemaValue): WitTypedSchemaValue =
     WitTypedSchemaValue(schemaGraphToWit(tv.graph), schemaValueToWit(tv.value))
 
-  def typedSchemaValueFromWit(wit: WitTypedSchemaValue): TypedSchemaValue =
-    TypedSchemaValue(schemaGraphFromWit(wit.graph), schemaValueFromWit(wit.value))
+  def typedSchemaValueFromWit(wit: WitTypedSchemaValue): TypedSchemaValue = {
+    val graph =
+      try schemaGraphFromWit(wit.graph)
+      catch {
+        case error: Throwable =>
+          drainCapabilityHandles(wit.value)
+          throw error
+      }
+    TypedSchemaValue(graph, schemaValueFromWit(wit.value))
+  }
+
+  private def drainCapabilityHandles(value: WitSchemaValueTree): Unit =
+    value.valueNodes.foreach {
+      case WitSchemaValueNode.SecretValue(handle)      => handle.take()
+      case WitSchemaValueNode.QuotaTokenHandle(handle) => handle.take()
+      case WitSchemaValueNode.StreamValue(handle)      =>
+        handle.take().foreach(stream => AgentStreamOwnership.cleanup(stream.dispose()))
+      case WitSchemaValueNode.PermissionCardHandle(handle) => handle.take()
+      case _                                               => ()
+    }
 }

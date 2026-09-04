@@ -5,6 +5,7 @@ import {
   "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/schema_model",
+  "moonbitlang/core/debug",
 }
 
 // Values
@@ -48,7 +49,7 @@ pub suberror FromSchemaError {
   OutOfRange(index~ : UInt, len~ : UInt, context~ : String)
   UnknownUnionTag(String)
   Custom(String)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn FromSchemaError::custom(String) -> Self
 pub fn FromSchemaError::out_of_range(UInt, UInt, String) -> Self
 pub fn FromSchemaError::shape_mismatch(String, String, String) -> Self
@@ -65,14 +66,14 @@ pub impl[T : IntoSchema] IntoSchema for AgentStream[T]
 
 pub(all) struct Duration {
   nanoseconds : Int64
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn Duration::new(Int64) -> Self
 pub impl FromSchema for Duration
 pub impl IntoSchema for Duration
 
 pub(all) struct Path {
   value : String
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn Path::new(String) -> Self
 pub impl FromSchema for Path
 pub impl IntoSchema for Path
@@ -81,7 +82,7 @@ pub struct Quantity[U] {
   mantissa : Int64
   scale : Int
   unit : String
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn[U : QuantityUnit] Quantity::new(Int64, Int, String) -> Self[U] raise FromSchemaError
 pub fn[U] Quantity::value(Self[U]) -> @types.QuantityValue
 pub impl[U : QuantityUnit] FromSchema for Quantity[U]
@@ -92,7 +93,7 @@ pub(all) struct TypeTag[T] {
 
 pub(all) struct Url {
   value : String
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn Url::new(String) -> Self
 pub impl FromSchema for Url
 pub impl IntoSchema for Url
@@ -163,4 +164,3 @@ pub(open) trait QuantityUnit {
   fn base_unit() -> String
   fn allowed_suffixes() -> Array[String]
 }
-

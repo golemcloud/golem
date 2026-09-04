@@ -22,16 +22,16 @@
 /// `defs` holds committed definitions in commit order.
 pub struct SchemaBuilder {
   defs : Array[SchemaTypeDef]
-  reserved : Map[TypeId, Unit]
+  reserved : Map[String, Unit]
 }
 
 ///|
 pub fn SchemaBuilder::new() -> SchemaBuilder {
-  { defs: [], reserved: Map::new() }
+  { defs: [], reserved: Map([]), }
 }
 
 ///|
-fn SchemaBuilder::index_of(self : SchemaBuilder, id : TypeId) -> Int? {
+fn SchemaBuilder::index_of(self : SchemaBuilder, id : String) -> Int? {
   for i, d in self.defs {
     if d.id == id {
       return Some(i)
@@ -42,13 +42,13 @@ fn SchemaBuilder::index_of(self : SchemaBuilder, id : TypeId) -> Int? {
 
 ///|
 /// Whether the given id is already reserved or committed.
-pub fn SchemaBuilder::contains(self : SchemaBuilder, id : TypeId) -> Bool {
+pub fn SchemaBuilder::contains(self : SchemaBuilder, id : String) -> Bool {
   self.reserved.contains(id) || !(self.index_of(id) is None)
 }
 
 ///|
 /// Reserve a slot for `id` so recursive references can close to a `Ref`.
-pub fn SchemaBuilder::reserve(self : SchemaBuilder, id : TypeId) -> Unit {
+pub fn SchemaBuilder::reserve(self : SchemaBuilder, id : String) -> Unit {
   self.reserved[id] = ()
 }
 
@@ -58,12 +58,12 @@ pub fn SchemaBuilder::reserve(self : SchemaBuilder, id : TypeId) -> Unit {
 /// otherwise it is appended in commit order.
 pub fn SchemaBuilder::commit(
   self : SchemaBuilder,
-  id : TypeId,
+  id : String,
   body : SchemaType,
   name : String?,
 ) -> Unit {
   let _ = self.reserved.remove(id)
-  let def : SchemaTypeDef = { id, name, body }
+  let def : SchemaTypeDef = { id, name, body, }
   match self.index_of(id) {
     Some(i) => self.defs[i] = def
     None => self.defs.push(def)
@@ -72,7 +72,7 @@ pub fn SchemaBuilder::commit(
 
 ///|
 /// A `Ref` schema type pointing at `id`.
-pub fn SchemaBuilder::ref_(self : SchemaBuilder, id : TypeId) -> SchemaType {
+pub fn SchemaBuilder::ref_(self : SchemaBuilder, id : String) -> SchemaType {
   ignore(self)
   schema_type(Ref(id))
 }
@@ -89,7 +89,7 @@ pub fn SchemaBuilder::ref_(self : SchemaBuilder, id : TypeId) -> SchemaType {
 /// without threading an error effect.
 pub fn SchemaBuilder::register(
   self : SchemaBuilder,
-  id : TypeId,
+  id : String,
   build : () -> SchemaType,
   name : String?,
 ) -> SchemaType {
@@ -120,7 +120,7 @@ pub fn SchemaBuilder::build_graph(
   self : SchemaBuilder,
   root : SchemaType,
 ) -> SchemaGraph raise SchemaModelError {
-  { defs: self.finish(), root }
+  { defs: self.finish(), root, }
 }
 
 ///|
@@ -157,7 +157,7 @@ pub fn merge_graph_defs(
 pub(all) struct MergedAgentGraph {
   defs : Array[SchemaTypeDef]
   roots : Array[SchemaType]
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Combine the per-root graphs of an agent (one per constructor / method input
@@ -171,5 +171,5 @@ pub(all) struct MergedAgentGraph {
 pub fn merge_agent_graphs(
   graphs : Array[SchemaGraph],
 ) -> MergedAgentGraph raise SchemaModelError {
-  { defs: merge_graph_defs(graphs), roots: graphs.map(g => g.root) }
+  { defs: merge_graph_defs(graphs), roots: graphs.map(g => g.root), }
 }

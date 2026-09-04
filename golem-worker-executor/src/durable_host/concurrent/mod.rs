@@ -55,12 +55,14 @@ use crate::durable_host::durability::{
     TaskRetryContext, TerminalCallError, mark_durable_call_trap_context,
     try_trigger_host_trap_retry,
 };
-use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
+use crate::durable_host::replay_state::{
+    OplogEntryLookupResult, ReplayState, ScopeStartClaimOutcome,
+};
 use crate::durable_host::{
     AtomicRegionLease, DurableScopeKind, DurableWorkerCtx, PublicDurableWorkerState,
 };
-use crate::services::HasWorker;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, PendingUpload};
+use crate::services::{HasShutdownToken, HasWorker};
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use std::fmt::Display;
 

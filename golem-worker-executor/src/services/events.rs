@@ -15,6 +15,7 @@
 use golem_common::model::{AgentId, AgentInvocationOutput, IdempotencyKey};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use tokio::sync::broadcast::error::RecvError;
+use uuid::Uuid;
 
 pub struct Events {
     sender: tokio::sync::broadcast::Sender<Event>,
@@ -80,6 +81,7 @@ pub enum Event {
     },
     WorkerLoaded {
         agent_id: AgentId,
+        start_attempt: Uuid,
         result: Result<(), WorkerExecutorError>,
     },
 }

@@ -23,10 +23,12 @@ Services load config by merging (in order): defaults → TOML file → environme
 | Worker Executor | `GolemConfig` | `golem-worker-executor/src/services/golem_config.rs` |
 | Worker Service | `WorkerServiceConfig` | `golem-worker-service/src/config.rs` |
 | Registry Service | `RegistryServiceConfig` | `golem-registry-service/src/config.rs` |
-| Shard Manager | `ShardManagerConfig` | `golem-shard-manager/src/shard_manager_config.rs` |
+| Shard Manager | `ShardManagerConfig` | `golem-shard-manager/src/config.rs` |
 | Compilation Service | `ServerConfig` | `golem-component-compilation-service/src/config.rs` |
+| Debugging Service | `DebugConfig` | `golem-debugging-service/src/config.rs` |
 
-The all-in-one `golem` binary has its own merged config that combines multiple service configs.
+The `golem` launcher configures the services it starts; it does not define a separate merged service
+config schema to update in place of the owning service structs above.
 
 ## Modifying a Config
 

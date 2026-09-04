@@ -2,42 +2,71 @@
 let example_dir = "../golem_sdk_example1"
 
 ///|
-let mod_json_path = "\{example_dir}/moon.mod.json"
+let mod_path = "\{example_dir}/moon.mod"
 
 ///|
 let golem_yaml_path = "\{example_dir}/golem.yaml"
 
 ///|
-let sdk_mooncakes_path = ".mooncakes/golemcloud/golem_sdk"
+let sdk_mooncakes_path = "{{ appRootDir }}/.mooncakes/golemcloud/golem_sdk"
 
 ///|
-let tools_mooncakes_path = ".mooncakes/golemcloud/golem_sdk_tools"
+let tools_mooncakes_path = "{{ appRootDir }}/.mooncakes/golemcloud/golem_sdk_tools"
 
 ///|
-let dev_tools_path = "../golem_sdk_tools"
+let dev_tools_path = "{{ appRootDir }}/../golem_sdk_tools"
 
 ///|
-let dev_sdk_path = "../golem_sdk"
+let dev_sdk_path = "{{ appRootDir }}/../golem_sdk"
+
+///|
+let dev_debug_build_path = "{{ appRootDir }}/../_build/wasm/debug/build/golemcloud/golem_sdk_example1/"
+
+///|
+let release_debug_build_path = "{{ appRootDir }}/_build/wasm/debug/build/"
+
+///|
+let dev_release_build_path = "{{ appRootDir }}/../_build/wasm/release/build/golemcloud/golem_sdk_example1/"
+
+///|
+let release_release_build_path = "{{ appRootDir }}/_build/wasm/release/build/"
 
 ///|
 let dev_sdk_version = "0.5.1"
+
+///|
+priv suberror ReleaseTransformError {
+  ReleaseTransformError(String)
+} derive(Debug)
+
+///|
+fn release_fail(message : String) -> Unit raise ReleaseTransformError {
+  raise ReleaseTransformError(message)
+}
 
 ///|
 fn main {
   let args = @env.args()
   if args.length() < 2 {
     print_usage()
+    @sys.exit(1)
     return
   }
   if args[1] == "--dev" {
     revert_to_dev() catch {
-      e => println("Error: \{e}")
+      e => {
+        println("Error: \{e}")
+        @sys.exit(1)
+      }
     }
   } else {
     let sdk_version = args[1]
     let tools_version = if args.length() >= 3 { args[2] } else { sdk_version }
     prepare_release(sdk_version, tools_version) catch {
-      e => println("Error: \{e}")
+      e => {
+        println("Error: \{e}")
+        @sys.exit(1)
+      }
     }
   }
 }
@@ -45,69 +74,55 @@ fn main {
 ///|
 fn print_usage() -> Unit {
   let usage =
-    #|Usage: moon run -C scripts release -- <sdk-version> [tools-version]
-    #|       moon run -C scripts release -- --dev
+    #|Usage: moon -C scripts run release -- <sdk-version> [tools-version]
+    #|       moon -C scripts run release -- --dev
     #|
     #|Examples:
-    #|  moon run -C scripts release -- 0.1.0            (same version for SDK and tools)
-    #|  moon run -C scripts release -- 0.1.0 0.2.0      (different versions)
-    #|  moon run -C scripts release -- --dev             (revert to development mode)
+    #|  moon -C scripts run release -- 0.1.0            (same version for SDK and tools)
+    #|  moon -C scripts run release -- 0.1.0 0.2.0      (different versions)
+    #|  moon -C scripts run release -- --dev             (revert to development mode)
   println(usage)
 }
 
 ///|
 fn prepare_release(sdk_version : String, tools_version : String) -> Unit raise {
+  validate_version("SDK", sdk_version)
+  validate_version("tools", tools_version)
   println(
     "==> Preparing template release with golem_sdk \{sdk_version}, golem_sdk_tools \{tools_version}...",
   )
-  // 1. moon.mod.json — compute new content
-  let mod_json = @fs.read_file_to_string(mod_json_path)
-  let mut m = replace_sdk_dep(
-    mod_json,
-    "\"golemcloud/golem_sdk\": \"\{sdk_version}\"",
-  )
+  // Compute every transformation before writing either file.
+  let mod_ = @fs.read_file_to_string(mod_path)
+  let mut m = replace_sdk_dep(mod_, sdk_version)
   m = remove_bin_deps(m)
-  m = insert_bin_deps(m, "\"golemcloud/golem_sdk_tools\": \"\{tools_version}\"")
-  // 2. golem.yaml — swap dev paths to mooncakes paths
+  m = insert_bin_deps(m, tools_version)
   let yaml = @fs.read_file_to_string(golem_yaml_path)
-  let mut y = yaml.replace_all(
-    old="-C \{dev_tools_path}",
-    new="-C \{tools_mooncakes_path}",
-  )
-  y = y.replace_all(old=" \{dev_sdk_path} ", new=" \{sdk_mooncakes_path} ")
-  // Write all files only after all transforms succeed
-  @fs.write_string_to_file(mod_json_path, m)
+  let y = transform_yaml_paths(yaml, true)
+  @fs.write_string_to_file(mod_path, m)
   @fs.write_string_to_file(golem_yaml_path, y)
   println("")
   println("Done. Files modified:")
   println(
-    "  \{mod_json_path}  — golem_sdk dep: \{sdk_version}, golem_sdk_tools bin-dep: \{tools_version}",
+    "  \{mod_path}  — golem_sdk dep: \{sdk_version}, golem_sdk_tools bin-dep: \{tools_version}",
   )
   println(
-    "  \{golem_yaml_path} — build commands use mooncakes-installed tools",
+    "  \{golem_yaml_path} — build commands use mooncakes-installed dependencies and standalone build paths",
   )
   println("")
   println("Review the changes, then copy \{example_dir}/ as your template.")
-  println("To revert: moon run -C scripts release -- --dev")
+  println("To revert: moon -C scripts run release -- --dev")
 }
 
 ///|
 fn revert_to_dev() -> Unit raise {
   println("==> Reverting to development mode...")
-  let workspace_dep = "\"golemcloud/golem_sdk\": \"\{dev_sdk_version}\""
-  // 1. moon.mod.json — compute new content
-  let mod_json = @fs.read_file_to_string(mod_json_path)
-  let mut m = replace_sdk_dep(mod_json, workspace_dep)
+  // Compute every transformation before writing either file.
+  let mod_ = @fs.read_file_to_string(mod_path)
+  let mut m = replace_sdk_dep(mod_, dev_sdk_version)
   m = remove_bin_deps(m)
-  // 2. golem.yaml — swap mooncakes paths back to dev paths
   let yaml = @fs.read_file_to_string(golem_yaml_path)
-  let mut y = yaml.replace_all(
-    old="-C \{tools_mooncakes_path}",
-    new="-C \{dev_tools_path}",
-  )
-  y = y.replace_all(old=" \{sdk_mooncakes_path} ", new=" \{dev_sdk_path} ")
-  // Write all files only after all transforms succeed
-  @fs.write_string_to_file(mod_json_path, m)
+  let y = transform_yaml_paths(yaml, false)
+  @fs.write_string_to_file(mod_path, m)
   @fs.write_string_to_file(golem_yaml_path, y)
   println("Done. Now in development mode (local workspace dependency).")
 }
@@ -116,133 +131,220 @@ fn revert_to_dev() -> Unit raise {
 
 ///|
 fn split_lines(s : String) -> Array[String] {
-  s.split("\n").collect().map(fn(v) { v.to_string() })
+  s.split("\n").collect().map(fn(v) { v.to_owned() })
 }
 
 ///|
-/// Replaces the `"golemcloud/golem_sdk": ...` entry in a JSON deps block.
-/// Handles both single-line (`"key": "version"`) and multi-line (`"key": { ... }`) entries.
-/// Preserves trailing commas from the original entry.
-fn replace_sdk_dep(s : String, replacement : String) -> String {
-  let marker = "\"golemcloud/golem_sdk\":"
+fn validate_version(
+  label : String,
+  version : String,
+) -> Unit raise ReleaseTransformError {
+  if version == "" || version.contains("\"") || version.contains("\n") {
+    release_fail("Invalid \{label} version: \{version}")
+  }
+}
+
+///|
+fn count_occurrences(s : String, marker : String) -> Int {
+  s.split(marker).collect().length() - 1
+}
+
+///|
+/// Replaces the active MoonBit module's single SDK import while preserving its indentation.
+fn replace_sdk_dep(
+  s : String,
+  version : String,
+) -> String raise ReleaseTransformError {
+  let marker = "\"golemcloud/golem_sdk@"
   let lines = split_lines(s)
   let result : Array[String] = []
-  let mut i = 0
-  while i < lines.length() {
-    let line = lines[i]
+  let mut replaced = 0
+  for line in lines {
     if line.contains(marker) {
-      let trimmed = line.trim_start().to_string()
+      replaced += 1
+      let trimmed = line.trim_start().to_owned()
+      if !trimmed.has_prefix(marker) ||
+        !(trimmed.has_suffix("\"") || trimmed.has_suffix("\",")) {
+        release_fail("Unsupported golem_sdk import syntax in \{mod_path}")
+      }
       let indent_len = line.length() - trimmed.length()
       let indent = String::make(indent_len, ' ')
-      // Determine if the original entry had a trailing comma
-      let mut has_comma = false
-      if line.contains("{") && not(line.contains("}")) {
-        // Multi-line object: skip to closing brace, check for comma there
-        i += 1
-        while i < lines.length() {
-          let l = lines[i]
-          let lt = l.trim_start().to_string()
-          if lt.has_prefix("}") {
-            has_comma = lt.has_prefix("},")
-            break
-          }
-          i += 1
-        }
-      } else {
-        // Single-line entry: check if line ends with comma
-        has_comma = line.trim_end().to_string().has_suffix(",")
+      let comma = if trimmed.has_suffix(",") { "," } else { "" }
+      let suffix = "\"" + comma
+      let existing_version = trimmed[marker.length():trimmed.length() -
+      suffix.length()].to_owned()
+      validate_version("existing SDK", existing_version)
+      if trimmed != marker + existing_version + suffix {
+        release_fail("Unsupported golem_sdk import syntax in \{mod_path}")
       }
-      let comma = if has_comma { "," } else { "" }
-      result.push("\{indent}\{replacement}\{comma}")
+      result.push("\{indent}\"golemcloud/golem_sdk@\{version}\"\{comma}")
     } else {
       result.push(line)
     }
-    i += 1
+  }
+  if replaced != 1 {
+    release_fail(
+      "Expected exactly one golem_sdk import in \{mod_path}, found \{replaced}",
+    )
   }
   result.join("\n")
 }
 
 ///|
-/// Removes the `"bin-deps": { ... }` block from JSON.
-/// Handles comma cleanup: removes a trailing comma from the previous line
-/// if the removed block was the last property.
-fn remove_bin_deps(s : String) -> String {
+/// Removes the standalone template's generated tool binary dependency block.
+fn remove_bin_deps(s : String) -> String raise ReleaseTransformError {
   let marker = "\"bin-deps\""
-  if not(s.contains(marker)) {
+  if !s.contains(marker) {
     return s
   }
   let lines = split_lines(s)
-  let result : Array[String] = []
-  let mut i = 0
-  while i < lines.length() {
-    let line = lines[i]
+  let mut marker_idx = -1
+  for i, line in lines {
     if line.contains(marker) {
-      // Skip the entire bin-deps block (including closing brace)
-      if line.contains("{") && not(line.contains("}")) {
-        i += 1
-        while i < lines.length() {
-          if lines[i].trim_start().to_string().has_prefix("}") {
-            break
-          }
-          i += 1
-        }
-        // i now points at the closing brace line; skip it too
+      if marker_idx >= 0 {
+        release_fail("Found multiple bin-deps entries in \{mod_path}")
       }
-      // Fix trailing comma on the previous kept line
-      if result.length() > 0 {
-        let prev = result[result.length() - 1]
-        let trimmed = prev.trim_end().to_string()
-        if trimmed.has_suffix(",") {
-          let indent_part = try! prev[:prev.length() - trimmed.length()]
-          let without_comma = try! trimmed[:trimmed.length() - 1]
-          result[result.length() - 1] = indent_part.to_string() +
-            without_comma.to_string()
-        }
-      }
-    } else {
+      marker_idx = i
+    }
+  }
+  if marker_idx <= 0 || marker_idx + 1 >= lines.length() {
+    release_fail("Unsupported bin-deps block in \{mod_path}")
+  }
+  let options_idx = marker_idx - 1
+  let closing_idx = marker_idx + 1
+  let entry = lines[marker_idx].trim().to_owned()
+  let entry_prefix = "\"bin-deps\": { \"golemcloud/golem_sdk_tools\": \""
+  let entry_suffix = "\" },"
+  if lines[options_idx].trim().to_owned() != "options(" ||
+    lines[closing_idx].trim().to_owned() != ")" ||
+    !entry.has_prefix(entry_prefix) ||
+    !entry.has_suffix(entry_suffix) {
+    release_fail("Unsupported bin-deps block in \{mod_path}")
+  }
+  let existing_version = entry[entry_prefix.length():entry.length() -
+  entry_suffix.length()].to_owned()
+  validate_version("existing tools", existing_version)
+  if entry != entry_prefix + existing_version + entry_suffix {
+    release_fail("Unsupported bin-deps block in \{mod_path}")
+  }
+  let start_idx = if options_idx > 0 && lines[options_idx - 1] == "" {
+    options_idx - 1
+  } else {
+    options_idx
+  }
+  let result : Array[String] = []
+  for i, line in lines {
+    if i < start_idx || i > closing_idx {
       result.push(line)
     }
-    i += 1
   }
   result.join("\n")
 }
 
 ///|
-/// Inserts a `"bin-deps": { ... }` block before the final closing brace in JSON.
-/// Idempotent: returns unchanged if `"bin-deps"` already exists.
-fn insert_bin_deps(s : String, entry : String) -> String {
+/// Adds the binary dependency consumed by `moon run cmd` in a standalone template.
+fn insert_bin_deps(
+  s : String,
+  tools_version : String,
+) -> String raise ReleaseTransformError {
   if s.contains("\"bin-deps\"") {
-    return s
+    release_fail(
+      "Refusing to overwrite an unmanaged bin-deps block in \{mod_path}",
+    )
   }
-  let lines = split_lines(s)
-  let result : Array[String] = []
-  // Find the last non-empty line that is the top-level closing brace
-  let mut closing_idx = -1
-  for i = lines.length() - 1; i >= 0; i = i - 1 {
-    if lines[i].trim().to_string() == "}" {
-      closing_idx = i
-      break
-    }
+  if s.contains("options(") {
+    release_fail(
+      "Refusing to merge bin-deps into an unmanaged options block in \{mod_path}",
+    )
   }
-  if closing_idx < 0 {
-    return s
+  if !s.has_suffix("\n") {
+    release_fail("Expected \{mod_path} to end with a newline")
   }
-  for i, line in lines {
-    if i == closing_idx {
-      // Add comma to previous line if needed
-      if result.length() > 0 {
-        let prev = result[result.length() - 1]
-        let trimmed = prev.trim_end().to_string()
-        if not(trimmed.has_suffix(",")) && not(trimmed.has_suffix("{")) {
-          let indent_part = try! prev[:prev.length() - trimmed.length()]
-          result[result.length() - 1] = indent_part.to_string() + trimmed + ","
-        }
-      }
-      result.push("  \"bin-deps\": {")
-      result.push("    \{entry}")
-      result.push("  }")
-    }
-    result.push(line)
+  s +
+  "\noptions(\n  \"bin-deps\": { \"golemcloud/golem_sdk_tools\": \"\{tools_version}\" },\n)\n"
+}
+
+///|
+fn switch_path(
+  s : String,
+  from : String,
+  to : String,
+  expected : Int,
+  label : String,
+) -> String raise ReleaseTransformError {
+  let from_count = count_occurrences(s, from)
+  let to_count = count_occurrences(s, to)
+  if from_count == expected && to_count == 0 {
+    s.replace_all(old=from, new=to)
+  } else if from_count == 0 && to_count == expected {
+    s
+  } else {
+    release_fail(
+      "Unexpected \{label} paths in \{golem_yaml_path}: found \{from_count} source and \{to_count} target occurrences; expected \{expected} of exactly one form",
+    )
+    abort("")
   }
-  result.join("\n")
+}
+
+///|
+fn transform_yaml_paths(
+  yaml : String,
+  release : Bool,
+) -> String raise ReleaseTransformError {
+  let from_tools = if release { dev_tools_path } else { tools_mooncakes_path }
+  let to_tools = if release { tools_mooncakes_path } else { dev_tools_path }
+  let from_sdk_arg = if release {
+    dev_sdk_path + "\""
+  } else {
+    sdk_mooncakes_path + "\""
+  }
+  let to_sdk_arg = if release {
+    sdk_mooncakes_path + "\""
+  } else {
+    dev_sdk_path + "\""
+  }
+  let from_sdk_wit = if release {
+    dev_sdk_path + "/wit"
+  } else {
+    sdk_mooncakes_path + "/wit"
+  }
+  let to_sdk_wit = if release {
+    sdk_mooncakes_path + "/wit"
+  } else {
+    dev_sdk_path + "/wit"
+  }
+  let from_debug_build = if release {
+    dev_debug_build_path
+  } else {
+    release_debug_build_path
+  }
+  let to_debug_build = if release {
+    release_debug_build_path
+  } else {
+    dev_debug_build_path
+  }
+  let from_release_build = if release {
+    dev_release_build_path
+  } else {
+    release_release_build_path
+  }
+  let to_release_build = if release {
+    release_release_build_path
+  } else {
+    dev_release_build_path
+  }
+  let mut result = switch_path(
+    yaml, from_tools, to_tools, 12, "golem_sdk_tools",
+  )
+  result = switch_path(
+    result, from_sdk_arg, to_sdk_arg, 4, "golem_sdk argument",
+  )
+  result = switch_path(result, from_sdk_wit, to_sdk_wit, 4, "golem_sdk WIT")
+  result = switch_path(
+    result, from_debug_build, to_debug_build, 2, "debug MoonBit build",
+  )
+  result = switch_path(
+    result, from_release_build, to_release_build, 2, "release MoonBit build",
+  )
+  result
 }
