@@ -1632,7 +1632,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     // Outside of reverts and updates, this will return the same status as get_latest_worker_metadata.
     // This just has an additional assert built in for when decisions need to be sure that they are fully up to date on the oplog.
     // _NEVER_ call this from outside the invocation loop, as that is the only place that can reason about whether the status is detached or not.
-    pub async fn get_non_detached_last_known_status(&self) -> AgentStatusRecord {
+    pub async fn get_non_detached_last_known_status(&self) -> Arc<AgentStatusRecord> {
         // Runs on the worker-state actor's status queue so the detached flag and the published
         // status are observed consistently with any in-flight commit/reattach transaction.
         self.state_actor.non_detached_status().await
@@ -2428,7 +2428,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     // should only be called from invocation loop
     pub async fn store_invocation_failure(&self, key: &IdempotencyKey, trap_type: &TrapType) {
-        let status = self.last_known_status.load_full().as_ref().clone();
+        let status = self.last_known_status.load_full();
         let keys_to_fail =
             invocation_keys_to_fail(&status, Some(key), !trap_type.is_invocation_rejection());
         let stderr = self.worker_event_service.get_last_invocation_errors();
@@ -5316,7 +5316,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
-        let status = self.last_known_status.load_full().as_ref().clone();
+        // Kept as an `Arc` rather than cloned out of. The record owns
+        // `invocation_results`, which gains an entry per invocation and is never
+        // pruned, so deep-copying it to read one key made each lookup cost more
+        // than the last. `load_full` already gives a consistent snapshot with the
+        // lifetime this needs.
+        let status = self.last_known_status.load_full();
         let maybe_result = self
             .invocation_results
             .read()
@@ -5709,7 +5714,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
 
-        let status = self.last_known_status.load_full().as_ref().clone();
+        let status = self.last_known_status.load_full();
         let keys_to_fail = invocation_keys_to_fail(&status, None, true);
 
         let mut invocation_results = self.invocation_results.write().await;
@@ -6170,7 +6175,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if self.last_known_status_detached.load(Ordering::Acquire) {
             return;
         }
-        let status = self.last_known_status.load_full().as_ref().clone();
+        let status = self.last_known_status.load_full();
         self.status_checkpointer
             .maybe_checkpoint(&status, reason)
             .await;
@@ -6193,7 +6198,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if self.last_known_status_detached.load(Ordering::Acquire) {
             return;
         }
-        let status = self.last_known_status.load_full().as_ref().clone();
+        let status = self.last_known_status.load_full();
         if let Some(marker) = min_exposed_marker
             && status.oplog_idx > marker
         {

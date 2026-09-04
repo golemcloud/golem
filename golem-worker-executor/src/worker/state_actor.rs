@@ -129,7 +129,7 @@ enum StatusJob {
     /// but the caller decides how to react (it asserts): a job whose caller was cancelled must
     /// not be able to panic the actor.
     NonDetachedStatus {
-        done: oneshot::Sender<Option<AgentStatusRecord>>,
+        done: oneshot::Sender<Option<Arc<AgentStatusRecord>>>,
     },
     /// Commits, then — if the status became detached (a jump or revert made it non-foldable) —
     /// recomputes it from the oplog, republishes it, and forces a cache flush.
@@ -266,7 +266,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                         let status = if state.detached.load(Ordering::Acquire) {
                             None
                         } else {
-                            Some(state.last_known_status.load_full().as_ref().clone())
+                            Some(state.last_known_status.load_full())
                         };
                         let _ = done.send(status);
                     }
@@ -389,7 +389,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     /// Returns the published status, asserting it is attached to the oplog. Serialized behind
     /// any in-flight commit/reattach transactions. The assert lives here on the caller side, so
     /// a job left behind by a cancelled caller cannot panic the actor.
-    pub async fn non_detached_status(&self) -> AgentStatusRecord {
+    pub async fn non_detached_status(&self) -> Arc<AgentStatusRecord> {
         self.commit
             .run_status_job(|done| StatusJob::NonDetachedStatus { done })
             .await
