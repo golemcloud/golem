@@ -95,6 +95,43 @@ inherit_test_dep!(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+async fn all_disabled_resource_metering_allows_startup_and_execution(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.resource_usage_metering = Default::default();
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter_id = agent_id!("Counter", "unmetered-execution");
+
+    executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
 async fn dropping_executor_releases_services(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -3599,7 +3636,6 @@ async fn long_running_poll_loop_http_failures_are_retried(
     let executor = start_customized(
         deps,
         &context,
-        None,
         None,
         Some(RetryConfig {
             max_attempts: 30,

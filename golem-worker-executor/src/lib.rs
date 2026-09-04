@@ -15,13 +15,16 @@
 pub mod bootstrap;
 pub mod config;
 pub mod durable_host;
+pub(crate) mod filesystem_pressure;
 pub mod grpc;
 pub mod identity;
 pub mod metrics;
 pub mod model;
 pub mod preview2;
+pub(crate) mod sandbox_filesystem;
 pub mod services;
 pub mod storage;
+pub(crate) mod wasi_filesystem;
 pub mod wasi_host;
 pub mod worker;
 pub mod workerctx;
@@ -48,7 +51,7 @@ use self::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use self::services::worker_fork::DefaultWorkerFork;
 use self::wasi_host::create_linker;
 use crate::grpc::WorkerExecutorImpl;
-use crate::services::active_agents::ActiveAgents;
+use crate::services::active_agents::{ActiveAgents, InvocationLoops};
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::card::{CardService, CardServiceDefault};
@@ -149,6 +152,10 @@ pub struct RunDetails {
     /// Weak reference to a sentinel inside `All`. When `All` is properly
     /// deallocated, `upgrade()` returns `None`. Used by tests to detect leaks.
     pub leak_detector: std::sync::Weak<()>,
+    /// The worker invocation loops of this executor. They stop at the shutdown signal; an
+    /// in-process restart of the executor over the same storage must wait for them to exit
+    /// before reopening the workers' oplogs.
+    pub invocation_loops: InvocationLoops,
 }
 
 impl Drop for RunDetails {
@@ -176,13 +183,13 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         &self,
         golem_config: &GolemConfig,
         shutdown_token: tokio_util::sync::CancellationToken,
-    ) -> Arc<ActiveAgents<Ctx>> {
-        Arc::new(ActiveAgents::<Ctx>::new(
+    ) -> anyhow::Result<Arc<ActiveAgents<Ctx>>> {
+        Ok(Arc::new(ActiveAgents::<Ctx>::new(
             &golem_config.memory,
             &golem_config.filesystem_storage,
             &golem_config.agent_status_flush,
             shutdown_token,
-        ))
+        )?))
     }
 
     fn create_shard_manager_service(
@@ -254,6 +261,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     ) -> Arc<dyn ResourceLimits> {
         crate::services::resource_limits::configured(
             &golem_config.resource_limits,
+            golem_config.resource_usage_metering,
             registry_service.clone(),
             shutdown_token.clone(),
         )
@@ -826,11 +834,15 @@ pub async fn create_worker_executor_impl<
         }
     };
 
-    let active_agents = bootstrap.create_active_agents(&golem_config, shutdown_token.clone());
+    let active_agents = bootstrap.create_active_agents(&golem_config, shutdown_token.clone())?;
 
+    let initial_file_cache_root = active_agents
+        .agent_filesystems()
+        .initial_file_cache_root()
+        .map(|path| path.to_path_buf());
     let file_loader = Arc::new(FileLoader::new(
         initial_files_service.clone(),
-        Some(active_agents.filesystem_storage_semaphore()),
+        initial_file_cache_root.as_deref(),
     )?);
 
     let running_worker_enumeration_service = Arc::new(RunningWorkerEnumerationServiceDefault::new(
@@ -1111,6 +1123,7 @@ pub async fn bootstrap_and_run_worker_executor<
     };
 
     let leak_detector = worker_executor_impl.leak_detector();
+    let invocation_loops = worker_executor_impl.active_agents().invocation_loops();
 
     crate::metrics::runtime::install_runtime_metrics(
         runtime.clone(),
@@ -1136,6 +1149,7 @@ pub async fn bootstrap_and_run_worker_executor<
         epoch_stop,
         shutdown,
         leak_detector,
+        invocation_loops,
     })
 }
 

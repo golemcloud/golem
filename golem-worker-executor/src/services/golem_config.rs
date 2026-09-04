@@ -29,10 +29,11 @@ use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use http::Uri;
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt::Write;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::warn;
@@ -81,6 +82,8 @@ pub struct GolemConfig {
     pub public_worker_api: WorkerServiceGrpcConfig,
     pub memory: MemoryConfig,
     pub filesystem_storage: FilesystemStorageConfig,
+    #[serde(default)]
+    pub resource_usage_metering: ResourceUsageMeteringConfig,
     pub rdbms: RdbmsConfig,
     pub resource_limits: ResourceLimitsConfig,
     pub component_cache: ComponentCacheConfig,
@@ -237,6 +240,12 @@ impl SafeDisplay for GolemConfig {
             "{}",
             self.filesystem_storage.to_safe_string_indented()
         );
+        let _ = writeln!(&mut result, "resource usage metering:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.resource_usage_metering.to_safe_string_indented()
+        );
         let _ = writeln!(&mut result, "rdbms:");
         let _ = writeln!(&mut result, "{}", self.rdbms.to_safe_string_indented());
         let _ = writeln!(&mut result, "resource limits:");
@@ -351,6 +360,7 @@ impl Default for GolemConfig {
             public_worker_api: WorkerServiceGrpcConfig::default(),
             memory: MemoryConfig::default(),
             filesystem_storage: FilesystemStorageConfig::default(),
+            resource_usage_metering: ResourceUsageMeteringConfig::default(),
             rdbms: RdbmsConfig::default(),
             resource_limits: ResourceLimitsConfig::default(),
             component_cache: ComponentCacheConfig::default(),
@@ -1265,6 +1275,42 @@ pub struct MemoryConfig {
     pub oom_retry_config: RetryConfig,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ResourceUsageMeteringConfig {
+    /// Measures Wasmtime fuel and exports it as compute usage. When disabled, cumulative fuel is
+    /// explicitly unlimited and invocation results report zero consumed fuel.
+    pub compute: bool,
+    /// Measures allocated linear-memory byte-time. Memory limits and admission remain enabled.
+    pub memory: bool,
+    /// Measures authoritative filesystem allocated-byte-time. Filesystem quotas and pressure
+    /// recovery remain enabled.
+    pub filesystem: bool,
+}
+
+impl ResourceUsageMeteringConfig {
+    pub const fn all_enabled() -> Self {
+        Self {
+            compute: true,
+            memory: true,
+            filesystem: true,
+        }
+    }
+
+    pub const fn any_byte_time_enabled(self) -> bool {
+        self.memory || self.filesystem
+    }
+}
+
+impl SafeDisplay for ResourceUsageMeteringConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "compute: {}", self.compute);
+        let _ = writeln!(&mut result, "memory: {}", self.memory);
+        let _ = writeln!(&mut result, "filesystem: {}", self.filesystem);
+        result
+    }
+}
+
 impl MemoryConfig {
     /// The admission policy for the measured-headroom gate. Reuses
     /// `worker_memory_ratio` as the usable fraction of the measured limit (the
@@ -1888,47 +1934,12 @@ impl Default for MemoryConfig {
     }
 }
 
-/// Configuration for the executor-wide worker storage semaphore.
-///
-/// The semaphore pool size is `total_worker_filesystem_storage_bytes`. Workers acquire
-/// permits proportional to their estimated storage usage; when the pool is
-/// exhausted, idle workers are evicted to free space. Use
-/// `total_worker_filesystem_storage_bytes` in tests to create a small,
-/// predictable pool.
-///
-/// # Permit release vs actual disk reclaim — configure with headroom
-///
-/// When a worker is evicted its storage semaphore permits are released at the
-/// moment `RunningWorker` drops, which is **slightly before** the worker's
-/// temp directory is deleted from disk. The directory is removed when the
-/// invocation task fully unwinds (dropping the wasmtime `Store` and its
-/// contained `TempDir`). In practice this gap is sub-millisecond, but it means
-/// the semaphore can briefly report available space that has not yet been
-/// reclaimed on disk.
-///
-/// This is the same race that exists for the memory semaphore
-/// (`MemoryConfig::total_memory`): memory permits are released when
-/// `RunningWorker` drops, before the wasmtime linear memory is actually freed.
-/// It has never caused problems in production because the semaphore is not
-/// configured to 100% of physical capacity.
-///
-/// **Recommended practice:** assuming the executor's temp directory has a
-/// dedicated volume (e.g. a pod-local tmpfs or block device mounted at `/tmp`),
-/// set `total_worker_filesystem_storage_bytes` to around 80–90% of that volume's
-/// capacity. The headroom absorbs the transient over-commitment window
-/// described above and any filesystem metadata overhead for the temp directory
-/// tree itself.
+/// Configuration for managed agent filesystems and their cleanup.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FilesystemStorageConfig {
-    /// Override the total storage pool size (bytes). When `None`, the default
-    /// of 10 GB is used. Set to a small value in tests to trigger eviction.
-    ///
-    /// Should be set to ~80–90% of the dedicated volume capacity, not 100% —
-    /// see the `FilesystemStorageConfig` doc comment for the rationale.
-    #[serde(alias = "total_worker_filesystem_storage_bytes_override")]
-    pub total_worker_filesystem_storage_bytes: Option<u64>,
-    #[serde(with = "humantime_serde")]
-    pub acquire_retry_delay: Duration,
+    /// Retry policy for deleting and verifying runtime filesystem directories.
+    /// `max_attempts` includes the initial deletion attempt.
+    pub cleanup_retry: RetryConfig,
     /// When set, use deterministic per-agent directory names rooted at this
     /// path instead of random OS temp directories. The directory structure is:
     ///
@@ -1940,31 +1951,280 @@ pub struct FilesystemStorageConfig {
     /// Directories are cleaned up when the worker is dropped, just like temp
     /// dirs. When `None` (the default), random temp directories are used.
     pub deterministic_root_dir: Option<PathBuf>,
+    /// Dedicated XFS root managed through project quotas. Managed mode is
+    /// fail-closed and cannot be combined with `deterministic_root_dir`.
+    pub managed_xfs_root_dir: Option<PathBuf>,
+    /// Private policy for deriving an agent's filesystem-object hard limit
+    /// proportionally from its allocated-byte limit, with fixed bounds.
+    pub filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig,
+    /// Physical capacity watermarks for managed filesystem pressure recovery.
+    #[serde(default)]
+    pub pressure: FilesystemPressureConfig,
 }
 
-impl FilesystemStorageConfig {
-    /// The total number of bytes available to the storage semaphore pool.
-    pub fn worker_filesystem_storage(&self) -> usize {
-        self.total_worker_filesystem_storage_bytes
-            .unwrap_or(10 * 1024 * 1024 * 1024) // 10 GB default
-            as usize
+#[derive(Clone, Debug, Serialize)]
+pub struct FilesystemPressureConfig {
+    /// Available bytes at or below which physical pressure is active.
+    minimum_available_bytes: u64,
+    /// Available bytes required after reclamation before retrying a mutation.
+    target_available_bytes: u64,
+    /// Available filesystem objects at or below which object pressure is active.
+    minimum_available_filesystem_objects: u64,
+    /// Available filesystem objects required after reclamation before retrying a mutation.
+    target_available_filesystem_objects: u64,
+    /// Number of fresh observations allowed after each completed deletion.
+    reclamation_observation_attempts: NonZeroU32,
+    /// Delay between post-deletion observations while reclamation settles.
+    #[serde(with = "humantime_serde")]
+    reclamation_observation_delay: Duration,
+}
+
+#[derive(Deserialize)]
+struct RawFilesystemPressureConfig {
+    minimum_available_bytes: u64,
+    target_available_bytes: u64,
+    minimum_available_filesystem_objects: u64,
+    target_available_filesystem_objects: u64,
+    reclamation_observation_attempts: u32,
+    #[serde(with = "humantime_serde")]
+    reclamation_observation_delay: Duration,
+}
+
+impl FilesystemPressureConfig {
+    pub fn new(
+        minimum_available_bytes: u64,
+        target_available_bytes: u64,
+        minimum_available_filesystem_objects: u64,
+        target_available_filesystem_objects: u64,
+        reclamation_observation_attempts: u32,
+        reclamation_observation_delay: Duration,
+    ) -> Result<Self, String> {
+        if minimum_available_bytes >= target_available_bytes {
+            return Err(
+                "minimum_available_bytes must be less than target_available_bytes".to_string(),
+            );
+        }
+        if minimum_available_filesystem_objects >= target_available_filesystem_objects {
+            return Err("minimum_available_filesystem_objects must be less than target_available_filesystem_objects".to_string());
+        }
+        let reclamation_observation_attempts = NonZeroU32::new(reclamation_observation_attempts)
+            .ok_or_else(|| {
+                "reclamation_observation_attempts must be greater than zero".to_string()
+            })?;
+
+        Ok(Self {
+            minimum_available_bytes,
+            target_available_bytes,
+            minimum_available_filesystem_objects,
+            target_available_filesystem_objects,
+            reclamation_observation_attempts,
+            reclamation_observation_delay,
+        })
+    }
+
+    pub const fn minimum_available_bytes(&self) -> u64 {
+        self.minimum_available_bytes
+    }
+
+    pub const fn target_available_bytes(&self) -> u64 {
+        self.target_available_bytes
+    }
+
+    pub const fn minimum_available_filesystem_objects(&self) -> u64 {
+        self.minimum_available_filesystem_objects
+    }
+
+    pub const fn target_available_filesystem_objects(&self) -> u64 {
+        self.target_available_filesystem_objects
+    }
+
+    pub const fn reclamation_observation_attempts(&self) -> u32 {
+        self.reclamation_observation_attempts.get()
+    }
+
+    pub const fn reclamation_observation_delay(&self) -> Duration {
+        self.reclamation_observation_delay
+    }
+}
+
+impl<'de> Deserialize<'de> for FilesystemPressureConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawFilesystemPressureConfig::deserialize(deserializer)?;
+        Self::new(
+            raw.minimum_available_bytes,
+            raw.target_available_bytes,
+            raw.minimum_available_filesystem_objects,
+            raw.target_available_filesystem_objects,
+            raw.reclamation_observation_attempts,
+            raw.reclamation_observation_delay,
+        )
+        .map_err(D::Error::custom)
+    }
+}
+
+impl Default for FilesystemPressureConfig {
+    fn default() -> Self {
+        Self::new(
+            64 * 1024 * 1024,
+            128 * 1024 * 1024,
+            8_192,
+            16_384,
+            4,
+            Duration::from_millis(25),
+        )
+        .expect("default filesystem pressure configuration must be valid")
+    }
+}
+
+impl SafeDisplay for FilesystemPressureConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "minimum available bytes: {}",
+            self.minimum_available_bytes
+        );
+        let _ = writeln!(
+            &mut result,
+            "target available bytes: {}",
+            self.target_available_bytes
+        );
+        let _ = writeln!(
+            &mut result,
+            "minimum available filesystem objects: {}",
+            self.minimum_available_filesystem_objects
+        );
+        let _ = writeln!(
+            &mut result,
+            "target available filesystem objects: {}",
+            self.target_available_filesystem_objects
+        );
+        let _ = writeln!(
+            &mut result,
+            "reclamation observation attempts: {}",
+            self.reclamation_observation_attempts
+        );
+        let _ = writeln!(
+            &mut result,
+            "reclamation observation delay: {:?}",
+            self.reclamation_observation_delay
+        );
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct FilesystemObjectLimitPolicyConfig {
+    /// Number of filesystem objects granted per GiB of allocated storage.
+    objects_per_gib: NonZeroU64,
+    /// Object quota floor for small storage allocations.
+    minimum_objects: NonZeroU64,
+    /// Object quota ceiling for large storage allocations.
+    maximum_objects: NonZeroU64,
+}
+
+#[derive(Deserialize)]
+struct RawFilesystemObjectLimitPolicyConfig {
+    objects_per_gib: u64,
+    minimum_objects: u64,
+    maximum_objects: u64,
+}
+
+impl FilesystemObjectLimitPolicyConfig {
+    pub fn new(
+        objects_per_gib: u64,
+        minimum_objects: u64,
+        maximum_objects: u64,
+    ) -> Result<Self, String> {
+        let objects_per_gib = NonZeroU64::new(objects_per_gib)
+            .ok_or_else(|| "objects_per_gib must be greater than zero".to_string())?;
+        let minimum_objects = NonZeroU64::new(minimum_objects)
+            .ok_or_else(|| "minimum_objects must be greater than zero".to_string())?;
+        let maximum_objects = NonZeroU64::new(maximum_objects)
+            .ok_or_else(|| "maximum_objects must be greater than zero".to_string())?;
+        if minimum_objects > maximum_objects {
+            return Err("minimum_objects must not exceed maximum_objects".to_string());
+        }
+
+        Ok(Self {
+            objects_per_gib,
+            minimum_objects,
+            maximum_objects,
+        })
+    }
+
+    pub const fn objects_per_gib(&self) -> u64 {
+        self.objects_per_gib.get()
+    }
+
+    pub const fn minimum_objects(&self) -> u64 {
+        self.minimum_objects.get()
+    }
+
+    pub const fn maximum_objects(&self) -> u64 {
+        self.maximum_objects.get()
+    }
+}
+
+impl<'de> Deserialize<'de> for FilesystemObjectLimitPolicyConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawFilesystemObjectLimitPolicyConfig::deserialize(deserializer)?;
+        Self::new(
+            raw.objects_per_gib,
+            raw.minimum_objects,
+            raw.maximum_objects,
+        )
+        .map_err(D::Error::custom)
+    }
+}
+
+impl Default for FilesystemObjectLimitPolicyConfig {
+    fn default() -> Self {
+        Self::new(32_768, 8192, 131_072)
+            .expect("default filesystem object limit policy must be valid")
+    }
+}
+
+impl SafeDisplay for FilesystemObjectLimitPolicyConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "objects per GiB: {}", self.objects_per_gib);
+        let _ = writeln!(&mut result, "minimum objects: {}", self.minimum_objects);
+        let _ = writeln!(&mut result, "maximum objects: {}", self.maximum_objects);
+        result
     }
 }
 
 impl SafeDisplay for FilesystemStorageConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
-        if let Some(limit) = &self.total_worker_filesystem_storage_bytes {
-            let _ = writeln!(&mut result, "total worker storage bytes: {limit}");
-        }
+        let _ = writeln!(&mut result, "cleanup retry:");
         let _ = writeln!(
             &mut result,
-            "acquire retry delay: {:?}",
-            self.acquire_retry_delay
+            "{}",
+            self.cleanup_retry.to_safe_string_indented()
         );
         if let Some(root) = &self.deterministic_root_dir {
             let _ = writeln!(&mut result, "deterministic root dir: {}", root.display());
         }
+        if let Some(root) = &self.managed_xfs_root_dir {
+            let _ = writeln!(&mut result, "managed XFS root dir: {}", root.display());
+        }
+        let _ = writeln!(&mut result, "filesystem object limit policy:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.filesystem_object_limit_policy
+                .to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "pressure:");
+        let _ = writeln!(&mut result, "{}", self.pressure.to_safe_string_indented());
         result
     }
 }
@@ -1972,9 +2232,17 @@ impl SafeDisplay for FilesystemStorageConfig {
 impl Default for FilesystemStorageConfig {
     fn default() -> Self {
         Self {
-            total_worker_filesystem_storage_bytes: None,
-            acquire_retry_delay: Duration::from_millis(500),
+            cleanup_retry: RetryConfig {
+                max_attempts: 4,
+                min_delay: Duration::from_millis(25),
+                max_delay: Duration::from_millis(250),
+                multiplier: 4.0,
+                max_jitter_factor: None,
+            },
             deterministic_root_dir: None,
+            managed_xfs_root_dir: None,
+            filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig::default(),
+            pressure: FilesystemPressureConfig::default(),
         }
     }
 }

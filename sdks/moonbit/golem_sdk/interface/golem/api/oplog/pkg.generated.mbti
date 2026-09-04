@@ -32,8 +32,6 @@ pub(all) suberror WorkerError {
   ExceededTableLimit
   ExceededHttpCallLimit
   ExceededRpcCallLimit
-  NodeOutOfFilesystemStorage
-  AgentExceededFilesystemStorageLimit
   AgentTerminatedByQuota(AgentTerminatedByQuotaError)
   EphemeralSleepTooLong(EphemeralSleepTooLong)
   EphemeralFuelExhausted(EphemeralFuelExhausted)
@@ -278,11 +276,6 @@ pub(all) struct FallibleResultParameters {
   error : String?
 } derive(Eq, @debug.Debug)
 
-pub(all) struct FilesystemStorageUsageUpdateParameters {
-  timestamp : @system-clock.Instant
-  delta : Int64
-} derive(Eq, @debug.Debug)
-
 pub(all) struct FinishSpanParameters {
   timestamp : @system-clock.Instant
   span_id : String
@@ -378,7 +371,6 @@ pub(all) enum OplogEntry {
   SuccessfulUpdate(RawSuccessfulUpdateParameters)
   FailedUpdate(FailedUpdateParameters)
   GrowMemory(GrowMemoryParameters)
-  FilesystemStorageUsageUpdate(FilesystemStorageUsageUpdateParameters)
   CreateResource(RawCreateResourceParameters)
   DropResource(RawDropResourceParameters)
   Log(LogParameters)
@@ -486,7 +478,6 @@ pub(all) enum PublicOplogEntry {
   SuccessfulUpdate(SuccessfulUpdateParameters)
   FailedUpdate(FailedUpdateParameters)
   GrowMemory(GrowMemoryParameters)
-  FilesystemStorageUsageUpdate(FilesystemStorageUsageUpdateParameters)
   CreateResource(CreateResourceParameters)
   DropResource(DropResourceParameters)
   Log(LogParameters)

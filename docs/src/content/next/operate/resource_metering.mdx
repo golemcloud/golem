@@ -1,0 +1,64 @@
+# Resource metering
+
+The worker executor can meter three resource usage dimensions independently:
+
+- Wasmtime fuel for compute usage
+- Allocated linear-memory byte-time
+- Filesystem allocated-byte-time
+
+All three dimensions are disabled by default. This is the expected configuration for Golem OSS and self-hosted enterprise deployments that run on customer hardware.
+
+```toml
+[resource_usage_metering]
+compute = false
+memory = false
+filesystem = false
+```
+
+Set only the dimensions that the deployment exports for billing. For example, a deployment that meters compute and memory but not filesystem storage uses:
+
+```toml
+[resource_usage_metering]
+compute = true
+memory = true
+filesystem = false
+```
+
+The equivalent environment variables are:
+
+```shell
+GOLEM__RESOURCE_USAGE_METERING__COMPUTE=true
+GOLEM__RESOURCE_USAGE_METERING__MEMORY=true
+GOLEM__RESOURCE_USAGE_METERING__FILESYSTEM=false
+```
+
+## Metering and enforcement
+
+These switches control usage measurement and export. They do not control resource enforcement.
+
+| Metering switch | Behavior when disabled | Controls that remain active |
+| --- | --- | --- |
+| `compute` | Fuel consumption is not accumulated or exported. Cumulative fuel is treated as unlimited. | Epoch-based interruption and executor scheduling |
+| `memory` | Linear-memory byte-time is not accumulated or exported. | Per-agent memory limits, measured admission, and memory-pressure eviction |
+| `filesystem` | Allocated filesystem byte-time is not accumulated or exported. | Managed XFS project quotas, filesystem-object limits, physical-pressure recovery, lifecycle, replay, and cleanup |
+
+Managed XFS does not enable storage billing. A self-hosted deployment may use managed XFS and quotas while leaving `filesystem = false`.
+
+### Current filesystem exceptions
+
+Disabling filesystem metering stops byte-time accumulation and export, but two synchronous allocation observations remain in the current filesystem lifecycle:
+
+- Filesystem operation completion may still read allocated usage.
+- A failure while making that observation may fail the guest I/O operation.
+
+These observations belong to the sealed GOL-416 filesystem protocol. Removing them requires an approved GOL-490 protocol amendment. The `filesystem` switch does not bypass them.
+
+## Deployment modes
+
+| Deployment | Compute | Memory | Filesystem |
+| --- | --- | --- | --- |
+| OSS or self-hosted default | Disabled | Disabled | Disabled |
+| Enterprise or on-premises default | Disabled | Disabled | Disabled |
+| Hosted | Explicit deployment choice | Explicit deployment choice | Explicit deployment choice |
+
+Hosted manifests are maintained outside this repository. Their operators must explicitly enable each billed dimension during deployment. The worker executor does not infer metering from a registry connection, account, plan, quota, storage backend, or usage fields in registry messages.

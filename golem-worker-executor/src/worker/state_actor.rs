@@ -51,8 +51,10 @@
 
 use super::status::{calculate_last_known_status_with_checkpoint, update_status_with_new_entries};
 use super::status_flusher::{AgentStatusFlusher, FlushReason};
-use super::{PendingMemoryGrowth, Worker, WorkerCommand, WorkerInstance, WorkerStatusMetric};
-use crate::services::agent_memory_meter::AgentMemoryMeter;
+use super::{
+    PendingMemoryGrowth, UnloadReason, Worker, WorkerCommand, WorkerInstance, WorkerStatusMetric,
+};
+use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{CommitLevel, Oplog};
 use crate::services::{All, HasConfig, HasSchedulerService};
 use crate::workerctx::WorkerCtx;
@@ -152,7 +154,7 @@ enum LifecycleJob<Ctx: WorkerCtx> {
     },
     MemoryLimitExceeded {
         worker: Arc<Worker<Ctx>>,
-        meter: AgentMemoryMeter,
+        memory: LinearMemoryTracker,
     },
 }
 
@@ -300,13 +302,16 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                         worker.add_and_commit_oplog(*entry).await;
                         let _ = done.send(());
                     }
-                    LifecycleJob::MemoryLimitExceeded { worker, meter } => {
+                    LifecycleJob::MemoryLimitExceeded { worker, memory } => {
                         worker
                             .memory_limit_interrupt_queued
                             .store(false, Ordering::Release);
-                        if meter.exceeds_current_limit() {
+                        if memory.exceeds_current_limit() {
                             worker
-                                .set_interrupting(InterruptKind::Suspend(Timestamp::now_utc()))
+                                .set_interrupting_for(
+                                    InterruptKind::Suspend(Timestamp::now_utc()),
+                                    UnloadReason::MemoryLimit,
+                                )
                                 .await;
                         }
                     }
@@ -433,10 +438,10 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         }
     }
 
-    pub fn memory_limit_exceeded(&self, worker: Arc<Worker<Ctx>>, meter: AgentMemoryMeter) {
+    pub fn memory_limit_exceeded(&self, worker: Arc<Worker<Ctx>>, memory: LinearMemoryTracker) {
         if self
             .lifecycle_jobs
-            .send(LifecycleJob::MemoryLimitExceeded { worker, meter })
+            .send(LifecycleJob::MemoryLimitExceeded { worker, memory })
             .is_err()
         {
             panic!(

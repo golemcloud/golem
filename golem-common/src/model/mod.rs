@@ -31,6 +31,7 @@ pub mod environment_plugin_grant;
 pub mod error;
 pub mod http_api_deployment;
 pub mod invocation_context;
+pub mod invocation_session_public;
 pub mod login;
 pub mod lucene;
 pub mod mcp_deployment;
@@ -711,7 +712,6 @@ pub struct AgentStatusRecord {
     pub component_revision: ComponentRevision,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
-    pub current_filesystem_storage_usage: u64,
     pub owned_resources: HashMap<AgentResourceId, AgentResourceDescription>,
     pub oplog_idx: OplogIndex,
     pub active_plugins: HashSet<EnvironmentPluginGrantId>,
@@ -760,7 +760,6 @@ impl Default for AgentStatusRecord {
             component_revision: ComponentRevision::INITIAL,
             component_size: 0,
             total_linear_memory_size: 0,
-            current_filesystem_storage_usage: 0,
             owned_resources: HashMap::new(),
             oplog_idx: OplogIndex::default(),
             active_plugins: HashSet::new(),

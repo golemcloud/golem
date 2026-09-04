@@ -496,7 +496,6 @@ async fn assert_automatic_snapshot_load_failure_recreates_replay_context(
         None,
         None,
         None,
-        None,
         Some(oplog_config.clone()),
     )
     .await?;
@@ -543,17 +542,8 @@ async fn assert_automatic_snapshot_load_failure_recreates_replay_context(
         .expect("Expected an automatic snapshot after the post-update invocation");
 
     drop(executor);
-    let executor = start_customized(
-        deps,
-        &context,
-        None,
-        None,
-        None,
-        None,
-        None,
-        Some(oplog_config),
-    )
-    .await?;
+    let executor =
+        start_customized(deps, &context, None, None, None, None, Some(oplog_config)).await?;
 
     let expected_error = match failure {
         AutomaticSnapshotLoadFailure::InvalidEntry => {
