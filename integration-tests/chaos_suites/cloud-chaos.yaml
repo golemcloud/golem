@@ -794,18 +794,24 @@ scenarios:
   # before, during and after a partition. Waiting for those to move would mean
   # waiting for worker-service to have already fallen over.
   #
-  # ── Why the stress is this small ─────────────────────────────────────────────
+  # ── How the stress is sized ──────────────────────────────────────────────────
   #
-  # worker-service on golem-dev requests 200m of CPU and sets no limit, so
-  # stress-ng is bounded by `workers × load` rather than by a cgroup quota, and
-  # the workflow scales the deployment to 3 replicas on 4-vCPU management nodes.
-  # Two workers at 90% per replica is deliberate restraint: the liveness probe
-  # hits /healthcheck every 15s with a 1s timeout and a failure threshold of 3,
-  # so roughly 45 seconds of a starved event loop is a kill, and the readiness
-  # probe pulls a pod out of the Service endpoints in about 30. Either turns this
-  # scenario into an unplanned worker-service outage and answers a different
-  # question. A worker-service restart across this window is a finding, not
-  # noise — see the runbook.
+  # A word on the field name first, because this suite uses "worker" for three
+  # unrelated things. `stressors.cpu.workers` in the manifest is Chaos Mesh's own
+  # field for the number of **stress-ng CPU burner threads** it starts inside the
+  # target container. It is not a worker-executor, not a worker-service replica,
+  # and not the running-workers set several scenarios below talk about.
+  #
+  # worker-service on golem-dev requests 200m of CPU and sets no limit, so those
+  # threads are bounded by `workers × load` rather than by a cgroup quota, and
+  # the workflow scales the deployment to 3 replicas on 4-vCPU management nodes,
+  # one replica per node. The ceiling is a probe deadline rather than a core
+  # count: the liveness probe hits /healthcheck every 15s with a 1s timeout and a
+  # failure threshold of 3, so roughly 45 seconds of a starved event loop is a
+  # kill, and the readiness probe pulls a pod out of the Service endpoints in
+  # about 30. Either turns this scenario into an unplanned worker-service outage
+  # and answers a different question. A worker-service restart across this window
+  # is a finding, not noise — see the runbook.
   - code: S21
     name: worker-service-cpu-saturation
     enabled: true
