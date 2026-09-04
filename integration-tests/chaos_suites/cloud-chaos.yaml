@@ -786,8 +786,7 @@ scenarios:
   # worker-service hop and nothing else. S2 measured that gap at 38-50ms p50
   # across two runs while looking for evidence its pairing was real. Here it is
   # the instrument: a fault that reaches worker-service widens it, and a fault
-  # that lands on the executors instead moves both populations together and
-  # leaves it flat.
+  # that slowed the two populations equally would leave it flat whatever it hit.
   #
   # This matters because throughput cannot do the job. The driver sets the
   # cadence, so both populations run at the rate they were asked to until the

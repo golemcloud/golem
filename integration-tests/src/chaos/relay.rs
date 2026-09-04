@@ -225,7 +225,15 @@ pub enum RelayViolation {
     /// [`RelayExpectation::RelayDegraded`] only, and backwards for a fault on
     /// the shared relay. A cross-pod call crosses worker-service twice and a
     /// co-located one crosses it once, so a fault on worker-service cannot hurt
-    /// the shorter path more. The stress landed on the executors instead.
+    /// the shorter path more.
+    ///
+    /// Which makes this the same kind of statement as [`Self::BothDegraded`] is
+    /// for the control: something other than the fault disturbed the run. It is
+    /// not "the load hit the executors" — on golem-dev it cannot, because the
+    /// executors hold a dedicated node pool that worker-service's own node
+    /// selector excludes. The candidates are an executor that restarted, and a
+    /// shard reassignment that left the pairing describing agents which have
+    /// since moved.
     CoLocatedDegradedMore,
 }
 
@@ -1053,7 +1061,9 @@ fn degraded_findings(
                  shorter path lost more, by more than the {PLACEMENT_SHARE_MARGIN_PERCENT} \
                  points these two normally sit apart. A cross-pod call crosses worker-service \
                  twice and a co-located one crosses it once, so a fault on worker-service cannot \
-                 hurt the shorter path more — this says the load landed on the executors instead"
+                 hurt the shorter path more — something other than the fault disturbed this run. \
+                 Check the executor restarts and the ownership samples: a shard that moved leaves \
+                 the pairing naming agents that are no longer where it put them"
             ),
         });
     }
