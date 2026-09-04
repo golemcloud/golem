@@ -1564,6 +1564,29 @@ impl AgentCommandHandler {
         path: String,
         output: Option<String>,
     ) -> anyhow::Result<()> {
+        let stream_to_stdout = output.as_deref() == Some("-");
+        // Keep progress and errors separate from the raw byte stream so this
+        // mode is safe to pipe into another process or redirect to a file.
+        let stderr_logs = stream_to_stdout.then(|| LogOutput::new(LogOutputTarget::Stderr));
+        let result = self
+            .cmd_file_contents_inner(agent_id, path, output, stream_to_stdout)
+            .await;
+        // The top-level error renderer runs after this handler returns. Keep its
+        // output on stderr too; the process is about to exit, so restoration is
+        // neither needed nor desirable in raw stdout mode.
+        if let Some(stderr_logs) = stderr_logs {
+            std::mem::forget(stderr_logs);
+        }
+        result
+    }
+
+    async fn cmd_file_contents_inner(
+        &self,
+        agent_id: AgentIdArgs,
+        path: String,
+        output: Option<String>,
+        stream_to_stdout: bool,
+    ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
@@ -1606,6 +1629,13 @@ impl AgentCommandHandler {
                 .map(|f| f.to_string_lossy().to_string())
                 .unwrap_or_else(|| "output.bin".to_string())
         };
+
+        if stream_to_stdout {
+            let mut stdout = std::io::stdout().lock();
+            stdout.write_all(&file_contents)?;
+            stdout.flush()?;
+            return Ok(());
+        }
 
         // Check if file exists and ask for confirmation if needed
         if Path::new(&output_path).exists() {
