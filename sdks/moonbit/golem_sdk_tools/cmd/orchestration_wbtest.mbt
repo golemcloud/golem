@@ -533,3 +533,64 @@ test "agents stale ownership failure leaves the whole package unchanged" {
   assert_false(@fs.path_exists(component + "/.golem-sdk-role"))
   remove_fixture_tree(root)
 }
+
+///|
+/// `moon` is mtime-driven, so rewriting a generated file with identical bytes
+/// would rebuild the package and invalidate every later build step. These tests
+/// pin the write decision, since MoonBit has no mtime API to assert on.
+test "write_generated_file skips a byte-identical rewrite" {
+  let root = "_build/content-stable-write"
+  let component = create_component_fixture(root, "")
+  let path = component + "/golem_reexports.mbt"
+  let content = generated_file_banner + "\n\npub fn a() -> Unit {}\n"
+  assert_true(write_generated_file(path, content))
+  assert_false(write_generated_file(path, content))
+  assert_true(write_generated_file(path, content + "\npub fn b() -> Unit {}\n"))
+  assert_false(
+    write_generated_file(path, content + "\npub fn b() -> Unit {}\n"),
+  )
+  remove_fixture_tree(root)
+}
+
+///|
+test "a generated file plan rewrites only what changed, and still removes stale files" {
+  let root = "_build/content-stable-plan"
+  let component = create_component_fixture(root, "")
+  let agents_path = component + "/golem_agents.mbt"
+  let stale_path = component + "/golem_tools.mbt"
+  let content = generated_file_banner + "\n\npub fn init_agents() -> Unit {}\n"
+
+  // First application writes the file.
+  let first = GeneratedFilePlan::new()
+  first.stage_write(agents_path, content, "Generated \{agents_path}")
+  first.preflight()
+  assert_eq(first.apply(), 1)
+
+  // Re-applying identical content writes nothing.
+  let second = GeneratedFilePlan::new()
+  second.stage_write(agents_path, content, "Generated \{agents_path}")
+  second.preflight()
+  assert_eq(second.apply(), 0)
+
+  // Changed content is written again.
+  let changed = content + "\npub fn extra() -> Unit {}\n"
+  let third = GeneratedFilePlan::new()
+  third.stage_write(agents_path, changed, "Generated \{agents_path}")
+  third.preflight()
+  assert_eq(third.apply(), 1)
+  assert_eq(@fs.read_file_to_string(agents_path), changed)
+
+  // Skipping an unchanged write must not suppress a staged removal.
+  @fs.write_string_to_file(
+    stale_path,
+    generated_file_banner + "\n\npub fn stale() -> Unit {}\n",
+  )
+  let fourth = GeneratedFilePlan::new()
+  fourth.stage_write(agents_path, changed, "Generated \{agents_path}")
+  fourth.stage_removal(stale_path)
+  fourth.preflight()
+  assert_eq(fourth.apply(), 0)
+  assert_false(@fs.path_exists(stale_path))
+  assert_true(@fs.path_exists(agents_path))
+  remove_fixture_tree(root)
+}

@@ -46,6 +46,10 @@ priv struct GeneratedFileWrite {
   path : String
   content : String
   message : String
+  /// Content already on disk, recorded by `GeneratedFilePlan::preflight` so
+  /// `apply` can skip byte-identical rewrites without reading the file twice.
+  /// `None` means the file is absent, or that `preflight` has not run yet.
+  mut existing : String?
 }
 
 ///|
@@ -66,7 +70,7 @@ fn GeneratedFilePlan::stage_write(
   content : String,
   message : String,
 ) -> Unit {
-  self.writes.push({ path, content, message, })
+  self.writes.push({ path, content, message, existing: None, })
 }
 
 ///|
@@ -78,9 +82,11 @@ fn GeneratedFilePlan::stage_removal(
 }
 
 ///|
+/// Validates every staged path before any state is changed, and records the
+/// content currently on disk so `apply` can skip unchanged writes.
 fn GeneratedFilePlan::preflight(self : GeneratedFilePlan) -> Unit raise {
   for write in self.writes {
-    validate_generated_write_path(write.path)
+    write.existing = read_generated_write_target(write.path)
   }
   for path in self.removals {
     validate_generated_removal_path(path)
@@ -88,10 +94,26 @@ fn GeneratedFilePlan::preflight(self : GeneratedFilePlan) -> Unit raise {
 }
 
 ///|
-fn GeneratedFilePlan::apply(self : GeneratedFilePlan) -> Unit raise {
+/// Applies the staged writes and removals. Writes whose content is already
+/// byte-identical on disk are skipped so that unchanged generated files keep
+/// their modification time: `moon` is mtime-driven, so rewriting identical
+/// bytes would rebuild the package and in turn invalidate every later build
+/// step. Returns the number of files actually written.
+///
+/// Must be called after `preflight`; without it every write is applied, which
+/// is the previous behaviour rather than a wrong result.
+fn GeneratedFilePlan::apply(self : GeneratedFilePlan) -> Int raise {
+  let mut written = 0
   for write in self.writes {
-    @fs.write_string_to_file(write.path, write.content)
-    println(write.message)
+    let unchanged = match write.existing {
+      Some(existing) => existing == write.content
+      None => false
+    }
+    if !unchanged {
+      @fs.write_string_to_file(write.path, write.content)
+      println(write.message)
+      written = written + 1
+    }
   }
   for path in self.removals {
     if @fs.path_exists(path) {
@@ -99,6 +121,7 @@ fn GeneratedFilePlan::apply(self : GeneratedFilePlan) -> Unit raise {
       println("Removed stale \{path}")
     }
   }
+  written
 }
 
 ///|
@@ -453,7 +476,7 @@ fn run_agents(
       forbid_ambient_tool=role is @lib.ComponentRole::ToolMiddleware,
     )
     file_plan.preflight()
-    file_plan.apply()
+    file_plan.apply() |> ignore
     if reconciled_pkg != pkg_content {
       @fs.write_string_to_file(pkg_path, reconciled_pkg)
     }
@@ -514,14 +537,25 @@ fn generate_derive_file(
 }
 
 ///|
-/// Writes a generated file without replacing a user-owned file at the managed path.
-fn write_generated_file(path : String, content : String) -> Unit raise {
-  validate_generated_write_path(path)
+/// Writes a generated file without replacing a user-owned file at the managed
+/// path. Skips the write when the content is already byte-identical so the file
+/// keeps its modification time. Returns whether it actually wrote.
+fn write_generated_file(path : String, content : String) -> Bool raise {
+  let unchanged = match read_generated_write_target(path) {
+    Some(existing) => existing == content
+    None => false
+  }
+  if unchanged {
+    return false
+  }
   @fs.write_string_to_file(path, content)
+  true
 }
 
 ///|
-fn validate_generated_write_path(path : String) -> Unit raise {
+/// Validates that a managed path may be written, and returns the content
+/// currently on disk. `None` means the file does not exist yet.
+fn read_generated_write_target(path : String) -> String? raise {
   if @fs.path_exists(path) {
     let existing = @fs.read_file_to_string(path)
     if !existing.has_prefix(generated_file_banner + "\n") {
@@ -529,6 +563,9 @@ fn validate_generated_write_path(path : String) -> Unit raise {
         "Refusing to overwrite non-generated file '" + path + "'",
       )
     }
+    Some(existing)
+  } else {
+    None
   }
 }
 
@@ -641,8 +678,9 @@ fn run_reexports(
   let formatted = @formatter.impls_to_string(impls)
   let output = generated_file_banner + "\n\n" + formatted
   let output_path = "\{target_dir}/golem_reexports.mbt"
-  write_generated_file(output_path, output)
-  println("Generated \{output_path} with \{fns.length()} functions")
+  if write_generated_file(output_path, output) {
+    println("Generated \{output_path} with \{fns.length()} functions")
+  }
   // Update target moon.pkg with the selected generated package's link section.
   let gen_pkg_path = if @fs.path_exists("\{gen_dir}/moon.pkg") {
     "\{gen_dir}/moon.pkg"
@@ -658,7 +696,11 @@ fn run_reexports(
     "golemcloud/golem_sdk/\{gen_package}",
   )
   let updated = @lib.update_pkg_link(with_gen_import, exports)
-  @fs.write_string_to_file(target_pkg_path, updated)
-  println("Updated \{target_pkg_path} with \{exports.length()} exports")
+  // Compare against the original on-disk content, not `role_safe_pkg_content`,
+  // which is already reconciled for the pure tool-middleware role.
+  if updated != target_pkg_content {
+    @fs.write_string_to_file(target_pkg_path, updated)
+    println("Updated \{target_pkg_path} with \{exports.length()} exports")
+  }
   commit_component_role_marker(target_dir, role)
 }
