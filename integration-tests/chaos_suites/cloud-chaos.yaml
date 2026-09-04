@@ -2290,16 +2290,34 @@ scenarios:
       kind: pod-kill
       target: worker-executor
       manifest: podchaos-mf1.yaml
-      # Halfway. Late enough that the outage has plainly landed and the
-      # workload has stalled on it, early enough to leave a real window on the
-      # far side. The same knob S1's scale schedule uses, and for the same
-      # reason: the workflow holds the window, so a fraction of it is the only
-      # thing the two sides can agree on without a second clock.
-      afterFraction: 0.5
-      # Half of what the schedule can deliver, so an injection that took its
-      # time being confirmed still counts. Below this the two faults did meet,
-      # but with too little of the outage left for a shard reassignment to run
-      # into it, which is the whole experiment.
+      # 0.6 of the window, which leaves 48s of overlap, and the number that
+      # matters is the one it is under.
+      #
+      # `GOLEM__WORKER_EXECUTORS__ASSIGN_SHARDS_TIMEOUT` is **60s** on golem-dev
+      # and golem-prod. It was raised from the 5s default in August 2026 after a
+      # chaos run found the same failure on the revoke leg: 5s cannot cover a
+      # handover whose handler recovers every agent it was just given, so the
+      # shard-manager dropped the shards from the routing table and put them
+      # back on a pod that had already let them go.
+      #
+      # MF1's claim is that the platform rides the outage out, and that claim
+      # only holds while the reassignment call outlives the outage. The first
+      # run was at 0.5 and produced 59.63s of overlap against that 60s ceiling —
+      # it passed with under four tenths of a second to spare, by luck rather
+      # than by design, and a slightly slower fault would have turned it into a
+      # different experiment without saying so.
+      #
+      # The overlap can only ever come out *shorter* than this fraction implies,
+      # never longer: the workflow measures the remainder from the wall clock,
+      # so time spent confirming the injection comes out of the overlap. That is
+      # why there is a floor below and no ceiling above it.
+      #
+      # MF1B is the deliberate version of the run this nearly became.
+      afterFraction: 0.6
+      # Below this the two faults did meet, but with too little of the outage
+      # left for a shard reassignment to run into it, which is the whole
+      # experiment. Comfortably under the 48s the schedule delivers, so an
+      # injection that took its time being confirmed still counts.
       minOverlapSecs: 30
 
     phases:
@@ -2367,6 +2385,120 @@ scenarios:
       # Identical to S16's, and load-bearing for the same reason: retrying only
       # transport errors, once, under the same idempotency key is what lets a
       # retry reveal double execution rather than hide it.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # ── MF1B ─────────────────────────────────────────────────────────────────
+  #
+  # MF1 with the overlap pushed past the shard-manager's assign timeout
+  # (GOL-381). Same two faults, same manifests, same workload, same endpoint.
+  # One number differs, and it is the one the result turns on.
+  #
+  # `GOLEM__WORKER_EXECUTORS__ASSIGN_SHARDS_TIMEOUT` is 60s on golem-dev and
+  # golem-prod. MF1 keeps its overlap under that and the reassignment call
+  # outlives the outage; here the overlap is ~97s, so the call gives up while the
+  # storage is still gone. What the cluster does next is not written down
+  # anywhere.
+  #
+  # ── Why this is a scenario and not a knob on MF1 ─────────────────────────
+  #
+  # Same reason S22 is not a longer S16. The two runs are judged by opposite
+  # expectations: MF1 says nothing should be disturbed, MF1B says the handover
+  # should fail and then recover. Folding them into one entry would leave the
+  # report unable to say which outcome it was hoping for, and the pair only
+  # means anything read side by side.
+  #
+  # ── The arithmetic, because three ceilings meet here ─────────────────────
+  #
+  #   * The overlap must exceed **60s**, or the assign call never times out and
+  #     this is MF1 with extra steps. 130s * (1 - 0.25) = 97.5s, and the
+  #     workflow can only make that shorter, never longer.
+  #   * The whole window must stay inside the **~168s** key-value retry budget,
+  #     or the executors panic and the run is S22. 130s leaves 38s of margin.
+  #   * A *fully* failed assign takes five attempts at 60s plus ~15s of backoff,
+  #     about **315s**, which no survivable outage can contain. So this run does
+  #     not reach "the shard-manager gave up and put the shards back". It
+  #     reaches the first timeout and the retry after it, and that is the
+  #     honest limit of what this fault can show.
+  #
+  # That last bound is worth stating plainly rather than discovering: on the
+  # timeouts golem-dev runs today, the routing-table corruption the August 2026
+  # investigation documented is **unreachable through a storage outage**,
+  # because the executor's own retry budget expires first. MF1B measures the
+  # near miss.
+  - code: MF1B
+    name: executor-kill-past-the-assign-timeout
+    enabled: true
+
+    fault:
+      kind: network-partition
+      target: worker-executor
+      # MF1's manifest, named rather than copied. Two files that must stay
+      # identical by hand is how a comparison silently stops being one; the
+      # S15A/S15B/S15C entries share S15's manifest for the same reason.
+      manifest: networkchaos-mf1.yaml
+      mode: all
+      # Must equal phases.faultSecs; see the note on S16.
+      durationSecs: 130
+
+    composed:
+      kind: pod-kill
+      target: worker-executor
+      manifest: podchaos-mf1.yaml
+      # A quarter in, leaving ~97.5s of overlap: past the 60s assign timeout
+      # with room for the retry after it to run for half a minute before the
+      # heal.
+      afterFraction: 0.25
+      # The floor is the assign timeout plus headroom, not an arbitrary
+      # fraction. Below 70s the overlap may not have outlasted a single
+      # `assign_shards` attempt, and then the run is MF1 wearing MF1B's code —
+      # which is exactly the confusion this pair exists to remove.
+      minOverlapSecs: 70
+
+    phases:
+      # MF1's, so the two are readable side by side.
+      baselineSecs: 300
+      # See the three ceilings above.
+      faultSecs: 130
+      # MF1's. The handover has one more thing to do here — a timed-out assign
+      # has to be retried after the storage returns — so the recovery window is
+      # if anything more load-bearing than it is there.
+      recoverySecs: 600
+
+    workload:
+      # MF1's population, unchanged. Only the timing differs between these two
+      # entries, and that is the entire point.
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 0
+      promiseAgents: 50
+      quotaAgents: 0
+      ratePerSec: 100
+
+    scheduled:
+      targets: 100
+      intervalMillis: 2000
+      leadSecs: 10
+      # Larger than MF1's 300s. The floor there was the outage plus one shard
+      # reassignment; here it is the outage plus a reassignment that has to be
+      # attempted twice. Recorded, not asserted.
+      leaseBudgetSecs: 360
+
+    storage:
+      endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+
+      expect:
+        kind: whole-workload
+        quietFloorPercent: 50
+
+      # MF1's 240s. The extra failed assign attempt is the shard-manager's time,
+      # not the streams', so this does not need to grow with the window.
+      recoveryBudgetSecs: 240
+
+    retryPolicy:
       transportOnly: true
       maxRetries: 1
       delaySecs: 5

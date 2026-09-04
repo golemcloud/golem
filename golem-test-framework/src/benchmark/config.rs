@@ -286,6 +286,8 @@ pub enum ChaosScenarioArg {
     /// The first composed fault: a worker-executor killed while the key-value
     /// PostgreSQL cluster is unreachable.
     Mf1,
+    /// MF1 with the overlap pushed past the shard-manager's assign timeout.
+    Mf1b,
 }
 
 /// Density subcommand action.
