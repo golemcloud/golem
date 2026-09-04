@@ -4804,7 +4804,14 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
         .unwrap();
     assert!(
         deps.environment_tool_grant_repo
-            .restore(mutable_grant.environment_tool_grant_id, actor.0, false)
+            .restore(
+                mutable_grant.environment_tool_grant_id,
+                mutable_grant.environment_id,
+                mutable_grant.tool_release_id,
+                actor.0,
+                false,
+                None,
+            )
             .await
             .unwrap()
             .is_none()
@@ -4828,7 +4835,7 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
         EnvironmentId(environment.revision.environment_id),
         ToolReleaseId(component_release_id),
         false,
-        false,
+        true,
         false,
         actor,
     );
@@ -4873,18 +4880,64 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
     ));
     let restored_grant = deps
         .environment_tool_grant_repo
-        .restore(ordinary_grant_id, actor.0, true)
+        .restore(
+            ordinary_grant_id,
+            ordinary_grant.environment_id,
+            ordinary_grant.tool_release_id,
+            actor.0,
+            true,
+            Some(true),
+        )
         .await
         .unwrap()
         .unwrap();
     assert!(restored_grant.automatic);
+    assert!(restored_grant.follow_coordinates);
+    let pinned_automatic_grant = deps
+        .environment_tool_grant_repo
+        .set_management(
+            ordinary_grant_id,
+            ordinary_grant.environment_id,
+            ordinary_grant.tool_release_id,
+            actor.0,
+            true,
+            false,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(pinned_automatic_grant.automatic);
+    assert!(!pinned_automatic_grant.follow_coordinates);
     let administrator_managed_grant = deps
         .environment_tool_grant_repo
-        .set_automatic(ordinary_grant_id, actor.0, false)
+        .set_management(
+            ordinary_grant_id,
+            ordinary_grant.environment_id,
+            ordinary_grant.tool_release_id,
+            actor.0,
+            false,
+            false,
+        )
         .await
         .unwrap()
         .unwrap();
     assert!(!administrator_managed_grant.automatic);
+    assert!(!administrator_managed_grant.follow_coordinates);
+    let retained_administrator_managed_grant = deps
+        .environment_tool_grant_repo
+        .set_management(
+            ordinary_grant_id,
+            ordinary_grant.environment_id,
+            ordinary_grant.tool_release_id,
+            actor.0,
+            true,
+            true,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!retained_administrator_managed_grant.automatic);
+    assert!(!retained_administrator_managed_grant.follow_coordinates);
     assert!(
         !deps
             .environment_tool_grant_repo
@@ -4892,6 +4945,49 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
             .await
             .unwrap()
     );
+    assert!(
+        deps.environment_tool_grant_repo
+            .delete(ordinary_grant_id, actor.0, false)
+            .await
+            .unwrap()
+    );
+    assert!(matches!(
+        deps.environment_tool_grant_repo
+            .restore(
+                ordinary_grant_id,
+                ordinary_grant.environment_id,
+                ordinary_grant.tool_release_id,
+                actor.0,
+                true,
+                Some(true),
+            )
+            .await,
+        Err(EnvironmentToolGrantRepoError::ConcurrentModification)
+    ));
+    let administrator_managed_tombstone = deps
+        .environment_tool_grant_repo
+        .get_by_id(ordinary_grant_id, true)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!administrator_managed_tombstone.automatic);
+    assert!(!administrator_managed_tombstone.follow_coordinates);
+    assert!(administrator_managed_tombstone.grant_deleted_at.is_some());
+    let restored_administrator_managed_grant = deps
+        .environment_tool_grant_repo
+        .restore(
+            ordinary_grant_id,
+            ordinary_grant.environment_id,
+            ordinary_grant.tool_release_id,
+            actor.0,
+            false,
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!restored_administrator_managed_grant.automatic);
+    assert!(!restored_administrator_managed_grant.follow_coordinates);
 
     let protected_grant = EnvironmentToolGrantRecord::creation(
         EnvironmentId(protected_environment.revision.environment_id),
@@ -4906,6 +5002,27 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
         .create(protected_grant)
         .await
         .unwrap();
+    assert!(
+        !deps
+            .environment_tool_grant_repo
+            .delete(protected_grant_id, actor.0, false)
+            .await
+            .unwrap()
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .set_management(
+                protected_grant_id,
+                protected_environment.revision.environment_id,
+                host_release_id,
+                actor.0,
+                false,
+                true,
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     let de_published = deps
         .tool_release_repo
@@ -5583,7 +5700,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         EnvironmentId(pinned_environment.revision.environment_id),
         ToolReleaseId(original_zeta_id),
         false,
-        false,
+        true,
         false,
         AccountId(owner_account_id),
     );
@@ -5651,17 +5768,31 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
             .lifecycle,
         TOOL_RELEASE_LIFECYCLE_SUPERSEDED
     );
-    assert_eq!(
+    assert!(matches!(
         deps.environment_tool_grant_repo
-            .get_by_id(pinned_grant_id, false)
-            .await
-            .unwrap()
-            .unwrap()
-            .release
-            .release
-            .tool_release_id,
+            .set_management(
+                pinned_grant_id,
+                pinned_environment.revision.environment_id,
+                original_zeta_id,
+                owner_account_id,
+                true,
+                true,
+            )
+            .await,
+        Err(EnvironmentToolGrantRepoError::ConcurrentModification)
+    ));
+    let pinned_grant = deps
+        .environment_tool_grant_repo
+        .get_by_id(pinned_grant_id, false)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        pinned_grant.release.release.tool_release_id,
         original_zeta_id
     );
+    assert!(pinned_grant.automatic);
+    assert!(!pinned_grant.follow_coordinates);
 
     let stale_coordinate_grant = EnvironmentToolGrantRecord::creation(
         EnvironmentId(environment_id),

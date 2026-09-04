@@ -76,12 +76,14 @@ declare_structs! {
 
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(evolution()))]
+    #[derive(Eq, PartialOrd, Ord, Hash)]
     pub struct ToolReleaseById {
         pub release_id: ToolReleaseId,
     }
 
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(evolution()))]
+    #[derive(Eq, PartialOrd, Ord, Hash)]
     pub struct ToolReleaseByCoordinates {
         pub account: AccountEmail,
         pub name: ToolName,
@@ -101,6 +103,7 @@ declare_structs! {
 declare_unions! {
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(evolution()))]
+    #[derive(Eq, PartialOrd, Ord, Hash)]
     pub enum ToolReleaseReference {
         ById(ToolReleaseById),
         ByCoordinates(ToolReleaseByCoordinates),

@@ -185,7 +185,7 @@ environments:
     server: cloud
 ```
 
-A release is not globally visible. A consumer selects an exact release once with `tools.<name>.release` and owns the provision configuration and bindings used by its deployment. Referencing the release is explicit consent for Golem to create the environment grant required by the deployment:
+A release is not globally visible. A consumer selects an exact release once with `tools.<name>.release` and owns the provision configuration and bindings used by its deployment. Golem derives an automatically managed environment grant from this manifest declaration. The grant is an authorization checkpoint for adding tools to the environment, allows the deployment to read the selected release, and provides a revocation handle:
 
 ```yaml
 tools:
@@ -1597,7 +1597,7 @@ The generator reads only the release's safe tool definition and metadata digest.
   <Field meta={{
     path: "tools.<tool-name>.release",
   }}>
-    ***Optional exact published release reference***. Specify either `releaseId` or all of `account`, `name`, and `version`. Referencing the release authorizes Golem to reconcile its automatically managed environment grant; planned changes remain visible during deployment. Omit `release` for a locally implemented tool.
+    ***Optional exact published release reference***. Specify either `releaseId` or all of `account`, `name`, and `version`. Golem derives and reconciles an automatically managed environment grant from this declaration; planned changes remain visible during deployment. Omit `release` for a locally implemented tool.
   </Field>
 
   <Field meta={{

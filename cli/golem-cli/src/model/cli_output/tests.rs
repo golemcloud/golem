@@ -4894,6 +4894,7 @@ fn arb_environment_tool_grant_plan_result() -> OutputDocumentStrategy {
             (
                 prop_oneof![
                     Just(crate::model::deploy::EnvironmentToolGrantPlanAction::Create),
+                    Just(crate::model::deploy::EnvironmentToolGrantPlanAction::UpdateReference),
                     Just(crate::model::deploy::EnvironmentToolGrantPlanAction::Delete),
                     Just(crate::model::deploy::EnvironmentToolGrantPlanAction::RetainProtected),
                     Just(crate::model::deploy::EnvironmentToolGrantPlanAction::RetainAdministratorManaged),

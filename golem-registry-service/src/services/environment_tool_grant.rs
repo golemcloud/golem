@@ -60,6 +60,8 @@ pub enum EnvironmentToolGrantError {
     AdministratorManagedToolGrant(EnvironmentToolGrantId),
     #[error("Environment tool grant {0} is not deleted")]
     GrantNotDeleted(EnvironmentToolGrantId),
+    #[error("Environment tool grant was modified concurrently")]
+    ConcurrentModification,
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -79,9 +81,18 @@ impl SafeDisplay for EnvironmentToolGrantError {
 error_forwarding!(
     EnvironmentToolGrantError,
     EnvironmentError,
-    EnvironmentToolGrantRepoError,
     ToolReleaseError
 );
+
+impl From<EnvironmentToolGrantRepoError> for EnvironmentToolGrantError {
+    fn from(value: EnvironmentToolGrantRepoError) -> Self {
+        match value {
+            EnvironmentToolGrantRepoError::GrantAlreadyExists => Self::GrantAlreadyExists,
+            EnvironmentToolGrantRepoError::ConcurrentModification => Self::ConcurrentModification,
+            EnvironmentToolGrantRepoError::InternalError(error) => Self::InternalError(error),
+        }
+    }
+}
 
 pub struct EnvironmentToolGrantService {
     environment_tool_grant_repo: Arc<dyn EnvironmentToolGrantRepo>,
@@ -219,14 +230,21 @@ impl EnvironmentToolGrantService {
                     .await?
                     .ok_or(EnvironmentToolGrantError::GrantAlreadyExists)?;
                 if existing.grant_deleted_at.is_none() {
-                    if existing.protected || existing.automatic == automatic {
+                    if existing.protected
+                        || (automatic && !existing.automatic)
+                        || (existing.automatic == automatic
+                            && existing.follow_coordinates == follow_coordinates)
+                    {
                         existing.try_into().map_err(Into::into)
                     } else {
                         self.environment_tool_grant_repo
-                            .set_automatic(
+                            .set_management(
                                 existing.environment_tool_grant_id,
+                                environment_id.0,
+                                release_id.0,
                                 auth.actor_account_id().0,
                                 automatic,
+                                follow_coordinates,
                             )
                             .await?
                             .ok_or(EnvironmentToolGrantError::GrantAlreadyExists)?
@@ -237,8 +255,11 @@ impl EnvironmentToolGrantService {
                     self.environment_tool_grant_repo
                         .restore(
                             existing.environment_tool_grant_id,
+                            environment_id.0,
+                            release_id.0,
                             auth.actor_account_id().0,
                             automatic,
+                            Some(follow_coordinates),
                         )
                         .await?
                         .ok_or(EnvironmentToolGrantError::ReferencedToolReleaseNotFound)?
@@ -349,7 +370,14 @@ impl EnvironmentToolGrantService {
             return Err(EnvironmentToolGrantError::GrantNotDeleted(grant_id));
         }
         self.environment_tool_grant_repo
-            .restore(grant_id.0, auth.actor_account_id().0, false)
+            .restore(
+                grant_id.0,
+                record.environment_id,
+                record.release.release.tool_release_id,
+                auth.actor_account_id().0,
+                false,
+                None,
+            )
             .await?
             .ok_or(EnvironmentToolGrantError::ReferencedToolReleaseNotFound)?
             .try_into()
@@ -539,6 +567,7 @@ fn environment_owner(environment: &Environment) -> EnvironmentOwnerPattern {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::account::AccountId;
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::card::{EffectiveSurface, GrantSurface};
     use golem_common::model::environment::{EnvironmentName, EnvironmentRevision};

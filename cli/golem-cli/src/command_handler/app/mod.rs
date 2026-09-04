@@ -64,6 +64,7 @@ use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdent
 use crate::model::help::AvailableComponentNamesHelp;
 use crate::model::language::GuestLanguage;
 use crate::model::text_format::{log_fuzzy_matches, log_text_view};
+use crate::model::tool_release::ResolvedToolGrants;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use futures_util::{StreamExt, TryStreamExt, stream};
@@ -113,27 +114,19 @@ pub struct AppCommandHandler {
 
 struct ToolGrantReconciliationPlan {
     creations: Vec<ToolReleaseReference>,
+    reference_updates: Vec<ToolReleaseReference>,
     deletions: Vec<EnvironmentToolGrantId>,
     view: EnvironmentToolGrantPlanView,
+    resolved_grants: ResolvedToolGrants,
 }
 
 impl ToolGrantReconciliationPlan {
     fn has_changes(&self) -> bool {
         self.view.has_changes()
     }
-}
 
-fn tool_grant_matches_reference(
-    grant: &EnvironmentToolGrantWithDetails,
-    reference: &ToolReleaseReference,
-) -> bool {
-    match reference {
-        ToolReleaseReference::ById(reference) => grant.release.id == reference.release_id,
-        ToolReleaseReference::ByCoordinates(reference) => {
-            grant.release_owner.email == reference.account
-                && grant.release.name == reference.name
-                && grant.release.version == reference.version
-        }
+    fn upserts(&self) -> impl Iterator<Item = &ToolReleaseReference> {
+        self.creations.iter().chain(&self.reference_updates)
     }
 }
 
@@ -167,28 +160,37 @@ fn build_tool_grant_reconciliation_plan(
     current: &[EnvironmentToolGrantWithDetails],
 ) -> ToolGrantReconciliationPlan {
     let mut creations = Vec::new();
+    let mut reference_updates = Vec::new();
+    let mut reference_update_grant_ids = BTreeSet::new();
     let mut deletions = Vec::new();
     let mut entries = Vec::new();
+    let resolved_grants = ResolvedToolGrants::from_current(desired, current);
 
     for reference in desired {
-        if !current
-            .iter()
-            .any(|grant| tool_grant_matches_reference(grant, reference))
-        {
-            creations.push(reference.clone());
-            entries.push(tool_grant_plan_entry(
-                EnvironmentToolGrantPlanAction::Create,
-                reference,
-                None,
-            ));
+        if resolved_grants.get(reference).is_none() {
+            let (action, grant_id) = if let Some(grant) =
+                ResolvedToolGrants::find_automatic_reference_mode_mismatch(current, reference)
+            {
+                reference_updates.push(reference.clone());
+                reference_update_grant_ids.insert(grant.grant.id);
+                (
+                    EnvironmentToolGrantPlanAction::UpdateReference,
+                    Some(grant.grant.id),
+                )
+            } else {
+                creations.push(reference.clone());
+                (EnvironmentToolGrantPlanAction::Create, None)
+            };
+            entries.push(tool_grant_plan_entry(action, reference, grant_id));
         }
     }
 
     for grant in current {
-        if desired
-            .iter()
-            .any(|reference| tool_grant_matches_reference(grant, reference))
-        {
+        if resolved_grants.contains_grant(grant.grant.id) {
+            continue;
+        }
+        if reference_update_grant_ids.contains(&grant.grant.id) {
+            deletions.push(grant.grant.id);
             continue;
         }
         let action = if grant.grant.protected {
@@ -211,8 +213,10 @@ fn build_tool_grant_reconciliation_plan(
 
     ToolGrantReconciliationPlan {
         creations,
+        reference_updates,
         deletions,
         view: EnvironmentToolGrantPlanView { entries },
+        resolved_grants,
     }
 }
 
@@ -865,12 +869,15 @@ impl AppCommandHandler {
             .await
             .map_err(DeployError::PrepareError)?;
 
-        let tool_grant_plan = self
+        let mut tool_grant_plan = self
             .plan_tool_grant_reconciliation(&environment)
             .await
             .map_err(DeployError::PrepareError)?;
-        let stage_requires_new_grants = config.stage && !tool_grant_plan.creations.is_empty();
-        if !tool_grant_plan.view.entries.is_empty() && (!config.stage || stage_requires_new_grants)
+        let stage_requires_grant_changes = config.stage
+            && (!tool_grant_plan.creations.is_empty()
+                || !tool_grant_plan.reference_updates.is_empty());
+        if !tool_grant_plan.view.entries.is_empty()
+            && (!config.stage || stage_requires_grant_changes)
         {
             log_action("Planning", "environment tool grant reconciliation");
             let _indent = self.ctx.log_handler().decorated_indent_primary();
@@ -879,9 +886,9 @@ impl AppCommandHandler {
                 .log_output(tool_grant_plan.view.clone())
                 .map_err(DeployError::PrepareError)?;
         }
-        if stage_requires_new_grants {
+        if stage_requires_grant_changes {
             return Err(DeployError::PrepareError(anyhow!(
-                "Cannot stage this deployment because it requires new environment tool grants; run a normal deployment to reconcile grants"
+                "Cannot stage this deployment because it requires environment tool grant changes; run a normal deployment to reconcile grants"
             )));
         }
         if !config.stage {
@@ -905,19 +912,28 @@ impl AppCommandHandler {
             {
                 return Err(DeployError::Cancelled);
             }
-            self.apply_tool_grant_reconciliation(&environment, tool_grant_plan)
+            self.apply_tool_grant_reconciliation(&environment, &mut tool_grant_plan)
                 .await
                 .map_err(DeployError::PrepareError)?;
         }
 
         if !config.skip_build {
-            self.build(&build_config, vec![], &ApplicationComponentSelectMode::All)
-                .await
-                .map_err(DeployError::BuildError)?;
+            self.build_with_resolved_tool_grants(
+                &build_config,
+                vec![],
+                &ApplicationComponentSelectMode::All,
+                &tool_grant_plan.resolved_grants,
+            )
+            .await
+            .map_err(DeployError::BuildError)?;
         }
 
         let Some((deploy_diff, deployment_version)) = self
-            .prepare_deployment(environment.clone(), config.full_diff)
+            .prepare_deployment(
+                environment.clone(),
+                &tool_grant_plan.resolved_grants,
+                config.full_diff,
+            )
             .await
             .map_err(DeployError::PrepareError)?
         else {
@@ -1036,12 +1052,15 @@ impl AppCommandHandler {
     async fn prepare_deployment(
         &self,
         environment: ResolvedEnvironmentIdentity,
+        resolved_tool_grants: &ResolvedToolGrants,
         full_diff: bool,
     ) -> anyhow::Result<Option<(DeployDiff, DeploymentVersion)>> {
         log_action("Preparing", "deployment");
         let _indent = LogIndent::new();
 
-        let deploy_quick_diff = self.deploy_quick_diff(environment).await?;
+        let deploy_quick_diff = self
+            .deploy_quick_diff(environment, resolved_tool_grants)
+            .await?;
 
         debug!("deploy_quick_diff: {:#?}", deploy_quick_diff);
 
@@ -1211,6 +1230,7 @@ impl AppCommandHandler {
     async fn deploy_quick_diff(
         &self,
         environment: ResolvedEnvironmentIdentity,
+        resolved_tool_grants: &ResolvedToolGrants,
     ) -> anyhow::Result<DeployQuickDiff> {
         let DeployableManifestComponents {
             components: deployable_manifest_components,
@@ -1221,7 +1241,7 @@ impl AppCommandHandler {
         } = self
             .ctx
             .component_handler()
-            .deployable_manifest_components(&environment)
+            .deployable_manifest_components(&environment, resolved_tool_grants)
             .await?;
 
         let deployable_manifest_http_api_deployments = self
@@ -1660,8 +1680,7 @@ impl AppCommandHandler {
                     &environment.environment_id.0,
                     &EnvironmentToolGrantReconciliation {
                         creations: plan
-                            .creations
-                            .iter()
+                            .upserts()
                             .cloned()
                             .map(|release| EnvironmentToolGrantCreation { release })
                             .collect(),
@@ -1677,20 +1696,27 @@ impl AppCommandHandler {
     async fn apply_tool_grant_reconciliation(
         &self,
         environment: &ResolvedEnvironmentIdentity,
-        plan: ToolGrantReconciliationPlan,
+        plan: &mut ToolGrantReconciliationPlan,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
-        for release in plan.creations {
-            clients
+        let upserts = plan.upserts().cloned().collect::<Vec<_>>();
+        for release in upserts {
+            let grant = clients
                 .environment_tool_grants
                 .create_automatic_environment_tool_grant(
                     &environment.environment_id.0,
-                    &EnvironmentToolGrantCreation { release },
+                    &EnvironmentToolGrantCreation {
+                        release: release.clone(),
+                    },
                 )
                 .await
                 .map_service_error()?;
+            plan.resolved_grants.insert(release, grant);
         }
-        for grant_id in plan.deletions {
+        for grant_id in &plan.deletions {
+            if plan.resolved_grants.contains_grant(*grant_id) {
+                continue;
+            }
             clients
                 .environment_tool_grants
                 .delete_automatic_environment_tool_grant(&grant_id.0)
@@ -2805,60 +2831,74 @@ impl AppCommandHandler {
                 .application()
                 .requires_remote_release_bridge_metadata()
         };
-        let effective_build_config =
-            if requires_remote_release_metadata && build_config.release_grants.is_empty() {
-                let environment = self
+        let resolved_tool_grants = if requires_remote_release_metadata {
+            let environment = self
+                .ctx
+                .environment_handler()
+                .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+                .await?;
+            let mut plan = self.plan_tool_grant_reconciliation(&environment).await?;
+            plan.deletions.clear();
+            plan.view.entries.retain(|entry| {
+                matches!(
+                    entry.action,
+                    EnvironmentToolGrantPlanAction::Create
+                        | EnvironmentToolGrantPlanAction::UpdateReference
+                )
+            });
+            self.validate_tool_grant_reconciliation(&environment, &plan)
+                .await?;
+            if plan.has_changes() {
+                log_action("Planning", "environment tool grants required by the build");
+                let _indent = self.ctx.log_handler().decorated_indent_primary();
+                self.ctx.log_handler().log_output(plan.view.clone())?;
+                if !self
                     .ctx
-                    .environment_handler()
-                    .resolve_environment(EnvironmentResolveMode::ManifestOnly)
-                    .await?;
-                let mut plan = self.plan_tool_grant_reconciliation(&environment).await?;
-                plan.deletions.clear();
-                plan.view
-                    .entries
-                    .retain(|entry| entry.action == EnvironmentToolGrantPlanAction::Create);
-                self.validate_tool_grant_reconciliation(&environment, &plan)
-                    .await?;
-                if plan.has_changes() {
-                    log_action("Planning", "environment tool grants required by the build");
-                    let _indent = self.ctx.log_handler().decorated_indent_primary();
-                    self.ctx.log_handler().log_output(plan.view.clone())?;
-                    if !self
-                        .ctx
-                        .interactive_handler()
-                        .confirm_tool_grant_plan_apply()?
-                    {
-                        bail!(NonSuccessfulExit);
-                    }
-                    self.apply_tool_grant_reconciliation(&environment, plan)
-                        .await?;
+                    .interactive_handler()
+                    .confirm_tool_grant_plan_apply()?
+                {
+                    bail!(NonSuccessfulExit);
                 }
-                let grants = self
-                    .ctx
-                    .golem_clients()
-                    .await?
-                    .environment_tool_grants
-                    .list_environment_tool_grants(&environment.environment_id.0)
-                    .await
-                    .map_service_error()?
-                    .values;
-                build_config.clone().with_release_grants(grants)
-            } else {
-                build_config.clone()
-            };
+                self.apply_tool_grant_reconciliation(&environment, &mut plan)
+                    .await?;
+            }
+            plan.resolved_grants
+        } else {
+            ResolvedToolGrants::default()
+        };
+
+        self.build_selected(build_config, &resolved_tool_grants)
+            .await
+    }
+
+    async fn build_with_resolved_tool_grants(
+        &self,
+        build_config: &BuildConfig,
+        component_names: Vec<ComponentName>,
+        default_component_select_mode: &ApplicationComponentSelectMode,
+        resolved_tool_grants: &ResolvedToolGrants,
+    ) -> anyhow::Result<()> {
+        self.must_select_components(component_names, default_component_select_mode)
+            .await?;
+        self.build_selected(build_config, resolved_tool_grants)
+            .await
+    }
+
+    async fn build_selected(
+        &self,
+        build_config: &BuildConfig,
+        resolved_tool_grants: &ResolvedToolGrants,
+    ) -> anyhow::Result<()> {
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
 
         // NOTE: dependency checks are done here, as they are interactive, and they modify
         //       the projects, tool checks are done as part of app_ctx.build
-        if effective_build_config.should_run_step(AppBuildStep::Check) {
-            self.plan_and_apply_dependency_fixes(&BuildContext::new(
-                app_ctx,
-                &effective_build_config,
-            ))?;
+        if build_config.should_run_step(AppBuildStep::Check) {
+            self.plan_and_apply_dependency_fixes(&BuildContext::new(app_ctx, build_config))?;
         }
 
-        app_ctx.build(&effective_build_config).await
+        app_ctx.build(build_config, resolved_tool_grants).await
     }
 
     fn plan_and_apply_dependency_fixes(&self, build_ctx: &BuildContext<'_>) -> anyhow::Result<()> {
@@ -3362,6 +3402,7 @@ fn duplicate_component_matches(found: &[Match]) -> Vec<(String, Vec<String>)> {
 mod tests {
     use super::{build_tool_grant_reconciliation_plan, duplicate_component_matches};
     use crate::fuzzy::Match;
+    use crate::model::deploy::EnvironmentToolGrantPlanAction;
     use chrono::Utc;
     use golem_common::model::account::{AccountEmail, AccountId, AccountSummary};
     use golem_common::model::diff::Hash;
@@ -3410,7 +3451,7 @@ mod tests {
 
     #[test]
     fn tool_grant_reconciliation_is_idempotent_for_an_existing_exact_grant() {
-        let current = grant("search", "1.2.0", "publisher@example.com", false, true);
+        let current = grant("search", "1.2.0", "publisher@example.com", true, false);
         let desired = vec![ToolReleaseReference::ById(ToolReleaseById {
             release_id: current.release.id,
         })];
@@ -3423,10 +3464,73 @@ mod tests {
     }
 
     #[test]
+    fn tool_grant_reconciliation_is_idempotent_for_existing_coordinates() {
+        let current = grant("search", "1.2.0", "publisher@example.com", true, true);
+        let desired = vec![ToolReleaseReference::ByCoordinates(
+            ToolReleaseByCoordinates {
+                account: AccountEmail::new("publisher@example.com"),
+                name: ToolName::try_from("search").unwrap(),
+                version: "1.2.0".to_string(),
+            },
+        )];
+
+        let plan = build_tool_grant_reconciliation_plan(&desired, &[current]);
+
+        assert!(plan.creations.is_empty());
+        assert!(plan.deletions.is_empty());
+        assert!(plan.view.entries.is_empty());
+    }
+
+    #[test]
+    fn tool_grant_reconciliation_updates_id_reference_to_coordinates() {
+        let current = grant("search", "1.2.0", "publisher@example.com", true, false);
+        let desired = vec![ToolReleaseReference::ByCoordinates(
+            ToolReleaseByCoordinates {
+                account: AccountEmail::new("publisher@example.com"),
+                name: ToolName::try_from("search").unwrap(),
+                version: "1.2.0".to_string(),
+            },
+        )];
+
+        let plan = build_tool_grant_reconciliation_plan(&desired, &[current.clone()]);
+
+        assert!(plan.creations.is_empty());
+        assert_eq!(plan.reference_updates, desired);
+        assert_eq!(plan.deletions, vec![current.grant.id]);
+        assert_eq!(plan.view.entries.len(), 1);
+        assert_eq!(
+            plan.view.entries[0].action,
+            EnvironmentToolGrantPlanAction::UpdateReference
+        );
+        assert_eq!(plan.view.entries[0].grant_id, Some(current.grant.id));
+    }
+
+    #[test]
+    fn tool_grant_reconciliation_updates_coordinate_reference_to_id() {
+        let current = grant("search", "1.2.0", "publisher@example.com", true, true);
+        let desired = vec![ToolReleaseReference::ById(ToolReleaseById {
+            release_id: current.release.id,
+        })];
+
+        let plan = build_tool_grant_reconciliation_plan(&desired, &[current.clone()]);
+
+        assert!(plan.creations.is_empty());
+        assert_eq!(plan.reference_updates, desired);
+        assert_eq!(plan.deletions, vec![current.grant.id]);
+        assert_eq!(plan.view.entries.len(), 1);
+        assert_eq!(
+            plan.view.entries[0].action,
+            EnvironmentToolGrantPlanAction::UpdateReference
+        );
+        assert_eq!(plan.view.entries[0].grant_id, Some(current.grant.id));
+    }
+
+    #[test]
     fn tool_grant_reconciliation_deletes_automatic_and_retains_protected_and_administrator_managed()
     {
-        let automatic = grant("old-search", "1.0.0", "old@example.com", false, true);
-        let protected = grant("host-clock", "1.0.0", "system@example.com", true, true);
+        let automatic = grant("old-search", "1.0.0", "old@example.com", true, false);
+        let mut protected = grant("host-clock", "1.0.0", "system@example.com", true, false);
+        protected.grant.protected = true;
         let administrator_managed =
             grant("admin-tool", "1.0.0", "publisher@example.com", false, false);
         let desired = vec![ToolReleaseReference::ByCoordinates(
@@ -3450,7 +3554,7 @@ mod tests {
         assert_eq!(plan.deletions, vec![automatic.grant.id]);
         assert_eq!(plan.view.entries.len(), 4);
         assert!(plan.view.entries.iter().any(|entry| {
-            entry.action == crate::model::deploy::EnvironmentToolGrantPlanAction::RetainProtected
+            entry.action == EnvironmentToolGrantPlanAction::RetainProtected
                 && entry.grant_id == Some(protected.grant.id)
         }));
         assert!(plan.view.entries.iter().any(|entry| {
@@ -3464,8 +3568,8 @@ mod tests {
         name: &str,
         version: &str,
         owner_email: &str,
-        protected: bool,
         automatic: bool,
+        follow_coordinates: bool,
     ) -> EnvironmentToolGrantWithDetails {
         let release_id = ToolReleaseId::new();
         let actor = AccountId::new();
@@ -3490,9 +3594,9 @@ mod tests {
                 id: EnvironmentToolGrantId::new(),
                 environment_id: EnvironmentId::new(),
                 tool_release_id: release_id,
-                protected,
+                protected: false,
                 automatic,
-                follow_coordinates: false,
+                follow_coordinates,
                 lifecycle: EnvironmentToolGrantLifecycle::Active,
                 created_at: now,
                 created_by: actor,

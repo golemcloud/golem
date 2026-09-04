@@ -55,10 +55,11 @@ use crate::model::tool_deployment::{
     DiscoveredToolImplementation, ToolEntityPath, ToolImplementationSource, ToolValidationCode,
     ToolValidationIssue, ToolValidationPhase, add_tool_issues,
 };
+use crate::model::tool_release::ResolvedToolGrants;
 use crate::validation::ValidationBuilder;
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use futures_util::future::OptionFuture;
-use golem_client::api::{ComponentClient, EnvironmentToolGrantsClient};
+use golem_client::api::ComponentClient;
 use golem_client::model::{ComponentCreation, ComponentDto};
 use golem_common::cache::SimpleCache;
 use golem_common::model::account::AccountEmail;
@@ -809,6 +810,7 @@ impl ComponentCommandHandler {
     pub async fn deployable_manifest_components(
         &self,
         environment: &ResolvedEnvironmentIdentity,
+        resolved_tool_grants: &ResolvedToolGrants,
     ) -> anyhow::Result<DeployableManifestComponents> {
         let (component_names, declared_agents) = {
             let app_ctx = self.ctx.app_context_lock().await;
@@ -851,6 +853,7 @@ impl ComponentCommandHandler {
         ) = self
             .resolve_manifest_tool_deployments(
                 environment,
+                resolved_tool_grants,
                 &mut components,
                 &unknown_declared_agents,
             )
@@ -868,6 +871,7 @@ impl ComponentCommandHandler {
     async fn resolve_manifest_tool_deployments(
         &self,
         environment: &ResolvedEnvironmentIdentity,
+        resolved_tool_grants: &ResolvedToolGrants,
         components: &mut BTreeMap<ComponentName, ComponentDeployProperties>,
         unknown_declared_agents: &BTreeSet<AgentTypeName>,
     ) -> anyhow::Result<(
@@ -876,15 +880,6 @@ impl ComponentCommandHandler {
         BTreeSet<ToolName>,
         Vec<PendingRemoteInitialFile>,
     )> {
-        let release_grants = self
-            .ctx
-            .golem_clients()
-            .await?
-            .environment_tool_grants
-            .list_environment_tool_grants(&environment.environment_id.0)
-            .await
-            .map_service_error()?
-            .values;
         let plugin_grants = self
             .ctx
             .environment_handler()
@@ -971,16 +966,8 @@ impl ComponentCommandHandler {
             let Some(release) = declaration.value.release.as_ref() else {
                 continue;
             };
-            let grant = release_grants.iter().find(|grant| match release {
-                app_raw::RegistrySubject::ById(reference) => {
-                    grant.release.id == reference.release_id
-                }
-                app_raw::RegistrySubject::ByCoordinates(reference) => {
-                    grant.release_owner.email.as_str() == reference.account
-                        && grant.release.name.as_str() == reference.name
-                        && grant.release.version == reference.version
-                }
-            });
+            let release_reference = release.to_release_reference().map_err(anyhow::Error::msg)?;
+            let grant = resolved_tool_grants.get(&release_reference);
             let Some(grant) = grant else {
                 issues.push(ToolValidationIssue::error(
                     ToolValidationPhase::DeclarationDiscoveryIdentity,

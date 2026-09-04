@@ -77,8 +77,6 @@ pub struct BuildConfig {
     pub steps_filter: HashSet<AppBuildStep>,
     pub custom_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
     pub repl_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
-    pub release_grants:
-        Vec<golem_common::model::environment_tool_grant::EnvironmentToolGrantWithDetails>,
 }
 
 impl BuildConfig {
@@ -114,16 +112,6 @@ impl BuildConfig {
         repl_bridge_sdk_target: CustomBridgeSdkTarget,
     ) -> Self {
         self.repl_bridge_sdk_target = Some(repl_bridge_sdk_target);
-        self
-    }
-
-    pub fn with_release_grants(
-        mut self,
-        release_grants: Vec<
-            golem_common::model::environment_tool_grant::EnvironmentToolGrantWithDetails,
-        >,
-    ) -> Self {
-        self.release_grants = release_grants;
         self
     }
 

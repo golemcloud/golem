@@ -36,6 +36,7 @@ use crate::model::deploy::log_unified_diff_for_path;
 use crate::model::format::Format;
 use crate::model::language::GuestLanguage;
 use crate::model::text_format::DecoratedIndent;
+use crate::model::tool_release::ResolvedToolGrants;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
@@ -44,7 +45,6 @@ use golem_common::model::component::ComponentName;
 use golem_common::model::diff;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::environment_tool_grant::EnvironmentToolGrantWithDetails;
-use golem_common::model::tool_release::ToolReleaseId;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -54,6 +54,7 @@ const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
 pub struct BuildContext<'a> {
     application_context: &'a ApplicationContext,
     build_config: &'a BuildConfig,
+    resolved_tool_grants: Option<&'a ResolvedToolGrants>,
 }
 
 impl<'a> BuildContext<'a> {
@@ -61,6 +62,19 @@ impl<'a> BuildContext<'a> {
         Self {
             application_context,
             build_config,
+            resolved_tool_grants: None,
+        }
+    }
+
+    pub fn new_with_resolved_tool_grants(
+        application_context: &'a ApplicationContext,
+        build_config: &'a BuildConfig,
+        resolved_tool_grants: &'a ResolvedToolGrants,
+    ) -> Self {
+        Self {
+            application_context,
+            build_config,
+            resolved_tool_grants: Some(resolved_tool_grants),
         }
     }
 
@@ -108,24 +122,12 @@ impl<'a> BuildContext<'a> {
         &self.application_context.tools_with_ensured_common_deps
     }
 
-    pub fn release_grants(&self) -> &[EnvironmentToolGrantWithDetails] {
-        &self.build_config.release_grants
-    }
-
     pub fn release_grant(
         &self,
         reference: &app_raw::RegistrySubject,
     ) -> Option<&EnvironmentToolGrantWithDetails> {
-        self.release_grants().iter().find(|grant| match reference {
-            app_raw::RegistrySubject::ById(reference) => {
-                grant.release.id == ToolReleaseId(reference.release_id.0)
-            }
-            app_raw::RegistrySubject::ByCoordinates(reference) => {
-                grant.release_owner.email.as_str() == reference.account
-                    && grant.release.name.as_str() == reference.name
-                    && grant.release.version == reference.version
-            }
-        })
+        self.resolved_tool_grants?
+            .get(&reference.to_release_reference().ok()?)
     }
 
     pub fn release_grant_by_name(
@@ -525,8 +527,17 @@ impl ApplicationContext {
         self.application.component_names().cloned().collect()
     }
 
-    pub async fn build(&self, build_config: &BuildConfig) -> anyhow::Result<()> {
-        build_app(&BuildContext::new(self, build_config)).await
+    pub async fn build(
+        &self,
+        build_config: &BuildConfig,
+        resolved_tool_grants: &ResolvedToolGrants,
+    ) -> anyhow::Result<()> {
+        build_app(&BuildContext::new_with_resolved_tool_grants(
+            self,
+            build_config,
+            resolved_tool_grants,
+        ))
+        .await
     }
 
     pub async fn custom_command(

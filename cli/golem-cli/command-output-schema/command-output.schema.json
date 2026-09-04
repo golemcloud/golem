@@ -6192,7 +6192,7 @@
       "type": "object",
       "required": ["action", "releaseId", "account", "name", "version", "grantId"],
       "properties": {
-        "action": { "type": "string", "enum": ["create", "delete", "retainProtected", "retainAdministratorManaged"] },
+        "action": { "type": "string", "enum": ["create", "updateReference", "delete", "retainProtected", "retainAdministratorManaged"] },
         "releaseId": { "type": ["string", "null"], "format": "uuid" },
         "account": { "type": ["string", "null"] },
         "name": { "type": ["string", "null"] },

@@ -165,6 +165,7 @@ pub struct EnvironmentSetupPlan {
 #[serde(rename_all = "camelCase")]
 pub enum EnvironmentToolGrantPlanAction {
     Create,
+    UpdateReference,
     Delete,
     RetainProtected,
     RetainAdministratorManaged,
@@ -174,6 +175,7 @@ impl std::fmt::Display for EnvironmentToolGrantPlanAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Create => "create",
+            Self::UpdateReference => "update reference",
             Self::Delete => "delete",
             Self::RetainProtected => "retain protected",
             Self::RetainAdministratorManaged => "retain administrator-managed",
@@ -251,7 +253,9 @@ impl EnvironmentToolGrantPlanView {
         self.entries.iter().any(|entry| {
             matches!(
                 entry.action,
-                EnvironmentToolGrantPlanAction::Create | EnvironmentToolGrantPlanAction::Delete
+                EnvironmentToolGrantPlanAction::Create
+                    | EnvironmentToolGrantPlanAction::UpdateReference
+                    | EnvironmentToolGrantPlanAction::Delete
             )
         })
     }

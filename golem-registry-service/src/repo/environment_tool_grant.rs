@@ -83,18 +83,24 @@ pub trait EnvironmentToolGrantRepo: Send + Sync {
         automatic_only: bool,
     ) -> Result<bool, EnvironmentToolGrantRepoError>;
 
-    async fn set_automatic(
+    async fn set_management(
         &self,
         grant_id: Uuid,
+        environment_id: Uuid,
+        release_id: Uuid,
         actor: Uuid,
         automatic: bool,
+        follow_coordinates: bool,
     ) -> Result<Option<EnvironmentToolGrantWithDetailsRecord>, EnvironmentToolGrantRepoError>;
 
     async fn restore(
         &self,
         grant_id: Uuid,
+        environment_id: Uuid,
+        release_id: Uuid,
         actor: Uuid,
         automatic: bool,
+        follow_coordinates: Option<bool>,
     ) -> Result<Option<EnvironmentToolGrantWithDetailsRecord>, EnvironmentToolGrantRepoError>;
 }
 
@@ -184,14 +190,24 @@ impl<Repo: EnvironmentToolGrantRepo> EnvironmentToolGrantRepo
             .await
     }
 
-    async fn set_automatic(
+    async fn set_management(
         &self,
         grant_id: Uuid,
+        environment_id: Uuid,
+        release_id: Uuid,
         actor: Uuid,
         automatic: bool,
+        follow_coordinates: bool,
     ) -> Result<Option<EnvironmentToolGrantWithDetailsRecord>, EnvironmentToolGrantRepoError> {
         self.repo
-            .set_automatic(grant_id, actor, automatic)
+            .set_management(
+                grant_id,
+                environment_id,
+                release_id,
+                actor,
+                automatic,
+                follow_coordinates,
+            )
             .instrument(info_span!("environment tool grant repository", grant_id = %grant_id))
             .await
     }
@@ -199,11 +215,21 @@ impl<Repo: EnvironmentToolGrantRepo> EnvironmentToolGrantRepo
     async fn restore(
         &self,
         grant_id: Uuid,
+        environment_id: Uuid,
+        release_id: Uuid,
         actor: Uuid,
         automatic: bool,
+        follow_coordinates: Option<bool>,
     ) -> Result<Option<EnvironmentToolGrantWithDetailsRecord>, EnvironmentToolGrantRepoError> {
         self.repo
-            .restore(grant_id, actor, automatic)
+            .restore(
+                grant_id,
+                environment_id,
+                release_id,
+                actor,
+                automatic,
+                follow_coordinates,
+            )
             .instrument(info_span!("environment tool grant repository", grant_id = %grant_id))
             .await
     }
@@ -300,9 +326,12 @@ impl DbEnvironmentToolGrantRepo<PostgresPool> {
             .is_some())
     }
 
-    async fn grant_has_published_release(
+    async fn grant_has_available_release(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         grant_id: Uuid,
+        environment_id: Uuid,
+        release_id: Uuid,
+        follow_coordinates: Option<bool>,
     ) -> RepoResult<bool> {
         let release_exists = tx
             .fetch_optional(
@@ -312,11 +341,19 @@ impl DbEnvironmentToolGrantRepo<PostgresPool> {
                     JOIN environment_tool_grants etg
                         ON etg.tool_release_id = tr.tool_release_id
                     WHERE etg.environment_tool_grant_id = $1
-                        AND (tr.lifecycle = $2 OR (NOT etg.follow_coordinates AND tr.lifecycle = $3))
+                        AND etg.environment_id = $2
+                        AND tr.tool_release_id = $3
+                        AND (
+                            tr.lifecycle = $4
+                            OR (NOT COALESCE($5, etg.follow_coordinates) AND tr.lifecycle = $6)
+                        )
                     FOR SHARE OF tr
                 "#})
                 .bind(grant_id)
+                .bind(environment_id)
+                .bind(release_id)
                 .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
+                .bind(follow_coordinates)
                 .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED),
             )
             .await?
@@ -329,13 +366,9 @@ impl DbEnvironmentToolGrantRepo<PostgresPool> {
             sqlx::query(indoc! { r#"
                 UPDATE environments
                 SET current_revision_id = current_revision_id
-                WHERE environment_id = (
-                    SELECT environment_id
-                    FROM environment_tool_grants
-                    WHERE environment_tool_grant_id = $1
-                )
+                WHERE environment_id = $1
             "#})
-            .bind(grant_id),
+            .bind(environment_id),
         )
         .await?;
         Ok(tx
@@ -350,9 +383,13 @@ impl DbEnvironmentToolGrantRepo<PostgresPool> {
                     ON er.environment_id = e.environment_id
                     AND er.revision_id = e.current_revision_id
                 WHERE etg.environment_tool_grant_id = $1
+                    AND etg.environment_id = $2
+                    AND tr.tool_release_id = $3
                     AND (NOT er.version_check OR tr.immutable)
             "#})
-                .bind(grant_id),
+                .bind(grant_id)
+                .bind(environment_id)
+                .bind(release_id),
             )
             .await?
             .is_some())
@@ -422,9 +459,12 @@ impl DbEnvironmentToolGrantRepo<SqlitePool> {
             .is_some())
     }
 
-    async fn grant_has_published_release(
+    async fn grant_has_available_release(
         tx: &mut PoolLabelledTransaction<SqlitePool>,
         grant_id: Uuid,
+        environment_id: Uuid,
+        release_id: Uuid,
+        follow_coordinates: Option<bool>,
     ) -> RepoResult<bool> {
         let release_exists = tx
             .fetch_optional(
@@ -434,10 +474,18 @@ impl DbEnvironmentToolGrantRepo<SqlitePool> {
                     JOIN environment_tool_grants etg
                         ON etg.tool_release_id = tr.tool_release_id
                     WHERE etg.environment_tool_grant_id = $1
-                        AND (tr.lifecycle = $2 OR (NOT etg.follow_coordinates AND tr.lifecycle = $3))
+                        AND etg.environment_id = $2
+                        AND tr.tool_release_id = $3
+                        AND (
+                            tr.lifecycle = $4
+                            OR (NOT COALESCE($5, etg.follow_coordinates) AND tr.lifecycle = $6)
+                        )
                 "#})
                 .bind(grant_id)
+                .bind(environment_id)
+                .bind(release_id)
                 .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
+                .bind(follow_coordinates)
                 .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED),
             )
             .await?
@@ -450,13 +498,9 @@ impl DbEnvironmentToolGrantRepo<SqlitePool> {
             sqlx::query(indoc! { r#"
                 UPDATE environments
                 SET current_revision_id = current_revision_id
-                WHERE environment_id = (
-                    SELECT environment_id
-                    FROM environment_tool_grants
-                    WHERE environment_tool_grant_id = $1
-                )
+                WHERE environment_id = $1
             "#})
-            .bind(grant_id),
+            .bind(environment_id),
         )
         .await?;
         Ok(tx
@@ -471,9 +515,13 @@ impl DbEnvironmentToolGrantRepo<SqlitePool> {
                     ON er.environment_id = e.environment_id
                     AND er.revision_id = e.current_revision_id
                 WHERE etg.environment_tool_grant_id = $1
+                    AND etg.environment_id = $2
+                    AND tr.tool_release_id = $3
                     AND (NOT er.version_check OR tr.immutable)
             "#})
-                .bind(grant_id),
+                .bind(grant_id)
+                .bind(environment_id)
+                .bind(release_id),
             )
             .await?
             .is_some())
@@ -663,32 +711,71 @@ impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
         Ok(result.is_some())
     }
 
-    async fn set_automatic(
+    async fn set_management(
         &self,
         grant_id: Uuid,
+        environment_id: Uuid,
+        release_id: Uuid,
         actor: Uuid,
         automatic: bool,
+        follow_coordinates: bool,
     ) -> Result<Option<EnvironmentToolGrantWithDetailsRecord>, EnvironmentToolGrantRepoError> {
         self.db_pool
-            .with_tx_err(METRICS_SVC_NAME, "set_automatic", |tx| {
+            .with_tx_err(METRICS_SVC_NAME, "set_management", |tx| {
                 async move {
+                    if !Self::grantable_release_exists(
+                        tx,
+                        environment_id,
+                        release_id,
+                        follow_coordinates,
+                    )
+                    .await?
+                    {
+                        return if automatic {
+                            Err(EnvironmentToolGrantRepoError::ConcurrentModification)
+                        } else {
+                            Ok(None)
+                        };
+                    }
                     let updated = tx
                         .execute(
                             sqlx::query(indoc! { r#"
                                 UPDATE environment_tool_grants
-                                SET automatic = $2, state_changed_at = $3, state_changed_by = $4
+                                SET automatic = $4, follow_coordinates = $5,
+                                    state_changed_at = $6, state_changed_by = $7
                                 WHERE environment_tool_grant_id = $1
-                                    AND lifecycle = $5
+                                    AND environment_id = $2
+                                    AND tool_release_id = $3
+                                    AND lifecycle = $8
                                     AND NOT protected
+                                    AND (NOT $4 OR automatic)
                             "#})
                             .bind(grant_id)
+                            .bind(environment_id)
+                            .bind(release_id)
                             .bind(automatic)
+                            .bind(follow_coordinates)
                             .bind(SqlDateTime::now())
                             .bind(actor)
                             .bind(ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE),
                         )
                         .await?;
                     if updated.rows_affected() != 1 {
+                        if automatic {
+                            let query = format!(
+                                "{GRANT_DETAILS_SELECT} WHERE etg.environment_tool_grant_id = $1 AND etg.environment_id = $2 AND tr.tool_release_id = $3 AND etg.lifecycle = {ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE} AND NOT etg.protected AND NOT etg.automatic"
+                            );
+                            return tx
+                                .fetch_optional_as(
+                                    sqlx::query_as(&query)
+                                        .bind(grant_id)
+                                        .bind(environment_id)
+                                        .bind(release_id),
+                                )
+                                .await?
+                                .map(Some)
+                                .ok_or(EnvironmentToolGrantRepoError::ConcurrentModification);
+                        }
                         return Ok(None);
                     }
                     let query =
@@ -705,34 +792,72 @@ impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
     async fn restore(
         &self,
         grant_id: Uuid,
+        environment_id: Uuid,
+        release_id: Uuid,
         actor: Uuid,
         automatic: bool,
+        follow_coordinates: Option<bool>,
     ) -> Result<Option<EnvironmentToolGrantWithDetailsRecord>, EnvironmentToolGrantRepoError> {
         self.db_pool
             .with_tx_err(METRICS_SVC_NAME, "restore", |tx| {
                 async move {
-                    if !Self::grant_has_published_release(tx, grant_id).await? {
-                        return Ok(None);
+                    if !Self::grant_has_available_release(
+                        tx,
+                        grant_id,
+                        environment_id,
+                        release_id,
+                        follow_coordinates,
+                    )
+                    .await?
+                    {
+                        return if automatic {
+                            Err(EnvironmentToolGrantRepoError::ConcurrentModification)
+                        } else {
+                            Ok(None)
+                        };
                     }
                     let updated = tx
                         .execute(
                             sqlx::query(indoc! { r#"
                                 UPDATE environment_tool_grants
-                                SET lifecycle = $2, state_changed_at = $3, state_changed_by = $4,
-                                    automatic = $5, deleted_at = NULL, deleted_by = NULL
+                                SET lifecycle = $4, state_changed_at = $5, state_changed_by = $6,
+                                    automatic = $7,
+                                    follow_coordinates = COALESCE($8, follow_coordinates),
+                                    deleted_at = NULL, deleted_by = NULL
                                 WHERE environment_tool_grant_id = $1
-                                    AND lifecycle = $6
+                                    AND environment_id = $2
+                                    AND tool_release_id = $3
+                                    AND lifecycle = $9
                                     AND NOT protected
+                                    AND (NOT $7 OR automatic)
                             "#})
                             .bind(grant_id)
+                            .bind(environment_id)
+                            .bind(release_id)
                             .bind(ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE)
                             .bind(SqlDateTime::now())
                             .bind(actor)
                             .bind(automatic)
+                            .bind(follow_coordinates)
                             .bind(ENVIRONMENT_TOOL_GRANT_LIFECYCLE_DELETED),
                         )
                         .await?;
                     if updated.rows_affected() != 1 {
+                        if automatic {
+                            let query = format!(
+                                "{GRANT_DETAILS_SELECT} WHERE etg.environment_tool_grant_id = $1 AND etg.environment_id = $2 AND tr.tool_release_id = $3 AND etg.lifecycle = {ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE} AND NOT etg.protected AND NOT etg.automatic"
+                            );
+                            return tx
+                                .fetch_optional_as(
+                                    sqlx::query_as(&query)
+                                        .bind(grant_id)
+                                        .bind(environment_id)
+                                        .bind(release_id),
+                                )
+                                .await?
+                                .map(Some)
+                                .ok_or(EnvironmentToolGrantRepoError::ConcurrentModification);
+                        }
                         return Ok(None);
                     }
                     let query =

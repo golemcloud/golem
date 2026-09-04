@@ -938,6 +938,9 @@ impl From<EnvironmentToolGrantError> for ApiError {
                 api::error_code::ENVIRONMENT_TOOL_GRANT_ALREADY_EXISTS,
                 error,
             ),
+            EnvironmentToolGrantError::ConcurrentModification => {
+                Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
+            }
             EnvironmentToolGrantError::ProtectedToolGrant(_) => {
                 Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
             }
