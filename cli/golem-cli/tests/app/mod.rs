@@ -29,9 +29,22 @@ mod tool_middleware;
 
 inherit_test_dep!(Tracing);
 
-// Tag for the it-cli `agents` CI shard. Must live in the `app` module so the tag's module-path
-// prefix resolves to `app::agents`.
+// Tags for the it-cli CI shards. They must live in the `app` module so the tag's module-path
+// prefix resolves to `app::<module>`.
+//
+// The `agents` module is split further by per-test `#[tag(agents_guest_bridge)]` and
+// `#[tag(agents_streaming)]` attributes; the `agents` CI shard skips those two tags.
 tag_suite!(agents, agents);
+// Everything except `app::agents` and `app::app` runs in the `deploy` shard; the untagged
+// remainder (`:tag:`) is the `core` shard, which is only `app::app`.
+tag_suite!(account, deploy);
+tag_suite!(build_and_deploy_all, deploy);
+tag_suite!(cards, deploy);
+tag_suite!(directory_source_ifs, deploy);
+tag_suite!(moonbit_tool_middleware, deploy);
+tag_suite!(plugins, deploy);
+tag_suite!(scala_tool_middleware, deploy);
+tag_suite!(tool_middleware, deploy);
 
 use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;
@@ -639,6 +652,80 @@ impl TestContext {
             stdout: Vec::new(),
             stderr: stderr_bytes,
         }
+    }
+
+    async fn cli_process_after<I, S>(
+        &self,
+        command_args: I,
+        expected: &str,
+        pause_after_match: Duration,
+    ) -> Child
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.rewrite_local_http_domain_ports();
+
+        let mut args = vec![
+            "--config-dir".to_string(),
+            self.config_dir.path().to_str().unwrap().to_string(),
+        ];
+        args.extend(
+            command_args
+                .into_iter()
+                .map(|arg| arg.as_ref().to_str().unwrap().to_string()),
+        );
+
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
+        println!(
+            "{} {}",
+            "> working directory:".bold(),
+            working_dir.display()
+        );
+        println!("{} {}", "> golem-cli".bold(), args.iter().join(" ").blue());
+
+        let mut child = Command::new(&self.golem_cli_path)
+            .args(args)
+            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+            .envs(&self.env)
+            .current_dir(&working_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let mut stdout = BufReader::new(child.stdout.take().unwrap()).lines();
+        let mut stderr = BufReader::new(child.stderr.take().unwrap()).lines();
+        tokio::spawn(async move {
+            while let Ok(Some(line)) = stderr.next_line().await {
+                eprintln!("> golem-cli - stderr: {line}");
+            }
+        });
+
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let line = stdout
+                    .next_line()
+                    .await
+                    .expect("failed to read golem-cli stdout")
+                    .expect("golem-cli exited before the expected output");
+                println!("> golem-cli - stdout: {line}");
+                if line.contains(expected) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("failed to observe expected golem-cli output");
+        tokio::time::sleep(pause_after_match).await;
+        tokio::spawn(async move {
+            while let Ok(Some(line)) = stdout.next_line().await {
+                println!("> golem-cli - stdout: {line}");
+            }
+        });
+
+        child
     }
 
     async fn cli_interactive<I, S, F>(&self, args: I, session_fn: F)

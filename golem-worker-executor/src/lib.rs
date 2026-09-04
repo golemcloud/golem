@@ -51,7 +51,7 @@ use self::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use self::services::worker_fork::DefaultWorkerFork;
 use self::wasi_host::create_linker;
 use crate::grpc::WorkerExecutorImpl;
-use crate::services::active_agents::ActiveAgents;
+use crate::services::active_agents::{ActiveAgents, InvocationLoops};
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::card::{CardService, CardServiceDefault};
@@ -152,6 +152,10 @@ pub struct RunDetails {
     /// Weak reference to a sentinel inside `All`. When `All` is properly
     /// deallocated, `upgrade()` returns `None`. Used by tests to detect leaks.
     pub leak_detector: std::sync::Weak<()>,
+    /// The worker invocation loops of this executor. They stop at the shutdown signal; an
+    /// in-process restart of the executor over the same storage must wait for them to exit
+    /// before reopening the workers' oplogs.
+    pub invocation_loops: InvocationLoops,
 }
 
 impl Drop for RunDetails {
@@ -1119,6 +1123,7 @@ pub async fn bootstrap_and_run_worker_executor<
     };
 
     let leak_detector = worker_executor_impl.leak_detector();
+    let invocation_loops = worker_executor_impl.active_agents().invocation_loops();
 
     crate::metrics::runtime::install_runtime_metrics(
         runtime.clone(),
@@ -1144,6 +1149,7 @@ pub async fn bootstrap_and_run_worker_executor<
         epoch_stop,
         shutdown,
         leak_detector,
+        invocation_loops,
     })
 }
 

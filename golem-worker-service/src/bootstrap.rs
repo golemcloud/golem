@@ -23,6 +23,7 @@ use crate::custom_api::oidc::{DefaultIdentityProvider, IdentityProvider};
 use crate::custom_api::request_handler::RequestHandler;
 use crate::custom_api::route_resolver::RouteResolver;
 use crate::custom_api::webhooks::WebhookCallbackHandler;
+use crate::invocation_session_token::InvocationSessionTokenKeyring;
 use crate::mcp::{McpCapabilityLookup, RegistryServiceMcpCapabilityLookup};
 use crate::service::agent_resolution_cache::AgentResolutionCache;
 use crate::service::auth::{AuthService, RemoteAuthService};
@@ -52,10 +53,15 @@ pub struct Services {
     pub route_resolver: Arc<RouteResolver>,
     pub identity_provider: Arc<dyn IdentityProvider>,
     pub session_store: Arc<dyn SessionStore>,
+    pub invocation_session_token_keyring: Arc<InvocationSessionTokenKeyring>,
 }
 
 impl Services {
     pub async fn new(config: &WorkerServiceConfig) -> anyhow::Result<Self> {
+        let invocation_session_token_keyring = Arc::new(
+            InvocationSessionTokenKeyring::new(&config.invocation_session_tokens)
+                .map_err(anyhow::Error::msg)?,
+        );
         let registry_service_client: Arc<dyn RegistryService> =
             Arc::new(GrpcRegistryService::new(&config.registry_service));
 
@@ -187,6 +193,7 @@ impl Services {
             route_resolver,
             identity_provider,
             session_store,
+            invocation_session_token_keyring,
         })
     }
 }
