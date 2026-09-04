@@ -55,8 +55,7 @@ use crate::model::deploy::{
     DeployConfig, DeployError, DeployResult, DeploySummary, EnvironmentSetupPlan,
     EnvironmentToolGrantPlanAction, EnvironmentToolGrantPlanEntry, EnvironmentToolGrantPlanView,
     PostDeployError, PostDeployResult, PostDeploySummary, ToolPublicationPlan,
-    ToolPublicationPlanAction, ToolPublicationPlanEntry, UpdateStagedComponentError,
-    build_environment_setup_plan, preferred_source_language_for_setup,
+    UpdateStagedComponentError, build_environment_setup_plan, preferred_source_language_for_setup,
 };
 use crate::model::deploy::{DeployPlanView, log_unified_diff, log_unified_diff_for_path};
 use crate::model::deploy::{DeploymentListView, DeploymentNewView};
@@ -70,11 +69,9 @@ use colored::Colorize;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use golem_client::api::{
     AgentSecretsClient, ApplicationClient, ComponentClient, EnvironmentClient,
-    EnvironmentToolGrantsClient, ResourcesClient, RetryPoliciesClient, ToolReleasesClient,
+    EnvironmentToolGrantsClient, ResourcesClient, RetryPoliciesClient,
 };
-use golem_client::model::{
-    ApplicationCreation, DeploymentCreation, DeploymentRollback, EnvironmentToolGrantReconciliation,
-};
+use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::schema_evolution::validate_schema_evolution;
 use golem_common::model::agent::{AgentConfigSource, AgentTypeName, DeployedRegisteredAgentType};
@@ -91,12 +88,10 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_tool_grant::{
     EnvironmentToolGrantCreation, EnvironmentToolGrantDeletion, EnvironmentToolGrantId,
-    EnvironmentToolGrantWithDetails,
+    EnvironmentToolGrantReconciliation, EnvironmentToolGrantWithDetails, EnvironmentToolValidation,
 };
-use golem_common::model::tool::{TOOL_METADATA_WIT_VERSION, ToolName};
-use golem_common::model::tool_release::{
-    ToolReleaseLifecycle, ToolReleaseReference, tool_metadata_digest,
-};
+use golem_common::model::tool::ToolName;
+use golem_common::model::tool_release::{ToolPublication, ToolReleaseReference};
 use golem_common::schema::schema_type::SchemaType;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -1126,7 +1121,7 @@ impl AppCommandHandler {
             log_action(
                 "Comparing",
                 format!(
-                    "staging area with current deployment: {}",
+                    "staging area with current deployment (tool publications excluded): {}",
                     if stage_is_same_as_current {
                         "SAME".green()
                     } else {
@@ -1367,85 +1362,41 @@ impl AppCommandHandler {
             return Ok(ToolPublicationPlan::default());
         }
 
-        let releases = self
+        let publications = tools_to_publish
+            .iter()
+            .map(|name| {
+                let definition = components
+                    .values()
+                    .flat_map(|component| &component.tools)
+                    .find(|tool| tool.name() == Some(name.as_str()))
+                    .ok_or_else(|| anyhow!("Published tool {name} has no local definition"))?;
+                Ok(ToolPublication {
+                    name: name.clone(),
+                    definition: definition.clone(),
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let result = self
             .ctx
             .golem_clients()
             .await?
-            .tool_releases
-            .list_account_tool_releases(&environment.server_environment.owner_account_id.0)
+            .environment_tool_grants
+            .validate_environment_tools(
+                &environment.environment_id.0,
+                &EnvironmentToolValidation {
+                    grant_reconciliation: EnvironmentToolGrantReconciliation {
+                        creations: Vec::new(),
+                        deletions: Vec::new(),
+                    },
+                    publications,
+                },
+            )
             .await
-            .map_service_error()?
-            .values;
-
-        let mut entries = Vec::with_capacity(tools_to_publish.len());
-        for name in &tools_to_publish {
-            let definition = components
-                .values()
-                .flat_map(|component| &component.tools)
-                .find(|tool| tool.name() == Some(name.as_str()))
-                .ok_or_else(|| anyhow!("Published tool {name} has no local definition"))?;
-            let existing = releases
-                .iter()
-                .find(|release| {
-                    release.name == *name
-                        && release.version == definition.version
-                        && release.lifecycle != ToolReleaseLifecycle::Superseded
-                })
-                .or_else(|| {
-                    releases.iter().find(|release| {
-                        release.name == *name && release.version == definition.version
-                    })
-                });
-            let Some(existing) = existing else {
-                entries.push(ToolPublicationPlanEntry {
-                    action: ToolPublicationPlanAction::Publish,
-                    name: name.to_string(),
-                    version: definition.version.clone(),
-                    reason: None,
-                });
-                continue;
-            };
-            let metadata_digest = tool_metadata_digest(TOOL_METADATA_WIT_VERSION, definition)?;
-            let content_matches = existing.definition == *definition
-                && existing.metadata_version == TOOL_METADATA_WIT_VERSION
-                && existing.metadata_digest == metadata_digest;
-            let (action, reason) = if existing.lifecycle == ToolReleaseLifecycle::DePublished {
-                (
-                    ToolPublicationPlanAction::Conflict,
-                    Some(
-                        "this release is de-published; restore it explicitly before deploying"
-                            .to_string(),
-                    ),
-                )
-            } else if existing.lifecycle == ToolReleaseLifecycle::Superseded {
-                (
-                    ToolPublicationPlanAction::Conflict,
-                    Some(
-                        "this coordinate belongs to a superseded release; use a new version"
-                            .to_string(),
-                    ),
-                )
-            } else if content_matches {
-                (ToolPublicationPlanAction::NoChange, None)
-            } else if environment.server_environment.version_check {
-                (
-                    ToolPublicationPlanAction::Conflict,
-                    Some(
-                        "this coordinate already has different content; use a new version or disable versionCheck for this environment"
-                            .to_string(),
-                    ),
-                )
-            } else {
-                (ToolPublicationPlanAction::Publish, None)
-            };
-            entries.push(ToolPublicationPlanEntry {
-                action,
-                name: name.to_string(),
-                version: definition.version.clone(),
-                reason,
-            });
-        }
-        Ok(ToolPublicationPlan::new(tools_to_publish, entries))
+            .map_service_error()?;
+        Ok(ToolPublicationPlan::new(
+            tools_to_publish,
+            result.publication_plan,
+        ))
     }
 
     async fn deploy_diff(&self, deploy_quick_diff: DeployQuickDiff) -> anyhow::Result<DeployDiff> {
@@ -1686,18 +1637,21 @@ impl AppCommandHandler {
                 .golem_clients()
                 .await?
                 .environment_tool_grants
-                .validate_environment_tool_grant_reconciliation(
+                .validate_environment_tools(
                     &environment.environment_id.0,
-                    &EnvironmentToolGrantReconciliation {
-                        creations: plan
-                            .upserts()
-                            .cloned()
-                            .map(|release| EnvironmentToolGrantCreation {
-                                release,
-                                automatic: true,
-                            })
-                            .collect(),
-                        deletions: plan.deletions.iter().map(|grant_id| grant_id.0).collect(),
+                    &EnvironmentToolValidation {
+                        grant_reconciliation: EnvironmentToolGrantReconciliation {
+                            creations: plan
+                                .upserts()
+                                .cloned()
+                                .map(|release| EnvironmentToolGrantCreation {
+                                    release,
+                                    automatic: true,
+                                })
+                                .collect(),
+                            deletions: plan.deletions.clone(),
+                        },
+                        publications: Vec::new(),
                     },
                 )
                 .await

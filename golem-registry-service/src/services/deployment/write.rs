@@ -73,6 +73,10 @@ pub enum DeploymentWriteError {
         requested_hash: diff::Hash,
         actual_hash: diff::Hash,
     },
+    #[error("Tool release coordinate exists with different immutable metadata")]
+    ToolReleaseImmutableConflict,
+    #[error("A de-published tool release must be restored explicitly before publication")]
+    ToolReleaseDePublishedConflict,
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -90,6 +94,8 @@ impl SafeDisplay for DeploymentWriteError {
             Self::ConcurrentDeployment => self.to_string(),
             Self::VersionAlreadyExists { .. } => self.to_string(),
             Self::NoOpDeployment => self.to_string(),
+            Self::ToolReleaseImmutableConflict => self.to_string(),
+            Self::ToolReleaseDePublishedConflict => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -460,6 +466,12 @@ impl DeploymentWriteService {
                 }
                 DeployRepoError::VersionAlreadyExists { version } => {
                     DeploymentWriteError::VersionAlreadyExists { version }
+                }
+                DeployRepoError::ToolReleaseImmutableConflict => {
+                    DeploymentWriteError::ToolReleaseImmutableConflict
+                }
+                DeployRepoError::ToolReleaseDePublishedConflict => {
+                    DeploymentWriteError::ToolReleaseDePublishedConflict
                 }
                 other => other.into(),
             })?

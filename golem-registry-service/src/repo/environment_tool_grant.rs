@@ -310,15 +310,6 @@ impl DbEnvironmentToolGrantRepo<PostgresPool> {
             return Ok(false);
         }
 
-        tx.execute(
-            sqlx::query(indoc! { r#"
-                UPDATE environments
-                SET current_revision_id = current_revision_id
-                WHERE environment_id = $1
-            "#})
-            .bind(environment_id),
-        )
-        .await?;
         Ok(tx
             .fetch_optional(
                 sqlx::query(indoc! { r#"
@@ -383,15 +374,6 @@ impl DbEnvironmentToolGrantRepo<PostgresPool> {
             return Ok(false);
         }
 
-        tx.execute(
-            sqlx::query(indoc! { r#"
-                UPDATE environments
-                SET current_revision_id = current_revision_id
-                WHERE environment_id = $1
-            "#})
-            .bind(environment_id),
-        )
-        .await?;
         Ok(tx
             .fetch_optional(
                 sqlx::query(indoc! { r#"
@@ -443,15 +425,6 @@ impl DbEnvironmentToolGrantRepo<SqlitePool> {
             return Ok(false);
         }
 
-        tx.execute(
-            sqlx::query(indoc! { r#"
-                UPDATE environments
-                SET current_revision_id = current_revision_id
-                WHERE environment_id = $1
-            "#})
-            .bind(environment_id),
-        )
-        .await?;
         Ok(tx
             .fetch_optional(
                 sqlx::query(indoc! { r#"
@@ -515,15 +488,6 @@ impl DbEnvironmentToolGrantRepo<SqlitePool> {
             return Ok(false);
         }
 
-        tx.execute(
-            sqlx::query(indoc! { r#"
-                UPDATE environments
-                SET current_revision_id = current_revision_id
-                WHERE environment_id = $1
-            "#})
-            .bind(environment_id),
-        )
-        .await?;
         Ok(tx
             .fetch_optional(
                 sqlx::query(indoc! { r#"

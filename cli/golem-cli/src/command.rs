@@ -1276,7 +1276,7 @@ pub mod tool {
             /// Published tool release ID
             release_id: ToolReleaseId,
         },
-        /// Make a release unavailable for new coordinate-based grants
+        /// Make a release unavailable for new deployments and new grants
         #[command(after_help = crate::command_examples::TOOL_RELEASE_DE_PUBLISH)]
         DePublish {
             /// Published tool release ID

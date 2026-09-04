@@ -19,7 +19,7 @@ use futures::future::join_all;
 use golem_common::base_model::Empty;
 use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::base_model::component_metadata::KnownExports;
-use golem_common::model::account::{AccountId, AccountRevision, AccountSetPlan};
+use golem_common::model::account::{AccountEmail, AccountId, AccountRevision, AccountSetPlan};
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
@@ -44,7 +44,8 @@ use golem_common::model::tool::{
     ToolDeploymentMetadata, ToolName, ToolProvisionConfig, ToolSource,
 };
 use golem_common::model::tool_release::{
-    SystemToolAvailability, SystemToolReleaseProvision, ToolReleaseId,
+    SystemToolAvailability, SystemToolReleaseProvision, ToolPublication, ToolPublicationPlanAction,
+    ToolReleaseId,
 };
 use golem_common::model::{AgentId, IdempotencyKey, OplogIndex};
 use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
@@ -5648,7 +5649,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                 false,
             )
             .await,
-        Err(DeployRepoError::ToolReleaseConflict)
+        Err(DeployRepoError::ToolReleaseDePublishedConflict)
     ));
     assert_eq!(
         deps.tool_release_repo
@@ -5678,7 +5679,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                 false,
             )
             .await,
-        Err(DeployRepoError::ToolReleaseConflict)
+        Err(DeployRepoError::ToolReleaseDePublishedConflict)
     ));
     assert_eq!(
         deps.tool_release_repo
@@ -5767,9 +5768,10 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                 false,
             )
             .await,
-        Err(DeployRepoError::ToolReleaseConflict)
+        Err(DeployRepoError::ToolReleaseImmutableConflict)
     ));
-    deps.environment_repo
+    let loose_publisher = deps
+        .environment_repo
         .update({
             let mut revision = env.revision.clone();
             revision.revision_id += 1;
@@ -5779,6 +5781,136 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         })
         .await
         .unwrap();
+    let consumer = deps.create_account().await;
+    let consumer_app = deps.create_application(consumer.revision.account_id).await;
+    let strict_consumer = deps.create_env(consumer_app.revision.application_id).await;
+    let strict_following_grant = EnvironmentToolGrantRecord::creation(
+        EnvironmentId(strict_consumer.revision.environment_id),
+        ToolReleaseId(original_zeta_id),
+        false,
+        false,
+        true,
+        AccountId(consumer.revision.account_id),
+    );
+    deps.environment_tool_grant_repo
+        .create(strict_following_grant.clone())
+        .await
+        .unwrap();
+    let loose_publisher = loose_publisher
+        .try_into_model(
+            ApplicationName(app.revision.name.clone()),
+            AccountId(owner_account_id),
+            AccountEmail::new(owner_account_email.clone()),
+        )
+        .unwrap();
+
+    let superseded_definition = make_test_tool("superseded-only", "1.0.0");
+    let mut superseded_record = deps
+        .tool_release_repo
+        .get_by_id(original_zeta_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .release;
+    superseded_record.tool_release_id = new_repo_uuid();
+    superseded_record.tool_name = "superseded-only".to_string();
+    superseded_record.tool_definition = Blob::new(superseded_definition.clone());
+    superseded_record.metadata_digest = golem_common::model::tool_release::tool_metadata_digest(
+        TOOL_METADATA_WIT_VERSION,
+        &superseded_definition,
+    )
+    .unwrap()
+    .into();
+    superseded_record.lifecycle = TOOL_RELEASE_LIFECYCLE_SUPERSEDED;
+    deps.tool_release_repo
+        .create(superseded_record)
+        .await
+        .unwrap();
+    let superseded_plan = tool_release_service
+        .plan_publications(
+            &loose_publisher,
+            vec![ToolPublication {
+                name: ToolName::try_from("superseded-only").unwrap(),
+                definition: superseded_definition,
+            }],
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    assert_eq!(superseded_plan.len(), 1);
+    assert_eq!(
+        superseded_plan[0].action,
+        ToolPublicationPlanAction::Publish
+    );
+    assert!(superseded_plan[0].reason.is_none());
+
+    let publication_plan = tool_release_service
+        .plan_publications(
+            &loose_publisher,
+            vec![ToolPublication {
+                name: ToolName::try_from("zeta").unwrap(),
+                definition: changed_zeta.clone(),
+            }],
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    assert_eq!(publication_plan.len(), 1);
+    assert_eq!(
+        publication_plan[0].action,
+        ToolPublicationPlanAction::Conflict
+    );
+    assert!(
+        publication_plan[0]
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("followed by a grant in a version-checked environment")
+    );
+    assert!(matches!(
+        deps.full_deployment_repo
+            .deploy(
+                deployment_creation(
+                    5,
+                    updated_component_revision_id,
+                    "5.0.0",
+                    vec![changed_zeta.clone()],
+                    Some("zeta"),
+                    false,
+                ),
+                false,
+            )
+            .await,
+        Err(DeployRepoError::ToolReleaseImmutableConflict)
+    ));
+
+    deps.environment_repo
+        .delete({
+            let mut revision = strict_consumer.revision.clone();
+            revision.revision_id += 1;
+            revision.audit = DeletableRevisionAuditFields::new(consumer.revision.account_id);
+            revision
+        })
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let publication_plan = tool_release_service
+        .plan_publications(
+            &loose_publisher,
+            vec![ToolPublication {
+                name: ToolName::try_from("zeta").unwrap(),
+                definition: changed_zeta.clone(),
+            }],
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    assert_eq!(publication_plan.len(), 1);
+    assert_eq!(
+        publication_plan[0].action,
+        ToolPublicationPlanAction::Publish,
+        "grants belonging to deleted environments must not constrain live publications"
+    );
     deps.full_deployment_repo
         .deploy(
             deployment_creation(

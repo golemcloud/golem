@@ -80,7 +80,9 @@ pub enum DeployRepoError {
     #[error("Retry policy for name {name} already exists")]
     RetryPolicyConflict { name: String },
     #[error("Tool release coordinate exists with different immutable metadata")]
-    ToolReleaseConflict,
+    ToolReleaseImmutableConflict,
+    #[error("A de-published tool release must be restored explicitly before publication")]
+    ToolReleaseDePublishedConflict,
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }

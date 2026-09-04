@@ -14,7 +14,10 @@
 
 use crate::base_model::account::{AccountId, AccountSummary};
 use crate::base_model::environment::EnvironmentId;
-use crate::base_model::tool_release::{ToolReleaseId, ToolReleaseMetadata, ToolReleaseReference};
+use crate::base_model::tool_release::{
+    ToolPublication, ToolPublicationPlanEntry, ToolReleaseId, ToolReleaseMetadata,
+    ToolReleaseReference,
+};
 use crate::{declare_enums, declare_structs, newtype_uuid};
 use chrono::{DateTime, Utc};
 
@@ -60,5 +63,14 @@ declare_structs! {
     pub struct EnvironmentToolGrantReconciliation {
         pub creations: Vec<EnvironmentToolGrantCreation>,
         pub deletions: Vec<EnvironmentToolGrantId>,
+    }
+
+    pub struct EnvironmentToolValidation {
+        pub grant_reconciliation: EnvironmentToolGrantReconciliation,
+        pub publications: Vec<ToolPublication>,
+    }
+
+    pub struct EnvironmentToolValidationResult {
+        pub publication_plan: Vec<ToolPublicationPlanEntry>,
     }
 }

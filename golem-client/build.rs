@@ -257,6 +257,18 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::tool_release::SystemToolAvailability",
             ),
             (
+                "ToolPublication",
+                "golem_common::model::tool_release::ToolPublication",
+            ),
+            (
+                "ToolPublicationPlanAction",
+                "golem_common::model::tool_release::ToolPublicationPlanAction",
+            ),
+            (
+                "ToolPublicationPlanEntry",
+                "golem_common::model::tool_release::ToolPublicationPlanEntry",
+            ),
+            (
                 "EnvironmentToolGrant",
                 "golem_common::model::environment_tool_grant::EnvironmentToolGrant",
             ),
@@ -275,6 +287,18 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             (
                 "EnvironmentToolGrantWithDetails",
                 "golem_common::model::environment_tool_grant::EnvironmentToolGrantWithDetails",
+            ),
+            (
+                "EnvironmentToolGrantReconciliation",
+                "golem_common::model::environment_tool_grant::EnvironmentToolGrantReconciliation",
+            ),
+            (
+                "EnvironmentToolValidation",
+                "golem_common::model::environment_tool_grant::EnvironmentToolValidation",
+            ),
+            (
+                "EnvironmentToolValidationResult",
+                "golem_common::model::environment_tool_grant::EnvironmentToolValidationResult",
             ),
             // domain_registration
             (

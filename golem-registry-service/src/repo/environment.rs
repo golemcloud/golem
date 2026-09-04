@@ -41,7 +41,9 @@ use golem_common::model::environment::EnvironmentId;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
-use golem_service_base::repo::{BindingsStack, RepoError, ResultExt};
+use golem_service_base::repo::{
+    BindingsStack, PoolLabelledTransaction, RepoError, RepoResult, ResultExt,
+};
 use indoc::{formatdoc, indoc};
 use sqlx::{Database, Encode, Row, Type};
 use std::collections::BTreeSet;
@@ -382,6 +384,48 @@ impl<DBP: Pool> DbEnvironmentRepo<DBP> {
         self.db_pool
             .with_tx_err(METRICS_SVC_NAME, api_name, f)
             .await
+    }
+}
+
+impl DbEnvironmentRepo<PostgresPool> {
+    pub(crate) async fn lock_in_tx(
+        tx: &mut PoolLabelledTransaction<PostgresPool>,
+        environment_id: Uuid,
+    ) -> RepoResult<bool> {
+        Ok(tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    SELECT environment_id
+                    FROM environments
+                    WHERE environment_id = $1
+                        AND deleted_at IS NULL
+                    FOR NO KEY UPDATE
+                "#})
+                .bind(environment_id),
+            )
+            .await?
+            .is_some())
+    }
+}
+
+impl DbEnvironmentRepo<SqlitePool> {
+    pub(crate) async fn lock_in_tx(
+        tx: &mut PoolLabelledTransaction<SqlitePool>,
+        environment_id: Uuid,
+    ) -> RepoResult<bool> {
+        // SQLite serializes write transactions, so no explicit row lock is needed.
+        Ok(tx
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    SELECT environment_id
+                    FROM environments
+                    WHERE environment_id = $1
+                        AND deleted_at IS NULL
+                "#})
+                .bind(environment_id),
+            )
+            .await?
+            .is_some())
     }
 }
 
@@ -731,16 +775,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     ) -> Result<EnvironmentScopedExtRevisionRecord, EnvironmentRepoError> {
         self.with_tx_err("update", |tx| {
             async move {
-                tx.execute(
-                    sqlx::query(indoc! { r#"
-                        UPDATE environments
-                        SET current_revision_id = current_revision_id
-                        WHERE environment_id = $1
-                    "#})
-                    .bind(revision.environment_id),
-                )
-                .await?;
-
                 if revision.version_check
                     && tx
                         .fetch_optional(

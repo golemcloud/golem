@@ -15,7 +15,8 @@
 use super::account::{AccountError, AccountService};
 use crate::repo::model::tool_release::{
     TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_PUBLISHED,
-    TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM, ToolReleaseRecord, ToolReleaseWithOwnerRecord,
+    TOOL_RELEASE_LIFECYCLE_SUPERSEDED, TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM, ToolReleaseRecord,
+    ToolReleaseWithOwnerRecord,
 };
 use crate::repo::tool_release::{ToolReleaseRepo, ToolReleaseRepoError};
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -24,12 +25,15 @@ use golem_common::model::card::{
     AccountToolReleaseResourcePattern, AccountToolReleaseVerb, ClassPermissionTarget,
     PermissionTarget,
 };
+use golem_common::model::diff;
 use golem_common::model::environment::Environment;
-use golem_common::model::tool::{RegisteredTool, ToolName, ToolSource};
+use golem_common::model::tool::{RegisteredTool, TOOL_METADATA_WIT_VERSION, ToolName, ToolSource};
 use golem_common::model::tool_release::{
-    SystemToolAvailability, SystemToolReleaseProvision, ToolRelease, ToolReleaseId,
-    ToolReleaseLifecycle, ToolReleaseOrigin, ToolReleaseReference,
+    SystemToolAvailability, SystemToolReleaseProvision, ToolPublication, ToolPublicationPlanAction,
+    ToolPublicationPlanEntry, ToolRelease, ToolReleaseId, ToolReleaseLifecycle, ToolReleaseOrigin,
+    ToolReleaseReference, tool_metadata_digest,
 };
+use golem_common::schema::tool::Tool;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::collections::{BTreeMap, BTreeSet};
@@ -85,6 +89,14 @@ pub struct ToolReleaseService {
     builtin_tool_owner_account_id: AccountId,
 }
 
+enum PublicationAssessment {
+    NoChange(ToolReleaseId),
+    Publish,
+    ImmutableConflict,
+    StrictFollowingGrantConflict,
+    DePublishedConflict,
+}
+
 impl ToolReleaseService {
     pub fn new(
         tool_release_repo: Arc<dyn ToolReleaseRepo>,
@@ -109,18 +121,10 @@ impl ToolReleaseService {
         let mut records = Vec::with_capacity(publish_tools.len());
 
         for name in publish_tools {
-            if !seen.insert(name.clone()) {
-                return Err(ToolReleaseError::DuplicatePublication(name.clone()));
-            }
+            Self::validate_publication_selection(environment, name, &mut seen, auth)?;
             let tool = registered_tools
                 .get(name)
                 .ok_or_else(|| ToolReleaseError::PublicationToolNotFound(name.clone()))?;
-            authorize_account_tool_release_permission(
-                auth,
-                &environment.owner_account_email,
-                AccountToolReleaseVerb::Publish,
-                name.clone(),
-            )?;
             if tool.owner_account_id != environment.owner_account_id {
                 return Err(ToolReleaseError::PublicationOwnerMismatch(name.clone()));
             }
@@ -137,38 +141,162 @@ impl ToolReleaseService {
         Ok(records)
     }
 
+    pub async fn plan_publications(
+        &self,
+        environment: &Environment,
+        publications: Vec<ToolPublication>,
+        auth: &AuthCtx,
+    ) -> Result<Vec<ToolPublicationPlanEntry>, ToolReleaseError> {
+        let mut seen = BTreeSet::new();
+        let mut entries = Vec::with_capacity(publications.len());
+        for publication in publications {
+            Self::validate_publication_selection(environment, &publication.name, &mut seen, auth)?;
+            if publication.definition.name() != Some(publication.name.as_str()) {
+                return Err(ToolReleaseError::PublicationToolNotFound(publication.name));
+            }
+            let metadata_digest =
+                tool_metadata_digest(TOOL_METADATA_WIT_VERSION, &publication.definition)?;
+            let assessment = self
+                .assess_publication(
+                    environment.owner_account_id,
+                    &publication.name,
+                    &publication.definition,
+                    TOOL_METADATA_WIT_VERSION,
+                    metadata_digest,
+                    environment.version_check,
+                )
+                .await?;
+            let (action, reason) = match assessment {
+                PublicationAssessment::NoChange(_) => {
+                    (ToolPublicationPlanAction::NoChange, None)
+                }
+                PublicationAssessment::Publish => (ToolPublicationPlanAction::Publish, None),
+                PublicationAssessment::ImmutableConflict => (
+                    ToolPublicationPlanAction::Conflict,
+                    Some(
+                        "this coordinate already has different content; use a new version or disable versionCheck for this environment"
+                            .to_string(),
+                    ),
+                ),
+                PublicationAssessment::StrictFollowingGrantConflict => (
+                    ToolPublicationPlanAction::Conflict,
+                    Some(
+                        "this coordinate is followed by a grant in a version-checked environment; use a new version"
+                            .to_string(),
+                    ),
+                ),
+                PublicationAssessment::DePublishedConflict => (
+                    ToolPublicationPlanAction::Conflict,
+                    Some(
+                        "this release is de-published; restore it explicitly before deploying"
+                            .to_string(),
+                    ),
+                ),
+            };
+            entries.push(ToolPublicationPlanEntry {
+                action,
+                name: publication.name.to_string(),
+                version: publication.definition.version,
+                reason,
+            });
+        }
+        Ok(entries)
+    }
+
     pub async fn publications_need_change(
         &self,
         candidates: &mut [ToolReleaseRecord],
     ) -> Result<bool, ToolReleaseError> {
         let mut changed = false;
         for candidate in candidates {
+            let name =
+                ToolName::try_from(candidate.tool_name.clone()).map_err(anyhow::Error::msg)?;
             match self
-                .tool_release_repo
-                .get_by_coordinates(
-                    candidate.owner_account_id,
-                    &candidate.tool_name,
-                    &candidate.tool_version,
+                .assess_publication(
+                    AccountId(candidate.owner_account_id),
+                    &name,
+                    candidate.tool_definition.value(),
+                    &candidate.metadata_version,
+                    candidate.metadata_digest.into(),
+                    candidate.immutable,
                 )
                 .await?
             {
-                None => changed = true,
-                Some(existing) => {
-                    let release: ToolRelease = existing.release.clone().try_into()?;
-                    if release.lifecycle == ToolReleaseLifecycle::DePublished {
-                        return Err(ToolReleaseError::DePublishedReleaseRequiresExplicitRestore);
-                    }
-                    if existing.release.publication_content_matches(candidate) {
-                        candidate.tool_release_id = existing.release.tool_release_id;
-                    } else if candidate.immutable {
-                        return Err(ToolReleaseError::ImmutableReleaseConflict);
-                    } else {
-                        changed = true;
-                    }
+                PublicationAssessment::NoChange(existing_id) => {
+                    candidate.tool_release_id = existing_id.0;
+                }
+                PublicationAssessment::Publish => changed = true,
+                PublicationAssessment::ImmutableConflict
+                | PublicationAssessment::StrictFollowingGrantConflict => {
+                    return Err(ToolReleaseError::ImmutableReleaseConflict);
+                }
+                PublicationAssessment::DePublishedConflict => {
+                    return Err(ToolReleaseError::DePublishedReleaseRequiresExplicitRestore);
                 }
             }
         }
         Ok(changed)
+    }
+
+    fn validate_publication_selection(
+        environment: &Environment,
+        name: &ToolName,
+        seen: &mut BTreeSet<ToolName>,
+        auth: &AuthCtx,
+    ) -> Result<(), ToolReleaseError> {
+        if !seen.insert(name.clone()) {
+            return Err(ToolReleaseError::DuplicatePublication(name.clone()));
+        }
+        authorize_account_tool_release_permission(
+            auth,
+            &environment.owner_account_email,
+            AccountToolReleaseVerb::Publish,
+            name.clone(),
+        )?;
+        Ok(())
+    }
+
+    async fn assess_publication(
+        &self,
+        owner_account_id: AccountId,
+        name: &ToolName,
+        definition: &Tool,
+        metadata_version: &str,
+        metadata_digest: diff::Hash,
+        immutable: bool,
+    ) -> Result<PublicationAssessment, ToolReleaseError> {
+        let Some(existing) = self
+            .tool_release_repo
+            .get_by_coordinates(owner_account_id.0, name.as_str(), &definition.version)
+            .await?
+        else {
+            return Ok(PublicationAssessment::Publish);
+        };
+        match existing.release.lifecycle {
+            TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED => Ok(PublicationAssessment::DePublishedConflict),
+            TOOL_RELEASE_LIFECYCLE_SUPERSEDED => Ok(PublicationAssessment::Publish),
+            TOOL_RELEASE_LIFECYCLE_PUBLISHED => {
+                let content_matches = existing.release.tool_definition.value() == definition
+                    && existing.release.metadata_version == metadata_version
+                    && diff::Hash::from(existing.release.metadata_digest) == metadata_digest;
+                if content_matches {
+                    Ok(PublicationAssessment::NoChange(ToolReleaseId(
+                        existing.release.tool_release_id,
+                    )))
+                } else if immutable {
+                    Ok(PublicationAssessment::ImmutableConflict)
+                } else if self
+                    .tool_release_repo
+                    .strict_following_grant_exists(existing.release.tool_release_id)
+                    .await?
+                {
+                    Ok(PublicationAssessment::StrictFollowingGrantConflict)
+                } else {
+                    Ok(PublicationAssessment::Publish)
+                }
+            }
+            lifecycle => Err(anyhow::anyhow!("unknown tool release lifecycle {lifecycle}").into()),
+        }
     }
 
     pub async fn get(

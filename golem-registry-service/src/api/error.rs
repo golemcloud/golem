@@ -25,7 +25,9 @@ use crate::services::deployment::{DeployValidationError, DeploymentError, Deploy
 use crate::services::domain_registration::DomainRegistrationError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
-use crate::services::environment_tool_grant::EnvironmentToolGrantError;
+use crate::services::environment_tool_grant::{
+    EnvironmentToolGrantError, EnvironmentToolValidationError,
+};
 use crate::services::http_api_deployment::HttpApiDeploymentError;
 use crate::services::mcp_deployment::McpDeploymentError;
 use crate::services::oauth2::OAuth2Error;
@@ -887,19 +889,28 @@ impl From<ToolReleaseError> for ApiError {
     fn from(value: ToolReleaseError) -> Self {
         let error = value.to_safe_string();
         match value {
-            ToolReleaseError::ToolReleaseNotFound(_)
-            | ToolReleaseError::ReferencedToolReleaseNotFound => {
-                Self::not_found(api::error_code::TOOL_NOT_FOUND, error)
+            ToolReleaseError::ToolReleaseNotFound(_) => {
+                Self::not_found(api::error_code::TOOL_RELEASE_NOT_FOUND, error)
+            }
+            ToolReleaseError::ReferencedToolReleaseNotFound => {
+                Self::not_found(api::error_code::REFERENCED_TOOL_RELEASE_NOT_FOUND, error)
             }
             ToolReleaseError::ParentAccountNotFound(_) => {
                 Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
             }
-            ToolReleaseError::PublicationToolNotFound(_)
-            | ToolReleaseError::DuplicatePublication(_)
-            | ToolReleaseError::PublicationOwnerMismatch(_)
-            | ToolReleaseError::PublicationHostSource(_) => {
-                Self::bad_request(api::error_code::TOOL_NOT_FOUND, error)
+            ToolReleaseError::PublicationToolNotFound(_) => {
+                Self::bad_request(api::error_code::TOOL_PUBLICATION_TOOL_NOT_FOUND, error)
             }
+            ToolReleaseError::DuplicatePublication(_) => {
+                Self::bad_request(api::error_code::DUPLICATE_TOOL_PUBLICATION, error)
+            }
+            ToolReleaseError::PublicationOwnerMismatch(_) => {
+                Self::bad_request(api::error_code::TOOL_PUBLICATION_OWNER_MISMATCH, error)
+            }
+            ToolReleaseError::PublicationHostSource(_) => Self::bad_request(
+                api::error_code::TOOL_PUBLICATION_HOST_SOURCE_NOT_SUPPORTED,
+                error,
+            ),
             ToolReleaseError::ImmutableReleaseConflict => {
                 Self::conflict(api::error_code::TOOL_RELEASE_IMMUTABLE_CONFLICT, error)
             }
@@ -928,9 +939,11 @@ impl From<EnvironmentToolGrantError> for ApiError {
             EnvironmentToolGrantError::ParentEnvironmentNotFound(_) => {
                 Self::not_found(api::error_code::ENVIRONMENT_NOT_FOUND, error)
             }
-            EnvironmentToolGrantError::EnvironmentToolGrantNotFound(_)
-            | EnvironmentToolGrantError::ReferencedToolReleaseNotFound => {
-                Self::not_found(api::error_code::TOOL_NOT_FOUND, error)
+            EnvironmentToolGrantError::EnvironmentToolGrantNotFound(_) => {
+                Self::not_found(api::error_code::ENVIRONMENT_TOOL_GRANT_NOT_FOUND, error)
+            }
+            EnvironmentToolGrantError::ReferencedToolReleaseNotFound => {
+                Self::not_found(api::error_code::REFERENCED_TOOL_RELEASE_NOT_FOUND, error)
             }
             EnvironmentToolGrantError::GrantAlreadyExists => Self::conflict(
                 api::error_code::ENVIRONMENT_TOOL_GRANT_ALREADY_EXISTS,
@@ -952,6 +965,15 @@ impl From<EnvironmentToolGrantError> for ApiError {
                 code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),
             })),
+        }
+    }
+}
+
+impl From<EnvironmentToolValidationError> for ApiError {
+    fn from(value: EnvironmentToolValidationError) -> Self {
+        match value {
+            EnvironmentToolValidationError::Grant(error) => error.into(),
+            EnvironmentToolValidationError::Publication(error) => error.into(),
         }
     }
 }
@@ -998,6 +1020,12 @@ impl From<DeploymentWriteError> for ApiError {
             }
             DeploymentWriteError::EnvironmentNotYetDeployed => {
                 Self::conflict(api::error_code::ENVIRONMENT_NOT_DEPLOYED, error)
+            }
+            DeploymentWriteError::ToolReleaseImmutableConflict => {
+                Self::conflict(api::error_code::TOOL_RELEASE_IMMUTABLE_CONFLICT, error)
+            }
+            DeploymentWriteError::ToolReleaseDePublishedConflict => {
+                Self::conflict(api::error_code::TOOL_RELEASE_LIFECYCLE_CONFLICT, error)
             }
 
             DeploymentWriteError::Unauthorized(inner) => inner.into(),
@@ -1445,6 +1473,119 @@ mod tests {
         match api_error {
             ApiError::Conflict(body) => {
                 assert_eq!(body.0.code, api::error_code::CONCURRENT_UPDATE);
+            }
+            other => panic!("Expected Conflict, got: {other:?}"),
+        }
+    }
+
+    fn status_and_code(api_error: ApiError) -> (&'static str, String) {
+        match api_error {
+            ApiError::BadRequest(body) => ("bad_request", body.0.code),
+            ApiError::NotFound(body) => ("not_found", body.0.code),
+            other => panic!("Expected bad request or not found, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_release_errors_use_specific_codes() {
+        use golem_common::model::tool::ToolName;
+        use golem_common::model::tool_release::ToolReleaseId;
+
+        let tool_name = ToolName::try_from("echo").unwrap();
+        let cases = [
+            (
+                ToolReleaseError::ToolReleaseNotFound(ToolReleaseId::new()),
+                "not_found",
+                api::error_code::TOOL_RELEASE_NOT_FOUND,
+            ),
+            (
+                ToolReleaseError::ReferencedToolReleaseNotFound,
+                "not_found",
+                api::error_code::REFERENCED_TOOL_RELEASE_NOT_FOUND,
+            ),
+            (
+                ToolReleaseError::PublicationToolNotFound(tool_name.clone()),
+                "bad_request",
+                api::error_code::TOOL_PUBLICATION_TOOL_NOT_FOUND,
+            ),
+            (
+                ToolReleaseError::DuplicatePublication(tool_name.clone()),
+                "bad_request",
+                api::error_code::DUPLICATE_TOOL_PUBLICATION,
+            ),
+            (
+                ToolReleaseError::PublicationOwnerMismatch(tool_name.clone()),
+                "bad_request",
+                api::error_code::TOOL_PUBLICATION_OWNER_MISMATCH,
+            ),
+            (
+                ToolReleaseError::PublicationHostSource(tool_name),
+                "bad_request",
+                api::error_code::TOOL_PUBLICATION_HOST_SOURCE_NOT_SUPPORTED,
+            ),
+        ];
+
+        for (error, expected_status, expected_code) in cases {
+            let (status, code) = status_and_code(error.into());
+            assert_eq!(status, expected_status);
+            assert_eq!(code, expected_code);
+        }
+    }
+
+    #[test]
+    fn environment_tool_grant_errors_distinguish_grants_from_releases() {
+        use golem_common::model::environment_tool_grant::EnvironmentToolGrantId;
+
+        let (status, code) = status_and_code(
+            EnvironmentToolGrantError::EnvironmentToolGrantNotFound(EnvironmentToolGrantId::new())
+                .into(),
+        );
+        assert_eq!(status, "not_found");
+        assert_eq!(code, api::error_code::ENVIRONMENT_TOOL_GRANT_NOT_FOUND);
+
+        let (status, code) =
+            status_and_code(EnvironmentToolGrantError::ReferencedToolReleaseNotFound.into());
+        assert_eq!(status, "not_found");
+        assert_eq!(code, api::error_code::REFERENCED_TOOL_RELEASE_NOT_FOUND);
+    }
+
+    #[test]
+    fn deployment_tool_not_found_keeps_tool_not_found_code() {
+        use golem_common::model::tool::ToolName;
+
+        let (status, code) = status_and_code(
+            DeploymentError::ToolNotFound(ToolName::try_from("echo").unwrap()).into(),
+        );
+        assert_eq!(status, "not_found");
+        assert_eq!(code, api::error_code::TOOL_NOT_FOUND);
+    }
+
+    #[test]
+    fn deployment_tool_release_immutable_conflict_uses_specific_code() {
+        let api_error = ApiError::from(DeploymentWriteError::ToolReleaseImmutableConflict);
+
+        match api_error {
+            ApiError::Conflict(body) => {
+                assert_eq!(
+                    body.0.code,
+                    api::error_code::TOOL_RELEASE_IMMUTABLE_CONFLICT
+                );
+            }
+            other => panic!("Expected Conflict, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deployment_tool_release_de_published_conflict_uses_specific_code() {
+        let api_error = ApiError::from(DeploymentWriteError::ToolReleaseDePublishedConflict);
+
+        match api_error {
+            ApiError::Conflict(body) => {
+                assert_eq!(
+                    body.0.code,
+                    api::error_code::TOOL_RELEASE_LIFECYCLE_CONFLICT
+                );
+                assert!(body.0.error.contains("de-published"));
             }
             other => panic!("Expected Conflict, got: {other:?}"),
         }

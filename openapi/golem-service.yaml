@@ -6151,8 +6151,8 @@ paths:
       - RegistryService
       - EnvironmentToolGrants
       - Environment
-      summary: Validate an automatically managed grant reconciliation without changing any grants
-      operationId: validate_environment_tool_grant_reconciliation
+      summary: Validate environment tool grants and publications without changing them
+      operationId: validate_environment_tools
       parameters:
       - in: path
         name: environment_id
@@ -6167,11 +6167,15 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/EnvironmentToolGrantReconciliation'
+              $ref: '#/components/schemas/EnvironmentToolValidation'
         required: true
       responses:
-        '204':
+        '200':
           description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/EnvironmentToolValidationResult'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -20252,6 +20256,29 @@ components:
       - grant
       - release
       - releaseOwner
+    EnvironmentToolValidation:
+      title: EnvironmentToolValidation
+      type: object
+      properties:
+        grantReconciliation:
+          $ref: '#/components/schemas/EnvironmentToolGrantReconciliation'
+        publications:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolPublication'
+      required:
+      - grantReconciliation
+      - publications
+    EnvironmentToolValidationResult:
+      title: EnvironmentToolValidationResult
+      type: object
+      properties:
+        publicationPlan:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolPublicationPlanEntry'
+      required:
+      - publicationPlan
     EnvironmentUpdate:
       title: EnvironmentUpdate
       type: object
@@ -22941,6 +22968,39 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/AgentFilePermissions'
+    ToolPublication:
+      title: ToolPublication
+      type: object
+      properties:
+        name:
+          type: string
+        definition:
+          $ref: '#/components/schemas/Tool'
+      required:
+      - name
+      - definition
+    ToolPublicationPlanAction:
+      type: string
+      enum:
+      - noChange
+      - publish
+      - conflict
+    ToolPublicationPlanEntry:
+      title: ToolPublicationPlanEntry
+      type: object
+      properties:
+        action:
+          $ref: '#/components/schemas/ToolPublicationPlanAction'
+        name:
+          type: string
+        version:
+          type: string
+        reason:
+          type: string
+      required:
+      - action
+      - name
+      - version
     ToolRelease:
       title: ToolRelease
       type: object

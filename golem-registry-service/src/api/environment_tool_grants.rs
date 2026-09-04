@@ -19,7 +19,7 @@ use golem_common::model::Page;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_tool_grant::{
     EnvironmentToolGrantCreation, EnvironmentToolGrantDeletion, EnvironmentToolGrantId,
-    EnvironmentToolGrantReconciliation, EnvironmentToolGrantWithDetails,
+    EnvironmentToolGrantWithDetails, EnvironmentToolValidation, EnvironmentToolValidationResult,
 };
 use golem_common::model::poem::NoContentResponse;
 use golem_common::recorded_http_api_request;
@@ -82,29 +82,30 @@ impl EnvironmentToolGrantsApi {
         record.result(result)
     }
 
-    /// Validate an automatically managed grant reconciliation without changing any grants
+    /// Validate environment tool grants and publications without changing them
     #[oai(
         path = "/envs/:environment_id/tools/validate",
         method = "post",
-        operation_id = "validate_environment_tool_grant_reconciliation",
+        operation_id = "validate_environment_tools",
         tag = ApiTags::Environment
     )]
-    async fn validate_environment_tool_grant_reconciliation(
+    async fn validate_environment_tools(
         &self,
         environment_id: Path<EnvironmentId>,
-        reconciliation: Json<EnvironmentToolGrantReconciliation>,
+        validation: Json<EnvironmentToolValidation>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<NoContentResponse> {
+    ) -> ApiResult<Json<EnvironmentToolValidationResult>> {
         let record = recorded_http_api_request!(
-            "validate_environment_tool_grant_reconciliation",
+            "validate_environment_tools",
             environment_id = environment_id.0.to_string()
         );
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         let result = async {
-            self.environment_tool_grant_service
-                .validate_reconciliation(environment_id.0, reconciliation.0, &auth)
-                .await?;
-            Ok(NoContentResponse::NoContent)
+            Ok(Json(
+                self.environment_tool_grant_service
+                    .validate_tools(environment_id.0, validation.0, &auth)
+                    .await?,
+            ))
         }
         .instrument(record.span.clone())
         .await;

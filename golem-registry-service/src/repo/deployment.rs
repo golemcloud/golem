@@ -767,38 +767,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
     }
 
     async fn get_staged_identity(&self, environment_id: Uuid) -> RepoResult<DeploymentIdentity> {
-        let tools = self
-            .with_ro("get_current_deployment_tool_identities")
-            .fetch_all_as(
-                sqlx::query_as(indoc! { r#"
-                    SELECT r.tool_name, r.tool_release_id, r.published, r.deployment_hash
-                    FROM current_deployments cd
-                    JOIN current_deployment_revisions cdr
-                        ON cdr.environment_id = cd.environment_id
-                        AND cdr.revision_id = cd.current_revision_id
-                    JOIN deployment_registered_tools r
-                        ON r.environment_id = cdr.environment_id
-                        AND r.deployment_revision_id = cdr.deployment_revision_id
-                    WHERE cd.environment_id = $1
-                    ORDER BY r.tool_name
-                "#})
-                .bind(environment_id),
-            )
-            .await?;
-        // TODO: maybe add helper for readonly tx helpers OR create common abstraction on top
-        //      of transactions and pool, so both cna be used for selects
-        let mut tx = self.with_ro("get_staged_identity").begin().await?;
-        match Self::get_staged_deployment(&mut tx, environment_id).await {
-            Ok(mut result) => {
-                tx.commit().await?;
-                result.tools = tools;
-                Ok(result)
-            }
-            Err(err) => {
-                let _ = tx.rollback().await;
-                Err(err)
-            }
-        }
+        let mut api = self.with_ro("get_staged_identity");
+        Self::get_staged_deployment(&mut api, environment_id).await
     }
 
     async fn get_deployment_identity(
@@ -919,10 +889,10 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                             .await
                             .map_err(|err| match err {
                                 ToolReleaseRepoError::ImmutableConflict => {
-                                    DeployRepoError::ToolReleaseConflict
+                                    DeployRepoError::ToolReleaseImmutableConflict
                                 }
                                 ToolReleaseRepoError::DePublishedConflict => {
-                                    DeployRepoError::ToolReleaseConflict
+                                    DeployRepoError::ToolReleaseDePublishedConflict
                                 }
                                 ToolReleaseRepoError::ConcurrentModification => {
                                     DeployRepoError::ConcurrentModification
@@ -1854,6 +1824,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 #[async_trait]
 trait DeploymentRepoInternal: DeploymentRepo {
     type Db: Database;
+    type Api: PoolApi<Db = Self::Db>;
     type Tx: LabelledPoolTransaction;
 
     async fn create_deployment_revision(
@@ -1866,24 +1837,29 @@ trait DeploymentRepoInternal: DeploymentRepo {
     ) -> Result<DeploymentRevisionRecord, DeployRepoError>;
 
     async fn get_staged_deployment(
-        tx: &mut Self::Tx,
+        api: &mut Self::Api,
         environment_id: Uuid,
     ) -> RepoResult<DeploymentIdentity>;
 
     async fn get_staged_components(
-        tx: &mut Self::Tx,
+        api: &mut Self::Api,
         environment_id: Uuid,
     ) -> RepoResult<Vec<ComponentRevisionIdentityRecord>>;
 
     async fn get_staged_http_api_deployments(
-        tx: &mut Self::Tx,
+        api: &mut Self::Api,
         environment_id: Uuid,
     ) -> RepoResult<Vec<HttpApiDeploymentRevisionIdentityRecord>>;
 
     async fn get_staged_mcp_deployments(
-        tx: &mut Self::Tx,
+        api: &mut Self::Api,
         environment_id: Uuid,
     ) -> RepoResult<Vec<McpDeploymentRevisionIdentityRecord>>;
+
+    async fn get_staged_tools(
+        api: &mut Self::Api,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<DeploymentToolIdentityRecord>>;
 
     async fn create_deployment_component_revision(
         tx: &mut Self::Tx,
@@ -1959,6 +1935,7 @@ trait DeploymentRepoInternal: DeploymentRepo {
 #[async_trait]
 impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
+    type Api = <PostgresPool as Pool>::LabelledApi;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
 
     async fn create_deployment_revision(
@@ -1995,22 +1972,23 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     }
 
     async fn get_staged_deployment(
-        tx: &mut Self::Tx,
+        api: &mut Self::Api,
         environment_id: Uuid,
     ) -> RepoResult<DeploymentIdentity> {
         Ok(DeploymentIdentity {
-            components: Self::get_staged_components(tx, environment_id).await?,
-            http_api_deployments: Self::get_staged_http_api_deployments(tx, environment_id).await?,
-            mcp_deployments: Self::get_staged_mcp_deployments(tx, environment_id).await?,
-            tools: Vec::new(),
+            components: Self::get_staged_components(api, environment_id).await?,
+            http_api_deployments: Self::get_staged_http_api_deployments(api, environment_id)
+                .await?,
+            mcp_deployments: Self::get_staged_mcp_deployments(api, environment_id).await?,
+            tools: Self::get_staged_tools(api, environment_id).await?,
         })
     }
 
     async fn get_staged_components(
-        tx: &mut Self::Tx,
+        api: &mut Self::Api,
         environment_id: Uuid,
     ) -> RepoResult<Vec<ComponentRevisionIdentityRecord>> {
-        tx.fetch_all_as(
+        api.fetch_all_as(
             sqlx::query_as(indoc! { r#"
                 SELECT c.component_id, c.name, cr.revision_id, cr.hash
                 FROM components c
@@ -2025,10 +2003,10 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     }
 
     async fn get_staged_http_api_deployments(
-        tx: &mut Self::Tx,
+        api: &mut Self::Api,
         environment_id: Uuid,
     ) -> RepoResult<Vec<HttpApiDeploymentRevisionIdentityRecord>> {
-        tx.fetch_all_as(
+        api.fetch_all_as(
             sqlx::query_as(indoc! { r#"
                     SELECT d.http_api_deployment_id, d.domain, dr.revision_id, dr.hash
                     FROM http_api_deployments d
@@ -2043,10 +2021,10 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     }
 
     async fn get_staged_mcp_deployments(
-        tx: &mut Self::Tx,
+        api: &mut Self::Api,
         environment_id: Uuid,
     ) -> RepoResult<Vec<McpDeploymentRevisionIdentityRecord>> {
-        tx.fetch_all_as(
+        api.fetch_all_as(
             sqlx::query_as(indoc! { r#"
                     SELECT d.mcp_deployment_id, d.domain, dr.revision_id, dr.hash
                     FROM mcp_deployments d
@@ -2055,6 +2033,28 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                         AND d.current_revision_id = dr.revision_id
                     WHERE d.environment_id = $1 AND d.deleted_at IS NULL
                 "#})
+            .bind(environment_id),
+        )
+        .await
+    }
+
+    async fn get_staged_tools(
+        api: &mut Self::Api,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<DeploymentToolIdentityRecord>> {
+        api.fetch_all_as(
+            sqlx::query_as(indoc! { r#"
+                SELECT r.tool_name, r.tool_release_id, r.published, r.deployment_hash
+                FROM current_deployments cd
+                JOIN current_deployment_revisions cdr
+                    ON cdr.environment_id = cd.environment_id
+                    AND cdr.revision_id = cd.current_revision_id
+                JOIN deployment_registered_tools r
+                    ON r.environment_id = cdr.environment_id
+                    AND r.deployment_revision_id = cdr.deployment_revision_id
+                WHERE cd.environment_id = $1
+                ORDER BY r.tool_name
+            "#})
             .bind(environment_id),
         )
         .await

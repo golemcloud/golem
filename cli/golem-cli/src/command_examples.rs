@@ -866,7 +866,7 @@ pub const TOOL_RELEASE_GET: &str = "Examples:
   golem-cli tool release get 00000000-0000-0000-0000-000000000001";
 
 pub const TOOL_RELEASE_DE_PUBLISH: &str = "Examples:
-  # Prevent new coordinate-based grants for a release
+  # Prevent new deployments and grants from using a release
   golem-cli tool release de-publish 00000000-0000-0000-0000-000000000001";
 
 pub const TOOL_RELEASE_RESTORE: &str = "Examples:

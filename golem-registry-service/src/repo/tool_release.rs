@@ -66,6 +66,11 @@ pub trait ToolReleaseRepo: Send + Sync {
         version: &str,
     ) -> Result<Option<ToolReleaseWithOwnerRecord>, ToolReleaseRepoError>;
 
+    async fn strict_following_grant_exists(
+        &self,
+        tool_release_id: Uuid,
+    ) -> Result<bool, ToolReleaseRepoError>;
+
     async fn list_by_owner(
         &self,
         owner_account_id: Uuid,
@@ -127,6 +132,19 @@ impl<Repo: ToolReleaseRepo> ToolReleaseRepo for LoggedToolReleaseRepo<Repo> {
                 owner_account_id = %owner_account_id,
                 tool_name = name,
                 tool_version = version
+            ))
+            .await
+    }
+
+    async fn strict_following_grant_exists(
+        &self,
+        tool_release_id: Uuid,
+    ) -> Result<bool, ToolReleaseRepoError> {
+        self.repo
+            .strict_following_grant_exists(tool_release_id)
+            .instrument(info_span!(
+                "tool release repository",
+                tool_release_id = %tool_release_id
             ))
             .await
     }
@@ -214,6 +232,21 @@ const RELEASE_SELECT: &str = r#"
     JOIN accounts a ON a.account_id = tr.owner_account_id
     JOIN account_revisions ar
         ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
+"#;
+
+const STRICT_FOLLOWING_GRANT_EXISTS: &str = r#"
+    SELECT 1
+    FROM environment_tool_grants etg
+    JOIN environments e ON e.environment_id = etg.environment_id
+    JOIN environment_revisions er
+        ON er.environment_id = e.environment_id
+        AND er.revision_id = e.current_revision_id
+    WHERE etg.tool_release_id = $1
+        AND etg.follow_coordinates
+        AND etg.deleted_at IS NULL
+        AND e.deleted_at IS NULL
+        AND er.version_check
+    LIMIT 1
 "#;
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -308,38 +341,10 @@ impl DbToolReleaseRepo<PostgresPool> {
                 return Err(ToolReleaseRepoError::ImmutableConflict);
             }
 
-            tx.execute(
-                sqlx::query(indoc! { r#"
-                    UPDATE environments
-                    SET current_revision_id = current_revision_id
-                    WHERE environment_id IN (
-                        SELECT etg.environment_id
-                        FROM environment_tool_grants etg
-                        WHERE etg.tool_release_id = $1
-                            AND etg.follow_coordinates
-                            AND etg.deleted_at IS NULL
-                    )
-                "#})
-                .bind(existing.release.tool_release_id),
-            )
-            .await?;
-
             let strict_following_grant_exists = tx
                 .fetch_optional(
-                    sqlx::query(indoc! { r#"
-                        SELECT 1
-                        FROM environment_tool_grants etg
-                        JOIN environments e ON e.environment_id = etg.environment_id
-                        JOIN environment_revisions er
-                            ON er.environment_id = e.environment_id
-                            AND er.revision_id = e.current_revision_id
-                        WHERE etg.tool_release_id = $1
-                            AND etg.follow_coordinates
-                            AND etg.deleted_at IS NULL
-                            AND er.version_check
-                        LIMIT 1
-                    "#})
-                    .bind(existing.release.tool_release_id),
+                    sqlx::query(STRICT_FOLLOWING_GRANT_EXISTS)
+                        .bind(existing.release.tool_release_id),
                 )
                 .await?
                 .is_some();
@@ -519,6 +524,17 @@ impl ToolReleaseRepo for DbToolReleaseRepo<PostgresPool> {
                     .bind(version),
             )
             .await?)
+    }
+
+    async fn strict_following_grant_exists(
+        &self,
+        tool_release_id: Uuid,
+    ) -> Result<bool, ToolReleaseRepoError> {
+        Ok(self
+            .with_ro("strict_following_grant_exists")
+            .fetch_optional(sqlx::query(STRICT_FOLLOWING_GRANT_EXISTS).bind(tool_release_id))
+            .await?
+            .is_some())
     }
 
     async fn list_by_owner(

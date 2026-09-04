@@ -29,7 +29,7 @@ use golem_common::model::card::{
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_tool_grant::{
     EnvironmentToolGrantCreation, EnvironmentToolGrantId, EnvironmentToolGrantReconciliation,
-    EnvironmentToolGrantWithDetails,
+    EnvironmentToolGrantWithDetails, EnvironmentToolValidation, EnvironmentToolValidationResult,
 };
 use golem_common::model::tool::ToolName;
 use golem_common::model::tool_release::{ToolRelease, ToolReleaseId, ToolReleaseReference};
@@ -66,6 +66,14 @@ pub enum EnvironmentToolGrantError {
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum EnvironmentToolValidationError {
+    #[error(transparent)]
+    Grant(#[from] EnvironmentToolGrantError),
+    #[error(transparent)]
+    Publication(#[from] ToolReleaseError),
 }
 
 impl SafeDisplay for EnvironmentToolGrantError {
@@ -208,13 +216,32 @@ impl EnvironmentToolGrantService {
         }
     }
 
-    pub async fn validate_reconciliation(
+    pub async fn validate_tools(
         &self,
         environment_id: EnvironmentId,
+        validation: EnvironmentToolValidation,
+        auth: &AuthCtx,
+    ) -> Result<EnvironmentToolValidationResult, EnvironmentToolValidationError> {
+        let environment = self.get_environment(environment_id, auth).await?;
+        self.validate_reconciliation_for_environment(
+            &environment,
+            validation.grant_reconciliation,
+            auth,
+        )
+        .await?;
+        let publication_plan = self
+            .tool_release_service
+            .plan_publications(&environment, validation.publications, auth)
+            .await?;
+        Ok(EnvironmentToolValidationResult { publication_plan })
+    }
+
+    async fn validate_reconciliation_for_environment(
+        &self,
+        environment: &Environment,
         reconciliation: EnvironmentToolGrantReconciliation,
         auth: &AuthCtx,
     ) -> Result<(), EnvironmentToolGrantError> {
-        let environment = self.get_environment(environment_id, auth).await?;
         for creation in reconciliation.creations {
             let release = self
                 .tool_release_service
@@ -230,7 +257,7 @@ impl EnvironmentToolGrantService {
             let name = ToolName::try_from(release.release.tool_name).map_err(anyhow::Error::msg)?;
             authorize_environment_tool_grant_permission(
                 auth,
-                &environment,
+                environment,
                 EnvironmentToolGrantVerb::Create,
                 name,
             )?;
@@ -239,7 +266,7 @@ impl EnvironmentToolGrantService {
             let (record, grant_environment) = self
                 .authorize(grant_id, false, EnvironmentToolGrantVerb::Delete, auth)
                 .await?;
-            if grant_environment.id != environment_id || !record.automatic {
+            if grant_environment.id != environment.id || !record.automatic {
                 return Err(EnvironmentToolGrantError::EnvironmentToolGrantNotFound(
                     grant_id,
                 ));

@@ -18,6 +18,7 @@ use crate::base_model::tool::{ToolName, ToolSource};
 use crate::schema::tool::Tool;
 use crate::{declare_enums, declare_structs, declare_unions, newtype_uuid};
 use chrono::{DateTime, Utc};
+use std::fmt::{Display, Formatter};
 
 newtype_uuid!(ToolReleaseId);
 
@@ -39,6 +40,26 @@ declare_enums! {
         Grantable,
         AutoGranted,
         Ambient,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub enum ToolPublicationPlanAction {
+    NoChange,
+    Publish,
+    Conflict,
+}
+
+impl Display for ToolPublicationPlanAction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NoChange => "no change",
+            Self::Publish => "publish",
+            Self::Conflict => "conflict",
+        })
     }
 }
 
@@ -97,6 +118,19 @@ declare_structs! {
         pub definition: Tool,
         pub metadata_version: String,
         pub availability: SystemToolAvailability,
+    }
+
+    pub struct ToolPublication {
+        pub name: ToolName,
+        pub definition: Tool,
+    }
+
+    #[derive(Eq)]
+    pub struct ToolPublicationPlanEntry {
+        pub action: ToolPublicationPlanAction,
+        pub name: String,
+        pub version: String,
+        pub reason: Option<String>,
     }
 }
 

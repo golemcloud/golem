@@ -51,6 +51,7 @@ use golem_common::model::environment_tool_grant::EnvironmentToolGrantId;
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation};
 use golem_common::model::tool::ToolName;
 use golem_common::model::tool_release::ToolReleaseId;
+pub use golem_common::model::tool_release::{ToolPublicationPlanAction, ToolPublicationPlanEntry};
 use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
 use itertools::Itertools;
@@ -199,34 +200,6 @@ pub struct EnvironmentToolGrantPlanEntry {
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentToolGrantPlanView {
     pub entries: Vec<EnvironmentToolGrantPlanEntry>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ToolPublicationPlanAction {
-    NoChange,
-    Publish,
-    Conflict,
-}
-
-impl std::fmt::Display for ToolPublicationPlanAction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::NoChange => "no change",
-            Self::Publish => "publish",
-            Self::Conflict => "conflict",
-        })
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolPublicationPlanEntry {
-    pub action: ToolPublicationPlanAction,
-    pub name: String,
-    pub version: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
