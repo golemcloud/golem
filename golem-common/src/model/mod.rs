@@ -609,13 +609,22 @@ impl ShardAssignment {
     }
 
     /// A granted renewal: the same set, at a new expiry.
+    /// Applies a granted lease and reports whether the owned set moved.
+    ///
+    /// A renewal normally returns exactly what was claimed (D4 keeps epochs
+    /// stable), so this is `false` on the common path. It is `true` when the
+    /// shard manager answered with a set this executor did not have — the
+    /// corrective delivery its docs describe — and the caller then has to
+    /// recover agents for it, exactly as an `AssignShards` push would.
     pub fn update_lease(
         &mut self,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: Option<DateTime<Utc>>,
-    ) {
+    ) -> bool {
+        let ownership_changed = self.shard_epochs != *shard_epochs;
         self.shard_epochs = shard_epochs.clone();
         self.expires_at = expires_at;
+        ownership_changed
     }
 
     pub fn revoke_shards(&mut self, shard_ids: &HashSet<ShardId>) {
