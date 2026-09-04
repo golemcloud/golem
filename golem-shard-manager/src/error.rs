@@ -247,3 +247,68 @@ impl ApiErrorDetails for ShardManagerTraceErrorKind<'_> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+
+    use super::*;
+    use crate::sharding::error::ShardManagerError;
+    use crate::sharding::{ExecutorId, ShardEpoch};
+    use golem_common::model::ShardId;
+    use uuid::Uuid;
+
+    fn arms(error: ShardManagerError) -> golem::shardmanager::v1::shard_lease_error::Error {
+        golem::shardmanager::v1::ShardLeaseError::from(error)
+            .error
+            .expect("every ShardManagerError must map to an arm")
+    }
+
+    fn body(arm: &golem::shardmanager::v1::shard_lease_error::Error) -> golem::common::ErrorBody {
+        use golem::shardmanager::v1::shard_lease_error::Error;
+        match arm {
+            Error::LeaseNotFound(body) | Error::StaleEpoch(body) | Error::Internal(body) => {
+                body.clone()
+            }
+        }
+    }
+
+    /// The cross-track contract: this mapping is what the executor branches on
+    /// (`lease_not_found` => re-register under a fresh id; `stale_epoch` =>
+    /// keep the set and retry; `internal` => treat as transport). A refusal
+    /// that landed on the wrong arm would silently change the executor's
+    /// reaction to it.
+    #[test]
+    fn each_lease_refusal_maps_to_the_arm_the_executor_branches_on() {
+        use golem::shardmanager::v1::shard_lease_error::Error;
+
+        let not_found = arms(ShardManagerError::ShardLeaseNotFound {
+            executor_id: ExecutorId(Uuid::nil()),
+        });
+        assert!(matches!(not_found, Error::LeaseNotFound(_)));
+        assert_eq!(body(&not_found).code, api::error_code::RESOURCE_NOT_FOUND);
+
+        let stale = arms(ShardManagerError::StaleShardEpoch {
+            executor_id: ExecutorId(Uuid::nil()),
+            shard_id: ShardId::new(3),
+            expected: Some(ShardEpoch(7)),
+            provided: ShardEpoch(6),
+        });
+        assert!(matches!(stale, Error::StaleEpoch(_)));
+        assert_eq!(body(&stale).code, api::error_code::CONCURRENT_UPDATE);
+    }
+
+    /// A lost compare-and-swap is `internal` on the wire, but it must keep the
+    /// `CONCURRENT_UPDATE` code rather than flattening to `INTERNAL_UNKNOWN`
+    /// the way `QuotaError` does: it is a retry-the-write condition, not an
+    /// unknown fault.
+    #[test]
+    fn a_lost_compare_and_swap_is_internal_but_keeps_its_concurrent_update_code() {
+        use golem::shardmanager::v1::shard_lease_error::Error;
+
+        let arm = arms(ShardManagerError::ConcurrentModification);
+
+        assert!(matches!(arm, Error::Internal(_)));
+        assert_eq!(body(&arm).code, api::error_code::CONCURRENT_UPDATE);
+    }
+}

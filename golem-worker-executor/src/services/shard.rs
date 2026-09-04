@@ -53,11 +53,13 @@ pub trait ShardService: Send + Sync {
     );
     fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), WorkerExecutorError>;
     /// A granted lease renewal: the same shard set, at a new expiry.
+    /// Applies a granted lease. `Ok(true)` means the owned set moved and the
+    /// caller must recover agents for it.
     fn update_lease(
         &self,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: Option<DateTime<Utc>>,
-    ) -> Result<(), WorkerExecutorError>;
+    ) -> Result<bool, WorkerExecutorError>;
     /// Drops every shard and lapses the lease (ruling E14). Used when the shard
     /// manager no longer knows this executor's lease: it owns nothing and is
     /// not ready until a re-registration installs a fresh grant.
@@ -209,7 +211,7 @@ impl ShardService for ShardServiceDefault {
         &self,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: Option<DateTime<Utc>>,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<bool, WorkerExecutorError> {
         self.with_write_shard_assignment(|shard_assignment| match shard_assignment {
             Some(shard_assignment) => {
                 debug!(
@@ -217,10 +219,10 @@ impl ShardService for ShardServiceDefault {
                     shard_ids_renewed = shard_epochs.keys().join(", "),
                     "ShardService.update_lease"
                 );
-                shard_assignment.update_lease(shard_epochs, expires_at);
+                let ownership_changed = shard_assignment.update_lease(shard_epochs, expires_at);
                 let assigned_shard_count = shard_assignment.len();
                 record_assigned_shard_count(assigned_shard_count);
-                Ok(())
+                Ok(ownership_changed)
             }
             None => Err(sharding_not_ready_error()),
         })

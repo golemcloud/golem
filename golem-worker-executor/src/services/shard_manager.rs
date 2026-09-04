@@ -217,14 +217,24 @@ impl GrpcShardManagerService {
     }
 
     /// Applies a granted lease and returns the cadence for the next pass.
-    fn adopt_lease(
+    ///
+    /// A renewal that comes back with a set this executor did not hold is the
+    /// shard manager correcting a push this executor never received, so it is
+    /// an assignment change like any other and has to recover agents for the
+    /// new shards. Every other delivery path announces (`register`,
+    /// `assign_shards`, the re-registration in ruling E15); adopting a wider
+    /// set silently would leave those shards owned but unserved until the next
+    /// push happened to arrive.
+    async fn adopt_lease(
         &self,
         shard_epochs: BTreeMap<ShardId, ShardEpoch>,
         expires_at: Option<chrono::DateTime<Utc>>,
     ) -> RenewalDelay {
         let shard_epochs: HashMap<ShardId, ShardEpoch> = shard_epochs.into_iter().collect();
-        if let Err(error) = self.shard_service.update_lease(&shard_epochs, expires_at) {
-            warn!(%error, "Failed to apply a renewed shard lease");
+        match self.shard_service.update_lease(&shard_epochs, expires_at) {
+            Ok(true) => self.announce_assignment_changed().await,
+            Ok(false) => {}
+            Err(error) => warn!(%error, "Failed to apply a renewed shard lease"),
         }
         let cadence = renewal_interval_for(expires_at, Utc::now());
         self.record_granted(cadence);
@@ -301,7 +311,7 @@ impl ShardManagerService for GrpcShardManagerService {
 
         let executor_id = self.executor_id();
         match self.client.renew_shard_lease(executor_id, claim).await {
-            Ok(lease) => self.adopt_lease(lease.shard_epochs, lease.expires_at),
+            Ok(lease) => self.adopt_lease(lease.shard_epochs, lease.expires_at).await,
             Err(ShardLeaseError::StaleEpoch(details)) => {
                 // The manager's view of this executor's shards moved on. Keep
                 // the current set and retry: the correction arrives as an
@@ -791,6 +801,65 @@ mod tests {
         let assignment = shard_service.current_assignment().unwrap();
         assert_eq!(assignment.shard_epochs, epochs([(2, 5)]));
         assert_eq!(assignment.expires_at, Some(fresh_expiry));
+    }
+
+    /// A renewal that answers with shards this executor did not claim is the
+    /// shard manager correcting a push that never arrived, so it has to recover
+    /// agents for them exactly as a push would. The common path — the same set
+    /// back, per D4 — must NOT fire the hook, or every renewal would trigger a
+    /// recovery sweep.
+    #[test]
+    async fn a_renewal_that_widens_the_set_announces_it_and_an_unchanged_one_does_not() {
+        let granted_expiry = Utc::now() + ChronoDuration::seconds(300);
+        let widened = Arc::new(AtomicBool::new(false));
+        let widen = widened.clone();
+        let mock = Arc::new(MockShardManager::new().with_renew(move |_, claimed| {
+            // First renewal echoes the claim; the second hands back an extra
+            // shard the executor never knew it owned.
+            let mut shard_epochs = claimed;
+            if widen.load(Ordering::SeqCst) {
+                shard_epochs.insert(ShardId::new(4), ShardEpoch(9));
+            }
+            Ok(ShardLease {
+                shard_epochs,
+                expires_at: Some(granted_expiry),
+            })
+        }));
+        let (service, shard_service) = make_service(mock.clone(), CancellationToken::new());
+        shard_service.register(
+            SHARDS,
+            &epochs([(0, 7)]),
+            Some(Utc::now() + ChronoDuration::seconds(30)),
+        );
+
+        let announced = Arc::new(AtomicBool::new(false));
+        let flag = announced.clone();
+        service.set_assignment_changed_hook(Arc::new(move || {
+            let flag = flag.clone();
+            Box::pin(async move {
+                flag.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+        }));
+
+        service.renew_shard_lease().await;
+        assert!(
+            !announced.load(Ordering::SeqCst),
+            "an unchanged set is a lease-clock refresh, not an assignment change"
+        );
+
+        widened.store(true, Ordering::SeqCst);
+        service.renew_shard_lease().await;
+
+        assert!(
+            announced.load(Ordering::SeqCst),
+            "a widened set must recover agents for the shards it just gained"
+        );
+        assert_eq!(
+            shard_service.current_assignment().unwrap().shard_epochs,
+            epochs([(0, 7), (4, 9)]),
+            "and the wider set is what the executor now serves"
+        );
     }
 
     /// Ruling E14: while the re-registration has not succeeded, the cleared

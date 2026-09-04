@@ -14,7 +14,6 @@
 
 use crate::grpc::client::{GrpcClient, GrpcClientConfig};
 use crate::model::quota_lease::{PendingReservation, QuotaLease};
-use applying::Apply;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
@@ -39,7 +38,6 @@ use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Write;
-use std::time::SystemTime;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
