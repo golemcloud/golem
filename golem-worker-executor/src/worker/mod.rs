@@ -1938,7 +1938,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
-        let status = self.last_known_status.read().await.clone();
+        // Snapshot the three fields used here instead of cloning the record.
+        // The record also owns `invocation_results`, which gains an entry per
+        // invocation and is never pruned, so cloning it to reach these made each
+        // lookup cost more than the last. Read under one guard at the point the
+        // clone was taken, so the values are the same consistent snapshot.
+        let status = {
+            let record = self.last_known_status.read().await;
+            InvocationLookupStatus {
+                agent_status: record.status,
+                current_idempotency_key: record.current_idempotency_key.clone(),
+                key_is_pending: record
+                    .pending_invocations
+                    .iter()
+                    .any(|entry| entry.has_idempotency_key(key)),
+            }
+        };
         let maybe_result = self.invocation_results.read().await.get(key).cloned();
         if let Some(mut result) = maybe_result {
             result
@@ -1946,12 +1961,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
             lookup_result_from_cached_result(&status, key, result)
         } else {
-            let is_pending = status
-                .pending_invocations
-                .iter()
-                .any(|entry| entry.has_idempotency_key(key));
             let is_current = status.current_idempotency_key.as_ref() == Some(key);
-            if is_pending || is_current {
+            if status.key_is_pending || is_current {
                 LookupResult::Pending
             } else {
                 LookupResult::New
@@ -2161,18 +2172,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
 
-        // Collect all idempotency keys to fail: pending invocations + currently running invocation
-        let status = self.last_known_status.read().await.clone();
-        let mut keys_to_fail: Vec<IdempotencyKey> = status
-            .pending_invocations
-            .iter()
-            .filter_map(|inv| inv.idempotency_key().cloned())
-            .collect();
-        if let Some(current_key) = &status.current_idempotency_key
-            && !keys_to_fail.contains(current_key)
-        {
-            keys_to_fail.push(current_key.clone());
-        }
+        // Collect all idempotency keys to fail: pending invocations + currently running invocation.
+        // Read under the guard rather than from a clone of the record, which
+        // would copy the unbounded `invocation_results` map along with them.
+        let keys_to_fail: Vec<IdempotencyKey> = {
+            let record = self.last_known_status.read().await;
+            let mut keys: Vec<IdempotencyKey> = record
+                .pending_invocations
+                .iter()
+                .filter_map(|inv| inv.idempotency_key().cloned())
+                .collect();
+            if let Some(current_key) = &record.current_idempotency_key
+                && !keys.contains(current_key)
+            {
+                keys.push(current_key.clone());
+            }
+            keys
+        };
 
         let mut invocation_results = self.invocation_results.write().await;
         for idempotency_key in &keys_to_fail {
@@ -3558,8 +3574,21 @@ impl InvocationResult {
     }
 }
 
+/// The fields of `AgentStatusRecord` an invocation lookup reads.
+///
+/// Owned rather than borrowed: `lookup_invocation_result` awaits between taking
+/// these and using them, and holding a status read guard across that await would
+/// block every writer.
+struct InvocationLookupStatus {
+    agent_status: AgentStatus,
+    current_idempotency_key: Option<IdempotencyKey>,
+    /// Whether `pending_invocations` held an entry for the key being looked up.
+    /// Resolved under the guard, since the answer is a bool and the list is not.
+    key_is_pending: bool,
+}
+
 fn lookup_result_from_cached_result(
-    status: &AgentStatusRecord,
+    status: &InvocationLookupStatus,
     key: &IdempotencyKey,
     result: InvocationResult,
 ) -> LookupResult {
@@ -3578,7 +3607,10 @@ fn lookup_result_from_cached_result(
                     ..
                 }),
         } if status.current_idempotency_key.as_ref() == Some(key)
-            && !matches!(status.status, AgentStatus::Failed | AgentStatus::Exited) =>
+            && !matches!(
+                status.agent_status,
+                AgentStatus::Failed | AgentStatus::Exited
+            ) =>
         {
             LookupResult::Pending
         }
@@ -3626,11 +3658,14 @@ mod tests {
     use golem_common::model::oplog::AgentError;
     use test_r::test;
 
-    fn status_with_current_key(status: AgentStatus, key: &IdempotencyKey) -> AgentStatusRecord {
-        AgentStatusRecord {
-            status,
+    fn status_with_current_key(
+        agent_status: AgentStatus,
+        key: &IdempotencyKey,
+    ) -> InvocationLookupStatus {
+        InvocationLookupStatus {
+            agent_status,
             current_idempotency_key: Some(key.clone()),
-            ..AgentStatusRecord::default()
+            key_is_pending: false,
         }
     }
 
