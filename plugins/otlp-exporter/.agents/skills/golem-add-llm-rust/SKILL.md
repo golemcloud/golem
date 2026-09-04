@@ -27,6 +27,7 @@ Provider crates (pick one):
 | xAI / Grok | `golem-ai-llm-grok` | `XAI_API_KEY` |
 | Ollama | `golem-ai-llm-ollama` | `GOLEM_OLLAMA_BASE_URL` (optional, defaults to `http://localhost:11434`) |
 | OpenRouter | `golem-ai-llm-openrouter` | `OPENROUTER_API_KEY` |
+| OrcaRouter | `golem-ai-llm-openai` | `OPENAI_API_KEY`, `OPENAI_BASE_URL` |
 
 ### Embeddings & Reranking
 
