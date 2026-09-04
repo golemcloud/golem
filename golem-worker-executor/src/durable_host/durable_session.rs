@@ -1851,7 +1851,6 @@ impl DurableSessionStreams {
                 intent
             }
         };
-        drop(session_guard);
         if locally_produced {
             self.producer
                 .cancel_open(
@@ -1863,6 +1862,7 @@ impl DurableSessionStreams {
                 .await
                 .map_err(|error| error.to_string())?;
         } else {
+            drop(session_guard);
             let rpc = self.rpc.clone().ok_or_else(|| {
                 "foreign durable stream cancellation routing is unavailable".to_string()
             })?;
@@ -4863,8 +4863,9 @@ mod tests {
     use golem_common::base_model::component::{ComponentId, ComponentRevision};
     use golem_common::base_model::durable_stream::{
         AttachmentId, PersistedStreamInvocationDescriptorV1, ResumeAttemptDescriptorV1,
-        StartAttemptDescriptorV1, StreamAttachmentKeyV1, StreamInvocationIdV1, StreamOffsetV1,
-        StreamSessionAttachedRecordV1, StreamSessionMappingV1, StreamSessionPreparedRecordV1,
+        StartAttemptDescriptorV1, StreamAttachmentKeyV1, StreamId, StreamInvocationIdV1,
+        StreamOffsetV1, StreamSessionAttachedRecordV1, StreamSessionMappingV1,
+        StreamSessionPreparedRecordV1,
     };
     use golem_common::base_model::environment::EnvironmentId;
     use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey};
@@ -5174,6 +5175,123 @@ mod tests {
                 CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok),
             ),
             &session_key,
+        ));
+    }
+
+    async fn backpressured_session_input() -> (
+        Arc<DurableStreamProducer>,
+        DurableSessionStreams,
+        DurableCatchUpReader,
+        DurableStreamHandleV1,
+    ) {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            Some(1),
+        )
+        .await
+        .unwrap();
+        let handle = producer
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKindV1::AgentHostedInput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        producer
+            .append_session_record(StreamSessionRecordV1::Attached(
+                StreamSessionAttachedRecordV1 {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: identity.invocation.clone(),
+                    attachment_id: AttachmentId::primary(
+                        identity.environment_id,
+                        &identity.agent_id,
+                        &identity.invocation.idempotency_key,
+                    )
+                    .unwrap(),
+                    attempt_id: AttemptId::fresh(),
+                    epoch: 1,
+                    pending_invocation_oplog_index: OplogIndex::INITIAL,
+                },
+            ))
+            .await
+            .unwrap();
+        let streams = DurableSessionStreams::new(
+            producer.clone(),
+            oplog.clone(),
+            identity.invocation,
+            [(7, handle.clone(), SessionStreamRoleV1::Input)],
+        )
+        .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)));
+        let reader = producer.catch_up(handle.clone(), None).await.unwrap();
+        producer
+            .write_items(handle.stream_id, 0, StreamItemsPayloadV1::PackedU8(vec![1]))
+            .await
+            .unwrap();
+        (producer, streams, reader, handle)
+    }
+
+    async fn wait_for_terminal_commit(producer: &DurableStreamProducer, stream_id: StreamId) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if producer
+                    .input_high_water(stream_id)
+                    .await
+                    .unwrap()
+                    .is_some_and(|high_water| high_water.terminal)
+                {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("stream terminal was not committed");
+    }
+
+    #[test]
+    async fn local_cancellation_holds_session_lock_through_live_publication() {
+        let (producer, streams, mut reader, handle) = backpressured_session_input().await;
+        let cancellation = tokio::spawn({
+            let streams = streams.clone();
+            async move {
+                streams
+                    .cancel_stream(
+                        7,
+                        StreamCancelRoleV1::InputConsumer,
+                        StreamCancelReasonV1::GuestDrop,
+                        Some("guest dropped its durable readable stream end".to_string()),
+                        None,
+                    )
+                    .await
+            }
+        });
+
+        wait_for_terminal_commit(&producer, handle.stream_id).await;
+        assert!(
+            streams.session_lock.try_lock().is_err(),
+            "local cancellation must retain session ownership until its terminal is published"
+        );
+
+        assert_eq!(reader.next().await.unwrap().unwrap().producer_sequence, 0);
+        cancellation.await.unwrap().unwrap();
+        assert!(matches!(
+            reader.next().await.unwrap().unwrap().payload,
+            CommittedProducerStreamEventPayloadV1::Cancel {
+                role: StreamCancelRoleV1::InputConsumer,
+                reason: StreamCancelReasonV1::GuestDrop,
+                ..
+            }
         ));
     }
 
