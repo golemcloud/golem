@@ -679,7 +679,11 @@ pub enum GolemCliSubcommand {
         /// Optional filter for language or template name
         filter: Option<String>,
     },
-    /// Build all or selected components in the application
+    /// Build all or selected components in the application.
+    ///
+    /// Bridge generation for remote tool releases reads metadata through the selected
+    /// environment. Required automatic grant changes are shown for confirmation and committed
+    /// as a separate setup step before the local build continues.
     #[command(after_help = crate::command_examples::BUILD)]
     Build {
         #[command(flatten)]

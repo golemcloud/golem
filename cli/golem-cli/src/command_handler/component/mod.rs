@@ -34,8 +34,8 @@ use crate::model::app_raw;
 use crate::model::cascade::property::tool_bindings::ToolBindingState;
 use crate::model::component::{
     AgentTypeManifestProvisionConfig, ComponentDeployProperties, ComponentNameMatchKind,
-    ComponentRevisionSelection, ComponentView, DeployableManifestComponents,
-    PendingRemoteInitialFile, SelectedComponents, ToolManifestDeploymentConfig,
+    ComponentRevisionSelection, ComponentView, PendingRemoteInitialFile, RemoteToolDeploymentPlan,
+    ResolvedManifestComponentsAndTools, SelectedComponents, ToolManifestDeploymentConfig,
     ToolManifestProvisionConfig, initial_permission_from_manifest_card,
     initial_permission_recipient_context,
 };
@@ -807,12 +807,12 @@ impl ComponentCommandHandler {
         }
     }
 
-    pub async fn deployable_manifest_components(
+    pub async fn resolve_manifest_components_and_tools(
         &self,
         environment: &ResolvedEnvironmentIdentity,
         resolved_tool_grants: &ResolvedToolGrants,
-    ) -> anyhow::Result<DeployableManifestComponents> {
-        let (component_names, declared_agents) = {
+    ) -> anyhow::Result<ResolvedManifestComponentsAndTools> {
+        let (component_names, declared_agents, has_remote_tools) = {
             let app_ctx = self.ctx.app_context_lock().await;
             let app = app_ctx.some_or_err()?;
             (
@@ -821,6 +821,10 @@ impl ComponentCommandHandler {
                     .agent_ids()
                     .cloned()
                     .collect::<BTreeSet<_>>(),
+                app.application()
+                    .remote_release_references()
+                    .next()
+                    .is_some(),
             )
         };
 
@@ -845,26 +849,20 @@ impl ComponentCommandHandler {
             .filter(|declared_agent| !exported_agents.contains_key(declared_agent))
             .collect::<BTreeSet<_>>();
 
-        let (
-            remote_tool_deployments,
-            diffable_remote_tool_deployments,
-            published_tools,
-            pending_remote_initial_files,
-        ) = self
+        let (remote_tools, tools_to_publish) = self
             .resolve_manifest_tool_deployments(
                 environment,
                 resolved_tool_grants,
                 &mut components,
                 &unknown_declared_agents,
+                has_remote_tools,
             )
             .await?;
 
-        Ok(DeployableManifestComponents {
+        Ok(ResolvedManifestComponentsAndTools {
             components,
-            remote_tool_deployments,
-            diffable_remote_tool_deployments,
-            published_tools,
-            pending_remote_initial_files,
+            remote_tools,
+            tools_to_publish,
         })
     }
 
@@ -874,17 +872,16 @@ impl ComponentCommandHandler {
         resolved_tool_grants: &ResolvedToolGrants,
         components: &mut BTreeMap<ComponentName, ComponentDeployProperties>,
         unknown_declared_agents: &BTreeSet<AgentTypeName>,
-    ) -> anyhow::Result<(
-        Vec<RemoteToolDeployment>,
-        BTreeMap<String, diff::HashOf<diff::RemoteToolDeployment>>,
-        BTreeSet<ToolName>,
-        Vec<PendingRemoteInitialFile>,
-    )> {
-        let plugin_grants = self
-            .ctx
-            .environment_handler()
-            .plugin_grants(environment)
-            .await?;
+        has_remote_tools: bool,
+    ) -> anyhow::Result<(RemoteToolDeploymentPlan, BTreeSet<ToolName>)> {
+        let plugin_grants = if has_remote_tools {
+            self.ctx
+                .environment_handler()
+                .plugin_grants(environment)
+                .await?
+        } else {
+            HashMap::new()
+        };
         let app_ctx = self.ctx.app_context_lock().await;
         let app = app_ctx.some_or_err()?.application();
         let mut issues = Vec::new();
@@ -1082,7 +1079,7 @@ impl ComponentCommandHandler {
         let local_owner = &environment.server_environment.owner_account_email;
         let mut configs_by_component =
             BTreeMap::<ComponentName, BTreeMap<ToolName, ToolManifestDeploymentConfig>>::new();
-        let mut remote_tool_deployments = Vec::new();
+        let mut remote_tool_deployments = BTreeMap::new();
         let mut diffable_remote_tool_deployments = BTreeMap::new();
         let mut pending_remote_initial_files = Vec::new();
 
@@ -1260,7 +1257,7 @@ impl ComponentCommandHandler {
                     }
                     .into(),
                 );
-                remote_tool_deployments.push(request);
+                remote_tool_deployments.insert(tool_name.clone(), request);
             }
         }
 
@@ -1312,10 +1309,12 @@ impl ComponentCommandHandler {
         pending_remote_initial_files.retain(|file| seen_initial_files.insert(file.content_hash));
 
         Ok((
-            remote_tool_deployments,
-            diffable_remote_tool_deployments,
+            RemoteToolDeploymentPlan {
+                deployments: remote_tool_deployments,
+                diffable_deployments: diffable_remote_tool_deployments,
+                pending_initial_files: pending_remote_initial_files,
+            },
             published_tools,
-            pending_remote_initial_files,
         ))
     }
 

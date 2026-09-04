@@ -256,10 +256,8 @@ async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
         .expect("publisher deployment must create search@1.2.0");
 
     let yaml_string = |value: &str| serde_json::to_string(value).unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        format!(
-            r#"manifestVersion: 1.6.0
+    let consumer_manifest = format!(
+        r#"manifestVersion: 1.6.0
 app: {application}
 
 tools:
@@ -284,19 +282,19 @@ bridge:
       outputDir: generated
       tools: [search]
 "#,
-            application = yaml_string(&consumer_application.name.0),
-            environment = yaml_string(&consumer_environment.name.0),
-            server_url = yaml_string(base_url.as_str()),
-            token = yaml_string(consumer.token.secret()),
-            publisher_account = yaml_string(publisher.account_email.as_str()),
-        ),
-    )?;
+        application = yaml_string(&consumer_application.name.0),
+        environment = yaml_string(&consumer_environment.name.0),
+        server_url = yaml_string(base_url.as_str()),
+        token = yaml_string(consumer.token.secret()),
+        publisher_account = yaml_string(publisher.account_email.as_str()),
+    );
+    fs::write_str(ctx.cwd_path_join("golem.yaml"), &consumer_manifest)?;
 
     let staged_deployment = ctx.cli([cmd::DEPLOY, "--stage"]).await;
     assert!(!staged_deployment.success());
     assert!(
-        staged_deployment.stdout_contains("requires new environment tool grants")
-            || staged_deployment.stderr_contains("requires new environment tool grants")
+        staged_deployment.stdout_contains("requires environment tool grant changes")
+            || staged_deployment.stderr_contains("requires environment tool grant changes")
     );
     assert!(
         consumer
@@ -315,6 +313,14 @@ bridge:
             || deployment_plan.stderr_contains("environment tool grant reconciliation")
     );
     assert!(
+        deployment_plan.stdout_contains("Planning stopped")
+            || deployment_plan.stderr_contains("Planning stopped")
+    );
+    assert!(
+        deployment_plan.stdout_contains("--plan does not apply them")
+            || deployment_plan.stderr_contains("--plan does not apply them")
+    );
+    assert!(
         consumer
             .client
             .list_environment_tool_grants(&consumer_environment.id.0)
@@ -331,6 +337,15 @@ bridge:
     assert!(
         granted_build.stdout_contains("environment tool grants required by the build")
             || granted_build.stderr_contains("environment tool grants required by the build")
+    );
+    assert!(
+        granted_build.stdout_contains("remote tool bridge access through the selected environment")
+            || granted_build
+                .stderr_contains("remote tool bridge access through the selected environment")
+    );
+    assert!(
+        granted_build.stdout_contains("Committed environment tool grant setup")
+            || granted_build.stderr_contains("Committed environment tool grant setup")
     );
     let grants = consumer
         .client
@@ -378,6 +393,65 @@ bridge:
             "remote-release bridge cache identity must include {expected}: {marker_input}"
         );
     }
+
+    consumer
+        .client
+        .delete_automatic_environment_tool_grant(&grant.grant.id.0)
+        .await?;
+    let deployment = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(deployment.success_or_dump());
+    assert!(deployment.stdout_contains_ordered([
+        "Planning environment tool grant reconciliation",
+        "Applying environment tool grant setup as a separate committed step",
+        "Committed environment tool grant setup",
+        "Preparing deployment",
+        "Deploying staged changes to the environment",
+    ]));
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        format!(
+            r#"manifestVersion: 1.6.0
+app: {application}
+
+environments:
+  {environment}:
+    server:
+      url: {server_url}
+      workerUrl: {server_url}
+      allowInsecure: true
+      auth:
+        staticToken: {token}
+"#,
+            application = yaml_string(&consumer_application.name.0),
+            environment = yaml_string(&consumer_environment.name.0),
+            server_url = yaml_string(base_url.as_str()),
+            token = yaml_string(consumer.token.secret()),
+        ),
+    )?;
+    let deletion_only_plan = ctx.cli([cmd::DEPLOY, "--plan"]).await;
+    assert!(deletion_only_plan.success_or_dump());
+    assert!(deletion_only_plan.stdout_contains_ordered([
+        "Planning environment tool grant reconciliation",
+        "Preparing deployment",
+    ]));
+    assert!(
+        !deletion_only_plan.stdout_contains("Planning stopped")
+            && !deletion_only_plan.stderr_contains("Planning stopped"),
+        "grant cleanup must not prevent the remaining deployment plan"
+    );
+    let stale_grants = consumer
+        .client
+        .list_environment_tool_grants(&consumer_environment.id.0)
+        .await?
+        .values;
+    assert_eq!(
+        stale_grants.len(),
+        1,
+        "planning must not delete stale grants"
+    );
+    assert!(stale_grants[0].grant.automatic);
+    fs::write_str(ctx.cwd_path_join("golem.yaml"), &consumer_manifest)?;
 
     let administrator_managed = consumer
         .client

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component::{ComponentDeployProperties, PendingRemoteInitialFile};
+use crate::model::component::{ComponentDeployProperties, RemoteToolDeploymentPlan};
 use crate::model::deploy::{
     DeploymentDisplay, DeploymentDisplayContext, DeploymentDisplayMode, EnvironmentSetupPlan,
     ToolPublicationPlan,
@@ -33,22 +33,23 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentCurrentDeploymentView;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::mcp_deployment::McpDeployment;
-use golem_common::model::tool::{RemoteToolDeployment, ToolName};
 use golem_common::schema::agent::AgentTypeSchema;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use tracing::debug;
+
+#[derive(Debug)]
+pub struct DeployableManifest {
+    pub components: BTreeMap<ComponentName, ComponentDeployProperties>,
+    pub remote_tools: RemoteToolDeploymentPlan,
+    pub http_api_deployments: BTreeMap<Domain, HttpApiDeploymentDeployProperties>,
+    #[allow(dead_code)]
+    pub mcp_deployments: BTreeMap<Domain, McpDeploymentDeployProperties>,
+}
 
 #[derive(Debug)]
 pub struct DeployQuickDiff {
     pub environment: ResolvedEnvironmentIdentity,
-    pub deployable_manifest_components: BTreeMap<ComponentName, ComponentDeployProperties>,
-    pub remote_tool_deployments: Vec<RemoteToolDeployment>,
-    pub published_tools: BTreeSet<ToolName>,
-    pub pending_remote_initial_files: Vec<PendingRemoteInitialFile>,
-    pub deployable_manifest_http_api_deployments:
-        BTreeMap<Domain, HttpApiDeploymentDeployProperties>,
-    #[allow(dead_code)]
-    pub deployable_manifest_mcp_deployments: BTreeMap<Domain, McpDeploymentDeployProperties>,
+    pub deployable_manifest: DeployableManifest,
     pub diffable_local_deployment: diff::Deployment,
     pub local_deployment_hash: diff::Hash,
     pub tool_publication_plan: ToolPublicationPlan,
@@ -85,12 +86,7 @@ pub enum DeployDiffKind {
 #[derive(Debug)]
 pub struct DeployDiff {
     pub environment: ResolvedEnvironmentIdentity,
-    pub deployable_components: BTreeMap<ComponentName, ComponentDeployProperties>,
-    pub remote_tool_deployments: Vec<RemoteToolDeployment>,
-    pub published_tools: BTreeSet<ToolName>,
-    pub pending_remote_initial_files: Vec<PendingRemoteInitialFile>,
-    pub deployable_http_api_deployments: BTreeMap<Domain, HttpApiDeploymentDeployProperties>,
-    pub deployable_mcp_deployments: BTreeMap<Domain, McpDeploymentDeployProperties>,
+    pub deployable_manifest: DeployableManifest,
     pub diffable_local_deployment: diff::Deployment,
     pub local_deployment_hash: diff::Hash,
     #[allow(unused)] // NOTE: for debug logs
@@ -113,7 +109,7 @@ impl DeployDiff {
         self.staged_deployment_hash == self.current_deployment_hash
     }
 
-    pub fn has_deployment_changes(&self) -> bool {
+    pub fn has_deployment_request_changes(&self) -> bool {
         !self.diff.components.is_empty()
             || !self.diff.http_api_deployments.is_empty()
             || !self.diff.mcp_deployments.is_empty()
@@ -143,7 +139,7 @@ impl DeployDiff {
     }
 
     pub fn has_apply_work(&self) -> bool {
-        self.has_deployment_changes()
+        self.has_deployment_request_changes()
             || self.has_environment_setup_entries_to_apply()
             || self.has_publication_work()
     }
@@ -165,7 +161,8 @@ impl DeployDiff {
     ) -> anyhow::Result<DeployUnifiedDiffs> {
         let mode = deployment_display_mode(full_diff);
         let local_agent_types = self
-            .deployable_components
+            .deployable_manifest
+            .components
             .iter()
             .map(|(component_name, component)| {
                 (component_name.0.clone(), component.agent_types.clone())
@@ -233,7 +230,8 @@ impl DeployDiff {
         &self,
         component_name: &ComponentName,
     ) -> &ComponentDeployProperties {
-        self.deployable_components
+        self.deployable_manifest
+            .components
             .get(component_name)
             .unwrap_or_else(|| {
                 panic!(
@@ -247,7 +245,8 @@ impl DeployDiff {
         &self,
         domain: &Domain,
     ) -> &HttpApiDeploymentDeployProperties {
-        self.deployable_http_api_deployments
+        self.deployable_manifest
+            .http_api_deployments
             .get(domain)
             .unwrap_or_else(|| {
                 panic!(
@@ -261,7 +260,8 @@ impl DeployDiff {
         &self,
         domain: &Domain,
     ) -> &McpDeploymentDeployProperties {
-        self.deployable_mcp_deployments
+        self.deployable_manifest
+            .mcp_deployments
             .get(domain)
             .unwrap_or_else(|| {
                 panic!(

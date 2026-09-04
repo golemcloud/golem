@@ -27,8 +27,8 @@ use crate::command::shared_args::{
 };
 use crate::command_handler::Handlers;
 use crate::command_handler::app::deploy_diff::{
-    DeployDetails, DeployDiff, DeployDiffKind, DeployQuickDiff, RollbackDetails, RollbackDiff,
-    RollbackEntityDetails, RollbackQuickDiff,
+    DeployDetails, DeployDiff, DeployDiffKind, DeployQuickDiff, DeployableManifest,
+    RollbackDetails, RollbackDiff, RollbackEntityDetails, RollbackQuickDiff,
 };
 use crate::command_handler::app::template::TemplateHandler;
 use crate::command_handler::app::version_strategy::{ResolvedAppVersionSource, compute_version};
@@ -49,7 +49,7 @@ use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
     WithSource,
 };
-use crate::model::component::{DeployableManifestComponents, PendingRemoteInitialFile};
+use crate::model::component::{PendingRemoteInitialFile, ResolvedManifestComponentsAndTools};
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{
     DeployConfig, DeployError, DeployResult, DeploySummary, EnvironmentSetupPlan,
@@ -123,6 +123,21 @@ struct ToolGrantReconciliationPlan {
 impl ToolGrantReconciliationPlan {
     fn has_changes(&self) -> bool {
         self.view.has_changes()
+    }
+
+    fn requires_access_changes(&self) -> bool {
+        !self.creations.is_empty() || !self.reference_updates.is_empty()
+    }
+
+    fn retain_access_changes(&mut self) {
+        self.deletions.clear();
+        self.view.entries.retain(|entry| {
+            matches!(
+                entry.action,
+                EnvironmentToolGrantPlanAction::Create
+                    | EnvironmentToolGrantPlanAction::UpdateReference
+            )
+        });
     }
 
     fn upserts(&self) -> impl Iterator<Item = &ToolReleaseReference> {
@@ -873,9 +888,8 @@ impl AppCommandHandler {
             .plan_tool_grant_reconciliation(&environment)
             .await
             .map_err(DeployError::PrepareError)?;
-        let stage_requires_grant_changes = config.stage
-            && (!tool_grant_plan.creations.is_empty()
-                || !tool_grant_plan.reference_updates.is_empty());
+        let stage_requires_grant_changes =
+            config.stage && tool_grant_plan.requires_access_changes();
         if !tool_grant_plan.view.entries.is_empty()
             && (!config.stage || stage_requires_grant_changes)
         {
@@ -896,18 +910,19 @@ impl AppCommandHandler {
                 .await
                 .map_err(DeployError::PrepareError)?;
         }
-        if !config.stage && tool_grant_plan.has_changes() {
-            if config.plan {
-                return Ok(DeploySummary::PlanOk);
-            }
+        let has_tool_grant_changes = !config.stage && tool_grant_plan.has_changes();
+        if !config.stage && config.plan && tool_grant_plan.requires_access_changes() {
+            log_warn_action(
+                "Planning stopped",
+                "the remaining build and deployment diff require the environment tool grant changes above; --plan does not apply them. Run the deployment without --plan to commit the grant setup and continue planning",
+            );
+            return Ok(DeploySummary::PlanOk);
+        }
+        if has_tool_grant_changes && !config.plan {
             if !self
                 .ctx
                 .interactive_handler()
-                .confirm_deploy_by_plan(
-                    &environment.application_name,
-                    &environment.environment_name,
-                    &self.ctx.selected_server_description(),
-                )
+                .confirm_tool_grant_plan_apply()
                 .map_err(DeployError::PrepareError)?
             {
                 return Err(DeployError::Cancelled);
@@ -939,7 +954,11 @@ impl AppCommandHandler {
         else {
             return {
                 if config.plan {
-                    Ok(DeploySummary::PlanUpToDate)
+                    Ok(if has_tool_grant_changes {
+                        DeploySummary::PlanOk
+                    } else {
+                        DeploySummary::PlanUpToDate
+                    })
                 } else {
                     Ok(DeploySummary::DeployUpToDate(
                         self.apply_post_deploy_args(
@@ -958,7 +977,7 @@ impl AppCommandHandler {
         };
 
         if config.plan {
-            return Ok(if deploy_diff.has_apply_work() {
+            return Ok(if has_tool_grant_changes || deploy_diff.has_apply_work() {
                 DeploySummary::PlanOk
             } else if deploy_diff.has_environment_setup_entries_skipped_already_exists() {
                 DeploySummary::PlanSkippedOnly
@@ -1073,7 +1092,7 @@ impl AppCommandHandler {
             let plan = self.build_environment_setup_plan(&deploy_diff).await?;
             if !plan.display.has_entries_to_apply()
                 && !plan.display.has_entries_skipped_already_exists()
-                && deploy_diff.tool_publication_plan.entries.is_empty()
+                && deploy_diff.tool_publication_plan.is_empty()
             {
                 return Ok(None);
             }
@@ -1089,7 +1108,7 @@ impl AppCommandHandler {
 
         if deployment_is_up_to_date
             && !deploy_diff.has_environment_setup_work()
-            && deploy_diff.tool_publication_plan.entries.is_empty()
+            && deploy_diff.tool_publication_plan.is_empty()
         {
             return Ok(None);
         }
@@ -1135,7 +1154,7 @@ impl AppCommandHandler {
                     log_action("Diffing", "with current deployment");
                 }
 
-                if deploy_diff.has_deployment_changes() || full_diff {
+                if deploy_diff.has_deployment_request_changes() || full_diff {
                     let _indent = self.ctx.log_handler().decorated_indent_secondary();
                     log_unified_diff(&unified_diffs.display_diff);
                 }
@@ -1174,7 +1193,7 @@ impl AppCommandHandler {
                         "changes to be applied to the staging area and to the environment:",
                     );
                 } else if deploy_diff.has_environment_setup_entries_skipped_already_exists()
-                    && !deploy_diff.has_deployment_changes()
+                    && !deploy_diff.has_deployment_request_changes()
                 {
                     log_action(
                         "Planned",
@@ -1183,8 +1202,8 @@ impl AppCommandHandler {
                 } else {
                     log_action("Planned", "changes to be applied to the environment:");
                 }
-                if deploy_diff.has_deployment_changes()
-                    || !deploy_diff.tool_publication_plan.entries.is_empty()
+                if deploy_diff.has_deployment_request_changes()
+                    || !deploy_diff.tool_publication_plan.is_empty()
                     || deploy_diff.environment_setup.is_some()
                 {
                     let _indent = self.ctx.log_handler().decorated_indent_secondary();
@@ -1194,7 +1213,8 @@ impl AppCommandHandler {
                         environment_setup: deploy_diff.environment_setup.as_ref(),
                     })?;
                 }
-                if deploy_diff.has_deployment_changes() && !deployment_version.0.is_empty() {
+                if deploy_diff.has_deployment_request_changes() && !deployment_version.0.is_empty()
+                {
                     log_action(
                         "Deployment version",
                         deployment_version.0.log_color_highlight().to_string(),
@@ -1208,7 +1228,7 @@ impl AppCommandHandler {
         }
 
         // Emit schema evolution warnings
-        for (component_name, new_props) in &deploy_diff.deployable_components {
+        for (component_name, new_props) in &deploy_diff.deployable_manifest.components {
             if let Some(old_agent_types) = deploy_diff.current_agent_types.get(&component_name.0) {
                 let warnings = validate_schema_evolution(old_agent_types, &new_props.agent_types);
                 for w in &warnings {
@@ -1232,16 +1252,14 @@ impl AppCommandHandler {
         environment: ResolvedEnvironmentIdentity,
         resolved_tool_grants: &ResolvedToolGrants,
     ) -> anyhow::Result<DeployQuickDiff> {
-        let DeployableManifestComponents {
-            components: deployable_manifest_components,
-            remote_tool_deployments,
-            diffable_remote_tool_deployments,
-            published_tools,
-            pending_remote_initial_files,
+        let ResolvedManifestComponentsAndTools {
+            components,
+            remote_tools,
+            tools_to_publish,
         } = self
             .ctx
             .component_handler()
-            .deployable_manifest_components(&environment, resolved_tool_grants)
+            .resolve_manifest_components_and_tools(&environment, resolved_tool_grants)
             .await?;
 
         let deployable_manifest_http_api_deployments = self
@@ -1258,7 +1276,7 @@ impl AppCommandHandler {
 
         let diffable_local_components = {
             let mut diffable_components = BTreeMap::<String, diff::HashOf<diff::Component>>::new();
-            for (component_name, component_deploy_properties) in &deployable_manifest_components {
+            for (component_name, component_deploy_properties) in &components {
                 let diffable_component = self
                     .ctx
                     .component_handler()
@@ -1315,27 +1333,23 @@ impl AppCommandHandler {
             components: diffable_local_components,
             http_api_deployments: diffable_local_http_api_deployments,
             mcp_deployments: diffable_local_mcp_deployments,
-            remote_tools: diffable_remote_tool_deployments,
-            published_tools: published_tools.iter().map(ToString::to_string).collect(),
+            remote_tools: remote_tools.diffable_deployments.clone(),
+            published_tools: tools_to_publish.iter().map(ToString::to_string).collect(),
         };
 
         let local_deployment_hash = diffable_local_deployment.hash()?;
         let tool_publication_plan = self
-            .plan_tool_publications(
-                &environment,
-                &deployable_manifest_components,
-                &published_tools,
-            )
+            .plan_tool_publications(&environment, &components, tools_to_publish)
             .await?;
 
         Ok(DeployQuickDiff {
             environment,
-            deployable_manifest_components,
-            remote_tool_deployments,
-            published_tools,
-            pending_remote_initial_files,
-            deployable_manifest_http_api_deployments,
-            deployable_manifest_mcp_deployments,
+            deployable_manifest: DeployableManifest {
+                components,
+                remote_tools,
+                http_api_deployments: deployable_manifest_http_api_deployments,
+                mcp_deployments: deployable_manifest_mcp_deployments,
+            },
             diffable_local_deployment,
             local_deployment_hash,
             tool_publication_plan,
@@ -1346,9 +1360,9 @@ impl AppCommandHandler {
         &self,
         environment: &ResolvedEnvironmentIdentity,
         components: &BTreeMap<ComponentName, crate::model::component::ComponentDeployProperties>,
-        published_tools: &BTreeSet<ToolName>,
+        tools_to_publish: BTreeSet<ToolName>,
     ) -> anyhow::Result<ToolPublicationPlan> {
-        if published_tools.is_empty() {
+        if tools_to_publish.is_empty() {
             return Ok(ToolPublicationPlan::default());
         }
 
@@ -1362,8 +1376,8 @@ impl AppCommandHandler {
             .map_service_error()?
             .values;
 
-        let mut entries = Vec::with_capacity(published_tools.len());
-        for name in published_tools {
+        let mut entries = Vec::with_capacity(tools_to_publish.len());
+        for name in &tools_to_publish {
             let definition = components
                 .values()
                 .flat_map(|component| &component.tools)
@@ -1430,7 +1444,7 @@ impl AppCommandHandler {
                 reason,
             });
         }
-        Ok(ToolPublicationPlan { entries })
+        Ok(ToolPublicationPlan::new(tools_to_publish, entries))
     }
 
     async fn deploy_diff(&self, deploy_quick_diff: DeployQuickDiff) -> anyhow::Result<DeployDiff> {
@@ -1480,13 +1494,7 @@ impl AppCommandHandler {
 
         Ok(DeployDiff {
             environment: deploy_quick_diff.environment,
-            deployable_components: deploy_quick_diff.deployable_manifest_components,
-            remote_tool_deployments: deploy_quick_diff.remote_tool_deployments,
-            published_tools: deploy_quick_diff.published_tools,
-            pending_remote_initial_files: deploy_quick_diff.pending_remote_initial_files,
-            deployable_http_api_deployments: deploy_quick_diff
-                .deployable_manifest_http_api_deployments,
-            deployable_mcp_deployments: deploy_quick_diff.deployable_manifest_mcp_deployments,
+            deployable_manifest: deploy_quick_diff.deployable_manifest,
             diffable_local_deployment: deploy_quick_diff.diffable_local_deployment,
             local_deployment_hash: deploy_quick_diff.local_deployment_hash,
             current_deployment,
@@ -1618,7 +1626,8 @@ impl AppCommandHandler {
 
         let source_language = preferred_source_language_for_setup(
             &deploy_diff
-                .deployable_components
+                .deployable_manifest
+                .components
                 .iter()
                 .map(|(name, component)| (name.0.clone(), component.agent_types.clone()))
                 .collect(),
@@ -1698,6 +1707,10 @@ impl AppCommandHandler {
         environment: &ResolvedEnvironmentIdentity,
         plan: &mut ToolGrantReconciliationPlan,
     ) -> anyhow::Result<()> {
+        log_action(
+            "Applying",
+            "environment tool grant setup as a separate committed step",
+        );
         let clients = self.ctx.golem_clients().await?;
         let upserts = plan.upserts().cloned().collect::<Vec<_>>();
         for release in upserts {
@@ -1723,6 +1736,10 @@ impl AppCommandHandler {
                 .await
                 .map_service_error()?;
         }
+        log_action(
+            "Committed",
+            "environment tool grant setup; these changes remain applied if the build or deployment is later cancelled or fails",
+        );
         Ok(())
     }
 
@@ -2525,7 +2542,10 @@ impl AppCommandHandler {
 
         self.upload_remote_initial_files(
             &deploy_diff.environment.environment_id,
-            &deploy_diff.pending_remote_initial_files,
+            &deploy_diff
+                .deployable_manifest
+                .remote_tools
+                .pending_initial_files,
         )
         .await?;
 
@@ -2540,8 +2560,19 @@ impl AppCommandHandler {
                         current_revision: deploy_diff.current_deployment_revision(),
                         expected_deployment_hash: deploy_diff.local_deployment_hash,
                         version: deployment_version.clone(),
-                        publish_tools: deploy_diff.published_tools.iter().cloned().collect(),
-                        remote_tools: deploy_diff.remote_tool_deployments.clone(),
+                        publish_tools: deploy_diff
+                            .tool_publication_plan
+                            .tools()
+                            .iter()
+                            .cloned()
+                            .collect(),
+                        remote_tools: deploy_diff
+                            .deployable_manifest
+                            .remote_tools
+                            .deployments
+                            .values()
+                            .cloned()
+                            .collect(),
                         agent_secret_defaults: if replace_incompatible_agent_secrets {
                             let mut defaults = environment_setup.agent_secret_defaults.clone();
                             defaults.extend(
@@ -2832,20 +2863,17 @@ impl AppCommandHandler {
                 .requires_remote_release_bridge_metadata()
         };
         let resolved_tool_grants = if requires_remote_release_metadata {
+            log_action(
+                "Preparing",
+                "remote tool bridge access through the selected environment",
+            );
             let environment = self
                 .ctx
                 .environment_handler()
                 .resolve_environment(EnvironmentResolveMode::ManifestOnly)
                 .await?;
             let mut plan = self.plan_tool_grant_reconciliation(&environment).await?;
-            plan.deletions.clear();
-            plan.view.entries.retain(|entry| {
-                matches!(
-                    entry.action,
-                    EnvironmentToolGrantPlanAction::Create
-                        | EnvironmentToolGrantPlanAction::UpdateReference
-                )
-            });
+            plan.retain_access_changes();
             self.validate_tool_grant_reconciliation(&environment, &plan)
                 .await?;
             if plan.has_changes() {
@@ -3286,7 +3314,7 @@ fn collect_declared_agent_secret_types(
 ) -> anyhow::Result<BTreeMap<String, SchemaType>> {
     let mut declared_secret_types = BTreeMap::<Vec<String>, (SchemaType, String)>::new();
 
-    for component in deploy_diff.deployable_components.values() {
+    for component in deploy_diff.deployable_manifest.components.values() {
         for agent_type in &component.agent_types {
             for config in &agent_type.config {
                 if config.source != AgentConfigSource::Secret {

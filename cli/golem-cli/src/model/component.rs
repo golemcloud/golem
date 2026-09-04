@@ -350,13 +350,17 @@ pub struct ComponentDeployProperties {
 }
 
 #[derive(Debug)]
-pub struct DeployableManifestComponents {
+pub struct ResolvedManifestComponentsAndTools {
     pub components: BTreeMap<ComponentName, ComponentDeployProperties>,
-    pub remote_tool_deployments: Vec<tool::RemoteToolDeployment>,
-    pub diffable_remote_tool_deployments:
-        BTreeMap<String, diff::HashOf<diff::RemoteToolDeployment>>,
-    pub published_tools: BTreeSet<ToolName>,
-    pub pending_remote_initial_files: Vec<PendingRemoteInitialFile>,
+    pub remote_tools: RemoteToolDeploymentPlan,
+    pub tools_to_publish: BTreeSet<ToolName>,
+}
+
+#[derive(Debug, Default)]
+pub struct RemoteToolDeploymentPlan {
+    pub deployments: BTreeMap<ToolName, tool::RemoteToolDeployment>,
+    pub diffable_deployments: BTreeMap<String, diff::HashOf<diff::RemoteToolDeployment>>,
+    pub pending_initial_files: Vec<PendingRemoteInitialFile>,
 }
 
 #[derive(Debug)]

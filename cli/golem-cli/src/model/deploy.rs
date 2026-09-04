@@ -49,6 +49,7 @@ use golem_common::model::diff::{
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::environment_tool_grant::EnvironmentToolGrantId;
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation};
+use golem_common::model::tool::ToolName;
 use golem_common::model::tool_release::ToolReleaseId;
 use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
@@ -231,10 +232,24 @@ pub struct ToolPublicationPlanEntry {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolPublicationPlan {
+    #[serde(skip)]
+    tools: BTreeSet<ToolName>,
     pub entries: Vec<ToolPublicationPlanEntry>,
 }
 
 impl ToolPublicationPlan {
+    pub fn new(tools: BTreeSet<ToolName>, entries: Vec<ToolPublicationPlanEntry>) -> Self {
+        Self { tools, entries }
+    }
+
+    pub fn tools(&self) -> &BTreeSet<ToolName> {
+        &self.tools
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     pub fn has_work(&self) -> bool {
         self.entries
             .iter()
@@ -378,21 +393,24 @@ mod tests {
         };
 
         assert!(
-            !ToolPublicationPlan {
-                entries: vec![entry(ToolPublicationPlanAction::NoChange)]
-            }
+            !ToolPublicationPlan::new(
+                BTreeSet::new(),
+                vec![entry(ToolPublicationPlanAction::NoChange)]
+            )
             .has_work()
         );
         assert!(
-            ToolPublicationPlan {
-                entries: vec![entry(ToolPublicationPlanAction::Publish)]
-            }
+            ToolPublicationPlan::new(
+                BTreeSet::new(),
+                vec![entry(ToolPublicationPlanAction::Publish)]
+            )
             .has_work()
         );
         assert!(
-            ToolPublicationPlan {
-                entries: vec![entry(ToolPublicationPlanAction::Conflict)]
-            }
+            ToolPublicationPlan::new(
+                BTreeSet::new(),
+                vec![entry(ToolPublicationPlanAction::Conflict)]
+            )
             .has_conflicts()
         );
     }
@@ -2321,13 +2339,13 @@ impl Serialize for DeployPlanView<'_> {
 
 impl TextOutput for DeployPlanView<'_> {
     fn log(&self) {
-        let has_deployment_changes = !self.deployment_diff.components.is_empty()
+        let has_deployment_request_changes = !self.deployment_diff.components.is_empty()
             || !self.deployment_diff.http_api_deployments.is_empty()
             || !self.deployment_diff.mcp_deployments.is_empty()
             || !self.deployment_diff.remote_tools.is_empty()
             || !self.deployment_diff.published_tools.is_empty();
 
-        if has_deployment_changes {
+        if has_deployment_request_changes {
             self.deployment_diff.log();
         }
 
