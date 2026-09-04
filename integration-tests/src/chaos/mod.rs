@@ -681,6 +681,22 @@ pub struct RelayConfig {
     /// against *zero*, not a model of what the hop should cost, and a cluster
     /// with faster links should not fail for being fast.
     pub cross_pod_premium_floor_ms: u64,
+    /// The least each population's own p50 must rise inside the fault window,
+    /// as a percentage of its p50 outside it, for the run to count the fault as
+    /// having reached worker-service. Read only under
+    /// [`relay::RelayExpectation::RelayDegraded`].
+    ///
+    /// The premium's blind spot, and the reason there are two readings rather
+    /// than one. The premium is a *difference* between the populations, so it
+    /// only moves when the fault costs the relay hop more than the hop both
+    /// populations share. S21's first run was that case and the premium read
+    /// 218%. The same fault at eight times the rate slowed both traversals
+    /// within a point of each other, the premium read 118%, and the report
+    /// called it a fault that never reached worker-service while both p50s had
+    /// risen by over a fifth. Either reading clearing its floor is evidence the
+    /// fault landed; only both failing is a run with nothing to show.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency_inflation_floor_percent: Option<f64>,
     /// Whether this run's fault is supposed to reach the relay.
     ///
     /// Defaults to [`RelayExpectation::Inert`], which is what S2 has always
@@ -1490,6 +1506,33 @@ impl ScenarioConfig {
                 "chaos scenario {}: relay.expectation is inert but it carries \
                  relay.crossPodPremiumInflationFloorPercent = {floor}, which only a \
                  relay-degraded scenario reads",
+                self.code
+            ),
+            _ => {}
+        }
+        // The same pairing for the second reading. Both floors are required
+        // together under relay-degraded rather than either standing alone: the
+        // two readings cover each other's blind spot, so a scenario carrying
+        // one of them has half an oracle and no way to tell which half.
+        match (config.expectation, config.latency_inflation_floor_percent) {
+            (relay::RelayExpectation::RelayDegraded, None) => anyhow::bail!(
+                "chaos scenario {}: relay.expectation is relay-degraded, so it needs \
+                 relay.latencyInflationFloorPercent — the premium alone goes blind whenever \
+                 the fault slows both populations equally",
+                self.code
+            ),
+            (relay::RelayExpectation::RelayDegraded, Some(floor)) if floor <= 100.0 => {
+                anyhow::bail!(
+                    "chaos scenario {}: relay.latencyInflationFloorPercent is {floor}, and 100 \
+                     is a p50 that did not move at all — a floor at or below it is met by a \
+                     fault that did nothing",
+                    self.code
+                )
+            }
+            (relay::RelayExpectation::Inert, Some(floor)) => anyhow::bail!(
+                "chaos scenario {}: relay.expectation is inert but it carries \
+                 relay.latencyInflationFloorPercent = {floor}, which only a relay-degraded \
+                 scenario reads",
                 self.code
             ),
             _ => {}

@@ -865,6 +865,19 @@ scenarios:
       # predicted still counts as having reached the relay, and only a fault
       # that missed it entirely fails.
       crossPodPremiumInflationFloorPercent: 150
+      # The reading the premium cannot give, and the run that proved it was
+      # needed. At the suite's usual rate the fault cost only the relay hop and
+      # the premium read 218%. At eight times that rate it cost both traversals
+      # within a point of each other — cross-pod p50 121% of its own, co-located
+      # 122% — the premium read 118%, and the run was filed as a fault that
+      # never reached worker-service.
+      #
+      # Each population against itself, taken as the smaller of its ratios
+      # either side of the window. 110 rather than something tighter because an
+      # undisturbed recovery window already sat at 109% of a warm-up-heavy
+      # baseline on that run, and this has to clear ordinary drift without
+      # clearing a fifth.
+      latencyInflationFloorPercent: 110
 
     workload:
       # S2's populations unchanged, and deliberately so: the placement split is
