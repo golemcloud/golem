@@ -23,7 +23,6 @@ pub use crate::repo::model::environment::{
     EnvironmentScopedRecord,
 };
 use crate::repo::model::environment_plugin_grant::EnvironmentPluginGrantRecord;
-use crate::repo::model::environment_tool_grant::ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE;
 use crate::repo::model::tool_release::{
     TOOL_RELEASE_LIFECYCLE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_SUPERSEDED,
 };
@@ -751,14 +750,12 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                                 JOIN tool_releases tr
                                     ON tr.tool_release_id = etg.tool_release_id
                                 WHERE etg.environment_id = $1
-                                    AND etg.lifecycle = $2
                                     AND etg.deleted_at IS NULL
                                     AND NOT tr.immutable
-                                    AND tr.lifecycle IN ($3, $4)
+                                    AND tr.lifecycle IN ($2, $3)
                                 LIMIT 1
                             "#})
                             .bind(revision.environment_id)
-                            .bind(ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE)
                             .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
                             .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED),
                         )

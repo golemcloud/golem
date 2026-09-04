@@ -94,7 +94,6 @@ CREATE TABLE environment_tool_grants
     protected                  BOOLEAN   NOT NULL,
     automatic                  BOOLEAN   NOT NULL,
     follow_coordinates         BOOLEAN   NOT NULL,
-    lifecycle                  SMALLINT  NOT NULL,
     created_at                 TIMESTAMP NOT NULL,
     created_by                 UUID      NOT NULL,
     state_changed_at           TIMESTAMP NOT NULL,
@@ -108,12 +107,10 @@ CREATE TABLE environment_tool_grants
         FOREIGN KEY (environment_id) REFERENCES environments,
     CONSTRAINT environment_tool_grants_release_fk
         FOREIGN KEY (tool_release_id) REFERENCES tool_releases,
-    CONSTRAINT environment_tool_grants_lifecycle_check
-        CHECK (lifecycle IN (0, 1)),
     CONSTRAINT environment_tool_grants_deletion_state_check
         CHECK (
-            (lifecycle = 0 AND deleted_at IS NULL AND deleted_by IS NULL)
-            OR (lifecycle = 1 AND deleted_at IS NOT NULL AND deleted_by IS NOT NULL)
+            (deleted_at IS NULL AND deleted_by IS NULL)
+            OR (deleted_at IS NOT NULL AND deleted_by IS NOT NULL)
         )
 );
 
@@ -135,7 +132,9 @@ ALTER TABLE deployment_registered_tools
     ADD COLUMN implementation_version TEXT,
     ADD COLUMN owner_account_id UUID,
     ADD COLUMN owner_account_email TEXT,
-    ADD COLUMN metadata_digest BYTEA;
+    ADD COLUMN metadata_digest BYTEA,
+    ADD COLUMN published BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN deployment_hash BYTEA;
 
 DO $$
 BEGIN
@@ -174,6 +173,7 @@ WHERE components.component_id = component_revisions.component_id
 
 ALTER TABLE deployment_registered_tools
     ALTER COLUMN source_kind DROP DEFAULT,
+    ALTER COLUMN published DROP DEFAULT,
     ALTER COLUMN component_id DROP NOT NULL,
     ALTER COLUMN component_revision_id DROP NOT NULL,
     ALTER COLUMN owner_account_id SET NOT NULL,
@@ -194,6 +194,12 @@ ALTER TABLE deployment_registered_tools
                 AND component_name IS NULL
                 AND host_tool_id IS NOT NULL
                 AND implementation_version IS NOT NULL)
+        ),
+    ADD CONSTRAINT deployment_registered_tools_identity_check
+        CHECK (
+            (tool_release_id IS NULL AND NOT published AND deployment_hash IS NULL)
+            OR (tool_release_id IS NOT NULL AND published AND deployment_hash IS NULL)
+            OR (tool_release_id IS NOT NULL AND NOT published AND deployment_hash IS NOT NULL)
         ),
     ADD CONSTRAINT deployment_registered_tools_component_revision_fk
         FOREIGN KEY (component_id, component_revision_id)

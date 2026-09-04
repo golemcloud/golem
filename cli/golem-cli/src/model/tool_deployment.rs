@@ -103,6 +103,7 @@ pub enum ToolValidationCode {
     DuplicateImplementation,
     MissingDeclaration,
     MissingImplementation,
+    UnusedDeclaration,
     ReleaseNotGranted,
     UnknownToolReference,
     UnknownAgentReference,

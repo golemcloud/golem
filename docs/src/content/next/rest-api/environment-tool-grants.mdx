@@ -3,7 +3,7 @@
 ## List active tool grants in an environment
 Path|Method|Protected
 ---|---|---
-`/v1/envs/{environment_id}/tool-grants`|GET|Yes
+`/v1/envs/{environment_id}/tools`|GET|Yes
 
 
 
@@ -453,7 +453,7 @@ Path|Method|Protected
 ## Grant an exact published tool release to an environment
 Path|Method|Protected
 ---|---|---
-`/v1/envs/{environment_id}/tool-grants`|POST|Yes
+`/v1/envs/{environment_id}/tools`|POST|Yes
 
 
 
@@ -465,498 +465,8 @@ Path|Method|Protected
   "release": {
     "type": "ById",
     "releaseId": "829d5913-a352-42a5-be6f-1526f30c0c85"
-  }
-}
-```
-
-**Example Response JSON**
-
-```json copy
-{
-  "grant": {
-    "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-    "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
-    "toolReleaseId": "4627e620-f60c-4beb-9b02-d50968f37183",
-    "protected": true,
-    "automatic": true,
-    "followCoordinates": true,
-    "lifecycle": "active",
-    "createdAt": "2019-08-24T14:15:22Z",
-    "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
-    "stateChangedAt": "2019-08-24T14:15:22Z",
-    "stateChangedBy": "2b961163-2f23-4eaa-a259-05736f8f6815"
   },
-  "release": {
-    "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-    "name": "string",
-    "version": "string",
-    "definition": {
-      "version": "string",
-      "commands": {
-        "nodes": [
-          {
-            "name": "string",
-            "aliases": [
-              "string"
-            ],
-            "doc": {
-              "summary": "string",
-              "description": "string",
-              "examples": [
-                {
-                  "title": "string",
-                  "body": "string"
-                }
-              ]
-            },
-            "globals": {
-              "options": [
-                {
-                  "long": "string",
-                  "short": null,
-                  "aliases": [
-                    "string"
-                  ],
-                  "doc": {
-                    "summary": "string",
-                    "description": "string",
-                    "examples": [
-                      {
-                        "title": "string",
-                        "body": "string"
-                      }
-                    ]
-                  },
-                  "value_name": "string",
-                  "shape": {
-                    "kind": "scalar",
-                    "value": {
-                      "kind": "ref",
-                      "value": {
-                        "id": "string",
-                        "metadata": {
-                          "doc": "string",
-                          "aliases": [
-                            "string"
-                          ],
-                          "examples": [
-                            "string"
-                          ],
-                          "deprecated": "string",
-                          "role": {
-                            "tag": "multimodal"
-                          }
-                        }
-                      }
-                    }
-                  },
-                  "default": {
-                    "kind": "bool",
-                    "value": true
-                  },
-                  "required": true,
-                  "env_var": "string"
-                }
-              ],
-              "flags": [
-                {
-                  "long": "string",
-                  "short": null,
-                  "aliases": [
-                    "string"
-                  ],
-                  "doc": {
-                    "summary": "string",
-                    "description": "string",
-                    "examples": [
-                      {
-                        "title": "string",
-                        "body": "string"
-                      }
-                    ]
-                  },
-                  "shape": {
-                    "kind": "bool-flag",
-                    "value": {
-                      "default": true,
-                      "negatable": true
-                    }
-                  },
-                  "env_var": "string"
-                }
-              ]
-            },
-            "subcommands": [
-              0
-            ],
-            "body": {
-              "positionals": {
-                "fixed": [
-                  {
-                    "name": "string",
-                    "doc": {
-                      "summary": "string",
-                      "description": "string",
-                      "examples": [
-                        {
-                          "title": "string",
-                          "body": "string"
-                        }
-                      ]
-                    },
-                    "value_name": "string",
-                    "type_": {
-                      "kind": "ref",
-                      "value": {
-                        "id": "string",
-                        "metadata": {
-                          "doc": "string",
-                          "aliases": [
-                            "string"
-                          ],
-                          "examples": [
-                            "string"
-                          ],
-                          "deprecated": "string",
-                          "role": {
-                            "tag": "multimodal"
-                          }
-                        }
-                      }
-                    },
-                    "default": {
-                      "kind": "bool",
-                      "value": true
-                    },
-                    "required": true,
-                    "accepts_stdio": true
-                  }
-                ],
-                "tail": {
-                  "name": "string",
-                  "doc": {
-                    "summary": "string",
-                    "description": "string",
-                    "examples": [
-                      {
-                        "title": "string",
-                        "body": "string"
-                      }
-                    ]
-                  },
-                  "value_name": "string",
-                  "item_type": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "string",
-                      "metadata": {
-                        "doc": "string",
-                        "aliases": [
-                          "string"
-                        ],
-                        "examples": [
-                          "string"
-                        ],
-                        "deprecated": "string",
-                        "role": {
-                          "tag": "multimodal"
-                        }
-                      }
-                    }
-                  },
-                  "min": 0,
-                  "max": 0,
-                  "separator": "string",
-                  "verbatim": true,
-                  "accepts_stdio": true
-                }
-              },
-              "options": [
-                {
-                  "long": "string",
-                  "short": null,
-                  "aliases": [
-                    "string"
-                  ],
-                  "doc": {
-                    "summary": "string",
-                    "description": "string",
-                    "examples": [
-                      {
-                        "title": "string",
-                        "body": "string"
-                      }
-                    ]
-                  },
-                  "value_name": "string",
-                  "shape": {
-                    "kind": "scalar",
-                    "value": {
-                      "kind": "ref",
-                      "value": {
-                        "id": "string",
-                        "metadata": {
-                          "doc": "string",
-                          "aliases": [
-                            "string"
-                          ],
-                          "examples": [
-                            "string"
-                          ],
-                          "deprecated": "string",
-                          "role": {
-                            "tag": "multimodal"
-                          }
-                        }
-                      }
-                    }
-                  },
-                  "default": {
-                    "kind": "bool",
-                    "value": true
-                  },
-                  "required": true,
-                  "env_var": "string"
-                }
-              ],
-              "flags": [
-                {
-                  "long": "string",
-                  "short": null,
-                  "aliases": [
-                    "string"
-                  ],
-                  "doc": {
-                    "summary": "string",
-                    "description": "string",
-                    "examples": [
-                      {
-                        "title": "string",
-                        "body": "string"
-                      }
-                    ]
-                  },
-                  "shape": {
-                    "kind": "bool-flag",
-                    "value": {
-                      "default": true,
-                      "negatable": true
-                    }
-                  },
-                  "env_var": "string"
-                }
-              ],
-              "constraints": [
-                {
-                  "kind": "requires-all",
-                  "value": [
-                    {
-                      "kind": "present",
-                      "value": "string"
-                    }
-                  ]
-                }
-              ],
-              "stdin": {
-                "doc": {
-                  "summary": "string",
-                  "description": "string",
-                  "examples": [
-                    {
-                      "title": "string",
-                      "body": "string"
-                    }
-                  ]
-                },
-                "mime": [
-                  "string"
-                ],
-                "required": true
-              },
-              "stdout": {
-                "doc": {
-                  "summary": "string",
-                  "description": "string",
-                  "examples": [
-                    {
-                      "title": "string",
-                      "body": "string"
-                    }
-                  ]
-                },
-                "mime": [
-                  "string"
-                ],
-                "required": true
-              },
-              "result": {
-                "type_": {
-                  "kind": "ref",
-                  "value": {
-                    "id": "string",
-                    "metadata": {
-                      "doc": "string",
-                      "aliases": [
-                        "string"
-                      ],
-                      "examples": [
-                        "string"
-                      ],
-                      "deprecated": "string",
-                      "role": {
-                        "tag": "multimodal"
-                      }
-                    }
-                  }
-                },
-                "doc": {
-                  "summary": "string",
-                  "description": "string",
-                  "examples": [
-                    {
-                      "title": "string",
-                      "body": "string"
-                    }
-                  ]
-                },
-                "formatters": [
-                  {
-                    "name": "string",
-                    "doc": {
-                      "summary": "string",
-                      "description": "string",
-                      "examples": [
-                        {
-                          "title": "string",
-                          "body": "string"
-                        }
-                      ]
-                    }
-                  }
-                ],
-                "default_formatter": "string"
-              },
-              "errors": [
-                {
-                  "name": "string",
-                  "doc": {
-                    "summary": "string",
-                    "description": "string",
-                    "examples": [
-                      {
-                        "title": "string",
-                        "body": "string"
-                      }
-                    ]
-                  },
-                  "kind": "usage-error",
-                  "exit_code": 0,
-                  "payload": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "string",
-                      "metadata": {
-                        "doc": "string",
-                        "aliases": [
-                          "string"
-                        ],
-                        "examples": [
-                          "string"
-                        ],
-                        "deprecated": "string",
-                        "role": {
-                          "tag": "multimodal"
-                        }
-                      }
-                    }
-                  }
-                }
-              ],
-              "annotations": {
-                "read_only": true,
-                "destructive": true,
-                "idempotent": true,
-                "open_world": true
-              }
-            }
-          }
-        ]
-      },
-      "schema": {
-        "defs": [
-          {
-            "id": "string",
-            "name": "string",
-            "body": {
-              "kind": "ref",
-              "value": {
-                "id": "string",
-                "metadata": {
-                  "doc": "string",
-                  "aliases": [
-                    "string"
-                  ],
-                  "examples": [
-                    "string"
-                  ],
-                  "deprecated": "string",
-                  "role": {
-                    "tag": "multimodal"
-                  }
-                }
-              }
-            }
-          }
-        ],
-        "root": {
-          "kind": "ref",
-          "value": {
-            "id": "string",
-            "metadata": {
-              "doc": "string",
-              "aliases": [
-                "string"
-              ],
-              "examples": [
-                "string"
-              ],
-              "deprecated": "string",
-              "role": {
-                "tag": "multimodal"
-              }
-            }
-          }
-        }
-      }
-    },
-    "metadataVersion": "string",
-    "metadataDigest": "string",
-    "sourceDigest": "string"
-  },
-  "releaseOwner": {
-    "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
-    "name": "string",
-    "email": "string"
-  }
-}
-```
-
-## Create an automatically managed grant required by an application deployment
-Path|Method|Protected
----|---|---
-`/v1/envs/{environment_id}/tool-grants/automatic`|POST|Yes
-
-
-
-
-
-**Example Request JSON**
-```json copy
-{
-  "release": {
-    "type": "ById",
-    "releaseId": "829d5913-a352-42a5-be6f-1526f30c0c85"
-  }
+  "automatic": true
 }
 ```
 
@@ -1435,7 +945,7 @@ Path|Method|Protected
 ## Validate an automatically managed grant reconciliation without changing any grants
 Path|Method|Protected
 ---|---|---
-`/v1/envs/{environment_id}/tool-grants/automatic/validate`|POST|Yes
+`/v1/envs/{environment_id}/tools/validate`|POST|Yes
 
 
 
@@ -1449,7 +959,8 @@ Path|Method|Protected
       "release": {
         "type": "ById",
         "releaseId": "829d5913-a352-42a5-be6f-1526f30c0c85"
-      }
+      },
+      "automatic": true
     }
   ],
   "deletions": [
@@ -1463,7 +974,7 @@ Path|Method|Protected
 ## Get an active environment tool grant
 Path|Method|Protected
 ---|---|---
-`/v1/environment-tool-grants/{grant_id}`|GET|Yes
+`/v1/environment-tools/{grant_id}`|GET|Yes
 
 
 
@@ -1946,33 +1457,25 @@ Path|Method|Protected
 ## Delete an environment tool grant
 Path|Method|Protected
 ---|---|---
-`/v1/environment-tool-grants/{grant_id}`|DELETE|Yes
+`/v1/environment-tools/{grant_id}`|DELETE|Yes
 
 
 
 
 
-
-
-
-
-## Delete an environment tool grant only if it is automatically managed
-Path|Method|Protected
----|---|---
-`/v1/environment-tool-grants/{grant_id}/automatic`|DELETE|Yes
-
-
-
-
-
-
+**Example Request JSON**
+```json copy
+{
+  "automatic": true
+}
+```
 
 
 
 ## Restore a deleted environment tool grant
 Path|Method|Protected
 ---|---|---
-`/v1/environment-tool-grants/{grant_id}/restore`|POST|Yes
+`/v1/environment-tools/{grant_id}/restore`|POST|Yes
 
 
 

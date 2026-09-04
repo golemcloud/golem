@@ -24,6 +24,9 @@ use crate::model::cli_output::StructuredOutput;
 use crate::model::language::GuestLanguage;
 use crate::model::repl::{ReplAgentMetadata, ReplMetadata};
 use crate::model::text_format::{NoTextOutput, TextOutput};
+use crate::model::tool_deployment::{
+    ToolEntityPath, ToolValidationCode, ToolValidationIssue, ToolValidationPhase,
+};
 use anyhow::bail;
 use camino::Utf8PathBuf;
 use golem_common::model::component::ComponentName;
@@ -554,6 +557,7 @@ fn collect_remote_tool_manifest_targets_for_entry(
                 metadata_version: grant.release.metadata_version.clone(),
                 metadata_digest: grant.release.metadata_digest,
                 source_digest: grant.release.source_digest,
+                manifest_source: ctx.application().tool_declarations()[name].source.clone(),
             },
             subject: BridgeSdkTargetSubject::Tool(grant.release.definition.clone()),
             target_language,
@@ -635,7 +639,7 @@ async fn collect_tool_manifest_targets_for_entry(
             is_matching_component,
             &mut tools,
             targets,
-        );
+        )?;
     }
 
     if !ignore_unmatched_matchers && !matchers.is_empty() {
@@ -673,7 +677,7 @@ fn collect_local_tool_manifest_targets_for_component(
     is_matching_component: bool,
     tools: &mut Vec<golem_common::schema::tool::Tool>,
     targets: &mut Vec<BridgeSdkTarget>,
-) {
+) -> anyhow::Result<()> {
     tools.retain(|tool| {
         let Some(name) = tool.name() else {
             return true;
@@ -685,14 +689,48 @@ fn collect_local_tool_manifest_targets_for_component(
             return true;
         };
 
-        declaration.value.release.is_none()
-            && (is_matching_component
-                || declaration
-                    .value
-                    .component
-                    .as_ref()
-                    .is_none_or(|selected| selected == component_name))
+        is_matching_component
+            || declaration
+                .value
+                .component
+                .as_ref()
+                .is_none_or(|selected| selected == component_name)
     });
+
+    for tool in tools.iter() {
+        let Some(name) = tool.name() else {
+            continue;
+        };
+        let Ok(name) = ToolName::try_from(name) else {
+            continue;
+        };
+        let Some(declaration) = application.tool_declarations().get(&name) else {
+            continue;
+        };
+        let selected_as_remote = targets.iter().any(|target| {
+            matches!(&target.source, BridgeSdkTargetSource::RemoteRelease { .. })
+                && target.subject.display_name() == name.as_str()
+        });
+
+        if declaration.value.release.is_some()
+            && (is_matching_all
+                || is_matching_component
+                || matchers.contains(name.as_str())
+                || selected_as_remote)
+        {
+            let issue = ToolValidationIssue::error(
+                ToolValidationPhase::DeclarationDiscoveryIdentity,
+                ToolValidationCode::DuplicateImplementation,
+                ToolEntityPath::tool(&name, "definition.name"),
+                Some(declaration.source.clone()),
+                format!(
+                    "Tool '{name}' is provided both by the remote release declared in '{}' and component '{component_name}'",
+                    declaration.source.display()
+                ),
+            );
+            bail!(issue.render());
+        }
+    }
 
     if !is_matching_all && !is_matching_component {
         tools.retain(|tool| tool.name().is_some_and(|name| matchers.contains(name)));
@@ -713,6 +751,8 @@ fn collect_local_tool_manifest_targets_for_component(
             output_dir,
         });
     }
+
+    Ok(())
 }
 
 async fn collect_dependency_guest_bridge_targets(
@@ -735,9 +775,7 @@ async fn collect_dependency_guest_bridge_targets(
         let metadata = extract_and_store_component_metadata(ctx, component_name).await?;
         for agent_type in &metadata.agent_types {
             let dependency = ComponentDependency::Agent {
-                source: crate::model::app::SubjectSource::Local {
-                    component_name: component_name.clone(),
-                },
+                component_name: component_name.clone(),
                 agent_type_name: agent_type.type_name.clone(),
             };
             let target_languages = dependency_guest_bridge_target_languages(
@@ -841,6 +879,9 @@ async fn collect_dependency_guest_bridge_targets(
                     metadata_version: grant.release.metadata_version.clone(),
                     metadata_digest: grant.release.metadata_digest,
                     source_digest: grant.release.source_digest,
+                    manifest_source: ctx.application().tool_declarations()[tool_name]
+                        .source
+                        .clone(),
                 },
                 subject: BridgeSdkTargetSubject::Tool(grant.release.definition.clone()),
                 target_language,
@@ -970,9 +1011,9 @@ async fn gen_bridge_sdk_target(
         BridgeSdkTargetSource::Local { component_name } => {
             ctx.application().component(component_name).final_wasm()
         }
-        BridgeSdkTargetSource::RemoteRelease { .. } => {
-            ctx.application().bridge_sdks_source().to_path_buf()
-        }
+        BridgeSdkTargetSource::RemoteRelease {
+            manifest_source, ..
+        } => manifest_source.clone(),
     };
     let target_name = target.subject.display_name().to_string();
     let target_kind = target.subject.kind().as_str();
@@ -1333,9 +1374,7 @@ mod tests {
     fn dependency_guest_bridge_support_accepts_all_current_languages_for_agents_and_tools() {
         let component_name = ComponentName("component".to_string());
         let agent_dependency = ComponentDependency::Agent {
-            source: crate::model::app::SubjectSource::Local {
-                component_name: component_name.clone(),
-            },
+            component_name: component_name.clone(),
             agent_type_name: AgentTypeName("Agent".to_string()),
         };
         let tool_dependency = ComponentDependency::Tool {
@@ -1385,7 +1424,8 @@ mod tests {
                     false,
                     &mut vec![tool("echo")],
                     &mut targets,
-                );
+                )
+                .unwrap();
             }
 
             assert_eq!(
@@ -1408,11 +1448,50 @@ mod tests {
             true,
             &mut vec![tool("echo")],
             &mut explicit_component_targets,
-        );
+        )
+        .unwrap();
         assert_eq!(
             explicit_component_targets[0].source.component_name(),
             Some(&first)
         );
+    }
+
+    #[test]
+    fn manifest_tool_matching_rejects_local_and_remote_release_collision() {
+        let (application, _temp_dir) = application_from_manifest(indoc! {r#"
+            app: bridge-test
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:provider:
+                componentWasm: provider.wasm
+
+            tools:
+              echo:
+                release:
+                  releaseId: 00000000-0000-0000-0000-000000000001
+        "#});
+        let component_name = ComponentName("app:provider".to_string());
+
+        let error = collect_local_tool_manifest_targets_for_component(
+            &application,
+            &component_name,
+            BridgeMode::Guest,
+            GuestLanguage::Rust,
+            &mut BTreeSet::new(),
+            true,
+            false,
+            &mut vec![tool("echo")],
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("DuplicateImplementation"), "{message}");
+        assert!(message.contains("app:provider"), "{message}");
     }
 
     fn bridge_sdk_target(
@@ -1482,29 +1561,29 @@ mod tests {
     }
 
     fn application_with_duplicate_tool_exporters() -> (Application, TempDir) {
+        application_from_manifest(indoc! {r#"
+            app: bridge-test
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:first:
+                componentWasm: first.wasm
+              app:second:
+                componentWasm: second.wasm
+
+            tools:
+              echo:
+                component: app:second
+        "#})
+    }
+
+    fn application_from_manifest(contents: &str) -> (Application, TempDir) {
         let temp_dir = tempdir().unwrap();
         let manifest = temp_dir.path().join("golem.yaml");
-        crate::fs::write(
-            &manifest,
-            indoc! {r#"
-                app: bridge-test
-
-                environments:
-                  local:
-                    server: local
-
-                components:
-                  app:first:
-                    componentWasm: first.wasm
-                  app:second:
-                    componentWasm: second.wasm
-
-                tools:
-                  echo:
-                    component: app:second
-            "#},
-        )
-        .unwrap();
+        crate::fs::write(&manifest, contents).unwrap();
 
         let raw_apps = vec![app_raw::ApplicationWithSource::from_yaml_file(&manifest).unwrap()];
         let (preload, warns, errors) = Application::preload_from_raw_apps(&raw_apps).into_product();

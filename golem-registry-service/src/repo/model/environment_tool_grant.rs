@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::audit::ImmutableAuditFields;
 use super::tool_release::ToolReleaseWithOwnerRecord;
 use golem_common::model::account::{AccountId, AccountSummary};
 use golem_common::model::environment::EnvironmentId;
@@ -24,9 +25,6 @@ use golem_service_base::repo::SqlDateTime;
 use sqlx::FromRow;
 use uuid::Uuid;
 
-pub const ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE: i16 = 0;
-pub const ENVIRONMENT_TOOL_GRANT_LIFECYCLE_DELETED: i16 = 1;
-
 #[derive(Debug, Clone, PartialEq, FromRow)]
 pub struct EnvironmentToolGrantRecord {
     pub environment_tool_grant_id: Uuid,
@@ -35,13 +33,10 @@ pub struct EnvironmentToolGrantRecord {
     pub protected: bool,
     pub automatic: bool,
     pub follow_coordinates: bool,
-    pub lifecycle: i16,
-    pub created_at: SqlDateTime,
-    pub created_by: Uuid,
     pub state_changed_at: SqlDateTime,
     pub state_changed_by: Uuid,
-    pub deleted_at: Option<SqlDateTime>,
-    pub deleted_by: Option<Uuid>,
+    #[sqlx(flatten)]
+    pub audit: ImmutableAuditFields,
 }
 
 impl EnvironmentToolGrantRecord {
@@ -61,13 +56,9 @@ impl EnvironmentToolGrantRecord {
             protected,
             automatic,
             follow_coordinates,
-            lifecycle: ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE,
-            created_at: now.clone(),
-            created_by: actor.0,
             state_changed_at: now,
             state_changed_by: actor.0,
-            deleted_at: None,
-            deleted_by: None,
+            audit: ImmutableAuditFields::new(actor.0),
         }
     }
 }
@@ -81,9 +72,9 @@ impl From<EnvironmentToolGrantRecord> for EnvironmentToolGrant {
             protected: value.protected,
             automatic: value.automatic,
             follow_coordinates: value.follow_coordinates,
-            lifecycle: grant_lifecycle(value.lifecycle),
-            created_at: value.created_at.into(),
-            created_by: AccountId(value.created_by),
+            lifecycle: grant_lifecycle(value.audit.deleted_at.is_some()),
+            created_at: value.audit.created_at.into(),
+            created_by: AccountId(value.audit.created_by),
             state_changed_at: value.state_changed_at.into(),
             state_changed_by: AccountId(value.state_changed_by),
         }
@@ -97,7 +88,6 @@ pub struct EnvironmentToolGrantWithDetailsRecord {
     pub protected: bool,
     pub automatic: bool,
     pub follow_coordinates: bool,
-    pub grant_lifecycle: i16,
     pub grant_created_at: SqlDateTime,
     pub grant_created_by: Uuid,
     pub grant_state_changed_at: SqlDateTime,
@@ -122,7 +112,7 @@ impl TryFrom<EnvironmentToolGrantWithDetailsRecord> for EnvironmentToolGrantWith
                 protected: value.protected,
                 automatic: value.automatic,
                 follow_coordinates: value.follow_coordinates,
-                lifecycle: grant_lifecycle(value.grant_lifecycle),
+                lifecycle: grant_lifecycle(value.grant_deleted_at.is_some()),
                 created_at: value.grant_created_at.into(),
                 created_by: AccountId(value.grant_created_by),
                 state_changed_at: value.grant_state_changed_at.into(),
@@ -134,10 +124,10 @@ impl TryFrom<EnvironmentToolGrantWithDetailsRecord> for EnvironmentToolGrantWith
     }
 }
 
-fn grant_lifecycle(value: i16) -> EnvironmentToolGrantLifecycle {
-    match value {
-        ENVIRONMENT_TOOL_GRANT_LIFECYCLE_ACTIVE => EnvironmentToolGrantLifecycle::Active,
-        ENVIRONMENT_TOOL_GRANT_LIFECYCLE_DELETED => EnvironmentToolGrantLifecycle::Deleted,
-        _ => EnvironmentToolGrantLifecycle::Deleted,
+fn grant_lifecycle(deleted: bool) -> EnvironmentToolGrantLifecycle {
+    if deleted {
+        EnvironmentToolGrantLifecycle::Deleted
+    } else {
+        EnvironmentToolGrantLifecycle::Active
     }
 }

@@ -26,8 +26,9 @@ use crate::model::environment::{
 use crate::model::tool_deployment::{DeployedToolListView, DeployedToolView};
 use crate::model::tool_release::{ToolReleaseListView, ToolReleaseView};
 use golem_client::api::{EnvironmentClient, EnvironmentToolGrantsClient, ToolReleasesClient};
-use golem_common::base_model::account::AccountEmail;
-use golem_common::base_model::environment_tool_grant::EnvironmentToolGrantCreation;
+use golem_common::base_model::environment_tool_grant::{
+    EnvironmentToolGrantCreation, EnvironmentToolGrantDeletion,
+};
 use golem_common::base_model::tool_release::{
     ToolReleaseByCoordinates, ToolReleaseById, ToolReleaseReference,
 };
@@ -203,7 +204,10 @@ impl ToolCommandHandler {
                     .golem_clients()
                     .await?
                     .environment_tool_grants
-                    .delete_environment_tool_grant(&grant_id.0)
+                    .delete_environment_tool_grant(
+                        &grant_id.0,
+                        &EnvironmentToolGrantDeletion { automatic: false },
+                    )
                     .await
                     .map_service_error()?;
                 self.ctx
@@ -242,7 +246,7 @@ impl ToolCommandHandler {
             }
             (None, Some(account), Some(name), Some(version)) => {
                 ToolReleaseReference::ByCoordinates(ToolReleaseByCoordinates {
-                    account: AccountEmail::new(account),
+                    account,
                     name,
                     version,
                 })
@@ -256,7 +260,10 @@ impl ToolCommandHandler {
             .environment_tool_grants
             .create_environment_tool_grant(
                 &environment.environment_id.0,
-                &EnvironmentToolGrantCreation { release },
+                &EnvironmentToolGrantCreation {
+                    release,
+                    automatic: false,
+                },
             )
             .await
             .map_service_error()?;

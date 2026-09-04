@@ -417,7 +417,6 @@ impl Services {
             retry_policy_service.clone(),
             environment_tool_grant_service.clone(),
             tool_release_service.clone(),
-            initial_agent_files.clone(),
         ));
 
         let deployed_routes_service =

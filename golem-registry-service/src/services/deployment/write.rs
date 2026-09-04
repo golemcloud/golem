@@ -34,7 +34,7 @@ use crate::services::retry_policy::{RetryPolicyError, RetryPolicyService};
 use crate::services::security_scheme::SecuritySchemeService;
 use crate::services::tool_release::{ToolReleaseError, ToolReleaseService};
 use futures::TryFutureExt;
-use golem_common::model::agent::{DeployedRegisteredAgentType, InitialAgentFileUpload};
+use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::card::EnvironmentVerb;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff;
@@ -46,12 +46,9 @@ use golem_common::model::{
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
-use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::repo::RepoError;
-use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tempfile::NamedTempFile;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeploymentWriteError {
@@ -127,7 +124,6 @@ pub struct DeploymentWriteService {
     retry_policy_service: Arc<RetryPolicyService>,
     environment_tool_grant_service: Arc<EnvironmentToolGrantService>,
     tool_release_service: Arc<ToolReleaseService>,
-    initial_agent_files_service: Arc<InitialAgentFilesService>,
 }
 
 impl DeploymentWriteService {
@@ -144,7 +140,6 @@ impl DeploymentWriteService {
         retry_policy_service: Arc<RetryPolicyService>,
         environment_tool_grant_service: Arc<EnvironmentToolGrantService>,
         tool_release_service: Arc<ToolReleaseService>,
-        initial_agent_files_service: Arc<InitialAgentFilesService>,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -159,37 +154,7 @@ impl DeploymentWriteService {
             retry_policy_service,
             environment_tool_grant_service,
             tool_release_service,
-            initial_agent_files_service,
         }
-    }
-
-    pub async fn upload_initial_agent_file(
-        &self,
-        environment_id: EnvironmentId,
-        data: Arc<NamedTempFile>,
-        auth: &AuthCtx,
-    ) -> Result<InitialAgentFileUpload, DeploymentWriteError> {
-        let environment = self
-            .environment_service
-            .get(environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(environment_id) => {
-                    DeploymentWriteError::ParentEnvironmentNotFound(environment_id)
-                }
-                other => other.into(),
-            })?;
-
-        let size = data.length().await?;
-        let stream = data.map_item(|item| item.map(|bytes| bytes.to_vec()));
-        store_initial_agent_file_stream(
-            self.initial_agent_files_service.as_ref(),
-            &environment,
-            stream,
-            size,
-            auth,
-        )
-        .await
     }
 
     pub async fn create_deployment(
@@ -584,154 +549,5 @@ impl DeploymentWriteService {
             .transpose()?;
 
         Ok(deployment)
-    }
-}
-
-#[cfg(test)]
-async fn store_initial_agent_file(
-    initial_agent_files_service: &InitialAgentFilesService,
-    environment: &Environment,
-    data: Vec<u8>,
-    auth: &AuthCtx,
-) -> Result<InitialAgentFileUpload, DeploymentWriteError> {
-    let size = data.len() as u64;
-    let stream = data
-        .map_item(|item| item.map_err(anyhow::Error::from))
-        .map_error(anyhow::Error::from);
-    store_initial_agent_file_stream(initial_agent_files_service, environment, stream, size, auth)
-        .await
-}
-
-async fn store_initial_agent_file_stream(
-    initial_agent_files_service: &InitialAgentFilesService,
-    environment: &Environment,
-    stream: impl ReplayableStream<Item = Result<Vec<u8>, anyhow::Error>, Error = anyhow::Error>,
-    size: u64,
-    auth: &AuthCtx,
-) -> Result<InitialAgentFileUpload, DeploymentWriteError> {
-    authorize_environment_permission(auth, environment, EnvironmentVerb::Deploy)?;
-
-    let content_hash = initial_agent_files_service
-        .put_if_not_exists(environment.id, stream)
-        .await?;
-
-    Ok(InitialAgentFileUpload { content_hash, size })
-}
-
-#[cfg(test)]
-mod initial_agent_file_tests {
-    use super::*;
-    use futures::TryStreamExt;
-    use golem_common::model::account::{AccountEmail, AccountId};
-    use golem_common::model::application::{ApplicationId, ApplicationName};
-    use golem_common::model::card::owner::EnvironmentOwnerPattern;
-    use golem_common::model::card::{
-        ClassPermissionTarget, EffectiveSurface, EnvironmentResourcePattern, GrantSurface,
-        PermissionTarget,
-    };
-    use golem_common::model::environment::{EnvironmentName, EnvironmentRevision};
-    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-    use test_r::test;
-
-    fn environment(id: EnvironmentId, name: &str) -> Environment {
-        Environment {
-            id,
-            revision: EnvironmentRevision::INITIAL,
-            application_id: ApplicationId::new(),
-            application_name: ApplicationName::try_from("app").unwrap(),
-            name: EnvironmentName::try_from(name).unwrap(),
-            diff_model_version: 0,
-            compatibility_check: false,
-            version_check: false,
-            security_overrides: false,
-            owner_account_id: AccountId::new(),
-            owner_account_email: AccountEmail::new("owner@example.com"),
-            current_deployment: None,
-        }
-    }
-
-    fn auth_for(environment: &Environment, verb: EnvironmentVerb) -> AuthCtx {
-        AuthCtx::agent_with_effective_surface(
-            environment.owner_account_id,
-            environment.owner_account_email.clone(),
-            EffectiveSurface {
-                source_card_ids: Vec::new(),
-                lower: vec![GrantSurface {
-                    positive: vec![PermissionTarget::Environment(ClassPermissionTarget {
-                        verb: Some(verb),
-                        owner: EnvironmentOwnerPattern::Environment {
-                            account: environment.owner_account_email.clone(),
-                            application: environment.application_name.clone(),
-                            environment: environment.name.clone(),
-                        },
-                        resource: EnvironmentResourcePattern::Any,
-                    })],
-                    negative: Vec::new(),
-                }],
-                upper: Vec::new(),
-            },
-        )
-    }
-
-    #[test]
-    async fn upload_requires_deploy_permission_and_stores_by_environment() {
-        let files = InitialAgentFilesService::new(Arc::new(InMemoryBlobStorage::new()));
-        let allowed = environment(EnvironmentId::new(), "allowed");
-        let other = environment(EnvironmentId::new(), "other");
-        let content = b"remote tool bridge".to_vec();
-
-        assert!(
-            store_initial_agent_file(
-                &files,
-                &allowed,
-                content.clone(),
-                &auth_for(&allowed, EnvironmentVerb::View),
-            )
-            .await
-            .is_err()
-        );
-        assert!(
-            store_initial_agent_file(
-                &files,
-                &other,
-                content.clone(),
-                &auth_for(&allowed, EnvironmentVerb::Deploy),
-            )
-            .await
-            .is_err()
-        );
-
-        let uploaded = store_initial_agent_file(
-            &files,
-            &allowed,
-            content.clone(),
-            &auth_for(&allowed, EnvironmentVerb::Deploy),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(uploaded.size, content.len() as u64);
-        assert_eq!(
-            uploaded.content_hash,
-            golem_common::model::agent::AgentFileContentHash(diff::Hash::new(blake3::hash(
-                &content
-            )))
-        );
-        assert!(
-            files
-                .exists(allowed.id, uploaded.content_hash)
-                .await
-                .unwrap()
-        );
-        assert!(!files.exists(other.id, uploaded.content_hash).await.unwrap());
-        let stored = files
-            .get(allowed.id, uploaded.content_hash)
-            .await
-            .unwrap()
-            .unwrap()
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap();
-        assert_eq!(stored.concat(), content);
     }
 }

@@ -28,7 +28,9 @@ use golem_common::model::component::{
 use golem_common::model::deployment::DeploymentVersion;
 use golem_common::model::diff::Hashable;
 use golem_common::model::environment::{Environment, EnvironmentCreation, EnvironmentName};
-use golem_common::model::environment_tool_grant::EnvironmentToolGrantCreation;
+use golem_common::model::environment_tool_grant::{
+    EnvironmentToolGrantCreation, EnvironmentToolGrantDeletion,
+};
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::tool::ToolName;
 use golem_common::model::tool_release::{ToolReleaseById, ToolReleaseReference};
@@ -396,7 +398,10 @@ bridge:
 
     consumer
         .client
-        .delete_automatic_environment_tool_grant(&grant.grant.id.0)
+        .delete_environment_tool_grant(
+            &grant.grant.id.0,
+            &EnvironmentToolGrantDeletion { automatic: true },
+        )
         .await?;
     let deployment = ctx.cli([flag::YES, cmd::DEPLOY]).await;
     assert!(deployment.success_or_dump());
@@ -461,6 +466,7 @@ environments:
                 release: ToolReleaseReference::ById(ToolReleaseById {
                     release_id: release.id,
                 }),
+                automatic: false,
             },
         )
         .await?;
@@ -468,29 +474,15 @@ environments:
     assert!(
         consumer
             .client
-            .delete_automatic_environment_tool_grant(&administrator_managed.grant.id.0)
+            .delete_environment_tool_grant(
+                &administrator_managed.grant.id.0,
+                &EnvironmentToolGrantDeletion { automatic: true },
+            )
             .await
             .is_err(),
         "automatic reconciliation must not delete an administrator-managed grant"
     );
-    let automatic_again = consumer
-        .client
-        .create_automatic_environment_tool_grant(
-            &consumer_environment.id.0,
-            &EnvironmentToolGrantCreation {
-                release: ToolReleaseReference::ById(ToolReleaseById {
-                    release_id: release.id,
-                }),
-            },
-        )
-        .await?;
-    assert!(automatic_again.grant.automatic);
-
-    consumer
-        .client
-        .delete_automatic_environment_tool_grant(&automatic_again.grant.id.0)
-        .await?;
-    let administrator_managed = consumer
+    let still_administrator_managed = consumer
         .client
         .create_environment_tool_grant(
             &consumer_environment.id.0,
@@ -498,13 +490,60 @@ environments:
                 release: ToolReleaseReference::ById(ToolReleaseById {
                     release_id: release.id,
                 }),
+                automatic: true,
+            },
+        )
+        .await?;
+    assert_eq!(
+        still_administrator_managed.grant.id,
+        administrator_managed.grant.id
+    );
+    assert!(
+        !still_administrator_managed.grant.automatic,
+        "automatic reconciliation must not adopt an active administrator-managed grant"
+    );
+
+    assert!(
+        consumer
+            .client
+            .delete_environment_tool_grant(
+                &still_administrator_managed.grant.id.0,
+                &EnvironmentToolGrantDeletion { automatic: true },
+            )
+            .await
+            .is_err(),
+        "automatic reconciliation must still be unable to delete the pinned administrator-managed grant"
+    );
+    consumer
+        .client
+        .delete_environment_tool_grant(
+            &administrator_managed.grant.id.0,
+            &EnvironmentToolGrantDeletion { automatic: false },
+        )
+        .await?;
+    let restored_automatic = consumer
+        .client
+        .create_environment_tool_grant(
+            &consumer_environment.id.0,
+            &EnvironmentToolGrantCreation {
+                release: ToolReleaseReference::ById(ToolReleaseById {
+                    release_id: release.id,
+                }),
+                automatic: true,
             },
         )
         .await?;
     assert!(
-        !administrator_managed.grant.automatic,
-        "a grant created through the administrator-managed endpoint must not remain automatic"
+        restored_automatic.grant.automatic,
+        "automatic reconciliation must be able to restore an administrator-deleted grant as automatic"
     );
+    consumer
+        .client
+        .delete_environment_tool_grant(
+            &restored_automatic.grant.id.0,
+            &EnvironmentToolGrantDeletion { automatic: true },
+        )
+        .await?;
 
     Ok(())
 }

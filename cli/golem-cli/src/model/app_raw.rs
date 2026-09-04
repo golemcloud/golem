@@ -515,7 +515,7 @@ pub struct ComponentDependencies {
 #[serde(untagged)]
 pub enum ComponentDependencyReference {
     Shortcut(String),
-    LocalAlias(ComponentDependencyReferenceStruct),
+    Structured(ComponentDependencyReferenceStruct),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

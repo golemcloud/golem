@@ -15,7 +15,6 @@
 use super::{BTreeSetDiff, HttpApiDeployment, McpDeployment};
 use crate::model::account::{AccountEmail, AccountId};
 use crate::model::agent::AgentTypeName;
-use crate::model::component::{ComponentId, ComponentRevision};
 use crate::model::diff::DiffError;
 use crate::model::diff::component::Component;
 use crate::model::diff::hash::{Hash, HashOf, Hashable, hash_from_serialized_value};
@@ -120,8 +119,8 @@ impl Diffable for RemoteToolDeployment {
 pub fn remote_tool_deployments(
     registered_tools: impl IntoIterator<Item = RegisteredTool>,
     bindings: impl IntoIterator<Item = CompiledToolBinding>,
-    local_component_revisions: &BTreeSet<(ComponentId, ComponentRevision)>,
-) -> BTreeMap<String, HashOf<RemoteToolDeployment>> {
+    published_tools: &BTreeSet<String>,
+) -> Result<BTreeMap<String, HashOf<RemoteToolDeployment>>, DiffError> {
     let mut bindings_by_tool =
         BTreeMap::<ToolName, BTreeMap<AgentTypeName, EffectiveToolBinding>>::new();
     for binding in bindings {
@@ -142,21 +141,37 @@ pub fn remote_tool_deployments(
     registered_tools
         .into_iter()
         .filter_map(|tool| {
-            let is_local = match &tool.source {
-                ToolSource::Component {
-                    component_id,
-                    component_revision,
-                    ..
-                } => local_component_revisions.contains(&(*component_id, *component_revision)),
-                ToolSource::Host { .. } => false,
+            let name = match tool.definition.name() {
+                Some(name) => match ToolName::try_from(name) {
+                    Ok(name) => name,
+                    Err(reason) => {
+                        return Some(Err(DiffError::RemoteToolIdentityInvariantViolation {
+                            reason,
+                        }));
+                    }
+                },
+                None => {
+                    return Some(Err(DiffError::RemoteToolIdentityInvariantViolation {
+                        reason: "registered tool definition has no root name".to_string(),
+                    }));
+                }
             };
-            if is_local {
-                return None;
+            if published_tools.contains(name.as_str()) {
+                return tool.release_id.is_none().then(|| {
+                    Err(DiffError::RemoteToolIdentityInvariantViolation {
+                        reason: format!("published tool {name} has no release id"),
+                    })
+                });
             }
-            let release_id = tool.release_id?;
-            let name = ToolName::try_from(tool.definition.name()?).ok()?;
+            let Some(release_id) = tool.release_id else {
+                return matches!(tool.source, ToolSource::Host { .. }).then(|| {
+                    Err(DiffError::RemoteToolIdentityInvariantViolation {
+                        reason: format!("non-local tool {name} has no release id"),
+                    })
+                });
+            };
             let bindings = bindings_by_tool.remove(&name).unwrap_or_default();
-            Some((
+            Some(Ok((
                 name.to_string(),
                 RemoteToolDeployment {
                     release_id,
@@ -170,7 +185,7 @@ pub fn remote_tool_deployments(
                     bindings,
                 }
                 .into(),
-            ))
+            )))
         })
         .collect()
 }
@@ -256,16 +271,20 @@ impl Hashable for Deployment {
 
 #[cfg(test)]
 mod tests {
-    use super::{Deployment, EffectiveToolBinding, RemoteToolDeployment};
+    use super::{Deployment, EffectiveToolBinding, RemoteToolDeployment, remote_tool_deployments};
     use crate::model::account::{AccountEmail, AccountId};
     use crate::model::agent::AgentTypeName;
     use crate::model::component::{ComponentId, ComponentName, ComponentRevision};
+    use crate::model::deployment::DeploymentRevision;
     use crate::model::diff::{Hash, Hashable};
     use crate::model::json::NormalizedJsonValue;
     use crate::model::tool::{
-        HostToolId, SecretKeyScope, ToolFilesystemAccess, ToolProvisionConfig, ToolSource,
+        HostToolId, RegisteredTool, SecretKeyScope, ToolFilesystemAccess, ToolProvisionConfig,
+        ToolSource,
     };
     use crate::model::tool_release::ToolReleaseId;
+    use crate::schema::SchemaGraph;
+    use crate::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
     use std::collections::{BTreeMap, BTreeSet};
     use test_r::test;
 
@@ -299,6 +318,105 @@ mod tests {
         }
         .hash()
         .unwrap()
+    }
+
+    fn registered_tool(
+        name: &str,
+        source: ToolSource,
+        release_id: Option<ToolReleaseId>,
+    ) -> RegisteredTool {
+        RegisteredTool {
+            deployment_revision: DeploymentRevision::INITIAL,
+            release_id,
+            definition: Tool {
+                version: "1.0.0".to_string(),
+                commands: CommandTree {
+                    nodes: vec![CommandNode {
+                        name: name.to_string(),
+                        aliases: Vec::new(),
+                        doc: Doc::default(),
+                        globals: Globals::default(),
+                        subcommands: Vec::new(),
+                        body: None,
+                    }],
+                },
+                schema: SchemaGraph::empty(),
+            },
+            provision: ToolProvisionConfig::default(),
+            source,
+            owner_account_id: AccountId::new(),
+            owner_account_email: AccountEmail::new("owner@example.com"),
+            metadata_version: "0.1.0".to_string(),
+            metadata_digest: Hash::new(blake3::hash(name.as_bytes())),
+        }
+    }
+
+    #[test]
+    fn remote_tool_classification_uses_release_and_publication_identity() {
+        let local = registered_tool(
+            "local",
+            ToolSource::Component {
+                component_id: ComponentId::new(),
+                component_revision: ComponentRevision::INITIAL,
+                component_name: ComponentName("local-component".to_string()),
+            },
+            None,
+        );
+        let published_release_id = ToolReleaseId::new();
+        let published = registered_tool(
+            "published",
+            ToolSource::Component {
+                component_id: ComponentId::new(),
+                component_revision: ComponentRevision::INITIAL,
+                component_name: ComponentName("publisher".to_string()),
+            },
+            Some(published_release_id),
+        );
+        let remote_release_id = ToolReleaseId::new();
+        let remote = registered_tool(
+            "remote",
+            ToolSource::Host {
+                host_tool_id: HostToolId::try_from("remote-host".to_string()).unwrap(),
+                implementation_version: "1".to_string(),
+            },
+            Some(remote_release_id),
+        );
+
+        let classified = remote_tool_deployments(
+            [local, published, remote],
+            Vec::new(),
+            &BTreeSet::from(["published".to_string()]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            classified.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["remote"]
+        );
+        assert_eq!(
+            classified["remote"].as_value().unwrap().release_id,
+            remote_release_id
+        );
+    }
+
+    #[test]
+    fn remote_host_tool_without_release_identity_is_rejected() {
+        let tool = registered_tool(
+            "remote",
+            ToolSource::Host {
+                host_tool_id: HostToolId::try_from("remote-host".to_string()).unwrap(),
+                implementation_version: "1".to_string(),
+            },
+            None,
+        );
+
+        let error = remote_tool_deployments([tool], Vec::new(), &BTreeSet::new()).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("non-local tool remote has no release id")
+        );
     }
 
     #[test]

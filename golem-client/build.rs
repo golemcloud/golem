@@ -262,6 +262,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::environment_tool_grant::EnvironmentToolGrantCreation",
             ),
             (
+                "EnvironmentToolGrantDeletion",
+                "golem_common::model::environment_tool_grant::EnvironmentToolGrantDeletion",
+            ),
+            (
                 "EnvironmentToolGrantLifecycle",
                 "golem_common::model::environment_tool_grant::EnvironmentToolGrantLifecycle",
             ),

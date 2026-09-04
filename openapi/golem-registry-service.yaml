@@ -3857,7 +3857,7 @@ paths:
       - Cookie: []
       - Token: []
       operationId: delete_environment_plugin_grant
-  /v1/envs/{environment_id}/tool-grants:
+  /v1/envs/{environment_id}/tools:
     post:
       tags:
       - RegistryService
@@ -4000,82 +4000,7 @@ paths:
       - Cookie: []
       - Token: []
       operationId: list_environment_tool_grants
-  /v1/envs/{environment_id}/tool-grants/automatic:
-    post:
-      tags:
-      - RegistryService
-      - EnvironmentToolGrants
-      - Environment
-      summary: Create an automatically managed grant required by an application deployment
-      parameters:
-      - name: environment_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/EnvironmentToolGrantCreation'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/EnvironmentToolGrantWithDetails'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: create_automatic_environment_tool_grant
-  /v1/envs/{environment_id}/tool-grants/automatic/validate:
+  /v1/envs/{environment_id}/tools/validate:
     post:
       tags:
       - RegistryService
@@ -4145,11 +4070,12 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: validate_automatic_environment_tool_grant_reconciliation
-  /v1/environment-tool-grants/{grant_id}:
+      operationId: validate_environment_tool_grant_reconciliation
+  /v1/environment-tools/{grant_id}:
     get:
       tags:
       - RegistryService
+      - EnvironmentToolGrants
       - EnvironmentToolGrants
       summary: Get an active environment tool grant
       parameters:
@@ -4218,6 +4144,7 @@ paths:
       tags:
       - RegistryService
       - EnvironmentToolGrants
+      - EnvironmentToolGrants
       summary: Delete an environment tool grant
       parameters:
       - name: grant_id
@@ -4228,6 +4155,12 @@ paths:
         required: true
         deprecated: false
         explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/EnvironmentToolGrantDeletion'
+        required: true
       responses:
         '204':
           description: ''
@@ -4277,74 +4210,11 @@ paths:
       - Cookie: []
       - Token: []
       operationId: delete_environment_tool_grant
-  /v1/environment-tool-grants/{grant_id}/automatic:
-    delete:
-      tags:
-      - RegistryService
-      - EnvironmentToolGrants
-      summary: Delete an environment tool grant only if it is automatically managed
-      parameters:
-      - name: grant_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '204':
-          description: ''
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: delete_automatic_environment_tool_grant
-  /v1/environment-tool-grants/{grant_id}/restore:
+  /v1/environment-tools/{grant_id}/restore:
     post:
       tags:
       - RegistryService
+      - EnvironmentToolGrants
       - EnvironmentToolGrants
       summary: Restore a deleted environment tool grant
       parameters:
@@ -12583,9 +12453,20 @@ components:
       title: EnvironmentToolGrantCreation
       required:
       - release
+      - automatic
       properties:
         release:
           $ref: '#/components/schemas/ToolReleaseReference'
+        automatic:
+          type: boolean
+    EnvironmentToolGrantDeletion:
+      type: object
+      title: EnvironmentToolGrantDeletion
+      required:
+      - automatic
+      properties:
+        automatic:
+          type: boolean
     EnvironmentToolGrantLifecycle:
       type: string
       enum:

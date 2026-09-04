@@ -1188,7 +1188,7 @@ pub mod environment {
 
 pub mod tool {
     use clap::{ArgGroup, Args, Subcommand};
-    use golem_common::base_model::account::AccountId;
+    use golem_common::base_model::account::{AccountEmail, AccountId};
     use golem_common::base_model::environment_tool_grant::EnvironmentToolGrantId;
     use golem_common::base_model::tool::ToolName;
     use golem_common::base_model::tool_release::ToolReleaseId;
@@ -1196,8 +1196,10 @@ pub mod tool {
     #[derive(Debug, Subcommand)]
     pub enum ToolSubcommand {
         /// List tools in the selected environment's current deployment
+        #[command(after_help = crate::command_examples::TOOL_LIST)]
         List,
         /// Get a tool from the selected environment's current deployment
+        #[command(after_help = crate::command_examples::TOOL_GET)]
         Get {
             /// Deployed tool name
             tool_name: ToolName,
@@ -1217,20 +1219,25 @@ pub mod tool {
     #[derive(Debug, Subcommand)]
     pub enum ToolGrantSubcommand {
         /// Grant a published tool release to the selected environment
+        #[command(after_help = crate::command_examples::TOOL_GRANT_CREATE)]
         Create(ToolGrantCreateArgs),
         /// List active tool grants in the selected environment
+        #[command(after_help = crate::command_examples::TOOL_GRANT_LIST)]
         List,
         /// Get an active tool grant
+        #[command(after_help = crate::command_examples::TOOL_GRANT_GET)]
         Get {
             /// Environment tool grant ID
             grant_id: EnvironmentToolGrantId,
         },
         /// Delete a tool grant
+        #[command(after_help = crate::command_examples::TOOL_GRANT_DELETE)]
         Delete {
             /// Environment tool grant ID
             grant_id: EnvironmentToolGrantId,
         },
         /// Restore a deleted tool grant
+        #[command(after_help = crate::command_examples::TOOL_GRANT_RESTORE)]
         Restore {
             /// Environment tool grant ID
             grant_id: EnvironmentToolGrantId,
@@ -1245,7 +1252,7 @@ pub mod tool {
         pub release_id: Option<ToolReleaseId>,
         /// Publisher account email
         #[arg(long, requires_all = ["name", "version"])]
-        pub account: Option<String>,
+        pub account: Option<AccountEmail>,
         /// Published tool name
         #[arg(long, requires_all = ["account", "version"])]
         pub name: Option<ToolName>,
@@ -1257,22 +1264,26 @@ pub mod tool {
     #[derive(Debug, Subcommand)]
     pub enum ToolReleaseSubcommand {
         /// List tool releases owned by an account
+        #[command(after_help = crate::command_examples::TOOL_RELEASE_LIST)]
         List {
             /// Account ID; defaults to the authenticated account
             #[arg(long)]
             account_id: Option<AccountId>,
         },
         /// Get a tool release
+        #[command(after_help = crate::command_examples::TOOL_RELEASE_GET)]
         Get {
             /// Published tool release ID
             release_id: ToolReleaseId,
         },
         /// Make a release unavailable for new coordinate-based grants
+        #[command(after_help = crate::command_examples::TOOL_RELEASE_DE_PUBLISH)]
         DePublish {
             /// Published tool release ID
             release_id: ToolReleaseId,
         },
         /// Restore a de-published release
+        #[command(after_help = crate::command_examples::TOOL_RELEASE_RESTORE)]
         Restore {
             /// Published tool release ID
             release_id: ToolReleaseId,

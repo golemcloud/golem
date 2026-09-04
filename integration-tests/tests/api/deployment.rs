@@ -36,7 +36,7 @@ use golem_common::model::domain_registration::{Domain, DomainRegistrationCreatio
 use golem_common::model::environment::EnvironmentCurrentDeploymentView;
 use golem_common::model::environment::EnvironmentUpdate;
 use golem_common::model::environment_tool_grant::{
-    EnvironmentToolGrantCreation, EnvironmentToolGrantWithDetails,
+    EnvironmentToolGrantCreation, EnvironmentToolGrantDeletion, EnvironmentToolGrantWithDetails,
 };
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
@@ -1163,6 +1163,7 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
             &consumer_env.id.0,
             &EnvironmentToolGrantCreation {
                 release: release_v12_coordinates,
+                automatic: false,
             },
         )
         .await?;
@@ -1347,6 +1348,7 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
                 release: ToolReleaseReference::ById(ToolReleaseById {
                     release_id: release_v13.id,
                 }),
+                automatic: false,
             },
         )
         .await?;
@@ -1384,7 +1386,10 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
     assert_ne!(remote_v13_hash, remote_v12_hash);
 
     consumer_client
-        .delete_environment_tool_grant(&grant_v13.grant.id.0)
+        .delete_environment_tool_grant(
+            &grant_v13.grant.id.0,
+            &EnvironmentToolGrantDeletion { automatic: false },
+        )
         .await?;
     let revoked_agent = agent_id!("GolemHostApi", "remote-search-revoked");
     consumer

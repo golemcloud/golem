@@ -29,7 +29,7 @@ use crate::model::agent::action_result::{
     AgentDeleteAllView, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
 };
 use crate::model::app::BuildConfig;
-use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
+use crate::model::app::{ApplicationComponentSelectMode, ComponentDependency, DynamicHelpSections};
 use crate::model::app_raw;
 use crate::model::cascade::property::tool_bindings::ToolBindingState;
 use crate::model::component::{
@@ -923,16 +923,14 @@ impl ComponentCommandHandler {
                         continue;
                     }
                 };
-                if let Some(declaration) = app.tool_declarations().get(&name) {
-                    if declaration.value.release.is_some()
-                        || declaration
-                            .value
-                            .component
-                            .as_ref()
-                            .is_some_and(|selected| selected != component_name)
-                    {
-                        continue;
-                    }
+                if let Some(declaration) = app.tool_declarations().get(&name)
+                    && declaration
+                        .value
+                        .component
+                        .as_ref()
+                        .is_some_and(|selected| selected != component_name)
+                {
+                    continue;
                 }
                 if let Err(errors) = validate_tool(definition) {
                     issues.push(ToolValidationIssue::error(
@@ -1076,6 +1074,71 @@ impl ComponentCommandHandler {
             }
         }
 
+        let mut used_tools = BTreeSet::new();
+        for component_name in app.component_names() {
+            for dependency in &app.component(component_name).properties().dependencies {
+                if let ComponentDependency::Tool { tool_name, .. } = dependency {
+                    used_tools.insert(tool_name.clone());
+                }
+            }
+        }
+        used_tools.extend(
+            app.selected_published_tools()
+                .filter_map(|name| ToolName::try_from(name).ok()),
+        );
+        for agent_name in agent_components.keys() {
+            if let Some(agent) = resolved_agents.agent(agent_name) {
+                used_tools.extend(
+                    agent
+                        .tool_bindings()
+                        .keys()
+                        .filter_map(|name| ToolName::try_from(name.as_str()).ok()),
+                );
+            }
+        }
+        for (_, _, targets) in app.bridge_sdks().for_all_used_modes() {
+            let Some(tool_targets) = targets.tools else {
+                continue;
+            };
+            let matchers = tool_targets.clone().into_set();
+            if matchers.contains("*") {
+                used_tools.extend(app.tool_declarations().keys().cloned());
+                break;
+            }
+            for matcher in matchers {
+                if app
+                    .component_names()
+                    .any(|component_name| component_name.as_str() == matcher)
+                {
+                    used_tools.extend(
+                        implementations
+                            .iter()
+                            .filter(|(_, sources)| {
+                                sources.iter().any(|source| {
+                                    source.implementation.local_component_name().is_some_and(
+                                        |component_name| component_name.as_str() == matcher,
+                                    )
+                                })
+                            })
+                            .map(|(tool_name, _)| tool_name.clone()),
+                    );
+                } else if let Ok(tool_name) = ToolName::try_from(matcher) {
+                    used_tools.insert(tool_name);
+                }
+            }
+        }
+        for (tool_name, declaration) in app.tool_declarations() {
+            if !used_tools.contains(tool_name) {
+                issues.push(ToolValidationIssue::warning(
+                    ToolValidationPhase::BindingReferences,
+                    ToolValidationCode::UnusedDeclaration,
+                    ToolEntityPath::tool(tool_name, "tools"),
+                    Some(declaration.source.clone()),
+                    "Tool declaration is not referenced by a component dependency, agent binding, bridge target, or publication",
+                ));
+            }
+        }
+
         let local_owner = &environment.server_environment.owner_account_email;
         let mut configs_by_component =
             BTreeMap::<ComponentName, BTreeMap<ToolName, ToolManifestDeploymentConfig>>::new();
@@ -1166,22 +1229,19 @@ impl ComponentCommandHandler {
                     ));
                 }
             }
-            let materialization_component = source
-                .implementation
-                .local_component_name()
-                .cloned()
-                .unwrap_or_else(|| ComponentName(format!("remote-release-{tool_name}")));
             let config = resolve_json_value(
-                &materialization_component,
+                "tool",
+                tool_name.as_str(),
                 "tool config",
                 provision
                     .properties
                     .config
                     .unwrap_or_else(|| serde_json::json!({})),
             );
-            let env = resolve_env_vars(&materialization_component, &provision.properties.env);
+            let env = resolve_env_vars("tool", tool_name.as_str(), &provision.properties.env);
             let plugins = resolve_plugin_parameters(
-                &materialization_component,
+                "tool",
+                tool_name.as_str(),
                 &provision.properties.plugins,
             );
             let (config, env, plugins) = match (config, env, plugins, files_valid) {
@@ -1446,7 +1506,11 @@ impl ComponentCommandHandler {
             agent_type_configs.insert(
                 agent_type.type_name.clone(),
                 AgentTypeManifestProvisionConfig {
-                    env: resolve_env_vars(component_name, resolved_agent.env())?,
+                    env: resolve_env_vars(
+                        "component",
+                        component_name.as_str(),
+                        resolved_agent.env(),
+                    )?,
                     config: resolve_config_values(
                         component_name,
                         &agent_type.type_name,
@@ -1464,7 +1528,11 @@ impl ComponentCommandHandler {
                         })?,
                     files_source: component.source().to_path_buf(),
                     files: resolved_agent.files().to_vec(),
-                    plugins: resolve_plugin_parameters(component_name, resolved_agent.plugins())?,
+                    plugins: resolve_plugin_parameters(
+                        "component",
+                        component_name.as_str(),
+                        resolved_agent.plugins(),
+                    )?,
                 },
             );
         }
@@ -2259,7 +2327,8 @@ fn resolve_secret_scope(
 }
 
 fn resolve_json_value(
-    component_name: &ComponentName,
+    subject_kind: &'static str,
+    subject_name: &str,
     value_kind: &str,
     value: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
@@ -2267,14 +2336,15 @@ fn resolve_json_value(
         .render_json_value(&value)
         .with_context(|| {
             format!(
-                "Failed to prepare {value_kind} for component {}",
-                component_name.as_str().log_color_highlight()
+                "Failed to prepare {value_kind} for {subject_kind} {}",
+                subject_name.log_color_highlight()
             )
         })
 }
 
 fn resolve_env_vars(
-    component_name: &ComponentName,
+    subject_kind: &'static str,
+    subject_name: &str,
     env: &BTreeMap<String, String>,
 ) -> anyhow::Result<BTreeMap<String, String>> {
     let renderer = crate::command_handler::template::EnvVarRenderer::new();
@@ -2282,7 +2352,7 @@ fn resolve_env_vars(
     let mut resolved_env = BTreeMap::new();
     let mut validation = ValidationBuilder::new();
     validation.with_context(
-        vec![("component", component_name.to_string())],
+        vec![(subject_kind, subject_name.to_string())],
         |validation| {
             for key in env.keys().sorted() {
                 let value = env.get(key).unwrap();
@@ -2329,8 +2399,8 @@ fn resolve_env_vars(
 
     validated_to_anyhow(
         &format!(
-            "Failed to prepare environment variables for component: {}",
-            component_name.as_str().log_color_highlight()
+            "Failed to prepare environment variables for {subject_kind}: {}",
+            subject_name.log_color_highlight()
         ),
         validation.build(resolved_env),
         None,
@@ -2338,7 +2408,8 @@ fn resolve_env_vars(
 }
 
 fn resolve_plugin_parameters(
-    component_name: &ComponentName,
+    subject_kind: &'static str,
+    subject_name: &str,
     plugins: &[app_raw::PluginInstallation],
 ) -> anyhow::Result<Vec<app_raw::PluginInstallation>> {
     let renderer = crate::command_handler::template::EnvVarRenderer::new();
@@ -2346,7 +2417,7 @@ fn resolve_plugin_parameters(
     let mut resolved_plugins = Vec::with_capacity(plugins.len());
     let mut validation = ValidationBuilder::new();
     validation.with_context(
-        vec![("component", component_name.to_string())],
+        vec![(subject_kind, subject_name.to_string())],
         |validation| {
             for plugin in plugins {
                 validation.with_context(
@@ -2412,8 +2483,8 @@ fn resolve_plugin_parameters(
 
     validated_to_anyhow(
         &format!(
-            "Failed to prepare plugin parameters for component: {}",
-            component_name.as_str().log_color_highlight()
+            "Failed to prepare plugin parameters for {subject_kind}: {}",
+            subject_name.log_color_highlight()
         ),
         validation.build(resolved_plugins),
         None,

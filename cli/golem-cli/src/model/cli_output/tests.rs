@@ -4152,7 +4152,7 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
                 (
                     crate::model::cascade::property::vec::VecMergeMode::Append,
                     vec![
-                        crate::model::app_raw::ComponentDependencyReference::LocalAlias(
+                        crate::model::app_raw::ComponentDependencyReference::Structured(
                             crate::model::app_raw::ComponentDependencyReferenceStruct {
                                 component: "app:provider".to_string(),
                                 name: "GeneratedAgent".to_string(),

@@ -147,8 +147,8 @@ impl<C: Serialize> TemplateRender<C> for app_raw::ComponentDependencyReference {
             app_raw::ComponentDependencyReference::Shortcut(shortcut) => Ok(
                 app_raw::ComponentDependencyReference::Shortcut(shortcut.render(env, ctx)?),
             ),
-            app_raw::ComponentDependencyReference::LocalAlias(structured) => Ok(
-                app_raw::ComponentDependencyReference::LocalAlias(structured.render(env, ctx)?),
+            app_raw::ComponentDependencyReference::Structured(structured) => Ok(
+                app_raw::ComponentDependencyReference::Structured(structured.render(env, ctx)?),
             ),
         }
     }

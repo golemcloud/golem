@@ -932,12 +932,14 @@ impl From<EnvironmentToolGrantError> for ApiError {
             | EnvironmentToolGrantError::ReferencedToolReleaseNotFound => {
                 Self::not_found(api::error_code::TOOL_NOT_FOUND, error)
             }
-            EnvironmentToolGrantError::GrantAlreadyExists
-            | EnvironmentToolGrantError::GrantNotDeleted(_)
-            | EnvironmentToolGrantError::AdministratorManagedToolGrant(_) => Self::conflict(
+            EnvironmentToolGrantError::GrantAlreadyExists => Self::conflict(
                 api::error_code::ENVIRONMENT_TOOL_GRANT_ALREADY_EXISTS,
                 error,
             ),
+            EnvironmentToolGrantError::GrantNotDeleted(_)
+            | EnvironmentToolGrantError::AdministratorManagedToolGrant(_) => {
+                Self::conflict(api::error_code::ENVIRONMENT_TOOL_GRANT_CONFLICT, error)
+            }
             EnvironmentToolGrantError::ConcurrentModification => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
             }

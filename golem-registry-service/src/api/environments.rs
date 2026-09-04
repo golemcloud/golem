@@ -14,6 +14,7 @@
 
 use super::ApiResult;
 use crate::services::auth::AuthService;
+use crate::services::component::ComponentWriteService;
 use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::EnvironmentService;
 use golem_common::model::Page;
@@ -43,6 +44,7 @@ pub struct EnvironmentsApi {
     environment_service: Arc<EnvironmentService>,
     deployment_service: Arc<DeploymentService>,
     deployment_write_service: Arc<DeploymentWriteService>,
+    component_write_service: Arc<ComponentWriteService>,
     auth_service: Arc<AuthService>,
 }
 
@@ -56,12 +58,14 @@ impl EnvironmentsApi {
         environment_service: Arc<EnvironmentService>,
         deployment_service: Arc<DeploymentService>,
         deployment_write_service: Arc<DeploymentWriteService>,
+        component_write_service: Arc<ComponentWriteService>,
         auth_service: Arc<AuthService>,
     ) -> Self {
         Self {
             environment_service,
             deployment_service,
             deployment_write_service,
+            component_write_service,
             auth_service,
         }
     }
@@ -86,7 +90,7 @@ impl EnvironmentsApi {
         let result = async {
             let file = Arc::new(payload.file.into_file());
             Ok(Json(
-                self.deployment_write_service
+                self.component_write_service
                     .upload_initial_agent_file(environment_id.0, file, &auth)
                     .await?,
             ))

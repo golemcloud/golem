@@ -32,6 +32,7 @@ use golem_common::model::card::{
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::{AgentTypeProvisionConfig, ComponentMetadata};
 use golem_common::model::deployment::{DeploymentRevision, DeploymentSummary};
+use golem_common::model::diff::{self, Hashable};
 use golem_common::model::environment::{
     EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentUpdate,
 };
@@ -4951,28 +4952,32 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
             .await
             .unwrap()
     );
-    assert!(matches!(
-        deps.environment_tool_grant_repo
-            .restore(
-                ordinary_grant_id,
-                ordinary_grant.environment_id,
-                ordinary_grant.tool_release_id,
-                actor.0,
-                true,
-                Some(true),
-            )
-            .await,
-        Err(EnvironmentToolGrantRepoError::ConcurrentModification)
-    ));
-    let administrator_managed_tombstone = deps
+    let automatically_restored_administrator_tombstone = deps
         .environment_tool_grant_repo
-        .get_by_id(ordinary_grant_id, true)
+        .restore(
+            ordinary_grant_id,
+            ordinary_grant.environment_id,
+            ordinary_grant.tool_release_id,
+            actor.0,
+            true,
+            Some(true),
+        )
         .await
         .unwrap()
         .unwrap();
-    assert!(!administrator_managed_tombstone.automatic);
-    assert!(!administrator_managed_tombstone.follow_coordinates);
-    assert!(administrator_managed_tombstone.grant_deleted_at.is_some());
+    assert!(automatically_restored_administrator_tombstone.automatic);
+    assert!(automatically_restored_administrator_tombstone.follow_coordinates);
+    assert!(
+        automatically_restored_administrator_tombstone
+            .grant_deleted_at
+            .is_none()
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .delete(ordinary_grant_id, actor.0, false)
+            .await
+            .unwrap()
+    );
     let restored_administrator_managed_grant = deps
         .environment_tool_grant_repo
         .restore(
@@ -4987,9 +4992,9 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
         .unwrap()
         .unwrap();
     assert!(!restored_administrator_managed_grant.automatic);
-    assert!(!restored_administrator_managed_grant.follow_coordinates);
+    assert!(restored_administrator_managed_grant.follow_coordinates);
 
-    let protected_grant = EnvironmentToolGrantRecord::creation(
+    let mut protected_grant = EnvironmentToolGrantRecord::creation(
         EnvironmentId(protected_environment.revision.environment_id),
         ToolReleaseId(host_release_id),
         true,
@@ -4998,10 +5003,31 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
         actor,
     );
     let protected_grant_id = protected_grant.environment_tool_grant_id;
+    protected_grant.audit = protected_grant.audit.into_deletion(actor.0);
     deps.environment_tool_grant_repo
         .create(protected_grant)
         .await
         .unwrap();
+    assert!(
+        deps.environment_tool_grant_repo
+            .get_by_id(protected_grant_id, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let restored_protected_grant = deps
+        .environment_tool_grant_repo
+        .restore_protected(
+            protected_grant_id,
+            protected_environment.revision.environment_id,
+            host_release_id,
+            AccountId::SYSTEM.0,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(restored_protected_grant.protected);
+    assert!(restored_protected_grant.grant_deleted_at.is_none());
     assert!(
         !deps
             .environment_tool_grant_repo
@@ -5205,7 +5231,13 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         let registered_tools = registered_tools
             .into_iter()
             .map(|tool| {
-                DeploymentRegisteredToolRecord::from_model(EnvironmentId(environment_id), tool)
+                let published = tool.definition.name() == published_tool;
+                DeploymentRegisteredToolRecord::from_model(
+                    EnvironmentId(environment_id),
+                    tool,
+                    published,
+                    None,
+                )
             })
             .collect();
 
@@ -5390,7 +5422,8 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .get_staged_identity(environment_id)
         .await
         .unwrap()
-        .to_diffable();
+        .to_diffable()
+        .unwrap();
     assert_eq!(
         staged_after_component_update.published_tools,
         ["zeta".to_string()].into_iter().collect()
@@ -5514,9 +5547,19 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         None,
         true,
     );
+    let remote_hash = diff::remote_tool_deployments(
+        [remote_registered_tool.clone()],
+        [remote_binding.clone()],
+        &BTreeSet::new(),
+    )
+    .unwrap()["remote-search"]
+        .hash()
+        .unwrap();
     remote_deployment.registered_tools = vec![DeploymentRegisteredToolRecord::from_model(
         EnvironmentId(environment_id),
         remote_registered_tool.clone(),
+        false,
+        Some(remote_hash),
     )];
     remote_deployment.agent_tool_bindings = vec![DeploymentAgentToolBindingRecord::from_model(
         EnvironmentId(environment_id),
@@ -5563,7 +5606,8 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .get_staged_identity(environment_id)
         .await
         .unwrap()
-        .to_diffable();
+        .to_diffable()
+        .unwrap();
     assert_eq!(staged.remote_tools.len(), 1);
     assert!(staged.published_tools.is_empty());
 

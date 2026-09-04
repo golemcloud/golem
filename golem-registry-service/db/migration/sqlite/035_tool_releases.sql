@@ -101,7 +101,6 @@ CREATE TABLE environment_tool_grants
     protected                  BOOLEAN   NOT NULL,
     automatic                  BOOLEAN   NOT NULL,
     follow_coordinates         BOOLEAN   NOT NULL,
-    lifecycle                  SMALLINT  NOT NULL,
     created_at                 TIMESTAMP NOT NULL,
     created_by                 UUID      NOT NULL,
     state_changed_at           TIMESTAMP NOT NULL,
@@ -115,12 +114,10 @@ CREATE TABLE environment_tool_grants
         FOREIGN KEY (environment_id) REFERENCES environments,
     CONSTRAINT environment_tool_grants_release_fk
         FOREIGN KEY (tool_release_id) REFERENCES tool_releases,
-    CONSTRAINT environment_tool_grants_lifecycle_check
-        CHECK (lifecycle IN (0, 1)),
     CONSTRAINT environment_tool_grants_deletion_state_check
         CHECK (
-            (lifecycle = 0 AND deleted_at IS NULL AND deleted_by IS NULL)
-            OR (lifecycle = 1 AND deleted_at IS NOT NULL AND deleted_by IS NOT NULL)
+            (deleted_at IS NULL AND deleted_by IS NULL)
+            OR (deleted_at IS NOT NULL AND deleted_by IS NOT NULL)
         )
 );
 
@@ -173,6 +170,8 @@ CREATE TABLE deployment_registered_tools_v2
     tool_provision_config  BLOB     NOT NULL,
     metadata_version       TEXT     NOT NULL,
     metadata_digest        BLOB,
+    published              BOOLEAN  NOT NULL,
+    deployment_hash        BLOB,
 
     CONSTRAINT deployment_registered_tools_v2_pk
         PRIMARY KEY (environment_id, deployment_revision_id, tool_name),
@@ -202,6 +201,12 @@ CREATE TABLE deployment_registered_tools_v2
                 AND component_name IS NULL
                 AND host_tool_id IS NOT NULL
                 AND implementation_version IS NOT NULL)
+        ),
+    CONSTRAINT deployment_registered_tools_v2_identity_check
+        CHECK (
+            (tool_release_id IS NULL AND NOT published AND deployment_hash IS NULL)
+            OR (tool_release_id IS NOT NULL AND published AND deployment_hash IS NULL)
+            OR (tool_release_id IS NOT NULL AND NOT published AND deployment_hash IS NOT NULL)
         )
 );
 
@@ -211,7 +216,8 @@ INSERT INTO deployment_registered_tools_v2 (
     component_id, component_revision_id, component_name,
     host_tool_id, implementation_version,
     owner_account_id, owner_account_email,
-    tool_definition, tool_provision_config, metadata_version, metadata_digest
+    tool_definition, tool_provision_config, metadata_version, metadata_digest,
+    published, deployment_hash
 )
 SELECT registered.environment_id,
        registered.deployment_revision_id,
@@ -228,6 +234,8 @@ SELECT registered.environment_id,
        registered.tool_definition,
        registered.tool_provision_config,
        registered.metadata_version,
+       NULL,
+       FALSE,
        NULL
 FROM deployment_registered_tools registered
 JOIN component_revisions

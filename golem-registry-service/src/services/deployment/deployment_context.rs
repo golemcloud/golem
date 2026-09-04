@@ -60,7 +60,7 @@ use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
 use golem_service_base::model::retry_policy::StoredRetryPolicy;
 use heck::ToKebabCase;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map};
+use std::collections::{BTreeMap, HashMap, HashSet, hash_map};
 
 #[derive(Debug)]
 pub struct CompiledTools {
@@ -135,11 +135,7 @@ impl DeploymentContext {
         compiled_tools: &CompiledTools,
         published_tools: &[ToolName],
     ) -> Result<diff::Hash, diff::DiffError> {
-        let local_component_revisions = self
-            .components
-            .values()
-            .map(|component| (component.id, component.revision))
-            .collect::<BTreeSet<_>>();
+        let published_tools = published_tools.iter().map(ToString::to_string).collect();
         let diffable = diff::Deployment {
             components: self
                 .components
@@ -159,9 +155,9 @@ impl DeploymentContext {
             remote_tools: diff::remote_tool_deployments(
                 compiled_tools.registered_tools.clone(),
                 compiled_tools.agent_tool_bindings.clone(),
-                &local_component_revisions,
-            ),
-            published_tools: published_tools.iter().map(ToString::to_string).collect(),
+                &published_tools,
+            )?,
+            published_tools,
         };
         diffable.hash()
     }

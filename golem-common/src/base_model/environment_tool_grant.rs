@@ -50,6 +50,11 @@ declare_structs! {
 
     pub struct EnvironmentToolGrantCreation {
         pub release: ToolReleaseReference,
+        pub automatic: bool,
+    }
+
+    pub struct EnvironmentToolGrantDeletion {
+        pub automatic: bool,
     }
 
     pub struct EnvironmentToolGrantReconciliation {

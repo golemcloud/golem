@@ -25,7 +25,7 @@ use super::model::deployment::{
     DeploymentComponentRevisionRecord, DeploymentHttpApiDeploymentRevisionRecord,
     DeploymentMcpDeploymentRevisionRecord, DeploymentRegisteredAgentTypeRecord,
     DeploymentRegisteredAgentTypeScopedRecord, DeploymentRegisteredToolRecord,
-    ToolDeploymentStateRecord,
+    DeploymentToolIdentityRecord, ToolDeploymentStateRecord,
 };
 use super::model::resource_definition::ResourceDefinitionRepoError;
 use super::model::retry_policy::RetryPolicyRepoError;
@@ -54,7 +54,7 @@ use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, Poo
 use golem_service_base::repo::{BindingsStack, Blob, RepoError, RepoResult, ResultExt};
 use indoc::{formatdoc, indoc};
 use sqlx::{Database, Row};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use tap::Pipe;
 use tracing::{Instrument, Span, info_span};
@@ -767,45 +767,31 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
     }
 
     async fn get_staged_identity(&self, environment_id: Uuid) -> RepoResult<DeploymentIdentity> {
-        let tool_state = match self
-            .get_current_tool_deployment_state(environment_id)
-            .await?
-        {
-            Some(tool_state) => {
-                let local_component_revisions = self
-                    .get_deployed_components(environment_id, tool_state.deployment_revision_id)
-                    .await?
-                    .into_iter()
-                    .map(|component| {
-                        Ok((
-                            golem_common::model::component::ComponentId(component.component_id),
-                            component.revision_id.try_into()?,
-                        ))
-                    })
-                    .collect::<Result<_, anyhow::Error>>()
-                    .map_err(|err| RepoError::InternalError(anyhow::anyhow!(err)))?;
-                let tool_state =
-                    golem_common::model::tool::ToolDeploymentState::try_from(tool_state)
-                        .map_err(|err| RepoError::InternalError(anyhow::anyhow!(err)))?;
-                Some((tool_state, local_component_revisions))
-            }
-            None => None,
-        };
+        let tools = self
+            .with_ro("get_current_deployment_tool_identities")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT r.tool_name, r.tool_release_id, r.published, r.deployment_hash
+                    FROM current_deployments cd
+                    JOIN current_deployment_revisions cdr
+                        ON cdr.environment_id = cd.environment_id
+                        AND cdr.revision_id = cd.current_revision_id
+                    JOIN deployment_registered_tools r
+                        ON r.environment_id = cdr.environment_id
+                        AND r.deployment_revision_id = cdr.deployment_revision_id
+                    WHERE cd.environment_id = $1
+                    ORDER BY r.tool_name
+                "#})
+                .bind(environment_id),
+            )
+            .await?;
         // TODO: maybe add helper for readonly tx helpers OR create common abstraction on top
         //      of transactions and pool, so both cna be used for selects
         let mut tx = self.with_ro("get_staged_identity").begin().await?;
         match Self::get_staged_deployment(&mut tx, environment_id).await {
             Ok(mut result) => {
                 tx.commit().await?;
-                if let Some((tool_state, local_component_revisions)) = tool_state {
-                    result.registered_tools = tool_state.registered_tools.into_values().collect();
-                    result.agent_tool_bindings = tool_state
-                        .agent_tool_bindings
-                        .into_values()
-                        .flat_map(BTreeMap::into_values)
-                        .collect();
-                    result.local_tool_component_revisions = local_component_revisions;
-                }
+                result.tools = tools;
                 Ok(result)
             }
             Err(err) => {
@@ -829,25 +815,22 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         };
 
         let revision_id = deployment_revision.revision_id;
-        let tool_state_record = self
-            .get_tool_deployment_state(environment_id, revision_id)
-            .await?;
-        let tool_state =
-            golem_common::model::tool::ToolDeploymentState::try_from(tool_state_record)
-                .map_err(|err| RepoError::InternalError(anyhow::anyhow!(err)))?;
         let components = self
             .get_deployed_components(environment_id, revision_id)
             .await?;
-        let local_tool_component_revisions = components
-            .iter()
-            .map(|component| {
-                Ok((
-                    golem_common::model::component::ComponentId(component.component_id),
-                    component.revision_id.try_into()?,
-                ))
-            })
-            .collect::<Result<_, anyhow::Error>>()
-            .map_err(|err| RepoError::InternalError(anyhow::anyhow!(err)))?;
+        let tools: Vec<DeploymentToolIdentityRecord> = self
+            .with_ro("get_deployment_tool_identities")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT tool_name, tool_release_id, published, deployment_hash
+                    FROM deployment_registered_tools
+                    WHERE environment_id = $1 AND deployment_revision_id = $2
+                    ORDER BY tool_name
+                "#})
+                .bind(environment_id)
+                .bind(revision_id),
+            )
+            .await?;
         Ok(Some(DeployedDeploymentIdentity {
             deployment_revision,
             identity: DeploymentIdentity {
@@ -858,13 +841,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 mcp_deployments: self
                     .get_deployed_mcp_deployments(environment_id, revision_id)
                     .await?,
-                registered_tools: tool_state.registered_tools.into_values().collect(),
-                agent_tool_bindings: tool_state
-                    .agent_tool_bindings
-                    .into_values()
-                    .flat_map(|bindings| bindings.into_values())
-                    .collect(),
-                local_tool_component_revisions,
+                tools,
             },
         }))
     }
@@ -1401,7 +1378,9 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.tool_definition,
                         r.tool_provision_config,
                         r.metadata_version,
-                        r.metadata_digest
+                        r.metadata_digest,
+                        r.published,
+                        r.deployment_hash
                     FROM deployment_registered_tools r
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
                         AND r.tool_name = $3
@@ -1437,7 +1416,9 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.tool_definition,
                         r.tool_provision_config,
                         r.metadata_version,
-                        r.metadata_digest
+                        r.metadata_digest,
+                        r.published,
+                        r.deployment_hash
                     FROM deployment_registered_tools r
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
                     ORDER BY r.tool_name
@@ -2021,9 +2002,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             components: Self::get_staged_components(tx, environment_id).await?,
             http_api_deployments: Self::get_staged_http_api_deployments(tx, environment_id).await?,
             mcp_deployments: Self::get_staged_mcp_deployments(tx, environment_id).await?,
-            registered_tools: Vec::new(),
-            agent_tool_bindings: Vec::new(),
-            local_tool_component_revisions: BTreeSet::new(),
+            tools: Vec::new(),
         })
     }
 
@@ -2224,8 +2203,9 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                      component_id, component_revision_id, component_name,
                      host_tool_id, implementation_version,
                      owner_account_id, owner_account_email,
-                     tool_definition, tool_provision_config, metadata_version, metadata_digest)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                     tool_definition, tool_provision_config, metadata_version, metadata_digest,
+                     published, deployment_hash)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
             "#})
             .bind(registered_tool.environment_id)
             .bind(registered_tool.deployment_revision_id)
@@ -2242,7 +2222,9 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             .bind(&registered_tool.tool_definition)
             .bind(&registered_tool.tool_provision_config)
             .bind(&registered_tool.metadata_version)
-            .bind(registered_tool.metadata_digest),
+            .bind(registered_tool.metadata_digest)
+            .bind(registered_tool.published)
+            .bind(registered_tool.deployment_hash),
         )
         .await?;
 

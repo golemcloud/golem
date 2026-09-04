@@ -90,7 +90,8 @@ use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_tool_grant::{
-    EnvironmentToolGrantCreation, EnvironmentToolGrantId, EnvironmentToolGrantWithDetails,
+    EnvironmentToolGrantCreation, EnvironmentToolGrantDeletion, EnvironmentToolGrantId,
+    EnvironmentToolGrantWithDetails,
 };
 use golem_common::model::tool::{TOOL_METADATA_WIT_VERSION, ToolName};
 use golem_common::model::tool_release::{
@@ -1685,13 +1686,16 @@ impl AppCommandHandler {
                 .golem_clients()
                 .await?
                 .environment_tool_grants
-                .validate_automatic_environment_tool_grant_reconciliation(
+                .validate_environment_tool_grant_reconciliation(
                     &environment.environment_id.0,
                     &EnvironmentToolGrantReconciliation {
                         creations: plan
                             .upserts()
                             .cloned()
-                            .map(|release| EnvironmentToolGrantCreation { release })
+                            .map(|release| EnvironmentToolGrantCreation {
+                                release,
+                                automatic: true,
+                            })
                             .collect(),
                         deletions: plan.deletions.iter().map(|grant_id| grant_id.0).collect(),
                     },
@@ -1716,10 +1720,11 @@ impl AppCommandHandler {
         for release in upserts {
             let grant = clients
                 .environment_tool_grants
-                .create_automatic_environment_tool_grant(
+                .create_environment_tool_grant(
                     &environment.environment_id.0,
                     &EnvironmentToolGrantCreation {
                         release: release.clone(),
+                        automatic: true,
                     },
                 )
                 .await
@@ -1732,7 +1737,10 @@ impl AppCommandHandler {
             }
             clients
                 .environment_tool_grants
-                .delete_automatic_environment_tool_grant(&grant_id.0)
+                .delete_environment_tool_grant(
+                    &grant_id.0,
+                    &EnvironmentToolGrantDeletion { automatic: true },
+                )
                 .await
                 .map_service_error()?;
         }
@@ -3520,7 +3528,7 @@ mod tests {
             },
         )];
 
-        let plan = build_tool_grant_reconciliation_plan(&desired, &[current.clone()]);
+        let plan = build_tool_grant_reconciliation_plan(&desired, std::slice::from_ref(&current));
 
         assert!(plan.creations.is_empty());
         assert_eq!(plan.reference_updates, desired);
@@ -3540,7 +3548,7 @@ mod tests {
             release_id: current.release.id,
         })];
 
-        let plan = build_tool_grant_reconciliation_plan(&desired, &[current.clone()]);
+        let plan = build_tool_grant_reconciliation_plan(&desired, std::slice::from_ref(&current));
 
         assert!(plan.creations.is_empty());
         assert_eq!(plan.reference_updates, desired);

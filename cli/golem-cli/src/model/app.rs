@@ -294,7 +294,7 @@ pub enum SubjectSource {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ComponentDependency {
     Agent {
-        source: SubjectSource,
+        component_name: ComponentName,
         agent_type_name: AgentTypeName,
     },
     Tool {
@@ -306,8 +306,8 @@ pub enum ComponentDependency {
 impl ComponentDependency {
     pub fn component_name(&self) -> Option<&ComponentName> {
         match self {
-            ComponentDependency::Agent { source, .. }
-            | ComponentDependency::Tool { source, .. } => match source {
+            ComponentDependency::Agent { component_name, .. } => Some(component_name),
+            ComponentDependency::Tool { source, .. } => match source {
                 SubjectSource::Local { component_name } => Some(component_name),
                 SubjectSource::RemoteRelease => None,
             },
@@ -327,6 +327,8 @@ pub enum BridgeSdkTargetSource {
         metadata_version: String,
         metadata_digest: golem_common::model::diff::Hash,
         source_digest: golem_common::model::diff::Hash,
+        #[serde(skip)]
+        manifest_source: PathBuf,
     },
 }
 
@@ -3030,7 +3032,7 @@ impl ComponentProperties {
             .filter_map(|dependency| {
                 parse_local_component_dependency_reference(validation, "agent", dependency).map(
                     |(component_name, name)| ComponentDependency::Agent {
-                        source: SubjectSource::Local { component_name },
+                        component_name,
                         agent_type_name: AgentTypeName(name),
                     },
                 )
@@ -3048,7 +3050,7 @@ impl ComponentProperties {
                         (SubjectSource::RemoteRelease, shortcut.clone())
                     }
                 }
-                app_raw::ComponentDependencyReference::LocalAlias(_) => {
+                app_raw::ComponentDependencyReference::Structured(_) => {
                     let (component_name, name) =
                         parse_local_component_dependency_reference(validation, "tool", dependency)?;
                     (SubjectSource::Local { component_name }, name)
@@ -3117,7 +3119,7 @@ fn parse_local_component_dependency_reference(
             };
             (component, name)
         }
-        app_raw::ComponentDependencyReference::LocalAlias(structured) => {
+        app_raw::ComponentDependencyReference::Structured(structured) => {
             (structured.component.as_str(), structured.name.as_str())
         }
     };
@@ -4553,21 +4555,29 @@ mod app_builder {
         }
 
         fn validate_tool_release_configuration(&mut self, validation: &mut ValidationBuilder) {
+            let mut issues = Vec::new();
             for (tool_name, declaration) in &self.tool_declarations {
                 if declaration.value.component.is_some() && declaration.value.release.is_some() {
-                    validation.add_error(format!(
-                        "Tool declaration {} cannot specify both `component` and `release`",
-                        tool_name.as_str().log_color_error_highlight(),
+                    issues.push(ToolValidationIssue::error(
+                        ToolValidationPhase::LocalResolution,
+                        ToolValidationCode::InvalidProvision,
+                        ToolEntityPath::tool(tool_name, "tools.component"),
+                        Some(declaration.source.clone()),
+                        "Registry tool cannot specify `component` or inherit component-scoped provision",
                     ));
                 }
 
                 if let Some(component_name) = &declaration.value.component
                     && !self.components.contains_key(component_name)
                 {
-                    validation.add_error(format!(
-                        "Local tool declaration {} references unknown component {}",
-                        tool_name.as_str().log_color_error_highlight(),
-                        component_name.as_str().log_color_error_highlight(),
+                    issues.push(ToolValidationIssue::error(
+                        ToolValidationPhase::DeclarationDiscoveryIdentity,
+                        ToolValidationCode::MissingImplementation,
+                        ToolEntityPath::tool(tool_name, "tools.component"),
+                        Some(declaration.source.clone()),
+                        format!(
+                            "Local tool declaration references unknown component {component_name}"
+                        ),
                     ));
                 }
 
@@ -4575,17 +4585,24 @@ mod app_builder {
                     if let app_raw::RegistrySubject::ByCoordinates(reference) = release
                         && reference.name != tool_name.as_str()
                     {
-                        validation.add_error(format!(
-                            "Remote tool declaration {} references published tool {}, but the declaration key must match the published tool name",
-                            tool_name.as_str().log_color_error_highlight(),
-                            reference.name.log_color_error_highlight(),
+                        issues.push(ToolValidationIssue::error(
+                            ToolValidationPhase::DeclarationDiscoveryIdentity,
+                            ToolValidationCode::InvalidName,
+                            ToolEntityPath::tool(tool_name, "tools.release.name"),
+                            Some(declaration.source.clone()),
+                            format!(
+                                "Remote tool declaration references published tool {}, but the declaration key must match the published tool name",
+                                reference.name
+                            ),
                         ));
                     }
                     if let Err(error) = release.to_release_reference() {
-                        validation.add_error(format!(
-                            "Invalid release reference for tool {}: {}",
-                            tool_name.as_str().log_color_error_highlight(),
-                            error,
+                        issues.push(ToolValidationIssue::error(
+                            ToolValidationPhase::DeclarationDiscoveryIdentity,
+                            ToolValidationCode::InvalidDeclaration,
+                            ToolEntityPath::tool(tool_name, "tools.release"),
+                            Some(declaration.source.clone()),
+                            format!("Invalid release reference: {error}"),
                         ));
                     }
                 }
@@ -4602,28 +4619,44 @@ mod app_builder {
                     }
 
                     match self.tool_declarations.get(tool_name) {
-                        None => validation.add_error(format!(
-                            "Component {} depends on undeclared tool {}",
-                            component_name.as_str().log_color_highlight(),
-                            tool_name.as_str().log_color_error_highlight(),
+                        None => issues.push(ToolValidationIssue::error(
+                            ToolValidationPhase::BindingReferences,
+                            ToolValidationCode::MissingDeclaration,
+                            ToolEntityPath::tool(tool_name, "components.dependencies.tools"),
+                            Some(component.source.clone()),
+                            format!("Component {component_name} depends on undeclared tool"),
                         )),
                         Some(declaration) if declaration.value.release.is_none() => {
                             if let Some(dependency_component) = &declaration.value.component {
                                 if dependency_component == component_name {
-                                    validation.add_error(format!(
-                                        "Component {} cannot depend on its own guest bridge SDK",
-                                        component_name.as_str().log_color_highlight(),
+                                    issues.push(ToolValidationIssue::error(
+                                        ToolValidationPhase::BindingReferences,
+                                        ToolValidationCode::InvalidDeclaration,
+                                        ToolEntityPath::tool(
+                                            tool_name,
+                                            "components.dependencies.tools",
+                                        ),
+                                        Some(component.source.clone()),
+                                        format!(
+                                            "Component {component_name} cannot depend on its own guest bridge SDK"
+                                        ),
                                     ));
                                 }
                                 *source = SubjectSource::Local {
                                     component_name: dependency_component.clone(),
                                 };
                             } else {
-                                validation.add_error(format!(
-                                    "Component {} uses name-only dependency {} for an implicit local tool; set tools.{}.component or use component/name to identify its build dependency",
-                                    component_name.as_str().log_color_highlight(),
-                                    tool_name.as_str().log_color_error_highlight(),
-                                    tool_name.as_str().log_color_highlight(),
+                                issues.push(ToolValidationIssue::error(
+                                    ToolValidationPhase::BindingReferences,
+                                    ToolValidationCode::InvalidDeclaration,
+                                    ToolEntityPath::tool(
+                                        &*tool_name,
+                                        "components.dependencies.tools",
+                                    ),
+                                    Some(component.source.clone()),
+                                    format!(
+                                        "Component {component_name} uses a name-only dependency for an implicit local tool; set tools.{tool_name}.component or use component/name to identify its build dependency"
+                                    ),
                                 ));
                             }
                         }
@@ -4635,30 +4668,39 @@ mod app_builder {
             for (environment_name, releases) in &self.tool_releases {
                 for published_name in releases.value.keys() {
                     let Ok(tool_name) = ToolName::try_from(published_name.as_str()) else {
-                        validation.add_error(format!(
-                            "Environment {} publishes invalid tool name {}",
-                            environment_name.0.log_color_highlight(),
-                            published_name.log_color_error_highlight(),
+                        issues.push(ToolValidationIssue::error(
+                            ToolValidationPhase::DeclarationDiscoveryIdentity,
+                            ToolValidationCode::InvalidName,
+                            ToolEntityPath::tool(published_name, "toolReleases"),
+                            Some(releases.source.clone()),
+                            format!("Environment {environment_name} publishes invalid tool name"),
                         ));
                         continue;
                     };
                     match self.tool_declarations.get(&tool_name) {
-                        None => validation.add_error(format!(
-                            "Environment {} publishes undeclared tool {}",
-                            environment_name.0.log_color_highlight(),
-                            published_name.log_color_error_highlight(),
+                        None => issues.push(ToolValidationIssue::error(
+                            ToolValidationPhase::BindingReferences,
+                            ToolValidationCode::MissingDeclaration,
+                            ToolEntityPath::tool(&tool_name, "toolReleases"),
+                            Some(releases.source.clone()),
+                            format!("Environment {environment_name} publishes undeclared tool"),
                         )),
                         Some(declaration) if declaration.value.release.is_some() => {
-                            validation.add_error(format!(
-                                "Environment {} cannot publish remote tool {}",
-                                environment_name.0.log_color_highlight(),
-                                published_name.log_color_error_highlight(),
+                            issues.push(ToolValidationIssue::error(
+                                ToolValidationPhase::DeclarationDiscoveryIdentity,
+                                ToolValidationCode::InvalidDeclaration,
+                                ToolEntityPath::tool(&tool_name, "toolReleases"),
+                                Some(releases.source.clone()),
+                                format!(
+                                    "Environment {environment_name} cannot publish remote tool"
+                                ),
                             ));
                         }
                         Some(_) => {}
                     }
                 }
             }
+            add_tool_issues(validation, issues);
         }
 
         /// Records preset names (from a component, template, agent, or tool) that an
@@ -6007,9 +6049,7 @@ mod test {
             dependencies,
             &vec![
                 ComponentDependency::Agent {
-                    source: SubjectSource::Local {
-                        component_name: parse_component_name("app:provider"),
-                    },
+                    component_name: parse_component_name("app:provider"),
                     agent_type_name: parse_agent_type_name("ShoppingCart"),
                 },
                 ComponentDependency::Tool {
@@ -6113,6 +6153,7 @@ mod test {
             tools:
               local-tool: {}
               remote-tool:
+                component: app:consumer
                 release:
                   account: publisher@example.com
                   name: other-tool
@@ -6129,6 +6170,18 @@ mod test {
             assert!(
                 errors.iter().any(|error| error.contains(expected)),
                 "missing {expected:?} in {errors:#?}"
+            );
+        }
+
+        for expected_code in [
+            "InvalidName",
+            "InvalidProvision",
+            "MissingDeclaration",
+            "InvalidDeclaration",
+        ] {
+            assert!(
+                errors.iter().any(|error| error.contains(expected_code)),
+                "missing structured issue code {expected_code:?} in {errors:#?}"
             );
         }
     }

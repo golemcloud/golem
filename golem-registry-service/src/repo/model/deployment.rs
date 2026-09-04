@@ -38,7 +38,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::agent::RegisteredAgentTypeImplementer;
 use golem_common::model::agent_secret::AgentSecretId;
-use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
+use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{
     CurrentDeployment, CurrentDeploymentRevision, Deployment, DeploymentPlan, DeploymentRevision,
     DeploymentSummary, DeploymentVersion,
@@ -64,7 +64,6 @@ use golem_service_base::repo::Blob;
 use golem_service_base::repo::RepoError;
 use heck::ToKebabCase;
 use sqlx::FromRow;
-use std::collections::BTreeSet;
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -246,9 +245,7 @@ pub struct DeploymentIdentity {
     pub components: Vec<ComponentRevisionIdentityRecord>,
     pub http_api_deployments: Vec<HttpApiDeploymentRevisionIdentityRecord>,
     pub mcp_deployments: Vec<McpDeploymentRevisionIdentityRecord>,
-    pub registered_tools: Vec<RegisteredTool>,
-    pub agent_tool_bindings: Vec<CompiledToolBinding>,
-    pub local_tool_component_revisions: BTreeSet<(ComponentId, ComponentRevision)>,
+    pub tools: Vec<DeploymentToolIdentityRecord>,
 }
 
 impl DeploymentIdentity {
@@ -256,7 +253,7 @@ impl DeploymentIdentity {
         self,
         current_revision: Option<CurrentDeploymentRevision>,
     ) -> Result<DeploymentPlan, DeployRepoError> {
-        let diffable = self.to_diffable();
+        let diffable = self.to_diffable()?;
         let remote_tools = diffable
             .remote_tools
             .iter()
@@ -301,24 +298,29 @@ impl DeploymentIdentity {
 }
 
 impl DeploymentIdentity {
-    pub fn to_diffable(&self) -> diff::Deployment {
-        let published_tools = self
-            .registered_tools
-            .iter()
-            .filter(|tool| {
-                tool.release_id.is_some()
-                    && matches!(
-                        &tool.source,
-                        ToolSource::Component {
-                            component_id,
-                            component_revision,
-                            ..
-                        } if self.local_tool_component_revisions.contains(&(*component_id, *component_revision))
-                    )
-            })
-            .filter_map(|tool| tool.definition.name().map(ToOwned::to_owned))
-            .collect();
-        diff::Deployment {
+    pub fn to_diffable(&self) -> Result<diff::Deployment, DeployRepoError> {
+        let mut remote_tools = std::collections::BTreeMap::new();
+        let mut published_tools = std::collections::BTreeSet::new();
+        for tool in &self.tools {
+            match (tool.tool_release_id, tool.published, tool.deployment_hash) {
+                (None, false, None) => {}
+                (Some(_), true, None) => {
+                    published_tools.insert(tool.tool_name.clone());
+                }
+                (Some(_), false, Some(hash)) => {
+                    remote_tools.insert(
+                        tool.tool_name.clone(),
+                        diff::HashOf::from_blake3_hash(hash.into()),
+                    );
+                }
+                _ => {
+                    return Err(
+                        anyhow!("invalid deployment tool identity for {}", tool.tool_name).into(),
+                    );
+                }
+            }
+        }
+        Ok(diff::Deployment {
             components: self
                 .components
                 .iter()
@@ -349,13 +351,9 @@ impl DeploymentIdentity {
                     )
                 })
                 .collect(),
-            remote_tools: diff::remote_tool_deployments(
-                self.registered_tools.clone(),
-                self.agent_tool_bindings.clone(),
-                &self.local_tool_component_revisions,
-            ),
+            remote_tools,
             published_tools,
-        }
+        })
     }
 }
 
@@ -367,7 +365,7 @@ pub struct DeployedDeploymentIdentity {
 impl TryFrom<DeployedDeploymentIdentity> for DeploymentSummary {
     type Error = DeployRepoError;
     fn try_from(value: DeployedDeploymentIdentity) -> Result<Self, Self::Error> {
-        let diffable = value.identity.to_diffable();
+        let diffable = value.identity.to_diffable()?;
         let remote_tools = diffable
             .remote_tools
             .iter()
@@ -541,10 +539,17 @@ pub struct DeploymentRegisteredToolRecord {
     pub tool_provision_config: Blob<ToolProvisionConfig>,
     pub metadata_version: String,
     pub metadata_digest: Option<SqlBlake3Hash>,
+    pub published: bool,
+    pub deployment_hash: Option<SqlBlake3Hash>,
 }
 
 impl DeploymentRegisteredToolRecord {
-    pub fn from_model(environment_id: EnvironmentId, registered_tool: RegisteredTool) -> Self {
+    pub fn from_model(
+        environment_id: EnvironmentId,
+        registered_tool: RegisteredTool,
+        published: bool,
+        deployment_hash: Option<diff::Hash>,
+    ) -> Self {
         let (
             source_kind,
             component_id,
@@ -598,8 +603,18 @@ impl DeploymentRegisteredToolRecord {
             tool_provision_config: Blob::new(registered_tool.provision),
             metadata_version: registered_tool.metadata_version,
             metadata_digest: Some(registered_tool.metadata_digest.into()),
+            published,
+            deployment_hash: deployment_hash.map(Into::into),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentToolIdentityRecord {
+    pub tool_name: String,
+    pub tool_release_id: Option<Uuid>,
+    pub published: bool,
+    pub deployment_hash: Option<SqlBlake3Hash>,
 }
 
 impl TryFrom<DeploymentRegisteredToolRecord> for RegisteredTool {
@@ -879,6 +894,35 @@ impl DeploymentRevisionCreationRecord {
         created_retry_policies: Vec<RetryPolicyCreationRecord>,
         actor: AccountId,
     ) -> anyhow::Result<Self> {
+        let published_tool_names = tool_releases
+            .iter()
+            .map(|release| release.tool_name.clone())
+            .collect();
+        let remote_tools = diff::remote_tool_deployments(
+            registered_tools.clone(),
+            agent_tool_bindings.clone(),
+            &published_tool_names,
+        )?;
+        let registered_tools = registered_tools
+            .into_iter()
+            .map(|tool| {
+                let tool_name = tool
+                    .definition
+                    .name()
+                    .ok_or_else(|| anyhow!("registered tool definition has no root name"))?;
+                let published = published_tool_names.contains(tool_name);
+                let deployment_hash = remote_tools
+                    .get(tool_name)
+                    .map(Hashable::hash)
+                    .transpose()?;
+                Ok(DeploymentRegisteredToolRecord::from_model(
+                    environment_id,
+                    tool,
+                    published,
+                    deployment_hash,
+                ))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
         Ok(Self {
             environment_id: environment_id.0,
             deployment_revision_id: deployment_revision.into(),
@@ -939,10 +983,7 @@ impl DeploymentRevisionCreationRecord {
                     )
                 })
                 .collect(),
-            registered_tools: registered_tools
-                .into_iter()
-                .map(|tool| DeploymentRegisteredToolRecord::from_model(environment_id, tool))
-                .collect(),
+            registered_tools,
             agent_tool_bindings: agent_tool_bindings
                 .into_iter()
                 .map(|binding| {

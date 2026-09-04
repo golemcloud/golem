@@ -185,26 +185,18 @@ fn available_remote_tool_guest_bridge_dependencies(
     for component_name in component_names {
         let component = ctx.application().component(component_name);
         for dependency in &component.properties().dependencies {
-            match dependency {
-                ComponentDependency::Tool {
-                    source: crate::model::app::SubjectSource::RemoteRelease,
-                    tool_name,
-                } => {
-                    ctx.release_grant_by_name(tool_name).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Remote tool dependency '{}' is not granted to the selected environment",
-                            tool_name
-                        )
-                    })?;
-                    available.insert(dependency.clone());
-                }
-                ComponentDependency::Agent {
-                    source: crate::model::app::SubjectSource::RemoteRelease,
-                    ..
-                } => anyhow::bail!(
-                    "Remote agent dependencies are not supported by published tool releases"
-                ),
-                _ => {}
+            if let ComponentDependency::Tool {
+                source: crate::model::app::SubjectSource::RemoteRelease,
+                tool_name,
+            } = dependency
+            {
+                ctx.release_grant_by_name(tool_name).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Remote tool dependency '{}' is not granted to the selected environment",
+                        tool_name
+                    )
+                })?;
+                available.insert(dependency.clone());
             }
         }
     }
@@ -428,13 +420,9 @@ fn report_guest_bridge_dependency_ordering_cycle(
             .difference(available_guest_bridge_dependencies)
             .map(|dependency| match dependency {
                 ComponentDependency::Agent {
-                    source,
+                    component_name,
                     agent_type_name,
-                } => format!(
-                    "agent {}/{}",
-                    format_subject_source(source),
-                    agent_type_name.as_str()
-                ),
+                } => format!("agent {}/{}", component_name, agent_type_name.as_str()),
                 ComponentDependency::Tool { source, tool_name } => format!(
                     "tool {}/{}",
                     format_subject_source(source),
@@ -512,9 +500,7 @@ fn component_guest_bridge_dependencies_provided_by_metadata(
             .agent_types
             .iter()
             .map(|agent_type| ComponentDependency::Agent {
-                source: crate::model::app::SubjectSource::Local {
-                    component_name: component_name.clone(),
-                },
+                component_name: component_name.clone(),
                 agent_type_name: agent_type.type_name.clone(),
             }),
     );
