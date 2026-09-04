@@ -476,6 +476,7 @@ jobs:
 
       - name: it-cli ${{ matrix.group.shard }}
         env:
+          NPM_CONFIG_AUDIT: 'false'
           QUIET: true
         run: cargo make --profile ci ${{ matrix.group.name }}
         timeout-minutes: 30
