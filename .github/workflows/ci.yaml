@@ -36,6 +36,7 @@ env:
   MOONBIT_INSTALL_VERSION: "0.10.11+6ff76a5f9"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
+  NPM_CONFIG_AUDIT: 'false'
 
 jobs:
   build-and-store:
@@ -476,7 +477,6 @@ jobs:
 
       - name: it-cli ${{ matrix.group.shard }}
         env:
-          NPM_CONFIG_AUDIT: 'false'
           QUIET: true
         run: cargo make --profile ci ${{ matrix.group.name }}
         timeout-minutes: 30

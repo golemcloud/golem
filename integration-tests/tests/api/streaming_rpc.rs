@@ -1050,9 +1050,6 @@ async fn dropped_durable_input_discards_items_and_end_after_consumer_cancellatio
         false,
     )
     .await?;
-    session
-        .send_input_value(input_id, 0, SchemaValue::U32(1))
-        .await?;
 
     let mut report = TrustedInvocationReport::default();
     loop {
@@ -1072,7 +1069,7 @@ async fn dropped_durable_input_discards_items_and_end_after_consumer_cancellatio
         }
     }
 
-    for sequence in 1..64u64 {
+    for sequence in 0..64u64 {
         session
             .send_input_value(input_id, sequence, SchemaValue::U32(1))
             .await?;

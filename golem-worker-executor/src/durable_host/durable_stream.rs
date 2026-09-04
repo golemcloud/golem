@@ -2646,6 +2646,15 @@ impl DurableStreamProducer {
                     replayed: true,
                 });
             }
+            if let Some(terminal) = stream.events.get(&first_sequence)
+                && terminal.is_terminal()
+            {
+                let terminal = terminal.clone();
+                let error = fenced_by_terminal(stream);
+                drop(index);
+                self.publish_repair(stream_id, vec![terminal]).await?;
+                return Err(error);
+            }
             return Err(DurableStreamProducerError::EventConflict);
         }
         index.ensure_producer_write_allowed()?;
@@ -7086,7 +7095,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    async fn producer_end_after_earlier_input_consumer_cancel_is_fenced() {
+    async fn producer_frames_after_earlier_input_consumer_cancel_are_fenced() {
         let identity = identity();
         let oplog = Arc::new(TestOplog::default());
         let producer = producer(oplog.clone(), &identity, None).await;
@@ -7121,6 +7130,24 @@ pub(crate) mod tests {
             .await
             .unwrap();
         let oplog_length = oplog.committed_length();
+
+        assert!(matches!(
+            producer
+                .write_items(
+                    handle.stream_id,
+                    1,
+                    StreamItemsPayloadV1::Values(vec![vec![2]]),
+                )
+                .await,
+            Err(DurableStreamProducerError::FencedByTerminal(
+                CommittedProducerStreamEventPayloadV1::Cancel {
+                    role: StreamCancelRoleV1::InputConsumer,
+                    reason: StreamCancelReasonV1::GuestDrop,
+                    details: None,
+                }
+            ))
+        ));
+        assert_eq!(oplog.committed_length(), oplog_length);
 
         assert!(matches!(
             producer
