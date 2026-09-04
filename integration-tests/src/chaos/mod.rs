@@ -160,6 +160,21 @@ pub enum ScenarioCode {
     /// the outage out. This one puts the overlap past it and asks what happens
     /// when the call the whole handover depends on gives up mid-outage.
     MF1B,
+    /// Worker-service CPU saturation while agents drive cross-pod RPC.
+    ///
+    /// S2's populations with S2's fault taken away and a different one put in
+    /// its place. S2 cut the link between two executors and expected nothing to
+    /// happen, because an agent-to-agent call the local executor does not own
+    /// is relayed through *worker-service*. This one saturates the CPU of the
+    /// relay itself, and expects the opposite.
+    ///
+    /// The measurement is the same premium S2 discovered it needed. Every call
+    /// in the workload crosses worker-service once; a cross-pod call crosses it
+    /// twice. So the gap between the two populations is exactly one
+    /// worker-service hop, and starving worker-service of CPU should widen it.
+    /// A run where both populations slow down by the same amount saturated
+    /// something else.
+    S21,
 }
 
 impl ScenarioCode {
@@ -189,13 +204,14 @@ impl ScenarioCode {
             ScenarioCode::S23 => "S23",
             ScenarioCode::MF1 => "MF1",
             ScenarioCode::MF1B => "MF1B",
+            ScenarioCode::S21 => "S21",
         }
     }
 
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 24] = [
+    pub const ALL: [ScenarioCode; 25] = [
         ScenarioCode::S1,
         ScenarioCode::S2,
         ScenarioCode::S3,
@@ -216,6 +232,7 @@ impl ScenarioCode {
         ScenarioCode::S16,
         ScenarioCode::S17,
         ScenarioCode::S18,
+        ScenarioCode::S21,
         ScenarioCode::S22,
         ScenarioCode::S23,
         ScenarioCode::MF1,
@@ -598,18 +615,24 @@ pub struct IsolationConfig {
     pub recovery_budget_secs: u64,
 }
 
-/// Shape of the cross-pod RPC control (GOL-368).
+/// Shape of a scenario built on the cross-pod RPC split (GOL-368, GOL-382).
 ///
-/// S2 is the one scenario built to come back empty. It drives agent-to-agent
-/// calls whose two halves are known to live on different executors, cuts those
-/// executors off from each other, and asserts that nothing moves. The claim
-/// under test is architectural: an executor reaches another executor's agents
-/// only by asking worker-service, never by connecting to it directly.
+/// Two scenarios share these numbers and disagree about what they should say.
+/// S2 drives agent-to-agent calls whose two halves live on different executors,
+/// cuts those executors off from each other, and asserts that nothing moves:
+/// the claim under test is architectural, that an executor reaches another
+/// executor's agents only by asking worker-service. S21 keeps the same
+/// populations and saturates worker-service instead, and asserts that the gap
+/// between them widens.
 ///
-/// A control is only worth running if it can fail, so the numbers below exist
-/// to stop it passing for the wrong reason. A run where the pairs turned out to
-/// be co-located, or where the partition never landed, would also report "no
-/// degradation" — and that report would be worthless.
+/// [`RelayExpectation`] is which of those two a run is, and it decides which
+/// numbers below are findings and which are context. Everything here is shared
+/// because the *measurement* is shared; only the verdict differs.
+///
+/// A scenario is only worth running if it can fail, so most of these exist to
+/// stop one passing for the wrong reason. A run where the pairs turned out to
+/// be co-located would report "no degradation" under either expectation, and
+/// that report would be worthless in both.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RelayConfig {
@@ -652,6 +675,30 @@ pub struct RelayConfig {
     /// against *zero*, not a model of what the hop should cost, and a cluster
     /// with faster links should not fail for being fast.
     pub cross_pod_premium_floor_ms: u64,
+    /// Whether this run's fault is supposed to reach the relay.
+    ///
+    /// Defaults to [`RelayExpectation::Inert`], which is what S2 has always
+    /// been. A scenario that expects damage has to say so, and saying so is
+    /// what turns the checks below from assertions into recorded context.
+    #[serde(default)]
+    pub expectation: relay::RelayExpectation,
+    /// How wide the cross-pod premium must get during the fault, as a
+    /// percentage of its own baseline, where **100 is unchanged**. Required by
+    /// [`relay::RelayExpectation::RelayDegraded`], refused by
+    /// [`relay::RelayExpectation::Inert`].
+    ///
+    /// The one number that says a fault aimed at worker-service actually
+    /// reached worker-service. Every call in the workload crosses worker-service
+    /// once and a cross-pod call crosses it twice, so the premium *is* one
+    /// worker-service hop. Slowing that hop widens the premium; slowing
+    /// anything else moves both populations together and leaves it flat.
+    ///
+    /// Throughput cannot stand in for this. The driver sets the cadence, so
+    /// both populations run at the rate they were asked to until the platform
+    /// is too slow to keep up at all, which is a later and much blunter
+    /// symptom.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cross_pod_premium_inflation_floor_percent: Option<f64>,
 }
 
 impl IsolationConfig {
@@ -1402,12 +1449,46 @@ impl ScenarioConfig {
 
     /// The cross-pod RPC control block. See [`Self::require_workload`].
     pub fn require_relay(&self) -> anyhow::Result<&RelayConfig> {
-        self.relay.as_ref().ok_or_else(|| {
+        let config = self.relay.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
                 "chaos scenario {} needs a `relay` block in the suite YAML",
                 self.code
             )
-        })
+        })?;
+        // The pairing is worth nothing without a verdict attached to it, and the
+        // two expectations need different numbers. Checked rather than defaulted
+        // in either direction: a scenario that expects the relay to degrade and
+        // carries no inflation floor would report a green run whatever the fault
+        // did, and one that expects nothing and carries a floor has had S21's
+        // block copied into it, which reads as configuration but changes no
+        // verdict at all.
+        match (
+            config.expectation,
+            config.cross_pod_premium_inflation_floor_percent,
+        ) {
+            (relay::RelayExpectation::RelayDegraded, None) => anyhow::bail!(
+                "chaos scenario {}: relay.expectation is relay-degraded, so it needs \
+                 relay.crossPodPremiumInflationFloorPercent — without it nothing in the run \
+                 checks that the fault reached worker-service at all",
+                self.code
+            ),
+            (relay::RelayExpectation::RelayDegraded, Some(floor)) if floor <= 100.0 => {
+                anyhow::bail!(
+                    "chaos scenario {}: relay.crossPodPremiumInflationFloorPercent is {floor}, \
+                     and 100 is the premium not moving at all — a floor at or below it is met \
+                     by a fault that did nothing",
+                    self.code
+                )
+            }
+            (relay::RelayExpectation::Inert, Some(floor)) => anyhow::bail!(
+                "chaos scenario {}: relay.expectation is inert but it carries \
+                 relay.crossPodPremiumInflationFloorPercent = {floor}, which only a \
+                 relay-degraded scenario reads",
+                self.code
+            ),
+            _ => {}
+        }
+        Ok(config)
     }
 
     /// The composed-fault block. See [`Self::require_workload`].
@@ -2198,28 +2279,69 @@ mod tests {
         assert_eq!(ScenarioCode::parse("s15b"), Some(ScenarioCode::S15B));
         assert_eq!(ScenarioCode::parse("s15c"), Some(ScenarioCode::S15C));
         assert_eq!(ScenarioCode::parse("s23"), Some(ScenarioCode::S23));
+        assert_eq!(ScenarioCode::parse("s21"), Some(ScenarioCode::S21));
         assert_eq!(ScenarioCode::parse("S99"), None);
     }
 
-    /// S2 is the only scenario that drives agent-to-agent traffic, and it is
-    /// the only one that must.
+    /// A scenario drives agent-to-agent traffic exactly when it carries the
+    /// block that says what to do with it.
     ///
     /// Asserted from the checked-in suite rather than a fixture because the
-    /// failure this guards against is a configuration one: an S2 entry that
-    /// lost its `rpcAgents` would still run, still produce two throughput
-    /// cells, and still come back clean — of a fault that had nothing to cut.
-    /// The pairing gate catches that at run time; this catches it at build time.
+    /// failure this guards against is a configuration one, and it can happen
+    /// from either side. An entry that lost its `rpcAgents` would still run,
+    /// still produce two throughput cells, and still come back clean — of a
+    /// fault that had nothing to reach. An entry that gained `rpcAgents` without
+    /// a `relay` block would drive twice the agents and report nothing about
+    /// them. The pairing gate catches the first at run time; this catches both
+    /// at build time.
+    ///
+    /// Stated as an equivalence rather than against a list of codes, so a third
+    /// scenario built on this pairing is covered without anyone remembering to
+    /// come back here.
     #[test]
-    fn only_s2_drives_the_rpc_stream() {
+    fn exactly_the_relay_scenarios_drive_the_rpc_stream() {
         let suite = ChaosSuite::load(suite_path()).unwrap();
         for entry in &suite.scenarios {
             let code = entry.scenario_code().unwrap();
             assert_eq!(
                 entry.drives_stream(Stream::Rpc),
-                code == ScenarioCode::S2,
-                "{code} disagrees with the suite about whether it drives cross-pod RPC"
+                entry.relay.is_some(),
+                "{code} drives cross-pod RPC without a relay block, or carries one without \
+                 driving the stream it reads"
             );
         }
+    }
+
+    /// The two relay scenarios must disagree about what their fault does.
+    ///
+    /// Both read the same cells and the same premium, and the only thing that
+    /// separates a control from a load test is `expectation`. A copy-paste that
+    /// left S21 on the default would produce a run reporting `cross-pod-degraded`
+    /// as a defect for a fault injected on purpose to cause it, and would file
+    /// no finding at all if the stress missed worker-service entirely.
+    #[test]
+    fn the_two_relay_scenarios_expect_opposite_things() {
+        let suite = ChaosSuite::load(suite_path()).unwrap();
+        let expectation = |code: ScenarioCode| {
+            suite
+                .scenarios
+                .iter()
+                .find(|entry| entry.scenario_code().ok() == Some(code))
+                .unwrap_or_else(|| panic!("{code} is missing from the suite"))
+                .require_relay()
+                .unwrap_or_else(|e| panic!("{code} has an unusable relay block: {e}"))
+                .expectation
+        };
+        assert_eq!(
+            expectation(ScenarioCode::S2),
+            relay::RelayExpectation::Inert,
+            "S2 is the control: its fault is supposed to change nothing"
+        );
+        assert_eq!(
+            expectation(ScenarioCode::S21),
+            relay::RelayExpectation::RelayDegraded,
+            "S21 saturates the relay both populations depend on, so it is supposed to hurt"
+        );
     }
 
     /// The workflow selects a scenario with `--scenario "${CODE,,}"`, so every
@@ -2373,7 +2495,7 @@ mod tests {
                 ScenarioCode::S3 => {
                     entry.require_isolation().unwrap();
                 }
-                ScenarioCode::S2 => {
+                ScenarioCode::S2 | ScenarioCode::S21 => {
                     entry.require_workload().unwrap();
                     entry.require_relay().unwrap();
                     entry.require_ownership().unwrap();

@@ -771,6 +771,126 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
+  # S21 — worker-service CPU saturation under cross-pod RPC (GOL-382).
+  #
+  # S2's populations with S2's fault taken away. S2 cut the link between the two
+  # executors and expected nothing to happen, because an agent-to-agent call the
+  # local executor does not own is relayed through worker-service. This one
+  # leaves the link alone and starves that relay of CPU instead.
+  #
+  # ── What is actually being measured ──────────────────────────────────────────
+  #
+  # Both populations cross worker-service. A cross-pod call crosses it twice
+  # (driver → worker-service → executor A → worker-service → executor B) and a
+  # co-located call crosses it once, so the *gap* between them is one
+  # worker-service hop and nothing else. S2 measured that gap at 38-50ms p50
+  # across two runs while looking for evidence its pairing was real. Here it is
+  # the instrument: a fault that reaches worker-service widens it, and a fault
+  # that lands on the executors instead moves both populations together and
+  # leaves it flat.
+  #
+  # This matters because throughput cannot do the job. The driver sets the
+  # cadence, so both populations run at the rate they were asked to until the
+  # platform is too slow to keep up at all. S2's cells were 9.51/s and 10.49/s
+  # before, during and after a partition. Waiting for those to move would mean
+  # waiting for worker-service to have already fallen over.
+  #
+  # ── Why the stress is this small ─────────────────────────────────────────────
+  #
+  # worker-service on golem-dev requests 200m of CPU and sets no limit, so
+  # stress-ng is bounded by `workers × load` rather than by a cgroup quota, and
+  # the workflow scales the deployment to 3 replicas on 4-vCPU management nodes.
+  # Two workers at 90% per replica is deliberate restraint: the liveness probe
+  # hits /healthcheck every 15s with a 1s timeout and a failure threshold of 3,
+  # so roughly 45 seconds of a starved event loop is a kill, and the readiness
+  # probe pulls a pod out of the Service endpoints in about 30. Either turns this
+  # scenario into an unplanned worker-service outage and answers a different
+  # question. A worker-service restart across this window is a finding, not
+  # noise — see the runbook.
+  - code: S21
+    name: worker-service-cpu-saturation
+    enabled: true
+
+    fault:
+      kind: cpu-stress
+      target: worker-service
+      # Every replica, by label. Loading one of three would leave two thirds of
+      # the relay traffic untouched, and the premium is a p50 across all of it.
+      mode: all
+      durationSecs: 180
+
+    phases:
+      # Same shape as S2, and for the same reason: the premium is compared
+      # against an undisturbed baseline, so that baseline has to be past cold
+      # starts and route warm-up.
+      baselineSecs: 300
+      faultSecs: 180
+      # Long enough to tell a population that degraded and came back from one
+      # that degraded and stayed down. That distinction is the run's correctness
+      # claim, since the fault itself is bounded in time.
+      recoverySecs: 420
+
+    ownership:
+      # Nothing here touches the shard-manager, so shards must not move. If they
+      # do, the pairing describes agents that have since relocated and the two
+      # populations are no longer the ones that were measured.
+      settleSecs: 120
+
+    relay:
+      # Identical to S2: the split is decided by hashing agent ids, not by
+      # anything this scenario arranges, so it needs the same gate against a run
+      # whose pairs all landed together.
+      crossPodFloorPercent: 25
+      # Read only by the after-heal check under this expectation. Cross-pod is
+      # *supposed* to fall inside the window, so a during-fault drop is recorded
+      # as the degradation the run set out to measure rather than raised as a
+      # finding. What is not allowed is failing to come back: the fault is
+      # bounded in time, so its effect has to be bounded too.
+      crossPodFloorThroughputPercent: 70
+      # Carried for the shared report shape. Under relay-degraded the co-located
+      # population is judged against cross-pod rather than against this floor —
+      # a co-located call crosses worker-service once and a cross-pod call
+      # crosses it twice, so the shorter path losing more is the finding, at
+      # whatever absolute level both of them sit.
+      coLocatedFloorThroughputPercent: 70
+      # The same vacuity guard S2 needs, and needed first: if the two
+      # populations cost the same on the undisturbed baseline they are not two
+      # populations, and everything below compares a thing to itself.
+      crossPodPremiumFloorMs: 5
+      expectation: relay-degraded
+      # 100 is a premium that did not move at all, so this asks for half again
+      # as wide. A floor rather than an expectation, in the same spirit as
+      # crossPodPremiumFloorMs above: worker-service contributes roughly the
+      # premium's own width to every call, so halving its effective CPU should
+      # push this well past 200. Set at 150 so a run that degraded less than
+      # predicted still counts as having reached the relay, and only a fault
+      # that missed it entirely fails.
+      crossPodPremiumInflationFloorPercent: 150
+
+    workload:
+      # S2's workload unchanged. The comparison is the same comparison, and
+      # changing the populations would make the two runs incomparable for no
+      # gain — S2's numbers are this scenario's control.
+      durableAgents: 100
+      ephemeralAgents: 50
+      scheduledAgents: 50
+      promiseAgents: 50
+      # Zero, as in S2. Quota traffic crosses the shard-manager link rather than
+      # worker-service, so it would add load without adding signal.
+      quotaAgents: 0
+      rpcAgents: 200
+      ratePerSec: 100
+
+    retryPolicy:
+      # Load-bearing here in a way it is not in S2. A starved relay is exactly
+      # what produces transport failures, and a retry that succeeds is the
+      # difference between a degraded platform and a lossy one.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
   # S7 — executor pod kill during agent state revert (GOL-371).
   #
   # The only scenario that disturbs work the platform is trying to *undo*. Each

@@ -12,19 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! S2 — executor-to-executor partition, cross-pod RPC control (GOL-368).
+//! The two scenarios built on the cross-pod RPC split (GOL-368, GOL-382).
 //!
-//! The suite's control. Every other scenario injects a fault it expects to hurt
-//! and measures the damage; this one injects a fault it expects to be inert and
-//! measures that nothing happened.
+//! Both drive agent-to-agent calls whose two halves are known to live on
+//! different executors, and both read the same instrument. They disagree only
+//! about what the fault is supposed to do to it.
 //!
-//! The claim under test is architectural. `WorkerExecutorClient` appears
-//! nowhere in the executor: when an agent invokes an agent its own executor does
-//! not own, `DirectWorkerInvocationRpc::invoke_and_await` finds
+//! **S2, the control.** Cut the two executors off from each other and assert
+//! that nothing moves. The claim under test is architectural:
+//! `WorkerExecutorClient` appears nowhere in the executor, so when an agent
+//! invokes an agent its own executor does not own,
+//! `DirectWorkerInvocationRpc::invoke_and_await` finds
 //! `shard_service().check_worker()` says no and hands the call to
-//! `worker_proxy`, which is a client of **worker-service**. So executor A
-//! reaches executor B's agents through a third party, and a partition between A
-//! and B cuts a link carrying no traffic.
+//! `worker_proxy`, a client of **worker-service**. Executor A reaches executor
+//! B's agents through a third party, and a partition between A and B cuts a
+//! link carrying no traffic.
+//!
+//! **S21, the load.** Leave the link alone and starve that third party of CPU
+//! instead. Every call in the workload crosses worker-service once and a
+//! cross-pod call crosses it twice, so the gap between the two populations is
+//! exactly one worker-service hop. S2 discovered that gap while looking for
+//! evidence its pairing was real; S21 exists because it is also the only clean
+//! way to say a fault reached the relay and not the executors.
 //!
 //! ### The choreography, and where it differs from S12
 //!
@@ -36,15 +45,24 @@
 //! 2. **Baseline** — run the mixed workload, RPC stream included.
 //! 3. **Gate** — refuse to spend the fault window unless enough callers came out
 //!    cross-pod. A run whose pairs all landed together would report exactly the
-//!    clean numbers a good run reports, and mean nothing. Same instinct as S9's
+//!    numbers a good run reports, and mean nothing. Same instinct as S9's
 //!    forward-leg gate.
 //! 4. **Re-pair** — check the split again immediately before injection, because
 //!    an ownership change between the gate and the fault would leave the report
 //!    comparing populations that no longer exist.
 //! 5. **Fault, recovery, read-back** — as in S12.
 //!
-//! The gate is the step that makes this scenario worth running. Without it a
-//! green S2 is indistinguishable from a broken S2.
+//! The gate is the step that makes either scenario worth running. Without it a
+//! green run is indistinguishable from a broken one.
+//!
+//! ### Why one module rather than two
+//!
+//! The pairing, the gate, the re-pair and the read-back indirection are the
+//! whole of the driver-side work, and they are identical. What differs is which
+//! fault the workflow injects and, in [`crate::chaos::relay`], which direction
+//! the numbers are supposed to point. Splitting the file would duplicate the
+//! parts that are easy to get subtly wrong in order to separate the parts that
+//! are already separated.
 
 use crate::chaos::history::{OperationHistory, OperationRecord, Phase, Stream};
 use crate::chaos::prep::ChaosPrepManifest;
@@ -71,8 +89,9 @@ use tracing::{info, warn};
 /// reading early would report a mismatch that says nothing about the platform.
 const SETTLE_BEFORE_READBACK: Duration = Duration::from_secs(30);
 
-/// Runs S2 end to end.
+/// Runs S2 or S21 end to end.
 pub async fn run(
+    code: ScenarioCode,
     config: &ScenarioConfig,
     manifest: &ChaosPrepManifest,
     deps: &BenchmarkTestDependencies,
@@ -82,8 +101,8 @@ pub async fn run(
     let started_at = Utc::now();
     let workload_config = config.require_workload()?;
     let relay_config = config.require_relay()?;
-    let history = OperationHistory::new(ScenarioCode::S2.as_str());
-    let key_prefix = crate::chaos::scenario_key_prefix(ScenarioCode::S2);
+    let history = OperationHistory::new(code.as_str());
+    let key_prefix = crate::chaos::scenario_key_prefix(code);
 
     let user = manifest.user_context(deps);
     let counters = user
@@ -121,7 +140,7 @@ pub async fn run(
     // cluster time. Not optional: every `finish!` below attaches the pairing,
     // including an abort, because on an abort the pairing is usually the reason.
     info!(
-        "S2: placing {} RPC pairs against the routing table",
+        "{code}: placing {} RPC pairs against the routing table",
         callers.len()
     );
     let mut pairing = relay::select_pairing(&ctx, deps, &callers).await?;
@@ -159,10 +178,8 @@ pub async fn run(
                         injected_at,
                         recovered_at: fault_recovered_at,
                     }),
-                    relay_config.cross_pod_floor_percent,
-                    relay_config.cross_pod_floor_throughput_percent,
-                    relay_config.co_located_floor_throughput_percent,
-                    relay_config.cross_pod_premium_floor_ms,
+                    code,
+                    relay_config,
                 ));
             }
             let result = build_result(
@@ -192,7 +209,7 @@ pub async fn run(
 
     // ── Baseline ────────────────────────────────────────────────────────────
     info!(
-        "S2: baseline phase, running mixed workload for {:?}",
+        "{code}: baseline phase, running mixed workload for {:?}",
         config.phases.baseline()
     );
     phases.baseline = Some(PhaseWindow::started(Utc::now()));
@@ -207,7 +224,7 @@ pub async fn run(
     // ── Gate ────────────────────────────────────────────────────────────────
     let baseline_operations = history.confirmed_in_phase(Phase::Baseline);
     if baseline_operations == 0 {
-        warn!("S2: baseline produced no confirmed operations, aborting before injection");
+        warn!("{code}: baseline produced no confirmed operations, aborting before injection");
         handle.stop().await;
         let records = history.snapshot();
         finish!(
@@ -227,7 +244,7 @@ pub async fn run(
     let confirmed = match relay::select_pairing(&ctx, deps, &callers).await {
         Ok(confirmed) => confirmed,
         Err(e) => {
-            warn!("S2: could not re-read the pairing before injection: {e}");
+            warn!("{code}: could not re-read the pairing before injection: {e}");
             handle.stop().await;
             let records = history.snapshot();
             finish!(
@@ -249,7 +266,7 @@ pub async fn run(
         // the clean numbers a good run produces, which makes them worse than no
         // numbers at all.
         warn!(
-            "S2: only {cross_pod_percent}% of callers are cross-pod, below the {}% floor",
+            "{code}: only {cross_pod_percent}% of callers are cross-pod, below the {}% floor",
             relay_config.cross_pod_floor_percent
         );
         handle.stop().await;
@@ -258,8 +275,8 @@ pub async fn run(
             TerminationReason::FaultTargetUnverified {
                 detail: format!(
                     "only {cross_pod_percent}% of RPC callers had their callee on the other \
-                     executor, below the {}% floor — a partition between executors would have \
-                     had almost nothing to cut",
+                     executor, below the {}% floor — the two populations this run compares \
+                     would have been the same population",
                     relay_config.cross_pod_floor_percent
                 ),
             },
@@ -270,16 +287,17 @@ pub async fn run(
     }
 
     info!(
-        "S2: baseline complete ({baseline_operations} confirmed ops, {cross_pod_percent}% \
+        "{code}: baseline complete ({baseline_operations} confirmed ops, {cross_pod_percent}% \
          cross-pod), signalling readiness"
     );
     signals.write_baseline_ready(&BaselineReady {
-        scenario_code: ScenarioCode::S2.as_str().to_string(),
+        scenario_code: code.as_str().to_string(),
         ready_at: Utc::now(),
         baseline_operations,
-        // Both executors are partitioned from each other, selected by label. On
-        // a two-replica deployment that is every executor there is, so there is
-        // no pod for the driver to name.
+        // Neither scenario pins a pod. S2 partitions every executor from every
+        // other one and S21 loads every worker-service replica, both selected by
+        // label, so there is nothing for the driver to name — unlike S3, where
+        // naming one side is the whole basis of the comparison.
         fault_target: None,
     })?;
 
@@ -287,14 +305,14 @@ pub async fn run(
     let injected = match signals.await_fault_injected(config.signal_timeout()).await {
         Ok(injected) => injected,
         Err(e) => {
-            warn!("S2: no fault-injected signal arrived: {e}");
+            warn!("{code}: no fault-injected signal arrived: {e}");
             handle.stop().await;
             let records = history.snapshot();
             finish!(signal_termination(&e), &records, Vec::new(), None);
         }
     };
     info!(
-        "S2: fault {} ({} on {}) reported active at {}",
+        "{code}: fault {} ({} on {}) reported active at {}",
         injected.fault_id, injected.kind, injected.target, injected.injected_at
     );
     fault_injected_at = Some(injected.injected_at);
@@ -306,14 +324,14 @@ pub async fn run(
     let recovered = match signals.await_fault_recovered(config.signal_timeout()).await {
         Ok(recovered) => recovered,
         Err(e) => {
-            warn!("S2: no fault-recovered signal arrived: {e}");
+            warn!("{code}: no fault-recovered signal arrived: {e}");
             handle.stop().await;
             let records = history.snapshot();
             finish!(signal_termination(&e), &records, Vec::new(), None);
         }
     };
     info!(
-        "S2: fault cleared at {} ({})",
+        "{code}: fault cleared at {} ({})",
         recovered.recovered_at, recovered.termination_reason
     );
     fault_recovered_at = Some(recovered.recovered_at);
@@ -323,7 +341,7 @@ pub async fn run(
 
     // ── Recovery ────────────────────────────────────────────────────────────
     info!(
-        "S2: recovery phase, running for a further {:?}",
+        "{code}: recovery phase, running for a further {:?}",
         config.phases.recovery()
     );
     ctx.phase.set(Phase::Recovery);
@@ -344,7 +362,7 @@ pub async fn run(
     // which is how every other scenario reports ownership.
 
     // ── Read-back ───────────────────────────────────────────────────────────
-    info!("S2: letting the platform settle for {SETTLE_BEFORE_READBACK:?} before read-back");
+    info!("{code}: letting the platform settle for {SETTLE_BEFORE_READBACK:?} before read-back");
     tokio::time::sleep(SETTLE_BEFORE_READBACK).await;
 
     let records = history.snapshot();
@@ -363,14 +381,14 @@ pub async fn run(
     // them, and the probe is what says whether a stalled call executed anyway.
     // The read-back above is a weaker form of the same question: it compares
     // sums per agent, where this attributes to a key.
-    let before_probe = read_callee_counters(&ctx, workload_config).await;
+    let before_probe = read_callee_counters(code, &ctx, workload_config).await;
     let probes = probe::probe_keys(&ctx, &records, Stream::Rpc).await;
-    let after_probe = read_callee_counters(&ctx, workload_config).await;
+    let after_probe = read_callee_counters(code, &ctx, workload_config).await;
 
     let exactly_once =
         ExactlyOnceReport::build(&records, &probes, Stream::Rpc, &before_probe, &after_probe);
     info!(
-        "S2: exactly-once account — {} keys checked, {} recovered by the probe, {} findings",
+        "{code}: exactly-once account — {} keys checked, {} recovered by the probe, {} findings",
         exactly_once.keys_checked,
         exactly_once.keys_recovered_by_probe,
         exactly_once.findings.len()
@@ -392,6 +410,7 @@ pub async fn run(
 /// the probe pass. Naming the caller there would point an investigation at an
 /// agent whose own counter never changes.
 async fn read_callee_counters(
+    code: ScenarioCode,
     ctx: &WorkloadContext,
     config: &crate::chaos::WorkloadConfig,
 ) -> std::collections::BTreeMap<String, u64> {
@@ -405,7 +424,7 @@ async fn read_callee_counters(
             // Recorded as absent rather than as zero: a callee that could not be
             // read says nothing about whether the probe executed against it, and
             // a zero here would be read as "it moved backwards".
-            Err(e) => warn!("S2: could not read RPC callee {callee}: {e}"),
+            Err(e) => warn!("{code}: could not read RPC callee {callee}: {e}"),
         }
     }
     values

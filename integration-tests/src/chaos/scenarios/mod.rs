@@ -29,12 +29,12 @@
 //! abort path, or that invented a phase window it never reached, would still
 //! produce a plausible-looking report from a wasted maintenance window.
 
+pub mod relay_fault;
 pub mod s1;
 pub mod s10;
 pub mod s11;
 pub mod s12;
 pub mod s13;
-pub mod s2;
 pub mod s3;
 pub mod s5;
 pub mod s6;

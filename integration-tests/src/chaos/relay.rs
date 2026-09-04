@@ -12,56 +12,78 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! What a partition between two executors cost the agents calling across it
-//! (GOL-368).
+//! What a fault cost the agents calling across executors (GOL-368, GOL-382).
 //!
-//! Every other scenario in the suite injects a fault it expects to hurt, and
-//! measures the damage. This one injects a fault it expects to be inert, and
-//! measures that nothing happened. The claim under test is architectural: an
-//! executor never opens a connection to another executor. When an agent invokes
-//! an agent its own executor does not own, `DirectWorkerInvocationRpc` hands the
-//! call to `worker_proxy`, which is a client of *worker-service*. The reply
-//! comes back the same way. So executor A reaches executor B's agents by asking
-//! a third party, and cutting the A-to-B link cuts nothing.
+//! Two scenarios share this report and disagree about which way its numbers
+//! should point, which is what [`RelayExpectation`] is for.
 //!
-//! ### Why a control needs more oracles than a normal scenario, not fewer
+//! **S2 injects a fault it expects to be inert**, and measures that nothing
+//! happened. The claim under test is architectural: an executor never opens a
+//! connection to another executor. When an agent invokes an agent its own
+//! executor does not own, `DirectWorkerInvocationRpc` hands the call to
+//! `worker_proxy`, which is a client of *worker-service*. The reply comes back
+//! the same way. So executor A reaches executor B's agents by asking a third
+//! party, and cutting the A-to-B link cuts nothing.
 //!
-//! A scenario that expects damage fails safe: if the fault misses, the damage
-//! is absent and the report says the fault was not observed. A scenario that
-//! expects *no* damage fails the other way. A run where the pairs were
-//! accidentally co-located, where the workload never started, or where the
-//! partition was never injected all produce the same clean-looking report as a
-//! run that genuinely proved the point.
+//! **S21 injects a fault aimed at that third party**, and measures what it
+//! cost. Same populations, same cells, opposite verdict.
 //!
-//! So the numbers here exist mostly to stop this passing for the wrong reason:
+//! ### The premium is the instrument, and it took a real run to find it
+//!
+//! Throughput cannot separate the two populations. The driver sets the cadence,
+//! so both run at the rate they were asked to whether or not a call leaves the
+//! pod: S2's first run measured 9.51/s cross-pod and 10.49/s co-located before,
+//! during and after a partition, and those cells look identical on a healthy run
+//! *and* on a run whose pairing was broken.
+//!
+//! Latency does separate them, and by an exactly interpretable amount. Every
+//! call in the workload crosses worker-service once; a cross-pod call crosses it
+//! twice. So the gap between the two populations is one worker-service hop and
+//! nothing else — 38ms and 50ms on S2's two runs. That makes it usable in a
+//! window where *everything* is slower, which is precisely the window S21 runs
+//! in: a fault that widened the premium reached worker-service, and one that
+//! moved both populations together did not.
+//!
+//! ### Why either scenario needs more oracles than a normal one
+//!
+//! A scenario that expects damage fails safe: if the fault misses, the damage is
+//! absent and the report says the fault was not observed. Neither of these does.
+//! S2 fails the other way — a run where the pairs were accidentally co-located,
+//! where the workload never started, or where the partition was never injected
+//! all produce the same clean report as a run that proved the point. S21 fails
+//! the same way one step along: a stress that missed worker-service produces the
+//! same undisturbed numbers as a platform that shrugged the load off.
+//!
+//! So the numbers here exist mostly to stop a run passing for the wrong reason:
 //!
 //! 1. **Were the pairs actually split?** [`Placement::CrossPod`] must hold at
-//!    least `cross_pod_floor_percent` of the callers. Below that the partition
-//!    had almost nothing to cut. See [`RelayViolation::PairingTooThin`].
-//! 2. **Did the cross-pod calls keep being served?** This is the assertion.
-//!    A drop here means an executor was talking to an executor.
-//! 3. **Did the co-located calls keep being served?** They never leave the pod,
-//!    so the partition cannot reach them even in principle. If *both* groups
-//!    drop, the cause is not the link under test and the report says so rather
-//!    than blaming the architecture.
+//!    least `cross_pod_floor_percent` of the callers. See
+//!    [`RelayViolation::PairingTooThin`].
+//! 2. **Are the two populations really two?** A cross-pod call has to cost more
+//!    than a co-located one on the undisturbed baseline. See
+//!    [`RelayViolation::CrossPodNotRelayed`].
+//! 3. **Did the fault do what the scenario said it would?** Under `Inert`, a
+//!    cross-pod drop is the finding. Under `RelayDegraded`, a premium that never
+//!    widened is. See [`RelayViolation::CrossPodDegraded`] and
+//!    [`RelayViolation::RelayNotDegraded`].
+//! 4. **Did it stop when the fault stopped?** Shared, because a bounded fault
+//!    has to have a bounded effect. See
+//!    [`RelayViolation::CrossPodDidNotReturn`].
 //!
-//! ### The one thing this cannot check
+//! ### The one thing S2 cannot check
 //!
-//! Whether the partition took hold. Every other partition scenario confirms the
-//! fault landed by watching something stop; here nothing is supposed to stop,
-//! so there is no in-cluster evidence to read. The run relies entirely on Chaos
-//! Mesh reporting `AllInjected`, which the workflow waits for before the
-//! measured window opens. That is a weaker guarantee than the rest of the suite
-//! works to, and it is stated in the report rather than left for a reader to
-//! infer — see [`RelayReport::partition_evidence`].
+//! Whether its partition took hold. Every other partition scenario confirms the
+//! fault landed by watching something stop; there nothing is supposed to stop,
+//! so there is no in-cluster evidence to read and the run relies entirely on
+//! Chaos Mesh reporting `AllInjected`. S21 is not in that position — the premium
+//! is its own evidence — and [`RelayReport::partition_evidence`] says which of
+//! the two a reader is holding.
 //!
 //! ### Throughput, not success rate
 //!
 //! For the same reason as [`crate::chaos::reachability`]: a stalled agent fails
 //! slowly and once, which a success rate reads as one failure out of one
-//! attempt. Confirmed operations per second is the number that would collapse
-//! if the architecture claim were false, so it is the number the report is
-//! built on.
+//! attempt. Confirmed operations per second is what a success rate cannot say.
 
 use crate::chaos::history::{OperationRecord, Outcome, Stream};
 use crate::chaos::pinned::routing_agent_id_in;
@@ -70,6 +92,7 @@ use crate::chaos::split::{
 };
 use crate::chaos::summary::LatencyStats;
 use crate::chaos::workload::{COUNTER_AGENT, WorkloadContext, rpc_callee_name};
+use crate::chaos::{RelayConfig, ScenarioCode};
 use chrono::{DateTime, Utc};
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use serde::{Deserialize, Serialize};
@@ -78,6 +101,17 @@ use tracing::info;
 
 /// The most findings the report carries.
 const MAX_FINDINGS: usize = 50;
+
+/// How far apart the two populations' shares of their own baselines have to be
+/// before the difference is read as one of them being hurt more.
+///
+/// The driver sets the cadence for both, so on an undisturbed run they land
+/// within a point of each other: S2's two green runs measured cross-pod at
+/// 100.11% against co-located at 99.9%, then 100.23% against 99.91%. Without a
+/// margin, ordinary jitter of that size would file
+/// [`RelayViolation::CoLocatedDegradedMore`] on any run where the coin landed
+/// the other way up.
+const PLACEMENT_SHARE_MARGIN_PERCENT: f64 = 5.0;
 
 /// Where the two halves of an RPC pair ended up.
 ///
@@ -110,6 +144,47 @@ impl std::fmt::Display for Placement {
     }
 }
 
+/// What the run's fault is supposed to do to the relay.
+///
+/// The two scenarios built on this pairing measure the same things and disagree
+/// only about which way the numbers should point, so the split lives here
+/// rather than in two copies of the report.
+///
+/// It is not a cosmetic label. Under [`Self::Inert`] a cross-pod population that
+/// fell behind is the finding; under [`Self::RelayDegraded`] it is the expected
+/// result and the finding is the opposite one, a fault that changed nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RelayExpectation {
+    /// The fault cannot reach the relay path, and the run exists to show that.
+    ///
+    /// S2: two executors cut off from each other, when no executor ever opens a
+    /// connection to another executor. The default, because it is what this
+    /// module was built for.
+    #[default]
+    Inert,
+    /// The fault is aimed at the relay itself, and the run exists to measure
+    /// what that costs without losing work.
+    ///
+    /// S21: worker-service starved of CPU while both populations depend on it.
+    RelayDegraded,
+}
+
+impl RelayExpectation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RelayExpectation::Inert => "inert",
+            RelayExpectation::RelayDegraded => "relay-degraded",
+        }
+    }
+}
+
+impl std::fmt::Display for RelayExpectation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Something about the run worth an operator's attention.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -137,6 +212,21 @@ pub enum RelayViolation {
     /// check here compares the two populations *through* the fault, and all of
     /// them pass trivially if the two populations are really the same thing.
     CrossPodNotRelayed,
+    /// The fault was supposed to reach the relay and the premium did not widen,
+    /// so the run has no evidence it reached anything.
+    ///
+    /// [`RelayExpectation::RelayDegraded`] only. The mirror of
+    /// [`Self::CrossPodNotRelayed`]: that one says the two populations were
+    /// never split, this one says they were split and the fault missed the
+    /// thing that separates them.
+    RelayNotDegraded,
+    /// Co-located calls lost more of their throughput than cross-pod ones did.
+    ///
+    /// [`RelayExpectation::RelayDegraded`] only, and backwards for a fault on
+    /// the shared relay. A cross-pod call crosses worker-service twice and a
+    /// co-located one crosses it once, so a fault on worker-service cannot hurt
+    /// the shorter path more. The stress landed on the executors instead.
+    CoLocatedDegradedMore,
 }
 
 impl RelayViolation {
@@ -147,6 +237,8 @@ impl RelayViolation {
             RelayViolation::BothDegraded => "both-degraded",
             RelayViolation::CrossPodDidNotReturn => "cross-pod-did-not-return",
             RelayViolation::CrossPodNotRelayed => "cross-pod-not-relayed",
+            RelayViolation::RelayNotDegraded => "relay-not-degraded",
+            RelayViolation::CoLocatedDegradedMore => "co-located-degraded-more",
         }
     }
 }
@@ -255,10 +347,16 @@ pub struct RelayCell {
     pub latency: LatencyStats,
 }
 
-/// The whole S2 verdict.
+/// The whole relay verdict.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RelayReport {
+    /// Which scenario produced this. Carried so the report's own prose names it
+    /// rather than every line hard-coding one of the two scenarios that build
+    /// this report.
+    pub scenario: ScenarioCode,
+    /// Which way the numbers were supposed to point.
+    pub expectation: RelayExpectation,
     /// How the pairs were placed, and against which executors.
     pub pairing: RelayPairing,
     pub cross_pod_percent: Option<f64>,
@@ -268,11 +366,32 @@ pub struct RelayReport {
     pub cross_pod_floor_throughput_percent: f64,
     pub co_located_floor_throughput_percent: f64,
     pub cross_pod_premium_floor_ms: u64,
+    /// The inflation floor, when the run carried one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cross_pod_premium_inflation_floor_percent: Option<f64>,
     /// How much more a cross-pod call cost than a co-located one on the
     /// undisturbed baseline, in milliseconds of p50. `None` when either
     /// population had no baseline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cross_pod_premium_ms: Option<i64>,
+    /// The same premium measured inside the fault window.
+    ///
+    /// The difference between the two populations is one worker-service hop, so
+    /// this number is that hop under whatever the fault did to it. Recorded for
+    /// both expectations: S21 judges it, and S2 gains a second way of saying its
+    /// partition changed nothing, since a partition between executors has no
+    /// business moving the cost of a relay through a third party.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cross_pod_premium_during_fault_ms: Option<i64>,
+    /// The fault-window premium as a percentage of the baseline premium, so
+    /// **100 means it did not move** and 250 means it is two and a half times
+    /// as wide. Same convention as
+    /// [`RelayCell::share_of_baseline_percent`].
+    ///
+    /// `None` when either premium is missing, or when the baseline premium is
+    /// zero and a percentage would divide by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cross_pod_premium_inflation_percent: Option<f64>,
     pub cells: Vec<RelayCell>,
     /// What is, and is not, known about the fault having taken hold. Spelled
     /// out because this scenario has no in-cluster evidence of its own — see
@@ -301,23 +420,24 @@ impl RelayReport {
 
     /// Lines an operator has to read.
     pub fn attention_lines(&self) -> Vec<String> {
+        let code = self.scenario;
         let mut lines: Vec<String> = self
             .findings
             .iter()
-            .map(|f| format!("S2 {}: {}", f.violation.as_str(), f.detail))
+            .map(|f| format!("{code} {}: {}", f.violation.as_str(), f.detail))
             .collect();
 
         if self.findings_omitted > 0 {
             lines.push(format!(
-                "S2: {} further relay finding(s) were dropped from the report",
+                "{code}: {} further relay finding(s) were dropped from the report",
                 self.findings_omitted
             ));
         }
         if self.records_outside_the_pairing > 0 {
             lines.push(format!(
-                "S2: {} operation(s) ran against callers the pairing never placed, so they are \
-                 in no population and in no cell — the pairing and the workload disagree about \
-                 who was driven",
+                "{code}: {} operation(s) ran against callers the pairing never placed, so they \
+                 are in no population and in no cell — the pairing and the workload disagree \
+                 about who was driven",
                 self.records_outside_the_pairing
             ));
         }
@@ -328,14 +448,20 @@ impl RelayReport {
     ///
     /// The evidence line goes here rather than into [`Self::attention_lines`]
     /// deliberately. It is a standing property of the scenario, true of every
-    /// S2 run including the good ones, and an attention item that fires every
+    /// run including the good ones, and an attention item that fires every
     /// single time teaches a reader to skip attention items.
+    ///
+    /// Under [`RelayExpectation::RelayDegraded`] the degradation itself is a
+    /// note for the same reason. The run was asked to hurt these calls, so
+    /// reporting that it did as an attention item would bury the one line that
+    /// says whether the platform stayed correct while it happened.
     pub fn note_lines(&self) -> Vec<String> {
-        let mut lines = vec![format!("S2: {}", self.partition_evidence)];
+        let code = self.scenario;
+        let mut lines = vec![format!("{code}: {}", self.partition_evidence)];
 
         if let Some(percent) = self.cross_pod_percent {
             lines.push(format!(
-                "S2: {percent}% of placed callers had their callee on the other executor \
+                "{code}: {percent}% of placed callers had their callee on the other executor \
                  ({} cross-pod, {} co-located, {} unplaced)",
                 self.pairing.cross_pod.len(),
                 self.pairing.co_located.len(),
@@ -345,9 +471,33 @@ impl RelayReport {
 
         if let Some(premium) = self.cross_pod_premium_ms {
             lines.push(format!(
-                "S2: a cross-pod call cost {premium}ms more than a co-located one at p50 on the \
-                 undisturbed baseline. That premium is the relay hop through worker-service, and \
-                 it is the evidence that the two populations really are split"
+                "{code}: a cross-pod call cost {premium}ms more than a co-located one at p50 on \
+                 the undisturbed baseline. That premium is the relay hop through worker-service, \
+                 and it is the evidence that the two populations really are split"
+            ));
+        }
+
+        if let Some(during) = self.cross_pod_premium_during_fault_ms {
+            let movement = match self.cross_pod_premium_inflation_percent {
+                Some(percent) => format!("{percent}% of its baseline width"),
+                None => "an unmeasured share of its baseline width".to_string(),
+            };
+            // The same measurement means opposite things to the two scenarios,
+            // so the sentence that interprets it has to differ. Reporting one
+            // reading under both would leave half the runs carrying a line that
+            // argues against what they set out to show.
+            let reading = match self.expectation {
+                RelayExpectation::Inert => {
+                    "A partition between two executors has no business moving the cost of a relay \
+                     through a third party, so this is a second way of saying the fault was inert"
+                }
+                RelayExpectation::RelayDegraded => {
+                    "That premium is one worker-service hop and nothing else, so this is where \
+                     this run's degradation lives"
+                }
+            };
+            lines.push(format!(
+                "{code}: during the fault that same premium was {during}ms, {movement}. {reading}"
             ));
         }
 
@@ -355,16 +505,29 @@ impl RelayReport {
             self.cell(Placement::CrossPod, Window::DuringFault),
             self.cell(Placement::CoLocated, Window::DuringFault),
         ) {
+            let share = |cell: &RelayCell| {
+                cell.share_of_baseline_percent
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "an unmeasured".to_string())
+            };
+            // Throughput is the blunt instrument here and the line says so
+            // under the expectation that would otherwise be read wrong. A
+            // degradation run whose cells both sit near 100% has not failed to
+            // degrade anything; the driver sets the cadence, so these hold until
+            // the platform cannot keep up at all, and the premium line above is
+            // where the degradation actually shows.
+            let caveat = match self.expectation {
+                RelayExpectation::Inert => "",
+                RelayExpectation::RelayDegraded => {
+                    ". The driver sets the cadence, so both hold up until the platform cannot \
+                     keep up at all — these are the SLO breach when it comes, not the measurement"
+                }
+            };
             lines.push(format!(
-                "S2: during the partition cross-pod ran at {}% of its own baseline and \
-                 co-located at {}%",
-                cross
-                    .share_of_baseline_percent
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "an unmeasured".to_string()),
-                co.share_of_baseline_percent
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "an unmeasured".to_string()),
+                "{code}: during the fault cross-pod ran at {}% of its own baseline and \
+                 co-located at {}%{caveat}",
+                share(cross),
+                share(co),
             ));
         }
 
@@ -485,10 +648,8 @@ pub fn build(
     records: &[OperationRecord],
     pairing: RelayPairing,
     fault: Option<FaultWindow>,
-    cross_pod_floor_percent: f64,
-    cross_pod_floor_throughput_percent: f64,
-    co_located_floor_throughput_percent: f64,
-    cross_pod_premium_floor_ms: u64,
+    scenario: ScenarioCode,
+    config: &RelayConfig,
 ) -> RelayReport {
     let mut tallies: BTreeMap<(Placement, Window), Tally> = BTreeMap::new();
     let mut first_submitted: BTreeMap<Placement, DateTime<Utc>> = BTreeMap::new();
@@ -593,34 +754,58 @@ pub fn build(
         }
     }
 
-    // Measured on the undisturbed baseline, because this is a statement about
-    // the workload rather than about the fault. Judging it during the partition
-    // would confuse "the pairing is wrong" with "the partition did something".
-    let baseline_p50 = |placement: Placement| {
-        cells
-            .iter()
-            .find(|c| c.placement == placement && c.window == Window::BeforeFault)
-            .map(|c| c.latency.p50_ms as i64)
+    // The gap between the two populations in one window, in milliseconds of
+    // p50. Both populations cross worker-service; only the cross-pod one crosses
+    // it twice, so whatever is left after the subtraction is one relay hop and
+    // nothing else. That is what makes this a usable instrument in a window
+    // where *everything* is slower.
+    let premium_in = |window: Window| {
+        let p50 = |placement: Placement| {
+            cells
+                .iter()
+                .find(|c| c.placement == placement && c.window == window)
+                .map(|c| c.latency.p50_ms as i64)
+        };
+        match (p50(Placement::CrossPod), p50(Placement::CoLocated)) {
+            (Some(cross), Some(co)) => Some(cross - co),
+            _ => None,
+        }
     };
-    let cross_pod_premium_ms = match (
-        baseline_p50(Placement::CrossPod),
-        baseline_p50(Placement::CoLocated),
-    ) {
-        (Some(cross), Some(co)) => Some(cross - co),
-        _ => None,
-    };
+
+    // The baseline premium is a statement about the workload rather than about
+    // the fault: it says the two populations really are split. Measuring it
+    // during the fault instead would confuse "the pairing is wrong" with "the
+    // fault did something".
+    let cross_pod_premium_ms = premium_in(Window::BeforeFault);
+    let cross_pod_premium_during_fault_ms = premium_in(Window::DuringFault);
+    let cross_pod_premium_inflation_percent =
+        match (cross_pod_premium_ms, cross_pod_premium_during_fault_ms) {
+            // A zero baseline has no width to grow by, and a percentage of it would
+            // be a division by zero dressed up as a measurement. The run is already
+            // reporting `cross-pod-not-relayed` in that case, which is the more
+            // useful thing to say.
+            (Some(baseline), Some(during)) if baseline > 0 => {
+                Some(round2(100.0 * during as f64 / baseline as f64))
+            }
+            _ => None,
+        };
 
     let cross_pod_percent = pairing.cross_pod_percent();
     let mut report = RelayReport {
+        scenario,
+        expectation: config.expectation,
         pairing,
         cross_pod_percent,
-        cross_pod_floor_percent,
-        cross_pod_floor_throughput_percent,
-        co_located_floor_throughput_percent,
-        cross_pod_premium_floor_ms,
+        cross_pod_floor_percent: config.cross_pod_floor_percent,
+        cross_pod_floor_throughput_percent: config.cross_pod_floor_throughput_percent,
+        co_located_floor_throughput_percent: config.co_located_floor_throughput_percent,
+        cross_pod_premium_floor_ms: config.cross_pod_premium_floor_ms,
+        cross_pod_premium_inflation_floor_percent: config.cross_pod_premium_inflation_floor_percent,
         cross_pod_premium_ms,
+        cross_pod_premium_during_fault_ms,
+        cross_pod_premium_inflation_percent,
         cells,
-        partition_evidence: partition_evidence(fault),
+        partition_evidence: fault_evidence(fault, config.expectation),
         records_outside_the_pairing,
         findings: Vec::new(),
         findings_omitted: 0,
@@ -634,33 +819,103 @@ pub fn build(
 }
 
 /// What can honestly be said about the fault having landed.
-fn partition_evidence(fault: Option<FaultWindow>) -> String {
+///
+/// The two expectations are in genuinely different positions here, and the line
+/// says which one the reader is holding. An inert fault leaves nothing in the
+/// cluster to observe, so the run has only Chaos Mesh's word for it. A fault
+/// aimed at the relay leaves a mark in the run's own numbers, and the report
+/// points at it rather than asking to be trusted.
+fn fault_evidence(fault: Option<FaultWindow>, expectation: RelayExpectation) -> String {
     match fault {
-        None => "the run never learned when the partition was injected, so every cell here is \
-                 filed under an unknown window and none of them can be read against the fault"
+        None => "the run never learned when the fault was injected, so every cell here is filed \
+                 under an unknown window and none of them can be read against it"
             .to_string(),
         Some(window) if window.recovered_at.is_none() => {
-            "the run saw the partition injected but never saw it healed, so the during-fault \
-             window runs to the last operation rather than to the heal"
+            "the run saw the fault injected but never saw it healed, so the during-fault window \
+             runs to the last operation rather than to the heal"
                 .to_string()
         }
-        Some(_) => "Chaos Mesh reporting AllInjected is the only evidence that the partition \
-                    took hold. Unlike every other partition scenario there is nothing in the \
-                    cluster that is supposed to stop, so a clean result here cannot by itself \
-                    distinguish an inert fault from an absent one"
-            .to_string(),
+        Some(_) => match expectation {
+            RelayExpectation::Inert => {
+                "Chaos Mesh reporting AllInjected is the only evidence that the partition took \
+                 hold. Unlike every other partition scenario there is nothing in the cluster \
+                 that is supposed to stop, so a clean result here cannot by itself distinguish \
+                 an inert fault from an absent one"
+                    .to_string()
+            }
+            RelayExpectation::RelayDegraded => {
+                "the fault is aimed at the relay itself, so unlike the control that shares these \
+                 populations this run carries its own evidence: the cross-pod premium is one \
+                 worker-service hop, and a premium that widened during the window says the \
+                 fault reached it"
+                    .to_string()
+            }
+        },
     }
 }
 
 /// Turns the cells into findings.
+///
+/// Split by expectation after the checks the two share. Those are the ones about
+/// the *measurement* — whether the populations exist and whether they are really
+/// two — and they hold whichever way the fault is supposed to point.
 fn judge(report: &RelayReport) -> Vec<RelayFinding> {
+    let mut findings = pairing_findings(report);
+
+    let cross = report
+        .cell(Placement::CrossPod, Window::DuringFault)
+        .and_then(|c| c.share_of_baseline_percent);
+    let co = report
+        .cell(Placement::CoLocated, Window::DuringFault)
+        .and_then(|c| c.share_of_baseline_percent);
+
+    match report.expectation {
+        RelayExpectation::Inert => findings.extend(inert_findings(report, cross, co)),
+        RelayExpectation::RelayDegraded => {
+            findings.extend(degraded_findings(report, cross, co));
+        }
+    }
+
+    // Shared, and last. Both scenarios require the relay to come back: the
+    // control because nothing should have moved it, and the degradation
+    // scenario because a fault that is bounded in time has to be bounded in
+    // effect too. Only worth saying when the fault window itself was clean
+    // under `Inert`, since a population that dropped and stayed down is already
+    // reported there and repeating it would double-count one problem.
+    let already_reported = report.expectation == RelayExpectation::Inert
+        && cross.is_some_and(|s| s < report.cross_pod_floor_throughput_percent);
+    let after = report
+        .cell(Placement::CrossPod, Window::AfterFault)
+        .and_then(|c| c.share_of_baseline_percent);
+    if !already_reported
+        && after.is_some_and(|after| after < report.cross_pod_floor_throughput_percent)
+    {
+        findings.push(RelayFinding {
+            violation: RelayViolation::CrossPodDidNotReturn,
+            detail: format!(
+                "cross-pod was only at {}% of its baseline after the heal, below the {}% floor. \
+                 The fault was bounded in time, so its effect has to be bounded too",
+                after.unwrap_or_default(),
+                report.cross_pod_floor_throughput_percent
+            ),
+        });
+    }
+
+    findings
+}
+
+/// The checks that are about the measurement rather than about the fault.
+///
+/// Run first under both expectations, because everything after them compares
+/// two populations and all of it passes for free if there are not two.
+fn pairing_findings(report: &RelayReport) -> Vec<RelayFinding> {
     let mut findings = Vec::new();
 
     match report.cross_pod_percent {
         None => findings.push(RelayFinding {
             violation: RelayViolation::PairingTooThin,
             detail: "no RPC caller was placed on either executor, so the run drove no pairs the \
-                     partition could reach"
+                     fault could reach"
                 .to_string(),
         }),
         Some(percent) if percent < report.cross_pod_floor_percent => {
@@ -668,7 +923,7 @@ fn judge(report: &RelayReport) -> Vec<RelayFinding> {
                 violation: RelayViolation::PairingTooThin,
                 detail: format!(
                     "only {percent}% of placed callers had their callee on the other executor, \
-                     below the {}% floor — the partition had almost nothing to cut, so a clean \
+                     below the {}% floor — the fault had almost nothing to reach, so a clean \
                      result here would not have been earned",
                     report.cross_pod_floor_percent
                 ),
@@ -677,9 +932,6 @@ fn judge(report: &RelayReport) -> Vec<RelayFinding> {
         Some(_) => {}
     }
 
-    // Checked before anything that compares the two populations through the
-    // fault, because if this fires those comparisons are between two samples of
-    // the same thing and every one of them passes for free.
     match report.cross_pod_premium_ms {
         Some(premium) if premium < report.cross_pod_premium_floor_ms as i64 => {
             findings.push(RelayFinding {
@@ -705,13 +957,13 @@ fn judge(report: &RelayReport) -> Vec<RelayFinding> {
         Some(_) => {}
     }
 
-    let cross = report
-        .cell(Placement::CrossPod, Window::DuringFault)
-        .and_then(|c| c.share_of_baseline_percent);
-    let co = report
-        .cell(Placement::CoLocated, Window::DuringFault)
-        .and_then(|c| c.share_of_baseline_percent);
+    findings
+}
 
+/// S2's verdict: the fault should have changed nothing, so any drop is a
+/// finding.
+fn inert_findings(report: &RelayReport, cross: Option<f64>, co: Option<f64>) -> Vec<RelayFinding> {
+    let mut findings = Vec::new();
     let cross_dropped = cross.is_some_and(|s| s < report.cross_pod_floor_throughput_percent);
     let co_dropped = co.is_some_and(|s| s < report.co_located_floor_throughput_percent);
 
@@ -747,22 +999,61 @@ fn judge(report: &RelayReport) -> Vec<RelayFinding> {
         });
     }
 
-    // Only worth saying when the fault window itself was clean: a population
-    // that dropped during the fault and stayed down is already reported above,
-    // and repeating it as a recovery failure would double-count one problem.
-    let after = report
-        .cell(Placement::CrossPod, Window::AfterFault)
-        .and_then(|c| c.share_of_baseline_percent);
-    if !cross_dropped
-        && after.is_some_and(|after| after < report.cross_pod_floor_throughput_percent)
+    findings
+}
+
+/// S21's verdict: the fault was aimed at the relay, so the finding is a fault
+/// that missed it.
+///
+/// Neither population dropping is *not* a finding on its own here. The driver
+/// sets the cadence, so throughput holds until the platform is too slow to keep
+/// up at all, and a scenario that waited for that would only ever fire on a
+/// worker-service that had already fallen over.
+fn degraded_findings(
+    report: &RelayReport,
+    cross: Option<f64>,
+    co: Option<f64>,
+) -> Vec<RelayFinding> {
+    let mut findings = Vec::new();
+
+    let floor = report
+        .cross_pod_premium_inflation_floor_percent
+        .unwrap_or(f64::INFINITY);
+    match report.cross_pod_premium_inflation_percent {
+        Some(inflation) if inflation < floor => findings.push(RelayFinding {
+            violation: RelayViolation::RelayNotDegraded,
+            detail: format!(
+                "the cross-pod premium was {inflation}% of its baseline width during the fault, \
+                 under the {floor}% floor, where 100% is a premium that did not move. That \
+                 premium is one worker-service hop and nothing else, so a fault aimed at \
+                 worker-service that left it alone did not reach worker-service. Read this run \
+                 as inconclusive rather than as the platform absorbing the fault"
+            ),
+        }),
+        None => findings.push(RelayFinding {
+            violation: RelayViolation::RelayNotDegraded,
+            detail: "the premium could not be compared across the fault window, so the run has \
+                     no evidence the fault reached the relay at all"
+                .to_string(),
+        }),
+        Some(_) => {}
+    }
+
+    // Reported as a share of a share: co-located keeping less of its own
+    // baseline than cross-pod kept of its own. Comparing the two rates directly
+    // would compare two populations that never ran at the same rate to begin
+    // with.
+    if let (Some(cross), Some(co)) = (cross, co)
+        && cross - co > PLACEMENT_SHARE_MARGIN_PERCENT
     {
         findings.push(RelayFinding {
-            violation: RelayViolation::CrossPodDidNotReturn,
+            violation: RelayViolation::CoLocatedDegradedMore,
             detail: format!(
-                "cross-pod held up during the partition but was only at {}% of its baseline \
-                 after the heal, below the {}% floor",
-                after.unwrap_or_default(),
-                report.cross_pod_floor_throughput_percent
+                "co-located held {co}% of its own baseline and cross-pod held {cross}%, so the \
+                 shorter path lost more, by more than the {PLACEMENT_SHARE_MARGIN_PERCENT} \
+                 points these two normally sit apart. A cross-pod call crosses worker-service \
+                 twice and a co-located one crosses it once, so a fault on worker-service cannot \
+                 hurt the shorter path more — this says the load landed on the executors instead"
             ),
         });
     }
@@ -803,6 +1094,21 @@ mod tests {
         } else {
             CO_LOCATED_MS
         };
+        record_costing(agent, submitted, completed, duration_ms)
+    }
+
+    /// The same record with the call's cost named rather than derived.
+    ///
+    /// The derived version fixes a population's latency for the whole run, which
+    /// is right for the control and useless for the scenario that measures the
+    /// premium *changing*. Kept as two functions so the existing fixtures keep
+    /// saying what they said.
+    fn record_costing(
+        agent: &str,
+        submitted: i64,
+        completed: Option<i64>,
+        duration_ms: u64,
+    ) -> OperationRecord {
         OperationRecord {
             op_id: 0,
             stream: Stream::Rpc,
@@ -836,6 +1142,29 @@ mod tests {
         }
     }
 
+    /// The control's thresholds, matching S2's suite entry closely enough that
+    /// a test reads against the numbers a real run is judged by.
+    fn inert_config() -> RelayConfig {
+        RelayConfig {
+            cross_pod_floor_percent: 25.0,
+            cross_pod_floor_throughput_percent: 70.0,
+            co_located_floor_throughput_percent: 70.0,
+            cross_pod_premium_floor_ms: 5,
+            expectation: RelayExpectation::Inert,
+            cross_pod_premium_inflation_floor_percent: None,
+        }
+    }
+
+    /// S21's, with an inflation floor the fixtures can straddle: the premium
+    /// has to be at least half again as wide during the fault.
+    fn degraded_config() -> RelayConfig {
+        RelayConfig {
+            expectation: RelayExpectation::RelayDegraded,
+            cross_pod_premium_inflation_floor_percent: Some(150.0),
+            ..inert_config()
+        }
+    }
+
     /// A steady run where neither population moved is the expected outcome, and
     /// it must produce no findings at all.
     #[test]
@@ -849,10 +1178,8 @@ mod tests {
             &records,
             pairing(&["cross-0"], &["co-0"]),
             fault(),
-            25.0,
-            70.0,
-            70.0,
-            5,
+            ScenarioCode::S2,
+            &inert_config(),
         );
         assert!(
             !report.has_findings(),
@@ -880,10 +1207,8 @@ mod tests {
             &records,
             pairing(&["cross-0"], &["co-0"]),
             fault(),
-            25.0,
-            70.0,
-            70.0,
-            5,
+            ScenarioCode::S2,
+            &inert_config(),
         );
         let violations: Vec<_> = report.findings.iter().map(|f| f.violation).collect();
         assert_eq!(violations, vec![RelayViolation::CrossPodDegraded]);
@@ -903,10 +1228,8 @@ mod tests {
             &records,
             pairing(&["cross-0"], &["co-0"]),
             fault(),
-            25.0,
-            70.0,
-            70.0,
-            5,
+            ScenarioCode::S2,
+            &inert_config(),
         );
         let violations: Vec<_> = report.findings.iter().map(|f| f.violation).collect();
         assert_eq!(violations, vec![RelayViolation::BothDegraded]);
@@ -939,10 +1262,8 @@ mod tests {
                 ],
             ),
             fault(),
-            25.0,
-            70.0,
-            70.0,
-            5,
+            ScenarioCode::S2,
+            &inert_config(),
         );
         assert_eq!(report.cross_pod_percent, Some(10.0));
         assert!(
@@ -975,10 +1296,8 @@ mod tests {
             &records,
             pairing(&["co-1"], &["co-0"]),
             fault(),
-            25.0,
-            70.0,
-            70.0,
-            5,
+            ScenarioCode::S2,
+            &inert_config(),
         );
         assert_eq!(report.cross_pod_premium_ms, Some(0));
         assert!(
@@ -1004,10 +1323,8 @@ mod tests {
             &records,
             pairing(&["cross-0"], &["co-0"]),
             fault(),
-            25.0,
-            70.0,
-            70.0,
-            5,
+            ScenarioCode::S2,
+            &inert_config(),
         );
         assert!(
             !report.has_findings(),
@@ -1046,10 +1363,8 @@ mod tests {
             &records,
             pairing(&["cross-0"], &["co-0"]),
             fault(),
-            25.0,
-            70.0,
-            70.0,
-            5,
+            ScenarioCode::S2,
+            &inert_config(),
         );
         assert_eq!(report.records_outside_the_pairing, 1);
     }
@@ -1063,11 +1378,291 @@ mod tests {
             &records,
             pairing(&["cross-0"], &["co-0"]),
             None,
-            25.0,
-            70.0,
-            70.0,
-            5,
+            ScenarioCode::S2,
+            &inert_config(),
         );
         assert!(report.partition_evidence.contains("unknown window"));
+    }
+
+    /// A run that spans the fault with a named cost on each side.
+    ///
+    /// `during_*` applies to operations that complete inside the window, which
+    /// is how the cells file them, so a fixture whose fault-window calls cost
+    /// more is a fixture of a relay under load.
+    fn records_across_the_fault(
+        during_cross_ms: u64,
+        during_co_ms: u64,
+        during_step: usize,
+    ) -> Vec<OperationRecord> {
+        let mut records = Vec::new();
+        for second in (0..100).step_by(2) {
+            records.push(record_costing(
+                "cross-0",
+                second,
+                Some(second),
+                CROSS_POD_MS,
+            ));
+            records.push(record_costing("co-0", second, Some(second), CO_LOCATED_MS));
+        }
+        for second in (100..200).step_by(during_step) {
+            records.push(record_costing(
+                "cross-0",
+                second,
+                Some(second),
+                during_cross_ms,
+            ));
+            records.push(record_costing("co-0", second, Some(second), during_co_ms));
+        }
+        for second in (200..300).step_by(2) {
+            records.push(record_costing(
+                "cross-0",
+                second,
+                Some(second),
+                CROSS_POD_MS,
+            ));
+            records.push(record_costing("co-0", second, Some(second), CO_LOCATED_MS));
+        }
+        records
+    }
+
+    /// S21's clean run. Both populations got slower and the cross-pod one got
+    /// slower *twice over*, which is what one starved worker-service hop looks
+    /// like from the outside.
+    #[test]
+    fn a_relay_fault_that_widened_the_premium_reports_nothing() {
+        // Baseline premium 50ms; during the fault 190 - 90 = 100ms, so 200%.
+        let records = records_across_the_fault(190, 90, 2);
+        let report = build(
+            &records,
+            pairing(&["cross-0"], &["co-0"]),
+            fault(),
+            ScenarioCode::S21,
+            &degraded_config(),
+        );
+        assert!(
+            !report.has_findings(),
+            "expected a clean degradation run, got {:?}",
+            report.findings
+        );
+        assert_eq!(report.cross_pod_premium_ms, Some(50));
+        assert_eq!(report.cross_pod_premium_during_fault_ms, Some(100));
+        assert_eq!(report.cross_pod_premium_inflation_percent, Some(200.0));
+    }
+
+    /// The vacuity guard. Both populations slowed by the same amount, so the
+    /// gap between them — one worker-service hop — never moved, and the load
+    /// landed somewhere else.
+    #[test]
+    fn a_fault_that_left_the_premium_alone_did_not_reach_the_relay() {
+        // Both populations pay a flat 100ms more, so the premium stays at 50.
+        let records = records_across_the_fault(250, 200, 2);
+        let report = build(
+            &records,
+            pairing(&["cross-0"], &["co-0"]),
+            fault(),
+            ScenarioCode::S21,
+            &degraded_config(),
+        );
+        assert_eq!(report.cross_pod_premium_inflation_percent, Some(100.0));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.violation == RelayViolation::RelayNotDegraded),
+            "a premium that did not move should read as inconclusive, got {:?}",
+            report.findings
+        );
+    }
+
+    /// The same numbers under the control's expectation raise nothing, because
+    /// a premium that held steady is exactly what S2 wants to see.
+    #[test]
+    fn the_control_does_not_ask_its_fault_to_widen_the_premium() {
+        let records = records_across_the_fault(150, 100, 2);
+        let report = build(
+            &records,
+            pairing(&["cross-0"], &["co-0"]),
+            fault(),
+            ScenarioCode::S2,
+            &inert_config(),
+        );
+        assert!(
+            !report.has_findings(),
+            "the control should not require its fault to change anything, got {:?}",
+            report.findings
+        );
+        assert_eq!(report.cross_pod_premium_inflation_percent, Some(100.0));
+    }
+
+    /// Cross-pod collapsing is the control's headline finding and the
+    /// degradation scenario's expected result. It must not be reported as a
+    /// defect by the one that asked for it.
+    #[test]
+    fn a_degradation_run_does_not_report_its_own_fault_as_a_defect() {
+        // Cross-pod is served a tenth as often inside the window, and pays a
+        // widened premium while it happens.
+        let records = records_across_the_fault(190, 90, 20);
+        let report = build(
+            &records,
+            pairing(&["cross-0"], &["co-0"]),
+            fault(),
+            ScenarioCode::S21,
+            &degraded_config(),
+        );
+        let violations: Vec<_> = report.findings.iter().map(|f| f.violation).collect();
+        assert!(
+            !violations.contains(&RelayViolation::CrossPodDegraded)
+                && !violations.contains(&RelayViolation::BothDegraded),
+            "the scenario asked for this degradation, so it is context and not a finding: {:?}",
+            report.findings
+        );
+        assert!(
+            report
+                .note_lines()
+                .iter()
+                .any(|line| line.contains("cross-pod ran at")),
+            "the degradation still has to be reported somewhere: {:?}",
+            report.note_lines()
+        );
+    }
+
+    /// The load hit the executors instead of the relay. A cross-pod call crosses
+    /// worker-service twice and a co-located one crosses it once, so the shorter
+    /// path cannot be the one that suffers more.
+    #[test]
+    fn the_shorter_path_losing_more_says_the_load_missed_the_relay() {
+        let mut records = Vec::new();
+        for second in (0..100).step_by(2) {
+            records.push(record_costing(
+                "cross-0",
+                second,
+                Some(second),
+                CROSS_POD_MS,
+            ));
+            records.push(record_costing("co-0", second, Some(second), CO_LOCATED_MS));
+        }
+        // The premium still widens, so this is not caught by the vacuity guard.
+        // Co-located is served far less often than cross-pod all the same.
+        for second in (100..200).step_by(4) {
+            records.push(record_costing("cross-0", second, Some(second), 190));
+        }
+        for second in (100..200).step_by(50) {
+            records.push(record_costing("co-0", second, Some(second), 90));
+        }
+        for second in (200..300).step_by(2) {
+            records.push(record_costing(
+                "cross-0",
+                second,
+                Some(second),
+                CROSS_POD_MS,
+            ));
+            records.push(record_costing("co-0", second, Some(second), CO_LOCATED_MS));
+        }
+        let report = build(
+            &records,
+            pairing(&["cross-0"], &["co-0"]),
+            fault(),
+            ScenarioCode::S21,
+            &degraded_config(),
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.violation == RelayViolation::CoLocatedDegradedMore),
+            "the shorter path losing more should be a finding, got {:?}",
+            report.findings
+        );
+    }
+
+    /// The bound that survives the expectation split: a fault that is over has
+    /// to stop costing anything, whichever way it was supposed to point.
+    #[test]
+    fn a_relay_that_never_came_back_is_a_finding_under_either_expectation() {
+        let mut records = Vec::new();
+        for second in (0..100).step_by(2) {
+            records.push(record("cross-0", second, Some(second)));
+            records.push(record("co-0", second, Some(second)));
+        }
+        for second in (100..200).step_by(2) {
+            records.push(record_costing("cross-0", second, Some(second), 190));
+            records.push(record_costing("co-0", second, Some(second), 90));
+        }
+        // Cross-pod stays down long after the heal.
+        for second in (200..300).step_by(50) {
+            records.push(record("cross-0", second, Some(second)));
+        }
+        for second in (200..300).step_by(2) {
+            records.push(record("co-0", second, Some(second)));
+        }
+        for (code, config) in [
+            (ScenarioCode::S2, inert_config()),
+            (ScenarioCode::S21, degraded_config()),
+        ] {
+            let report = build(
+                &records,
+                pairing(&["cross-0"], &["co-0"]),
+                fault(),
+                code,
+                &config,
+            );
+            assert!(
+                report
+                    .findings
+                    .iter()
+                    .any(|f| f.violation == RelayViolation::CrossPodDidNotReturn),
+                "{code} should require the relay to recover, got {:?}",
+                report.findings
+            );
+        }
+    }
+
+    /// The two populations sitting a fraction of a point apart is what an
+    /// undisturbed run looks like, and it must not be read as one of them being
+    /// hurt.
+    #[test]
+    fn ordinary_jitter_between_the_populations_is_not_an_inversion() {
+        let mut records = Vec::new();
+        for second in (0..100).step_by(2) {
+            records.push(record_costing(
+                "cross-0",
+                second,
+                Some(second),
+                CROSS_POD_MS,
+            ));
+            records.push(record_costing("co-0", second, Some(second), CO_LOCATED_MS));
+        }
+        // Cross-pod is served on every even second of the window; co-located
+        // misses one, which is the sub-point difference S2's green runs showed.
+        for second in (100..200).step_by(2) {
+            records.push(record_costing("cross-0", second, Some(second), 190));
+            if second != 150 {
+                records.push(record_costing("co-0", second, Some(second), 90));
+            }
+        }
+        for second in (200..300).step_by(2) {
+            records.push(record_costing(
+                "cross-0",
+                second,
+                Some(second),
+                CROSS_POD_MS,
+            ));
+            records.push(record_costing("co-0", second, Some(second), CO_LOCATED_MS));
+        }
+        let report = build(
+            &records,
+            pairing(&["cross-0"], &["co-0"]),
+            fault(),
+            ScenarioCode::S21,
+            &degraded_config(),
+        );
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.violation == RelayViolation::CoLocatedDegradedMore),
+            "a fraction of a point apart is not the shorter path being hurt: {:?}",
+            report.findings
+        );
     }
 }
