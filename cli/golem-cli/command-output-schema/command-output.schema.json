@@ -347,7 +347,7 @@
     },
     "account.limits.show": {
       "type": "object",
-      "description": "Single structured output document emitted by per-agent storage and memory limit commands.",
+      "description": "Single structured output document containing monthly resource policy and per-agent storage and memory limits.",
       "x-golem-output-mode": "single",
       "x-golem-command": "account limits show",
       "x-golem-commands": [
@@ -357,12 +357,20 @@
       ],
       "required": [
         "$type",
+        "accountId",
+        "monthly",
         "maxStoragePerAgent",
         "maxMemoryPerAgent"
       ],
       "properties": {
         "$type": {
           "const": "account.limits.show"
+        },
+        "accountId": {
+          "type": "string"
+        },
+        "monthly": {
+          "$ref": "#/definitions/MonthlyResourceLimits"
         },
         "maxStoragePerAgent": {
           "$ref": "#/definitions/StorageLimit"
@@ -739,7 +747,7 @@
     },
     "AccountUsageMetering": {
       "type": "object",
-      "description": "Collection state for each customer-visible usage dimension. Both storage dimensions use the filesystem meter.",
+      "description": "Collection state for each customer-visible usage dimension. Both storage dimensions use storage metering.",
       "required": [
         "compute",
         "memory",
@@ -788,6 +796,118 @@
         }
       },
       "additionalProperties": false
+    },
+    "MonthlyResourceLimits": {
+      "type": "object",
+      "required": [
+        "computeGcu",
+        "memoryGbSeconds",
+        "durableStorageGbMonth",
+        "ephemeralStorageGbMonth"
+      ],
+      "properties": {
+        "computeGcu": {
+          "$ref": "#/definitions/MonthlyComputeLimit"
+        },
+        "memoryGbSeconds": {
+          "$ref": "#/definitions/MonthlyMemoryLimit"
+        },
+        "durableStorageGbMonth": {
+          "$ref": "#/definitions/MonthlyStorageLimit"
+        },
+        "ephemeralStorageGbMonth": {
+          "$ref": "#/definitions/MonthlyStorageLimit"
+        }
+      },
+      "additionalProperties": false
+    },
+    "MonthlyComputeLimit": {
+      "type": "object",
+      "required": ["metering", "unit"],
+      "properties": {
+        "metering": {
+          "$ref": "#/definitions/MeteringStatus"
+        },
+        "monthlyAmount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "usage": {
+          "type": "number",
+          "minimum": 0
+        },
+        "remaining": {
+          "type": "number",
+          "minimum": 0
+        },
+        "unit": {
+          "const": "GCU"
+        },
+        "behavior": {
+          "$ref": "#/definitions/MonthlyLimitBehavior"
+        }
+      },
+      "additionalProperties": false
+    },
+    "MonthlyMemoryLimit": {
+      "type": "object",
+      "required": ["metering", "unit"],
+      "properties": {
+        "metering": {
+          "$ref": "#/definitions/MeteringStatus"
+        },
+        "monthlyAmount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "usage": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "remaining": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unit": {
+          "const": "GB-seconds"
+        },
+        "behavior": {
+          "$ref": "#/definitions/MonthlyLimitBehavior"
+        }
+      },
+      "additionalProperties": false
+    },
+    "MonthlyStorageLimit": {
+      "type": "object",
+      "required": ["metering", "unit"],
+      "properties": {
+        "metering": {
+          "$ref": "#/definitions/MeteringStatus"
+        },
+        "monthlyAmount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "usage": {
+          "type": "number",
+          "minimum": 0
+        },
+        "remaining": {
+          "type": "number",
+          "minimum": 0
+        },
+        "unit": {
+          "const": "GB-month"
+        },
+        "behavior": {
+          "$ref": "#/definitions/MonthlyLimitBehavior"
+        }
+      },
+      "additionalProperties": false
+    },
+    "MonthlyLimitBehavior": {
+      "type": "string",
+      "enum": ["hardLimit"]
     },
     "MemoryLimit": {
       "type": "object",

@@ -20,8 +20,8 @@ use crate::services::auth::AuthService;
 use golem_common::base_model::api;
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
-    AccountUsage, DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS, MemoryLimit, SetMemoryLimit,
-    SetStorageLimit, StorageLimit,
+    AccountResourcePolicy, AccountUsage, DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS, MemoryLimit,
+    SetMemoryLimit, SetStorageLimit, StorageLimit,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -63,7 +63,7 @@ impl AccountUsageApi {
     /// the registry last received a usage snapshot for the period, or the response time if no
     /// snapshot exists. Metering status distinguishes enabled meters that measured zero from
     /// disabled meters. `unknown` means no usage producer has reported metering state for the
-    /// period. Durable and ephemeral storage both reflect the shared filesystem meter.
+    /// period. Durable and ephemeral storage both use storage metering.
     #[oai(
         path = "/:account_id/usage",
         method = "get",
@@ -132,28 +132,34 @@ impl AccountUsageApi {
         record.result(Ok(Json(response)))
     }
 
-    /// Get effective storage-per-agent override metadata for an account.
+    /// Get the current account resource policy.
+    ///
+    /// The policy combines Plan Row monthly amounts with current UTC-period usage and both
+    /// per-agent safety limits. Enabled monthly dimensions report measured usage and remaining
+    /// capacity. Disabled dimensions omit the monthly amount, usage, remaining capacity, and
+    /// behavior. `unknown` means no producer has reported metering state; it does not mean disabled
+    /// or measured zero. Compute uses GCU, allocated linear memory uses GB-seconds, storage uses
+    /// GB-month, and per-agent limits use bytes. The effective monthly behavior in this version is
+    /// `hardLimit`.
     #[oai(
-        path = "/:account_id/resource-overrides/max-storage-per-agent",
+        path = "/:account_id/limits",
         method = "get",
-        operation_id = "get_account_storage_override"
+        operation_id = "get_account_limits"
     )]
-    async fn get_storage_override(
+    async fn get_limits(
         &self,
         account_id: Path<AccountId>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<StorageLimit>> {
-        let record = recorded_http_api_request!(
-            "get_account_storage_override",
-            account_id = account_id.0.to_string()
-        );
+    ) -> ApiResult<Json<AccountResourcePolicy>> {
+        let record =
+            recorded_http_api_request!("get_account_limits", account_id = account_id.0.to_string());
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
-        let storage_limit = self
-            .account_resource_override_service
-            .get_max_disk_space_per_worker(account_id.0, &auth)
+        let policy = self
+            .account_usage_service
+            .get_resource_policy(account_id.0, &auth)
             .instrument(record.span.clone())
             .await?;
-        record.result(Ok(Json(storage_limit)))
+        record.result(Ok(Json(policy)))
     }
 
     /// Set a storage-per-agent override for the authenticated account owner.
@@ -209,30 +215,6 @@ impl AccountUsageApi {
             .map_err(ApiError::from);
 
         record.result(response)
-    }
-
-    /// Get the effective maximum linear memory per agent.
-    #[oai(
-        path = "/:account_id/resource-overrides/max-memory-per-agent",
-        method = "get",
-        operation_id = "get_account_max_memory_override"
-    )]
-    async fn get_max_memory_override(
-        &self,
-        account_id: Path<AccountId>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<MemoryLimit>> {
-        let record = recorded_http_api_request!(
-            "get_account_max_memory_override",
-            account_id = account_id.0.to_string()
-        );
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-        let response = self
-            .account_resource_override_service
-            .get_max_memory_per_worker(account_id.0, &auth)
-            .instrument(record.span.clone())
-            .await?;
-        record.result(Ok(Json(response)))
     }
 
     /// Set the maximum linear memory per agent for the authenticated account owner.

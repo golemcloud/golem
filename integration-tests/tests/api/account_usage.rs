@@ -16,11 +16,13 @@ use anyhow::Context;
 use chrono::{DateTime, Utc};
 use golem_client::api::{
     RegistryServiceClearAccountStorageOverrideError, RegistryServiceClient,
-    RegistryServiceGetAccountStorageOverrideError, RegistryServiceSetAccountStorageOverrideError,
+    RegistryServiceGetAccountLimitsError, RegistryServiceSetAccountStorageOverrideError,
 };
 use golem_common::model::account::{AccountId, AccountRevision, AccountSetPlan};
 use golem_common::model::account_usage::{
-    AccountUsagePeriod, MemoryLimit, MeteringStatus, SetMemoryLimit, SetStorageLimit, StorageLimit,
+    AccountUsagePeriod, BYTE_SECONDS_PER_GB_MONTH, MemoryLimit, MeteringStatus, MonthlyComputeUnit,
+    MonthlyLimitBehavior, MonthlyMemoryUnit, MonthlyStorageUnit, SetMemoryLimit, SetStorageLimit,
+    StorageLimit,
 };
 use golem_service_base::clients::registry::{
     GrpcRegistryService, GrpcRegistryServiceConfig, RegistryService as _, ResourceUsageMetering,
@@ -156,7 +158,7 @@ async fn account_usage_reports_all_customer_dimensions(
     let user = deps.user().await?;
     let registry_service = deps.registry_service();
     let registry_client = registry_client(deps);
-    let byte_seconds_per_gb_month = (1024_u64.pow(3) * 730 * 3600) as f64;
+    let byte_seconds_per_gb_month = BYTE_SECONDS_PER_GB_MONTH as f64;
 
     let updates_started_at = Utc::now();
     for (fuel_delta, durable_storage_byte_seconds_delta, ephemeral_storage_byte_seconds_delta) in
@@ -208,6 +210,66 @@ async fn account_usage_reports_all_customer_dimensions(
     );
     assert!(usage.usage.as_of >= updates_started_at);
     assert!(usage.usage.as_of <= updates_finished_at);
+
+    let limits = registry_service
+        .client(&user.token)
+        .await
+        .get_account_limits(&user.account_id.0)
+        .await?;
+    assert_eq!(limits.account_id, user.account_id);
+    assert_eq!(limits.monthly.compute_gcu.metering, MeteringStatus::Enabled);
+    assert_eq!(limits.monthly.compute_gcu.monthly_amount, Some(5));
+    assert_eq!(limits.monthly.compute_gcu.usage, Some(1.5));
+    assert_eq!(limits.monthly.compute_gcu.remaining, Some(3.5));
+    assert_eq!(limits.monthly.compute_gcu.unit, MonthlyComputeUnit::Gcu);
+    assert_eq!(
+        limits.monthly.compute_gcu.behavior,
+        Some(MonthlyLimitBehavior::HardLimit)
+    );
+    assert_eq!(limits.monthly.memory_gb_seconds.monthly_amount, Some(50));
+    assert_eq!(limits.monthly.memory_gb_seconds.usage, Some(14));
+    assert_eq!(limits.monthly.memory_gb_seconds.remaining, Some(36));
+    assert_eq!(
+        limits.monthly.memory_gb_seconds.unit,
+        MonthlyMemoryUnit::GbSeconds
+    );
+    assert_eq!(
+        limits.monthly.durable_storage_gb_month.monthly_amount,
+        Some(7)
+    );
+    assert_eq!(
+        limits.monthly.durable_storage_gb_month.usage,
+        Some(140.0 / byte_seconds_per_gb_month)
+    );
+    assert_eq!(
+        limits.monthly.durable_storage_gb_month.remaining,
+        Some((7 * BYTE_SECONDS_PER_GB_MONTH - 140) as f64 / byte_seconds_per_gb_month)
+    );
+    assert_eq!(
+        limits.monthly.durable_storage_gb_month.unit,
+        MonthlyStorageUnit::GbMonth
+    );
+    assert_eq!(
+        limits.monthly.ephemeral_storage_gb_month.monthly_amount,
+        Some(11)
+    );
+    assert_eq!(
+        limits.monthly.ephemeral_storage_gb_month.usage,
+        Some(500.0 / byte_seconds_per_gb_month)
+    );
+    assert_eq!(
+        limits.monthly.ephemeral_storage_gb_month.remaining,
+        Some((11 * BYTE_SECONDS_PER_GB_MONTH - 500) as f64 / byte_seconds_per_gb_month)
+    );
+    assert_eq!(
+        limits.monthly.ephemeral_storage_gb_month.unit,
+        MonthlyStorageUnit::GbMonth
+    );
+    assert_eq!(
+        limits.max_memory_per_agent.effective_value,
+        1024 * 1024 * 1024
+    );
+    assert!(!limits.max_storage_per_agent.enabled);
 
     let historical_period = previous_period(usage.usage.period);
     let historical_as_of =
@@ -374,12 +436,12 @@ async fn account_storage_override_endpoints_hide_foreign_accounts(
     let client = deps.registry_service().client(&user.token).await;
 
     let error = client
-        .get_account_storage_override(&foreign_user.account_id.0)
+        .get_account_limits(&foreign_user.account_id.0)
         .await
         .unwrap_err();
     assert!(matches!(
         error,
-        golem_client::Error::Item(RegistryServiceGetAccountStorageOverrideError::Error404(_))
+        golem_client::Error::Item(RegistryServiceGetAccountLimitsError::Error404(_))
     ));
 
     let error = client
@@ -433,8 +495,9 @@ async fn account_storage_override_endpoints_resolve_set_and_clear(
     };
     assert_eq!(
         client
-            .get_account_storage_override(&user.account_id.0)
-            .await?,
+            .get_account_limits(&user.account_id.0)
+            .await?
+            .max_storage_per_agent,
         expected_default
     );
 
@@ -459,8 +522,9 @@ async fn account_storage_override_endpoints_resolve_set_and_clear(
     };
     assert_eq!(
         client
-            .get_account_max_memory_override(&user.account_id.0)
-            .await?,
+            .get_account_limits(&user.account_id.0)
+            .await?
+            .max_memory_per_agent,
         expected_max_memory
     );
     let max_memory_override = client
@@ -484,8 +548,9 @@ async fn account_storage_override_endpoints_resolve_set_and_clear(
 
     assert_eq!(
         client
-            .get_account_storage_override(&user.account_id.0)
-            .await?,
+            .get_account_limits(&user.account_id.0)
+            .await?
+            .max_storage_per_agent,
         expected_override
     );
 
@@ -515,8 +580,9 @@ async fn account_storage_override_endpoints_resolve_set_and_clear(
     );
     assert_eq!(
         client
-            .get_account_storage_override(&user.account_id.0)
-            .await?,
+            .get_account_limits(&user.account_id.0)
+            .await?
+            .max_storage_per_agent,
         expected_default
     );
 

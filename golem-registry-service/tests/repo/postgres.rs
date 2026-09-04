@@ -530,6 +530,11 @@ async fn test_plan_reseed_deletes_nonconfigurable_overrides_before_reenable(
 }
 
 #[test]
+async fn test_plan_monthly_amounts_are_upserted(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_plan_monthly_amounts_are_upserted(deps).await;
+}
+
+#[test]
 async fn test_plan_reseed_clamps_overrides_before_range_expansion(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {

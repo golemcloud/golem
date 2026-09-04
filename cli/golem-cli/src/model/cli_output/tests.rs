@@ -3253,6 +3253,12 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
             arb_small_u64(),
             any::<bool>(),
             any::<bool>(),
+            arb_uuid(),
+            prop_oneof![
+                Just(golem_common::model::account_usage::MeteringStatus::Enabled),
+                Just(golem_common::model::account_usage::MeteringStatus::Disabled),
+                Just(golem_common::model::account_usage::MeteringStatus::Unknown),
+            ],
         )
             .prop_map(
                 |(
@@ -3262,6 +3268,8 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
                     ceiling,
                     user_configurable,
                     storage_enabled,
+                    account_id,
+                    metering,
                 )| {
                     let storage = if storage_enabled {
                         golem_common::model::account_usage::StorageLimit {
@@ -3293,7 +3301,61 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
                         ceiling,
                         user_configurable,
                     };
-                    crate::model::account::AccountLimitsView::new(storage, memory)
+                    let (monthly_amount, usage, remaining, behavior) = match metering {
+                        golem_common::model::account_usage::MeteringStatus::Enabled => (
+                            Some(plan_default),
+                            Some(effective_value as f64),
+                            Some(ceiling as f64),
+                            Some(golem_common::model::account_usage::MonthlyLimitBehavior::HardLimit),
+                        ),
+                        golem_common::model::account_usage::MeteringStatus::Disabled => {
+                            (None, None, None, None)
+                        }
+                        golem_common::model::account_usage::MeteringStatus::Unknown => {
+                            (Some(plan_default), None, None, None)
+                        }
+                    };
+                    crate::model::account::AccountLimitsView::new(
+                        golem_common::model::account_usage::AccountResourcePolicy {
+                            account_id: golem_common::model::account::AccountId(account_id),
+                            monthly: golem_common::model::account_usage::MonthlyResourceLimits {
+                                compute_gcu: golem_common::model::account_usage::MonthlyComputeLimit {
+                                    metering,
+                                    monthly_amount,
+                                    usage,
+                                    remaining,
+                                    unit: golem_common::model::account_usage::MonthlyComputeUnit::Gcu,
+                                    behavior,
+                                },
+                                memory_gb_seconds: golem_common::model::account_usage::MonthlyMemoryLimit {
+                                    metering,
+                                    monthly_amount,
+                                    usage: usage.map(|value| value as u64),
+                                    remaining: remaining.map(|value| value as u64),
+                                    unit: golem_common::model::account_usage::MonthlyMemoryUnit::GbSeconds,
+                                    behavior,
+                                },
+                                durable_storage_gb_month: golem_common::model::account_usage::MonthlyStorageLimit {
+                                    metering,
+                                    monthly_amount,
+                                    usage,
+                                    remaining,
+                                    unit: golem_common::model::account_usage::MonthlyStorageUnit::GbMonth,
+                                    behavior,
+                                },
+                                ephemeral_storage_gb_month: golem_common::model::account_usage::MonthlyStorageLimit {
+                                    metering,
+                                    monthly_amount,
+                                    usage,
+                                    remaining,
+                                    unit: golem_common::model::account_usage::MonthlyStorageUnit::GbMonth,
+                                    behavior,
+                                },
+                            },
+                            max_memory_per_agent: memory,
+                            max_storage_per_agent: storage,
+                        },
+                    )
                 },
             ),
     )

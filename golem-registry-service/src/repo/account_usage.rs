@@ -685,8 +685,8 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
                 SELECT
                     p.plan_id, p.name, p.max_memory_per_worker,
                     p.max_memory_per_worker_ceiling, p.max_memory_per_worker_user_configurable,
-                    p.monthly_memory_gb_seconds, p.monthly_memory_gb_seconds_ceiling,
-                    p.monthly_memory_gb_seconds_user_configurable,
+                    p.monthly_compute_gcu, p.monthly_memory_gb_seconds,
+                    p.monthly_durable_storage_gb_month, p.monthly_ephemeral_storage_gb_month,
                     p.max_table_elements_per_worker,
                     p.max_disk_space_per_worker_enabled,
                     p.max_disk_space_per_worker,

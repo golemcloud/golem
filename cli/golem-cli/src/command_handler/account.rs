@@ -327,19 +327,14 @@ impl AccountCommandHandler {
     async fn cmd_limits_show(&self, account_id: Option<AccountId>) -> anyhow::Result<()> {
         let account_id = self.select_account_id_or_err(account_id).await?;
         let clients = self.ctx.golem_clients().await?;
-        let storage = clients
+        let policy = clients
             .account
-            .get_account_storage_override(&account_id.0)
-            .await
-            .map_service_error()?;
-        let max_memory = clients
-            .account
-            .get_account_max_memory_override(&account_id.0)
+            .get_account_limits(&account_id.0)
             .await
             .map_service_error()?;
         self.ctx
             .log_handler()
-            .log_output(AccountLimitsView::new(storage, max_memory))?;
+            .log_output(AccountLimitsView::new(policy))?;
         Ok(())
     }
 

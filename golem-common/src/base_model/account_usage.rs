@@ -18,7 +18,7 @@ use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-pub const BYTE_SECONDS_PER_GB_MONTH: f64 = 1024.0 * 1024.0 * 1024.0 * 730.0 * 3600.0;
+pub const BYTE_SECONDS_PER_GB_MONTH: u64 = 1024 * 1024 * 1024 * 730 * 3600;
 pub const FUEL_PER_GCU: u64 = 1_000_000;
 pub const DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS: usize = 6;
 pub const EFFECTIVELY_UNLIMITED_STORAGE_LIMIT: u64 = 10_000_000_000_000_000;
@@ -42,6 +42,59 @@ declare_enums! {
 #[display(rename_all = "camelCase")]
 pub enum StorageLimitDisabledReason {
     ManagedFilesystemUnavailable,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, derive_more::Display,
+)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[display(rename_all = "camelCase")]
+pub enum MonthlyLimitBehavior {
+    HardLimit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+pub enum MonthlyComputeUnit {
+    #[serde(rename = "GCU")]
+    #[cfg_attr(feature = "full", oai(rename = "GCU"))]
+    Gcu,
+}
+
+impl Display for MonthlyComputeUnit {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("GCU")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+pub enum MonthlyMemoryUnit {
+    #[serde(rename = "GB-seconds")]
+    #[cfg_attr(feature = "full", oai(rename = "GB-seconds"))]
+    GbSeconds,
+}
+
+impl Display for MonthlyMemoryUnit {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("GB-seconds")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+pub enum MonthlyStorageUnit {
+    #[serde(rename = "GB-month")]
+    #[cfg_attr(feature = "full", oai(rename = "GB-month"))]
+    GbMonth,
+}
+
+impl Display for MonthlyStorageUnit {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("GB-month")
+    }
 }
 
 declare_structs! {
@@ -72,6 +125,63 @@ declare_structs! {
     pub struct AccountUsage {
         pub account_id: AccountId,
         pub usage: AccountUsageMetrics,
+    }
+
+    #[cfg_attr(feature = "full", oai(skip_serializing_if_is_none))]
+    pub struct MonthlyComputeLimit {
+        pub metering: MeteringStatus,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub monthly_amount: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub usage: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub remaining: Option<f64>,
+        pub unit: MonthlyComputeUnit,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub behavior: Option<MonthlyLimitBehavior>,
+    }
+
+    #[cfg_attr(feature = "full", oai(skip_serializing_if_is_none))]
+    pub struct MonthlyMemoryLimit {
+        pub metering: MeteringStatus,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub monthly_amount: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub usage: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub remaining: Option<u64>,
+        pub unit: MonthlyMemoryUnit,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub behavior: Option<MonthlyLimitBehavior>,
+    }
+
+    #[cfg_attr(feature = "full", oai(skip_serializing_if_is_none))]
+    pub struct MonthlyStorageLimit {
+        pub metering: MeteringStatus,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub monthly_amount: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub usage: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub remaining: Option<f64>,
+        pub unit: MonthlyStorageUnit,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub behavior: Option<MonthlyLimitBehavior>,
+    }
+
+    pub struct MonthlyResourceLimits {
+        pub compute_gcu: MonthlyComputeLimit,
+        pub memory_gb_seconds: MonthlyMemoryLimit,
+        pub durable_storage_gb_month: MonthlyStorageLimit,
+        pub ephemeral_storage_gb_month: MonthlyStorageLimit,
+    }
+
+    #[cfg_attr(feature = "full", oai(example))]
+    pub struct AccountResourcePolicy {
+        pub account_id: AccountId,
+        pub monthly: MonthlyResourceLimits,
+        pub max_memory_per_agent: MemoryLimit,
+        pub max_storage_per_agent: StorageLimit,
     }
 
     #[derive(Eq)]
@@ -106,6 +216,52 @@ declare_structs! {
 
     pub struct SetMemoryLimit {
         pub value: u64,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MonthlyPlanAmounts {
+    pub compute_gcu: u64,
+    pub memory_gb_seconds: u64,
+    pub durable_storage_gb_month: u64,
+    pub ephemeral_storage_gb_month: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedMonthlyPlanAmounts {
+    pub compute_fuel: u64,
+    pub memory_gb_seconds: u64,
+    pub durable_storage_byte_seconds: u64,
+    pub ephemeral_storage_byte_seconds: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum MonthlyPlanAmountError {
+    #[error("monthly compute GCU amount exceeds the supported fuel range")]
+    ComputeOverflow,
+    #[error("monthly durable storage GB-month amount exceeds the supported byte-second range")]
+    DurableStorageOverflow,
+    #[error("monthly ephemeral storage GB-month amount exceeds the supported byte-second range")]
+    EphemeralStorageOverflow,
+}
+
+impl MonthlyPlanAmounts {
+    pub fn resolve(self) -> Result<ResolvedMonthlyPlanAmounts, MonthlyPlanAmountError> {
+        Ok(ResolvedMonthlyPlanAmounts {
+            compute_fuel: self
+                .compute_gcu
+                .checked_mul(FUEL_PER_GCU)
+                .ok_or(MonthlyPlanAmountError::ComputeOverflow)?,
+            memory_gb_seconds: self.memory_gb_seconds,
+            durable_storage_byte_seconds: self
+                .durable_storage_gb_month
+                .checked_mul(BYTE_SECONDS_PER_GB_MONTH)
+                .ok_or(MonthlyPlanAmountError::DurableStorageOverflow)?,
+            ephemeral_storage_byte_seconds: self
+                .ephemeral_storage_gb_month
+                .checked_mul(BYTE_SECONDS_PER_GB_MONTH)
+                .ok_or(MonthlyPlanAmountError::EphemeralStorageOverflow)?,
+        })
     }
 }
 
@@ -162,6 +318,56 @@ impl StorageLimit {
     pub fn executor_value(&self) -> u64 {
         self.effective_value
             .unwrap_or(EFFECTIVELY_UNLIMITED_STORAGE_LIMIT)
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::Example for AccountResourcePolicy {
+    fn example() -> Self {
+        Self {
+            account_id: AccountId(uuid::Uuid::from_u128(1)),
+            monthly: MonthlyResourceLimits {
+                compute_gcu: MonthlyComputeLimit {
+                    metering: MeteringStatus::Enabled,
+                    monthly_amount: Some(100),
+                    usage: Some(25.0),
+                    remaining: Some(75.0),
+                    unit: MonthlyComputeUnit::Gcu,
+                    behavior: Some(MonthlyLimitBehavior::HardLimit),
+                },
+                memory_gb_seconds: MonthlyMemoryLimit {
+                    metering: MeteringStatus::Enabled,
+                    monthly_amount: Some(10_000),
+                    usage: Some(2_500),
+                    remaining: Some(7_500),
+                    unit: MonthlyMemoryUnit::GbSeconds,
+                    behavior: Some(MonthlyLimitBehavior::HardLimit),
+                },
+                durable_storage_gb_month: MonthlyStorageLimit {
+                    metering: MeteringStatus::Enabled,
+                    monthly_amount: Some(50),
+                    usage: Some(12.5),
+                    remaining: Some(37.5),
+                    unit: MonthlyStorageUnit::GbMonth,
+                    behavior: Some(MonthlyLimitBehavior::HardLimit),
+                },
+                ephemeral_storage_gb_month: MonthlyStorageLimit {
+                    metering: MeteringStatus::Enabled,
+                    monthly_amount: Some(25),
+                    usage: Some(5.0),
+                    remaining: Some(20.0),
+                    unit: MonthlyStorageUnit::GbMonth,
+                    behavior: Some(MonthlyLimitBehavior::HardLimit),
+                },
+            },
+            max_memory_per_agent: MemoryLimit::resolve(
+                1024 * 1024 * 1024,
+                None,
+                10 * 1024 * 1024 * 1024,
+                true,
+            ),
+            max_storage_per_agent: <StorageLimit as poem_openapi::types::Example>::example(),
+        }
     }
 }
 
@@ -227,7 +433,7 @@ pub fn fuel_to_gcu(fuel: u64) -> f64 {
 }
 
 pub fn byte_seconds_to_gb_month(byte_seconds: u64) -> f64 {
-    byte_seconds as f64 / BYTE_SECONDS_PER_GB_MONTH
+    byte_seconds as f64 / BYTE_SECONDS_PER_GB_MONTH as f64
 }
 
 impl AccountUsageMetrics {
@@ -267,10 +473,11 @@ fn format_metered(value: impl Display, unit: &str, status: MeteringStatus) -> St
 #[cfg(test)]
 mod tests {
     use super::{
-        AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod,
+        AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod, BYTE_SECONDS_PER_GB_MONTH,
         EFFECTIVELY_UNLIMITED_STORAGE_LIMIT, FUEL_PER_GCU, MemoryLimit, MeteringStatus,
-        PERIOD_FORMAT_ERROR, StorageLimit, StorageLimitDisabledReason, byte_seconds_to_gb_month,
-        fuel_to_gcu,
+        MonthlyComputeUnit, MonthlyMemoryUnit, MonthlyPlanAmountError, MonthlyPlanAmounts,
+        MonthlyStorageUnit, PERIOD_FORMAT_ERROR, ResolvedMonthlyPlanAmounts, StorageLimit,
+        StorageLimitDisabledReason, byte_seconds_to_gb_month, fuel_to_gcu,
     };
     use chrono::Utc;
     use std::str::FromStr;
@@ -423,9 +630,90 @@ mod tests {
 
     #[test]
     fn account_usage_uses_canonical_customer_unit_conversions() {
+        assert_eq!(BYTE_SECONDS_PER_GB_MONTH, 2_821_793_513_472_000);
         assert_eq!(fuel_to_gcu(FUEL_PER_GCU * 2), 2.0);
-        let byte_seconds_per_gb_month = 1024_u64.pow(3) * 730 * 3600;
-        assert_eq!(byte_seconds_to_gb_month(byte_seconds_per_gb_month * 2), 2.0);
+        assert_eq!(byte_seconds_to_gb_month(BYTE_SECONDS_PER_GB_MONTH * 2), 2.0);
+    }
+
+    #[test]
+    fn monthly_resource_units_are_dimension_specific() {
+        assert_eq!(MonthlyComputeUnit::Gcu.to_string(), "GCU");
+        assert_eq!(MonthlyMemoryUnit::GbSeconds.to_string(), "GB-seconds");
+        assert_eq!(MonthlyStorageUnit::GbMonth.to_string(), "GB-month");
+
+        assert_eq!(
+            serde_json::to_value(MonthlyComputeUnit::Gcu).unwrap(),
+            serde_json::json!("GCU")
+        );
+        assert_eq!(
+            serde_json::to_value(MonthlyMemoryUnit::GbSeconds).unwrap(),
+            serde_json::json!("GB-seconds")
+        );
+        assert_eq!(
+            serde_json::to_value(MonthlyStorageUnit::GbMonth).unwrap(),
+            serde_json::json!("GB-month")
+        );
+
+        assert!(serde_json::from_str::<MonthlyComputeUnit>(r#""GB-seconds""#).is_err());
+        assert!(serde_json::from_str::<MonthlyMemoryUnit>(r#""GB-month""#).is_err());
+        assert!(serde_json::from_str::<MonthlyStorageUnit>(r#""GCU""#).is_err());
+    }
+
+    #[test]
+    fn monthly_plan_amounts_resolve_all_dimensions_exactly() {
+        assert_eq!(
+            MonthlyPlanAmounts {
+                compute_gcu: 3,
+                memory_gb_seconds: 5,
+                durable_storage_gb_month: 7,
+                ephemeral_storage_gb_month: 11,
+            }
+            .resolve(),
+            Ok(ResolvedMonthlyPlanAmounts {
+                compute_fuel: 3 * FUEL_PER_GCU,
+                memory_gb_seconds: 5,
+                durable_storage_byte_seconds: 7 * BYTE_SECONDS_PER_GB_MONTH,
+                ephemeral_storage_byte_seconds: 11 * BYTE_SECONDS_PER_GB_MONTH,
+            })
+        );
+    }
+
+    #[test]
+    fn monthly_plan_amounts_reject_each_overflow() {
+        let maximum_gcu = u64::MAX / FUEL_PER_GCU;
+        let maximum_gb_month = u64::MAX / BYTE_SECONDS_PER_GB_MONTH;
+        let valid = MonthlyPlanAmounts {
+            compute_gcu: maximum_gcu,
+            memory_gb_seconds: u64::MAX,
+            durable_storage_gb_month: maximum_gb_month,
+            ephemeral_storage_gb_month: maximum_gb_month,
+        };
+        assert!(valid.resolve().is_ok());
+
+        assert_eq!(
+            MonthlyPlanAmounts {
+                compute_gcu: maximum_gcu + 1,
+                ..valid
+            }
+            .resolve(),
+            Err(MonthlyPlanAmountError::ComputeOverflow)
+        );
+        assert_eq!(
+            MonthlyPlanAmounts {
+                durable_storage_gb_month: maximum_gb_month + 1,
+                ..valid
+            }
+            .resolve(),
+            Err(MonthlyPlanAmountError::DurableStorageOverflow)
+        );
+        assert_eq!(
+            MonthlyPlanAmounts {
+                ephemeral_storage_gb_month: maximum_gb_month + 1,
+                ..valid
+            }
+            .resolve(),
+            Err(MonthlyPlanAmountError::EphemeralStorageOverflow)
+        );
     }
 
     #[test]

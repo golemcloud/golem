@@ -177,6 +177,22 @@ async fn env_vars(
             "10000000000000000".to_string(),
         )
         .with(
+            "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_COMPUTE_GCU",
+            "5".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_MEMORY_GB_SECONDS",
+            "50".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_DURABLE_STORAGE_GB_MONTH",
+            "7".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
+            "11".to_string(),
+        )
+        .with(
             "GOLEM__INITIAL_PLANS__UNLIMITED__PLAN_ID",
             admin_plan_id.to_string(),
         )
@@ -207,6 +223,22 @@ async fn env_vars(
         .with(
             "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_GAS_LIMIT",
             "1000000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_COMPUTE_GCU",
+            "0".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_MEMORY_GB_SECONDS",
+            "0".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_DURABLE_STORAGE_GB_MONTH",
+            "0".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
+            "0".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_UPLOAD_LIMIT",
@@ -255,6 +287,22 @@ async fn env_vars(
         .with(
             "GOLEM__INITIAL_PLANS__LOW_FUEL__MONTHLY_GAS_LIMIT",
             "1".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__MONTHLY_COMPUTE_GCU",
+            "0".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__MONTHLY_MEMORY_GB_SECONDS",
+            "0".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__MONTHLY_DURABLE_STORAGE_GB_MONTH",
+            "0".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
+            "0".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_FUEL__MONTHLY_UPLOAD_LIMIT",
@@ -310,12 +358,16 @@ async fn env_vars(
             "30".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_MEMORY_GB_SECONDS_CEILING",
-            "60".to_string(),
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_COMPUTE_GCU",
+            "20".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_MEMORY_GB_SECONDS_USER_CONFIGURABLE",
-            "true".to_string(),
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_DURABLE_STORAGE_GB_MONTH",
+            "40".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
+            "50".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_STORAGE_PER_AGENT",
@@ -387,6 +439,22 @@ async fn env_vars(
             "1000000000000000000".to_string(),
         )
         .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_COMPUTE_GCU",
+            "0".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_MEMORY_GB_SECONDS",
+            "0".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_DURABLE_STORAGE_GB_MONTH",
+            "0".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
+            "0".to_string(),
+        )
+        .with(
             "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_UPLOAD_LIMIT",
             "10000000000000000".to_string(),
         )
@@ -442,6 +510,22 @@ async fn env_vars(
         .with(
             "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_GAS_LIMIT",
             "1000000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_COMPUTE_GCU",
+            "0".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_MEMORY_GB_SECONDS",
+            "0".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_DURABLE_STORAGE_GB_MONTH",
+            "0".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
+            "0".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_UPLOAD_LIMIT",

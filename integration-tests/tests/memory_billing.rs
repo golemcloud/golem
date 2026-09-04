@@ -97,7 +97,7 @@ mod tests {
             .await
             .get_account_usage(&user.account_id.0, None)
             .await?;
-        Ok(usage.usage.durable_storage_gb_month * BYTE_SECONDS_PER_GB_MONTH)
+        Ok(usage.usage.durable_storage_gb_month * BYTE_SECONDS_PER_GB_MONTH as f64)
     }
 
     #[test]

@@ -4051,6 +4051,48 @@ pub async fn test_plan_reseed_deletes_nonconfigurable_overrides_before_reenable(
     assert_eq!(usage.storage_limit.effective_value, Some(125));
 }
 
+pub async fn test_plan_monthly_amounts_are_upserted(deps: &Deps) {
+    let plan_id = deps.test_plan_id();
+    let mut plan = deps.plan_repo.get_by_id(plan_id).await.unwrap().unwrap();
+    plan.monthly_compute_gcu = 2.into();
+    plan.monthly_memory_gb_seconds = 3.into();
+    plan.monthly_durable_storage_gb_month = 5.into();
+    plan.monthly_ephemeral_storage_gb_month = 7.into();
+    deps.plan_repo.create_or_update(plan).await.unwrap();
+
+    let seeded = deps.plan_repo.get_by_id(plan_id).await.unwrap().unwrap();
+    assert_eq!(seeded.monthly_compute_gcu.get(), 2);
+    assert_eq!(seeded.monthly_memory_gb_seconds.get(), 3);
+    assert_eq!(seeded.monthly_durable_storage_gb_month.get(), 5);
+    assert_eq!(seeded.monthly_ephemeral_storage_gb_month.get(), 7);
+
+    let mut updated = seeded;
+    updated.monthly_compute_gcu = 11.into();
+    updated.monthly_memory_gb_seconds = 13.into();
+    updated.monthly_durable_storage_gb_month = 17.into();
+    updated.monthly_ephemeral_storage_gb_month = 19.into();
+    deps.plan_repo.create_or_update(updated).await.unwrap();
+
+    let loaded = deps.plan_repo.get_by_id(plan_id).await.unwrap().unwrap();
+    assert_eq!(loaded.monthly_compute_gcu.get(), 11);
+    assert_eq!(loaded.monthly_memory_gb_seconds.get(), 13);
+    assert_eq!(loaded.monthly_durable_storage_gb_month.get(), 17);
+    assert_eq!(loaded.monthly_ephemeral_storage_gb_month.get(), 19);
+
+    let listed = deps
+        .plan_repo
+        .list()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|plan| plan.plan_id == plan_id)
+        .expect("updated plan must be listed");
+    assert_eq!(listed.monthly_compute_gcu.get(), 11);
+    assert_eq!(listed.monthly_memory_gb_seconds.get(), 13);
+    assert_eq!(listed.monthly_durable_storage_gb_month.get(), 17);
+    assert_eq!(listed.monthly_ephemeral_storage_gb_month.get(), 19);
+}
+
 pub async fn test_plan_reseed_clamps_overrides_before_range_expansion(deps: &Deps) {
     let account = deps.create_account().await;
     let account_id = account.revision.account_id;
@@ -4469,9 +4511,10 @@ async fn create_disk_override_plan(deps: &Deps, account_id: Uuid, user_configura
             max_memory_per_worker: 1024.into(),
             max_memory_per_worker_ceiling: 2048.into(),
             max_memory_per_worker_user_configurable: user_configurable,
+            monthly_compute_gcu: 1.into(),
             monthly_memory_gb_seconds: 1024.into(),
-            monthly_memory_gb_seconds_ceiling: 2048.into(),
-            monthly_memory_gb_seconds_user_configurable: user_configurable,
+            monthly_durable_storage_gb_month: 2.into(),
+            monthly_ephemeral_storage_gb_month: 3.into(),
             max_table_elements_per_worker: 16384.into(),
             max_disk_space_per_worker_enabled: true,
             max_disk_space_per_worker: 1024.into(),

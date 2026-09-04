@@ -63,6 +63,42 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::account_usage::AccountUsageMetering",
             ),
             (
+                "AccountResourcePolicy",
+                "golem_common::model::account_usage::AccountResourcePolicy",
+            ),
+            (
+                "MonthlyResourceLimits",
+                "golem_common::model::account_usage::MonthlyResourceLimits",
+            ),
+            (
+                "MonthlyComputeLimit",
+                "golem_common::model::account_usage::MonthlyComputeLimit",
+            ),
+            (
+                "MonthlyMemoryLimit",
+                "golem_common::model::account_usage::MonthlyMemoryLimit",
+            ),
+            (
+                "MonthlyStorageLimit",
+                "golem_common::model::account_usage::MonthlyStorageLimit",
+            ),
+            (
+                "MonthlyLimitBehavior",
+                "golem_common::model::account_usage::MonthlyLimitBehavior",
+            ),
+            (
+                "MonthlyComputeUnit",
+                "golem_common::model::account_usage::MonthlyComputeUnit",
+            ),
+            (
+                "MonthlyMemoryUnit",
+                "golem_common::model::account_usage::MonthlyMemoryUnit",
+            ),
+            (
+                "MonthlyStorageUnit",
+                "golem_common::model::account_usage::MonthlyStorageUnit",
+            ),
+            (
                 "MeteringStatus",
                 "golem_common::model::account_usage::MeteringStatus",
             ),

@@ -144,14 +144,14 @@ Path|Method|Protected
   "componentLimit": 0,
   "workerConnectionLimit": 0,
   "storageLimit": 0,
-  "monthlyGasLimit": 0,
   "monthlyUploadLimit": 0,
+  "monthlyComputeGcu": 0,
+  "monthlyMemoryGbSeconds": 0,
+  "monthlyDurableStorageGbMonth": 0,
+  "monthlyEphemeralStorageGbMonth": 0,
   "maxMemoryPerAgent": 0,
   "maxMemoryPerAgentCeiling": 0,
   "maxMemoryPerAgentUserConfigurable": true,
-  "monthlyMemoryGbSeconds": 0,
-  "monthlyMemoryGbSecondsCeiling": 0,
-  "monthlyMemoryGbSecondsUserConfigurable": true,
   "maxTableElementsPerWorker": 0,
   "maxStoragePerAgentEnabled": true,
   "maxStoragePerAgent": 0,
@@ -266,7 +266,7 @@ ephemeral storage in GB-month using byte-seconds / (1024^3 * 730 * 3600). `asOf`
 the registry last received a usage snapshot for the period, or the response time if no
 snapshot exists. Metering status distinguishes enabled meters that measured zero from
 disabled meters. `unknown` means no usage producer has reported metering state for the
-period. Durable and ephemeral storage both reflect the shared filesystem meter.
+period. Durable and ephemeral storage both use storage metering.
 
 **Query Parameters**
 
@@ -344,12 +344,18 @@ last|integer|No|-
 ]
 ```
 
-## Get effective storage-per-agent override metadata for an account.
+## Get the current account resource policy.
 Path|Method|Protected
 ---|---|---
-`/v1/accounts/{account_id}/resource-overrides/max-storage-per-agent`|GET|Yes
+`/v1/accounts/{account_id}/limits`|GET|Yes
 
-
+The policy combines Plan Row monthly amounts with current UTC-period usage and both
+per-agent safety limits. Enabled monthly dimensions report measured usage and remaining
+capacity. Disabled dimensions omit the monthly amount, usage, remaining capacity, and
+behavior. `unknown` means no producer has reported metering state; it does not mean disabled
+or measured zero. Compute uses GCU, allocated linear memory uses GB-seconds, storage uses
+GB-month, and per-agent limits use bytes. The effective monthly behavior in this version is
+`hardLimit`.
 
 
 
@@ -359,11 +365,55 @@ Path|Method|Protected
 
 ```json copy
 {
-  "ceiling": 10737418240,
-  "effectiveValue": 1073741824,
-  "enabled": true,
-  "planDefault": 1073741824,
-  "userConfigurable": true
+  "accountId": "00000000-0000-0000-0000-000000000001",
+  "maxMemoryPerAgent": {
+    "ceiling": 10737418240,
+    "effectiveValue": 1073741824,
+    "overrideValue": null,
+    "planDefault": 1073741824,
+    "userConfigurable": true
+  },
+  "maxStoragePerAgent": {
+    "ceiling": 10737418240,
+    "effectiveValue": 1073741824,
+    "enabled": true,
+    "planDefault": 1073741824,
+    "userConfigurable": true
+  },
+  "monthly": {
+    "computeGcu": {
+      "behavior": "hardLimit",
+      "metering": "enabled",
+      "monthlyAmount": 100,
+      "remaining": 75,
+      "unit": "GCU",
+      "usage": 25
+    },
+    "durableStorageGbMonth": {
+      "behavior": "hardLimit",
+      "metering": "enabled",
+      "monthlyAmount": 50,
+      "remaining": 37.5,
+      "unit": "GB-month",
+      "usage": 12.5
+    },
+    "ephemeralStorageGbMonth": {
+      "behavior": "hardLimit",
+      "metering": "enabled",
+      "monthlyAmount": 25,
+      "remaining": 20,
+      "unit": "GB-month",
+      "usage": 5
+    },
+    "memoryGbSeconds": {
+      "behavior": "hardLimit",
+      "metering": "enabled",
+      "monthlyAmount": 10000,
+      "remaining": 7500,
+      "unit": "GB-seconds",
+      "usage": 2500
+    }
+  }
 }
 ```
 
@@ -414,29 +464,6 @@ Path|Method|Protected
   "effectiveValue": 1073741824,
   "enabled": true,
   "planDefault": 1073741824,
-  "userConfigurable": true
-}
-```
-
-## Get the effective maximum linear memory per agent.
-Path|Method|Protected
----|---|---
-`/v1/accounts/{account_id}/resource-overrides/max-memory-per-agent`|GET|Yes
-
-
-
-
-
-
-
-**Example Response JSON**
-
-```json copy
-{
-  "effectiveValue": 0,
-  "planDefault": 0,
-  "overrideValue": 0,
-  "ceiling": 0,
   "userConfigurable": true
 }
 ```

@@ -177,12 +177,13 @@ impl Default for RegistryServiceConfig {
                 storage_limit: 500000000,
                 monthly_gas_limit: 1000000000000000000,
                 monthly_upload_limit: 1000000000,
+                monthly_compute_gcu: 0,
+                monthly_memory_gb_seconds: 0,
+                monthly_durable_storage_gb_month: 0,
+                monthly_ephemeral_storage_gb_month: 0,
                 max_memory_per_agent: 1024 * 1024 * 1024, // 1 GB
                 max_memory_per_agent_ceiling: default_unlimited(),
                 max_memory_per_agent_user_configurable: false,
-                monthly_memory_gb_seconds: default_unlimited(),
-                monthly_memory_gb_seconds_ceiling: default_unlimited(),
-                monthly_memory_gb_seconds_user_configurable: false,
                 max_table_elements_per_worker: 16_384,
                 max_storage_per_agent_enabled: false,
                 max_storage_per_agent: default_unlimited(),
@@ -492,19 +493,18 @@ pub struct PrecreatedPlan {
     pub component_limit: u64,
     pub worker_connection_limit: u64,
     pub storage_limit: u64,
+    /// Executor fuel allowance. Monthly account policy uses `monthly_compute_gcu`.
     pub monthly_gas_limit: u64,
     pub monthly_upload_limit: u64,
+    pub monthly_compute_gcu: u64,
+    pub monthly_memory_gb_seconds: u64,
+    pub monthly_durable_storage_gb_month: u64,
+    pub monthly_ephemeral_storage_gb_month: u64,
     pub max_memory_per_agent: u64,
     #[serde(default = "default_unlimited")]
     pub max_memory_per_agent_ceiling: u64,
     #[serde(default)]
     pub max_memory_per_agent_user_configurable: bool,
-    #[serde(default = "default_unlimited")]
-    pub monthly_memory_gb_seconds: u64,
-    #[serde(default = "default_unlimited")]
-    pub monthly_memory_gb_seconds_ceiling: u64,
-    #[serde(default)]
-    pub monthly_memory_gb_seconds_user_configurable: bool,
     #[serde(default = "default_max_table_elements_per_worker")]
     pub max_table_elements_per_worker: u64,
     #[serde(default)]
@@ -576,7 +576,15 @@ mod tests {
 
     #[test]
     pub fn config_is_loadable() {
-        make_config_loader().load().expect("Failed to load config");
+        let config = make_config_loader().load().expect("Failed to load config");
+        let plan = config
+            .initial_plans
+            .get("default")
+            .expect("default plan must exist");
+        assert_eq!(plan.monthly_compute_gcu, 0);
+        assert_eq!(plan.monthly_memory_gb_seconds, 0);
+        assert_eq!(plan.monthly_durable_storage_gb_month, 0);
+        assert_eq!(plan.monthly_ephemeral_storage_gb_month, 0);
     }
 
     /// An omitted ceiling follows the configured per-agent storage default.
@@ -614,18 +622,17 @@ mod tests {
     }
 
     #[test]
-    pub fn memory_plan_fields_default_to_unlimited() {
+    pub fn oss_monthly_plan_amounts_default_to_zero() {
         let plan = RegistryServiceConfig::default()
             .initial_plans
             .remove("default")
             .expect("default plan must exist");
 
         assert_eq!(plan.max_memory_per_agent_ceiling, 1_000_000_000_000_000_000);
-        assert_eq!(plan.monthly_memory_gb_seconds, 1_000_000_000_000_000_000);
-        assert_eq!(
-            plan.monthly_memory_gb_seconds_ceiling,
-            1_000_000_000_000_000_000
-        );
+        assert_eq!(plan.monthly_compute_gcu, 0);
+        assert_eq!(plan.monthly_memory_gb_seconds, 0);
+        assert_eq!(plan.monthly_durable_storage_gb_month, 0);
+        assert_eq!(plan.monthly_ephemeral_storage_gb_month, 0);
         assert!(!plan.max_storage_per_agent_enabled);
         assert_eq!(plan.max_storage_per_agent, 1_000_000_000_000_000_000);
     }

@@ -650,7 +650,7 @@ paths:
         the registry last received a usage snapshot for the period, or the response time if no
         snapshot exists. Metering status distinguishes enabled meters that measured zero from
         disabled meters. `unknown` means no usage producer has reported metering state for the
-        period. Durable and ephemeral storage both reflect the shared filesystem meter.
+        period. Durable and ephemeral storage both use storage metering.
       parameters:
       - name: account_id
         schema:
@@ -802,12 +802,20 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_account_usage_history
-  /v1/accounts/{account_id}/resource-overrides/max-storage-per-agent:
+  /v1/accounts/{account_id}/limits:
     get:
       tags:
       - RegistryService
       - Account
-      summary: Get effective storage-per-agent override metadata for an account.
+      summary: Get the current account resource policy.
+      description: |-
+        The policy combines Plan Row monthly amounts with current UTC-period usage and both
+        per-agent safety limits. Enabled monthly dimensions report measured usage and remaining
+        capacity. Disabled dimensions omit the monthly amount, usage, remaining capacity, and
+        behavior. `unknown` means no producer has reported metering state; it does not mean disabled
+        or measured zero. Compute uses GCU, allocated linear memory uses GB-seconds, storage uses
+        GB-month, and per-agent limits use bytes. The effective monthly behavior in this version is
+        `hardLimit`.
       parameters:
       - name: account_id
         schema:
@@ -823,7 +831,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/StorageLimit'
+                $ref: '#/components/schemas/AccountResourcePolicy'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -869,7 +877,8 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_account_storage_override
+      operationId: get_account_limits
+  /v1/accounts/{account_id}/resource-overrides/max-storage-per-agent:
     put:
       tags:
       - RegistryService
@@ -1011,73 +1020,6 @@ paths:
       - Token: []
       operationId: clear_account_storage_override
   /v1/accounts/{account_id}/resource-overrides/max-memory-per-agent:
-    get:
-      tags:
-      - RegistryService
-      - Account
-      summary: Get the effective maximum linear memory per agent.
-      parameters:
-      - name: account_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/MemoryLimit'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: get_account_max_memory_override
     put:
       tags:
       - RegistryService
@@ -8883,6 +8825,67 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AccountRole'
+    AccountResourcePolicy:
+      type: object
+      title: AccountResourcePolicy
+      required:
+      - accountId
+      - monthly
+      - maxMemoryPerAgent
+      - maxStoragePerAgent
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        monthly:
+          $ref: '#/components/schemas/MonthlyResourceLimits'
+        maxMemoryPerAgent:
+          $ref: '#/components/schemas/MemoryLimit'
+        maxStoragePerAgent:
+          $ref: '#/components/schemas/StorageLimit'
+      example:
+        accountId: 00000000-0000-0000-0000-000000000001
+        maxMemoryPerAgent:
+          ceiling: 10737418240
+          effectiveValue: 1073741824
+          overrideValue: null
+          planDefault: 1073741824
+          userConfigurable: true
+        maxStoragePerAgent:
+          ceiling: 10737418240
+          effectiveValue: 1073741824
+          enabled: true
+          planDefault: 1073741824
+          userConfigurable: true
+        monthly:
+          computeGcu:
+            behavior: hardLimit
+            metering: enabled
+            monthlyAmount: 100
+            remaining: 75.0
+            unit: GCU
+            usage: 25.0
+          durableStorageGbMonth:
+            behavior: hardLimit
+            metering: enabled
+            monthlyAmount: 50
+            remaining: 37.5
+            unit: GB-month
+            usage: 12.5
+          ephemeralStorageGbMonth:
+            behavior: hardLimit
+            metering: enabled
+            monthlyAmount: 25
+            remaining: 20.0
+            unit: GB-month
+            usage: 5.0
+          memoryGbSeconds:
+            behavior: hardLimit
+            metering: enabled
+            monthlyAmount: 10000
+            remaining: 7500
+            unit: GB-seconds
+            usage: 2500
     AccountRole:
       type: string
       enum:
@@ -12147,6 +12150,105 @@ components:
       - enabled
       - disabled
       - unknown
+    MonthlyComputeLimit:
+      type: object
+      title: MonthlyComputeLimit
+      required:
+      - metering
+      - unit
+      properties:
+        metering:
+          $ref: '#/components/schemas/MeteringStatus'
+        monthlyAmount:
+          type: integer
+          format: uint64
+        usage:
+          type: number
+          format: double
+        remaining:
+          type: number
+          format: double
+        unit:
+          $ref: '#/components/schemas/MonthlyComputeUnit'
+        behavior:
+          $ref: '#/components/schemas/MonthlyLimitBehavior'
+    MonthlyComputeUnit:
+      type: string
+      enum:
+      - GCU
+    MonthlyLimitBehavior:
+      type: string
+      enum:
+      - hardLimit
+    MonthlyMemoryLimit:
+      type: object
+      title: MonthlyMemoryLimit
+      required:
+      - metering
+      - unit
+      properties:
+        metering:
+          $ref: '#/components/schemas/MeteringStatus'
+        monthlyAmount:
+          type: integer
+          format: uint64
+        usage:
+          type: integer
+          format: uint64
+        remaining:
+          type: integer
+          format: uint64
+        unit:
+          $ref: '#/components/schemas/MonthlyMemoryUnit'
+        behavior:
+          $ref: '#/components/schemas/MonthlyLimitBehavior'
+    MonthlyMemoryUnit:
+      type: string
+      enum:
+      - GB-seconds
+    MonthlyResourceLimits:
+      type: object
+      title: MonthlyResourceLimits
+      required:
+      - computeGcu
+      - memoryGbSeconds
+      - durableStorageGbMonth
+      - ephemeralStorageGbMonth
+      properties:
+        computeGcu:
+          $ref: '#/components/schemas/MonthlyComputeLimit'
+        memoryGbSeconds:
+          $ref: '#/components/schemas/MonthlyMemoryLimit'
+        durableStorageGbMonth:
+          $ref: '#/components/schemas/MonthlyStorageLimit'
+        ephemeralStorageGbMonth:
+          $ref: '#/components/schemas/MonthlyStorageLimit'
+    MonthlyStorageLimit:
+      type: object
+      title: MonthlyStorageLimit
+      required:
+      - metering
+      - unit
+      properties:
+        metering:
+          $ref: '#/components/schemas/MeteringStatus'
+        monthlyAmount:
+          type: integer
+          format: uint64
+        usage:
+          type: number
+          format: double
+        remaining:
+          type: number
+          format: double
+        unit:
+          $ref: '#/components/schemas/MonthlyStorageUnit'
+        behavior:
+          $ref: '#/components/schemas/MonthlyLimitBehavior'
+    MonthlyStorageUnit:
+      type: string
+      enum:
+      - GB-month
     NamedField:
       type: object
       required:
@@ -12888,14 +12990,14 @@ components:
       - componentLimit
       - workerConnectionLimit
       - storageLimit
-      - monthlyGasLimit
       - monthlyUploadLimit
+      - monthlyComputeGcu
+      - monthlyMemoryGbSeconds
+      - monthlyDurableStorageGbMonth
+      - monthlyEphemeralStorageGbMonth
       - maxMemoryPerAgent
       - maxMemoryPerAgentCeiling
       - maxMemoryPerAgentUserConfigurable
-      - monthlyMemoryGbSeconds
-      - monthlyMemoryGbSecondsCeiling
-      - monthlyMemoryGbSecondsUserConfigurable
       - maxTableElementsPerWorker
       - maxStoragePerAgentEnabled
       - maxStoragePerAgent
@@ -12928,10 +13030,19 @@ components:
         storageLimit:
           type: integer
           format: uint64
-        monthlyGasLimit:
+        monthlyUploadLimit:
           type: integer
           format: uint64
-        monthlyUploadLimit:
+        monthlyComputeGcu:
+          type: integer
+          format: uint64
+        monthlyMemoryGbSeconds:
+          type: integer
+          format: uint64
+        monthlyDurableStorageGbMonth:
+          type: integer
+          format: uint64
+        monthlyEphemeralStorageGbMonth:
           type: integer
           format: uint64
         maxMemoryPerAgent:
@@ -12941,14 +13052,6 @@ components:
           type: integer
           format: uint64
         maxMemoryPerAgentUserConfigurable:
-          type: boolean
-        monthlyMemoryGbSeconds:
-          type: integer
-          format: uint64
-        monthlyMemoryGbSecondsCeiling:
-          type: integer
-          format: uint64
-        monthlyMemoryGbSecondsUserConfigurable:
           type: boolean
         maxTableElementsPerWorker:
           type: integer

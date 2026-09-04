@@ -2,9 +2,10 @@ use crate::Tracing;
 use crate::app::{TestContext, cmd, flag};
 use chrono::{DateTime, Datelike, Utc};
 use golem_cli::{fs, versions};
+use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
-    AccountUsageMetering, AccountUsagePeriod, MemoryLimit, MeteringStatus, StorageLimit,
-    StorageLimitDisabledReason,
+    AccountUsageMetering, AccountUsagePeriod, MemoryLimit, MeteringStatus, MonthlyLimitBehavior,
+    MonthlyResourceLimits, StorageLimit, StorageLimitDisabledReason,
 };
 use indoc::{formatdoc, indoc};
 use serde::Deserialize;
@@ -48,6 +49,8 @@ struct AccountUsageListView {
 struct AccountLimitsView {
     #[serde(rename = "$type")]
     kind: String,
+    account_id: AccountId,
+    monthly: MonthlyResourceLimits,
     max_storage_per_agent: StorageLimit,
     max_memory_per_agent: MemoryLimit,
 }
@@ -68,7 +71,12 @@ fn previous_period(period: AccountUsagePeriod) -> AccountUsagePeriod {
 
 async fn seed_account_usage(
     ctx: &TestContext,
-) -> (AccountUsagePeriod, AccountUsagePeriod, AccountUsagePeriod) {
+) -> (
+    Uuid,
+    AccountUsagePeriod,
+    AccountUsagePeriod,
+    AccountUsagePeriod,
+) {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(
@@ -85,6 +93,15 @@ async fn seed_account_usage(
     .fetch_one(&pool)
     .await
     .expect("initial account is missing");
+    sqlx::query(
+        "UPDATE plans SET monthly_compute_gcu = 5, monthly_memory_gb_seconds = 50, \
+         monthly_durable_storage_gb_month = 7, monthly_ephemeral_storage_gb_month = 11 \
+         WHERE plan_id = (SELECT plan_id FROM accounts WHERE account_id = $1)",
+    )
+    .bind(account_id)
+    .execute(&pool)
+    .await
+    .expect("failed to configure monthly plan amounts");
 
     let now = Utc::now();
     let current = AccountUsagePeriod {
@@ -150,7 +167,7 @@ async fn seed_account_usage(
         .expect("failed to seed account usage metering state");
     }
 
-    (current, previous, zero_period)
+    (account_id, current, previous, zero_period)
 }
 
 #[test]
@@ -158,7 +175,7 @@ async fn seed_account_usage(
 async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     ctx.start_server().await;
-    let (current_period, previous_period, zero_period) = seed_account_usage(&ctx).await;
+    let (account_id, current_period, previous_period, zero_period) = seed_account_usage(&ctx).await;
 
     let output = ctx
         .cli([cmd::ACCOUNT, "usage", "show", flag::FORMAT, "json"])
@@ -259,6 +276,32 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
         .next()
         .expect("account limits show produced no JSON output");
     assert_eq!(limits.kind, "account.limits.show");
+    assert_eq!(limits.account_id.0, account_id);
+    assert_eq!(limits.monthly.compute_gcu.monthly_amount, Some(5));
+    assert_eq!(limits.monthly.compute_gcu.usage, Some(1.5));
+    assert_eq!(limits.monthly.compute_gcu.remaining, Some(3.5));
+    assert_eq!(
+        limits.monthly.compute_gcu.behavior,
+        Some(MonthlyLimitBehavior::HardLimit)
+    );
+    assert_eq!(limits.monthly.memory_gb_seconds.monthly_amount, Some(50));
+    assert_eq!(limits.monthly.memory_gb_seconds.usage, Some(14));
+    assert_eq!(limits.monthly.memory_gb_seconds.remaining, Some(36));
+    assert_eq!(
+        limits.monthly.durable_storage_gb_month.monthly_amount,
+        Some(7)
+    );
+    assert_eq!(limits.monthly.durable_storage_gb_month.usage, Some(1.0));
+    assert_eq!(limits.monthly.durable_storage_gb_month.remaining, Some(6.0));
+    assert_eq!(
+        limits.monthly.ephemeral_storage_gb_month.monthly_amount,
+        Some(11)
+    );
+    assert_eq!(limits.monthly.ephemeral_storage_gb_month.usage, Some(2.0));
+    assert_eq!(
+        limits.monthly.ephemeral_storage_gb_month.remaining,
+        Some(9.0)
+    );
     assert_eq!(
         limits.max_storage_per_agent,
         StorageLimit {
@@ -274,7 +317,18 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
 
     let output = ctx.cli([cmd::ACCOUNT, "limits", "show"]).await;
     assert!(output.success_or_dump());
-    assert!(output.stdout_contains_ordered(["Max storage per agent", "disabled"]));
+    assert!(output.stdout_contains("Monthly compute amount:"));
+    assert!(output.stdout_contains("5 GCU"));
+    assert!(output.stdout_contains("Monthly compute usage:"));
+    assert!(output.stdout_contains("1.5 GCU"));
+    assert!(output.stdout_contains("Monthly memory remaining:"));
+    assert!(output.stdout_contains("36 GB-seconds"));
+    assert!(output.stdout_contains("Monthly durable storage usage:"));
+    assert!(output.stdout_contains("1 GB-month"));
+    assert!(output.stdout_contains("Monthly ephemeral storage remaining:"));
+    assert!(output.stdout_contains("9 GB-month"));
+    assert!(output.stdout_contains("Max storage per agent:"));
+    assert!(output.stdout_contains("disabled"));
 
     let output = ctx
         .cli([

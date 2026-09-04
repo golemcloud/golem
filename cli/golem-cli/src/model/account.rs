@@ -20,7 +20,8 @@ use chrono::SecondsFormat;
 use golem_client::model::{Account, PermissionShare};
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
-    AccountUsage, AccountUsageMetrics, MemoryLimit, StorageLimit,
+    AccountResourcePolicy, AccountUsage, AccountUsageMetrics, MemoryLimit, MeteringStatus,
+    MonthlyLimitBehavior,
 };
 use golem_common::model::permission_share::PermissionShareId;
 use serde::{Deserialize, Serialize};
@@ -230,29 +231,70 @@ impl StructuredOutput for AccountUsageListView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountLimitsView {
-    pub max_storage_per_agent: StorageLimit,
-    pub max_memory_per_agent: MemoryLimit,
+    #[serde(flatten)]
+    pub policy: AccountResourcePolicy,
 }
 
 impl Masked for AccountLimitsView {}
 
 impl AccountLimitsView {
-    pub fn new(max_storage_per_agent: StorageLimit, max_memory_per_agent: MemoryLimit) -> Self {
-        Self {
-            max_storage_per_agent,
-            max_memory_per_agent,
-        }
+    pub fn new(policy: AccountResourcePolicy) -> Self {
+        Self { policy }
     }
 }
 
 impl MessageWithFields for AccountLimitsView {
     fn message(&self) -> String {
-        "Account per-agent resource limits".to_string()
+        "Account resource policy".to_string()
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        let limit = &self.max_storage_per_agent;
+        let limit = &self.policy.max_storage_per_agent;
         let mut fields = FieldsBuilder::new();
+        fields.fmt_field("Account ID", &self.policy.account_id, format_main_id);
+        add_monthly_limit_fields(
+            &mut fields,
+            "Monthly compute",
+            self.policy.monthly.compute_gcu.metering,
+            self.policy.monthly.compute_gcu.monthly_amount,
+            self.policy.monthly.compute_gcu.usage,
+            self.policy.monthly.compute_gcu.remaining,
+            self.policy.monthly.compute_gcu.unit,
+            self.policy.monthly.compute_gcu.behavior,
+        );
+        add_monthly_limit_fields(
+            &mut fields,
+            "Monthly memory",
+            self.policy.monthly.memory_gb_seconds.metering,
+            self.policy.monthly.memory_gb_seconds.monthly_amount,
+            self.policy.monthly.memory_gb_seconds.usage,
+            self.policy.monthly.memory_gb_seconds.remaining,
+            self.policy.monthly.memory_gb_seconds.unit,
+            self.policy.monthly.memory_gb_seconds.behavior,
+        );
+        add_monthly_limit_fields(
+            &mut fields,
+            "Monthly durable storage",
+            self.policy.monthly.durable_storage_gb_month.metering,
+            self.policy.monthly.durable_storage_gb_month.monthly_amount,
+            self.policy.monthly.durable_storage_gb_month.usage,
+            self.policy.monthly.durable_storage_gb_month.remaining,
+            self.policy.monthly.durable_storage_gb_month.unit,
+            self.policy.monthly.durable_storage_gb_month.behavior,
+        );
+        add_monthly_limit_fields(
+            &mut fields,
+            "Monthly ephemeral storage",
+            self.policy.monthly.ephemeral_storage_gb_month.metering,
+            self.policy
+                .monthly
+                .ephemeral_storage_gb_month
+                .monthly_amount,
+            self.policy.monthly.ephemeral_storage_gb_month.usage,
+            self.policy.monthly.ephemeral_storage_gb_month.remaining,
+            self.policy.monthly.ephemeral_storage_gb_month.unit,
+            self.policy.monthly.ephemeral_storage_gb_month.behavior,
+        );
         if limit.enabled {
             fields
                 .field(
@@ -287,10 +329,41 @@ impl MessageWithFields for AccountLimitsView {
         add_memory_limit_fields(
             &mut fields,
             "Max memory per agent",
-            &self.max_memory_per_agent,
+            &self.policy.max_memory_per_agent,
             "bytes",
         );
         fields.build()
+    }
+}
+
+fn add_monthly_limit_fields<T: std::fmt::Display>(
+    fields: &mut FieldsBuilder,
+    label: &str,
+    metering: MeteringStatus,
+    monthly_amount: Option<u64>,
+    usage: Option<T>,
+    remaining: Option<T>,
+    unit: impl std::fmt::Display,
+    behavior: Option<MonthlyLimitBehavior>,
+) {
+    fields.field(&format!("{label} metering"), &metering.to_string());
+    if let Some(monthly_amount) = monthly_amount {
+        fields.field(
+            &format!("{label} amount"),
+            &format!("{monthly_amount} {unit}"),
+        );
+    }
+    if let Some(usage) = usage {
+        fields.field(&format!("{label} usage"), &format!("{usage} {unit}"));
+    }
+    if let Some(remaining) = remaining {
+        fields.field(
+            &format!("{label} remaining"),
+            &format!("{remaining} {unit}"),
+        );
+    }
+    if let Some(behavior) = behavior {
+        fields.field(&format!("{label} behavior"), &behavior.to_string());
     }
 }
 
@@ -485,11 +558,14 @@ mod tests {
     use super::{ACCOUNT_USAGE_LABELS, AccountLimitsView, AccountUsageView, MessageWithFields};
     use chrono::{TimeZone, Utc};
     use golem_common::model::account_usage::{
-        AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod, MemoryLimit, MeteringStatus,
-        StorageLimit,
+        AccountResourcePolicy, AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod,
+        MemoryLimit, MeteringStatus, MonthlyComputeLimit, MonthlyComputeUnit, MonthlyLimitBehavior,
+        MonthlyMemoryLimit, MonthlyMemoryUnit, MonthlyResourceLimits, MonthlyStorageLimit,
+        MonthlyStorageUnit, StorageLimit,
     };
     use proptest::prelude::*;
     use test_r::test;
+    use uuid::uuid;
 
     /// Usage magnitudes we actually bill on: exact zero, sub-GB fractions where a
     /// rounded format would silently truncate, and up through implausibly large.
@@ -590,8 +666,45 @@ mod tests {
 
     #[test]
     fn account_limits_render_all_enabled_values() {
-        let limits = AccountLimitsView::new(
-            StorageLimit {
+        let limits = AccountLimitsView::new(AccountResourcePolicy {
+            account_id: golem_common::model::account::AccountId(uuid!(
+                "e71a6160-4144-4720-9e34-e5943458d129"
+            )),
+            monthly: MonthlyResourceLimits {
+                compute_gcu: MonthlyComputeLimit {
+                    metering: MeteringStatus::Enabled,
+                    monthly_amount: Some(10),
+                    usage: Some(3.5),
+                    remaining: Some(6.5),
+                    unit: MonthlyComputeUnit::Gcu,
+                    behavior: Some(MonthlyLimitBehavior::HardLimit),
+                },
+                memory_gb_seconds: MonthlyMemoryLimit {
+                    metering: MeteringStatus::Enabled,
+                    monthly_amount: Some(20),
+                    usage: Some(7),
+                    remaining: Some(13),
+                    unit: MonthlyMemoryUnit::GbSeconds,
+                    behavior: Some(MonthlyLimitBehavior::HardLimit),
+                },
+                durable_storage_gb_month: MonthlyStorageLimit {
+                    metering: MeteringStatus::Enabled,
+                    monthly_amount: Some(30),
+                    usage: Some(11.25),
+                    remaining: Some(18.75),
+                    unit: MonthlyStorageUnit::GbMonth,
+                    behavior: Some(MonthlyLimitBehavior::HardLimit),
+                },
+                ephemeral_storage_gb_month: MonthlyStorageLimit {
+                    metering: MeteringStatus::Enabled,
+                    monthly_amount: Some(40),
+                    usage: Some(2.5),
+                    remaining: Some(37.5),
+                    unit: MonthlyStorageUnit::GbMonth,
+                    behavior: Some(MonthlyLimitBehavior::HardLimit),
+                },
+            },
+            max_storage_per_agent: StorageLimit {
                 enabled: true,
                 effective_value: Some(10),
                 plan_default: Some(5),
@@ -600,55 +713,38 @@ mod tests {
                 user_configurable: true,
                 disabled_reason: None,
             },
-            MemoryLimit {
+            max_memory_per_agent: MemoryLimit {
                 effective_value: 30,
                 plan_default: 25,
                 override_value: Some(30),
                 ceiling: 40,
                 user_configurable: true,
             },
-        );
+        });
 
-        assert_eq!(limits.message(), "Account per-agent resource limits");
-        assert_eq!(
-            limits.fields(),
-            vec![
-                ("Max storage per agent".to_string(), "10 bytes".to_string()),
-                (
-                    "Max storage per agent plan default".to_string(),
-                    "5 bytes".to_string(),
-                ),
-                (
-                    "Max storage per agent override".to_string(),
-                    "(none)".to_string(),
-                ),
-                (
-                    "Max storage per agent ceiling".to_string(),
-                    "20 bytes".to_string(),
-                ),
-                (
-                    "Max storage per agent user configurable".to_string(),
-                    "true".to_string(),
-                ),
-                ("Max memory per agent".to_string(), "30 bytes".to_string()),
-                (
-                    "Max memory per agent plan default".to_string(),
-                    "25 bytes".to_string(),
-                ),
-                (
-                    "Max memory per agent override".to_string(),
-                    "30 bytes".to_string(),
-                ),
-                (
-                    "Max memory per agent ceiling".to_string(),
-                    "40 bytes".to_string(),
-                ),
-                (
-                    "Max memory per agent user configurable".to_string(),
-                    "true".to_string(),
-                ),
-            ]
-        );
+        assert_eq!(limits.message(), "Account resource policy");
+        let fields = limits.fields();
+        for expected in [
+            ("Monthly compute amount", "10 GCU"),
+            ("Monthly compute usage", "3.5 GCU"),
+            ("Monthly compute remaining", "6.5 GCU"),
+            ("Monthly compute behavior", "hardLimit"),
+            ("Monthly memory amount", "20 GB-seconds"),
+            ("Monthly memory usage", "7 GB-seconds"),
+            ("Monthly durable storage amount", "30 GB-month"),
+            ("Monthly durable storage usage", "11.25 GB-month"),
+            ("Monthly ephemeral storage amount", "40 GB-month"),
+            ("Monthly ephemeral storage remaining", "37.5 GB-month"),
+            ("Max storage per agent", "10 bytes"),
+            ("Max memory per agent", "30 bytes"),
+        ] {
+            assert!(
+                fields
+                    .iter()
+                    .any(|(name, value)| name == expected.0 && value == expected.1),
+                "missing field {expected:?} in {fields:?}"
+            );
+        }
     }
 
     proptest! {
