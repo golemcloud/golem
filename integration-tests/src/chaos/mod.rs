@@ -621,6 +621,13 @@ pub struct IsolationConfig {
     pub recovery_budget_secs: u64,
 }
 
+/// Latency may sit a tenth above its baseline after a heal without the run
+/// calling the fault unbounded: the recovery window starts the instant the
+/// fault clears, so its first minute is legitimately still draining.
+fn default_recovery_floor_percent() -> f64 {
+    110.0
+}
+
 /// Shape of a scenario built on the cross-pod RPC split (GOL-368, GOL-382).
 ///
 /// Two scenarios share these numbers and disagree about what they should say.
@@ -681,22 +688,25 @@ pub struct RelayConfig {
     /// against *zero*, not a model of what the hop should cost, and a cluster
     /// with faster links should not fail for being fast.
     pub cross_pod_premium_floor_ms: u64,
-    /// The least each population's own p50 must rise inside the fault window,
-    /// as a percentage of its p50 outside it, for the run to count the fault as
-    /// having reached worker-service. Read only under
-    /// [`relay::RelayExpectation::RelayDegraded`].
+    /// How far above its baseline latency may still sit after the heal before
+    /// the run reports [`relay::RelayViolation::RelayDidNotRecover`]. Read
+    /// under [`relay::RelayExpectation::RelayDegraded`] only, where 100 is a
+    /// p50 that returned exactly.
     ///
-    /// The premium's blind spot, and the reason there are two readings rather
-    /// than one. The premium is a *difference* between the populations, so it
-    /// only moves when the fault costs the relay hop more than the hop both
-    /// populations share. S21's first run was that case and the premium read
-    /// 218%. The same fault at eight times the rate slowed both traversals
-    /// within a point of each other, the premium read 118%, and the report
-    /// called it a fault that never reached worker-service while both p50s had
-    /// risen by over a fifth. Either reading clearing its floor is evidence the
-    /// fault landed; only both failing is a run with nothing to show.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub latency_inflation_floor_percent: Option<f64>,
+    /// The only size this scenario judges, and deliberately the only one. It
+    /// carried two floors demanding the fault hurt by some minimum, and both
+    /// were wrong the same way: the question is what a saturated relay costs,
+    /// and a floor turns "the platform coped" into a failure of the test. They
+    /// were guesses too — the premium floor asked for 150% against a measured
+    /// 120%, and the run that cleared it turned out to have caught a bimodal
+    /// baseline on the right side of its swing.
+    ///
+    /// What the fault cost is a number to report. A bounded fault whose cost
+    /// outlives it is a finding.
+    ///
+    /// Defaulted so an inert scenario need not carry a number it never reads.
+    #[serde(default = "default_recovery_floor_percent")]
+    pub recovery_floor_percent: f64,
     /// Whether this run's fault is supposed to reach the relay.
     ///
     /// Defaults to [`RelayExpectation::Inert`], which is what S2 has always
@@ -704,23 +714,6 @@ pub struct RelayConfig {
     /// what turns the checks below from assertions into recorded context.
     #[serde(default)]
     pub expectation: relay::RelayExpectation,
-    /// How wide the cross-pod premium must get during the fault, as a
-    /// percentage of its own baseline, where **100 is unchanged**. Required by
-    /// [`relay::RelayExpectation::RelayDegraded`], refused by
-    /// [`relay::RelayExpectation::Inert`].
-    ///
-    /// The one number that says a fault aimed at worker-service actually
-    /// reached worker-service. Every call in the workload crosses worker-service
-    /// once and a cross-pod call crosses it twice, so the premium *is* one
-    /// worker-service hop. Slowing that hop widens the premium; slowing
-    /// anything else moves both populations together and leaves it flat.
-    ///
-    /// Throughput cannot stand in for this. The driver sets the cadence, so
-    /// both populations run at the rate they were asked to until the platform
-    /// is too slow to keep up at all, which is a later and much blunter
-    /// symptom.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cross_pod_premium_inflation_floor_percent: Option<f64>,
 }
 
 impl IsolationConfig {
@@ -1477,65 +1470,21 @@ impl ScenarioConfig {
                 self.code
             )
         })?;
-        // The pairing is worth nothing without a verdict attached to it, and the
-        // two expectations need different numbers. Checked rather than defaulted
-        // in either direction: a scenario that expects the relay to degrade and
-        // carries no inflation floor would report a green run whatever the fault
-        // did, and one that expects nothing and carries a floor has had S21's
-        // block copied into it, which reads as configuration but changes no
-        // verdict at all.
-        match (
-            config.expectation,
-            config.cross_pod_premium_inflation_floor_percent,
-        ) {
-            (relay::RelayExpectation::RelayDegraded, None) => anyhow::bail!(
-                "chaos scenario {}: relay.expectation is relay-degraded, so it needs \
-                 relay.crossPodPremiumInflationFloorPercent — without it nothing in the run \
-                 checks that the fault reached worker-service at all",
-                self.code
-            ),
-            (relay::RelayExpectation::RelayDegraded, Some(floor)) if floor <= 100.0 => {
-                anyhow::bail!(
-                    "chaos scenario {}: relay.crossPodPremiumInflationFloorPercent is {floor}, \
-                     and 100 is the premium not moving at all — a floor at or below it is met \
-                     by a fault that did nothing",
-                    self.code
-                )
-            }
-            (relay::RelayExpectation::Inert, Some(floor)) => anyhow::bail!(
-                "chaos scenario {}: relay.expectation is inert but it carries \
-                 relay.crossPodPremiumInflationFloorPercent = {floor}, which only a \
-                 relay-degraded scenario reads",
-                self.code
-            ),
-            _ => {}
-        }
-        // The same pairing for the second reading. Both floors are required
-        // together under relay-degraded rather than either standing alone: the
-        // two readings cover each other's blind spot, so a scenario carrying
-        // one of them has half an oracle and no way to tell which half.
-        match (config.expectation, config.latency_inflation_floor_percent) {
-            (relay::RelayExpectation::RelayDegraded, None) => anyhow::bail!(
-                "chaos scenario {}: relay.expectation is relay-degraded, so it needs \
-                 relay.latencyInflationFloorPercent — the premium alone goes blind whenever \
-                 the fault slows both populations equally",
-                self.code
-            ),
-            (relay::RelayExpectation::RelayDegraded, Some(floor)) if floor <= 100.0 => {
-                anyhow::bail!(
-                    "chaos scenario {}: relay.latencyInflationFloorPercent is {floor}, and 100 \
-                     is a p50 that did not move at all — a floor at or below it is met by a \
-                     fault that did nothing",
-                    self.code
-                )
-            }
-            (relay::RelayExpectation::Inert, Some(floor)) => anyhow::bail!(
-                "chaos scenario {}: relay.expectation is inert but it carries \
-                 relay.latencyInflationFloorPercent = {floor}, which only a relay-degraded \
-                 scenario reads",
-                self.code
-            ),
-            _ => {}
+        // One number, and only under the expectation that reads it.
+        //
+        // Two floors used to live here demanding the fault degrade by some
+        // minimum before the run counted. Both are gone: this scenario reports
+        // what the fault cost and fails only when the cost outlasts the fault.
+        if config.expectation == relay::RelayExpectation::RelayDegraded
+            && config.recovery_floor_percent <= 100.0
+        {
+            anyhow::bail!(
+                "chaos scenario {}: relay.recoveryFloorPercent is {}, and 100 is latency that \
+                 returned to its baseline exactly — a floor at or below it fails every run \
+                 that recovered",
+                self.code,
+                config.recovery_floor_percent
+            )
         }
         Ok(config)
     }

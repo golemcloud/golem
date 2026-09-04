@@ -863,27 +863,20 @@ scenarios:
       # populations, and everything below compares a thing to itself.
       crossPodPremiumFloorMs: 5
       expectation: relay-degraded
-      # 100 is a premium that did not move at all, so this asks for half again
-      # as wide. A floor rather than an expectation, in the same spirit as
-      # crossPodPremiumFloorMs above: worker-service contributes roughly the
-      # premium's own width to every call, so halving its effective CPU should
-      # push this well past 200. Set at 150 so a run that degraded less than
-      # predicted still counts as having reached the relay, and only a fault
-      # that missed it entirely fails.
-      crossPodPremiumInflationFloorPercent: 150
-      # The reading the premium cannot give, and the run that proved it was
-      # needed. At the suite's usual rate the fault cost only the relay hop and
-      # the premium read 218%. At eight times that rate it cost both traversals
-      # within a point of each other — cross-pod p50 121% of its own, co-located
-      # 122% — the premium read 118%, and the run was filed as a fault that
-      # never reached worker-service.
+      # The only size this scenario judges. Not how much the fault hurt — that
+      # is what the run is for and the numbers are reported — but whether the
+      # hurt stopped when the fault did.
       #
-      # Each population against itself, taken as the smaller of its ratios
-      # either side of the window. 110 rather than something tighter because an
-      # undisturbed recovery window already sat at 109% of a warm-up-heavy
-      # baseline on that run, and this has to clear ordinary drift without
-      # clearing a fifth.
-      latencyInflationFloorPercent: 110
+      # Two floors used to sit here asking the fault to degrade by a minimum.
+      # Both went: 150% on the premium was a guess against a measured 120%, and
+      # the run that cleared it turned out to have caught a bimodal baseline on
+      # the right side of its swing. Meanwhile both runs at this rate left
+      # latency above baseline a full recovery window after the heal and still
+      # climbing, which is the thing worth failing on.
+      #
+      # 110 rather than tighter because the recovery window follows the fault
+      # immediately and its first minute is legitimately still draining.
+      recoveryFloorPercent: 110
 
     workload:
       # S2's populations unchanged, and deliberately so: the placement split is

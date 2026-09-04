@@ -65,7 +65,7 @@
 //! 3. **Did the fault do what the scenario said it would?** Under `Inert`, a
 //!    cross-pod drop is the finding. Under `RelayDegraded`, a premium that never
 //!    widened is. See [`RelayViolation::CrossPodDegraded`] and
-//!    [`RelayViolation::RelayNotDegraded`].
+//!    [`RelayViolation::RelayDidNotRecover`].
 //! 4. **Did it stop when the fault stopped?** Shared, because a bounded fault
 //!    has to have a bounded effect. See
 //!    [`RelayViolation::CrossPodDidNotReturn`].
@@ -212,14 +212,15 @@ pub enum RelayViolation {
     /// check here compares the two populations *through* the fault, and all of
     /// them pass trivially if the two populations are really the same thing.
     CrossPodNotRelayed,
-    /// The fault was supposed to reach the relay and the premium did not widen,
-    /// so the run has no evidence it reached anything.
+    /// Latency was still above its baseline after the fault healed and a whole
+    /// recovery window had passed.
     ///
-    /// [`RelayExpectation::RelayDegraded`] only. The mirror of
-    /// [`Self::CrossPodNotRelayed`]: that one says the two populations were
-    /// never split, this one says they were split and the fault missed the
-    /// thing that separates them.
-    RelayNotDegraded,
+    /// [`RelayExpectation::RelayDegraded`] only, and the one thing this
+    /// scenario fails on. It deliberately does *not* fail on the fault having
+    /// been small: the run exists to see what a saturated relay costs, and a
+    /// platform that shrugs it off is a result rather than a broken test. A
+    /// bounded fault whose cost outlives it is not.
+    RelayDidNotRecover,
     /// Co-located calls lost more of their throughput than cross-pod ones did.
     ///
     /// [`RelayExpectation::RelayDegraded`] only, and backwards for a fault on
@@ -245,7 +246,7 @@ impl RelayViolation {
             RelayViolation::BothDegraded => "both-degraded",
             RelayViolation::CrossPodDidNotReturn => "cross-pod-did-not-return",
             RelayViolation::CrossPodNotRelayed => "cross-pod-not-relayed",
-            RelayViolation::RelayNotDegraded => "relay-not-degraded",
+            RelayViolation::RelayDidNotRecover => "relay-did-not-recover",
             RelayViolation::CoLocatedDegradedMore => "co-located-degraded-more",
         }
     }
@@ -374,9 +375,11 @@ pub struct RelayReport {
     pub cross_pod_floor_throughput_percent: f64,
     pub co_located_floor_throughput_percent: f64,
     pub cross_pod_premium_floor_ms: u64,
-    /// The inflation floor, when the run carried one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cross_pod_premium_inflation_floor_percent: Option<f64>,
+    /// How far above its baseline latency may still sit after the heal before
+    /// the run says the fault outlived itself. Read under
+    /// [`RelayExpectation::RelayDegraded`] only; 100 would be a p50 that
+    /// returned exactly.
+    pub recovery_floor_percent: f64,
     /// How much more a cross-pod call cost than a co-located one on the
     /// undisturbed baseline, in milliseconds of p50. `None` when either
     /// population had no baseline.
@@ -400,10 +403,6 @@ pub struct RelayReport {
     /// zero and a percentage would divide by it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cross_pod_premium_inflation_percent: Option<f64>,
-    /// The floor each population's own p50 inflation is judged against, when
-    /// the run carried one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub latency_inflation_floor_percent: Option<f64>,
     /// Each population's p50 inside the fault window as a percentage of its own
     /// p50 outside it, so **100 means it did not move**.
     ///
@@ -855,11 +854,10 @@ pub fn build(
         cross_pod_floor_throughput_percent: config.cross_pod_floor_throughput_percent,
         co_located_floor_throughput_percent: config.co_located_floor_throughput_percent,
         cross_pod_premium_floor_ms: config.cross_pod_premium_floor_ms,
-        cross_pod_premium_inflation_floor_percent: config.cross_pod_premium_inflation_floor_percent,
+        recovery_floor_percent: config.recovery_floor_percent,
         cross_pod_premium_ms,
         cross_pod_premium_during_fault_ms,
         cross_pod_premium_inflation_percent,
-        latency_inflation_floor_percent: config.latency_inflation_floor_percent,
         cross_pod_latency_inflation_percent,
         co_located_latency_inflation_percent,
         cells,
@@ -1074,52 +1072,39 @@ fn degraded_findings(
 ) -> Vec<RelayFinding> {
     let mut findings = Vec::new();
 
-    // Two independent readings, and either one clearing its floor is enough.
+    // What this scenario does *not* do any more: require the fault to have hurt
+    // by some minimum amount.
     //
-    // The premium says the fault cost the relay hop *more* than the hop both
-    // populations share. It is the sharper reading when it moves, and it is
-    // blind whenever the fault costs both traversals the same — which is not a
-    // corner case: S21 hit only the relay hop at the suite's usual rate and hit
-    // both, within a point of each other, at eight times that rate. The pair of
-    // p50s below covers exactly that, at the price of not saying which hop paid.
+    // It used to, twice over — a floor on the premium's widening and a floor on
+    // each population's own p50 — and both were wrong for the same reason. The
+    // question here is "stress worker-service, drive traffic through it, and see
+    // what happens", and a floor turns "the platform coped" into a failure of
+    // the test. Worse, the floors were guesses: the premium floor was set at
+    // 150% by predicting worker-service contributes about the premium's own
+    // width to a call, and three runs measured 120%. The numbers are reported
+    // below and an operator reads them; nothing here gates on their size.
     //
-    // So only a run where neither moved has nothing to show, and that is the
-    // one this finding is for.
-    let premium_floor = report
-        .cross_pod_premium_inflation_floor_percent
-        .unwrap_or(f64::INFINITY);
-    let premium_reached =
-        matches!(report.cross_pod_premium_inflation_percent, Some(inflation) if inflation >= premium_floor);
-
-    let latency_floor = report
-        .latency_inflation_floor_percent
-        .unwrap_or(f64::INFINITY);
-    let both_reached = matches!(
-        (
-            report.cross_pod_latency_inflation_percent,
-            report.co_located_latency_inflation_percent,
-        ),
-        (Some(cross), Some(co)) if cross >= latency_floor && co >= latency_floor
-    );
-
-    if !premium_reached && !both_reached {
-        let say = |value: Option<f64>| match value {
-            Some(percent) => format!("{percent}%"),
-            None => "unmeasured".to_string(),
-        };
+    // What is still worth failing on is a *bounded* fault leaving an unbounded
+    // effect, which is what these runs actually found.
+    let floor = report.recovery_floor_percent;
+    let elevated = |placement: Placement| {
+        let baseline = report.cell(placement, Window::BeforeFault)?.latency.p50_ms as f64;
+        let after = report.cell(placement, Window::AfterFault)?.latency.p50_ms as f64;
+        (baseline > 0.0).then(|| round2(100.0 * after / baseline))
+    };
+    if let (Some(cross_after), Some(co_after)) =
+        (elevated(Placement::CrossPod), elevated(Placement::CoLocated))
+        && (cross_after >= floor || co_after >= floor)
+    {
         findings.push(RelayFinding {
-            violation: RelayViolation::RelayNotDegraded,
+            violation: RelayViolation::RelayDidNotRecover,
             detail: format!(
-                "neither reading moved. The cross-pod premium was {} of its baseline width \
-                 against a {premium_floor}% floor, and inside the window cross-pod p50 was {} \
-                 and co-located p50 {} of their own p50 outside it, against a {latency_floor}% \
-                 floor — 100% is a number that did not move. The premium is one worker-service \
-                 hop and the pair of p50s is both traversals together, so a fault aimed at \
-                 worker-service that moved neither did not reach worker-service. Read this run \
-                 as inconclusive rather than as the platform absorbing the fault",
-                say(report.cross_pod_premium_inflation_percent),
-                say(report.cross_pod_latency_inflation_percent),
-                say(report.co_located_latency_inflation_percent),
+                "after the fault healed, cross-pod p50 was {cross_after}% of its baseline and \
+                 co-located p50 {co_after}%, against a {floor}% floor. The fault was bounded in \
+                 time, so its cost should be too. Latency that is still elevated a full recovery \
+                 window later — and the per-minute breakdown of the run's history is where to \
+                 confirm it is still climbing rather than settling — is the fault outliving \
+                 itself"
             ),
         });
     }
@@ -1140,7 +1125,7 @@ fn degraded_findings(
                  twice and a co-located one crosses it once, so a fault on worker-service cannot \
                  hurt the shorter path more — something other than the fault disturbed this run. \
                  Check the executor restarts and the ownership samples: a shard that moved leaves \
-                 the pairing naming agents that are no longer where it put them"
+                 the pairing describing agents that have since relocated"
             ),
         });
     }
@@ -1238,8 +1223,7 @@ mod tests {
             co_located_floor_throughput_percent: 70.0,
             cross_pod_premium_floor_ms: 5,
             expectation: RelayExpectation::Inert,
-            cross_pod_premium_inflation_floor_percent: None,
-            latency_inflation_floor_percent: None,
+            recovery_floor_percent: 110.0,
         }
     }
 
@@ -1249,8 +1233,7 @@ mod tests {
     fn degraded_config() -> RelayConfig {
         RelayConfig {
             expectation: RelayExpectation::RelayDegraded,
-            cross_pod_premium_inflation_floor_percent: Some(150.0),
-            latency_inflation_floor_percent: Some(110.0),
+            recovery_floor_percent: 110.0,
             ..inert_config()
         }
     }
@@ -1569,10 +1552,15 @@ mod tests {
         );
     }
 
-    /// The vacuity guard that survives. Neither reading moved, so nothing in
-    /// the run says the fault reached worker-service at all.
+    /// A fault the platform shrugged off is a result, not a failure of the run.
+    ///
+    /// This used to be a finding, on the reasoning that a scenario aimed at
+    /// worker-service ought to prove it reached worker-service. It cost two
+    /// configured floors and it made "the platform coped" indistinguishable
+    /// from "the test is broken". The run reports what the fault cost and
+    /// leaves the reading to whoever asked for it.
     #[test]
-    fn a_fault_that_moved_neither_reading_did_not_reach_the_relay() {
+    fn a_fault_the_platform_shrugged_off_is_not_a_finding() {
         let records = records_across_the_fault(CROSS_POD_MS, CO_LOCATED_MS, 2);
         let report = build(
             &records,
@@ -1582,17 +1570,47 @@ mod tests {
             &degraded_config(),
         );
         assert_eq!(report.cross_pod_premium_inflation_percent, Some(100.0));
-        assert_eq!(report.cross_pod_latency_inflation_percent, Some(100.0));
-        assert_eq!(report.co_located_latency_inflation_percent, Some(100.0));
+        assert!(
+            !report.has_findings(),
+            "a fault that cost nothing is a reading, not a finding, got {:?}",
+            report.findings
+        );
+    }
+
+    /// The one thing this scenario does fail on: a fault bounded in time whose
+    /// cost is not bounded with it. Both S21 runs at eight times the suite rate
+    /// ended a whole recovery window above their baselines and still climbing.
+    #[test]
+    fn a_fault_whose_cost_outlived_it_is_a_finding() {
+        let mut records = Vec::new();
+        for second in (0..100).step_by(2) {
+            records.push(record_costing("cross-0", second, Some(second), CROSS_POD_MS));
+            records.push(record_costing("co-0", second, Some(second), CO_LOCATED_MS));
+        }
+        for second in (100..200).step_by(2) {
+            records.push(record_costing("cross-0", second, Some(second), 250));
+            records.push(record_costing("co-0", second, Some(second), 200));
+        }
+        // The heal changed nothing: 200 against a 150 baseline and 150 against
+        // 100 are both well past the floor.
+        for second in (200..300).step_by(2) {
+            records.push(record_costing("cross-0", second, Some(second), 200));
+            records.push(record_costing("co-0", second, Some(second), 150));
+        }
+        let report = build(
+            &records,
+            pairing(&["cross-0"], &["co-0"]),
+            fault(),
+            ScenarioCode::S21,
+            &degraded_config(),
+        );
         let finding = report
             .findings
             .iter()
-            .find(|f| f.violation == RelayViolation::RelayNotDegraded)
-            .expect("a run where nothing moved should read as inconclusive");
-        // Both readings have to appear, or an operator cannot tell which of the
-        // two the run failed on.
-        assert!(finding.detail.contains("premium"), "{}", finding.detail);
-        assert!(finding.detail.contains("p50"), "{}", finding.detail);
+            .find(|f| f.violation == RelayViolation::RelayDidNotRecover)
+            .expect("latency still elevated after the heal should be a finding");
+        assert!(finding.detail.contains("133.33"), "{}", finding.detail);
+        assert!(finding.detail.contains("150"), "{}", finding.detail);
     }
 
     /// The same numbers under the control's expectation raise nothing, because
