@@ -369,6 +369,7 @@ struct TrustedInvocationSession {
     state: InvocationSessionState,
     acceptance: InvocationAccepted,
     mappings: HashMap<u64, DurableStreamMapping>,
+    unsent_requests: Vec<InvocationRequest>,
 }
 
 impl TrustedInvocationSession {
@@ -469,6 +470,7 @@ impl TrustedInvocationSession {
             state,
             acceptance: InvocationAccepted::default(),
             mappings: HashMap::new(),
+            unsent_requests: Vec::new(),
         };
         let response = session.receive().await?;
         let accepted = match response.response {
@@ -531,11 +533,24 @@ impl TrustedInvocationSession {
             })
     }
 
+    /// Sends a request frame unless the executor already finished the RPC.
+    ///
+    /// A gRPC server may complete a bidirectional call while the client is still streaming
+    /// requests; HTTP/2 then resets the stream with `NO_ERROR` after the complete response and
+    /// the request channel closes. Frames that could not be sent are recorded and the session
+    /// outcome is read from the responses in `finish`, which reports the unsent frames if the
+    /// invocation did not complete successfully.
     async fn send(&mut self, request: InvocationRequest) -> anyhow::Result<()> {
         self.state
             .validate_trusted_request(&request)
             .map_err(anyhow::Error::msg)?;
-        self.requests.send(request).await?;
+        if !self.unsent_requests.is_empty() {
+            self.unsent_requests.push(request);
+            return Ok(());
+        }
+        if let Err(error) = self.requests.send(request).await {
+            self.unsent_requests.push(error.0);
+        }
         Ok(())
     }
 
@@ -600,8 +615,19 @@ impl TrustedInvocationSession {
         mut report: TrustedInvocationReport,
     ) -> anyhow::Result<TrustedInvocationReport> {
         while !self.state.is_complete() {
-            report.record(self.receive().await?)?;
+            let response = self.receive().await.map_err(|error| {
+                if self.unsent_requests.is_empty() {
+                    error
+                } else {
+                    error.context(format!(
+                        "the request channel closed before these frames were sent: {:#?}",
+                        self.unsent_requests
+                    ))
+                }
+            })?;
+            report.record(response)?;
         }
+        report.unsent_requests = std::mem::take(&mut self.unsent_requests);
         let trailing =
             tokio::time::timeout(std::time::Duration::from_secs(10), self.responses.recv())
                 .await
@@ -628,6 +654,8 @@ struct TrustedInvocationReport {
     input_acks: HashMap<u64, usize>,
     stream_cancels: Vec<StreamCancel>,
     completion: Option<Result<(), InvocationFailure>>,
+    /// Request frames the client could not send because the server finished the RPC first.
+    unsent_requests: Vec<InvocationRequest>,
 }
 
 impl TrustedInvocationReport {
@@ -694,7 +722,10 @@ impl TrustedInvocationReport {
     fn successful_result(&self) -> anyhow::Result<&ProtoSchemaValue> {
         match self.completion.as_ref() {
             Some(Ok(())) => {}
-            other => anyhow::bail!("trusted invocation did not complete successfully: {other:?}"),
+            other => anyhow::bail!(
+                "trusted invocation did not complete successfully: {other:?}; unsent requests: {:#?}",
+                self.unsent_requests
+            ),
         }
         self.result
             .as_ref()

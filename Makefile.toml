@@ -670,6 +670,30 @@ script = '''
 cargo-test-r run --package integration-tests --test integration ':tag:group2&db_sqlite' -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
+# TEMPORARY stress task for flushing out the flaky streaming invocation tests (remove together
+# with the matching `it` matrix entry in ci.yaml once the suite is stable). Runs the streaming RPC
+# API tests repeatedly with debug logging for the streaming host, gRPC session and worker-service
+# invocation session targets in both the test binary and the spawned services.
+[tasks.integration-tests-streaming-stress]
+description = "Repeatedly runs the streaming RPC integration tests (sqlite) to surface flakiness"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info,golem_worker_executor::durable_host=debug,golem_worker_executor::grpc=debug,golem_worker_service::api::invocation_session=debug", "GOLEM_LOG_FILTER" = "golem_worker_executor::durable_host=debug,golem_worker_executor::grpc=debug,golem_worker_service::api::invocation_session=debug", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+single_iterations = range 1 11
+for i in ${single_iterations}
+    echo "=== streaming stress: dropped_durable_input_completes_while_producer_items_and_end_are_in_flight iteration ${i}/10 ==="
+    exec --fail-on-error cargo-test-r run --package integration-tests --test integration dropped_durable_input_completes_while_producer_items_and_end_are_in_flight -- --skip :tag:db_postgres --nocapture --test-threads=1 --report-time
+end
+release ${single_iterations}
+module_iterations = range 1 16
+for i in ${module_iterations}
+    echo "=== streaming stress: streaming_rpc module iteration ${i}/15 ==="
+    exec --fail-on-error cargo-test-r run --package integration-tests --test integration streaming_rpc -- --skip :tag:db_postgres --nocapture --test-threads=1 --report-time
+end
+release ${module_iterations}
+'''
+
 [tasks.integration-tests-group5]
 description = "Runs integration tests (group 5/11 - service tests)"
 dependencies = ["wit"]
@@ -803,10 +827,33 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 [tasks.cli-integration-tests-agents-streaming]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
 description = "Runs the it-cli 'agents_streaming' shard (app::agents streaming end-to-end tests)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_LOG_FILTER" = "golem_worker_executor::durable_host=debug,golem_worker_executor::grpc=debug,golem_worker_service::api::invocation_session=debug" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents_streaming" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
+# TEMPORARY stress task for flushing out the flaky streaming CLI end-to-end test (remove together
+# with the matching `it-cli` matrix entry in ci.yaml once the suite is stable). Loops the failing
+# test on its own first, then the whole shard to keep the parallel load pattern of the real job.
+[tasks.cli-integration-tests-agents-streaming-stress]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
+description = "Repeatedly runs the it-cli 'agents_streaming' shard to surface flakiness"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_LOG_FILTER" = "golem_worker_executor::durable_host=debug,golem_worker_executor::grpc=debug,golem_worker_service::api::invocation_session=debug" }
+script_runner = "@duckscript"
+script = '''
+single_iterations = range 1 11
+for i in ${single_iterations}
+    echo "=== streaming stress: test_streaming_invocation_cli_end_to_end iteration ${i}/10 ==="
+    exec --fail-on-error cargo-test-r run --package golem-cli --test integration test_streaming_invocation_cli_end_to_end -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time
+end
+release ${single_iterations}
+shard_iterations = range 1 5
+for i in ${shard_iterations}
+    echo "=== streaming stress: agents_streaming shard iteration ${i}/4 ==="
+    exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents_streaming" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time
+end
+release ${shard_iterations}
 '''
 
 [tasks.cli-integration-tests-bridge]

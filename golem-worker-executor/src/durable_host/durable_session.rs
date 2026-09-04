@@ -1676,9 +1676,23 @@ impl DurableSessionStreams {
         {
             Ok(outcome) => outcome,
             Err(error) if discards_input_after_terminal(&error, &self.session_key) => {
+                tracing::debug!(
+                    transport_stream_id,
+                    first_sequence,
+                    error = %error,
+                    "Discarding late durable input items after terminal"
+                );
                 return Ok(None);
             }
-            Err(error) => return Err(error.to_string()),
+            Err(error) => {
+                tracing::warn!(
+                    transport_stream_id,
+                    first_sequence,
+                    error = %error,
+                    "Rejecting durable input items"
+                );
+                return Err(error.to_string());
+            }
         };
         let mut nested_mappings = Vec::with_capacity(nested_transport_ids.len());
         if !nested_transport_ids.is_empty() {
@@ -1751,8 +1765,24 @@ impl DurableSessionStreams {
             .await
         {
             Ok(outcome) => Ok(Some(outcome.value)),
-            Err(error) if discards_input_after_terminal(&error, &self.session_key) => Ok(None),
-            Err(error) => Err(error.to_string()),
+            Err(error) if discards_input_after_terminal(&error, &self.session_key) => {
+                tracing::debug!(
+                    transport_stream_id,
+                    sequence,
+                    error = %error,
+                    "Discarding late durable input end after terminal"
+                );
+                Ok(None)
+            }
+            Err(error) => {
+                tracing::warn!(
+                    transport_stream_id,
+                    sequence,
+                    error = %error,
+                    "Rejecting durable input end"
+                );
+                Err(error.to_string())
+            }
         }
     }
 
@@ -3208,9 +3238,14 @@ impl DurableSessionStreams {
         Ok(())
     }
 
+    /// Sends the guest-authored cancellation of every callee-owned input stream to the attached
+    /// client. Inputs whose acceptance already announced a terminal high water are skipped: the
+    /// client learned about that cancellation from the acceptance, and re-sending the same
+    /// durable offset would violate the strictly increasing offset rule of the session protocol.
     pub(crate) async fn pump_input_cancellations(
         &self,
         responses: &mpsc::Sender<InvocationResponse>,
+        announced_high_waters: &HashMap<u64, InputStreamHighWaterV1>,
     ) -> Result<(), String> {
         self.recover_session_mappings().await?;
         let inputs = self
@@ -3222,8 +3257,11 @@ impl DurableSessionStreams {
                 (*role == SessionStreamRoleV1::Input
                     && handle.producer_environment_id == self.session_key.callee_environment_id
                     && handle.producer == self.session_key.callee
-                    && handle.expected_producer_fingerprint == self.session_key.callee_fingerprint)
-                    .then_some((*transport_stream_id, handle.clone()))
+                    && handle.expected_producer_fingerprint == self.session_key.callee_fingerprint
+                    && !announced_high_waters
+                        .get(transport_stream_id)
+                        .is_some_and(|high_water| high_water.terminal))
+                .then_some((*transport_stream_id, handle.clone()))
             })
             .collect::<Vec<_>>();
         for (transport_stream_id, handle) in inputs {
@@ -4222,11 +4260,20 @@ impl DroppedDurableInput {
             Err(error) if error.starts_with("StaleEpoch:") => {
                 tracing::debug!(
                     transport_stream_id = self.transport_stream_id,
-                    "skipping cancellation of dropped durable stream: {error}"
+                    error = %error,
+                    "Skipping cancellation of dropped durable stream"
                 );
                 Ok(())
             }
-            Err(error) => Err(error),
+            Err(error) => {
+                tracing::warn!(
+                    transport_stream_id = self.transport_stream_id,
+                    role = ?self.role,
+                    error = %error,
+                    "Cancellation of dropped durable stream failed"
+                );
+                Err(error)
+            }
         }
     }
 }

@@ -314,6 +314,10 @@ jobs:
             description: "IT #12"
           - name: integration-tests-group13
             description: "IT #13"
+          # TEMPORARY: repeated streaming RPC runs to flush out flakiness; remove once stable.
+          - name: integration-tests-streaming-stress
+            description: "IT streaming stress (temporary)"
+            stress: true
 
     steps:
       - uses: actions/checkout@v5
@@ -344,7 +348,7 @@ jobs:
         run: cargo make --profile ci ${{ matrix.group.name }}
         timeout-minutes: 45
       - uses: ./.github/actions/publish-test-report
-        if: always()
+        if: always() && !matrix.group.stress
         with:
           artifact-name: '${{ matrix.group.name }}-report'
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -360,7 +364,7 @@ jobs:
       - build-golem-ts
       - build-cli-test-bins
       - build-golem-scala
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.group.stress && 90 || 30 }}
     strategy:
       fail-fast: false
       matrix:
@@ -368,6 +372,8 @@ jobs:
           - { name: cli-integration-tests-agents, shard: agents }
           - { name: cli-integration-tests-agents-guest-bridge, shard: agents_guest_bridge }
           - { name: cli-integration-tests-agents-streaming, shard: agents_streaming }
+          # TEMPORARY: repeated streaming shard runs to flush out flakiness; remove once stable.
+          - { name: cli-integration-tests-agents-streaming-stress, shard: agents_streaming_stress, stress: true }
           - { name: cli-integration-tests-bridge, shard: bridge_gen }
           - { name: cli-integration-tests-bridge-rust, shard: bridge_gen_rust }
           - { name: cli-integration-tests-deploy, shard: deploy }
@@ -478,10 +484,19 @@ jobs:
       - name: it-cli ${{ matrix.group.shard }}
         env:
           QUIET: true
+          GOLEM_CLI_TEST_SERVER_LOG_DIR: ${{ github.workspace }}/tmp/golem-cli-test-server-logs
         run: cargo make --profile ci ${{ matrix.group.name }}
-        timeout-minutes: 30
+        timeout-minutes: ${{ matrix.group.stress && 90 || 30 }}
+      - name: Upload golem server logs
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: '${{ matrix.group.name }}-server-logs-attempt${{ github.run_attempt }}'
+          path: tmp/golem-cli-test-server-logs
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: ./.github/actions/publish-test-report
-        if: always()
+        if: always() && !matrix.group.stress
         with:
           artifact-name: '${{ matrix.group.name }}-report'
           github-token: ${{ secrets.GITHUB_TOKEN }}

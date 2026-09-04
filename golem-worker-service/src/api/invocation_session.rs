@@ -1583,7 +1583,12 @@ async fn handle_private_responses<S>(
     while let Some(response) = responses.next().await {
         let response = match response {
             Ok(response) => response,
-            Err(_) => {
+            Err(status) => {
+                tracing::warn!(
+                    attempt_id = %attempt_id,
+                    error = %status,
+                    "Invocation session transport failed"
+                );
                 fail_session(
                     &outbound,
                     &state,
@@ -1605,7 +1610,12 @@ async fn handle_private_responses<S>(
         .await;
         let messages = match translated {
             Ok(messages) => messages,
-            Err(_) => {
+            Err(error) => {
+                tracing::warn!(
+                    attempt_id = %attempt_id,
+                    error = ?error,
+                    "Invocation session response translation failed"
+                );
                 fail_session(
                     &outbound,
                     &state,
@@ -1651,6 +1661,10 @@ async fn handle_private_responses<S>(
             return;
         }
     }
+    tracing::warn!(
+        attempt_id = %attempt_id,
+        "Invocation session response stream ended before the session completed"
+    );
     fail_session(
         &outbound,
         &state,
@@ -1864,7 +1878,25 @@ async fn translate_private_response(
                 Some(invocation_session_completion::Outcome::Success(_)) => {
                     PublicInvocationOutcome::Success
                 }
-                Some(invocation_session_completion::Outcome::Failure(_)) | None => {
+                Some(invocation_session_completion::Outcome::Failure(failure)) => {
+                    tracing::warn!(
+                        attempt_id = %attempt_id,
+                        kind = failure.kind,
+                        code = %failure.code,
+                        message = %failure.message,
+                        worker_error = ?failure.worker_error,
+                        "Invocation session finished with failure"
+                    );
+                    PublicInvocationOutcome::Failure {
+                        code: PublicErrorCode::InvocationFailed,
+                        message: "invocation failed".to_string(),
+                    }
+                }
+                None => {
+                    tracing::warn!(
+                        attempt_id = %attempt_id,
+                        "Invocation session finished without an outcome"
+                    );
                     PublicInvocationOutcome::Failure {
                         code: PublicErrorCode::InvocationFailed,
                         message: "invocation failed".to_string(),
