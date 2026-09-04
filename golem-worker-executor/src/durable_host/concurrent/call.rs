@@ -2291,9 +2291,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         // downstream commit / scope close (`?` below) does not drop the handle "unfinished" and trip
         // the drop policy. The host-call `End` is what makes the call durable, not these follow-ups.
         self.finished = true;
-        if self.persisted {
+        let response = if self.persisted {
             let oplog = ctx.state.oplog.clone();
-            let host_response: HostResponse = response.clone().into();
+            let host_response: HostResponse = response.into();
             let end = match prepare_end_entry(
                 &oplog,
                 &self.request_upload,
@@ -2324,7 +2324,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             DurableCallCoordinator::new(ctx)
                 .finish(self.retry.function_type(), self.boundary, false)
                 .await?;
-        }
+            Pair::unwrap_own_response(host_response)
+        } else {
+            response
+        };
         Ok(response)
     }
 
@@ -2431,18 +2434,20 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 self.cleanup_sink.clone(),
             );
             self.finished = true;
-            let persist_result: Result<(), WorkerExecutorError> = if self.persisted {
+            let persist_result: Result<Pair::Resp, WorkerExecutorError> = if self.persisted {
+                let host_response: HostResponse = response.into();
                 Self::persist_access_terminal(
                     oplog,
                     completion_marker_recorder,
                     &mut guard,
                     self.start_idx,
-                    &response,
+                    host_response,
                     post_end_entry,
                 )
                 .await
+                .map(Pair::unwrap_own_response)
             } else {
-                Ok(())
+                Ok(response)
             };
 
             // Read the current owner through the lease *after* the terminal is persisted, so a
@@ -2465,10 +2470,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             });
             guard.release_atomic_lease();
 
-            if let Err(err) = persist_result {
+            let response = persist_result.inspect_err(|_| {
                 guard.disarm();
-                return Err(err);
-            }
+            })?;
             // From here on the `End` is persisted, but these error returns are *observed* by the
             // caller (the worker traps): the completion was not silently discarded by the guest,
             // so the marker must not be recorded — while the terminal join / permit release must
@@ -2503,10 +2507,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         completion_marker_recorder: CompletionMarkerRecorder,
         guard: &mut AccessTerminalGuard<P>,
         start_idx: OplogIndex,
-        response: &Pair::Resp,
+        host_response: HostResponse,
         post_end_entry: Option<OplogEntry>,
-    ) -> Result<(), WorkerExecutorError> {
-        let host_response: HostResponse = response.clone().into();
+    ) -> Result<HostResponse, WorkerExecutorError> {
         let end = prepare_end_entry(
             &oplog,
             &guard
@@ -2543,7 +2546,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 recorder: completion_marker_recorder,
             }),
         );
-        guard.wait_terminal().await
+        guard.wait_terminal().await?;
+        Ok(host_response)
     }
 
     /// Replays a call: drive the cursor until the call resolves, decode its response, then close the
