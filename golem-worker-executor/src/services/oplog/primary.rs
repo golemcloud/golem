@@ -31,6 +31,7 @@ use crate::storage::indexed::{
     IndexedStorageNamespace,
 };
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::FutureExt;
 use golem_common::model::RetryConfig;
 use golem_common::model::account::AccountId;
@@ -41,6 +42,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayl
 use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
 use golem_common::read_only_lock;
 use golem_common::retries::get_delay;
+use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use std::cmp::{max, min};
@@ -86,6 +88,163 @@ where
             Err(err) => {
                 panic!("Indexed storage operation '{op_name}' failed for key '{key}': {err}");
             }
+        }
+    }
+}
+
+fn stored_batch_matches(mut actual: Vec<(u64, Vec<u8>)>, expected: &[(u64, Bytes)]) -> bool {
+    actual.sort_unstable_by_key(|(id, _)| *id);
+    actual.len() == expected.len()
+        && actual.iter().zip(expected).all(
+            |((actual_id, actual_value), (expected_id, expected_value))| {
+                actual_id == expected_id && actual_value.as_slice() == expected_value.as_ref()
+            },
+        )
+}
+
+async fn stored_oplog_batch_matches(
+    retry_config: &RetryConfig,
+    indexed_storage: &(dyn IndexedStorage + Send + Sync),
+    namespace: &IndexedStorageNamespace,
+    key: &str,
+    expected: &[(u64, Bytes)],
+) -> bool {
+    let first_id = expected.first().expect("non-empty oplog batch").0;
+    let last_id = expected.last().expect("non-empty oplog batch").0;
+    retry_storage_op(retry_config, "append_reconcile", key, || {
+        let namespace = namespace.clone();
+        async move {
+            indexed_storage
+                .with_entity("oplog", "append_reconcile", "entry")
+                .read_raw(namespace, key, first_id, last_id)
+                .await
+                .map(|actual| stored_batch_matches(actual, expected))
+        }
+    })
+    .await
+}
+
+enum SerializedOplogAppend {
+    Entry((u64, Bytes)),
+    Batch(Arc<[(u64, Bytes)]>),
+}
+
+impl SerializedOplogAppend {
+    fn entries(&self) -> &[(u64, Bytes)] {
+        match self {
+            Self::Entry(entry) => std::slice::from_ref(entry),
+            Self::Batch(entries) => entries,
+        }
+    }
+
+    async fn write(
+        &self,
+        indexed_storage: &(dyn IndexedStorage + Send + Sync),
+        namespace: &IndexedStorageNamespace,
+        api_name: &'static str,
+        key: &str,
+    ) -> Result<(), IndexedStorageError> {
+        let storage = indexed_storage.with_entity("oplog", api_name, "entry");
+        match self {
+            Self::Entry((id, value)) => {
+                storage
+                    .append_raw(namespace.clone(), key, *id, value.to_vec())
+                    .await
+            }
+            Self::Batch(entries) => {
+                storage
+                    .append_many_raw(namespace, key, entries.clone())
+                    .await
+            }
+        }
+    }
+}
+
+async fn retry_oplog_append(
+    retry_config: &RetryConfig,
+    indexed_storage: &(dyn IndexedStorage + Send + Sync),
+    namespace: &IndexedStorageNamespace,
+    op_name: &str,
+    api_name: &'static str,
+    key: &str,
+    append: SerializedOplogAppend,
+) {
+    let mut attempts = 0u32;
+    let mut write_may_have_committed = false;
+    loop {
+        attempts += 1;
+        let error = match append
+            .write(indexed_storage, namespace, api_name, key)
+            .await
+        {
+            Ok(()) => return,
+            Err(error) => error,
+        };
+
+        let retryable = match &error {
+            IndexedStorageError::Indeterminate(_) => {
+                write_may_have_committed = true;
+                true
+            }
+            IndexedStorageError::Transient(_) => true,
+            IndexedStorageError::Conflict(msg) => {
+                if !write_may_have_committed {
+                    panic!(
+                        "Indexed storage operation '{op_name}' conflicted for key '{key}' without a preceding indeterminate write; possible concurrent oplog writer: {msg}"
+                    );
+                }
+                false
+            }
+            IndexedStorageError::Other(_) => {
+                if !write_may_have_committed {
+                    panic!("Indexed storage operation '{op_name}' failed for key '{key}': {error}");
+                }
+                false
+            }
+        };
+
+        if retryable && let Some(delay) = get_delay(retry_config, attempts) {
+            record_oplog_storage_retry(op_name);
+            warn!(
+                op = op_name,
+                key = key,
+                attempt = attempts,
+                delay_ms = delay.as_millis() as u64,
+                error = %error,
+                "Retryable indexed storage write failed, retrying"
+            );
+            tokio::time::sleep(delay).await;
+            continue;
+        }
+
+        if write_may_have_committed
+            && stored_oplog_batch_matches(
+                retry_config,
+                indexed_storage,
+                namespace,
+                key,
+                append.entries(),
+            )
+            .await
+        {
+            warn!(
+                op = op_name,
+                key = key,
+                attempts,
+                error = %error,
+                "Accepted an oplog append after its indeterminate result matched storage"
+            );
+            return;
+        }
+
+        if write_may_have_committed {
+            panic!(
+                "Indexed storage operation '{op_name}' failed for key '{key}' after {attempts} attempts and the indeterminate write did not match storage: {error}"
+            );
+        } else {
+            panic!(
+                "Indexed storage operation '{op_name}' failed for key '{key}' after {attempts} attempts: {error}"
+            );
         }
     }
 }
@@ -138,6 +297,36 @@ impl PrimaryOplogService {
 
     pub fn key_prefix(component_id: &ComponentId) -> String {
         component_id.0.to_string()
+    }
+
+    async fn append_initial_entry(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        op_name: &str,
+        api_name: &'static str,
+        entry: &OplogEntry,
+    ) {
+        let key = Self::oplog_key(&owned_agent_id.agent_id);
+        let namespace = IndexedStorageNamespace::OpLog {
+            agent_id: owned_agent_id.agent_id(),
+            agent_mode,
+        };
+        let value = Bytes::from(
+            serialize(entry)
+                .unwrap_or_else(|err| panic!("Failed to serialize initial oplog entry: {err}")),
+        );
+
+        retry_oplog_append(
+            &self.retry_config,
+            self.indexed_storage.as_ref(),
+            &namespace,
+            op_name,
+            api_name,
+            &key,
+            SerializedOplogAppend::Entry((1, value)),
+        )
+        .await;
     }
 
     async fn get_last_index_from_storage(
@@ -273,26 +462,14 @@ impl OplogService for PrimaryOplogService {
             panic!("oplog for worker {owned_agent_id} already exists in indexed storage")
         }
 
-        {
-            let is = self.indexed_storage.clone();
-            let agent_id = owned_agent_id.agent_id();
-            let key = key.clone();
-            retry_storage_op(&self.retry_config, "create_append", &key, || {
-                let is = is.clone();
-                let ns = IndexedStorageNamespace::OpLog {
-                    agent_id: agent_id.clone(),
-                    agent_mode,
-                };
-                let key = key.clone();
-                let entry = initial_entry.clone();
-                async move {
-                    is.with_entity("oplog", "create", "entry")
-                        .append(ns, &key, 1, &entry)
-                        .await
-                }
-            })
-            .await;
-        }
+        self.append_initial_entry(
+            owned_agent_id,
+            agent_mode,
+            "create_append",
+            "create",
+            &initial_entry,
+        )
+        .await;
 
         self.open(
             owned_agent_id,
@@ -316,31 +493,17 @@ impl OplogService for PrimaryOplogService {
     ) -> Arc<dyn Oplog> {
         record_oplog_call("create_fresh");
 
-        let key = Self::oplog_key(&owned_agent_id.agent_id);
-
         // The caller guarantees the agent id is freshly derived and unused, so
         // the existence probe performed by `create` is skipped: the initial
         // entry is appended directly without any prior read.
-        {
-            let is = self.indexed_storage.clone();
-            let agent_id = owned_agent_id.agent_id();
-            let key = key.clone();
-            retry_storage_op(&self.retry_config, "create_fresh_append", &key, || {
-                let is = is.clone();
-                let ns = IndexedStorageNamespace::OpLog {
-                    agent_id: agent_id.clone(),
-                    agent_mode,
-                };
-                let key = key.clone();
-                let entry = initial_entry.clone();
-                async move {
-                    is.with_entity("oplog", "create_fresh", "entry")
-                        .append(ns, &key, 1, &entry)
-                        .await
-                }
-            })
-            .await;
-        }
+        self.append_initial_entry(
+            owned_agent_id,
+            agent_mode,
+            "create_fresh_append",
+            "create_fresh",
+            &initial_entry,
+        )
+        .await;
 
         self.open(
             owned_agent_id,
@@ -1271,6 +1434,10 @@ impl PrimaryOplogState {
             }
         }
 
+        if entries.is_empty() {
+            return BTreeMap::new();
+        }
+
         let entry_count = entries.len() as u64;
         let mut pairs = Vec::with_capacity(entries.len());
         let mut last_idx = self.last_committed_idx;
@@ -1279,46 +1446,44 @@ impl PrimaryOplogState {
             pairs.push((oplog_idx.into(), entry));
             last_idx = oplog_idx;
         }
-        let pairs_ref: Vec<(u64, &OplogEntry)> = pairs.iter().map(|(id, e)| (*id, e)).collect();
-        let bytes_written = {
-            let is = self.indexed_storage.clone();
-            let agent_id = self.owned_agent_id.agent_id();
-            let agent_mode = self.agent_mode;
-            let key = self.key.clone();
-            retry_storage_op(&self.retry_config, "append", &key, || {
-                let is = is.clone();
-                let ns = IndexedStorageNamespace::OpLog {
-                    agent_id: agent_id.clone(),
-                    agent_mode,
-                };
-                let key = key.clone();
-                let pairs_ref = &pairs_ref;
-                async move {
-                    is.with_entity("oplog", "append", "entry")
-                        .append_many(ns, &key, pairs_ref)
-                        .await
-                }
-            })
-            .await
-        };
-
-        if entry_count > 0 {
-            let account_id = self.account_id.to_string();
-            let environment_id = self.owned_agent_id.environment_id().to_string();
-            record_storage_bytes_written(
-                STORAGE_TYPE_OPLOG,
-                &account_id,
-                &environment_id,
-                bytes_written,
-            );
-            record_storage_objects_written(
-                STORAGE_TYPE_OPLOG,
-                &account_id,
-                &environment_id,
-                entry_count,
-            );
+        let mut bytes_written = 0u64;
+        let mut serialized_pairs = Vec::with_capacity(pairs.len());
+        for (id, entry) in &pairs {
+            let value = serialize(entry)
+                .unwrap_or_else(|err| panic!("Failed to serialize oplog entry: {err}"));
+            bytes_written += value.len() as u64;
+            serialized_pairs.push((*id, Bytes::from(value)));
         }
-        drop(pairs_ref);
+        let serialized_pairs: Arc<[(u64, Bytes)]> = serialized_pairs.into();
+        let namespace = IndexedStorageNamespace::OpLog {
+            agent_id: self.owned_agent_id.agent_id(),
+            agent_mode: self.agent_mode,
+        };
+        retry_oplog_append(
+            &self.retry_config,
+            self.indexed_storage.as_ref(),
+            &namespace,
+            "append",
+            "append",
+            &self.key,
+            SerializedOplogAppend::Batch(serialized_pairs),
+        )
+        .await;
+
+        let account_id = self.account_id.to_string();
+        let environment_id = self.owned_agent_id.environment_id().to_string();
+        record_storage_bytes_written(
+            STORAGE_TYPE_OPLOG,
+            &account_id,
+            &environment_id,
+            bytes_written,
+        );
+        record_storage_objects_written(
+            STORAGE_TYPE_OPLOG,
+            &account_id,
+            &environment_id,
+            entry_count,
+        );
 
         self.last_committed_idx = last_idx;
         BTreeMap::from_iter(

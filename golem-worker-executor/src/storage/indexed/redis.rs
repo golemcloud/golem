@@ -18,11 +18,13 @@ use crate::storage::indexed::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
+use fred::error::ErrorKind;
 use fred::prelude::{Key, Value};
 use fred::types::streams::XCapKind;
 use golem_common::metrics::redis::{record_redis_deserialized_size, record_redis_serialized_size};
-use golem_common::redis::RedisPool;
+use golem_common::redis::{RedisError, RedisPool};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Debug)]
@@ -108,6 +110,20 @@ impl RedisIndexedStorage {
             id.parse::<u64>().map_err(|e| {
                 IndexedStorageError::Other(format!("Failed to parse {id} as u64: {e}"))
             })
+        }
+    }
+
+    fn classify_append_error(error: RedisError, primary_oplog_insert: bool) -> IndexedStorageError {
+        if primary_oplog_insert
+            && error
+                .details()
+                .contains("ID specified in XADD is equal or smaller than")
+        {
+            IndexedStorageError::Conflict(error.to_string())
+        } else if primary_oplog_insert && matches!(error.kind(), ErrorKind::IO) {
+            IndexedStorageError::Indeterminate(error.to_string())
+        } else {
+            IndexedStorageError::Other(error.to_string())
         }
     }
 
@@ -214,6 +230,7 @@ impl IndexedStorage for RedisIndexedStorage {
         value: Vec<u8>,
     ) -> Result<(), IndexedStorageError> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
+        let primary_oplog_insert = matches!(&namespace, IndexedStorageNamespace::OpLog { .. });
 
         let _: String = self
             .redis
@@ -226,7 +243,7 @@ impl IndexedStorage for RedisIndexedStorage {
                 (Key::from(Self::KEY), Value::Bytes(Bytes::from(value))),
             )
             .await
-            .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+            .map_err(|error| Self::classify_append_error(error, primary_oplog_insert))?;
         Ok(())
     }
 
@@ -235,30 +252,31 @@ impl IndexedStorage for RedisIndexedStorage {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: IndexedStorageNamespace,
+        namespace: &IndexedStorageNamespace,
         key: &str,
-        pairs: Vec<(u64, Vec<u8>)>,
+        pairs: Arc<[(u64, Bytes)]>,
     ) -> Result<(), IndexedStorageError> {
         if !pairs.is_empty() {
+            let primary_oplog_insert = matches!(namespace, IndexedStorageNamespace::OpLog { .. });
             let mut redis_pairs = Vec::with_capacity(pairs.len());
-            for (id, value) in pairs {
+            for (id, value) in pairs.iter() {
                 record_redis_serialized_size(svc_name, entity_name, value.len());
                 redis_pairs.push((
                     id.to_string(),
-                    (Key::from(Self::KEY), Value::Bytes(Bytes::from(value))),
+                    (Key::from(Self::KEY), Value::Bytes(value.clone())),
                 ));
             }
 
             self.redis
                 .with(svc_name, api_name)
                 .xadd_pipeline(
-                    Self::composite_key(namespace, key),
+                    Self::composite_key((*namespace).clone(), key),
                     false,
                     None,
                     redis_pairs,
                 )
                 .await
-                .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+                .map_err(|error| Self::classify_append_error(error, primary_oplog_insert))?;
         }
         Ok(())
     }
@@ -388,5 +406,47 @@ impl IndexedStorage for RedisIndexedStorage {
             .await
             .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn primary_oplog_xadd_ordering_error_is_a_conflict() {
+        let error = RedisError::new(
+            ErrorKind::Unknown,
+            "ERR The ID specified in XADD is equal or smaller than the target stream top item",
+        );
+
+        assert!(matches!(
+            RedisIndexedStorage::classify_append_error(error, true),
+            IndexedStorageError::Conflict(_)
+        ));
+    }
+
+    #[test]
+    fn compressed_oplog_xadd_ordering_error_remains_permanent() {
+        let error = RedisError::new(
+            ErrorKind::Unknown,
+            "ERR The ID specified in XADD is equal or smaller than the target stream top item",
+        );
+
+        assert!(matches!(
+            RedisIndexedStorage::classify_append_error(error, false),
+            IndexedStorageError::Other(_)
+        ));
+    }
+
+    #[test]
+    fn primary_oplog_xadd_io_error_is_indeterminate() {
+        let error = RedisError::new(ErrorKind::IO, "connection lost after sending XADD");
+
+        assert!(matches!(
+            RedisIndexedStorage::classify_append_error(error, true),
+            IndexedStorageError::Indeterminate(_)
+        ));
     }
 }
