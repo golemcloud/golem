@@ -867,9 +867,10 @@ scenarios:
       crossPodPremiumInflationFloorPercent: 150
 
     workload:
-      # S2's workload unchanged. The comparison is the same comparison, and
-      # changing the populations would make the two runs incomparable for no
-      # gain — S2's numbers are this scenario's control.
+      # S2's populations unchanged, and deliberately so: the placement split is
+      # decided by hashing agent ids, so keeping the counts keeps the two
+      # populations the same two populations S2 measured. Only the rate below
+      # differs.
       durableAgents: 100
       ephemeralAgents: 50
       scheduledAgents: 50
@@ -878,7 +879,26 @@ scenarios:
       # worker-service, so it would add load without adding signal.
       quotaAgents: 0
       rpcAgents: 200
-      ratePerSec: 100
+      # Eight times the rest of the suite, and knowingly past the 25% cap
+      # documented on `rate_per_sec`. That cap is a margin for faults that remove
+      # capacity — S13 kills executors, so a rate comfortable at two has to
+      # survive one — and this fault removes none. What it does need is a
+      # worker-service that is actually spending CPU, because a fault that takes
+      # CPU away from a service that wants none measures scheduling delay rather
+      # than saturation.
+      #
+      # The first run measured what it wants: 0.05 cores per pod at 91 ops/s,
+      # on 4-vCPU nodes carrying one replica each. Two stressors take 1.8 cores
+      # and leave 2.2, so worker-service has to want 2.2 before losing them
+      # registers, which is 44x this rate. Eight times gets it to 0.4 cores and
+      # leaves the executors at 2.8 of their 8, measured flat at 0.35 through
+      # the whole first run. Closing the rest of the gap belongs to the
+      # stressor, not to the workload.
+      #
+      # The agent counts do not rise with it. Each agent is delivering 0.2 ops/s
+      # against a serial ceiling near 8/s, so the rate has roughly 40x of room
+      # before an agent is the constraint.
+      ratePerSec: 800
 
     retryPolicy:
       # Load-bearing here in a way it is not in S2. A starved relay is exactly

@@ -389,6 +389,12 @@ pub struct WorkloadConfig {
     /// Combined submission rate across all streams, in operations per second.
     /// The project caps this at 25% of measured per-pod capacity so the run
     /// measures fault recovery rather than saturation.
+    ///
+    /// The cap is a margin for faults that *remove* capacity: S13 kills
+    /// executors, so a rate comfortable at two of them has to stay survivable
+    /// at one. A scenario whose fault removes none may sit above it, provided
+    /// its suite entry says why. S21 does, because a CPU stress cannot saturate
+    /// a service that is spending 1% of a core.
     pub rate_per_sec: u32,
 }
 
