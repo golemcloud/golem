@@ -28,21 +28,40 @@
 //! **S21 injects a fault aimed at that third party**, and measures what it
 //! cost. Same populations, same cells, opposite verdict.
 //!
-//! ### The premium is the instrument, and it took a real run to find it
+//! ### What "the premium" is
 //!
-//! Throughput cannot separate the two populations. The driver sets the cadence,
-//! so both run at the rate they were asked to whether or not a call leaves the
-//! pod: S2's first run measured 9.51/s cross-pod and 10.49/s co-located before,
-//! during and after a partition, and those cells look identical on a healthy run
-//! *and* on a run whose pairing was broken.
+//! The one piece of vocabulary these scenarios invent, so it is worth spelling
+//! out. The RPC stream has each agent call another agent, and the callee lands
+//! on the caller's own executor or on the other one purely by how their agent
+//! ids hash.
 //!
-//! Latency does separate them, and by an exactly interpretable amount. Every
-//! call in the workload crosses worker-service once; a cross-pod call crosses it
-//! twice. So the gap between the two populations is one worker-service hop and
-//! nothing else — 38ms and 50ms on S2's two runs. That makes it usable in a
-//! window where *everything* is slower, which is precisely the window S21 runs
-//! in: a fault that widened the premium reached worker-service, and one that
-//! moved both populations together did not.
+//! Every call starts driver -> worker-service -> executor. A **co-located** call
+//! ends there, because the callee is an agent that executor already owns. A
+//! **cross-pod** call cannot: an executor never opens a connection to another
+//! executor, so `DirectWorkerInvocationRpc` hands the call to `worker_proxy`,
+//! which is a client of worker-service, and the reply comes back the same way.
+//!
+//! So a cross-pod call crosses worker-service twice and a co-located one crosses
+//! it once. Subtract the two median latencies and everything they share
+//! cancels: the driver's own round trip, the first crossing, the agent's work.
+//! What is left is the one extra crossing only cross-pod calls pay, which is
+//! **what it costs an agent to have its callee on another pod**. S2 measured
+//! 38ms and 50ms; S21 has seen 22ms at the suite's usual rate and 43-50ms at
+//! eight times it.
+//!
+//! Throughput cannot do this job. The driver sets the cadence, so both
+//! populations run at the rate they were asked to whether or not a call leaves
+//! the pod: S2's first run measured 9.51/s cross-pod and 10.49/s co-located
+//! before, during and after a partition, and those cells look identical on a
+//! healthy run *and* on a run whose pairing was broken.
+//!
+//! The premium's value is that it survives a window where *everything* is
+//! slower, because anything hitting both populations equally drops out of a
+//! difference. Its limit is the same sentence read backwards: a fault costing
+//! both crossings the same leaves it flat while both populations degrade. S21
+//! met both cases — the fault hit only the second crossing at 100 ops/s and both
+//! crossings at 800 — so each population's own p50 is reported beside the
+//! premium, and no verdict rests on the premium alone.
 //!
 //! ### Why either scenario needs more oracles than a normal one
 //!
