@@ -1020,6 +1020,81 @@ async fn dropped_durable_input_completes_while_producer_items_and_end_are_in_fli
     Ok(())
 }
 
+/// Once the executor has cancelled an input because the guest dropped it, later producer items
+/// and the producer terminal are discarded instead of failing the invocation protocol.
+#[test]
+#[timeout("4 minutes")]
+#[tracing::instrument]
+async fn dropped_durable_input_discards_items_and_end_after_consumer_cancellation(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, environment) = user.app_and_env().await?;
+    let component = user
+        .component(&environment.id, "golem_it_agent_rpc_rust_release")
+        .name("golem-it:agent-rpc-rust")
+        .unique()
+        .store()
+        .await?;
+    let target_agent_id = agent_id!(
+        "StreamingRpcTarget",
+        format!("drop-input-late-end-{}", uuid::Uuid::new_v4())
+    );
+    let input_id = 202;
+    let mut session = TrustedInvocationSession::start_with(
+        deps,
+        &component,
+        &target_agent_id,
+        "drop_input",
+        proto_record_values(vec![proto_stream(input_id)]),
+        false,
+    )
+    .await?;
+    session
+        .send_input_value(input_id, 0, SchemaValue::U32(1))
+        .await?;
+
+    let mut report = TrustedInvocationReport::default();
+    loop {
+        let response = session.receive().await?;
+        let input_consumer_cancelled = matches!(
+            response.response.as_ref(),
+            Some(invocation_response::Response::StreamCancel(cancel))
+                if cancel.transport_stream_id == input_id
+                    && cancel.role == StreamCancelRole::InputConsumer as i32
+        );
+        report.record(response)?;
+        if input_consumer_cancelled {
+            break;
+        }
+        if session.state.is_complete() {
+            anyhow::bail!("invocation completed before cancelling its dropped durable input");
+        }
+    }
+
+    for sequence in 1..64u64 {
+        session
+            .send_input_value(input_id, sequence, SchemaValue::U32(1))
+            .await?;
+    }
+    session.end_input(input_id, 64).await?;
+    let report = session.finish(report).await?;
+    let result = report
+        .successful_result()
+        .map_err(|error| anyhow::anyhow!("{error}; failure: {:?}", report.failure()))?;
+    assert_eq!(decode_proto_value(result)?, SchemaValue::U64(42));
+    assert!(
+        report
+            .stream_cancels
+            .iter()
+            .all(|cancel| cancel.transport_stream_id == input_id
+                && cancel.role == StreamCancelRole::InputConsumer as i32),
+        "unexpected stream cancellations: {:?}",
+        report.stream_cancels
+    );
+    Ok(())
+}
+
 #[test]
 #[timeout("4 minutes")]
 #[tracing::instrument]
