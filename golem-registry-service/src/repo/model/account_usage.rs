@@ -111,7 +111,6 @@ pub struct AccountUsage {
     pub plan: PlanRecord,
     pub storage_limit: StorageLimit,
     pub max_memory_per_worker: golem_common::model::account_usage::MemoryLimit,
-    pub monthly_memory_gb_seconds: golem_common::model::account_usage::MemoryLimit,
     pub metering: Option<ResourceUsageMetering>,
     pub changes: BTreeMap<UsageType, i64>,
 }
@@ -122,7 +121,6 @@ pub struct AccountUsagePlan {
     pub plan: PlanRecord,
     pub storage_override_value: Option<NumericU64>,
     pub max_memory_override_value: Option<NumericU64>,
-    pub monthly_memory_override_value: Option<NumericU64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -233,7 +231,7 @@ impl AccountUsage {
             available_fuel,
             max_memory_per_worker: self.max_memory_per_worker.effective_value,
             max_table_elements_per_worker: self.plan.max_table_elements_per_worker.get(),
-            max_disk_space_per_worker: self.storage_limit.effective_value,
+            max_disk_space_per_worker: self.storage_limit.executor_value(),
             per_invocation_http_call_limit: self.plan.per_invocation_http_call_limit.get(),
             per_invocation_rpc_call_limit: self.plan.per_invocation_rpc_call_limit.get(),
             available_http_calls,

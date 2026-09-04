@@ -347,7 +347,7 @@
     },
     "account.limits.show": {
       "type": "object",
-      "description": "Single structured output document emitted by account storage and memory limit commands.",
+      "description": "Single structured output document emitted by per-agent storage and memory limit commands.",
       "x-golem-output-mode": "single",
       "x-golem-command": "account limits show",
       "x-golem-commands": [
@@ -357,41 +357,17 @@
       ],
       "required": [
         "$type",
-        "effectiveValue",
-        "planDefault",
-        "overrideValue",
-        "ceiling",
-        "userConfigurable",
-        "maxMemoryPerAgent",
-        "monthlyMemoryGbSeconds"
+        "maxStoragePerAgent",
+        "maxMemoryPerAgent"
       ],
       "properties": {
         "$type": {
           "const": "account.limits.show"
         },
-        "effectiveValue": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "planDefault": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "overrideValue": {
-          "type": ["integer", "null"],
-          "minimum": 0
-        },
-        "ceiling": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "userConfigurable": {
-          "type": "boolean"
+        "maxStoragePerAgent": {
+          "$ref": "#/definitions/StorageLimit"
         },
         "maxMemoryPerAgent": {
-          "$ref": "#/definitions/MemoryLimit"
-        },
-        "monthlyMemoryGbSeconds": {
           "$ref": "#/definitions/MemoryLimit"
         }
       },
@@ -841,6 +817,39 @@
         },
         "userConfigurable": {
           "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StorageLimit": {
+      "type": "object",
+      "required": ["enabled", "userConfigurable"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "effectiveValue": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "planDefault": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "overrideValue": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ceiling": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "userConfigurable": {
+          "type": "boolean"
+        },
+        "disabledReason": {
+          "type": "string",
+          "enum": ["managedFilesystemUnavailable"]
         }
       },
       "additionalProperties": false

@@ -19,7 +19,6 @@ use uuid::Uuid;
 pub enum AccountResourceOverrideDimension {
     MaxDiskSpacePerWorker,
     MaxMemoryPerWorker,
-    MonthlyMemoryGbSeconds,
 }
 
 impl AccountResourceOverrideDimension {
@@ -27,7 +26,6 @@ impl AccountResourceOverrideDimension {
         match self {
             Self::MaxDiskSpacePerWorker => "max_disk_space_per_worker",
             Self::MaxMemoryPerWorker => "max_memory_per_worker",
-            Self::MonthlyMemoryGbSeconds => "monthly_memory_gb_seconds",
         }
     }
 }

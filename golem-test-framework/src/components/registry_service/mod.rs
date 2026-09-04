@@ -173,7 +173,7 @@ async fn env_vars(
             "100000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__DEFAULT__MAX_DISK_SPACE_PER_WORKER",
+            "GOLEM__INITIAL_PLANS__DEFAULT__MAX_STORAGE_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
@@ -197,11 +197,11 @@ async fn env_vars(
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__MAX_MEMORY_PER_WORKER",
+            "GOLEM__INITIAL_PLANS__UNLIMITED__MAX_MEMORY_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__MAX_DISK_SPACE_PER_WORKER",
+            "GOLEM__INITIAL_PLANS__UNLIMITED__MAX_STORAGE_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
@@ -245,11 +245,11 @@ async fn env_vars(
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__MAX_MEMORY_PER_WORKER",
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__MAX_MEMORY_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__MAX_DISK_SPACE_PER_WORKER",
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__MAX_STORAGE_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
@@ -272,7 +272,7 @@ async fn env_vars(
             "GOLEM__INITIAL_PLANS__LOW_FUEL__WORKER_LIMIT",
             "10000000000000000".to_string(),
         )
-        // Low disk space plan — per-worker disk quota of 5 bytes so "hello world" exceeds it
+        // Low storage plan: per-agent quota of 5 bytes so "hello world" exceeds it.
         .with(
             "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__PLAN_ID",
             low_disk_space_plan_id.to_string(),
@@ -294,15 +294,15 @@ async fn env_vars(
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_MEMORY_PER_WORKER",
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_MEMORY_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_MEMORY_PER_WORKER_CEILING",
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_MEMORY_PER_AGENT_CEILING",
             "20000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_MEMORY_PER_WORKER_USER_CONFIGURABLE",
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_MEMORY_PER_AGENT_USER_CONFIGURABLE",
             "true".to_string(),
         )
         .with(
@@ -318,15 +318,19 @@ async fn env_vars(
             "true".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_DISK_SPACE_PER_WORKER",
-            "5".to_string(), // 5 bytes — "hello world" (11 bytes) exceeds this
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_STORAGE_PER_AGENT",
+            "5".to_string(), // 5 bytes, so "hello world" exceeds this.
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_DISK_SPACE_PER_WORKER_CEILING",
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_STORAGE_PER_AGENT_ENABLED",
+            "true".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_STORAGE_PER_AGENT_CEILING",
             "20".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_DISK_SPACE_PER_WORKER_USER_CONFIGURABLE",
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_STORAGE_PER_AGENT_USER_CONFIGURABLE",
             "true".to_string(),
         )
         .with(
@@ -371,11 +375,11 @@ async fn env_vars(
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MAX_MEMORY_PER_WORKER",
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MAX_MEMORY_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MAX_DISK_SPACE_PER_WORKER",
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MAX_STORAGE_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
@@ -428,11 +432,11 @@ async fn env_vars(
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MAX_MEMORY_PER_WORKER",
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MAX_MEMORY_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MAX_DISK_SPACE_PER_WORKER",
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MAX_STORAGE_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(

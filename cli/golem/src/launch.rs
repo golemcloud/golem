@@ -248,16 +248,17 @@ fn registry_service_config(
                     storage_limit: u64::MAX,
                     monthly_gas_limit: u64::MAX,
                     monthly_upload_limit: u64::MAX,
-                    max_memory_per_worker: u64::MAX,
-                    max_memory_per_worker_ceiling: u64::MAX,
-                    max_memory_per_worker_user_configurable: true,
+                    max_memory_per_agent: u64::MAX,
+                    max_memory_per_agent_ceiling: u64::MAX,
+                    max_memory_per_agent_user_configurable: true,
                     monthly_memory_gb_seconds: u64::MAX,
                     monthly_memory_gb_seconds_ceiling: u64::MAX,
                     monthly_memory_gb_seconds_user_configurable: true,
                     max_table_elements_per_worker: u64::MAX,
-                    max_disk_space_per_worker: u64::MAX,
-                    max_disk_space_per_worker_ceiling: None,
-                    max_disk_space_per_worker_user_configurable: true,
+                    max_storage_per_agent_enabled: false,
+                    max_storage_per_agent: u64::MAX,
+                    max_storage_per_agent_ceiling: None,
+                    max_storage_per_agent_user_configurable: false,
                     per_invocation_http_call_limit: u64::MAX,
                     per_invocation_rpc_call_limit: u64::MAX,
                     monthly_http_call_limit: u64::MAX,
@@ -532,4 +533,40 @@ async fn run_worker_service(
         .start_endpoints(join_set, None)
         .instrument(span)
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn registry_config_uses_single_binary_plan() {
+        let args = LaunchArgs {
+            router_addr: "127.0.0.1".to_string(),
+            router_port: 0,
+            custom_request_port: 0,
+            mcp_port: 0,
+            ports_file: None,
+            data_dir: PathBuf::from("/tmp/golem-launch-config-test"),
+            agent_filesystem_root: None,
+            resource_usage_metering: ResourceUsageMeteringConfig::default(),
+        };
+        let config = registry_service_config(
+            &args,
+            &golem_component_compilation_service::RunDetails {
+                http_port: 0,
+                grpc_port: 0,
+            },
+        )
+        .unwrap();
+        let plan = config.initial_plans.get("default").unwrap();
+
+        assert_eq!(
+            plan.plan_id,
+            PlanId(uuid!("e808bd76-a6ab-4090-ade4-8447b8e8550f"))
+        );
+        assert!(!plan.max_storage_per_agent_enabled);
+        assert_eq!(plan.max_storage_per_agent, u64::MAX);
+    }
 }

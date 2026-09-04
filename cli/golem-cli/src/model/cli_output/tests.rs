@@ -3252,15 +3252,39 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
             proptest::option::of(arb_small_u64()),
             arb_small_u64(),
             any::<bool>(),
+            any::<bool>(),
         )
             .prop_map(
-                |(effective_value, plan_default, override_value, ceiling, user_configurable)| {
-                    let storage = golem_common::model::account_usage::StorageLimit {
-                        effective_value,
-                        plan_default,
-                        override_value,
-                        ceiling,
-                        user_configurable,
+                |(
+                    effective_value,
+                    plan_default,
+                    override_value,
+                    ceiling,
+                    user_configurable,
+                    storage_enabled,
+                )| {
+                    let storage = if storage_enabled {
+                        golem_common::model::account_usage::StorageLimit {
+                            enabled: true,
+                            effective_value: Some(effective_value),
+                            plan_default: Some(plan_default),
+                            override_value,
+                            ceiling: Some(ceiling),
+                            user_configurable,
+                            disabled_reason: None,
+                        }
+                    } else {
+                        golem_common::model::account_usage::StorageLimit {
+                            enabled: false,
+                            effective_value: None,
+                            plan_default: None,
+                            override_value: None,
+                            ceiling: None,
+                            user_configurable: false,
+                            disabled_reason: Some(
+                                golem_common::model::account_usage::StorageLimitDisabledReason::ManagedFilesystemUnavailable,
+                            ),
+                        }
                     };
                     let memory = golem_common::model::account_usage::MemoryLimit {
                         effective_value,
@@ -3269,7 +3293,7 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
                         ceiling,
                         user_configurable,
                     };
-                    crate::model::account::AccountLimitsView::new(storage, memory.clone(), memory)
+                    crate::model::account::AccountLimitsView::new(storage, memory)
                 },
             ),
     )

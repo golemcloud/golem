@@ -21,6 +21,7 @@ use std::str::FromStr;
 pub const BYTE_SECONDS_PER_GB_MONTH: f64 = 1024.0 * 1024.0 * 1024.0 * 730.0 * 3600.0;
 pub const FUEL_PER_GCU: u64 = 1_000_000;
 pub const DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS: usize = 6;
+pub const EFFECTIVELY_UNLIMITED_STORAGE_LIMIT: u64 = 10_000_000_000_000_000;
 const PERIOD_FORMAT_ERROR: &str = "period must use YYYY-MM format";
 
 declare_enums! {
@@ -30,6 +31,17 @@ declare_enums! {
         /// No usage producer has reported the metering state for this period yet.
         Unknown,
     }
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, derive_more::Display,
+)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[display(rename_all = "camelCase")]
+pub enum StorageLimitDisabledReason {
+    ManagedFilesystemUnavailable,
 }
 
 declare_structs! {
@@ -63,17 +75,24 @@ declare_structs! {
     }
 
     #[derive(Eq)]
+    #[cfg_attr(feature = "full", oai(example, skip_serializing_if_is_none))]
     pub struct StorageLimit {
-        pub effective_value: u64,
-        pub plan_default: u64,
+        pub enabled: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub effective_value: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub plan_default: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub override_value: Option<u64>,
-        pub ceiling: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub ceiling: Option<u64>,
         pub user_configurable: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub disabled_reason: Option<StorageLimitDisabledReason>,
     }
 
     pub struct SetStorageLimit {
         pub value: u64,
-        pub expires_at: Option<DateTime<Utc>>,
     }
 
     #[derive(Eq)]
@@ -87,7 +106,6 @@ declare_structs! {
 
     pub struct SetMemoryLimit {
         pub value: u64,
-        pub expires_at: Option<DateTime<Utc>>,
     }
 }
 
@@ -109,18 +127,54 @@ impl AccountUsagePeriod {
 
 impl StorageLimit {
     pub fn resolve(
+        enabled: bool,
         plan_default: u64,
         override_value: Option<u64>,
         ceiling: u64,
         user_configurable: bool,
     ) -> Self {
-        Self {
-            effective_value: override_value.unwrap_or(plan_default).min(ceiling),
-            plan_default,
-            override_value,
-            ceiling,
-            user_configurable,
+        if enabled {
+            let override_value = override_value
+                .filter(|_| user_configurable)
+                .filter(|value| (plan_default..=ceiling).contains(value));
+            Self {
+                enabled: true,
+                effective_value: Some(override_value.unwrap_or(plan_default)),
+                plan_default: Some(plan_default),
+                override_value,
+                ceiling: Some(ceiling),
+                user_configurable,
+                disabled_reason: None,
+            }
+        } else {
+            Self {
+                enabled: false,
+                effective_value: None,
+                plan_default: None,
+                override_value: None,
+                ceiling: None,
+                user_configurable: false,
+                disabled_reason: Some(StorageLimitDisabledReason::ManagedFilesystemUnavailable),
+            }
         }
+    }
+
+    pub fn executor_value(&self) -> u64 {
+        self.effective_value
+            .unwrap_or(EFFECTIVELY_UNLIMITED_STORAGE_LIMIT)
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::Example for StorageLimit {
+    fn example() -> Self {
+        Self::resolve(
+            true,
+            1024 * 1024 * 1024,
+            None,
+            10 * 1024 * 1024 * 1024,
+            true,
+        )
     }
 }
 
@@ -131,8 +185,11 @@ impl MemoryLimit {
         ceiling: u64,
         user_configurable: bool,
     ) -> Self {
+        let override_value = override_value
+            .filter(|_| user_configurable)
+            .filter(|value| (plan_default..=ceiling).contains(value));
         Self {
-            effective_value: override_value.unwrap_or(plan_default).min(ceiling),
+            effective_value: override_value.unwrap_or(plan_default),
             plan_default,
             override_value,
             ceiling,
@@ -210,8 +267,10 @@ fn format_metered(value: impl Display, unit: &str, status: MeteringStatus) -> St
 #[cfg(test)]
 mod tests {
     use super::{
-        AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod, FUEL_PER_GCU, MemoryLimit,
-        MeteringStatus, byte_seconds_to_gb_month, fuel_to_gcu,
+        AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod,
+        EFFECTIVELY_UNLIMITED_STORAGE_LIMIT, FUEL_PER_GCU, MemoryLimit, MeteringStatus,
+        PERIOD_FORMAT_ERROR, StorageLimit, StorageLimitDisabledReason, byte_seconds_to_gb_month,
+        fuel_to_gcu,
     };
     use chrono::Utc;
     use std::str::FromStr;
@@ -219,13 +278,15 @@ mod tests {
 
     #[test]
     fn account_usage_period_parses_year_and_month() {
+        let period = AccountUsagePeriod::from_str("2026-04").unwrap();
         assert_eq!(
-            AccountUsagePeriod::from_str("2026-04").unwrap(),
+            period,
             AccountUsagePeriod {
                 year: 2026,
                 month: 4,
             }
         );
+        assert_eq!(period.to_string(), "2026-04");
     }
 
     #[test]
@@ -234,20 +295,130 @@ mod tests {
             AccountUsagePeriod::from_str("2026-13").unwrap_err(),
             "period month must be between 01 and 12"
         );
+        assert_eq!(
+            AccountUsagePeriod::from_str("26-04").unwrap_err(),
+            PERIOD_FORMAT_ERROR
+        );
+        assert_eq!(
+            AccountUsagePeriod::from_str("2026-4").unwrap_err(),
+            PERIOD_FORMAT_ERROR
+        );
     }
 
     #[test]
-    fn memory_limit_resolves_override_and_clamps_to_ceiling() {
+    fn memory_limit_resolves_only_in_range_override() {
         assert_eq!(
-            MemoryLimit::resolve(100, Some(300), 200, true),
+            MemoryLimit::resolve(100, Some(150), 200, true),
             MemoryLimit {
-                effective_value: 200,
+                effective_value: 150,
                 plan_default: 100,
-                override_value: Some(300),
+                override_value: Some(150),
                 ceiling: 200,
                 user_configurable: true,
             }
         );
+        assert_eq!(
+            MemoryLimit::resolve(100, Some(99), 200, true).override_value,
+            None
+        );
+        assert_eq!(
+            MemoryLimit::resolve(100, Some(201), 200, true).override_value,
+            None
+        );
+        assert_eq!(
+            MemoryLimit::resolve(100, Some(150), 200, false),
+            MemoryLimit {
+                effective_value: 100,
+                plan_default: 100,
+                override_value: None,
+                ceiling: 200,
+                user_configurable: false,
+            }
+        );
+    }
+
+    #[test]
+    fn enabled_storage_limit_resolves_only_in_range_override() {
+        assert_eq!(
+            StorageLimit::resolve(true, 100, Some(150), 200, true),
+            StorageLimit {
+                enabled: true,
+                effective_value: Some(150),
+                plan_default: Some(100),
+                override_value: Some(150),
+                ceiling: Some(200),
+                user_configurable: true,
+                disabled_reason: None,
+            }
+        );
+        assert_eq!(
+            StorageLimit::resolve(true, 100, Some(99), 200, true).override_value,
+            None
+        );
+        assert_eq!(
+            StorageLimit::resolve(true, 100, Some(201), 200, true).override_value,
+            None
+        );
+        assert_eq!(
+            StorageLimit::resolve(true, 100, Some(150), 200, false),
+            StorageLimit {
+                enabled: true,
+                effective_value: Some(100),
+                plan_default: Some(100),
+                override_value: None,
+                ceiling: Some(200),
+                user_configurable: false,
+                disabled_reason: None,
+            }
+        );
+    }
+
+    #[test]
+    fn disabled_storage_limit_hides_values_and_resolves_to_unlimited_for_executor() {
+        let limit = StorageLimit::resolve(false, 100, Some(300), 200, true);
+
+        assert_eq!(
+            limit,
+            StorageLimit {
+                enabled: false,
+                effective_value: None,
+                plan_default: None,
+                override_value: None,
+                ceiling: None,
+                user_configurable: false,
+                disabled_reason: Some(StorageLimitDisabledReason::ManagedFilesystemUnavailable),
+            }
+        );
+        assert_eq!(limit.executor_value(), EFFECTIVELY_UNLIMITED_STORAGE_LIMIT);
+    }
+
+    #[cfg(feature = "full")]
+    #[test]
+    fn storage_limit_openapi_example_is_coherent() {
+        let example = <StorageLimit as poem_openapi::types::Example>::example();
+
+        assert_eq!(
+            <StorageLimit as poem_openapi::types::ToJSON>::to_json(&example),
+            Some(serde_json::json!({
+                "enabled": true,
+                "effectiveValue": 1024 * 1024 * 1024_u64,
+                "planDefault": 1024 * 1024 * 1024_u64,
+                "ceiling": 10 * 1024 * 1024 * 1024_u64,
+                "userConfigurable": true,
+            }))
+        );
+
+        let disabled = StorageLimit::resolve(false, 1, Some(2), 3, true);
+        let expected = serde_json::json!({
+            "enabled": false,
+            "userConfigurable": false,
+            "disabledReason": "managedFilesystemUnavailable",
+        });
+        assert_eq!(
+            <StorageLimit as poem_openapi::types::ToJSON>::to_json(&disabled),
+            Some(expected.clone())
+        );
+        assert_eq!(serde_json::to_value(disabled).unwrap(), expected);
     }
 
     #[test]

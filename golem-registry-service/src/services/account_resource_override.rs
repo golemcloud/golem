@@ -15,13 +15,13 @@
 use super::account::{AccountError, AccountService};
 use super::account_usage::error::AccountUsageError;
 use super::account_usage::{authorize_account_usage_permission, map_account_error};
-use crate::repo::account_resource_override::AccountResourceOverrideRepo;
-use crate::repo::model::account_resource_override::{
-    AccountResourceOverrideDimension, AccountResourceOverrideReason, AccountResourceOverrideRecord,
+use crate::repo::account_resource_override::{
+    AccountResourceOverrideRepo, OverridePolicy, OverridePolicyViolation,
+    SetAccountResourceOverrideError,
 };
+use crate::repo::model::account_resource_override::AccountResourceOverrideDimension;
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{MemoryLimit, StorageLimit};
-use golem_common::model::auth::AccountRole;
 use golem_common::model::card::AccountUsageVerb;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
@@ -36,8 +36,10 @@ pub enum AccountResourceOverrideError {
     ExceedsPlanCeiling(&'static str, u64),
     #[error("{0} is below plan default {1}")]
     BelowPlanDefault(&'static str, u64),
-    #[error("Only admins may set an override expiry")]
-    ExpiryRequiresAdmin,
+    #[error("{0} is disabled because managed filesystem quotas are unavailable")]
+    FeatureDisabled(&'static str),
+    #[error("Only account owners may change per-agent resource limits")]
+    OwnerOnly,
     #[error("Account {0} not found")]
     AccountNotFound(AccountId),
     #[error(transparent)]
@@ -52,36 +54,13 @@ impl SafeDisplay for AccountResourceOverrideError {
             Self::NotUserConfigurable(_)
             | Self::ExceedsPlanCeiling(_, _)
             | Self::BelowPlanDefault(_, _)
-            | Self::ExpiryRequiresAdmin
+            | Self::FeatureDisabled(_)
+            | Self::OwnerOnly
             | Self::AccountNotFound(_) => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
-}
-
-fn validate_memory_override(
-    label: &'static str,
-    value: u64,
-    plan_default: u64,
-    ceiling: u64,
-    configurable: bool,
-) -> Result<(), AccountResourceOverrideError> {
-    if !configurable {
-        return Err(AccountResourceOverrideError::NotUserConfigurable(label));
-    }
-    if value < plan_default {
-        return Err(AccountResourceOverrideError::BelowPlanDefault(
-            label,
-            plan_default,
-        ));
-    }
-    if value > ceiling {
-        return Err(AccountResourceOverrideError::ExceedsPlanCeiling(
-            label, ceiling,
-        ));
-    }
-    Ok(())
 }
 
 error_forwarding!(AccountResourceOverrideError, RepoError, AccountError);
@@ -117,41 +96,24 @@ impl AccountResourceOverrideService {
         &self,
         account_id: AccountId,
         value: u64,
-        expires_at: Option<SqlDateTime>,
         auth: &AuthCtx,
     ) -> Result<StorageLimit, AccountResourceOverrideError> {
-        self.authorize(account_id, auth, AccountUsageVerb::Update)
+        self.authorize_owner(account_id, auth).await?;
+        let policy = self
+            .set_user_override(
+                account_id,
+                AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+                value,
+                auth,
+            )
             .await?;
-        if expires_at.is_some() && !can_set_expiry(auth) {
-            return Err(AccountResourceOverrideError::ExpiryRequiresAdmin);
-        }
-        let plan = self.account_service.get_plan(account_id, auth).await?;
-
-        if !plan.max_disk_space_per_worker_user_configurable {
-            return Err(AccountResourceOverrideError::NotUserConfigurable(
-                "Storage limit",
-            ));
-        }
-        if value > plan.max_disk_space_per_worker_ceiling {
-            return Err(AccountResourceOverrideError::ExceedsPlanCeiling(
-                "Storage limit",
-                plan.max_disk_space_per_worker_ceiling,
-            ));
-        }
-
-        let created_at = SqlDateTime::now();
-        self.repo
-            .upsert(AccountResourceOverrideRecord {
-                account_id: account_id.0,
-                dimension: AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
-                override_value: value.into(),
-                reason: AccountResourceOverrideReason::UserSelfServe,
-                expires_at,
-                created_by: auth.actor_account_id().0,
-                created_at,
-            })
-            .await?;
-        self.resolved_storage_limit(account_id).await
+        Ok(StorageLimit::resolve(
+            policy.enabled,
+            policy.default,
+            Some(value),
+            policy.ceiling,
+            policy.user_configurable,
+        ))
     }
 
     pub async fn get_max_disk_space_per_worker(
@@ -169,8 +131,18 @@ impl AccountResourceOverrideService {
         account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<StorageLimit, AccountResourceOverrideError> {
-        self.authorize(account_id, auth, AccountUsageVerb::Update)
-            .await?;
+        self.authorize_owner(account_id, auth).await?;
+        let plan = self.account_service.get_plan(account_id, auth).await?;
+        if !plan.max_storage_per_agent_enabled {
+            return Err(AccountResourceOverrideError::FeatureDisabled(
+                "Maximum storage per agent",
+            ));
+        }
+        if !plan.max_storage_per_agent_user_configurable {
+            return Err(AccountResourceOverrideError::NotUserConfigurable(
+                "Maximum storage per agent",
+            ));
+        }
         self.repo
             .delete(
                 account_id.0,
@@ -184,17 +156,23 @@ impl AccountResourceOverrideService {
         &self,
         account_id: AccountId,
         value: u64,
-        expires_at: Option<SqlDateTime>,
         auth: &AuthCtx,
     ) -> Result<MemoryLimit, AccountResourceOverrideError> {
-        self.set_memory_limit(
-            account_id,
-            value,
-            expires_at,
-            auth,
-            AccountResourceOverrideDimension::MaxMemoryPerWorker,
-        )
-        .await
+        self.authorize_owner(account_id, auth).await?;
+        let policy = self
+            .set_user_override(
+                account_id,
+                AccountResourceOverrideDimension::MaxMemoryPerWorker,
+                value,
+                auth,
+            )
+            .await?;
+        Ok(MemoryLimit::resolve(
+            policy.default,
+            Some(value),
+            policy.ceiling,
+            policy.user_configurable,
+        ))
     }
 
     pub async fn get_max_memory_per_worker(
@@ -204,11 +182,7 @@ impl AccountResourceOverrideService {
     ) -> Result<MemoryLimit, AccountResourceOverrideError> {
         self.authorize(account_id, auth, AccountUsageVerb::View)
             .await?;
-        self.resolved_memory_limit(
-            account_id,
-            AccountResourceOverrideDimension::MaxMemoryPerWorker,
-        )
-        .await
+        self.resolved_memory_limit(account_id).await
     }
 
     pub async fn clear_max_memory_per_worker(
@@ -216,118 +190,38 @@ impl AccountResourceOverrideService {
         account_id: AccountId,
         auth: &AuthCtx,
     ) -> Result<MemoryLimit, AccountResourceOverrideError> {
-        self.clear_memory_limit(
-            account_id,
-            auth,
-            AccountResourceOverrideDimension::MaxMemoryPerWorker,
-        )
-        .await
-    }
-
-    pub async fn set_monthly_memory_gb_seconds(
-        &self,
-        account_id: AccountId,
-        value: u64,
-        expires_at: Option<SqlDateTime>,
-        auth: &AuthCtx,
-    ) -> Result<MemoryLimit, AccountResourceOverrideError> {
-        self.set_memory_limit(
-            account_id,
-            value,
-            expires_at,
-            auth,
-            AccountResourceOverrideDimension::MonthlyMemoryGbSeconds,
-        )
-        .await
-    }
-
-    pub async fn get_monthly_memory_gb_seconds(
-        &self,
-        account_id: AccountId,
-        auth: &AuthCtx,
-    ) -> Result<MemoryLimit, AccountResourceOverrideError> {
-        self.authorize(account_id, auth, AccountUsageVerb::View)
-            .await?;
-        self.resolved_memory_limit(
-            account_id,
-            AccountResourceOverrideDimension::MonthlyMemoryGbSeconds,
-        )
-        .await
-    }
-
-    pub async fn clear_monthly_memory_gb_seconds(
-        &self,
-        account_id: AccountId,
-        auth: &AuthCtx,
-    ) -> Result<MemoryLimit, AccountResourceOverrideError> {
-        self.clear_memory_limit(
-            account_id,
-            auth,
-            AccountResourceOverrideDimension::MonthlyMemoryGbSeconds,
-        )
-        .await
-    }
-
-    async fn set_memory_limit(
-        &self,
-        account_id: AccountId,
-        value: u64,
-        expires_at: Option<SqlDateTime>,
-        auth: &AuthCtx,
-        dimension: AccountResourceOverrideDimension,
-    ) -> Result<MemoryLimit, AccountResourceOverrideError> {
-        self.authorize(account_id, auth, AccountUsageVerb::Update)
-            .await?;
-        if expires_at.is_some() && !can_set_expiry(auth) {
-            return Err(AccountResourceOverrideError::ExpiryRequiresAdmin);
-        }
+        self.authorize_owner(account_id, auth).await?;
         let plan = self.account_service.get_plan(account_id, auth).await?;
-        let (label, plan_default, ceiling, configurable) = match dimension {
-            AccountResourceOverrideDimension::MaxMemoryPerWorker => (
+        if !plan.max_memory_per_agent_user_configurable {
+            return Err(AccountResourceOverrideError::NotUserConfigurable(
                 "Maximum memory per agent",
-                plan.max_memory_per_worker,
-                plan.max_memory_per_worker_ceiling,
-                plan.max_memory_per_worker_user_configurable,
-            ),
-            AccountResourceOverrideDimension::MonthlyMemoryGbSeconds => (
-                "Monthly memory GB-seconds",
-                plan.monthly_memory_gb_seconds,
-                plan.monthly_memory_gb_seconds_ceiling,
-                plan.monthly_memory_gb_seconds_user_configurable,
-            ),
-            AccountResourceOverrideDimension::MaxDiskSpacePerWorker => unreachable!(),
-        };
-        validate_memory_override(label, value, plan_default, ceiling, configurable)?;
+            ));
+        }
         self.repo
-            .upsert(AccountResourceOverrideRecord {
-                account_id: account_id.0,
-                dimension,
-                override_value: value.into(),
-                reason: AccountResourceOverrideReason::UserSelfServe,
-                expires_at,
-                created_by: auth.actor_account_id().0,
-                created_at: SqlDateTime::now(),
-            })
+            .delete(
+                account_id.0,
+                AccountResourceOverrideDimension::MaxMemoryPerWorker,
+            )
             .await?;
-        self.resolved_memory_limit(account_id, dimension).await
+        self.resolved_memory_limit(account_id).await
     }
 
-    async fn clear_memory_limit(
+    async fn set_user_override(
         &self,
         account_id: AccountId,
-        auth: &AuthCtx,
         dimension: AccountResourceOverrideDimension,
-    ) -> Result<MemoryLimit, AccountResourceOverrideError> {
-        self.authorize(account_id, auth, AccountUsageVerb::Update)
-            .await?;
-        self.repo.delete(account_id.0, dimension).await?;
-        self.resolved_memory_limit(account_id, dimension).await
+        value: u64,
+        auth: &AuthCtx,
+    ) -> Result<OverridePolicy, AccountResourceOverrideError> {
+        self.repo
+            .set_user_override(account_id.0, dimension, value, auth.actor_account_id().0)
+            .await
+            .map_err(|error| map_set_error(account_id, dimension, error))
     }
 
     async fn resolved_memory_limit(
         &self,
         account_id: AccountId,
-        dimension: AccountResourceOverrideDimension,
     ) -> Result<MemoryLimit, AccountResourceOverrideError> {
         let plan = self
             .account_service
@@ -335,27 +229,18 @@ impl AccountResourceOverrideService {
             .await?;
         let override_value = self
             .repo
-            .get_active_value(account_id.0, dimension, &SqlDateTime::now())
+            .get_active_value(
+                account_id.0,
+                AccountResourceOverrideDimension::MaxMemoryPerWorker,
+                &SqlDateTime::now(),
+            )
             .await?
             .map(Into::into);
-        let (plan_default, ceiling, configurable) = match dimension {
-            AccountResourceOverrideDimension::MaxMemoryPerWorker => (
-                plan.max_memory_per_worker,
-                plan.max_memory_per_worker_ceiling,
-                plan.max_memory_per_worker_user_configurable,
-            ),
-            AccountResourceOverrideDimension::MonthlyMemoryGbSeconds => (
-                plan.monthly_memory_gb_seconds,
-                plan.monthly_memory_gb_seconds_ceiling,
-                plan.monthly_memory_gb_seconds_user_configurable,
-            ),
-            AccountResourceOverrideDimension::MaxDiskSpacePerWorker => unreachable!(),
-        };
         Ok(MemoryLimit::resolve(
-            plan_default,
+            plan.max_memory_per_agent,
             override_value,
-            ceiling,
-            configurable,
+            plan.max_memory_per_agent_ceiling,
+            plan.max_memory_per_agent_user_configurable,
         ))
     }
 
@@ -377,10 +262,11 @@ impl AccountResourceOverrideService {
             .await?
             .map(Into::into);
         Ok(StorageLimit::resolve(
-            plan.max_disk_space_per_worker,
+            plan.max_storage_per_agent_enabled,
+            plan.max_storage_per_agent,
             override_value,
-            plan.max_disk_space_per_worker_ceiling,
-            plan.max_disk_space_per_worker_user_configurable,
+            plan.max_storage_per_agent_ceiling,
+            plan.max_storage_per_agent_user_configurable,
         ))
     }
 
@@ -399,34 +285,100 @@ impl AccountResourceOverrideService {
         authorize_account_usage_permission(auth, &account.email, verb)?;
         Ok(())
     }
+
+    async fn authorize_owner(
+        &self,
+        account_id: AccountId,
+        auth: &AuthCtx,
+    ) -> Result<(), AccountResourceOverrideError> {
+        self.authorize(account_id, auth, AccountUsageVerb::Update)
+            .await?;
+        ensure_account_owner(account_id, auth)
+    }
 }
 
-fn can_set_expiry(auth: &AuthCtx) -> bool {
-    auth.is_system() || auth.account_roles().contains(&AccountRole::Admin)
+fn map_set_error(
+    account_id: AccountId,
+    dimension: AccountResourceOverrideDimension,
+    error: SetAccountResourceOverrideError,
+) -> AccountResourceOverrideError {
+    let label = match dimension {
+        AccountResourceOverrideDimension::MaxDiskSpacePerWorker => "Maximum storage per agent",
+        AccountResourceOverrideDimension::MaxMemoryPerWorker => "Maximum memory per agent",
+    };
+    match error {
+        SetAccountResourceOverrideError::AccountNotFound(_) => {
+            AccountResourceOverrideError::AccountNotFound(account_id)
+        }
+        SetAccountResourceOverrideError::Policy(OverridePolicyViolation::FeatureDisabled) => {
+            AccountResourceOverrideError::FeatureDisabled(label)
+        }
+        SetAccountResourceOverrideError::Policy(OverridePolicyViolation::NotUserConfigurable) => {
+            AccountResourceOverrideError::NotUserConfigurable(label)
+        }
+        SetAccountResourceOverrideError::Policy(OverridePolicyViolation::BelowPlanDefault(
+            default,
+        )) => AccountResourceOverrideError::BelowPlanDefault(label, default),
+        SetAccountResourceOverrideError::Policy(OverridePolicyViolation::ExceedsPlanCeiling(
+            ceiling,
+        )) => AccountResourceOverrideError::ExceedsPlanCeiling(label, ceiling),
+        SetAccountResourceOverrideError::Internal(error) => error.into(),
+    }
+}
+
+fn ensure_account_owner(
+    account_id: AccountId,
+    auth: &AuthCtx,
+) -> Result<(), AccountResourceOverrideError> {
+    match auth {
+        AuthCtx::User(user) if user.account_id == account_id => Ok(()),
+        _ => Err(AccountResourceOverrideError::OwnerOnly),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::account::AccountEmail;
+    use golem_common::model::card::EffectiveSurface;
+    use golem_common::model::plan::PlanId;
+    use golem_service_base::model::auth::UserAuthCtx;
+    use std::collections::BTreeSet;
     use test_r::test;
 
     #[test]
-    fn memory_override_must_be_within_plan_range() {
-        assert!(validate_memory_override("Memory", 10, 10, 20, true).is_ok());
-        assert!(validate_memory_override("Memory", 20, 10, 20, true).is_ok());
+    fn only_the_account_owner_can_mutate_per_agent_limits() {
+        let owner_id = AccountId::new();
+        let owner = AuthCtx::User(UserAuthCtx {
+            account_id: owner_id,
+            account_email: AccountEmail::new("owner@example.com"),
+            account_plan_id: PlanId::new(),
+            account_roles: BTreeSet::new(),
+            effective_surface: EffectiveSurface::default(),
+            delegation_surface: None,
+        });
+
+        assert!(ensure_account_owner(owner_id, &owner).is_ok());
         assert!(matches!(
-            validate_memory_override("Memory", 9, 10, 20, true),
-            Err(AccountResourceOverrideError::BelowPlanDefault("Memory", 10))
+            ensure_account_owner(AccountId::new(), &owner),
+            Err(AccountResourceOverrideError::OwnerOnly)
         ));
         assert!(matches!(
-            validate_memory_override("Memory", 21, 10, 20, true),
-            Err(AccountResourceOverrideError::ExceedsPlanCeiling(
-                "Memory", 20
-            ))
+            ensure_account_owner(owner_id, &AuthCtx::System),
+            Err(AccountResourceOverrideError::OwnerOnly)
         ));
-        assert!(matches!(
-            validate_memory_override("Memory", 10, 10, 20, false),
-            Err(AccountResourceOverrideError::NotUserConfigurable("Memory"))
-        ));
+    }
+
+    #[test]
+    fn resource_override_errors_have_safe_public_messages() {
+        assert_eq!(
+            AccountResourceOverrideError::FeatureDisabled("Maximum storage per agent")
+                .to_safe_string(),
+            "Maximum storage per agent is disabled because managed filesystem quotas are unavailable"
+        );
+        assert_eq!(
+            AccountResourceOverrideError::OwnerOnly.to_safe_string(),
+            "Only account owners may change per-agent resource limits"
+        );
     }
 }

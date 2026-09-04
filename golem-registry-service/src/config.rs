@@ -177,16 +177,17 @@ impl Default for RegistryServiceConfig {
                 storage_limit: 500000000,
                 monthly_gas_limit: 1000000000000000000,
                 monthly_upload_limit: 1000000000,
-                max_memory_per_worker: 1024 * 1024 * 1024, // 1 GB
-                max_memory_per_worker_ceiling: default_unlimited(),
-                max_memory_per_worker_user_configurable: false,
+                max_memory_per_agent: 1024 * 1024 * 1024, // 1 GB
+                max_memory_per_agent_ceiling: default_unlimited(),
+                max_memory_per_agent_user_configurable: false,
                 monthly_memory_gb_seconds: default_unlimited(),
                 monthly_memory_gb_seconds_ceiling: default_unlimited(),
                 monthly_memory_gb_seconds_user_configurable: false,
                 max_table_elements_per_worker: 16_384,
-                max_disk_space_per_worker: 1024 * 1024 * 1024, // 1 GB
-                max_disk_space_per_worker_ceiling: None,       // tracks the limit above
-                max_disk_space_per_worker_user_configurable: false,
+                max_storage_per_agent_enabled: false,
+                max_storage_per_agent: default_unlimited(),
+                max_storage_per_agent_ceiling: None,
+                max_storage_per_agent_user_configurable: false,
                 per_invocation_http_call_limit: 1_000_000_000_000_000_000,
                 per_invocation_rpc_call_limit: 1_000_000_000_000_000_000,
                 monthly_http_call_limit: 1_000_000_000_000_000_000,
@@ -493,11 +494,11 @@ pub struct PrecreatedPlan {
     pub storage_limit: u64,
     pub monthly_gas_limit: u64,
     pub monthly_upload_limit: u64,
-    pub max_memory_per_worker: u64,
+    pub max_memory_per_agent: u64,
     #[serde(default = "default_unlimited")]
-    pub max_memory_per_worker_ceiling: u64,
+    pub max_memory_per_agent_ceiling: u64,
     #[serde(default)]
-    pub max_memory_per_worker_user_configurable: bool,
+    pub max_memory_per_agent_user_configurable: bool,
     #[serde(default = "default_unlimited")]
     pub monthly_memory_gb_seconds: u64,
     #[serde(default = "default_unlimited")]
@@ -506,15 +507,17 @@ pub struct PrecreatedPlan {
     pub monthly_memory_gb_seconds_user_configurable: bool,
     #[serde(default = "default_max_table_elements_per_worker")]
     pub max_table_elements_per_worker: u64,
-    #[serde(default = "default_max_disk_space_per_worker")]
-    pub max_disk_space_per_worker: u64,
-    /// Upper bound a user may raise `max_disk_space_per_worker` to. Left unset it
-    /// tracks `max_disk_space_per_worker`; see
-    /// [`PrecreatedPlan::resolved_max_disk_space_per_worker_ceiling`].
     #[serde(default)]
-    pub max_disk_space_per_worker_ceiling: Option<u64>,
+    pub max_storage_per_agent_enabled: bool,
+    #[serde(default = "default_unlimited")]
+    pub max_storage_per_agent: u64,
+    /// Upper bound a user may raise `max_storage_per_agent` to. Left unset it
+    /// tracks `max_storage_per_agent`; see
+    /// [`PrecreatedPlan::resolved_max_storage_per_agent_ceiling`].
     #[serde(default)]
-    pub max_disk_space_per_worker_user_configurable: bool,
+    pub max_storage_per_agent_ceiling: Option<u64>,
+    #[serde(default)]
+    pub max_storage_per_agent_user_configurable: bool,
     #[serde(default = "default_unlimited")]
     pub per_invocation_http_call_limit: u64,
     #[serde(default = "default_unlimited")]
@@ -530,24 +533,18 @@ pub struct PrecreatedPlan {
 }
 
 impl PrecreatedPlan {
-    /// The ceiling this plan's effective per-agent disk limit is clamped to.
+    /// The ceiling for this plan's per-agent storage overrides.
     ///
-    /// An unset ceiling tracks `max_disk_space_per_worker` rather than falling back to a
-    /// fixed constant: a deployment that raises the per-agent disk limit without also
-    /// declaring a ceiling would otherwise have its own configured limit clamped straight
-    /// back down, silently and below what it asked for.
-    pub fn resolved_max_disk_space_per_worker_ceiling(&self) -> u64 {
-        self.max_disk_space_per_worker_ceiling
-            .unwrap_or(self.max_disk_space_per_worker)
+    /// An unset ceiling tracks `max_storage_per_agent` rather than falling back to a
+    /// fixed constant, keeping the plan default and its implicit override range coherent.
+    pub fn resolved_max_storage_per_agent_ceiling(&self) -> u64 {
+        self.max_storage_per_agent_ceiling
+            .unwrap_or(self.max_storage_per_agent)
     }
 }
 
 fn default_max_table_elements_per_worker() -> u64 {
     16_384
-}
-
-fn default_max_disk_space_per_worker() -> u64 {
-    1024 * 1024 * 1024 // 1 GB
 }
 
 fn default_unlimited() -> u64 {
@@ -582,20 +579,19 @@ mod tests {
         make_config_loader().load().expect("Failed to load config");
     }
 
-    /// A plan that raises the per-agent disk limit without declaring a ceiling must not
-    /// have its own configured limit clamped back down.
+    /// An omitted ceiling follows the configured per-agent storage default.
     #[test]
-    pub fn unset_ceiling_tracks_the_configured_disk_limit() {
+    pub fn unset_ceiling_tracks_the_configured_storage_limit() {
         let mut plan = RegistryServiceConfig::default()
             .initial_plans
             .remove("default")
             .expect("default plan must exist");
 
-        plan.max_disk_space_per_worker = 10 * 1024 * 1024 * 1024;
-        plan.max_disk_space_per_worker_ceiling = None;
+        plan.max_storage_per_agent = 10 * 1024 * 1024 * 1024;
+        plan.max_storage_per_agent_ceiling = None;
 
         assert_eq!(
-            plan.resolved_max_disk_space_per_worker_ceiling(),
+            plan.resolved_max_storage_per_agent_ceiling(),
             10 * 1024 * 1024 * 1024
         );
     }
@@ -608,11 +604,11 @@ mod tests {
             .remove("default")
             .expect("default plan must exist");
 
-        plan.max_disk_space_per_worker = 10 * 1024 * 1024 * 1024;
-        plan.max_disk_space_per_worker_ceiling = Some(2 * 1024 * 1024 * 1024);
+        plan.max_storage_per_agent = 10 * 1024 * 1024 * 1024;
+        plan.max_storage_per_agent_ceiling = Some(2 * 1024 * 1024 * 1024);
 
         assert_eq!(
-            plan.resolved_max_disk_space_per_worker_ceiling(),
+            plan.resolved_max_storage_per_agent_ceiling(),
             2 * 1024 * 1024 * 1024
         );
     }
@@ -624,14 +620,13 @@ mod tests {
             .remove("default")
             .expect("default plan must exist");
 
-        assert_eq!(
-            plan.max_memory_per_worker_ceiling,
-            1_000_000_000_000_000_000
-        );
+        assert_eq!(plan.max_memory_per_agent_ceiling, 1_000_000_000_000_000_000);
         assert_eq!(plan.monthly_memory_gb_seconds, 1_000_000_000_000_000_000);
         assert_eq!(
             plan.monthly_memory_gb_seconds_ceiling,
             1_000_000_000_000_000_000
         );
+        assert!(!plan.max_storage_per_agent_enabled);
+        assert_eq!(plan.max_storage_per_agent, 1_000_000_000_000_000_000);
     }
 }

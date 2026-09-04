@@ -230,65 +230,74 @@ impl StructuredOutput for AccountUsageListView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountLimitsView {
-    #[serde(flatten)]
     pub max_storage_per_agent: StorageLimit,
     pub max_memory_per_agent: MemoryLimit,
-    pub monthly_memory_gb_seconds: MemoryLimit,
 }
 
 impl Masked for AccountLimitsView {}
 
 impl AccountLimitsView {
-    pub fn new(
-        max_storage_per_agent: StorageLimit,
-        max_memory_per_agent: MemoryLimit,
-        monthly_memory_gb_seconds: MemoryLimit,
-    ) -> Self {
+    pub fn new(max_storage_per_agent: StorageLimit, max_memory_per_agent: MemoryLimit) -> Self {
         Self {
             max_storage_per_agent,
             max_memory_per_agent,
-            monthly_memory_gb_seconds,
         }
     }
 }
 
 impl MessageWithFields for AccountLimitsView {
     fn message(&self) -> String {
-        "Account storage limits".to_string()
+        "Account per-agent resource limits".to_string()
     }
 
     fn fields(&self) -> Vec<(String, String)> {
         let limit = &self.max_storage_per_agent;
         let mut fields = FieldsBuilder::new();
-        fields
-            .field(
-                "Max storage per agent",
-                &format!("{} bytes", limit.effective_value),
-            )
-            .field("Plan default", &format!("{} bytes", limit.plan_default))
-            .field(
-                "Override",
+        if limit.enabled {
+            fields
+                .field(
+                    "Max storage per agent",
+                    &format_optional_limit(limit.effective_value, "bytes"),
+                )
+                .field(
+                    "Max storage per agent plan default",
+                    &format_optional_limit(limit.plan_default, "bytes"),
+                )
+                .field(
+                    "Max storage per agent override",
+                    &format_optional_limit(limit.override_value, "bytes"),
+                )
+                .field(
+                    "Max storage per agent ceiling",
+                    &format_optional_limit(limit.ceiling, "bytes"),
+                )
+                .field(
+                    "Max storage per agent user configurable",
+                    &limit.user_configurable,
+                );
+        } else {
+            fields.field("Max storage per agent", &"disabled").field(
+                "Max storage per agent disabled reason",
                 &limit
-                    .override_value
-                    .map(|value| format!("{value} bytes"))
-                    .unwrap_or_else(|| "(none)".to_string()),
-            )
-            .field("Ceiling", &format!("{} bytes", limit.ceiling))
-            .field("User configurable", &limit.user_configurable);
+                    .disabled_reason
+                    .map(|reason| reason.to_string())
+                    .unwrap_or_else(|| "unspecified".to_string()),
+            );
+        }
         add_memory_limit_fields(
             &mut fields,
             "Max memory per agent",
             &self.max_memory_per_agent,
             "bytes",
         );
-        add_memory_limit_fields(
-            &mut fields,
-            "Monthly memory",
-            &self.monthly_memory_gb_seconds,
-            "GB-seconds",
-        );
         fields.build()
     }
+}
+
+fn format_optional_limit(value: Option<u64>, unit: &str) -> String {
+    value
+        .map(|value| format!("{value} {unit}"))
+        .unwrap_or_else(|| "(none)".to_string())
 }
 
 fn add_memory_limit_fields(
@@ -473,10 +482,11 @@ impl StructuredOutput for PermissionShareListView {
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCOUNT_USAGE_LABELS, AccountUsageView, MessageWithFields};
+    use super::{ACCOUNT_USAGE_LABELS, AccountLimitsView, AccountUsageView, MessageWithFields};
     use chrono::{TimeZone, Utc};
     use golem_common::model::account_usage::{
-        AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod, MeteringStatus,
+        AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod, MemoryLimit, MeteringStatus,
+        StorageLimit,
     };
     use proptest::prelude::*;
     use test_r::test;
@@ -576,6 +586,69 @@ mod tests {
     #[test]
     fn account_usage_heading_names_the_account_and_period() {
         assert_eq!(sample_usage().message(), "Account usage for 2026-04");
+    }
+
+    #[test]
+    fn account_limits_render_all_enabled_values() {
+        let limits = AccountLimitsView::new(
+            StorageLimit {
+                enabled: true,
+                effective_value: Some(10),
+                plan_default: Some(5),
+                override_value: None,
+                ceiling: Some(20),
+                user_configurable: true,
+                disabled_reason: None,
+            },
+            MemoryLimit {
+                effective_value: 30,
+                plan_default: 25,
+                override_value: Some(30),
+                ceiling: 40,
+                user_configurable: true,
+            },
+        );
+
+        assert_eq!(limits.message(), "Account per-agent resource limits");
+        assert_eq!(
+            limits.fields(),
+            vec![
+                ("Max storage per agent".to_string(), "10 bytes".to_string()),
+                (
+                    "Max storage per agent plan default".to_string(),
+                    "5 bytes".to_string(),
+                ),
+                (
+                    "Max storage per agent override".to_string(),
+                    "(none)".to_string(),
+                ),
+                (
+                    "Max storage per agent ceiling".to_string(),
+                    "20 bytes".to_string(),
+                ),
+                (
+                    "Max storage per agent user configurable".to_string(),
+                    "true".to_string(),
+                ),
+                ("Max memory per agent".to_string(), "30 bytes".to_string()),
+                (
+                    "Max memory per agent plan default".to_string(),
+                    "25 bytes".to_string(),
+                ),
+                (
+                    "Max memory per agent override".to_string(),
+                    "30 bytes".to_string(),
+                ),
+                (
+                    "Max memory per agent ceiling".to_string(),
+                    "40 bytes".to_string(),
+                ),
+                (
+                    "Max memory per agent user configurable".to_string(),
+                    "true".to_string(),
+                ),
+            ]
+        );
     }
 
     proptest! {

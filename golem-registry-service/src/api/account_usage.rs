@@ -26,7 +26,6 @@ use golem_common::model::account_usage::{
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
-use golem_service_base::repo::SqlDateTime;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -157,7 +156,7 @@ impl AccountUsageApi {
         record.result(Ok(Json(storage_limit)))
     }
 
-    /// Set a storage-per-agent override for an account. Setting an expiry requires an admin token.
+    /// Set a storage-per-agent override for the authenticated account owner.
     #[oai(
         path = "/:account_id/resource-overrides/max-storage-per-agent",
         method = "put",
@@ -176,12 +175,7 @@ impl AccountUsageApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         let response = self
             .account_resource_override_service
-            .set_max_disk_space_per_worker(
-                account_id.0,
-                request.0.value,
-                request.0.expires_at.map(SqlDateTime::new),
-                &auth,
-            )
+            .set_max_disk_space_per_worker(account_id.0, request.0.value, &auth)
             .instrument(record.span.clone())
             .await
             .map(Json)
@@ -241,7 +235,7 @@ impl AccountUsageApi {
         record.result(Ok(Json(response)))
     }
 
-    /// Set the maximum linear memory per agent. Setting an expiry requires an admin token.
+    /// Set the maximum linear memory per agent for the authenticated account owner.
     #[oai(
         path = "/:account_id/resource-overrides/max-memory-per-agent",
         method = "put",
@@ -260,12 +254,7 @@ impl AccountUsageApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         let response = self
             .account_resource_override_service
-            .set_max_memory_per_worker(
-                account_id.0,
-                request.0.value,
-                request.0.expires_at.map(SqlDateTime::new),
-                &auth,
-            )
+            .set_max_memory_per_worker(account_id.0, request.0.value, &auth)
             .instrument(record.span.clone())
             .await
             .map(Json)
@@ -292,88 +281,6 @@ impl AccountUsageApi {
         let response = self
             .account_resource_override_service
             .clear_max_memory_per_worker(account_id.0, &auth)
-            .instrument(record.span.clone())
-            .await
-            .map(Json)
-            .map_err(ApiError::from);
-        record.result(response)
-    }
-
-    /// Get the effective monthly memory GB-seconds allowance.
-    #[oai(
-        path = "/:account_id/resource-overrides/monthly-memory-gb-seconds",
-        method = "get",
-        operation_id = "get_account_monthly_memory_override"
-    )]
-    async fn get_monthly_memory_override(
-        &self,
-        account_id: Path<AccountId>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<MemoryLimit>> {
-        let record = recorded_http_api_request!(
-            "get_account_monthly_memory_override",
-            account_id = account_id.0.to_string()
-        );
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-        let response = self
-            .account_resource_override_service
-            .get_monthly_memory_gb_seconds(account_id.0, &auth)
-            .instrument(record.span.clone())
-            .await?;
-        record.result(Ok(Json(response)))
-    }
-
-    /// Set the monthly memory GB-seconds allowance. Setting an expiry requires an admin token.
-    #[oai(
-        path = "/:account_id/resource-overrides/monthly-memory-gb-seconds",
-        method = "put",
-        operation_id = "set_account_monthly_memory_override"
-    )]
-    async fn set_monthly_memory_override(
-        &self,
-        account_id: Path<AccountId>,
-        request: Json<SetMemoryLimit>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<MemoryLimit>> {
-        let record = recorded_http_api_request!(
-            "set_account_monthly_memory_override",
-            account_id = account_id.0.to_string()
-        );
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-        let response = self
-            .account_resource_override_service
-            .set_monthly_memory_gb_seconds(
-                account_id.0,
-                request.0.value,
-                request.0.expires_at.map(SqlDateTime::new),
-                &auth,
-            )
-            .instrument(record.span.clone())
-            .await
-            .map(Json)
-            .map_err(ApiError::from);
-        record.result(response)
-    }
-
-    /// Clear the monthly memory GB-seconds allowance override.
-    #[oai(
-        path = "/:account_id/resource-overrides/monthly-memory-gb-seconds",
-        method = "delete",
-        operation_id = "clear_account_monthly_memory_override"
-    )]
-    async fn clear_monthly_memory_override(
-        &self,
-        account_id: Path<AccountId>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<MemoryLimit>> {
-        let record = recorded_http_api_request!(
-            "clear_account_monthly_memory_override",
-            account_id = account_id.0.to_string()
-        );
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-        let response = self
-            .account_resource_override_service
-            .clear_monthly_memory_gb_seconds(account_id.0, &auth)
             .instrument(record.span.clone())
             .await
             .map(Json)

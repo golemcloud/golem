@@ -373,7 +373,10 @@ impl From<AccountResourceOverrideError> for ApiError {
             AccountResourceOverrideError::BelowPlanDefault(_, _) => {
                 Self::bad_request(api::error_code::LIMIT_EXCEEDED, error)
             }
-            AccountResourceOverrideError::ExpiryRequiresAdmin => {
+            AccountResourceOverrideError::FeatureDisabled(_) => {
+                Self::bad_request(api::error_code::FEATURE_DISABLED, error)
+            }
+            AccountResourceOverrideError::OwnerOnly => {
                 Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
             }
             AccountResourceOverrideError::AccountNotFound(_) => {
@@ -509,11 +512,13 @@ impl From<PlanError> for ApiError {
         match value {
             PlanError::PlanNotFound(_) => Self::not_found(api::error_code::PLAN_NOT_FOUND, error),
             PlanError::Unauthorized(inner) => inner.into(),
-            PlanError::InternalError(_) => Self::InternalError(Json(ErrorBody {
-                error,
-                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
-                cause: Some(value.into_anyhow()),
-            })),
+            PlanError::InvalidPolicy(_) | PlanError::InternalError(_) => {
+                Self::InternalError(Json(ErrorBody {
+                    error,
+                    code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                    cause: Some(value.into_anyhow()),
+                }))
+            }
         }
     }
 }
@@ -1220,7 +1225,13 @@ mod tests {
             ApiError::LimitExceeded(_)
         ));
         assert!(matches!(
-            ApiError::from(AccountResourceOverrideError::ExpiryRequiresAdmin),
+            ApiError::from(AccountResourceOverrideError::FeatureDisabled(
+                "Maximum storage per agent"
+            )),
+            ApiError::BadRequest(_)
+        ));
+        assert!(matches!(
+            ApiError::from(AccountResourceOverrideError::OwnerOnly),
             ApiError::Forbidden(_)
         ));
         assert!(matches!(

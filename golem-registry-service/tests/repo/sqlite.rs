@@ -298,8 +298,25 @@ async fn test_account_resource_override_resolution(deps: &Deps) {
 }
 
 #[test]
-async fn test_storage_limit_is_clamped_after_plan_update(deps: &Deps) {
-    crate::repo::common::test_storage_limit_is_clamped_after_plan_update(deps).await;
+async fn test_storage_limit_discards_out_of_range_override_after_plan_update(deps: &Deps) {
+    crate::repo::common::test_storage_limit_discards_out_of_range_override_after_plan_update(deps)
+        .await;
+}
+
+#[test]
+async fn test_plan_reseed_deletes_nonconfigurable_overrides_before_reenable(deps: &Deps) {
+    crate::repo::common::test_plan_reseed_deletes_nonconfigurable_overrides_before_reenable(deps)
+        .await;
+}
+
+#[test]
+async fn test_plan_reseed_clamps_overrides_before_range_expansion(deps: &Deps) {
+    crate::repo::common::test_plan_reseed_clamps_overrides_before_range_expansion(deps).await;
+}
+
+#[test]
+async fn test_atomic_user_override_set_validates_current_policy(deps: &Deps) {
+    crate::repo::common::test_atomic_user_override_set_validates_current_policy(deps).await;
 }
 
 #[test]

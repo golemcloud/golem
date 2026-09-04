@@ -146,16 +146,17 @@ Path|Method|Protected
   "storageLimit": 0,
   "monthlyGasLimit": 0,
   "monthlyUploadLimit": 0,
-  "maxMemoryPerWorker": 0,
-  "maxMemoryPerWorkerCeiling": 0,
-  "maxMemoryPerWorkerUserConfigurable": true,
+  "maxMemoryPerAgent": 0,
+  "maxMemoryPerAgentCeiling": 0,
+  "maxMemoryPerAgentUserConfigurable": true,
   "monthlyMemoryGbSeconds": 0,
   "monthlyMemoryGbSecondsCeiling": 0,
   "monthlyMemoryGbSecondsUserConfigurable": true,
   "maxTableElementsPerWorker": 0,
-  "maxDiskSpacePerWorker": 0,
-  "maxDiskSpacePerWorkerCeiling": 0,
-  "maxDiskSpacePerWorkerUserConfigurable": true,
+  "maxStoragePerAgentEnabled": true,
+  "maxStoragePerAgent": 0,
+  "maxStoragePerAgentCeiling": 0,
+  "maxStoragePerAgentUserConfigurable": true,
   "perInvocationHttpCallLimit": 0,
   "perInvocationRpcCallLimit": 0,
   "monthlyHttpCallLimit": 0,
@@ -358,15 +359,15 @@ Path|Method|Protected
 
 ```json copy
 {
-  "effectiveValue": 0,
-  "planDefault": 0,
-  "overrideValue": 0,
-  "ceiling": 0,
+  "ceiling": 10737418240,
+  "effectiveValue": 1073741824,
+  "enabled": true,
+  "planDefault": 1073741824,
   "userConfigurable": true
 }
 ```
 
-## Set a storage-per-agent override for an account. Setting an expiry requires an admin token.
+## Set a storage-per-agent override for the authenticated account owner.
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/resource-overrides/max-storage-per-agent`|PUT|Yes
@@ -378,8 +379,7 @@ Path|Method|Protected
 **Example Request JSON**
 ```json copy
 {
-  "value": 0,
-  "expiresAt": "2019-08-24T14:15:22Z"
+  "value": 0
 }
 ```
 
@@ -387,10 +387,10 @@ Path|Method|Protected
 
 ```json copy
 {
-  "effectiveValue": 0,
-  "planDefault": 0,
-  "overrideValue": 0,
-  "ceiling": 0,
+  "ceiling": 10737418240,
+  "effectiveValue": 1073741824,
+  "enabled": true,
+  "planDefault": 1073741824,
   "userConfigurable": true
 }
 ```
@@ -410,10 +410,10 @@ Path|Method|Protected
 
 ```json copy
 {
-  "effectiveValue": 0,
-  "planDefault": 0,
-  "overrideValue": 0,
-  "ceiling": 0,
+  "ceiling": 10737418240,
+  "effectiveValue": 1073741824,
+  "enabled": true,
+  "planDefault": 1073741824,
   "userConfigurable": true
 }
 ```
@@ -441,7 +441,7 @@ Path|Method|Protected
 }
 ```
 
-## Set the maximum linear memory per agent. Setting an expiry requires an admin token.
+## Set the maximum linear memory per agent for the authenticated account owner.
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/resource-overrides/max-memory-per-agent`|PUT|Yes
@@ -453,8 +453,7 @@ Path|Method|Protected
 **Example Request JSON**
 ```json copy
 {
-  "value": 0,
-  "expiresAt": "2019-08-24T14:15:22Z"
+  "value": 0
 }
 ```
 
@@ -474,81 +473,6 @@ Path|Method|Protected
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/resource-overrides/max-memory-per-agent`|DELETE|Yes
-
-
-
-
-
-
-
-**Example Response JSON**
-
-```json copy
-{
-  "effectiveValue": 0,
-  "planDefault": 0,
-  "overrideValue": 0,
-  "ceiling": 0,
-  "userConfigurable": true
-}
-```
-
-## Get the effective monthly memory GB-seconds allowance.
-Path|Method|Protected
----|---|---
-`/v1/accounts/{account_id}/resource-overrides/monthly-memory-gb-seconds`|GET|Yes
-
-
-
-
-
-
-
-**Example Response JSON**
-
-```json copy
-{
-  "effectiveValue": 0,
-  "planDefault": 0,
-  "overrideValue": 0,
-  "ceiling": 0,
-  "userConfigurable": true
-}
-```
-
-## Set the monthly memory GB-seconds allowance. Setting an expiry requires an admin token.
-Path|Method|Protected
----|---|---
-`/v1/accounts/{account_id}/resource-overrides/monthly-memory-gb-seconds`|PUT|Yes
-
-
-
-
-
-**Example Request JSON**
-```json copy
-{
-  "value": 0,
-  "expiresAt": "2019-08-24T14:15:22Z"
-}
-```
-
-**Example Response JSON**
-
-```json copy
-{
-  "effectiveValue": 0,
-  "planDefault": 0,
-  "overrideValue": 0,
-  "ceiling": 0,
-  "userConfigurable": true
-}
-```
-
-## Clear the monthly memory GB-seconds allowance override.
-Path|Method|Protected
----|---|---
-`/v1/accounts/{account_id}/resource-overrides/monthly-memory-gb-seconds`|DELETE|Yes
 
 
 

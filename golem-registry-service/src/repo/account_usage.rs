@@ -268,7 +268,6 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             usage,
             storage_limit: storage_limit(&account_plan),
             max_memory_per_worker: max_memory_per_worker(&account_plan),
-            monthly_memory_gb_seconds: monthly_memory_gb_seconds(&account_plan),
             metering: None,
             plan: account_plan.plan,
             changes: Default::default(),
@@ -402,7 +401,6 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             usage,
             storage_limit: storage_limit(&account_plan),
             max_memory_per_worker: max_memory_per_worker(&account_plan),
-            monthly_memory_gb_seconds: monthly_memory_gb_seconds(&account_plan),
             metering: None,
             plan: account_plan.plan,
             changes: Default::default(),
@@ -690,10 +688,10 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
                     p.monthly_memory_gb_seconds, p.monthly_memory_gb_seconds_ceiling,
                     p.monthly_memory_gb_seconds_user_configurable,
                     p.max_table_elements_per_worker,
+                    p.max_disk_space_per_worker_enabled,
                     p.max_disk_space_per_worker,
                     storage_override.override_value AS storage_override_value,
                     memory_override.override_value AS max_memory_override_value,
-                    monthly_memory_override.override_value AS monthly_memory_override_value,
                     p.max_disk_space_per_worker_ceiling, p.max_disk_space_per_worker_user_configurable,
                     p.max_concurrent_agents_per_executor,
                     p.total_app_count,
@@ -708,21 +706,16 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
                 LEFT JOIN account_resource_overrides storage_override
                     ON storage_override.account_id = a.account_id
                     AND storage_override.dimension = $2
-                    AND (storage_override.expires_at IS NULL OR storage_override.expires_at > $5)
+                    AND (storage_override.expires_at IS NULL OR storage_override.expires_at > $4)
                 LEFT JOIN account_resource_overrides memory_override
                     ON memory_override.account_id = a.account_id
                     AND memory_override.dimension = $3
-                    AND (memory_override.expires_at IS NULL OR memory_override.expires_at > $5)
-                LEFT JOIN account_resource_overrides monthly_memory_override
-                    ON monthly_memory_override.account_id = a.account_id
-                    AND monthly_memory_override.dimension = $4
-                    AND (monthly_memory_override.expires_at IS NULL OR monthly_memory_override.expires_at > $5)
+                    AND (memory_override.expires_at IS NULL OR memory_override.expires_at > $4)
                 WHERE a.account_id = $1 AND a.deleted_at IS NULL
             "#})
                 .bind(account_id)
                 .bind(AccountResourceOverrideDimension::MaxDiskSpacePerWorker.as_str())
                 .bind(AccountResourceOverrideDimension::MaxMemoryPerWorker.as_str())
-                .bind(AccountResourceOverrideDimension::MonthlyMemoryGbSeconds.as_str())
                 .bind(SqlDateTime::now()),
             )
             .await?;
@@ -741,6 +734,7 @@ fn storage_limit(account_plan: &AccountUsagePlan) -> StorageLimit {
         .as_ref()
         .map(NumericU64::get);
     StorageLimit::resolve(
+        account_plan.plan.max_disk_space_per_worker_enabled,
         plan_default,
         override_value,
         ceiling,
@@ -759,20 +753,6 @@ fn max_memory_per_worker(account_plan: &AccountUsagePlan) -> MemoryLimit {
             .map(NumericU64::get),
         account_plan.plan.max_memory_per_worker_ceiling.get(),
         account_plan.plan.max_memory_per_worker_user_configurable,
-    )
-}
-
-fn monthly_memory_gb_seconds(account_plan: &AccountUsagePlan) -> MemoryLimit {
-    MemoryLimit::resolve(
-        account_plan.plan.monthly_memory_gb_seconds.get(),
-        account_plan
-            .monthly_memory_override_value
-            .as_ref()
-            .map(NumericU64::get),
-        account_plan.plan.monthly_memory_gb_seconds_ceiling.get(),
-        account_plan
-            .plan
-            .monthly_memory_gb_seconds_user_configurable,
     )
 }
 

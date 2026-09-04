@@ -3,7 +3,8 @@ use crate::app::{TestContext, cmd, flag};
 use chrono::{DateTime, Datelike, Utc};
 use golem_cli::{fs, versions};
 use golem_common::model::account_usage::{
-    AccountUsageMetering, AccountUsagePeriod, MeteringStatus,
+    AccountUsageMetering, AccountUsagePeriod, MemoryLimit, MeteringStatus, StorageLimit,
+    StorageLimitDisabledReason,
 };
 use indoc::{formatdoc, indoc};
 use serde::Deserialize;
@@ -47,11 +48,8 @@ struct AccountUsageListView {
 struct AccountLimitsView {
     #[serde(rename = "$type")]
     kind: String,
-    effective_value: u64,
-    plan_default: u64,
-    override_value: Option<u64>,
-    ceiling: u64,
-    user_configurable: bool,
+    max_storage_per_agent: StorageLimit,
+    max_memory_per_agent: MemoryLimit,
 }
 
 fn previous_period(period: AccountUsagePeriod) -> AccountUsagePeriod {
@@ -261,18 +259,44 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
         .next()
         .expect("account limits show produced no JSON output");
     assert_eq!(limits.kind, "account.limits.show");
-    assert_eq!(limits.effective_value, u64::MAX);
-    assert_eq!(limits.plan_default, u64::MAX);
-    assert_eq!(limits.override_value, None);
-    assert_eq!(limits.ceiling, u64::MAX);
-    assert!(limits.user_configurable);
+    assert_eq!(
+        limits.max_storage_per_agent,
+        StorageLimit {
+            enabled: false,
+            effective_value: None,
+            plan_default: None,
+            override_value: None,
+            ceiling: None,
+            user_configurable: false,
+            disabled_reason: Some(StorageLimitDisabledReason::ManagedFilesystemUnavailable),
+        }
+    );
+
+    let output = ctx.cli([cmd::ACCOUNT, "limits", "show"]).await;
+    assert!(output.success_or_dump());
+    assert!(output.stdout_contains_ordered(["Max storage per agent", "disabled"]));
 
     let output = ctx
         .cli([
             cmd::ACCOUNT,
             "limits",
             "set",
+            "--max-storage-per-agent",
             "1048576",
+        ])
+        .await;
+    assert!(!output.status.success());
+    assert!(output.stderr_contains(
+        "Maximum storage per agent is disabled because managed filesystem quotas are unavailable"
+    ));
+
+    let output = ctx
+        .cli([
+            cmd::ACCOUNT,
+            "limits",
+            "set",
+            "--max-memory-per-agent",
+            "18446744073709551615",
             flag::FORMAT,
             "json",
         ])
@@ -284,11 +308,18 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
         .next()
         .expect("account limits set produced no JSON output");
     assert_eq!(limits.kind, "account.limits.show");
-    assert_eq!(limits.effective_value, 1_048_576);
-    assert_eq!(limits.override_value, Some(1_048_576));
+    assert_eq!(limits.max_memory_per_agent.effective_value, u64::MAX);
+    assert_eq!(limits.max_memory_per_agent.override_value, Some(u64::MAX));
 
     let output = ctx
-        .cli([cmd::ACCOUNT, "limits", "unset", flag::FORMAT, "json"])
+        .cli([
+            cmd::ACCOUNT,
+            "limits",
+            "unset",
+            "--max-memory-per-agent",
+            flag::FORMAT,
+            "json",
+        ])
         .await;
     assert!(output.success_or_dump());
     let limits = output
@@ -297,8 +328,8 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
         .next()
         .expect("account limits unset produced no JSON output");
     assert_eq!(limits.kind, "account.limits.show");
-    assert_eq!(limits.effective_value, u64::MAX);
-    assert_eq!(limits.override_value, None);
+    assert_eq!(limits.max_memory_per_agent.effective_value, u64::MAX);
+    assert_eq!(limits.max_memory_per_agent.override_value, None);
 }
 
 #[test]

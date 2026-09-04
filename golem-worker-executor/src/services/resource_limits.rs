@@ -25,6 +25,7 @@ use chrono::Utc;
 use golem_common::SafeDisplay;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountId;
+use golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_STORAGE_LIMIT;
 use golem_common::model::agent::AgentMode;
 use golem_service_base::clients::registry::{RegistryService, ResourceUsageUpdate};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -308,7 +309,7 @@ impl AtomicResourceEntry {
     /// consistent with other unlimited sentinels in this codebase.
     pub const UNLIMITED_OPLOG_WRITES_PER_SECOND: u64 = 1_000_000_000_000_000_000;
     // This matches the existing registry plan sentinel and fits every supported database backend.
-    pub(crate) const EFFECTIVELY_UNLIMITED_DISK_SPACE: u64 = 10_000_000_000_000_000;
+    pub(crate) const EFFECTIVELY_UNLIMITED_DISK_SPACE: u64 = EFFECTIVELY_UNLIMITED_STORAGE_LIMIT;
 
     pub fn new(
         fuel: u64,

@@ -18,13 +18,13 @@ use super::model::account::{
 use crate::repo::card::DbCardRepo;
 use crate::repo::model::BindFields;
 pub use crate::repo::model::account::AccountRecord;
-use crate::repo::model::account::AccountRepoError;
-use crate::repo::model::account_resource_override::{
-    AccountResourceOverrideDimension, AccountResourceOverrideReason,
-};
 use crate::repo::model::card::CardRecord;
 use crate::repo::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
+};
+use crate::repo::{
+    account_resource_override::{DbAccountResourceOverrideRepo, OverrideReconciliationScope},
+    model::account::AccountRepoError,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -32,17 +32,10 @@ use futures::FutureExt;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
-use golem_service_base::repo::{NumericU64, ResultExt, SqlDateTime};
+use golem_service_base::repo::ResultExt;
 use indoc::indoc;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
-
-#[derive(Debug, Clone, Copy)]
-pub struct OverridePolicy {
-    pub dimension: AccountResourceOverrideDimension,
-    pub ceiling: u64,
-    pub user_configurable: bool,
-}
 
 #[async_trait]
 pub trait AccountRepo: Send + Sync {
@@ -60,7 +53,6 @@ pub trait AccountRepo: Send + Sync {
     async fn update_plan_and_reconcile_overrides(
         &self,
         revision: AccountRevisionRecord,
-        override_policies: [OverridePolicy; 3],
     ) -> Result<AccountExtRevisionRecord, AccountRepoError>;
 
     async fn delete(
@@ -129,11 +121,10 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
     async fn update_plan_and_reconcile_overrides(
         &self,
         revision: AccountRevisionRecord,
-        override_policies: [OverridePolicy; 3],
     ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
         let span = Self::span_account_id(revision.account_id);
         self.repo
-            .update_plan_and_reconcile_overrides(revision, override_policies)
+            .update_plan_and_reconcile_overrides(revision)
             .instrument(span)
             .await
     }
@@ -311,7 +302,6 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
     async fn update_plan_and_reconcile_overrides(
         &self,
         revision: AccountRevisionRecord,
-        override_policies: [OverridePolicy; 3],
     ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
         self.db_pool
             .with_tx_err(
@@ -319,42 +309,32 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                 "update_plan_and_reconcile_overrides",
                 |tx| {
                     async move {
+                        DbAccountResourceOverrideRepo::<PostgresPool>::lock_account_in_tx(
+                            tx,
+                            revision.account_id,
+                        )
+                        .await?
+                        .ok_or(AccountRepoError::ConcurrentModification)?;
+                        let override_policies =
+                            DbAccountResourceOverrideRepo::<PostgresPool>::lock_plan_policies_in_tx(
+                                tx,
+                                revision.plan_id,
+                            )
+                            .await?
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "Account {} references missing destination plan {}",
+                                    revision.account_id,
+                                    revision.plan_id
+                                )
+                            })?;
                         let account = Self::update_in_tx(tx, revision.clone()).await?;
-                        let now = SqlDateTime::now();
-
-                        for policy in override_policies {
-                            if policy.user_configurable {
-                                tx.execute(
-                                    sqlx::query(indoc! { r#"
-                                UPDATE account_resource_overrides
-                                SET override_value = $1, reason = $2
-                                WHERE account_id = $3
-                                  AND dimension = $4
-                                  AND (expires_at IS NULL OR expires_at > $5)
-                                  AND override_value > $1
-                            "# })
-                                    .bind(NumericU64::new(policy.ceiling))
-                                    .bind(AccountResourceOverrideReason::DowngradeClamp.as_str())
-                                    .bind(revision.account_id)
-                                    .bind(policy.dimension.as_str())
-                                    .bind(&now),
-                                )
-                                .await?;
-                            } else {
-                                tx.execute(
-                                    sqlx::query(indoc! { r#"
-                                DELETE FROM account_resource_overrides
-                                WHERE account_id = $1
-                                  AND dimension = $2
-                                  AND (expires_at IS NULL OR expires_at > $3)
-                            "# })
-                                    .bind(revision.account_id)
-                                    .bind(policy.dimension.as_str())
-                                    .bind(&now),
-                                )
-                                .await?;
-                            }
-                        }
+                        DbAccountResourceOverrideRepo::<PostgresPool>::reconcile_in_tx(
+                            tx,
+                            OverrideReconciliationScope::Account(revision.account_id),
+                            override_policies,
+                        )
+                        .await?;
 
                         Ok(account)
                     }

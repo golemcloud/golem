@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use anyhow::Context;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use golem_client::api::{
     RegistryServiceClearAccountStorageOverrideError, RegistryServiceClient,
     RegistryServiceGetAccountStorageOverrideError, RegistryServiceSetAccountStorageOverrideError,
@@ -383,13 +383,7 @@ async fn account_storage_override_endpoints_hide_foreign_accounts(
     ));
 
     let error = client
-        .set_account_storage_override(
-            &foreign_user.account_id.0,
-            &SetStorageLimit {
-                value: 1,
-                expires_at: None,
-            },
-        )
+        .set_account_storage_override(&foreign_user.account_id.0, &SetStorageLimit { value: 1 })
         .await
         .unwrap_err();
     assert!(matches!(
@@ -411,7 +405,7 @@ async fn account_storage_override_endpoints_hide_foreign_accounts(
 
 #[test]
 #[tracing::instrument]
-async fn account_storage_override_endpoints_resolve_set_expire_and_clear(
+async fn account_storage_override_endpoints_resolve_set_and_clear(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
@@ -429,11 +423,13 @@ async fn account_storage_override_endpoints_resolve_set_expire_and_clear(
 
     let client = deps.registry_service().client(&user.token).await;
     let expected_default = StorageLimit {
-        effective_value: 5,
-        plan_default: 5,
+        enabled: true,
+        effective_value: Some(5),
+        plan_default: Some(5),
         override_value: None,
-        ceiling: 20,
+        ceiling: Some(20),
         user_configurable: true,
+        disabled_reason: None,
     };
     assert_eq!(
         client
@@ -443,19 +439,13 @@ async fn account_storage_override_endpoints_resolve_set_expire_and_clear(
     );
 
     let expected_override = StorageLimit {
-        effective_value: 12,
+        effective_value: Some(12),
         override_value: Some(12),
         ..expected_default.clone()
     };
     assert_eq!(
         client
-            .set_account_storage_override(
-                &user.account_id.0,
-                &SetStorageLimit {
-                    value: 12,
-                    expires_at: None,
-                },
-            )
+            .set_account_storage_override(&user.account_id.0, &SetStorageLimit { value: 12 },)
             .await?,
         expected_override
     );
@@ -478,7 +468,6 @@ async fn account_storage_override_endpoints_resolve_set_expire_and_clear(
             &user.account_id.0,
             &SetMemoryLimit {
                 value: 12_000_000_000_000_000,
-                expires_at: None,
             },
         )
         .await?;
@@ -493,35 +482,6 @@ async fn account_storage_override_endpoints_resolve_set_expire_and_clear(
         expected_max_memory
     );
 
-    let expected_monthly_memory = MemoryLimit {
-        effective_value: 30,
-        plan_default: 30,
-        override_value: None,
-        ceiling: 60,
-        user_configurable: true,
-    };
-    assert_eq!(
-        client
-            .get_account_monthly_memory_override(&user.account_id.0)
-            .await?,
-        expected_monthly_memory
-    );
-    let monthly_override = client
-        .set_account_monthly_memory_override(
-            &user.account_id.0,
-            &SetMemoryLimit {
-                value: 45,
-                expires_at: None,
-            },
-        )
-        .await?;
-    assert_eq!(monthly_override.override_value, Some(45));
-    assert_eq!(
-        client
-            .clear_account_monthly_memory_override(&user.account_id.0)
-            .await?,
-        expected_monthly_memory
-    );
     assert_eq!(
         client
             .get_account_storage_override(&user.account_id.0)
@@ -529,27 +489,23 @@ async fn account_storage_override_endpoints_resolve_set_expire_and_clear(
         expected_override
     );
 
+    let error = admin_client
+        .set_account_storage_override(&user.account_id.0, &SetStorageLimit { value: 15 })
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceSetAccountStorageOverrideError::Error403(body)) =
+        error
+    else {
+        panic!("expected account-owner-only error, got {error:?}")
+    };
+    assert_eq!(body.code, "AUTH_FORBIDDEN");
     assert_eq!(
-        admin_client
-            .set_account_storage_override(
-                &user.account_id.0,
-                &SetStorageLimit {
-                    value: 15,
-                    expires_at: Some(Utc::now() - Duration::seconds(1)),
-                },
-            )
-            .await?,
-        expected_default
+        body.error,
+        "Only account owners may change per-agent resource limits"
     );
 
     client
-        .set_account_storage_override(
-            &user.account_id.0,
-            &SetStorageLimit {
-                value: 12,
-                expires_at: None,
-            },
-        )
+        .set_account_storage_override(&user.account_id.0, &SetStorageLimit { value: 12 })
         .await?;
     assert_eq!(
         client
@@ -569,20 +525,14 @@ async fn account_storage_override_endpoints_resolve_set_expire_and_clear(
 
 #[test]
 #[tracing::instrument]
-async fn account_storage_override_endpoints_validate_plan_ceiling_and_expiry(
+async fn account_storage_override_endpoints_validate_capability_and_plan_range(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let client = deps.registry_service().client(&user.token).await;
 
     let error = client
-        .set_account_storage_override(
-            &user.account_id.0,
-            &SetStorageLimit {
-                value: 1,
-                expires_at: None,
-            },
-        )
+        .set_account_storage_override(&user.account_id.0, &SetStorageLimit { value: 1 })
         .await
         .unwrap_err();
     let golem_client::Error::Item(RegistryServiceSetAccountStorageOverrideError::Error400(body)) =
@@ -590,8 +540,11 @@ async fn account_storage_override_endpoints_validate_plan_ceiling_and_expiry(
     else {
         panic!("expected non-configurable plan error, got {error:?}")
     };
-    assert_eq!(body.code, "RESOURCE_OVERRIDE_NOT_USER_CONFIGURABLE");
-    assert_eq!(body.errors, ["Storage limit is not user configurable"]);
+    assert_eq!(body.code, "FEATURE_DISABLED");
+    assert_eq!(
+        body.errors,
+        ["Maximum storage per agent is disabled because managed filesystem quotas are unavailable"]
+    );
 
     let admin = deps.admin().await;
     admin
@@ -607,13 +560,7 @@ async fn account_storage_override_endpoints_validate_plan_ceiling_and_expiry(
         .await?;
 
     let error = client
-        .set_account_storage_override(
-            &user.account_id.0,
-            &SetStorageLimit {
-                value: 21,
-                expires_at: None,
-            },
-        )
+        .set_account_storage_override(&user.account_id.0, &SetStorageLimit { value: 21 })
         .await
         .unwrap_err();
     let golem_client::Error::Item(RegistryServiceSetAccountStorageOverrideError::Error422(body)) =
@@ -622,25 +569,25 @@ async fn account_storage_override_endpoints_validate_plan_ceiling_and_expiry(
         panic!("expected plan ceiling error, got {error:?}")
     };
     assert_eq!(body.code, "LIMIT_EXCEEDED");
-    assert_eq!(body.error, "Storage limit exceeds plan ceiling 20");
+    assert_eq!(
+        body.error,
+        "Maximum storage per agent exceeds plan ceiling 20"
+    );
 
     let error = client
-        .set_account_storage_override(
-            &user.account_id.0,
-            &SetStorageLimit {
-                value: 12,
-                expires_at: Some(Utc::now() + Duration::hours(1)),
-            },
-        )
+        .set_account_storage_override(&user.account_id.0, &SetStorageLimit { value: 4 })
         .await
         .unwrap_err();
-    let golem_client::Error::Item(RegistryServiceSetAccountStorageOverrideError::Error403(body)) =
+    let golem_client::Error::Item(RegistryServiceSetAccountStorageOverrideError::Error400(body)) =
         error
     else {
-        panic!("expected admin-only expiry error, got {error:?}")
+        panic!("expected plan default error, got {error:?}")
     };
-    assert_eq!(body.code, "AUTH_FORBIDDEN");
-    assert_eq!(body.error, "Only admins may set an override expiry");
+    assert_eq!(body.code, "LIMIT_EXCEEDED");
+    assert_eq!(
+        body.errors,
+        ["Maximum storage per agent is below plan default 5"]
+    );
 
     Ok(())
 }

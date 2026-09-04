@@ -17,11 +17,10 @@ mod card;
 use self::card::account_root_card_record;
 use super::plan::{PlanError, PlanService};
 use crate::config::PrecreatedAccount;
-use crate::repo::account::{AccountRepo, OverridePolicy};
+use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{
     AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
 };
-use crate::repo::model::account_resource_override::AccountResourceOverrideDimension;
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
@@ -181,8 +180,7 @@ impl AccountService {
         info!("Updating account: {}", account_id);
 
         // check that plan exists
-        let destination_plan = self
-            .plan_service
+        self.plan_service
             .get(&update.plan, &AuthCtx::System)
             .await
             .map_err(|e| match e {
@@ -194,28 +192,7 @@ impl AccountService {
         let record = Self::next_revision_record(account, auth)?;
         let result = self
             .account_repo
-            .update_plan_and_reconcile_overrides(
-                record,
-                [
-                    OverridePolicy {
-                        dimension: AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
-                        ceiling: destination_plan.max_disk_space_per_worker_ceiling,
-                        user_configurable: destination_plan
-                            .max_disk_space_per_worker_user_configurable,
-                    },
-                    OverridePolicy {
-                        dimension: AccountResourceOverrideDimension::MaxMemoryPerWorker,
-                        ceiling: destination_plan.max_memory_per_worker_ceiling,
-                        user_configurable: destination_plan.max_memory_per_worker_user_configurable,
-                    },
-                    OverridePolicy {
-                        dimension: AccountResourceOverrideDimension::MonthlyMemoryGbSeconds,
-                        ceiling: destination_plan.monthly_memory_gb_seconds_ceiling,
-                        user_configurable: destination_plan
-                            .monthly_memory_gb_seconds_user_configurable,
-                    },
-                ],
-            )
+            .update_plan_and_reconcile_overrides(record)
             .await;
         Self::map_update_result(result)
     }
