@@ -788,7 +788,23 @@ pub async fn run(
     );
     ctx.phase.set(Phase::Recovery);
     phases.recovery = Some(PhaseWindow::started(Utc::now()));
-    tokio::time::sleep(config.phases.recovery()).await;
+    // A composed run takes one more sample early in the recovery phase, and
+    // MF1's first run is why. It left the fault window with 564 of 1024 shards
+    // assigned to nobody and reached the end of a ten-minute recovery phase with
+    // all 1024 assigned again, so the one thing the run most wanted to say — how
+    // long after the storage came back the handover completed — was somewhere
+    // inside a ten-minute gap between two samples. Waiting the same settle the
+    // during-fault sample uses turns that into an answer or a bound.
+    if composed_config.is_some() {
+        let settle = REASSIGNMENT_SETTLE.min(config.phases.recovery());
+        tokio::time::sleep(settle).await;
+        ownership_samples
+            .push(sample_ownership(deps, "after-heal", ownership_samples.last(), false).await);
+        routing_snapshots.push(snapshot_routing(deps, "after-heal").await);
+        tokio::time::sleep(config.phases.recovery() - settle).await;
+    } else {
+        tokio::time::sleep(config.phases.recovery()).await;
+    }
 
     let skipped = schedules.skipped();
     // Stopping waits for in-flight operations to record themselves rather than
