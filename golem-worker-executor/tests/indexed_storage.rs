@@ -902,6 +902,73 @@ async fn multi_sqlite_scan_stable_crosses_its_files_a_page_at_a_time() {
     );
 }
 
+/// A file created after a listing was cached still shows up in the next walk.
+///
+/// The listing is cached because re-reading and re-sorting the whole directory per page made a walk
+/// quadratic in the file count, and a directory holds one file per agent that has ever had entries.
+/// Nothing may go missing for that: this process is the only writer to its own directory, so
+/// creating a file has to drop what the cache holds.
+#[test]
+#[tracing::instrument]
+async fn multi_sqlite_scan_stable_sees_files_created_after_a_walk() {
+    async fn walk(
+        is: &MultiSqliteIndexedStorage,
+        meta: &IndexedStorageMetaNamespace,
+    ) -> Vec<String> {
+        let mut resume = None;
+        let mut seen: Vec<String> = Vec::new();
+        for _ in 0..32 {
+            let (next, chunk) = is
+                .scan_stable("svc", "api", meta.clone(), None, resume, 2)
+                .await
+                .unwrap();
+            seen.extend(chunk);
+            match next {
+                Some(next) => resume = Some(next),
+                None => {
+                    seen.sort();
+                    return seen;
+                }
+            }
+        }
+        panic!("the walk never reported exhaustion and was cut off by the iteration cap");
+    }
+
+    async fn plant(is: &MultiSqliteIndexedStorage, name: &str) -> String {
+        let namespace = IndexedStorageNamespace::OpLog {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: name.to_string(),
+            },
+            agent_mode: AgentMode::Durable,
+        };
+        let key = format!("key-{name}");
+        is.append("svc", "api", "entity", namespace, &key, 1, b"v".to_vec())
+            .await
+            .unwrap();
+        key
+    }
+
+    let tempdir = TempDir::new().unwrap();
+    let is = MultiSqliteIndexedStorage::new(tempdir.path(), 10, true);
+    let meta = IndexedStorageMetaNamespace::Oplog {
+        agent_mode: AgentMode::Durable,
+    };
+
+    let mut expected = vec![plant(&is, "first").await, plant(&is, "second").await];
+    expected.sort();
+    assert_eq!(walk(&is, &meta).await, expected);
+
+    // Straight after a walk, so the listing the walk took is still inside its window.
+    expected.push(plant(&is, "third").await);
+    expected.sort();
+    assert_eq!(
+        walk(&is, &meta).await,
+        expected,
+        "a walk served a cached listing missed a file created after it was taken"
+    );
+}
+
 /// `last_id` must answer without moving the payload, and must agree with `last` when it does.
 #[test]
 #[tracing::instrument]

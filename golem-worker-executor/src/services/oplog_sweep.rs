@@ -55,7 +55,7 @@ use std::time::{Duration, Instant};
 
 use futures::stream::{self, StreamExt};
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{AgentId, OwnedAgentId, ShardAssignment, ShardId};
@@ -118,9 +118,13 @@ enum Outcome {
     /// The archive step never ran: the oplog would not open, or nothing recognised it as
     /// something that can be archived.
     ArchiveFailed,
-    /// One archive step ran. `more` carries the `try_archive` contract: a layer below still holds
-    /// entries for this agent, so a later tick has work to do.
-    Archived { more: bool },
+    /// The agent's entries were moved out of every layer that could pass them on.
+    ///
+    /// Always a full drain. [`OplogSweeper::archive_agent`] keeps stepping until `try_archive`
+    /// reports nothing left below, because `open_oplog` leaves a suspended worker behind that makes
+    /// the next tick skip the agent as resident; a partial move would strand the remainder. An
+    /// agent the step bound cuts short is reported as [`Outcome::ArchiveFailed`] instead.
+    Archived,
 }
 
 /// Whether an agent has been quiet long enough to archive.
@@ -156,9 +160,18 @@ enum Verdict {
 /// keeping the list here rather than in `OplogSweepConfig` is what makes them so.
 pub const SWEPT_MODES: &[AgentMode] = &[AgentMode::Ephemeral];
 
-/// The most archive steps one agent gets in a single tick. A step moves a whole layer, so the
-/// layer stack bounds this well below the limit; it exists so a miscounting layer cannot spin.
-const MAX_ARCHIVE_STEPS: u32 = 16;
+/// Slack over the layer count when bounding the archive steps one agent gets in a single tick.
+///
+/// One step moves a whole layer and reports whether another below it still holds entries
+/// (`MultiLayerOplog::archive`), so a correct stack needs at most one step per layer. Bounding at
+/// the layer count plus this leaves the guard doing only what it was meant to do -- stop a layer
+/// that miscounts `more` from spinning -- rather than also capping a stack that is merely deep.
+///
+/// A fixed bound did both, and the second was silent: it dropped the agent's tracking entry and
+/// reported it archived while layers below still held entries, and `open_oplog` had by then left a
+/// suspended worker that makes every later tick skip the agent as resident. The untouched layers
+/// stayed where they were for the life of the pod.
+const ARCHIVE_STEP_SLACK: usize = 2;
 
 /// The shortest a tick interval is allowed to be. A misconfigured zero would otherwise spin.
 const MIN_INTERVAL: Duration = Duration::from_millis(100);
@@ -194,7 +207,7 @@ enum Decision {
     Archive(AgentId),
 }
 
-/// Per-route counters. Every field counts scanned keys except `drained` and `truncated`, and the
+/// Per-route counters. Every field counts scanned keys except `truncated`, and the
 /// counted fields sum to `scanned`. A shutdown during the archive phase is the one case that
 /// leaves a scanned key with no outcome, so under it `scanned` counts fewer keys than the scan
 /// walked.
@@ -209,8 +222,6 @@ struct RouteReport {
     unaddressable: u64,
     archive_failed: u64,
     archived: u64,
-    /// Archive steps that reported no further layer to drain. A subset of `archived`.
-    drained: u64,
     /// A budget stopped the tick, a scan failed, or the node began shutting down, before the
     /// namespace was exhausted.
     truncated: bool,
@@ -227,7 +238,6 @@ impl RouteReport {
             ("unaddressable", self.unaddressable),
             ("archive_failed", self.archive_failed),
             ("archived", self.archived),
-            ("drained", self.drained),
         ] {
             record_oplog_sweep_outcome(route, outcome, count);
         }
@@ -286,10 +296,19 @@ fn owns(assignment: &ShardAssignment, agent_id: &AgentId) -> bool {
 
 /// The quiet gate. `ScheduledAction::ArchiveOplog` carries the index the agent had when the action
 /// was registered and acts only if the current index still matches; with no row to carry an index,
-/// the sweep compares against what it saw on its own previous tick.
-fn assess(remembered: Option<OplogIndex>, current: OplogIndex) -> Verdict {
+/// the sweep compares against what it saw on its own previous pass.
+///
+/// The sighting has to come from an *earlier* pass, not merely from an earlier probe. A backend may
+/// hand the same key back twice inside one walk -- Redis `SCAN` guarantees a key present throughout
+/// is returned at least once, not exactly once -- and comparing indices alone let the second
+/// sighting satisfy a gate that the first had just opened. That archives an agent within one pass
+/// instead of across two, which skips the interval the gate exists to impose and can race a
+/// previous shard owner still writing. The `dedup` before the archive phase cannot catch it: by
+/// then both sightings have been assessed, and the two may not even be in the same tick. A pass
+/// visits each key once, so an earlier pass is what "quiet since last time" means.
+fn assess(remembered: Option<Seen>, current: OplogIndex, pass: u64) -> Verdict {
     match remembered {
-        Some(previous) if previous == current => Verdict::Move,
+        Some(seen) if seen.index == current && seen.pass < pass => Verdict::Move,
         _ => Verdict::Wait,
     }
 }
@@ -306,7 +325,6 @@ fn merge(left: RouteReport, right: RouteReport) -> RouteReport {
         unaddressable: left.unaddressable + right.unaddressable,
         archive_failed: left.archive_failed + right.archive_failed,
         archived: left.archived + right.archived,
-        drained: left.drained + right.drained,
         truncated: left.truncated || right.truncated,
     }
 }
@@ -325,12 +343,7 @@ fn tally(outcomes: impl IntoIterator<Item = Outcome>) -> RouteReport {
                 Outcome::Resident => report.resident += 1,
                 Outcome::Unaddressable => report.unaddressable += 1,
                 Outcome::ArchiveFailed => report.archive_failed += 1,
-                Outcome::Archived { more } => {
-                    report.archived += 1;
-                    if !more {
-                        report.drained += 1;
-                    }
-                }
+                Outcome::Archived => report.archived += 1,
             }
             report
         })
@@ -361,6 +374,48 @@ struct Seen {
     pass: u64,
 }
 
+/// What a tick has left to spend, shared across its routes.
+///
+/// `max_scanned_per_tick` and `max_archives_per_tick` are documented as tick budgets and used to be
+/// handed to every route in full, so a stack with several compressed source levels multiplied the
+/// store work one tick could do by the number of routes.
+///
+/// A route takes an equal share of what is left rather than the whole remainder, so a busy route
+/// cannot starve the ones behind it. Sharing the remainder rather than a fixed slice is what keeps
+/// that from wasting budget: a route that finds nothing to do leaves its share to the routes after
+/// it. The order routes run in is load-bearing -- lowest source level first, so a tick never hands
+/// entries to a layer it is about to drain -- which is why the shares move and the order does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TickBudget {
+    scans: u64,
+    archives: u64,
+    routes_left: u64,
+}
+
+impl TickBudget {
+    fn new(config: &OplogSweepConfig, routes: usize) -> Self {
+        Self {
+            scans: config.max_scanned_per_tick.max(1) as u64,
+            archives: config.max_archives_per_tick.max(1) as u64,
+            routes_left: routes.max(1) as u64,
+        }
+    }
+
+    /// The next route's share: what is left, split evenly over the routes still to run. At least
+    /// one of each, so a route is never handed a budget it cannot take a single step with.
+    fn share(&self) -> (u64, u64) {
+        let left = self.routes_left.max(1);
+        ((self.scans / left).max(1), (self.archives / left).max(1))
+    }
+
+    /// Books what a route used and drops it from the split.
+    fn spend(&mut self, scanned: u64, archived: u64) {
+        self.scans = self.scans.saturating_sub(scanned);
+        self.archives = self.archives.saturating_sub(archived);
+        self.routes_left = self.routes_left.saturating_sub(1);
+    }
+}
+
 struct Route {
     id: RouteId,
     namespace: IndexedStorageMetaNamespace,
@@ -374,6 +429,10 @@ pub struct OplogSweeper {
     shards: Arc<dyn ShardService>,
     components: Arc<dyn ComponentService>,
     worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
+    /// How many archive steps one agent gets before [`Self::archive_agent`] gives up on it.
+    /// Derived from the stack the sweeper was built over, not configured: see
+    /// [`ARCHIVE_STEP_SLACK`].
+    max_archive_steps: u32,
     /// The index each agent showed on the previous tick, per route. Losing it costs one extra tick
     /// of latency, never a stranded oplog: the work list comes from storage.
     ///
@@ -450,6 +509,7 @@ impl OplogSweeper {
             shards,
             components,
             worker_access,
+            max_archive_steps: archives.len().saturating_add(ARCHIVE_STEP_SLACK) as u32,
             memo: Mutex::new(HashMap::new()),
             cursors: Mutex::new(HashMap::new()),
             passes: Mutex::new(HashMap::new()),
@@ -582,14 +642,20 @@ impl OplogSweeper {
         };
 
         let mut routes = Vec::with_capacity(self.routes.len());
+        let mut budget = TickBudget::new(&self.config, self.routes.len());
         for route in &self.routes {
             if cancel.is_cancelled() {
                 break;
             }
+            let (scans, archives) = budget.share();
             let report = self
-                .sweep_route(route, &assignment, cancel)
+                .sweep_route(route, &assignment, cancel, scans, archives)
                 .instrument(info_span!("oplog_sweep", route = %route.id))
                 .await;
+            // `scanned` counts the keys the route decided rather than the keys it walked, and the
+            // two differ only when shutdown cut the archive phase short. That tick is ending
+            // anyway, so the difference cannot reach another route.
+            budget.spend(report.scanned, report.archived);
             routes.push((route.id, report));
         }
 
@@ -599,11 +665,15 @@ impl OplogSweeper {
         }
     }
 
+    /// `scan_budget` and `archive_budget` are this route's share of the tick's budgets, not the
+    /// configured values: see [`TickBudget`].
     async fn sweep_route(
         &self,
         route: &Route,
         assignment: &ShardAssignment,
         cancel: &CancellationToken,
+        scan_budget: u64,
+        archive_budget: u64,
     ) -> RouteReport {
         let started = Instant::now();
         let mut resume = self.cursors.lock().await.get(&route.id).cloned();
@@ -630,7 +700,7 @@ impl OplogSweeper {
         // Zero would read nothing, exhaust the namespace on the first page and wipe the tracking
         // table, all while reporting a healthy tick, so treat it as one.
         let page_size = self.config.page_size.max(1);
-        let scan_budget = self.config.max_scanned_per_tick.max(1) as u64;
+        let scan_budget = scan_budget.max(1);
         // A key budget bounds round trips only on a backend that fills every page. Redis matches
         // server-side and can hand back empty pages while it walks the keyspace, so `walked` would
         // never move and the tick would traverse the whole thing. Bound the pages as well.
@@ -689,7 +759,7 @@ impl OplogSweeper {
             }
             // Soft by up to a page: a page is probed as a unit, so this stops at the first page
             // that carries the budget past its bound rather than splitting one.
-            if pending.len() >= self.config.max_archives_per_tick.max(1) {
+            if pending.len() as u64 >= archive_budget.max(1) {
                 truncated = true;
                 break;
             }
@@ -812,8 +882,8 @@ impl OplogSweeper {
             .lock()
             .await
             .get(&(route.id, agent_id.clone()))
-            .map(|seen| seen.index);
-        if assess(remembered, current) == Verdict::Wait {
+            .copied();
+        if assess(remembered, current, pass) == Verdict::Wait {
             self.remember(route.id, &agent_id, current, pass).await;
             return Decision::Settled(Outcome::Moving);
         }
@@ -828,7 +898,7 @@ impl OplogSweeper {
     }
 
     /// Moves one agent's entries out of this layer, and keeps going until no layer below holds
-    /// any, or until [`MAX_ARCHIVE_STEPS`] steps have run.
+    /// any, or until [`OplogSweeper::max_archive_steps`] steps have run.
     ///
     /// Runs only after the scan has finished paging, because every step ends in a `drop_prefix`
     /// that removes the key the scan walked.
@@ -868,7 +938,7 @@ impl OplogSweeper {
         // the layer for the life of the pod.
         let mut more = true;
         let mut steps = 0;
-        while more && steps < MAX_ARCHIVE_STEPS {
+        while more && steps < self.max_archive_steps {
             let stepped = match MultiLayerOplog::try_archive_blocking(&oplog).await {
                 Some(more) => Some(more),
                 None => EphemeralOplog::try_archive_blocking(&oplog).await,
@@ -889,18 +959,25 @@ impl OplogSweeper {
             steps += 1;
         }
         if more {
+            // Not an archive, and the tracking entry stays. Reporting this as archived would drop
+            // the entry while layers below still hold entries, and the suspended worker
+            // `open_oplog` just registered makes the next tick skip the agent as resident, so the
+            // remainder would never be reached again. The bound is the stack depth plus slack, so
+            // reaching it means a layer reported more work than the stack can hold.
             warn!(
                 agent_id = %agent_id,
                 steps,
-                "Oplog sweep stopped archiving an agent at the step limit"
+                "Oplog sweep stopped archiving an agent at the step bound; a layer reported more \
+                 work below it than the stack has layers"
             );
+            return Outcome::ArchiveFailed;
         }
 
         self.forget(route.id, &agent_id).await;
-        debug!(agent_id = %agent_id, steps, more, "Oplog sweep archived an agent");
-        // If a durable route is ever added to `SWEPT_MODES`, `more == false` is where
+        debug!(agent_id = %agent_id, steps, "Oplog sweep archived an agent");
+        // If a durable route is ever added to `SWEPT_MODES`, this is where
         // `WorkerService::remove_cached_status` belongs, as it does in the scheduled action.
-        Outcome::Archived { more }
+        Outcome::Archived
     }
 
     /// An agent's environment, resolved through its component.
@@ -910,8 +987,29 @@ impl OplogSweeper {
     /// have moved it out of the layer being scanned, which is where any agent that outgrew
     /// `entry_count_limit` ends up. The component answers instead, because an agent's environment
     /// is its component's environment.
+    ///
+    /// Two lookups, because the deployed one alone strands exactly the oplogs this sweep exists to
+    /// reach. `get_metadata(id, None)` goes to `get_deployed_component_metadata`, which answers only
+    /// for a component that is currently deployed and not deleted. An agent whose teardown archival
+    /// was lost to a pod crash therefore becomes permanently unarchiveable the moment its component
+    /// is deleted: every later tick resolves nothing, reports [`Outcome::Unaddressable`], and leaves
+    /// the entries where they are. `ScheduledAction::ArchiveOplog` never had that problem, because
+    /// its row carried the `OwnedAgentId`.
+    ///
+    /// The first revision answers instead. `get_component_metadata` is documented to return deleted
+    /// components, and a component does not move between environments across revisions, so revision
+    /// zero carries the same environment the current one would. Deployed is still tried first: it is
+    /// the lookup the rest of the executor warms a cache for, and most swept agents belong to
+    /// components that are still there.
     async fn environment_of(&self, component_id: ComponentId) -> Option<EnvironmentId> {
-        match self.components.get_metadata(component_id, None).await {
+        if let Ok(component) = self.components.get_metadata(component_id, None).await {
+            return Some(component.environment_id);
+        }
+        match self
+            .components
+            .get_metadata(component_id, Some(ComponentRevision::INITIAL))
+            .await
+        {
             Ok(component) => Some(component.environment_id),
             Err(error) => {
                 warn!(
@@ -1085,13 +1183,80 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_is_quiet_only_after_its_index_survives_a_tick() {
+    fn an_agent_is_quiet_only_after_its_index_survives_a_pass() {
         let first = OplogIndex::from_u64(11);
         let second = OplogIndex::from_u64(12);
+        let seen = |index, pass| Some(Seen { index, pass });
 
-        assert_eq!(assess(None, first), Verdict::Wait);
-        assert_eq!(assess(Some(first), second), Verdict::Wait);
-        assert_eq!(assess(Some(second), second), Verdict::Move);
+        assert_eq!(assess(None, first, 1), Verdict::Wait);
+        assert_eq!(assess(seen(first, 0), second, 1), Verdict::Wait);
+        assert_eq!(assess(seen(second, 0), second, 1), Verdict::Move);
+    }
+
+    /// A backend may hand the same key back twice inside one walk. Comparing indices alone let the
+    /// second sighting satisfy the gate the first had just opened, archiving inside one pass and
+    /// skipping the interval the gate exists to impose.
+    #[test]
+    fn a_sighting_from_the_same_pass_does_not_open_the_gate() {
+        let index = OplogIndex::from_u64(11);
+
+        assert_eq!(
+            assess(Some(Seen { index, pass: 3 }), index, 3),
+            Verdict::Wait,
+            "a duplicate key within one pass is not a second sighting"
+        );
+        assert_eq!(
+            assess(Some(Seen { index, pass: 2 }), index, 3),
+            Verdict::Move,
+            "a sighting from the previous pass is"
+        );
+    }
+
+    #[test]
+    fn a_tick_splits_its_budgets_across_its_routes() {
+        let config = OplogSweepConfig {
+            max_scanned_per_tick: 100,
+            max_archives_per_tick: 10,
+            ..OplogSweepConfig::default()
+        };
+
+        let mut budget = TickBudget::new(&config, 2);
+        assert_eq!(
+            budget.share(),
+            (50, 5),
+            "an even split, not the whole of it"
+        );
+
+        // A route that finds nothing leaves its share to the one behind it rather than wasting it.
+        budget.spend(0, 0);
+        assert_eq!(budget.share(), (100, 10));
+
+        let mut budget = TickBudget::new(&config, 2);
+        budget.spend(50, 5);
+        assert_eq!(
+            budget.share(),
+            (50, 5),
+            "and a route that spends its share does not"
+        );
+    }
+
+    /// Zero would hand a route a budget it cannot take one step with, and the route would report a
+    /// truncated tick having done nothing.
+    #[test]
+    fn a_route_is_never_handed_an_empty_share() {
+        let config = OplogSweepConfig {
+            max_scanned_per_tick: 1,
+            max_archives_per_tick: 1,
+            ..OplogSweepConfig::default()
+        };
+        let mut budget = TickBudget::new(&config, 4);
+        assert_eq!(budget.share(), (1, 1));
+        budget.spend(10, 10);
+        assert_eq!(
+            budget.share(),
+            (1, 1),
+            "and an overspent budget still floors at one"
+        );
     }
 
     #[test]
@@ -1185,13 +1350,12 @@ mod tests {
             Outcome::Resident,
             Outcome::Unaddressable,
             Outcome::ArchiveFailed,
-            Outcome::Archived { more: true },
-            Outcome::Archived { more: false },
+            Outcome::Archived,
+            Outcome::Archived,
         ]);
 
         assert_eq!(report.scanned, 9);
         assert_eq!(report.archived, 2);
-        assert_eq!(report.drained, 1);
         assert_eq!(
             report.unparseable
                 + report.not_owned
@@ -1219,7 +1383,6 @@ mod tests {
             unaddressable: 8,
             archive_failed: 9,
             archived: 10,
-            drained: 11,
             truncated: false,
         };
         let right = RouteReport {
@@ -1232,7 +1395,6 @@ mod tests {
             unaddressable: 18,
             archive_failed: 19,
             archived: 20,
-            drained: 21,
             truncated: true,
         };
 
@@ -1246,7 +1408,6 @@ mod tests {
         assert_eq!(merged.unaddressable, 26);
         assert_eq!(merged.archive_failed, 28);
         assert_eq!(merged.archived, 30);
-        assert_eq!(merged.drained, 32);
         assert!(merged.truncated, "truncation is sticky");
     }
 
@@ -1333,6 +1494,11 @@ mod tests {
     struct FixedPages {
         inner: Arc<InMemoryIndexedStorage>,
         keys_per_page: u64,
+        /// When set, every walk serves the whole namespace twice before it ends, and the resume
+        /// token is ignored. That is the smallest shape of what Redis `SCAN` is allowed to do: a
+        /// key present throughout is returned at least once, not exactly once.
+        duplicate_pages: bool,
+        calls: std::sync::atomic::AtomicU64,
     }
 
     #[async_trait]
@@ -1390,6 +1556,18 @@ mod tests {
             resume: Option<ScanResume>,
             _count: u64,
         ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+            if self.duplicate_pages {
+                let (_, keys) = self
+                    .inner
+                    .scan_stable(svc_name, api_name, namespace, prefix, None, 10_000)
+                    .await?;
+                let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return if call.is_multiple_of(2) {
+                    Ok((Some(ScanResume::Marker("again".to_string())), keys))
+                } else {
+                    Ok((None, keys))
+                };
+            }
             self.inner
                 .scan_stable(
                     svc_name,
@@ -1600,7 +1778,11 @@ mod tests {
     /// for the agents of a given component.
     struct FixedEnvironment {
         environment_id: EnvironmentId,
+        /// Answers nothing at all, deployed lookup or pinned.
         fails: bool,
+        /// Answers only a pinned revision, which is what a deleted component looks like:
+        /// `get_deployed_component_metadata` skips it, `get_component_metadata` still has it.
+        deleted: bool,
     }
 
     #[async_trait]
@@ -1617,9 +1799,9 @@ mod tests {
         async fn get_metadata(
             &self,
             component_id: ComponentId,
-            _forced_revision: Option<ComponentRevision>,
+            forced_revision: Option<ComponentRevision>,
         ) -> Result<Component, WorkerExecutorError> {
-            if self.fails {
+            if self.fails || (self.deleted && forced_revision.is_none()) {
                 return Err(WorkerExecutorError::runtime("component not found"));
             }
             Ok(Component {
@@ -1754,6 +1936,7 @@ mod tests {
             Arc::new(FixedEnvironment {
                 environment_id,
                 fails: false,
+                deleted: false,
             }),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
@@ -1851,7 +2034,6 @@ mod tests {
         // The index has not moved, so the second tick archives.
         let second = sweeper.sweep_once(&CancellationToken::new()).await;
         assert_eq!(second.archived(), 1);
-        assert_eq!(second.route(EPHEMERAL_L1).drained, 1);
 
         // The entries changed layer, which is what "archived" has to mean.
         assert_eq!(
@@ -1978,6 +2160,7 @@ mod tests {
             Arc::new(FixedEnvironment {
                 environment_id,
                 fails: true,
+                deleted: false,
             }),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
@@ -1989,6 +2172,86 @@ mod tests {
         let second = sweeper.sweep_once(&CancellationToken::new()).await;
         assert_eq!(second.route(EPHEMERAL_L1).unaddressable, 1);
         assert_eq!(second.archived(), 0);
+    }
+
+    /// A stranded oplog is what the sweep exists for, and the component behind one is exactly the
+    /// component most likely to have been deleted in the meantime. Resolving only through the
+    /// deployed lookup made those oplogs permanently unarchiveable: every tick reported
+    /// `unaddressable` and left the entries where they were.
+    #[test]
+    async fn an_agent_whose_component_was_deleted_is_still_archived() {
+        let layers = layers();
+        let environment_id = EnvironmentId::new();
+        let agent_id = agent("counter-1", ComponentId::new());
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
+
+        let sweeper = OplogSweeper::over_layers(
+            manual(),
+            layers.indexed_storage.clone(),
+            &layers.archives,
+            all_shards(),
+            Arc::new(FixedEnvironment {
+                environment_id,
+                fails: false,
+                deleted: true,
+            }),
+            Arc::new(DirectAccess {
+                oplog_service: layers.oplog_service.clone(),
+                resident: HashSet::new(),
+            }),
+        );
+
+        sweeper.sweep_once(&CancellationToken::new()).await;
+        let second = sweeper.sweep_once(&CancellationToken::new()).await;
+
+        assert_eq!(second.route(EPHEMERAL_L1).unaddressable, 0);
+        assert_eq!(second.archived(), 1);
+        assert_eq!(
+            layers.archives[0]
+                .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
+                .await,
+            OplogIndex::NONE
+        );
+    }
+
+    /// Redis `SCAN` promises a key present throughout the walk is returned *at least* once. The
+    /// gate used to compare indices alone, so the second sighting satisfied the gate the first had
+    /// just opened and the agent was archived inside one pass, skipping the interval entirely.
+    #[test]
+    async fn a_key_handed_back_twice_in_one_pass_does_not_clear_the_gate() {
+        let layers = layers();
+        let environment_id = EnvironmentId::new();
+        let agent_id = agent("counter-1", ComponentId::new());
+        stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
+
+        let sweeper = build_over(
+            Arc::new(FixedPages {
+                inner: layers.indexed_storage.clone(),
+                keys_per_page: 1,
+                duplicate_pages: true,
+                calls: std::sync::atomic::AtomicU64::new(0),
+            }),
+            &layers,
+            manual(),
+            all_shards(),
+            environment_id,
+            HashSet::new(),
+        );
+
+        // One tick, two pages, the same key on both. Both are sightings from the pass now under
+        // way, so neither opens the gate.
+        let first = sweeper.sweep_once(&CancellationToken::new()).await;
+        assert_eq!(first.route(EPHEMERAL_L1).moving, 2);
+        assert_eq!(
+            first.archived(),
+            0,
+            "a duplicate satisfied the gate the pass had just opened"
+        );
+
+        // The pass ended, so the next one carries a sighting from before it and the gate opens.
+        let second = sweeper.sweep_once(&CancellationToken::new()).await;
+        assert_eq!(second.archived(), 1);
     }
 
     #[test]
@@ -2010,6 +2273,7 @@ mod tests {
             Arc::new(FixedEnvironment {
                 environment_id,
                 fails: true,
+                deleted: false,
             }),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
@@ -2391,15 +2655,17 @@ mod tests {
         assert_eq!(sweeper.memo.lock().await.len(), 6);
     }
 
+    /// The bound is derived from the stack so that only a layer reporting more work than the stack
+    /// can hold reaches it. A fixed bound also caught a stack that was merely deep, and did it
+    /// silently: it dropped the tracking entry, reported the agent archived, and left `open_oplog`'s
+    /// suspended worker to make every later tick skip it as resident.
     #[test]
     #[timeout("1m")]
-    async fn an_agent_stops_at_the_step_limit_rather_than_draining_without_end() {
-        // One layer more than a pass may walk, so a full drain cannot finish inside one. Without
-        // the limit an oplog that keeps reporting more to move holds the tick for the life of the
-        // pod.
-        let layers = deep_layers(MAX_ARCHIVE_STEPS as usize + 1);
+    async fn a_stack_deeper_than_any_fixed_bound_still_drains_fully() {
+        let layers = deep_layers(24);
         let environment_id = EnvironmentId::new();
         let agent_id = agent("counter-1", ComponentId::new());
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
         stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
 
         let sweeper = build(
@@ -2415,9 +2681,27 @@ mod tests {
 
         assert_eq!(second.route(EPHEMERAL_L1).archived, 1);
         assert_eq!(
-            second.route(EPHEMERAL_L1).drained,
+            second.route(EPHEMERAL_L1).archive_failed,
             0,
-            "the step limit stopped the walk short of the bottom layer"
+            "a stack this deep is a supported configuration, not a miscounting layer"
+        );
+
+        // Every layer that can pass entries on has done so. A bound that cut the walk short left
+        // them in whichever layer it stopped at, and nothing would have come back for them.
+        for (level, archive) in layers.archives.iter().enumerate().rev().skip(1) {
+            assert_eq!(
+                archive
+                    .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
+                    .await,
+                OplogIndex::NONE,
+                "layer {level} still holds entries for an agent reported as archived"
+            );
+        }
+
+        assert_eq!(
+            sweeper.max_archive_steps as usize,
+            layers.archives.len() + ARCHIVE_STEP_SLACK,
+            "the bound follows the stack it was built over"
         );
     }
 
@@ -2443,6 +2727,8 @@ mod tests {
             Arc::new(FixedPages {
                 inner: layers.indexed_storage.clone(),
                 keys_per_page: 1,
+                duplicate_pages: false,
+                calls: std::sync::atomic::AtomicU64::new(0),
             }),
             &layers,
             OplogSweepConfig {
@@ -2482,6 +2768,8 @@ mod tests {
             Arc::new(FixedPages {
                 inner: layers.indexed_storage.clone(),
                 keys_per_page: 4,
+                duplicate_pages: false,
+                calls: std::sync::atomic::AtomicU64::new(0),
             }),
             &layers,
             OplogSweepConfig {
@@ -2645,6 +2933,7 @@ mod tests {
             Arc::new(FixedEnvironment {
                 environment_id: EnvironmentId::new(),
                 fails: false,
+                deleted: false,
             }),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),

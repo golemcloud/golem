@@ -1679,6 +1679,9 @@ pub struct OplogSweepConfig {
     pub max_concurrency: usize,
     /// Agents one tick may archive before it stops. A page is probed as a unit, so a tick stops at
     /// the first page that carries it past this and can exceed it by up to `page_size`.
+    ///
+    /// A tick budget, not a per-route one: a stack with more than one source layer splits this
+    /// between its routes rather than giving each the whole of it.
     pub max_archives_per_tick: usize,
     /// Keys one tick may scan before it stops, because a tick asks each scan for no more than
     /// what is left of the budget. A backend is free to hand back more than it was asked for, and
@@ -1691,6 +1694,10 @@ pub struct OplogSweepConfig {
     /// left off rather than by counting past what it has already read, so the cost of a page does
     /// not grow with how far into the namespace it sits. Raising this raises the work a tick does
     /// in proportion, and nothing worse.
+    ///
+    /// A tick budget, not a per-route one, like `max_archives_per_tick` above. Routes share it,
+    /// each taking an even split of what the routes before it left, so the number of source layers
+    /// changes how a tick divides its work and not how much of it there is.
     pub max_scanned_per_tick: usize,
     /// Wall-clock bound on one tick, after which the tick stops at its next boundary and reports
     /// itself truncated.

@@ -25,14 +25,26 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+
+/// How long a directory listing is served before it is taken again.
+///
+/// A backstop rather than the mechanism. This process is the only writer to its own directory, and
+/// [`MultiSqliteIndexedStorage::storage_by_db_name`] drops the cached listings whenever it creates a
+/// file, so a listing served from cache is normally exact. The window only matters if something
+/// outside the process puts a file there, and it can only make a listing short, never wrong: a file
+/// is emptied rather than deleted, so a name once listed keeps its place.
+const LISTING_TTL: Duration = Duration::from_secs(10);
 
 /// IndexedStorage implementation that uses multiple separate SQLite databases depending
 /// on the namespace.
 pub struct MultiSqliteIndexedStorage {
     cache: Cache<String, (), SqliteIndexedStorage, IndexedStorageError>,
     hash_cache: Arc<Mutex<HashCache>>,
+    /// The `.db` files under each meta-namespace prefix, sorted, with the time they were read.
+    /// See [`MultiSqliteIndexedStorage::namespace_db_files`].
+    listing_cache: Arc<Mutex<HashMap<String, CachedListing>>>,
     root_dir: PathBuf,
     max_connections: u32,
     foreign_keys: bool,
@@ -41,6 +53,11 @@ pub struct MultiSqliteIndexedStorage {
 struct HashCache {
     hash_per_agent_id: HashMap<AgentId, String>,
     agent_id_per_hash: HashMap<String, AgentId>,
+}
+
+struct CachedListing {
+    files: Arc<Vec<String>>,
+    read_at: Instant,
 }
 
 impl MultiSqliteIndexedStorage {
@@ -63,6 +80,7 @@ impl MultiSqliteIndexedStorage {
                 hash_per_agent_id: HashMap::new(),
                 agent_id_per_hash: HashMap::new(),
             })),
+            listing_cache: Arc::new(Mutex::new(HashMap::new())),
             root_dir: root_dir.to_path_buf(),
             max_connections,
             foreign_keys,
@@ -92,14 +110,9 @@ impl MultiSqliteIndexedStorage {
         self.storage_by_db_name(db).await
     }
 
-    /// The `.db` files a namespace is spread over, in a stable order.
-    fn namespace_db_files(
-        &self,
-        namespace: &IndexedStorageMetaNamespace,
-    ) -> Result<Vec<String>, IndexedStorageError> {
-        use std::fs;
-
-        let db_prefix = match namespace {
+    /// The filename prefix every `.db` file under a meta-namespace shares.
+    fn db_prefix(namespace: &IndexedStorageMetaNamespace) -> String {
+        match namespace {
             IndexedStorageMetaNamespace::Oplog { agent_mode } => {
                 let mode = super::agent_mode_prefix(*agent_mode);
                 format!("{mode}-oplog-")
@@ -108,9 +121,52 @@ impl MultiSqliteIndexedStorage {
                 let mode = super::agent_mode_prefix(*agent_mode);
                 format!("{mode}-compressed-oplog-l{}-", level)
             }
-        };
+        }
+    }
 
-        let mut matching_files: Vec<_> = fs::read_dir(&self.root_dir)
+    /// The `.db` files a namespace is spread over, in a stable order.
+    ///
+    /// Cached for [`LISTING_TTL`], and read off the Tokio worker. A walk over a meta-namespace asks
+    /// for this once per page, the directory holds one file per agent that has ever had entries at
+    /// this level -- ephemeral ids are unbounded, so that is one per invocation -- and reading and
+    /// sorting all of it per page made a walk quadratic in the file count, with a synchronous
+    /// `read_dir` of the whole directory blocking a runtime worker each time. That defeats the
+    /// bounded-work guarantee of anything paging through it.
+    async fn namespace_db_files(
+        &self,
+        namespace: &IndexedStorageMetaNamespace,
+    ) -> Result<Arc<Vec<String>>, IndexedStorageError> {
+        let db_prefix = Self::db_prefix(namespace);
+        if let Some(cached) = self.listing_cache.lock().await.get(&db_prefix)
+            && cached.read_at.elapsed() < LISTING_TTL
+        {
+            return Ok(cached.files.clone());
+        }
+
+        let root_dir = self.root_dir.clone();
+        let prefix = db_prefix.clone();
+        let files = tokio::task::spawn_blocking(move || Self::read_db_files(&root_dir, &prefix))
+            .await
+            .map_err(|e| {
+                IndexedStorageError::Other(format!("Failed to list the root directory: {:?}", e))
+            })??;
+
+        let files = Arc::new(files);
+        self.listing_cache.lock().await.insert(
+            db_prefix,
+            CachedListing {
+                files: files.clone(),
+                read_at: Instant::now(),
+            },
+        );
+        Ok(files)
+    }
+
+    /// Blocking half of [`Self::namespace_db_files`].
+    fn read_db_files(root_dir: &Path, db_prefix: &str) -> Result<Vec<String>, IndexedStorageError> {
+        use std::fs;
+
+        let mut matching_files: Vec<_> = fs::read_dir(root_dir)
             .map_err(|e| {
                 IndexedStorageError::Other(format!("Failed to read root directory: {:?}", e))
             })?
@@ -118,7 +174,7 @@ impl MultiSqliteIndexedStorage {
                 entry.ok().and_then(|e| {
                     let path = e.path();
                     let file_name = path.file_name()?.to_string_lossy().to_string();
-                    if file_name.starts_with(&db_prefix) && file_name.ends_with(".db") {
+                    if file_name.starts_with(db_prefix) && file_name.ends_with(".db") {
                         Some(file_name)
                     } else {
                         None
@@ -137,11 +193,27 @@ impl MultiSqliteIndexedStorage {
         let max_connections = self.max_connections;
         let foreign_keys = self.foreign_keys;
         let db_path = self.root_dir.join(db.clone()).to_string_lossy().to_string();
-        self.cache
+        // Set when this call is what puts a new file in the directory, which makes every cached
+        // listing that would have contained it short. Tested inside the miss path rather than on
+        // every call: a hit means the file was opened already, and a miss on its own only means the
+        // connection was evicted.
+        let created = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = created.clone();
+        let existing = db_path.clone();
+        let storage = self
+            .cache
             .get_or_insert_simple(&db, async move || {
+                flag.store(
+                    !Path::new(&existing).exists(),
+                    std::sync::atomic::Ordering::SeqCst,
+                );
                 Self::init_storage(max_connections, foreign_keys, db_path).await
             })
-            .await
+            .await?;
+        if created.load(std::sync::atomic::Ordering::SeqCst) {
+            self.listing_cache.lock().await.clear();
+        }
+        Ok(storage)
     }
 
     async fn namespace_to_db(&self, namespace: &IndexedStorageNamespace) -> String {
@@ -234,7 +306,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
-        let matching_files = self.namespace_db_files(&namespace)?;
+        let matching_files = self.namespace_db_files(&namespace).await?;
 
         // Decode cursor: upper 32 bits = file index, lower 32 bits = scan cursor within file
         let file_index = (cursor >> 32) as usize;
@@ -305,16 +377,18 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
             None => None,
         };
 
+        let files = self.namespace_db_files(&namespace).await?;
+        // Sorted, so the marker is found by bisection rather than by walking the files before it.
+        // Skipping linearly cost every page a pass over everything the pass had already done.
+        let start = match after.as_deref() {
+            Some(after) => files.partition_point(|file| file.as_str() <= after),
+            None => 0,
+        };
+
         let mut keys = Vec::new();
         let mut last_file = None;
         let mut opened = 0;
-        for file_name in self.namespace_db_files(&namespace)? {
-            if after
-                .as_deref()
-                .is_some_and(|after| file_name.as_str() <= after)
-            {
-                continue;
-            }
+        for file_name in files[start..].iter().cloned() {
             if opened >= count.max(1) {
                 break;
             }
