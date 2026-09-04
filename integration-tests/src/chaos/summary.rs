@@ -53,7 +53,7 @@ use crate::chaos::fires::ScheduleFireReport;
 use crate::chaos::history::{Outcome, Phase, Stream};
 use crate::chaos::outage::StorageFaultReport;
 use crate::chaos::ownership::OwnershipSample;
-use crate::chaos::probe::KeyProbe;
+use crate::chaos::probe::{KeyProbe, SkipReason};
 use crate::chaos::reachability::ReachabilityReport;
 use crate::chaos::relay::RelayReport;
 use crate::chaos::resurrection::ResurrectionReport;
@@ -368,6 +368,16 @@ pub struct ExactlyOnceReport {
     /// report so a clean verdict over a large number of them can be read for
     /// what it is: a weaker claim.
     pub keys_inconclusive: u64,
+    /// Of the inconclusive keys, the ones the probe pass never asked about at
+    /// all, by reason.
+    ///
+    /// Separated from the rest because the cause is different: an inconclusive
+    /// key was asked about and the exchange failed, a skipped key was never
+    /// asked. The pass only skips when it gives up — an agent that stopped
+    /// answering, or a pass that ran out of budget — so an entry here means the
+    /// run measured less than it set out to, whatever the verdict says.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub keys_skipped: BTreeMap<SkipReason, u64>,
     /// Keys that had a final result after recovery.
     pub keys_with_final_result: u64,
     /// Keys the driver never got a result for, but which the platform produced
@@ -437,6 +447,9 @@ impl ExactlyOnceReport {
                         .is_some_and(|class| class.is_definite_rejection());
                     if !definitive {
                         report.keys_inconclusive += 1;
+                        if let Some(reason) = probe.skipped {
+                            *report.keys_skipped.entry(reason).or_default() += 1;
+                        }
                         continue;
                     }
                     report.findings.push(ExactlyOnceFinding {
@@ -784,11 +797,23 @@ impl ChaosSummary {
     /// Attaches the exactly-once account and hoists its findings into
     /// [`Self::attention`], so a reader scanning the top of a report sees them
     /// next to the read-back verdicts rather than further down.
+    /// Skipped keys are hoisted alongside the findings, unlike the rest of the
+    /// numbers. They do not fail a run, but a clean verdict computed without
+    /// them is a weaker claim than the same verdict computed over everything,
+    /// and that has to be visible next to the verdict rather than only in the
+    /// account underneath it. A healthy pass skips nothing, so this stays quiet
+    /// on runs where it would only be noise.
     pub fn with_exactly_once(mut self, report: ExactlyOnceReport) -> Self {
         for finding in &report.findings {
             self.attention.push(format!(
                 "{}: key {} on agent {} — {}",
                 finding.violation, finding.idempotency_key, finding.agent, finding.detail
+            ));
+        }
+        for (reason, count) in &report.keys_skipped {
+            self.attention.push(format!(
+                "the probe pass never asked about {count} keys — {}",
+                reason.describe()
             ));
         }
         self.exactly_once = Some(report);

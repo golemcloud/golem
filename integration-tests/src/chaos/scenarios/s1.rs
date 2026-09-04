@@ -673,6 +673,7 @@ mod tests {
             final_value,
             error: final_value.is_none().then(|| "refused".to_string()),
             error_class: final_value.is_none().then_some(ErrorClass::Response),
+            skipped: None,
         }
     }
 
@@ -804,6 +805,7 @@ mod tests {
             // What `errors::classify` yields for a timeout: unreadable, so the
             // band of doubt widens rather than a refusal being invented.
             error_class: Some(ErrorClass::Transport),
+            skipped: None,
         };
 
         let report = ExactlyOnceReport::build(

@@ -494,6 +494,7 @@ mod tests {
             // answer was no" — the only failure that is evidence about the key
             // rather than about the connection.
             error_class: final_value.is_none().then_some(ErrorClass::Response),
+            skipped: None,
         }
     }
 
@@ -505,6 +506,7 @@ mod tests {
             final_value: None,
             error: Some(format!("{class} failure")),
             error_class: Some(class),
+            skipped: None,
         }
     }
 
