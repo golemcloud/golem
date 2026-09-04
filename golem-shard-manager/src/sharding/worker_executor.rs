@@ -193,26 +193,30 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
     async fn health_check(&self, pod: &Pod) -> Result<(), HealthCheckError> {
         // NOTE: retries are handled in healthcheck.rs
         let endpoint = pod.endpoint(self.config.client_config.tls_enabled());
-        let conn = timeout(self.config.health_check_timeout, endpoint.connect()).await;
-        match conn {
-            Ok(conn) => match conn {
-                Ok(conn) => {
-                    let request = HealthCheckRequest {
-                        service: "".to_string(),
-                    };
-                    match HealthClient::new(conn).check(request).await {
-                        Ok(response) => {
-                            let status = health_check_serving_status(response);
-                            (status == ServingStatus::Serving)
-                                .then_some(())
-                                .ok_or_else(|| HealthCheckError::GrpcOther(status.as_str_name()))
-                        }
-                        Err(status) => Err(HealthCheckError::GrpcError(status)),
-                    }
-                }
-                Err(err) => Err(HealthCheckError::GrpcTransportError(err)),
-            },
-            Err(_) => Err(HealthCheckError::GrpcOther("connect timeout")),
+        // The deadline covers the check RPC as well as the connect: an executor that accepts
+        // connections but never answers would otherwise hold this call open forever.
+        let checked = timeout(self.config.health_check_timeout, async {
+            let conn = endpoint
+                .connect()
+                .await
+                .map_err(HealthCheckError::GrpcTransportError)?;
+            let request = HealthCheckRequest {
+                service: "".to_string(),
+            };
+            let response = HealthClient::new(conn)
+                .check(request)
+                .await
+                .map_err(HealthCheckError::GrpcError)?;
+            let status = health_check_serving_status(response);
+            (status == ServingStatus::Serving)
+                .then_some(())
+                .ok_or_else(|| HealthCheckError::GrpcOther(status.as_str_name()))
+        })
+        .await;
+
+        match checked {
+            Ok(result) => result,
+            Err(_) => Err(HealthCheckError::GrpcOther("health check timeout")),
         }
     }
 
@@ -428,4 +432,47 @@ fn health_check_serving_status(response: Response<HealthCheckResponse>) -> Servi
         .status
         .try_into()
         .unwrap_or(ServingStatus::Unknown)
+}
+
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+
+    use super::*;
+    use crate::config::WorkerExecutorServiceConfig;
+    use std::time::Duration;
+    use tokio::net::TcpListener;
+
+    #[test]
+    // The executor accepts the connection and then never answers, so only a deadline covering the
+    // check RPC - not just the connect - lets this return.
+    async fn a_health_check_against_a_silent_executor_gives_up() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local address");
+        let _silent_executor = tokio::spawn(async move {
+            let mut accepted = Vec::new();
+            while let Ok((connection, _)) = listener.accept().await {
+                // Held open and never answered.
+                accepted.push(connection);
+            }
+        });
+
+        let health_check_timeout = Duration::from_millis(300);
+        let service = WorkerExecutorServiceDefault::new(WorkerExecutorServiceConfig {
+            health_check_timeout,
+            ..Default::default()
+        });
+        let pod = Pod {
+            ip: addr.ip(),
+            port: addr.port(),
+        };
+
+        let checked = timeout(health_check_timeout * 2, service.health_check(&pod))
+            .await
+            .expect("health_check outlived twice its own timeout");
+        assert!(
+            checked.is_err(),
+            "an executor that never answers must not be reported healthy"
+        );
+    }
 }

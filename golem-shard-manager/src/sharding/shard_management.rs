@@ -35,7 +35,9 @@ use tracing::{Instrument, debug, error, info, warn};
 /// Bounds a persistence round-trip, so a wedged backend cannot hold the shard state lock forever,
 /// leaving every [`ShardManagement::current_snapshot`] reader waiting while the fail-stop that
 /// should end the process never runs.
-const PERSISTENCE_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const PERSISTENCE_TIMEOUT: Duration = Duration::from_secs(30);
+
+const INITIAL_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
 pub struct ShardManagement {
@@ -59,7 +61,34 @@ impl ShardManagement {
         health_check: Arc<dyn HealthCheck>,
         threshold: f64,
         lease_ttl: Duration,
+        number_of_shards: usize,
         join_set: &mut JoinSet<anyhow::Result<()>>,
+    ) -> Result<Self, ShardManagerError> {
+        Self::new_with_initial_health_check_timeout(
+            persistence_service,
+            worker_executors,
+            health_check,
+            threshold,
+            lease_ttl,
+            number_of_shards,
+            join_set,
+            INITIAL_HEALTH_CHECK_TIMEOUT,
+        )
+        .await
+    }
+
+    /// [`Self::new`] with the startup health check bound taken as a parameter, so that a test does
+    /// not have to wait out the production budget.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn new_with_initial_health_check_timeout(
+        persistence_service: Arc<dyn RoutingTablePersistence>,
+        worker_executors: Arc<dyn WorkerExecutorService>,
+        health_check: Arc<dyn HealthCheck>,
+        threshold: f64,
+        lease_ttl: Duration,
+        number_of_shards: usize,
+        join_set: &mut JoinSet<anyhow::Result<()>>,
+        initial_health_check_timeout: Duration,
     ) -> Result<Self, ShardManagerError> {
         let (shard_state, external_revision) =
             match timeout(PERSISTENCE_TIMEOUT, persistence_service.read()).await {
@@ -71,10 +100,31 @@ impl ShardManagement {
                 }
             };
 
+        // Before the health check and before the worker is spawned: past this point the worker can
+        // persist state and command executors, and a replica that disagrees with the stored shard
+        // count must do neither.
+        crate::ensure_shard_count_matches(shard_state.number_of_shards, number_of_shards)?;
+
         info!("Initial healthcheck started");
 
-        let executors = shard_state.get_executors_with_addrs();
-        let unhealthy_executors = get_unhealthy_executors(&health_check, &executors).await;
+        let executors: Vec<(ExecutorId, ExecutorAddr, Option<String>)> =
+            shard_state.get_executors_with_addrs();
+        let unhealthy_executors = match timeout(
+            initial_health_check_timeout,
+            get_unhealthy_executors(&health_check, &executors),
+        )
+        .await
+        {
+            Ok(unhealthy_executors) => unhealthy_executors,
+            Err(_) => {
+                // Dropping every executor because their probes were slow would empty the routing
+                // table; the periodic health check loop removes the ones that are really gone.
+                error!(
+                    "Initial healthcheck timed out after {initial_health_check_timeout:?}, treating all executors as healthy"
+                );
+                HashSet::new()
+            }
+        };
         let healthy_executors: HashSet<ExecutorId> = executors
             .iter()
             .map(|(id, _, _)| *id)
@@ -294,10 +344,14 @@ impl ShardManagement {
         }
     }
 
-    /// Applies `mutate` to the shard lease state and persists the result compare-and-swap style:
-    /// snapshot, mutate, bump the revision, write guarded on the cached external revision. On any
-    /// failure the in-memory state is rolled back to the snapshot and the error is returned - the
-    /// same pattern as the quota service's lease mutations.
+    /// Applies `mutate` to a *clone* of the shard lease state, persists it compare-and-swap style
+    /// guarded on the cached external revision, and swaps it into the live state only once the
+    /// write is durable.
+    ///
+    /// A clone rather than mutate-in-place with rollback: a caller dropped mid-persist never runs
+    /// its rollback, but the guard's `Drop` publishes the mutation anyway - and the next write
+    /// either stores that stray mutation as though intended, or, if the abandoned write landed,
+    /// fails forever on a cached revision that is now behind.
     ///
     /// The write lock is held across the persistence round-trip so that readers of
     /// [`Self::current_snapshot`] can never observe a state that was not durably stored and then
@@ -315,15 +369,15 @@ impl ShardManagement {
         let mut current_shard_state = self.shard_state.write().await;
         let mut external_revision = self.external_revision.lock().await;
 
-        let snapshot = current_shard_state.clone();
+        let mut next_shard_state = current_shard_state.clone();
         let prev_external_revision = *external_revision;
-        let outcome = mutate(&mut current_shard_state);
+        let outcome = mutate(&mut next_shard_state);
 
-        let written = match current_shard_state.bump_revision() {
+        let written = match next_shard_state.bump_revision() {
             Ok(_) => {
                 let write = self
                     .persistence
-                    .write(&current_shard_state, prev_external_revision);
+                    .write(&next_shard_state, prev_external_revision);
 
                 match timeout(PERSISTENCE_TIMEOUT, write).await {
                     Ok(written) => written,
@@ -337,6 +391,7 @@ impl ShardManagement {
 
         match written {
             Ok(new_external_revision) => {
+                *current_shard_state = next_shard_state;
                 *external_revision = new_external_revision;
                 Ok(outcome)
             }
@@ -344,15 +399,14 @@ impl ShardManagement {
                 match &err {
                     ShardManagerError::ConcurrentModification => error!(
                         prev_external_revision,
-                        "Revision conflict: another shard manager wrote the shard lease state. \
-                         Rolling back"
+                        "Revision conflict: another shard manager wrote the shard lease state; \
+                         the in-memory state is unchanged"
                     ),
                     other => error!(
                         error = %other,
-                        "Persisting the shard lease state failed, rolling back"
+                        "Persisting the shard lease state failed; the in-memory state is unchanged"
                     ),
                 }
-                *current_shard_state = snapshot;
                 Err(err)
             }
         }

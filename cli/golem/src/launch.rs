@@ -480,9 +480,14 @@ async fn run_shard_manager(
 ) -> Result<golem_shard_manager::RunDetails, anyhow::Error> {
     let prometheus_registry = prometheus::default_registry().clone();
     let span = tracing::info_span!("shard-manager");
-    golem_shard_manager::run(&config, prometheus_registry, join_set)
-        .instrument(span)
-        .await
+    golem_shard_manager::run(
+        &config,
+        golem_shard_manager::Deployment::Embedded,
+        prometheus_registry,
+        join_set,
+    )
+    .instrument(span)
+    .await
 }
 
 async fn run_component_compilation_service(
