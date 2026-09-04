@@ -333,10 +333,15 @@ pub trait WorkerService: Send + Sync {
     /// reshard will not resume, so it silently stops running with nothing recording that it should
     /// be. [`update_cached_status`](Self::update_cached_status) fails the operation it was part of,
     /// and the hot path (`AgentStatusFlusher::on_status_changed`) treats it as fatal.
+    ///
+    /// `tracked` is [`DefaultWorkerService::should_track_for_assignment_recovery`] of the status
+    /// being installed; the caller computes it so the status record itself need not be passed
+    /// around (or copied) for this one bit. Ephemeral workers are never tracked, and callers skip
+    /// them.
     async fn set_assignment_tracking(
         &self,
         owned_agent_id: &OwnedAgentId,
-        status_value: &AgentStatusRecord,
+        tracked: bool,
     ) -> Result<(), String>;
 
     /// Convenience cold-path helper that updates the recovery index *and* writes the blob in one
@@ -358,8 +363,14 @@ pub trait WorkerService: Send + Sync {
         previous_status: Option<&AgentStatusRecord>,
         status_value: AgentStatusRecord,
     ) -> Result<(), String> {
-        self.set_assignment_tracking(owned_agent_id, &status_value)
+        // Ephemeral workers are never tracked for recovery (mirrors `write_cached_status`).
+        if status_value.agent_mode != AgentMode::Ephemeral {
+            self.set_assignment_tracking(
+                owned_agent_id,
+                DefaultWorkerService::should_track_for_assignment_recovery(&status_value),
+            )
             .await?;
+        }
         self.write_cached_status(owned_agent_id, previous_status, status_value)
             .await
             .map(|_| ())
@@ -1087,14 +1098,9 @@ impl WorkerService for DefaultWorkerService {
     async fn set_assignment_tracking(
         &self,
         owned_agent_id: &OwnedAgentId,
-        status_value: &AgentStatusRecord,
+        tracked: bool,
     ) -> Result<(), String> {
         record_worker_call("set_assignment_tracking");
-
-        // Ephemeral workers are never tracked for recovery (mirrors `write_cached_status`).
-        if status_value.agent_mode == AgentMode::Ephemeral {
-            return Ok(());
-        }
 
         let shard_assignment = self
             .shard_service
@@ -1104,7 +1110,7 @@ impl WorkerService for DefaultWorkerService {
         let shard_id =
             ShardId::from_agent_id(&owned_agent_id.agent_id, shard_assignment.number_of_shards);
 
-        if Self::should_track_for_assignment_recovery(status_value) {
+        if tracked {
             debug!("Adding worker to the set of running workers in shard {shard_id}");
 
             self.key_value_storage

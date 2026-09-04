@@ -33,10 +33,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tracing::debug;
 
-use golem_common::model::{AgentStatusRecord, OwnedAgentId};
+use golem_common::model::{AgentStatusRecord, OplogIndex, OwnedAgentId};
 
 use crate::services::worker::WorkerService;
 
@@ -143,7 +143,19 @@ impl StatusCheckpointer {
     ///
     /// Best-effort: a write failure is logged and metered, the baseline is left unchanged, and the
     /// worker continues. The oplog remains the source of truth.
-    pub async fn maybe_checkpoint(&self, status: &AgentStatusRecord, reason: CheckpointReason) {
+    ///
+    /// Reads the live status through its lock and copies it only once it has decided to write:
+    /// the record owns `invocation_results`, which grows by one entry per invocation and is never
+    /// pruned, and this is called after every durable function, where the throttle discards
+    /// nearly every call. `min_exposed_marker` is the per-invocation `get_oplog_index` watermark;
+    /// a committed tip beyond it is skipped, since a later `set_oplog_index` back to the marker
+    /// would delete what the checkpoint recorded.
+    pub async fn maybe_checkpoint(
+        &self,
+        status: &RwLock<AgentStatusRecord>,
+        min_exposed_marker: Option<OplogIndex>,
+        reason: CheckpointReason,
+    ) {
         if self.is_ephemeral || !self.enabled || self.delete_started.load(Ordering::Acquire) {
             return;
         }
@@ -153,6 +165,14 @@ impl StatusCheckpointer {
         // Re-check after taking the lock: `begin_delete` may have set the flag while we waited for
         // it (it takes this same lock as a barrier), so once we hold the lock the flag is final.
         if self.delete_started.load(Ordering::Acquire) {
+            return;
+        }
+
+        let status = status.read().await;
+
+        if let Some(marker) = min_exposed_marker
+            && status.oplog_idx > marker
+        {
             return;
         }
 
@@ -185,13 +205,13 @@ impl StatusCheckpointer {
             return;
         }
 
+        // Copy only what is about to be written, and release the status lock before the write.
+        let snapshot = status.clone();
+        drop(status);
+
         match self
             .worker_service
-            .write_status_checkpoint(
-                &self.owned_agent_id,
-                state.last_written.as_ref(),
-                status.clone(),
-            )
+            .write_status_checkpoint(&self.owned_agent_id, state.last_written.as_ref(), snapshot)
             .await
         {
             Ok(written) => {
@@ -304,7 +324,7 @@ mod tests {
         async fn set_assignment_tracking(
             &self,
             _owned_agent_id: &OwnedAgentId,
-            _status_value: &AgentStatusRecord,
+            _tracked: bool,
         ) -> Result<(), String> {
             Ok(())
         }
@@ -337,7 +357,7 @@ mod tests {
         let service = Arc::new(RecordingWorkerService::default());
         let cp = checkpointer(service.clone(), 100);
 
-        cp.maybe_checkpoint(&status_at(10), CheckpointReason::Idle)
+        cp.maybe_checkpoint(&RwLock::new(status_at(10)), None, CheckpointReason::Idle)
             .await;
 
         assert_eq!(
@@ -351,11 +371,11 @@ mod tests {
         let service = Arc::new(RecordingWorkerService::default());
         let cp = checkpointer(service.clone(), 100);
 
-        cp.maybe_checkpoint(&status_at(10), CheckpointReason::Idle)
+        cp.maybe_checkpoint(&RwLock::new(status_at(10)), None, CheckpointReason::Idle)
             .await; // first -> written (10)
-        cp.maybe_checkpoint(&status_at(50), CheckpointReason::Idle)
+        cp.maybe_checkpoint(&RwLock::new(status_at(50)), None, CheckpointReason::Idle)
             .await; // +40 < 100 -> skipped
-        cp.maybe_checkpoint(&status_at(110), CheckpointReason::Idle)
+        cp.maybe_checkpoint(&RwLock::new(status_at(110)), None, CheckpointReason::Idle)
             .await; // +100 >= 100 -> written (110)
 
         assert_eq!(
@@ -369,8 +389,12 @@ mod tests {
         let service = Arc::new(RecordingWorkerService::default());
         let cp = checkpointer(service.clone(), 100);
 
-        cp.maybe_checkpoint(&status_at(10), CheckpointReason::MidInvocation)
-            .await;
+        cp.maybe_checkpoint(
+            &RwLock::new(status_at(10)),
+            None,
+            CheckpointReason::MidInvocation,
+        )
+        .await;
 
         assert_eq!(
             *service.writes.lock().unwrap(),
@@ -379,16 +403,56 @@ mod tests {
     }
 
     #[test]
+    async fn mid_invocation_skips_a_tip_beyond_the_exposed_marker() {
+        let service = Arc::new(RecordingWorkerService::default());
+        let cp = checkpointer(service.clone(), 100);
+
+        // The guest captured oplog index 40 through `get_oplog_index`; a checkpoint at 50 would
+        // be discarded by a later `set_oplog_index(40)`, so it is not written.
+        cp.maybe_checkpoint(
+            &RwLock::new(status_at(50)),
+            Some(OplogIndex::from_u64(40)),
+            CheckpointReason::MidInvocation,
+        )
+        .await;
+        assert!(service.writes.lock().unwrap().is_empty());
+
+        // A tip at or below the marker is safe to record.
+        cp.maybe_checkpoint(
+            &RwLock::new(status_at(40)),
+            Some(OplogIndex::from_u64(40)),
+            CheckpointReason::MidInvocation,
+        )
+        .await;
+        assert_eq!(
+            *service.writes.lock().unwrap(),
+            vec![OplogIndex::from_u64(40)]
+        );
+    }
+
+    #[test]
     async fn mid_invocation_throttles_like_idle() {
         let service = Arc::new(RecordingWorkerService::default());
         let cp = checkpointer(service.clone(), 100);
 
-        cp.maybe_checkpoint(&status_at(10), CheckpointReason::MidInvocation)
-            .await; // first -> written (10)
-        cp.maybe_checkpoint(&status_at(50), CheckpointReason::MidInvocation)
-            .await; // +40 < 100 -> skipped
-        cp.maybe_checkpoint(&status_at(110), CheckpointReason::MidInvocation)
-            .await; // +100 >= 100 -> written (110)
+        cp.maybe_checkpoint(
+            &RwLock::new(status_at(10)),
+            None,
+            CheckpointReason::MidInvocation,
+        )
+        .await; // first -> written (10)
+        cp.maybe_checkpoint(
+            &RwLock::new(status_at(50)),
+            None,
+            CheckpointReason::MidInvocation,
+        )
+        .await; // +40 < 100 -> skipped
+        cp.maybe_checkpoint(
+            &RwLock::new(status_at(110)),
+            None,
+            CheckpointReason::MidInvocation,
+        )
+        .await; // +100 >= 100 -> written (110)
 
         assert_eq!(
             *service.writes.lock().unwrap(),
@@ -403,11 +467,15 @@ mod tests {
 
         // A mid-invocation checkpoint and a subsequent idle checkpoint use the same persisted
         // baseline, so the idle one is throttled relative to the mid-invocation write.
-        cp.maybe_checkpoint(&status_at(10), CheckpointReason::MidInvocation)
-            .await; // written (10)
-        cp.maybe_checkpoint(&status_at(40), CheckpointReason::Idle)
+        cp.maybe_checkpoint(
+            &RwLock::new(status_at(10)),
+            None,
+            CheckpointReason::MidInvocation,
+        )
+        .await; // written (10)
+        cp.maybe_checkpoint(&RwLock::new(status_at(40)), None, CheckpointReason::Idle)
             .await; // +30 < 100 -> skipped
-        cp.maybe_checkpoint(&status_at(150), CheckpointReason::Idle)
+        cp.maybe_checkpoint(&RwLock::new(status_at(150)), None, CheckpointReason::Idle)
             .await; // +140 >= 100 -> written (150)
 
         assert_eq!(
@@ -421,10 +489,14 @@ mod tests {
         let service = Arc::new(RecordingWorkerService::default());
         let cp = checkpointer(service.clone(), 100);
 
-        cp.maybe_checkpoint(&status_at(10), CheckpointReason::Idle)
+        cp.maybe_checkpoint(&RwLock::new(status_at(10)), None, CheckpointReason::Idle)
             .await; // written (10)
-        cp.maybe_checkpoint(&status_at(20), CheckpointReason::Snapshot)
-            .await; // +10 but snapshot -> written (20)
+        cp.maybe_checkpoint(
+            &RwLock::new(status_at(20)),
+            None,
+            CheckpointReason::Snapshot,
+        )
+        .await; // +10 but snapshot -> written (20)
 
         assert_eq!(
             *service.writes.lock().unwrap(),
@@ -437,10 +509,10 @@ mod tests {
         let service = Arc::new(RecordingWorkerService::default());
         let cp = checkpointer(service.clone(), 100);
 
-        cp.maybe_checkpoint(&status_at(500), CheckpointReason::Idle)
+        cp.maybe_checkpoint(&RwLock::new(status_at(500)), None, CheckpointReason::Idle)
             .await; // written (500)
         // A revert truncated the oplog: the new tip is behind the stale checkpoint -> refresh.
-        cp.maybe_checkpoint(&status_at(200), CheckpointReason::Idle)
+        cp.maybe_checkpoint(&RwLock::new(status_at(200)), None, CheckpointReason::Idle)
             .await;
 
         assert_eq!(
@@ -455,7 +527,7 @@ mod tests {
         // High throttle so a small index delta alone would never trigger a refresh.
         let cp = checkpointer(service.clone(), 1000);
 
-        cp.maybe_checkpoint(&status_at(100), CheckpointReason::Idle)
+        cp.maybe_checkpoint(&RwLock::new(status_at(100)), None, CheckpointReason::Idle)
             .await; // written (100)
 
         // A logical revert appends a `Revert` marker (tip advances to 121) and records a deleted
@@ -467,7 +539,7 @@ mod tests {
             start: OplogIndex::from_u64(80),
             end: OplogIndex::from_u64(120),
         });
-        cp.maybe_checkpoint(&after_revert, CheckpointReason::Idle)
+        cp.maybe_checkpoint(&RwLock::new(after_revert), None, CheckpointReason::Idle)
             .await;
 
         assert_eq!(
@@ -484,8 +556,12 @@ mod tests {
         cp.begin_delete().await;
         // Even a snapshot checkpoint (which otherwise bypasses every throttle) must not write after
         // deletion has started, so it cannot resurrect a deleted checkpoint.
-        cp.maybe_checkpoint(&status_at(10), CheckpointReason::Snapshot)
-            .await;
+        cp.maybe_checkpoint(
+            &RwLock::new(status_at(10)),
+            None,
+            CheckpointReason::Snapshot,
+        )
+        .await;
 
         assert!(service.writes.lock().unwrap().is_empty());
     }
@@ -496,12 +572,20 @@ mod tests {
 
         let disabled = StatusCheckpointer::new(owned_agent_id(), false, false, 0, service.clone());
         disabled
-            .maybe_checkpoint(&status_at(10), CheckpointReason::Snapshot)
+            .maybe_checkpoint(
+                &RwLock::new(status_at(10)),
+                None,
+                CheckpointReason::Snapshot,
+            )
             .await;
 
         let ephemeral = StatusCheckpointer::new(owned_agent_id(), true, true, 0, service.clone());
         ephemeral
-            .maybe_checkpoint(&status_at(10), CheckpointReason::Snapshot)
+            .maybe_checkpoint(
+                &RwLock::new(status_at(10)),
+                None,
+                CheckpointReason::Snapshot,
+            )
             .await;
 
         assert!(service.writes.lock().unwrap().is_empty());

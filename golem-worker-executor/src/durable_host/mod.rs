@@ -2522,14 +2522,16 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         let in_atomic_region = !self.state.active_atomic_regions.is_empty();
 
-        let latest_status_before = self
+        // Only the retry state (one entry per active retry point) is needed here, so copy that
+        // rather than the whole record.
+        let current_retry_state_before = self
             .public_state
             .worker()
-            .get_non_detached_last_known_status()
+            .with_non_detached_last_known_status(|status| status.current_retry_state.clone())
             .await;
         let (decision, retry_policy_state) = self
             .get_recovery_decision_on_trap_with_semantic(
-                &latest_status_before.current_retry_state,
+                &current_retry_state_before,
                 trap_type,
                 in_atomic_region,
                 full_function_name,
@@ -2563,10 +2565,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             self.public_state.worker().add_and_commit_oplog(entry).await;
         };
 
-        let latest_status = self
+        let latest_agent_status = self
             .public_state
             .worker()
-            .get_non_detached_last_known_status()
+            .with_non_detached_last_known_status(|status| status.status)
             .await;
 
         let giving_up = matches!(
@@ -2576,7 +2578,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 ..
             }
         ) || matches!(
-            latest_status.status,
+            latest_agent_status,
             AgentStatus::Interrupted | AgentStatus::Exited
         ) || decision == RetryDecision::None;
 
@@ -2598,7 +2600,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         debug!(
             "Recovery decision for {trap_type:?} with {:?} retries (in_atomic_region={in_atomic_region}): {:?}",
-            latest_status_before.current_retry_state, decision
+            current_retry_state_before, decision
         );
 
         decision
@@ -2973,9 +2975,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         this: &T,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        latest_worker_status: &AgentStatusRecord,
+        deleted_regions: &DeletedRegions,
     ) -> Option<LastError> {
-        last_error(this, owned_agent_id, agent_mode, latest_worker_status).await
+        last_error(this, owned_agent_id, agent_mode, deleted_regions).await
     }
 
     async fn resume_replay(
@@ -3683,7 +3685,7 @@ async fn last_error<T: HasOplogService + HasConfig>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
-    latest_worker_status: &AgentStatusRecord,
+    deleted_regions: &DeletedRegions,
 ) -> Option<LastError> {
     let mut idx = this
         .oplog_service()
@@ -3696,10 +3698,7 @@ async fn last_error<T: HasOplogService + HasConfig>(
         let mut first_retry_from = OplogIndex::NONE;
         let mut last_error_index = idx;
         loop {
-            if latest_worker_status
-                .deleted_regions
-                .is_in_deleted_region(idx)
-            {
+            if deleted_regions.is_in_deleted_region(idx) {
                 if idx > OplogIndex::INITIAL {
                     idx = idx.previous();
                     continue;

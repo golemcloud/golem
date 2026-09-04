@@ -59,6 +59,7 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
+use golem_common::model::regions::DeletedRegions;
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, TypedAgentConfigEntry};
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput,
@@ -181,19 +182,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(worker_executor)
     }
 
+    /// `agent_status` and `deleted_regions` come from the agent's latest status record. They are
+    /// taken as fields rather than the record so the invoke path can read them under the status
+    /// lock instead of copying the record, whose `invocation_results` grows with every invocation.
     async fn ensure_not_failed(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        metadata: &AgentMetadata,
+        agent_status: AgentStatus,
+        deleted_regions: &DeletedRegions,
     ) -> Result<(), WorkerExecutorError> {
-        match &metadata.last_known_status.status {
+        match agent_status {
             AgentStatus::Failed => {
                 let error_and_retry_count = Ctx::get_last_error_and_retry_count(
                     self,
                     owned_agent_id,
                     agent_mode,
-                    &metadata.last_known_status,
+                    deleted_regions,
                 )
                 .await;
                 if let Some(last_error) = error_and_retry_count {
@@ -214,7 +219,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self,
                     owned_agent_id,
                     agent_mode,
-                    &metadata.last_known_status,
+                    deleted_regions,
                 )
                 .await;
                 debug!("Last error and retry count: {:?}", error_and_retry_count);
@@ -780,8 +785,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_agent_id.agent_id(),
             ))?;
 
-        self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, &metadata)
-            .await?;
+        self.ensure_not_failed(
+            &owned_agent_id,
+            metadata.agent_mode,
+            metadata.last_known_status.status,
+            &metadata.last_known_status.deleted_regions,
+        )
+        .await?;
 
         match &metadata.last_known_status.status {
             AgentStatus::Suspended | AgentStatus::Interrupted | AgentStatus::Idle => {
@@ -884,10 +894,36 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
         self.ensure_worker_belongs_to_this_executor(&agent_id)?;
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await?;
+        // This runs on every invocation. For a resident worker, read the two fields the failure
+        // check needs under the status lock; only a worker that is not resident has its record
+        // materialised (from the cache and oplog), which is the same cold path as before.
+        let failure_check =
+            if let Some(worker) = self.active_workers().try_get(&owned_agent_id).await {
+                Some(
+                    worker
+                        .with_last_known_status(|status| {
+                            (
+                                worker.agent_mode(),
+                                status.status,
+                                status.deleted_regions.clone(),
+                            )
+                        })
+                        .await,
+                )
+            } else {
+                Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
+                    .await?
+                    .map(|metadata| {
+                        (
+                            metadata.agent_mode,
+                            metadata.last_known_status.status,
+                            metadata.last_known_status.deleted_regions,
+                        )
+                    })
+            };
 
-        if let Some(metadata) = &metadata {
-            self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, metadata)
+        if let Some((agent_mode, agent_status, deleted_regions)) = failure_check {
+            self.ensure_not_failed(&owned_agent_id, agent_mode, agent_status, &deleted_regions)
                 .await?;
         }
 
@@ -993,7 +1029,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self,
             &owned_agent_id,
             metadata.agent_mode,
-            &metadata.last_known_status,
+            &metadata.last_known_status.deleted_regions,
         )
         .await;
 
@@ -1072,7 +1108,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 self,
                 &worker_metadata.owned_agent_id(),
                 worker_metadata.agent_mode,
-                &worker_metadata.last_known_status,
+                &worker_metadata.last_known_status.deleted_regions,
             )
             .await;
             let metadata =
@@ -1317,8 +1353,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_agent_id.agent_id(),
             ))?;
 
-        self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, &metadata)
-            .await?;
+        self.ensure_not_failed(
+            &owned_agent_id,
+            metadata.agent_mode,
+            metadata.last_known_status.status,
+            &metadata.last_known_status.deleted_regions,
+        )
+        .await?;
 
         if metadata.last_known_status.status != AgentStatus::Interrupted {
             let event_service = Worker::get_or_create_suspended(
