@@ -27,7 +27,8 @@ use golem_worker_executor::storage::indexed::postgres::PostgresIndexedStorage;
 use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{
-    IndexedStorage, IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanCursor,
+    IndexedStorage, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
+    IndexedStorageNamespace, ScanCursor,
 };
 use golem_worker_executor_test_utils::WorkerExecutorTestDependencies;
 use pretty_assertions::assert_eq;
@@ -254,6 +255,10 @@ async fn postgres_storage(
     let postgres = DockerPostgresRdb::new(&unique_network_id, false).await;
     Arc::new(PostgresIndexedStorageWrapper { postgres })
 }
+
+/// A compressed level nothing else writes to, so a walk over it has a fixed set of keys to be
+/// right about.
+const SCAN_STABLE_LEVEL: usize = 97;
 
 #[derive(Debug, Clone)]
 struct IndexedStorageNamespaces {
@@ -699,6 +704,318 @@ async fn scan_with_no_pattern_paginated(
     assert!(all.contains(&key1.to_string()));
     assert!(all.contains(&key2.to_string()));
     assert!(all.contains(&key3.to_string()));
+}
+
+/// Pins the contract `IndexedStorage::scan_stable` exists for.
+///
+/// `scan` cannot be paged by a caller that deletes what it is handed: its cursor is a position on
+/// every backend that has one, so a delete behind the cursor shifts the rest down and the next page
+/// steps over that many keys nothing has looked at. `scan_stable` resumes by seeking instead, and
+/// every backend has to honour that, whether it seeks on a key, walks its files, or falls back to
+/// an iteration protocol that already tolerates deletion.
+///
+/// The keys are spread over six agents rather than one, because the multi-SQLite backend puts each
+/// agent in its own file and walks files rather than keys. With one agent its whole walk is a
+/// single file and none of that is exercised.
+///
+/// A second namespace is deleted from alongside the first. It stands for the lower oplog layers an
+/// archive step drains on its way down: the caller removes keys there too, and none of that may
+/// disturb the walk in progress.
+///
+/// The walk needs a meta-namespace nothing else writes to, so it takes a compressed level of its
+/// own. The shared one carries whatever the tests running beside this are appending and deleting,
+/// which leaves the walk with no fixed set of keys to be right about.
+#[test]
+#[tracing::instrument]
+async fn scan_stable_resumes_past_deleted_keys(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    let is = is.get_indexed_storage().await;
+    let swept_meta = IndexedStorageMetaNamespace::CompressedOplog {
+        agent_mode: AgentMode::Durable,
+        level: SCAN_STABLE_LEVEL,
+    };
+
+    // One agent per key, so a backend that shards by agent has six shards to walk.
+    let planted: Vec<(IndexedStorageNamespace, IndexedStorageNamespace, String)> = (0..6)
+        .map(|i| {
+            let component_id = ComponentId::new();
+            let swept = IndexedStorageNamespace::CompressedOpLog {
+                agent_id: AgentId {
+                    component_id,
+                    agent_id: format!("stable-{i}"),
+                },
+                agent_mode: AgentMode::Durable,
+                level: SCAN_STABLE_LEVEL,
+            };
+            let below = IndexedStorageNamespace::CompressedOpLog {
+                agent_id: AgentId {
+                    component_id,
+                    agent_id: format!("stable-{i}"),
+                },
+                agent_mode: AgentMode::Durable,
+                level: SCAN_STABLE_LEVEL + 1,
+            };
+            (swept, below, format!("{}-swept-{i}", Uuid::new_v4()))
+        })
+        .collect();
+
+    for (swept, below, key) in &planted {
+        is.append("svc", "api", "entity", swept.clone(), key, 1, b"v".to_vec())
+            .await
+            .unwrap();
+        is.append("svc", "api", "entity", below.clone(), key, 1, b"v".to_vec())
+            .await
+            .unwrap();
+    }
+
+    // Take a page, delete what it handed back along with that key's entry in the layer below, carry
+    // on from the token. The sweep's tick in miniature.
+    let mut seen: Vec<String> = Vec::new();
+    let mut resume = None;
+    let mut terminated = false;
+    for _ in 0..256 {
+        // Through the labelled wrapper, which is how every caller reaches this.
+        let (next, chunk) = is
+            .with("svc", "api")
+            .scan_stable(swept_meta.clone(), None, resume, 2)
+            .await
+            .unwrap();
+        for key in &chunk {
+            if let Some((swept, below, _)) = planted.iter().find(|(_, _, k)| k == key) {
+                is.delete("svc", "api", swept.clone(), key).await.unwrap();
+                is.delete("svc", "api", below.clone(), key).await.unwrap();
+            }
+        }
+        seen.extend(chunk);
+        match next {
+            Some(next) => resume = Some(next),
+            None => {
+                terminated = true;
+                break;
+            }
+        }
+    }
+
+    assert!(
+        terminated,
+        "the walk never reported exhaustion and was cut off by the iteration cap"
+    );
+
+    for (_, _, key) in &planted {
+        assert!(
+            seen.contains(key),
+            "key {key} was skipped: the walk moved past something nothing had examined"
+        );
+    }
+
+    // Redis may hand a key back more than once, so this is the strongest thing every backend
+    // owes: nothing but the planted keys, and all of them.
+    for key in &seen {
+        assert!(
+            planted.iter().any(|(_, _, planted)| planted == key),
+            "the walk returned {key}, which belongs to no namespace it was pointed at"
+        );
+    }
+}
+
+/// The multi-SQLite walk pages over files rather than keys: its token names the last file it
+/// finished, and it is done when the file list runs out. A drained namespace keeps every one of
+/// its files, since nothing removes them, so that list stays as long as it ever was and the walk
+/// still has to cross it a budget at a time.
+#[test]
+#[tracing::instrument]
+async fn multi_sqlite_scan_stable_crosses_its_files_a_page_at_a_time() {
+    async fn walk(
+        is: &MultiSqliteIndexedStorage,
+        meta: &IndexedStorageMetaNamespace,
+    ) -> (usize, Vec<String>) {
+        let mut resume = None;
+        let mut seen: Vec<String> = Vec::new();
+        for page in 1..=32 {
+            let (next, chunk) = is
+                .scan_stable("svc", "api", meta.clone(), None, resume, 2)
+                .await
+                .unwrap();
+            seen.extend(chunk);
+            match next {
+                Some(next) => resume = Some(next),
+                None => return (page, seen),
+            }
+        }
+        panic!("the walk never reported exhaustion and was cut off by the iteration cap");
+    }
+
+    let tempdir = TempDir::new().unwrap();
+    let is = MultiSqliteIndexedStorage::new(tempdir.path(), 10, true);
+    let meta = IndexedStorageMetaNamespace::Oplog {
+        agent_mode: AgentMode::Durable,
+    };
+
+    // An odd number of agents, so the last page opens fewer files than its budget allows.
+    let planted: Vec<(IndexedStorageNamespace, String)> = (0..5)
+        .map(|i| {
+            let namespace = IndexedStorageNamespace::OpLog {
+                agent_id: AgentId {
+                    component_id: ComponentId::new(),
+                    agent_id: format!("file-{i}"),
+                },
+                agent_mode: AgentMode::Durable,
+            };
+            (namespace, format!("key-{i}"))
+        })
+        .collect();
+
+    for (namespace, key) in &planted {
+        is.append(
+            "svc",
+            "api",
+            "entity",
+            namespace.clone(),
+            key,
+            1,
+            b"v".to_vec(),
+        )
+        .await
+        .unwrap();
+    }
+
+    let (pages, mut seen) = walk(&is, &meta).await;
+    let mut expected: Vec<String> = planted.iter().map(|(_, key)| key.clone()).collect();
+    seen.sort();
+    expected.sort();
+    assert_eq!(seen, expected);
+    assert_eq!(pages, 3, "two files to a page, and the fifth ends the walk");
+
+    for (namespace, key) in &planted {
+        is.delete("svc", "api", namespace.clone(), key)
+            .await
+            .unwrap();
+    }
+
+    let (pages, seen) = walk(&is, &meta).await;
+    assert!(seen.is_empty(), "every key was deleted");
+    assert_eq!(
+        pages, 3,
+        "the drained files are still crossed two at a time, not opened all at once"
+    );
+}
+
+/// A file created after a listing was cached still shows up in the next walk.
+///
+/// The listing is cached because re-reading and re-sorting the whole directory per page made a walk
+/// quadratic in the file count, and a directory holds one file per agent that has ever had entries.
+/// Nothing may go missing for that: this process is the only writer to its own directory, so
+/// creating a file has to drop what the cache holds.
+#[test]
+#[tracing::instrument]
+async fn multi_sqlite_scan_stable_sees_files_created_after_a_walk() {
+    async fn walk(
+        is: &MultiSqliteIndexedStorage,
+        meta: &IndexedStorageMetaNamespace,
+    ) -> Vec<String> {
+        let mut resume = None;
+        let mut seen: Vec<String> = Vec::new();
+        for _ in 0..32 {
+            let (next, chunk) = is
+                .scan_stable("svc", "api", meta.clone(), None, resume, 2)
+                .await
+                .unwrap();
+            seen.extend(chunk);
+            match next {
+                Some(next) => resume = Some(next),
+                None => {
+                    seen.sort();
+                    return seen;
+                }
+            }
+        }
+        panic!("the walk never reported exhaustion and was cut off by the iteration cap");
+    }
+
+    async fn plant(is: &MultiSqliteIndexedStorage, name: &str) -> String {
+        let namespace = IndexedStorageNamespace::OpLog {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: name.to_string(),
+            },
+            agent_mode: AgentMode::Durable,
+        };
+        let key = format!("key-{name}");
+        is.append("svc", "api", "entity", namespace, &key, 1, b"v".to_vec())
+            .await
+            .unwrap();
+        key
+    }
+
+    let tempdir = TempDir::new().unwrap();
+    let is = MultiSqliteIndexedStorage::new(tempdir.path(), 10, true);
+    let meta = IndexedStorageMetaNamespace::Oplog {
+        agent_mode: AgentMode::Durable,
+    };
+
+    let mut expected = vec![plant(&is, "first").await, plant(&is, "second").await];
+    expected.sort();
+    assert_eq!(walk(&is, &meta).await, expected);
+
+    // Straight after a walk, so the listing the walk took is still inside its window.
+    expected.push(plant(&is, "third").await);
+    expected.sort();
+    assert_eq!(
+        walk(&is, &meta).await,
+        expected,
+        "a walk served a cached listing missed a file created after it was taken"
+    );
+}
+
+/// `last_id` must answer without moving the payload, and must agree with `last` when it does.
+#[test]
+#[tracing::instrument]
+async fn last_id_matches_last_without_the_value(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = format!("{}-last-id", Uuid::new_v4());
+
+    assert_eq!(
+        is.with_entity("svc", "api", "entity")
+            .last_id(ns.ns.clone(), &key)
+            .await
+            .unwrap(),
+        None,
+        "an index with no entries has no last id"
+    );
+
+    for id in [1u64, 7, 42] {
+        is.append(
+            "svc",
+            "api",
+            "entity",
+            ns.ns.clone(),
+            &key,
+            id,
+            format!("value-{id}").into_bytes(),
+        )
+        .await
+        .unwrap();
+    }
+
+    let last = is
+        .last("svc", "api", "entity", ns.ns.clone(), &key)
+        .await
+        .unwrap();
+    // Through the labelled wrapper, which is how every caller reaches this.
+    let last_id = is
+        .with_entity("svc", "api", "entity")
+        .last_id(ns.ns.clone(), &key)
+        .await
+        .unwrap();
+
+    assert_eq!(last_id, Some(42));
+    assert_eq!(last_id, last.map(|(id, _)| id));
 }
 
 #[test]

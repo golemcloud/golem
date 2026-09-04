@@ -253,6 +253,13 @@ impl OplogArchiveService for CompressedOplogArchiveService {
             .unwrap_or_default(),
         )
     }
+
+    fn scan_namespace(&self, agent_mode: AgentMode) -> Option<IndexedStorageMetaNamespace> {
+        Some(IndexedStorageMetaNamespace::CompressedOplog {
+            agent_mode,
+            level: self.level,
+        })
+    }
 }
 
 #[derive(Debug)]
