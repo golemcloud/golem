@@ -16,7 +16,16 @@ componentTemplates:
           dir: "{{ appRootDir }}"
           mkdirs:
           - "{{ appRootDir }}/_build/wasm/debug"
+          sources:
+          - "GOLEM_MOONBIT_BUILD_SDK_PATH/wit"
+          - "{{ appRootDir }}/_build/wasm/debug/build/{{ moonbitBuildPackagePath }}"
+          targets:
+          - "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.embed.wasm"
         - command: wasm-tools component new "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.embed.wasm" --output "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.agent.wasm"
+          sources:
+          - "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.embed.wasm"
+          targets:
+          - "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.agent.wasm"
         componentWasm: "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.agent.wasm"
       release:
         build:
@@ -30,7 +39,16 @@ componentTemplates:
           dir: "{{ appRootDir }}"
           mkdirs:
           - "{{ appRootDir }}/_build/wasm/release"
+          sources:
+          - "GOLEM_MOONBIT_BUILD_SDK_PATH/wit"
+          - "{{ appRootDir }}/_build/wasm/release/build/{{ moonbitBuildPackagePath }}"
+          targets:
+          - "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.embed.wasm"
         - command: wasm-tools component new "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.embed.wasm" --output "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent.wasm"
+          sources:
+          - "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.embed.wasm"
+          targets:
+          - "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent.wasm"
         componentWasm: "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent.wasm"
   moonbit-tool-middleware:
     presets:
@@ -47,7 +65,16 @@ componentTemplates:
           dir: "{{ appRootDir }}"
           mkdirs:
           - "{{ appRootDir }}/_build/wasm/debug"
+          sources:
+          - "GOLEM_MOONBIT_BUILD_SDK_PATH/wit"
+          - "{{ appRootDir }}/_build/wasm/debug/build/{{ moonbitBuildPackagePath }}"
+          targets:
+          - "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.tool-middleware.embed.wasm"
         - command: wasm-tools component new "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.tool-middleware.embed.wasm" --output "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.tool-middleware.wasm"
+          sources:
+          - "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.tool-middleware.embed.wasm"
+          targets:
+          - "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.tool-middleware.wasm"
         componentWasm: "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.tool-middleware.wasm"
       release:
         build:
@@ -61,7 +88,16 @@ componentTemplates:
           dir: "{{ appRootDir }}"
           mkdirs:
           - "{{ appRootDir }}/_build/wasm/release"
+          sources:
+          - "GOLEM_MOONBIT_BUILD_SDK_PATH/wit"
+          - "{{ appRootDir }}/_build/wasm/release/build/{{ moonbitBuildPackagePath }}"
+          targets:
+          - "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.tool-middleware.embed.wasm"
         - command: wasm-tools component new "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.tool-middleware.embed.wasm" --output "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.tool-middleware.wasm"
+          sources:
+          - "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.tool-middleware.embed.wasm"
+          targets:
+          - "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.tool-middleware.wasm"
         componentWasm: "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.tool-middleware.wasm"
   moonbit-agent-tool-middleware:
     presets:
@@ -78,7 +114,16 @@ componentTemplates:
           dir: "{{ appRootDir }}"
           mkdirs:
           - "{{ appRootDir }}/_build/wasm/debug"
+          sources:
+          - "GOLEM_MOONBIT_BUILD_SDK_PATH/wit"
+          - "{{ appRootDir }}/_build/wasm/debug/build/{{ moonbitBuildPackagePath }}"
+          targets:
+          - "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.agent-tool-middleware.embed.wasm"
         - command: wasm-tools component new "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.agent-tool-middleware.embed.wasm" --output "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.agent-tool-middleware.wasm"
+          sources:
+          - "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.agent-tool-middleware.embed.wasm"
+          targets:
+          - "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.agent-tool-middleware.wasm"
         componentWasm: "{{ appRootDir }}/_build/wasm/debug/{{ componentName | to_snake_case }}.agent-tool-middleware.wasm"
       release:
         build:
@@ -92,5 +137,14 @@ componentTemplates:
           dir: "{{ appRootDir }}"
           mkdirs:
           - "{{ appRootDir }}/_build/wasm/release"
+          sources:
+          - "GOLEM_MOONBIT_BUILD_SDK_PATH/wit"
+          - "{{ appRootDir }}/_build/wasm/release/build/{{ moonbitBuildPackagePath }}"
+          targets:
+          - "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent-tool-middleware.embed.wasm"
         - command: wasm-tools component new "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent-tool-middleware.embed.wasm" --output "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent-tool-middleware.wasm"
+          sources:
+          - "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent-tool-middleware.embed.wasm"
+          targets:
+          - "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent-tool-middleware.wasm"
         componentWasm: "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent-tool-middleware.wasm"
