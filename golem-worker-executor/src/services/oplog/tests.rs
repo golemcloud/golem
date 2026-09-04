@@ -2788,6 +2788,59 @@ async fn completed_host_call_response_upload_failure_writes_no_start(_tracing: &
 }
 
 #[test]
+async fn owned_invocation_payload_upload_failure_writes_no_entry(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(ReadCountingBlobStorage::failing_on_put(1));
+    let oplog_service = PrimaryOplogService::new(
+        indexed_storage,
+        blob_storage,
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "owned-invocation-upload-failure".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id, account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    let before = oplog.current_oplog_index().await;
+
+    let result = oplog
+        .add_agent_invocation_started_with_index(
+            AgentInvocation::AgentMethod {
+                idempotency_key: IdempotencyKey::fresh(),
+                method_name: "large-input".to_string(),
+                input: SchemaValue::Binary(BinaryValuePayload {
+                    bytes: vec![1_u8; 1024],
+                    mime_type: None,
+                }),
+                invocation_context: InvocationContextStack::fresh_rounded(),
+                principal: Principal::anonymous(),
+                scope_card: None,
+            },
+            invocation_wallet_pin(),
+        )
+        .await;
+
+    assert!(result.is_err());
+    assert_eq!(oplog.current_oplog_index().await, before);
+}
+
+#[test]
 async fn entries_with_large_payload(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
@@ -5609,6 +5662,97 @@ async fn scan_for_component_with_no_workers_terminates_immediately(_tracing: &Tr
             "empty scan did not terminate within 3 iterations"
         );
     }
+}
+
+#[test]
+async fn owned_payload_upload_moves_cache_and_roundtrips_without_it(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let oplog_service = PrimaryOplogService::new(
+        indexed_storage,
+        blob_storage,
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "owned-payload".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+
+    let inline = vec![1_u8; 8];
+    let inline_ptr = inline.as_ptr();
+    let inline_without_cache = match oplog.upload_payload_owned(inline).await.unwrap() {
+        OplogPayload::SerializedInline {
+            bytes,
+            cached: Some(cached),
+        } => {
+            assert_eq!(cached.as_ptr(), inline_ptr);
+            OplogPayload::SerializedInline {
+                bytes,
+                cached: None,
+            }
+        }
+        other => panic!("expected an inline payload with a cache, got {other:?}"),
+    };
+
+    let external = vec![2_u8; 1024];
+    let external_ptr = external.as_ptr();
+    let external_without_cache = match oplog.upload_payload_owned(external).await.unwrap() {
+        OplogPayload::External {
+            payload_id,
+            md5_hash,
+            cached: Some(cached),
+        } => {
+            assert_eq!(cached.as_ptr(), external_ptr);
+            OplogPayload::External {
+                payload_id,
+                md5_hash,
+                cached: None,
+            }
+        }
+        other => panic!("expected an external payload with a cache, got {other:?}"),
+    };
+
+    let reopened = oplog_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id, account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    assert_eq!(
+        reopened
+            .download_payload::<Vec<u8>>(inline_without_cache)
+            .await
+            .unwrap(),
+        vec![1_u8; 8]
+    );
+    assert_eq!(
+        reopened
+            .download_payload::<Vec<u8>>(external_without_cache)
+            .await
+            .unwrap(),
+        vec![2_u8; 1024]
+    );
 }
 
 /// A large request reserved with [`OplogOps::add_start_with_reserved_payload`] is stored externally,

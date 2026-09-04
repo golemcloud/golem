@@ -19,7 +19,7 @@ use crate::durable_host::durable_session::{
 use crate::durable_host::durable_stream::ProducerRegistrationRequestV1;
 use crate::durable_host::stream_session::{
     decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
-    remap_recursive_stream_references,
+    encode_recursive_stream_value_with_schema,
 };
 use crate::grpc::invocation::{CanStartWorker, from_proto_invocation_context};
 use crate::services::{HasAll, HasComponentService, HasSchedulerService, UsesAllDeps};
@@ -124,6 +124,18 @@ struct AcceptedInvocation {
     durable_streams: Option<DurableSessionStreams>,
     prepared: Option<golem_common::model::durable_stream::StreamSessionPreparedRecordV1>,
     durable_replayed: bool,
+}
+
+struct TransportStreamId(u64);
+
+pub(crate) fn decode_invocation_input(
+    input: golem_api_grpc::proto::golem::schema::SchemaValue,
+) -> Result<SchemaValue, String> {
+    decode_recursive_stream_value(input, |stream_id, _| {
+        Ok(SchemaValueStream::from_host_endpoint(TransportStreamId(
+            stream_id,
+        )))
+    })
 }
 
 async fn detach_durable_attachment(streams: Option<DurableSessionStreams>) {
@@ -273,7 +285,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: &InvocationStart,
         method_parameters: Option<SchemaValue>,
-        durable_input: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
+        input_encoded_len: Option<usize>,
         acceptance_committed: tokio::sync::oneshot::Sender<()>,
         accepted: tokio::sync::oneshot::Sender<AcceptedInvocation>,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
@@ -400,15 +412,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .limit_invocation_context_stack_depth(from_proto_invocation_context(&request.context));
         let worker_creation_principal = principal.clone();
 
-        let invocation = AgentInvocation::AgentMethod {
-            idempotency_key: ik.clone(),
-            method_name: method_name.clone(),
-            input: method_parameters.clone(),
-            invocation_context,
-            principal,
-            scope_card,
-        };
-
         match mode {
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await => {
                 let worker = self
@@ -466,10 +469,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 };
                 let accepted_revision =
                     (worker.agent_mode() == AgentMode::Ephemeral).then_some(component.revision);
+                let invocation = AgentInvocation::AgentMethod {
+                    idempotency_key: ik.clone(),
+                    method_name: method_name.clone(),
+                    input: method_parameters,
+                    invocation_context,
+                    principal,
+                    scope_card,
+                };
                 let mut invocation_output = if streaming {
-                    let durable_input = durable_input.ok_or_else(|| {
+                    let input_encoded_len = input_encoded_len.ok_or_else(|| {
                         WorkerExecutorError::invalid_request(
-                            "durable streaming invocation is missing its canonical input",
+                            "durable streaming invocation is missing its encoded input length",
                         )
                     })?;
                     let request = build_durable_streaming_request(
@@ -477,8 +488,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         &component.metadata,
                         component.revision,
                         worker.get_initial_worker_metadata().fingerprint,
-                        invocation.clone(),
-                        durable_input,
+                        invocation,
+                        input_encoded_len,
                         acceptance_committed,
                         self.services
                             .config()
@@ -556,6 +567,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         "live streams require an attached Await invocation session",
                     ));
                 }
+                let invocation = AgentInvocation::AgentMethod {
+                    idempotency_key: ik.clone(),
+                    method_name,
+                    input: method_parameters,
+                    invocation_context,
+                    principal,
+                    scope_card,
+                };
 
                 match schedule_at {
                     Some(scheduled_time) => {
@@ -700,7 +719,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             return;
         }
         let first = first.request.expect("validated request has a payload");
-        let start = match first {
+        let mut start = match first {
             invocation_request::Request::Start(start) => start,
             invocation_request::Request::ResumeAttach(resume) => {
                 self.run_resumed_agent_session(resume, inbound, outward, state)
@@ -729,15 +748,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         });
 
+        let input_encoded_len = start.input.as_ref().map(Message::encoded_len);
         let input =
             if start.mode() == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup {
                 Ok(None)
             } else {
-                match start.input.clone() {
-                    Some(input) => decode_recursive_stream_value(input, |_, _| {
-                        Ok(SchemaValueStream::from_host_endpoint(()))
-                    })
-                    .map(Some),
+                match start.input.take() {
+                    Some(input) => decode_invocation_input(input).map(Some),
                     None => Err("invocation start has no input".to_string()),
                 }
             };
@@ -763,7 +780,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let invocation = self.invoke_agent_internal(
             &start,
             input,
-            start.input.clone(),
+            input_encoded_len,
             acceptance_committed_tx,
             accepted_tx,
         );
@@ -1791,7 +1808,7 @@ pub(crate) fn build_durable_streaming_request(
     component_revision: ComponentRevision,
     callee_fingerprint: golem_common::model::AgentFingerprint,
     invocation: AgentInvocation,
-    durable_input: golem_api_grpc::proto::golem::schema::SchemaValue,
+    input_encoded_len: usize,
     acceptance_committed: tokio::sync::oneshot::Sender<()>,
     live_join_buffer_events: usize,
 ) -> Result<DurableStreamingInvocationRequest, WorkerExecutorError> {
@@ -1858,6 +1875,14 @@ pub(crate) fn build_durable_streaming_request(
             })
             .collect(),
     );
+    let invocation_input = match &invocation {
+        AgentInvocation::AgentMethod { input, .. } => input,
+        _ => {
+            return Err(WorkerExecutorError::invalid_request(
+                "durable streaming request requires an agent method invocation",
+            ));
+        }
+    };
     let session_key = StreamInvocationIdV1 {
         callee_environment_id: environment_id,
         callee: callee.clone(),
@@ -1871,7 +1896,7 @@ pub(crate) fn build_durable_streaming_request(
         attachment_id,
         role: SessionStreamRoleV1::Input,
     };
-    if durable_input.encoded_len() > MAX_DURABLE_STREAM_ITEM_SIZE {
+    if input_encoded_len > MAX_DURABLE_STREAM_ITEM_SIZE {
         return Err(WorkerExecutorError::invalid_request(
             "ResourceExhausted: durable invocation input exceeds the 16 MiB logical value limit",
         ));
@@ -1903,51 +1928,59 @@ pub(crate) fn build_durable_streaming_request(
     }
     let mut input_element_types = Vec::new();
     let mut canonical_foreign_mappings = Vec::new();
-    decode_recursive_stream_value_with_schema(
-        durable_input.clone(),
+    let mut canonical_handle_index = 0u64;
+    let canonical_input = encode_recursive_stream_value_with_schema(
+        invocation_input,
         &agent_type.schema,
         &input_root,
-        |transport_stream_id, path| {
-        let element = stream_element_schema(&agent_type.schema, &input_root, path)?;
-        let element_schema_fingerprint = schema_fingerprint_v1(&agent_type.schema, element)
-            .map_err(|error| error.to_string())?;
-        input_element_types.push((
-            transport_stream_id,
-            element.cloned().unwrap_or_else(SchemaType::u8),
-        ));
-        if foreign_mappings.is_empty() {
-            registrations.push((
+        |stream, path| {
+            let transport_stream_id = stream
+                .with_host_endpoint::<TransportStreamId, _>(|stream_id| stream_id.0)?;
+            let element = stream_element_schema(&agent_type.schema, &input_root, path)?;
+            let element_schema_fingerprint = schema_fingerprint_v1(&agent_type.schema, element)
+                .map_err(|error| error.to_string())?;
+            input_element_types.push((
                 transport_stream_id,
-                ProducerRegistrationRequestV1 {
-                    coordinate: StreamRegistrationCoordinateV1::Root {
-                        invocation_id: session_key.clone(),
-                        root_kind: StreamRootKindV1::MethodInput,
-                        recursive_value_path: path.to_vec(),
-                    },
-                    source_kind: StreamSourceKindV1::ExternalInlineInput,
-                    source_invocation: session_key.clone(),
-                    component_revision,
-                    element_schema_fingerprint,
-                    session_mapping: Some(session_mapping.clone()),
-                },
+                element.cloned().unwrap_or_else(SchemaType::u8),
             ));
-        } else {
-            let mapping = foreign_by_transport
-                .get(&transport_stream_id)
-                .ok_or_else(|| {
-                    format!(
-                        "durable invocation input references unmapped transport stream {transport_stream_id}"
-                    )
-                })?
-                .clone();
-            if mapping.handle.element_schema_fingerprint != element_schema_fingerprint {
-                return Err(format!(
-                    "durable invocation input stream {transport_stream_id} has the wrong schema fingerprint"
+            if foreign_mappings.is_empty() {
+                registrations.push((
+                    transport_stream_id,
+                    ProducerRegistrationRequestV1 {
+                        coordinate: StreamRegistrationCoordinateV1::Root {
+                            invocation_id: session_key.clone(),
+                            root_kind: StreamRootKindV1::MethodInput,
+                            recursive_value_path: path.to_vec(),
+                        },
+                        source_kind: StreamSourceKindV1::ExternalInlineInput,
+                        source_invocation: session_key.clone(),
+                        component_revision,
+                        element_schema_fingerprint,
+                        session_mapping: Some(session_mapping.clone()),
+                    },
                 ));
+            } else {
+                let mapping = foreign_by_transport
+                    .get(&transport_stream_id)
+                    .ok_or_else(|| {
+                        format!(
+                            "durable invocation input references unmapped transport stream {transport_stream_id}"
+                        )
+                    })?
+                    .clone();
+                if mapping.handle.element_schema_fingerprint != element_schema_fingerprint {
+                    return Err(format!(
+                        "durable invocation input stream {transport_stream_id} has the wrong schema fingerprint"
+                    ));
+                }
+                canonical_foreign_mappings.push(mapping);
             }
-            canonical_foreign_mappings.push(mapping);
-        }
-            Ok(SchemaValueStream::from_host_endpoint(()))
+
+            let index = canonical_handle_index;
+            canonical_handle_index = canonical_handle_index
+                .checked_add(1)
+                .ok_or_else(|| "durable input handle index overflow".to_string())?;
+            Ok(index)
         },
     )
     .map_err(WorkerExecutorError::invalid_request)?;
@@ -1976,15 +2009,6 @@ pub(crate) fn build_durable_streaming_request(
             "ResourceExhausted: durable invocation input materializes more than 256 streams",
         ));
     }
-    let mut canonical_handle_index = 0u64;
-    let canonical_input = remap_recursive_stream_references(durable_input, |_, _| {
-        let index = canonical_handle_index;
-        canonical_handle_index = canonical_handle_index
-            .checked_add(1)
-            .ok_or_else(|| "durable input handle index overflow".to_string())?;
-        Ok(index)
-    })
-    .map_err(WorkerExecutorError::invalid_request)?;
     if canonical_handle_index != expected_handle_count as u64 {
         return Err(WorkerExecutorError::invalid_request(
             "durable invocation input stream topology changed during canonicalization",
@@ -2749,9 +2773,15 @@ async fn route_durable_request(
 #[cfg(test)]
 mod freshness_tests {
     use super::{
-        AcceptanceRace, decode_invocation_freshness_disposition, effective_session_identity,
-        is_attachment_termination, pre_acceptance_rejection_reason, race_invocation_acceptance,
-        require_expected_callee_fingerprint,
+        AcceptanceRace, TransportStreamId, build_durable_streaming_request,
+        decode_invocation_freshness_disposition, decode_invocation_input,
+        effective_session_identity, is_attachment_termination, pre_acceptance_rejection_reason,
+        race_invocation_acceptance, require_expected_callee_fingerprint,
+    };
+    use crate::durable_host::durable_session::durable_stream_mapping_to_proto;
+    use crate::durable_host::stream_session::{
+        decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
+        encode_recursive_stream_value_with_schema, remap_recursive_stream_references,
     };
     use futures::future;
     use golem_api_grpc::proto::golem::account::PlanId;
@@ -2759,12 +2789,545 @@ mod freshness_tests {
         AuthCtx, AuthEffectiveSurface, UserAuthCtx, auth_ctx,
     };
     use golem_api_grpc::proto::golem::common::{AccountId, Uuid};
-    use golem_api_grpc::proto::golem::worker::InvocationRejectionReason;
-    use golem_common::model::AgentFingerprint;
-    use golem_common::model::agent::InvocationFreshnessDisposition;
+    use golem_api_grpc::proto::golem::schema::{
+        BinaryValue, SchemaValue as ProtoSchemaValue, schema_value as proto_schema_value,
+    };
+    use golem_api_grpc::proto::golem::worker::{InvocationRejectionReason, InvocationStart};
+    use golem_common::base_model::Empty;
+    use golem_common::base_model::agent::Snapshotting;
+    use golem_common::base_model::component::{ComponentId, ComponentRevision};
+    use golem_common::base_model::component_metadata::{ComponentMetadata, KnownExports};
+    use golem_common::base_model::durable_stream::{
+        DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandleV1, MAX_DURABLE_STREAM_ITEM_SIZE,
+        SessionStreamRoleV1, StreamId, StreamInvocationIdV1, StreamMapSideV1,
+        StreamSessionMappingRecordV1, StreamValuePathStepV1,
+    };
+    use golem_common::base_model::environment::EnvironmentId;
+    use golem_common::model::agent::{
+        AgentMode, AgentTypeName, InvocationFreshnessDisposition, Principal,
+    };
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::{AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey};
+    use golem_common::schema::SchemaValue;
+    use golem_common::schema::agent::{
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
+        OutputSchema,
+    };
+    use golem_schema::schema::schema_value::{ResultValuePayload, UnionValuePayload};
+    use golem_schema::schema::{
+        DiscriminatorRule, FieldDiscriminator, NamedFieldType, ResultSpec, SchemaFingerprintV1,
+        SchemaGraph, SchemaType, SchemaTypeDef, SchemaValueStream, TypeId, UnionBranch, UnionSpec,
+        VariantCaseType, schema_fingerprint_v1,
+    };
     use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use prost::Message;
+    use std::collections::BTreeMap;
     use std::task::Poll;
     use test_r::test;
+
+    #[test]
+    fn invocation_input_decode_moves_binary_payload() {
+        let bytes = vec![7; 1024];
+        let bytes_ptr = bytes.as_ptr();
+        let input = ProtoSchemaValue {
+            value: Some(proto_schema_value::Value::BinaryValue(BinaryValue {
+                bytes,
+                mime_type: None,
+            })),
+        };
+
+        let decoded = decode_invocation_input(input).unwrap();
+        let SchemaValue::Binary(binary) = decoded else {
+            panic!("expected binary input")
+        };
+
+        assert_eq!(binary.bytes.as_ptr(), bytes_ptr);
+    }
+
+    #[test]
+    fn one_pass_input_canonicalization_matches_two_pass_traversal() {
+        fn field(name: &str, body: SchemaType) -> NamedFieldType {
+            NamedFieldType {
+                name: name.to_string(),
+                body,
+                metadata: Default::default(),
+            }
+        }
+
+        let map_type_id = TypeId::new("stream-map");
+        let union = SchemaType::union(UnionSpec {
+            branches: vec![
+                UnionBranch {
+                    tag: "plain".to_string(),
+                    body: SchemaType::record(vec![field("kind", SchemaType::string())]),
+                    discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
+                        field_name: "kind".to_string(),
+                        literal: Some("plain".to_string()),
+                    }),
+                    metadata: Default::default(),
+                },
+                UnionBranch {
+                    tag: "stream".to_string(),
+                    body: SchemaType::record(vec![
+                        field("kind", SchemaType::string()),
+                        field("values", SchemaType::stream(Some(SchemaType::u64()))),
+                    ]),
+                    discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
+                        field_name: "kind".to_string(),
+                        literal: Some("stream".to_string()),
+                    }),
+                    metadata: Default::default(),
+                },
+            ],
+        });
+        let root = SchemaType::record(vec![
+            field("mapping", SchemaType::ref_to(map_type_id.clone())),
+            field(
+                "variant",
+                SchemaType::variant(vec![
+                    VariantCaseType {
+                        name: "none".to_string(),
+                        payload: None,
+                        metadata: Default::default(),
+                    },
+                    VariantCaseType {
+                        name: "some".to_string(),
+                        payload: Some(SchemaType::option(SchemaType::stream(Some(
+                            SchemaType::string(),
+                        )))),
+                        metadata: Default::default(),
+                    },
+                ]),
+            ),
+            field(
+                "result",
+                SchemaType::result(ResultSpec {
+                    ok: Some(Box::new(SchemaType::u64())),
+                    err: Some(Box::new(SchemaType::stream(Some(SchemaType::string())))),
+                }),
+            ),
+            field("union", union),
+        ]);
+        let graph = SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: map_type_id,
+                name: None,
+                body: SchemaType::map(
+                    SchemaType::stream(Some(SchemaType::u64())),
+                    SchemaType::stream(Some(SchemaType::string())),
+                ),
+            }],
+            root: root.clone(),
+        };
+        let input = SchemaValue::Record {
+            fields: vec![
+                SchemaValue::Map {
+                    entries: vec![(
+                        SchemaValue::Stream(SchemaValueStream::from_host_endpoint(101_u64)),
+                        SchemaValue::Stream(SchemaValueStream::from_host_endpoint(7_u64)),
+                    )],
+                },
+                SchemaValue::Variant(golem_schema::schema::schema_value::VariantValuePayload {
+                    case: 1,
+                    payload: Some(Box::new(SchemaValue::Option {
+                        inner: Some(Box::new(SchemaValue::Stream(
+                            SchemaValueStream::from_host_endpoint(55_u64),
+                        ))),
+                    })),
+                }),
+                SchemaValue::Result(ResultValuePayload::Err {
+                    value: Some(Box::new(SchemaValue::Stream(
+                        SchemaValueStream::from_host_endpoint(300_u64),
+                    ))),
+                }),
+                SchemaValue::Union(UnionValuePayload {
+                    tag: "stream".to_string(),
+                    body: Box::new(SchemaValue::Record {
+                        fields: vec![
+                            SchemaValue::String("stream".to_string()),
+                            SchemaValue::Stream(SchemaValueStream::from_host_endpoint(2_u64)),
+                        ],
+                    }),
+                }),
+            ],
+        };
+        let original =
+            encode_recursive_stream_value_with_schema(&input, &graph, &root, |stream, _| {
+                stream.with_host_endpoint::<u64, _>(|stream_id| *stream_id)
+            })
+            .unwrap();
+
+        let mut old_observations = Vec::new();
+        decode_recursive_stream_value_with_schema(
+            original.clone(),
+            &graph,
+            &root,
+            |stream_id, path| {
+                old_observations.push((stream_id, path.to_vec()));
+                Ok(SchemaValueStream::from_host_endpoint(()))
+            },
+        )
+        .unwrap();
+        let mut old_index = 0_u64;
+        let old_canonical = remap_recursive_stream_references(original.clone(), |_, _| {
+            let index = old_index;
+            old_index += 1;
+            Ok(index)
+        })
+        .unwrap();
+
+        let decoded = decode_invocation_input(original).unwrap();
+        let canonicalize = |decoded: &SchemaValue| {
+            let mut observations = Vec::new();
+            let mut index = 0_u64;
+            let canonical = encode_recursive_stream_value_with_schema(
+                decoded,
+                &graph,
+                &root,
+                |stream, path| {
+                    let stream_id = stream
+                        .with_host_endpoint::<TransportStreamId, _>(|stream_id| stream_id.0)?;
+                    observations.push((stream_id, path.to_vec()));
+                    let canonical = index;
+                    index += 1;
+                    Ok(canonical)
+                },
+            )
+            .unwrap();
+            (canonical, observations)
+        };
+        let (new_canonical, new_observations) = canonicalize(&decoded);
+
+        assert_eq!(new_canonical, old_canonical);
+        assert_eq!(new_observations, old_observations);
+        assert_eq!(
+            new_observations,
+            vec![
+                (
+                    101,
+                    vec![
+                        StreamValuePathStepV1::RecordField(0),
+                        StreamValuePathStepV1::MapEntry {
+                            index: 0,
+                            side: StreamMapSideV1::Key,
+                        },
+                    ],
+                ),
+                (
+                    7,
+                    vec![
+                        StreamValuePathStepV1::RecordField(0),
+                        StreamValuePathStepV1::MapEntry {
+                            index: 0,
+                            side: StreamMapSideV1::Value,
+                        },
+                    ],
+                ),
+                (
+                    55,
+                    vec![
+                        StreamValuePathStepV1::RecordField(1),
+                        StreamValuePathStepV1::VariantCasePayload(1),
+                        StreamValuePathStepV1::OptionSome,
+                    ],
+                ),
+                (
+                    300,
+                    vec![
+                        StreamValuePathStepV1::RecordField(2),
+                        StreamValuePathStepV1::ResultErr,
+                    ],
+                ),
+                (
+                    2,
+                    vec![
+                        StreamValuePathStepV1::RecordField(3),
+                        StreamValuePathStepV1::UnionBranch(1),
+                        StreamValuePathStepV1::RecordField(1),
+                    ],
+                ),
+            ]
+        );
+        assert_eq!(canonicalize(&decoded).0, old_canonical);
+    }
+
+    fn builder_fixture() -> (InvocationStart, ComponentMetadata, AgentInvocation) {
+        let mapping_type = SchemaType::map(
+            SchemaType::stream(Some(SchemaType::u64())),
+            SchemaType::stream(Some(SchemaType::string())),
+        );
+        let tail_type = SchemaType::stream(Some(SchemaType::bool()));
+        let method = AgentMethodSchema {
+            name: "run".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![
+                NamedField::user_supplied("mapping", mapping_type),
+                NamedField::user_supplied("tail", tail_type),
+            ]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: Vec::new(),
+            read_only: None,
+        };
+        let metadata = ComponentMetadata::from_parts(
+            KnownExports::default(),
+            Vec::new(),
+            None,
+            None,
+            vec![AgentTypeSchema {
+                type_name: AgentTypeName("test-agent".to_string()),
+                description: String::new(),
+                source_language: String::new(),
+                schema: SchemaGraph::empty(),
+                constructor: AgentConstructorSchema {
+                    name: None,
+                    description: String::new(),
+                    prompt_hint: None,
+                    input_schema: InputSchema::Parameters(Vec::new()),
+                },
+                methods: vec![method],
+                dependencies: Vec::new(),
+                mode: AgentMode::Durable,
+                http_mount: None,
+                snapshotting: Snapshotting::Disabled(Empty {}),
+                config: Vec::new(),
+            }],
+            BTreeMap::new(),
+        );
+        let component_id = ComponentId(uuid::Uuid::from_u128(1));
+        let environment_id = EnvironmentId(uuid::Uuid::from_u128(2));
+        let callee = AgentId {
+            component_id,
+            agent_id: "test-agent()".to_string(),
+        };
+        let idempotency_key = IdempotencyKey::new("test-key".to_string());
+        let fingerprint = AgentFingerprint(uuid::Uuid::from_u128(3));
+        let request = InvocationStart {
+            agent_id: Some(callee.into()),
+            method_name: Some("run".to_string()),
+            idempotency_key: Some(idempotency_key.clone().into()),
+            environment_id: Some(environment_id.into()),
+            attempt_id: Some(uuid::Uuid::new_v4().into()),
+            expected_callee_fingerprint: Some(fingerprint.0.into()),
+            ..Default::default()
+        };
+        let invocation = AgentInvocation::AgentMethod {
+            idempotency_key,
+            method_name: "run".to_string(),
+            input: SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::Map {
+                        entries: vec![(
+                            SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                                TransportStreamId(101),
+                            )),
+                            SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                                TransportStreamId(7),
+                            )),
+                        )],
+                    },
+                    SchemaValue::Stream(SchemaValueStream::from_host_endpoint(TransportStreamId(
+                        55,
+                    ))),
+                ],
+            },
+            invocation_context: InvocationContextStack::fresh(),
+            principal: Principal::anonymous(),
+            scope_card: None,
+        };
+        (request, metadata, invocation)
+    }
+
+    fn foreign_mapping(
+        transport_stream_id: u64,
+        element_schema_fingerprint: SchemaFingerprintV1,
+        request: &InvocationStart,
+    ) -> StreamSessionMappingRecordV1 {
+        let environment_id: EnvironmentId = request.environment_id.unwrap().try_into().unwrap();
+        let callee: AgentId = request.agent_id.clone().unwrap().try_into().unwrap();
+        let callee_fingerprint =
+            AgentFingerprint(request.expected_callee_fingerprint.unwrap().into());
+        let idempotency_key = request.idempotency_key.clone().unwrap().into();
+        StreamSessionMappingRecordV1 {
+            transport_stream_id,
+            handle: DurableStreamHandleV1 {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                stream_id: StreamId(uuid::Uuid::from_u128(
+                    1_000 + u128::from(transport_stream_id),
+                )),
+                producer_environment_id: environment_id,
+                producer: callee.clone(),
+                expected_producer_fingerprint: callee_fingerprint,
+                source_invocation: StreamInvocationIdV1 {
+                    callee_environment_id: environment_id,
+                    callee,
+                    callee_fingerprint,
+                    idempotency_key,
+                },
+                component_revision: ComponentRevision::INITIAL,
+                element_schema_fingerprint,
+            },
+            role: SessionStreamRoleV1::Input,
+        }
+    }
+
+    #[test]
+    fn durable_request_builder_preserves_size_precedence_and_stream_metadata_order() {
+        let (mut request, metadata, invocation) = builder_fixture();
+        request.durable_input_mappings.push(Default::default());
+        let (acceptance_committed, _) = tokio::sync::oneshot::channel();
+        let error = match build_durable_streaming_request(
+            &request,
+            &metadata,
+            ComponentRevision::INITIAL,
+            AgentFingerprint(uuid::Uuid::from_u128(3)),
+            invocation,
+            MAX_DURABLE_STREAM_ITEM_SIZE + 1,
+            acceptance_committed,
+            8,
+        ) {
+            Ok(_) => panic!("oversized input must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("input exceeds the 16 MiB logical value limit")
+        );
+
+        let (request, metadata, invocation) = builder_fixture();
+        let (acceptance_committed, _) = tokio::sync::oneshot::channel();
+        let built = build_durable_streaming_request(
+            &request,
+            &metadata,
+            ComponentRevision::INITIAL,
+            AgentFingerprint(uuid::Uuid::from_u128(3)),
+            invocation,
+            1,
+            acceptance_committed,
+            8,
+        )
+        .unwrap();
+        let expected_paths = [
+            vec![
+                StreamValuePathStepV1::RecordField(0),
+                StreamValuePathStepV1::MapEntry {
+                    index: 0,
+                    side: StreamMapSideV1::Key,
+                },
+            ],
+            vec![
+                StreamValuePathStepV1::RecordField(0),
+                StreamValuePathStepV1::MapEntry {
+                    index: 0,
+                    side: StreamMapSideV1::Value,
+                },
+            ],
+            vec![StreamValuePathStepV1::RecordField(1)],
+        ];
+        assert_eq!(
+            built
+                .registrations
+                .iter()
+                .map(|(transport_stream_id, registration)| {
+                    let path = match &registration.coordinate {
+                        super::StreamRegistrationCoordinateV1::Root {
+                            recursive_value_path,
+                            ..
+                        } => recursive_value_path.clone(),
+                        _ => panic!("expected a root registration"),
+                    };
+                    (
+                        *transport_stream_id,
+                        path,
+                        registration.element_schema_fingerprint,
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    101,
+                    expected_paths[0].clone(),
+                    schema_fingerprint_v1(&SchemaGraph::empty(), Some(&SchemaType::u64())).unwrap(),
+                ),
+                (
+                    7,
+                    expected_paths[1].clone(),
+                    schema_fingerprint_v1(&SchemaGraph::empty(), Some(&SchemaType::string()))
+                        .unwrap(),
+                ),
+                (
+                    55,
+                    expected_paths[2].clone(),
+                    schema_fingerprint_v1(&SchemaGraph::empty(), Some(&SchemaType::bool()))
+                        .unwrap(),
+                ),
+            ]
+        );
+        assert_eq!(
+            built.input_element_types,
+            vec![
+                (101, SchemaType::u64()),
+                (7, SchemaType::string()),
+                (55, SchemaType::bool()),
+            ]
+        );
+        let canonical =
+            ProtoSchemaValue::decode(built.attempt.invocation.invocation_value.as_slice()).unwrap();
+        let mut canonical_ids = Vec::new();
+        decode_recursive_stream_value(canonical, |stream_id, _| {
+            canonical_ids.push(stream_id);
+            Ok(SchemaValueStream::from_host_endpoint(()))
+        })
+        .unwrap();
+        assert_eq!(canonical_ids, vec![0, 1, 2]);
+
+        let (mut request, metadata, invocation) = builder_fixture();
+        let fingerprints = [
+            schema_fingerprint_v1(&SchemaGraph::empty(), Some(&SchemaType::u64())).unwrap(),
+            schema_fingerprint_v1(&SchemaGraph::empty(), Some(&SchemaType::string())).unwrap(),
+            schema_fingerprint_v1(&SchemaGraph::empty(), Some(&SchemaType::bool())).unwrap(),
+        ];
+        let mappings = [
+            foreign_mapping(55, fingerprints[2], &request),
+            foreign_mapping(101, fingerprints[0], &request),
+            foreign_mapping(7, fingerprints[1], &request),
+        ];
+        request.durable_input_mappings = mappings
+            .iter()
+            .map(|mapping| durable_stream_mapping_to_proto(mapping, None))
+            .collect();
+        let (acceptance_committed, _) = tokio::sync::oneshot::channel();
+        let built = build_durable_streaming_request(
+            &request,
+            &metadata,
+            ComponentRevision::INITIAL,
+            AgentFingerprint(uuid::Uuid::from_u128(3)),
+            invocation,
+            1,
+            acceptance_committed,
+            8,
+        )
+        .unwrap();
+
+        assert!(built.registrations.is_empty());
+        assert_eq!(
+            built
+                .foreign_mappings
+                .iter()
+                .map(|mapping| mapping.transport_stream_id)
+                .collect::<Vec<_>>(),
+            vec![101, 7, 55]
+        );
+        assert_eq!(
+            built.input_element_types,
+            vec![
+                (101, SchemaType::u64()),
+                (7, SchemaType::string()),
+                (55, SchemaType::bool()),
+            ]
+        );
+    }
 
     #[test]
     fn output_pump_distinguishes_attachment_termination_from_protocol_failure() {

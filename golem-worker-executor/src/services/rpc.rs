@@ -17,9 +17,8 @@ use super::direct_invocation_auth::DirectInvocationAuthService;
 use super::environment_state::EnvironmentStateService;
 use super::file_loader::FileLoader;
 use super::{HasAgentWebhooksService, HasEnvironmentStateService, HasWebSocketConnectionPool};
-use crate::durable_host::stream_session::decode_recursive_stream_value;
 use crate::durable_host::websocket::WebSocketConnectionPool;
-use crate::grpc::build_durable_streaming_request;
+use crate::grpc::{build_durable_streaming_request, decode_invocation_input};
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::resource_limits::ResourceLimits;
@@ -65,9 +64,9 @@ use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
 };
 use golem_common::schema::SchemaValue;
-use golem_schema::schema::SchemaValueStream;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
+use prost::Message;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
@@ -1475,10 +1474,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 Some(status.component_revision),
             )
             .await?;
-        let input = decode_recursive_stream_value(method_parameters.clone(), |_, _| {
-            Ok(SchemaValueStream::from_host_endpoint(()))
-        })
-        .map_err(|details| RpcError::ProtocolError { details })?;
+        let input_encoded_len = method_parameters.encoded_len();
+        let input = decode_invocation_input(method_parameters)
+            .map_err(|details| RpcError::ProtocolError { details })?;
         let parsed_agent_id =
             ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
                 .map_err(|details| RpcError::ProtocolError { details })?;
@@ -1497,7 +1495,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         let start = InvocationStart {
             agent_id: Some(owned_agent_id.agent_id().into()),
             method_name: Some(method_name.clone()),
-            input: Some(method_parameters.clone()),
+            input: None,
             idempotency_key: Some(idempotency_key.clone().into()),
             context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                 parent: Some(self_agent_id.clone().into()),
@@ -1538,7 +1536,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             component.revision,
             expected_callee_fingerprint,
             invocation,
-            method_parameters,
+            input_encoded_len,
             acceptance_committed,
             self.config()
                 .limits
