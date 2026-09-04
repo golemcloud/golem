@@ -68,6 +68,11 @@ use uuid::Uuid;
 
 const CHANNEL_CAPACITY: usize = 16;
 const WRITE_PROGRESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How long a session whose client half ended first waits for the private session to end before
+/// the WebSocket is closed. Ending the client half closes the private request stream, and the
+/// executor persists the durable transport detach before it ends the private response stream, so
+/// a client that resumes right after the close handshake completes finds the session detached.
+const CLIENT_GONE_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const SESSION_BYTE_BUDGET: usize = 64 * 1024 * 1024;
 const OUTPUT_BYTE_BUDGET: usize = 32 * 1024 * 1024;
 const INPUT_UNACKNOWLEDGED_BYTE_BUDGET: usize = 16 * 1024 * 1024;
@@ -810,8 +815,17 @@ pub async fn serve_public_invocation_session(
     };
     let writer_budgets = budgets.clone();
     let writer = tokio::spawn(async move {
+        // A queued close frame is held back and sent as the final frame once the session ends,
+        // so the client cannot observe the close handshake before the private session has been
+        // drained. Everything queued after a close frame is dropped.
+        let mut pending_close = None;
+        let mut sink_open = true;
         while let Some(message) = outbound_rx.recv().await {
-            if message.should_drop(&writer_budgets).await {
+            if !sink_open || pending_close.is_some() || message.should_drop(&writer_budgets).await {
+                continue;
+            }
+            if message.message.is_close() {
+                pending_close = Some(message.message);
                 continue;
             }
             if !matches!(
@@ -819,9 +833,15 @@ pub async fn serve_public_invocation_session(
                     .await,
                 Ok(Ok(()))
             ) {
-                return;
+                sink_open = false;
             }
         }
+        if let Some(close) = pending_close
+            && sink_open
+        {
+            let _ = tokio::time::timeout(WRITE_PROGRESS_TIMEOUT, websocket_sink.send(close)).await;
+        }
+        let _ = tokio::time::timeout(WRITE_PROGRESS_TIMEOUT, websocket_sink.close()).await;
     });
     let bindings = token_bindings(&auth);
     let initial = match receive_initial(
@@ -950,7 +970,9 @@ pub async fn serve_public_invocation_session(
         );
         tokio::pin!(client, server);
         tokio::select! {
-            _ = &mut client => {}
+            _ = &mut client => {
+                let _ = tokio::time::timeout(CLIENT_GONE_DRAIN_TIMEOUT, &mut server).await;
+            }
             _ = &mut server => {}
         }
     }

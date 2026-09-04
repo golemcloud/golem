@@ -379,10 +379,25 @@ impl TrustedInvocationSession {
         method_name: &str,
         input: ProtoSchemaValue,
     ) -> anyhow::Result<Self> {
+        Self::start_with(deps, component, agent_id, method_name, input, true).await
+    }
+
+    async fn start_with(
+        deps: &EnvBasedTestDependencies,
+        component: &ComponentDto,
+        agent_id: &ParsedAgentId,
+        method_name: &str,
+        input: ProtoSchemaValue,
+        ephemeral: bool,
+    ) -> anyhow::Result<Self> {
         let idempotency_key = IdempotencyKey::fresh();
-        let agent_id = agent_id
-            .with_ephemeral_invocation_phantom(&idempotency_key)
-            .map_err(|error| anyhow::anyhow!("invalid ephemeral agent id: {error}"))?;
+        let agent_id = if ephemeral {
+            agent_id
+                .with_ephemeral_invocation_phantom(&idempotency_key)
+                .map_err(|error| anyhow::anyhow!("invalid ephemeral agent id: {error}"))?
+        } else {
+            agent_id.clone()
+        };
         let agent_id = AgentId::from_agent_id(component.id, &agent_id)
             .map_err(|error| anyhow::anyhow!("invalid agent id: {error}"))?;
         let (requests, receiver) = mpsc::channel(32);
@@ -400,9 +415,13 @@ impl TrustedInvocationSession {
                 component_owner_account_id: None,
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 schedule_at: None,
-                freshness_disposition:
+                freshness_disposition: if ephemeral {
                     golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh
-                        as i32,
+                        as i32
+                } else {
+                    golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                        as i32
+                },
                 attempt_id: Some(uuid::Uuid::new_v4().into()),
                 expected_callee_fingerprint: None,
                 durable_input_mappings: Vec::new(),
@@ -942,6 +961,62 @@ async fn grpc_invocation_session_routes_resume_and_takeover(
         assert!(responses.message().await?.is_none());
         assert!(state.is_complete());
     }
+    Ok(())
+}
+
+/// A durable guest that drops its input immediately makes the executor emit an input-consumer
+/// cancellation once the invocation completes, while the producer has already pushed every item
+/// and its end frame through the worker service. Both the worker-service proxy and the client
+/// must accept the consumer cancellation arriving after the producer terminal they already
+/// forwarded, and the invocation must still complete with the guest's result.
+#[test]
+#[timeout("4 minutes")]
+#[tracing::instrument]
+async fn dropped_durable_input_completes_while_producer_items_and_end_are_in_flight(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, environment) = user.app_and_env().await?;
+    let component = user
+        .component(&environment.id, "golem_it_agent_rpc_rust_release")
+        .name("golem-it:agent-rpc-rust")
+        .unique()
+        .store()
+        .await?;
+    let target_agent_id = agent_id!(
+        "StreamingRpcTarget",
+        format!("drop-input-{}", uuid::Uuid::new_v4())
+    );
+    let input_id = 201;
+    let mut session = TrustedInvocationSession::start_with(
+        deps,
+        &component,
+        &target_agent_id,
+        "drop_input",
+        proto_record_values(vec![proto_stream(input_id)]),
+        false,
+    )
+    .await?;
+    for sequence in 0..64u64 {
+        session
+            .send_input_value(input_id, sequence, SchemaValue::U32(1))
+            .await?;
+    }
+    session.end_input(input_id, 64).await?;
+    let report = session.finish(TrustedInvocationReport::default()).await?;
+    let result = report
+        .successful_result()
+        .map_err(|error| anyhow::anyhow!("{error}; failure: {:?}", report.failure()))?;
+    assert_eq!(decode_proto_value(result)?, SchemaValue::U64(42));
+    assert!(
+        report
+            .stream_cancels
+            .iter()
+            .all(|cancel| cancel.transport_stream_id == input_id
+                && cancel.role == StreamCancelRole::InputConsumer as i32),
+        "unexpected stream cancellations: {:?}",
+        report.stream_cancels
+    );
     Ok(())
 }
 
