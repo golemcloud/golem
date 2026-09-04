@@ -1111,9 +1111,10 @@ fn degraded_findings(
         let after = report.cell(placement, Window::AfterFault)?.latency.p50_ms as f64;
         (baseline > 0.0).then(|| round2(100.0 * after / baseline))
     };
-    if let (Some(cross_after), Some(co_after)) =
-        (elevated(Placement::CrossPod), elevated(Placement::CoLocated))
-        && (cross_after >= floor || co_after >= floor)
+    if let (Some(cross_after), Some(co_after)) = (
+        elevated(Placement::CrossPod),
+        elevated(Placement::CoLocated),
+    ) && (cross_after >= floor || co_after >= floor)
     {
         findings.push(RelayFinding {
             violation: RelayViolation::RelayDidNotRecover,
@@ -1603,7 +1604,12 @@ mod tests {
     fn a_fault_whose_cost_outlived_it_is_a_finding() {
         let mut records = Vec::new();
         for second in (0..100).step_by(2) {
-            records.push(record_costing("cross-0", second, Some(second), CROSS_POD_MS));
+            records.push(record_costing(
+                "cross-0",
+                second,
+                Some(second),
+                CROSS_POD_MS,
+            ));
             records.push(record_costing("co-0", second, Some(second), CO_LOCATED_MS));
         }
         for second in (100..200).step_by(2) {
