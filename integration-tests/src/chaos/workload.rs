@@ -84,7 +84,7 @@ const EPHEMERAL_COUNTER_AGENT: &str = "EphemeralCounter";
 pub(crate) const SCHEDULE_EMITTER_AGENT: &str = "ScheduleEmitter";
 pub(crate) const SCHEDULE_COUNTER_AGENT: &str = "ScheduleCounter";
 const PROMISE_AGENT: &str = "PromiseAgent";
-const QUOTA_COUNTER_AGENT: &str = "QuotaCounter";
+pub(crate) const QUOTA_COUNTER_AGENT: &str = "QuotaCounter";
 
 /// How far ahead scheduled polls are registered. Long enough that registration
 /// and firing are distinct events (so a fault can land between them), short

@@ -58,6 +58,7 @@ use crate::chaos::reachability::ReachabilityReport;
 use crate::chaos::relay::RelayReport;
 use crate::chaos::resurrection::ResurrectionReport;
 use crate::chaos::rollback::RollbackReport;
+use crate::chaos::skew::SkewReport;
 use crate::chaos::truncation::TruncationReport;
 use crate::chaos::wakeups::WakeupReport;
 use serde::{Deserialize, Serialize};
@@ -588,6 +589,10 @@ pub struct ChaosSummary {
     /// off from each other. `None` everywhere else.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relay: Option<RelayReport>,
+    /// The clock-skew account, for the one scenario that moves an executor's
+    /// clock away from the rest of the cluster. `None` everywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skew: Option<SkewReport>,
     /// The truncation account, for scenarios that revert agent state. Absent
     /// for scenarios that do not, for the same reason as `scheduleFires`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -754,6 +759,7 @@ impl ChaosSummary {
             promise_wakeups: None,
             reachability: None,
             relay: None,
+            skew: None,
             truncation: None,
             resurrection: None,
             rollback: None,
@@ -845,6 +851,22 @@ impl ChaosSummary {
         self.attention.extend(report.attention_lines());
         self.notes.extend(report.note_lines());
         self.relay = Some(report);
+        self
+    }
+
+    /// Attaches the clock-skew account and hoists everything it wants a human
+    /// to see into [`Self::attention`].
+    ///
+    /// Same split as [`Self::with_relay`], for a sharper version of the same
+    /// reason. A skew changes nothing a pod can see about itself, so a run whose
+    /// injection silently failed produces the same clean report as one whose
+    /// injection landed and did no harm. The measured offset therefore goes into
+    /// the notes on every run, findings or not: it is the only line that says
+    /// the experiment happened.
+    pub fn with_skew(mut self, report: SkewReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.skew = Some(report);
         self
     }
 

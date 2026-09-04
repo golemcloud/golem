@@ -163,9 +163,10 @@ pub struct ChaosResult {
     /// The reachability workload the run was configured with, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<IsolationConfig>,
-    /// How the agents divided around the executor the partition cut off.
-    /// Present only for S3. Load-bearing for the same reason as
-    /// `promiseSelection`, and for one more: S3's whole verdict is a comparison
+    /// How the agents divided around the executor the fault was aimed at.
+    /// Present for S3, which cuts that executor off from worker-service, and
+    /// for S19, which moves its clock. Load-bearing for the same reason as
+    /// `promiseSelection`, and for one more: both verdicts are comparisons
     /// between the two groups, so a report without this cannot be re-checked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation_selection: Option<PodSplit>,

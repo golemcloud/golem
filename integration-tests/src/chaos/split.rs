@@ -469,6 +469,20 @@ pub fn delete_subject<'a>(ctx: &'a WorkloadContext) -> Subject<'a> {
     }
 }
 
+/// The counters component's quota agents, as S19 aims at them.
+///
+/// The quota stream rather than the durable one because the lease is the only
+/// thing on this platform that one machine mints and another judges, and a
+/// clock skew can only be seen where two clocks are compared.
+pub fn quota_subject<'a>(ctx: &'a WorkloadContext) -> Subject<'a> {
+    Subject {
+        scenario: "S19",
+        component: &ctx.counters,
+        agent_type: crate::chaos::workload::QUOTA_COUNTER_AGENT,
+        noun: "quota agents",
+    }
+}
+
 /// The promise component's waiters, as S11 aims at them.
 pub fn waiter_subject<'a>(ctx: &'a WorkloadContext) -> Subject<'a> {
     Subject {

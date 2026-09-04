@@ -118,33 +118,14 @@ use crate::chaos::scenarios::{
 use crate::chaos::scheduled::{self, ScheduledSelection};
 use crate::chaos::signal::{BaselineReady, FaultSignals, FaultTarget};
 use crate::chaos::summary::{AgentReadback, ChaosSummary, Note, TerminationReason};
-use crate::chaos::workload::{self, PhaseMarker, WorkloadContext};
-use crate::chaos::{ScenarioCode, ScenarioConfig, ScheduledConfig};
+use crate::chaos::workload::{PhaseMarker, WorkloadContext};
+use crate::chaos::{ScenarioCode, ScenarioConfig};
 use chrono::{DateTime, TimeDelta, Utc};
 use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::dsl::TestDsl;
 use std::collections::BTreeSet;
 use std::time::Duration;
 use tracing::{info, warn};
-
-/// Extra quiet after the last registration's action is due, before the fire
-/// logs are read.
-///
-/// The rest of the settle is derived from the configuration rather than fixed:
-/// the final registration falls due one `lead` after the workload stops, and if
-/// its executor died holding the claim, the recovery costs up to one lease
-/// budget on top. Reading before that elapsed would report actions as lost that
-/// were merely late, which is the one mistake this scenario cannot afford.
-const SETTLE_MARGIN: Duration = Duration::from_secs(30);
-
-/// How many targets to sample after the baseline to prove actions are firing at
-/// all.
-///
-/// A handful, because this is a smoke test rather than a measurement: if the
-/// scheduling path is broken, every target is equally broken, and the point is
-/// to fail before spending the fault window on a run that would report a clean
-/// account of nothing.
-const FIRE_PROOF_SAMPLE: usize = 5;
 
 pub async fn run(
     config: &ScenarioConfig,
@@ -298,7 +279,7 @@ pub async fn run(
     // Registering is not firing. A platform that accepted every registration and
     // scheduled none of them would otherwise reach read-back and report a
     // flawless account of a mechanism that never ran.
-    let sampled = sample_fire_count(&ctx, &targets).await;
+    let sampled = scheduled::sample_fire_count(&ctx, &targets).await;
     if sampled == 0 {
         warn!("S10: {baseline_operations} registrations accepted and no action has fired");
         handle.stop().await;
@@ -315,7 +296,7 @@ pub async fn run(
     info!(
         "S10: baseline complete ({baseline_operations} registrations, {sampled} fires across a \
          sample of {} targets)",
-        FIRE_PROOF_SAMPLE.min(targets.len())
+        scheduled::FIRE_PROOF_SAMPLE.min(targets.len())
     );
 
     // ── Verify ownership, then signal ───────────────────────────────────────
@@ -425,7 +406,7 @@ pub async fn run(
     routing_snapshots.push(snapshot_routing(deps, "after-recovery").await);
 
     // ── Account ─────────────────────────────────────────────────────────────
-    let settle = settle_before_readback(scheduled_config);
+    let settle = scheduled::settle_before_readback(scheduled_config);
     info!("S10: letting the last actions fall due and fire, {settle:?} before read-back");
     tokio::time::sleep(settle).await;
 
@@ -493,11 +474,6 @@ pub async fn run(
     };
 
     finish!(reason, &records, readback, Some(report));
-}
-
-/// How long to wait after the workload stops before reading the fire logs.
-fn settle_before_readback(config: &ScheduledConfig) -> Duration {
-    config.lead() + config.lease_budget() + SETTLE_MARGIN
 }
 
 /// Actions that were registered but not yet due when the executor died.
@@ -582,18 +558,6 @@ fn readback_from_polls(records: &[OperationRecord], logs: &[TargetFireLog]) -> V
             readback_for(Stream::Scheduled, &log.agent, scoped, observed)
         })
         .collect()
-}
-
-/// Reads the fire count of a few targets, to prove actions are firing at all.
-async fn sample_fire_count(ctx: &WorkloadContext, targets: &[String]) -> u64 {
-    let mut total = 0u64;
-    for target in targets.iter().take(FIRE_PROOF_SAMPLE) {
-        match workload::read_polls(ctx, target).await {
-            Ok(polls) => total += polls,
-            Err(e) => warn!("S10: could not sample fires on {target}: {e}"),
-        }
-    }
-    total
 }
 
 #[cfg(test)]
@@ -704,22 +668,5 @@ mod tests {
         assert!(!pending.needs_attention());
         assert_eq!(pending.note().level, NoteLevel::Context);
         assert!(pending.note().message.contains("353"));
-    }
-
-    /// The last registration falls due one lead after the workload stops, and a
-    /// recovery costs up to a lease on top. Reading before that would report
-    /// late actions as lost.
-    #[test]
-    fn the_settle_covers_a_full_lead_plus_a_full_lease_recovery() {
-        let config = ScheduledConfig {
-            targets: 100,
-            interval_millis: 2000,
-            lead_secs: 10,
-            lease_budget_secs: 45,
-        };
-        assert_eq!(
-            settle_before_readback(&config),
-            Duration::from_secs(10 + 45) + SETTLE_MARGIN
-        );
     }
 }

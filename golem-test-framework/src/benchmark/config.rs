@@ -291,6 +291,9 @@ pub enum ChaosScenarioArg {
     /// Worker-service CPU saturation while agents drive cross-pod RPC. S2's
     /// populations with the fault moved off the link and onto the relay.
     S21,
+    /// One executor's wall clock moved half a minute behind the cluster, where
+    /// the quota lease is the only contract two clocks are compared across.
+    S19,
 }
 
 /// Density subcommand action.

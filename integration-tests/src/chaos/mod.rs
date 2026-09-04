@@ -53,6 +53,7 @@ pub mod rollback;
 pub mod scenarios;
 pub mod scheduled;
 pub mod signal;
+pub mod skew;
 pub mod split;
 pub mod steady;
 pub mod summary;
@@ -175,6 +176,15 @@ pub enum ScenarioCode {
     /// A run where both populations slow down by the same amount saturated
     /// something else.
     S21,
+    /// One executor's wall clock moved half a minute behind the rest of the
+    /// cluster.
+    ///
+    /// A uniformly wrong clock is invisible to every comparison a pod makes
+    /// between two of its own readings, so the fault can only be seen where one
+    /// machine's clock is judged against another's. On this platform that is the
+    /// quota lease: the shard-manager mints `expires_at` and the executor decides
+    /// against it when to renew and whether the lease is already dead.
+    S19,
 }
 
 impl ScenarioCode {
@@ -205,13 +215,14 @@ impl ScenarioCode {
             ScenarioCode::MF1 => "MF1",
             ScenarioCode::MF1B => "MF1B",
             ScenarioCode::S21 => "S21",
+            ScenarioCode::S19 => "S19",
         }
     }
 
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 25] = [
+    pub const ALL: [ScenarioCode; 26] = [
         ScenarioCode::S1,
         ScenarioCode::S2,
         ScenarioCode::S3,
@@ -232,6 +243,7 @@ impl ScenarioCode {
         ScenarioCode::S16,
         ScenarioCode::S17,
         ScenarioCode::S18,
+        ScenarioCode::S19,
         ScenarioCode::S21,
         ScenarioCode::S22,
         ScenarioCode::S23,
@@ -714,6 +726,49 @@ pub struct RelayConfig {
     /// what turns the checks below from assertions into recorded context.
     #[serde(default)]
     pub expectation: relay::RelayExpectation,
+}
+
+/// Shape of the clock-skew scenario (GOL-383).
+///
+/// Three numbers and a count, and every one of them exists to stop the run
+/// passing for the wrong reason. A clock skew is the least self-evident fault in
+/// the suite: it changes nothing a pod can see about itself, so a run whose
+/// injection silently failed looks exactly like a run whose injection landed and
+/// did no harm. The tolerance and the probe count are what separate those two.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkewConfig {
+    /// What the workflow asks Chaos Mesh to do to the pod's clock, in
+    /// milliseconds. Negative for a clock set behind, which is the only
+    /// direction that produces a disagreement — see [`skew`].
+    ///
+    /// Mirrored here rather than read from the manifest because the driver never
+    /// touches Kubernetes. It is what the report is judged against, so a value
+    /// that disagrees with the manifest fails the run on
+    /// [`skew::SkewViolation::ClockNeverMoved`] rather than passing quietly.
+    pub injected_offset_ms: i64,
+    /// How far the measured offset may sit from the injected one before the run
+    /// is treated as having failed to inject anything.
+    ///
+    /// Absorbs the probe's own round trip and the ordinary difference between a
+    /// GitHub runner's clock and an EC2 node's. It has to stay well under the
+    /// offset itself: a tolerance at or above it is met by a run where the clock
+    /// never moved at all, which is the one thing this number exists to catch.
+    pub tolerance_ms: i64,
+    /// Percentage of its own baseline the quota stream's post-fault p50 may
+    /// reach before the run reports
+    /// [`skew::SkewViolation::QuotaDidNotRecover`].
+    ///
+    /// Losing a lease under skew is a legitimate response and is only recorded.
+    /// Never getting it back is not.
+    #[serde(default = "default_recovery_floor_percent")]
+    pub recovery_floor_percent: f64,
+    /// Clock readings to take per group, per round.
+    ///
+    /// A round is a handful rather than one, because the reading is a median and
+    /// a single probe that caught a slow invocation would decide the run on its
+    /// own.
+    pub probes_per_round: u32,
 }
 
 impl IsolationConfig {
@@ -1308,6 +1363,9 @@ pub struct ScenarioConfig {
     /// The cross-pod RPC control. Absent for scenarios that do not run one.
     #[serde(default)]
     pub relay: Option<RelayConfig>,
+    /// Clock-skew settings. Absent for scenarios that do not move a clock.
+    #[serde(default)]
+    pub skew: Option<SkewConfig>,
     /// Storage-outage settings. Absent for scenarios that do not take a
     /// storage dependency away.
     #[serde(default)]
@@ -1760,13 +1818,21 @@ impl ScenarioConfig {
                 self.code
             );
         }
-        // Checked here rather than in the driver so a bad YAML fails the build
-        // instead of a maintenance window. Both blocks write to the scheduled
-        // stream, but only the `scheduled` block's registrations carry a token
-        // into the target's fire log — see `ScheduleEmitter::schedule_fire_at`
-        // in the counters component. Driving both would leave the fire account
-        // pairing the mixed workload's tokenless registrations against nothing
-        // and reporting every one of them as an action that never ran.
+        self.check_one_scheduled_writer()?;
+        Ok(config)
+    }
+
+    /// Only one of the two blocks that write to the scheduled stream may be
+    /// present.
+    ///
+    /// Checked at load time so a bad YAML fails the build instead of a
+    /// maintenance window. Both blocks register scheduled actions, but only the
+    /// `scheduled` block's registrations carry a token into the target's fire
+    /// log — see `ScheduleEmitter::schedule_fire_at` in the counters component.
+    /// Driving both would leave the fire account pairing the mixed workload's
+    /// tokenless registrations against nothing and reporting every one of them
+    /// as an action that never ran.
+    fn check_one_scheduled_writer(&self) -> anyhow::Result<()> {
         if let (Some(workload), Some(_)) = (&self.workload, &self.scheduled)
             && workload.scheduled_agents > 0
         {
@@ -1779,6 +1845,72 @@ impl ScenarioConfig {
                 workload.scheduled_agents
             );
         }
+        Ok(())
+    }
+
+    /// The clock-skew block. See [`Self::require_workload`].
+    pub fn require_skew(&self) -> anyhow::Result<&SkewConfig> {
+        let config = self.skew.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "chaos scenario {} needs a `skew` block in the suite YAML",
+                self.code
+            )
+        })?;
+        // A skew of zero is a run with no fault in it. The direction matters
+        // just as much: a clock that runs *fast* makes an executor renew its
+        // lease early, which costs an extra RPC and produces no disagreement at
+        // all. Only a clock set behind can make a pod act on a lease the
+        // granting authority has already retired.
+        if config.injected_offset_ms >= 0 {
+            anyhow::bail!(
+                "chaos scenario {}: skew.injectedOffsetMs is {}, and a clock set forward (or not \
+                 at all) only makes an executor renew early, which no oracle here can see",
+                self.code,
+                config.injected_offset_ms
+            );
+        }
+        // The same hole `slowdownFloor <= 1.0` leaves, in this scenario's units:
+        // a tolerance at or above the offset is satisfied by a measured offset
+        // of zero, so the one check that proves the fault landed would pass on a
+        // run where nothing was injected.
+        if config.tolerance_ms <= 0 || config.tolerance_ms >= config.injected_offset_ms.abs() {
+            anyhow::bail!(
+                "chaos scenario {}: skew.toleranceMs is {} against an offset of {}ms, and a \
+                 tolerance that wide is met by a run where the clock never moved",
+                self.code,
+                config.tolerance_ms,
+                config.injected_offset_ms
+            );
+        }
+        // At or below 100 the run would demand the quota stream come back
+        // *faster* than its own baseline, which run-to-run spread alone breaks.
+        if !config.recovery_floor_percent.is_finite() || config.recovery_floor_percent <= 100.0 {
+            anyhow::bail!(
+                "chaos scenario {}: skew.recoveryFloorPercent is {}, and a floor at or below 100 \
+                 asks the quota stream to end up quicker than it started",
+                self.code,
+                config.recovery_floor_percent
+            );
+        }
+        if config.probes_per_round == 0 {
+            anyhow::bail!(
+                "chaos scenario {}: skew.probesPerRound is zero, so nothing in the run would \
+                 show whether the clock ever moved",
+                self.code
+            );
+        }
+        // The quota lease is the only cross-clock contract on this platform, so
+        // a skew run that drives no quota agents has nothing the fault can
+        // reach and no cell to judge.
+        if !self.drives_stream(Stream::Quota) {
+            anyhow::bail!(
+                "chaos scenario {}: a `skew` block with no quota agents in the workload, and the \
+                 quota lease is the only thing on this platform one machine mints and another \
+                 judges — nothing else in the run can see a clock move",
+                self.code
+            );
+        }
+        self.check_one_scheduled_writer()?;
         Ok(config)
     }
 
@@ -1953,6 +2085,7 @@ mod tests {
                 delete: None,
                 rollback: None,
                 relay: None,
+                skew: None,
                 storage: None,
                 composed: None,
                 ownership: None,
@@ -1993,6 +2126,7 @@ mod tests {
             delete: None,
             rollback: None,
             relay: None,
+            skew: None,
             storage: None,
             composed: None,
             revert: Some(RevertConfig {
@@ -2083,6 +2217,7 @@ mod tests {
             delete: None,
             rollback: None,
             relay: None,
+            skew: None,
             storage: Some(StorageConfig {
                 endpoint: endpoint.to_string(),
                 expect: OutageExpectation::WholeWorkload {
@@ -2310,6 +2445,29 @@ mod tests {
         }
     }
 
+    /// Exactly one scenario moves a clock, and it is the one that carries the
+    /// block saying by how much.
+    ///
+    /// The same shape as the relay pairing check above, and for a sharper
+    /// version of the same reason. A `skew` block on a scenario that injects no
+    /// clock fault would judge every run of it against an offset nobody applied
+    /// and fail them all on `clock-never-moved`. A clock fault with no block
+    /// would inject a skew and report a run with no evidence it landed, which is
+    /// the artifact this whole scenario is built to avoid producing.
+    #[test]
+    fn exactly_the_clock_skew_scenario_carries_a_skew_block() {
+        let suite = ChaosSuite::load(suite_path()).unwrap();
+        for entry in &suite.scenarios {
+            let code = entry.scenario_code().unwrap();
+            assert_eq!(
+                entry.skew.is_some(),
+                entry.fault.kind == "clock-skew",
+                "{code} injects a clock skew without a skew block, or carries one without a \
+                 clock fault to judge against"
+            );
+        }
+    }
+
     /// The two relay scenarios must disagree about what their fault does.
     ///
     /// Both read the same cells and the same premium, and the only thing that
@@ -2492,6 +2650,11 @@ mod tests {
                 }
                 ScenarioCode::S3 => {
                     entry.require_isolation().unwrap();
+                }
+                ScenarioCode::S19 => {
+                    entry.require_workload().unwrap();
+                    entry.require_scheduled().unwrap();
+                    entry.require_skew().unwrap();
                 }
                 ScenarioCode::S2 | ScenarioCode::S21 => {
                     entry.require_workload().unwrap();

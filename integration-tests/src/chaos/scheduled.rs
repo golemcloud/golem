@@ -104,6 +104,47 @@ pub async fn verify_ownership(
     .await
 }
 
+/// Extra quiet after the last registration's action is due, before the fire
+/// logs are read.
+///
+/// The rest of the settle is derived from the configuration rather than fixed:
+/// the final registration falls due one `lead` after the workload stops, and if
+/// its target's executor was faulted while holding the claim, the recovery costs
+/// up to one lease budget on top. Reading before that elapsed would report
+/// actions as lost that were merely late, which is the one mistake a fire
+/// account cannot afford.
+const SETTLE_MARGIN: Duration = Duration::from_secs(30);
+
+/// How many targets to sample after the baseline to prove actions are firing at
+/// all.
+///
+/// A handful, because this is a smoke test rather than a measurement: if the
+/// scheduling path is broken, every target is equally broken, and the point is
+/// to fail before spending the fault window on a run that would report a clean
+/// account of nothing.
+pub const FIRE_PROOF_SAMPLE: usize = 5;
+
+/// How long to wait after the workload stops before reading the fire logs.
+pub fn settle_before_readback(config: &ScheduledConfig) -> Duration {
+    config.lead() + config.lease_budget() + SETTLE_MARGIN
+}
+
+/// Reads the fire count of a few targets, to prove actions are firing at all.
+///
+/// Registering is not firing. A platform that accepted every registration and
+/// scheduled none of them would otherwise reach read-back and report a flawless
+/// account of a mechanism that never ran.
+pub async fn sample_fire_count(ctx: &WorkloadContext, targets: &[String]) -> u64 {
+    let mut total = 0u64;
+    for target in targets.iter().take(FIRE_PROOF_SAMPLE) {
+        match crate::chaos::workload::read_polls(ctx, target).await {
+            Ok(polls) => total += polls,
+            Err(e) => warn!("could not sample fires on {target}: {e}"),
+        }
+    }
+    total
+}
+
 /// A running registration workload. As elsewhere, dropping the handle does not
 /// stop it: call [`ScheduledHandle::stop`] so in-flight registrations record
 /// themselves instead of being cancelled mid-flight.
@@ -413,6 +454,23 @@ mod tests {
         assert!(
             !log.is_complete(),
             "a dropped entry must leave the log short of polls"
+        );
+    }
+
+    /// The last registration falls due one lead after the workload stops, and a
+    /// recovery costs up to a lease on top. Reading before that would report
+    /// late actions as lost.
+    #[test]
+    fn the_settle_covers_a_full_lead_plus_a_full_lease_recovery() {
+        let config = ScheduledConfig {
+            targets: 100,
+            interval_millis: 2000,
+            lead_secs: 10,
+            lease_budget_secs: 45,
+        };
+        assert_eq!(
+            settle_before_readback(&config),
+            Duration::from_secs(10 + 45) + SETTLE_MARGIN
         );
     }
 }

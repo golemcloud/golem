@@ -112,7 +112,14 @@ pub type FaultWindow = crate::chaos::split::FaultWindow;
 /// S10 result already carries.
 pub type FireWindow = crate::chaos::split::Window;
 
-/// Whether an action's target was on the executor the fault killed.
+/// Whether an action's target was on the executor the fault was aimed at.
+///
+/// The names say "killed" because every scenario that read this report until
+/// S19 killed a pod, and they are the names in the archived results and in the
+/// report generator that reads them. S19 aims a clock skew at an executor
+/// instead, and its targets land in [`TargetGroup::OnKilledExecutor`] having
+/// survived: the group means "on the faulted pod", and renaming it would cost a
+/// schema bump and stop rendering every run already in the bucket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TargetGroup {
@@ -244,12 +251,14 @@ impl ScheduleFireReport {
     /// `lead` is how far ahead registrations were made, used to say when an
     /// action that never fired was due — the fire log is the only place the
     /// exact due time survives, and an action that never fired left no entry.
+    /// `targets_on_faulted_pod` is whichever targets the fault was aimed at,
+    /// killed or otherwise — see [`TargetGroup`].
     pub fn build(
         records: &[OperationRecord],
         logs: &[TargetFireLog],
         lead: Duration,
         fault: Option<FaultWindow>,
-        killed_targets: &BTreeSet<String>,
+        targets_on_faulted_pod: &BTreeSet<String>,
         lease_budget: Duration,
     ) -> Self {
         let lead = TimeDelta::from_std(lead).unwrap_or(TimeDelta::zero());
@@ -384,7 +393,13 @@ impl ScheduleFireReport {
         report.findings_omitted = findings.len().saturating_sub(MAX_FINDINGS) as u64;
         findings.truncate(MAX_FINDINGS);
         report.findings = findings;
-        let (delay, overdue) = delay_stats(logs, fault, killed_targets, budget_ms, &registered_at);
+        let (delay, overdue) = delay_stats(
+            logs,
+            fault,
+            targets_on_faulted_pod,
+            budget_ms,
+            &registered_at,
+        );
         report.delay = delay;
         report.overdue_on_arrival = overdue.len() as u64;
         report.overdue_delay =
@@ -495,7 +510,7 @@ impl ScheduleFireReport {
 fn delay_stats(
     logs: &[TargetFireLog],
     fault: Option<FaultWindow>,
-    killed_targets: &BTreeSet<String>,
+    targets_on_faulted_pod: &BTreeSet<String>,
     budget_ms: u64,
     registered_at: &BTreeMap<&str, DateTime<Utc>>,
 ) -> (Vec<FireDelayStats>, Vec<i64>) {
@@ -503,7 +518,7 @@ fn delay_stats(
     let mut overdue: Vec<i64> = Vec::new();
 
     for log in logs {
-        let group = if killed_targets.contains(&log.agent) {
+        let group = if targets_on_faulted_pod.contains(&log.agent) {
             TargetGroup::OnKilledExecutor
         } else {
             TargetGroup::Elsewhere

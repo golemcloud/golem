@@ -922,6 +922,160 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
+  # S19 — one executor's wall clock moved half a minute behind (GOL-383).
+  #
+  # A clock that is uniformly wrong is undetectable from inside the pod it runs
+  # on: every comparison the pod makes between two of its own readings is
+  # correct, because the error cancels. Only a comparison between its clock and
+  # another machine's can go wrong, and on this platform there is exactly one of
+  # those — the quota lease. The shard-manager mints `expiresAt` on its clock and
+  # the executor decides against its own clock when to renew and whether the
+  # lease is already dead.
+  #
+  # The scheduler is deliberately *not* the target, though the ticket names it.
+  # An executor claims due actions `WHERE shardId = ANY(...) AND availableAtMs <=
+  # now`, and shard sets are disjoint, so two executors can never contend for one
+  # action however far apart their clocks are. There is no lease to lose and no
+  # double fire to produce: the owner fires late, by exactly the skew. It is
+  # still driven here, because the *recovery edge* is where that lateness becomes
+  # visible — see `skew.rs`.
+  #
+  # ── Why a skew run needs more guards than a normal scenario ──────────────────
+  #
+  # This is the S2 problem in a sharper form. A run whose injection silently
+  # failed produces exactly the report a run whose injection landed and did no
+  # harm produces, and neither has anything missing from it. Two guards close
+  # that: `skew.toleranceMs` fails a run whose measured offset does not match the
+  # one asked for, and the driver refuses to inject at all if every quota agent
+  # landed on one executor — the shard-manager only reclaims a stale lease when
+  # some *other* pod touches the same resource, so a one-sided population makes
+  # the fault inert by construction.
+  - code: S19
+    name: executor-clock-skew
+    enabled: true
+
+    fault:
+      kind: clock-skew
+      target: worker-executor
+      # One executor, and the workflow narrows the selector to the pod the
+      # driver named. `all` would move every clock by the same amount, which is
+      # a cluster that agrees with itself and disagrees only with the driver —
+      # no lease disagreement anywhere, and a run that measures nothing.
+      mode: one
+      # Must equal phases.faultSecs, for S16's reason: Chaos Mesh recovers a
+      # TimeChaos on its own `duration` while the workflow holds the phase for
+      # faultSecs, so a shorter value here leaves the tail of the fault phase
+      # measuring a cluster whose clock was already correct.
+      durationSecs: 420
+
+    phases:
+      # Long enough for cold starts and route warm-up to settle, and for several
+      # lease renewals to have gone round undisturbed, so the baseline is a
+      # steady state rather than a warm-up.
+      baselineSecs: 300
+      # Sized to the renewal cycle rather than to a caller's timeout. On
+      # golem-dev the lease runs 60s and the executor renews when it believes
+      # fewer than 20s remain, so a pod 30s behind renews about 10s after its
+      # lease has actually expired, once every ~70s. 420s gives half a dozen of
+      # those exposure windows, which is enough for a p50 to mean something.
+      faultSecs: 420
+      # Two things have to finish in here: the quota stream returning to its own
+      # baseline once the clock is corrected, which costs at most one renewal
+      # cycle, and the scheduled backlog draining under a corrected clock, which
+      # is where the skew's cost to scheduled work actually shows.
+      recoverySecs: 300
+
+    workload:
+      # The population the fault can reach. Split by shard ownership across the
+      # two executors, so ~60 sit on the skewed pod and ~60 are the control —
+      # and the control half is not decoration: without a second pod renewing
+      # against the same resource, nothing ever reclaims the stale lease.
+      quotaAgents: 120
+      # Along for the exactly-once oracle. A duplicate execution is the headline
+      # guarantee the ticket asks about, and the durable stream is the only one
+      # that can be read back exactly.
+      durableAgents: 60
+      # Zero on purpose, same as S16: only the `scheduled` block's registrations
+      # carry a token into the target's fire log, and setting both is refused at
+      # load time.
+      scheduledAgents: 0
+      # Nothing about a promise or an ephemeral agent crosses a clock boundary,
+      # so both would add operations to the report without adding evidence.
+      ephemeralAgents: 0
+      promiseAgents: 0
+      rpcAgents: 0
+      # Split evenly between the two active streams, so ~50 quota reservations a
+      # second. Far below the `chaos-quota` rate limit, deliberately: a refusal
+      # here has to mean a lease the executor could not renew, not a bucket the
+      # workload drained itself.
+      ratePerSec: 100
+
+    scheduled:
+      # 60 targets, classified against whichever executor the quota split picked
+      # rather than choosing it themselves. Ownership is per agent id and these
+      # are a different agent type, so the executor holding most quota agents
+      # need not hold most targets — which is fine, and why the placement is
+      # read separately.
+      targets: 60
+      # 20 registrations a second overall. Lower than S10's 50 because the fire
+      # log here is read after a 420s fault and a 300s recovery, and every fire
+      # is an entry the target has to hand back in one invocation.
+      intervalMillis: 3000
+      # Comfortably longer than the skew, so an action registered during the
+      # fault is still pending when the clock is corrected. That is the whole
+      # scheduled measurement: the backlog fires with a *corrected* stamp and
+      # shows a real delay of about the skew, where during the fault the same
+      # fires read as perfectly punctual because the pod stamps its own late
+      # fire with its own late clock.
+      leadSecs: 30
+      # What a late fire may cost, and the number the delay percentiles are
+      # reported against. Sized to the skew rather than to a reassignment: no
+      # shard moves here, so the only thing an action can be late by is the
+      # offset plus the scheduler's own poll interval.
+      leaseBudgetSecs: 60
+
+    skew:
+      # Half a minute, backwards. Not a round number: on golem-dev the executor
+      # renews with 20s of headroom, so any skew smaller than that keeps every
+      # renewal inside the valid window and the fault is inert. 30s overshoots
+      # it by 10, so the skewed pod renews 10s after its lease has expired by
+      # the granting clock, every cycle, for the whole window.
+      #
+      # Forwards does nothing at all: a clock that runs fast makes the executor
+      # renew early, which costs an extra RPC and produces no disagreement.
+      # Refused at load time.
+      injectedOffsetMs: -30000
+      # What the measured offset may be out by before the run is called one that
+      # injected nothing. Generous against the number it guards — the probe
+      # carries its own invocation round trip, which is milliseconds — and far
+      # enough below 30000 that a clock which never moved cannot pass.
+      toleranceMs: 5000
+      # How far above its own baseline the quota stream's p50 may still sit once
+      # the clock is corrected. 150 rather than the 110 the relay scenario uses,
+      # because this p50 is a plain invocation of tens of milliseconds and a
+      # tenth of that is inside ordinary run-to-run spread.
+      #
+      # Reported, not failed: losing a lease under skew is a legitimate response
+      # and how long getting it back may take is a judgement.
+      recoveryFloorPercent: 150
+      # Readings per group per round, and there are four rounds — one on the
+      # undisturbed baseline and three through the fault. A median rather than a
+      # single reading, so one probe that caught a slow invocation cannot decide
+      # the run.
+      probesPerRound: 3
+
+    retryPolicy:
+      # Identical to the others. The consequence specific to this scenario is
+      # that a reservation parked behind a lost lease looks like a slow call
+      # rather than a failed one, so the retry rarely fires — which is itself
+      # worth knowing, and why the latency cells are the measurement rather than
+      # the acceptance counts.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
   # S7 — executor pod kill during agent state revert (GOL-371).
   #
   # The only scenario that disturbs work the platform is trying to *undo*. Each
