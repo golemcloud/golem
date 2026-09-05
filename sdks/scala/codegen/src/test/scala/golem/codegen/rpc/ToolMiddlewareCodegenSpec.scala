@@ -96,6 +96,15 @@ class ToolMiddlewareCodegenSpec extends munit.FunSuite {
     )
     assert(
       content.contains(
+        "stdin: _root_.golem.tool.ToolMiddlewareInputHandle): " +
+          "_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolInvokeError[_root_.scala.Nothing], " +
+          "(_root_.scala.Long, _root_.golem.tool.ToolMiddlewareOutputHandle)]]"
+      ),
+      content
+    )
+    assert(!content.contains("stdin: _root_.golem.tool.ToolInputStream"), content)
+    assert(
+      content.contains(
         "ToolUnderlyingRuntime.staticInputModel(__descriptor, _root_.scala.List(\"nested\", \"inspect\"))"
       )
     )
