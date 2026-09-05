@@ -776,6 +776,7 @@ pub struct InvocationResultMembership {
     bloom: InvocationResultBloom,
     capacity: usize,
     exact_complete: bool,
+    change_generation: u64,
     /// Number of revert entries folded into this status. It identifies the current oplog branch
     /// so physical and hydrated result entries from an earlier branch are never reused.
     revert_generation: u64,
@@ -789,6 +790,7 @@ impl InvocationResultMembership {
             bloom: InvocationResultBloom::new(bloom_bits, bloom_hashes),
             capacity,
             exact_complete: true,
+            change_generation: 0,
             revert_generation: 0,
         }
     }
@@ -802,6 +804,7 @@ impl InvocationResultMembership {
     }
 
     pub fn insert(&mut self, key: IdempotencyKey, result_index: OplogIndex) {
+        self.change_generation = self.change_generation.wrapping_add(1);
         self.bloom.insert(&key);
         if let Some(previous_index) = self.recent_by_key.remove(&key) {
             self.recent_by_index.remove(&previous_index);
@@ -829,6 +832,17 @@ impl InvocationResultMembership {
 
     pub fn is_exact_complete(&self) -> bool {
         self.exact_complete
+    }
+
+    pub fn oldest_retained_index(&self) -> Option<OplogIndex> {
+        self.recent_by_index.get_min().map(|(index, _)| *index)
+    }
+
+    /// Changes whenever a result is added to or removed from the exact membership. It allows
+    /// in-process admission checks to ignore unrelated oplog commits while still detecting that a
+    /// result may have appeared and subsequently been evicted.
+    pub fn change_generation(&self) -> u64 {
+        self.change_generation
     }
 
     /// Returns the number of revert entries folded into this status. A change means cached result
@@ -860,6 +874,7 @@ impl InvocationResultMembership {
     pub fn remove(&mut self, key: &IdempotencyKey) -> Option<OplogIndex> {
         let index = self.recent_by_key.remove(key)?;
         self.recent_by_index.remove(&index);
+        self.change_generation = self.change_generation.wrapping_add(1);
         Some(index)
     }
 }

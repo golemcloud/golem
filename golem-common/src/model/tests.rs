@@ -44,6 +44,11 @@ fn invocation_result_membership_bounds_exact_entries_without_false_negatives() {
 
     assert_eq!(membership.len(), 2);
     assert!(!membership.is_exact_complete());
+    assert_eq!(membership.change_generation(), 3);
+    assert_eq!(
+        membership.oldest_retained_index(),
+        Some(OplogIndex::from_u64(20))
+    );
     assert_eq!(membership.get(&first), None);
     assert_eq!(membership.get(&second), Some(&OplogIndex::from_u64(20)));
     assert_eq!(membership.get(&third), Some(&OplogIndex::from_u64(30)));
