@@ -20,28 +20,9 @@
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::render::{
     to_external_input_openapi_components, to_external_output_openapi_components,
-    to_openapi_components,
 };
 use golem_common::schema::schema_type::SchemaType;
 use serde_json::{Map, Value, json};
-
-/// Render `(graph, ty)` to an OpenAPI 3.1 schema JSON value, merging every
-/// named component schema it references into the document-wide
-/// `components/schemas` accumulator.
-///
-/// Returns the inline root schema for `ty` (a `{ "$ref": … }` object when `ty`
-/// is a named `Ref`). Named definitions reachable from `ty` — including the
-/// synthesised per-union-branch schemas — are merged into `components` under
-/// their `TypeId` keys: an identical entry is deduplicated, a conflicting one
-/// is an error. The document-wide schema graph builder disambiguates names,
-/// so a real conflict here indicates a bug.
-pub fn render_schema(
-    graph: &SchemaGraph,
-    ty: &SchemaType,
-    components: &mut Map<String, Value>,
-) -> Result<Value, String> {
-    merge_bundle(to_openapi_components(graph, ty), components)
-}
 
 /// Render a schema for an untrusted external request. Host-managed capability
 /// leaves are unsatisfiable because callers cannot construct them.
@@ -144,7 +125,7 @@ mod tests {
     fn scalar_produces_no_components() {
         let graph = SchemaGraph::anonymous(SchemaType::bool());
         let mut components = Map::new();
-        let root = render_schema(&graph, &SchemaType::string(), &mut components).unwrap();
+        let root = render_input_schema(&graph, &SchemaType::string(), &mut components).unwrap();
         assert_eq!(root, json!({ "type": "string" }));
         assert!(components.is_empty());
     }
@@ -192,17 +173,17 @@ mod tests {
     fn ref_emits_component_and_ref_root() {
         let (graph, id) = user_graph();
         let mut components = Map::new();
-        let root = render_schema(&graph, &SchemaType::ref_to(id), &mut components).unwrap();
-        assert_eq!(root["$ref"], json!("#/components/schemas/app.User"));
-        assert!(components.contains_key("app.User"));
+        let root = render_input_schema(&graph, &SchemaType::ref_to(id), &mut components).unwrap();
+        assert_eq!(root["$ref"], json!("#/components/schemas/Input_app.User"));
+        assert!(components.contains_key("Input_app.User"));
     }
 
     #[test]
     fn identical_component_is_deduplicated() {
         let (graph, id) = user_graph();
         let mut components = Map::new();
-        render_schema(&graph, &SchemaType::ref_to(id.clone()), &mut components).unwrap();
-        render_schema(&graph, &SchemaType::ref_to(id), &mut components).unwrap();
+        render_input_schema(&graph, &SchemaType::ref_to(id.clone()), &mut components).unwrap();
+        render_input_schema(&graph, &SchemaType::ref_to(id), &mut components).unwrap();
         assert_eq!(components.len(), 1);
     }
 
@@ -210,8 +191,9 @@ mod tests {
     fn conflicting_component_errors() {
         let (graph, id) = user_graph();
         let mut components = Map::new();
-        components.insert("app.User".to_string(), json!({ "type": "string" }));
-        let err = render_schema(&graph, &SchemaType::ref_to(id), &mut components).unwrap_err();
+        components.insert("Input_app.User".to_string(), json!({ "type": "string" }));
+        let err =
+            render_input_schema(&graph, &SchemaType::ref_to(id), &mut components).unwrap_err();
         assert!(
             err.contains("conflicting component schema"),
             "unexpected error: {err}"

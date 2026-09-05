@@ -637,7 +637,11 @@ impl RustBridgeGenerator {
                             app_name: config.app_name.to_string(),
                             env_name: config.env_name.to_string(),
                             agent_type_name: #agent_type_name.to_string(),
-                            parameters: constructor_parameters.clone(),
+                            parameters: crate::__golem_bridge_runtime::schema::ExternalSchemaValue::try_from(
+                                constructor_parameters.clone(),
+                            ).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
+                                message: format!("Failed to validate constructor parameters: {__e}"),
+                            })?,
                             phantom_id,
                             config: Some(agent_config),
                         },
@@ -673,11 +677,19 @@ impl RustBridgeGenerator {
                             app_name: config.app_name.to_string(),
                             env_name: config.env_name.to_string(),
                             agent_type_name: #agent_type_name.to_string(),
-                            parameters: self.constructor_parameters.clone(),
+                            parameters: crate::__golem_bridge_runtime::schema::ExternalSchemaValue::try_from(
+                                self.constructor_parameters.clone(),
+                            ).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
+                                message: format!("Failed to validate constructor parameters: {__e}"),
+                            })?,
                             phantom_id: self.phantom_id,
                             config: #invocation_config,
                             method_name: method_name.to_string(),
-                            method_parameters,
+                            method_parameters: crate::__golem_bridge_runtime::schema::ExternalSchemaValue::try_from(
+                                method_parameters,
+                            ).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
+                                message: format!("Failed to validate method parameters: {__e}"),
+                            })?,
                             mode,
                             schedule_at,
                             idempotency_key: None,
@@ -1681,7 +1693,7 @@ impl RustBridgeGenerator {
                         let idempotency_key = response.idempotency_key;
                         match response.result {
                             Some(__typed) => {
-                                let (_, __value) = __typed.into_parts();
+                                let (_, __value) = __typed.into_inner().into_parts();
                                 let __decoded: #return_type = (|| -> Result<#return_type, String> {
                                     #decode_body
                                 })().map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to decode result value: {__e}") })?;
