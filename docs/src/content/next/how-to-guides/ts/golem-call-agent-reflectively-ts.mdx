@@ -1,0 +1,186 @@
+# Calling Agents with Runtime Reflection (TypeScript)
+
+Use reflection when the target agent type or method is chosen at runtime. When
+the target is known while writing the component, prefer its definition client
+(`Target.client`) because it provides compile-time input and output types.
+
+## Discover Agent Types
+
+The reflection API exposes the agent types registered for the running
+component revision:
+
+```typescript
+import {
+  getAllAgentTypes,
+  getReflectedAgentType,
+} from '@golemcloud/golem-ts-sdk';
+
+const available = getAllAgentTypes();
+const counterType = getReflectedAgentType('CounterAgent');
+
+if (!counterType) {
+  throw new Error('CounterAgent is not registered');
+}
+
+console.log(counterType.name, counterType.mode, counterType.sourceLanguage);
+console.log(counterType.methods.map((method) => method.name));
+```
+
+An `AgentType` contains its constructor schema, method schemas, descriptions,
+implementation identity, and lifecycle mode. Use `method(name)` when selecting
+a method dynamically; it returns `undefined` for an unknown method.
+
+## Inspect and Validate Schemas
+
+Constructor and method schemas are exposed as `SchemaRef` values. They accept
+canonical JSON, report structured validation issues, and can render JSON
+Schema:
+
+```typescript
+const method = counterType.method('add');
+if (!method) throw new Error('CounterAgent.add is not registered');
+
+const validation = method.input.validateJson({ by: 5 });
+if (!validation.success) {
+  throw new Error(JSON.stringify(validation.issues));
+}
+
+const jsonSchema = method.input.toJsonSchema();
+```
+
+Use `packJson` and `unpackJson` only when integrating with APIs that explicitly
+exchange schema-native values. Normal reflected calls accept and return JSON.
+
+## Invoke a Durable Agent
+
+Use the reflected type's client factory just like a typed definition factory,
+then select the method by name:
+
+```typescript
+const counter = counterType.client.get({ name: 'main' });
+const invocation = await counter.method('add').invoke({ by: 5 });
+
+console.log(invocation.value);
+console.log(invocation.metadata.agentId);
+console.log(invocation.metadata.idempotencyKey);
+```
+
+`invoke` and `invokeJson` return `{ value, metadata }`. `trigger` and `schedule`
+also return identity metadata. Client creation and invocation failures are
+reported as structured `RemoteCallError` values; use `isRemoteCallError` to
+inspect their `cause` without parsing messages.
+
+## Construct an Agent ID with Caller-Owned Schemas
+
+A complete caller-owned contract is the Level 2 option when the target name,
+constructor shape, and methods are known locally but the target implementation
+is not imported. Its `agentId` helper accepts values described by any supported
+Standard Schema library:
+
+```typescript
+import { z } from 'zod';
+import {
+  AgentId,
+  defineAgentClient,
+  method,
+} from '@golemcloud/golem-ts-sdk';
+import { v } from '@golemcloud/golem-ts-sdk/schema';
+
+const CounterContract = defineAgentClient({
+  name: 'CounterAgent',
+  id: { name: z.string() },
+  methods: {
+    echo: method({ input: { message: z.string() }, returns: z.string() }),
+  },
+});
+
+const schemaLibraryId = CounterContract.agentId({ name: 'main' });
+const first = await schemaLibraryId
+  .client(CounterContract)
+  .echo({ message: 'from Zod' });
+
+const constructorValue = v.record([v.string('main')]);
+const schemaValueId = AgentId.create({
+  componentId: schemaLibraryId.componentId,
+  typeName: CounterContract.name,
+  constructorValue,
+});
+const second = await schemaValueId
+  .client(CounterContract)
+  .echo({ message: 'from SchemaValue' });
+```
+
+The first form validates and packs constructor fields through the caller's
+schema library. The explicit `AgentId.create` form is for infrastructure that
+already owns a Golem `SchemaValue`; record fields must be in the target
+constructor's declared order. It does not validate that value against the
+remote constructor schema. When runtime metadata is available, prefer
+`agentType.agentId(json)` or pack with `agentType.constructorInput` before
+calling `agentType.agentIdValue(value)`.
+
+## Bind a Concrete Agent ID
+
+After an agent exists, resolve the schema registered for that concrete identity
+and bind it fluently:
+
+```typescript
+import {
+  getAgentTypeByAgentId,
+  type AgentId,
+} from '@golemcloud/golem-ts-sdk';
+
+function bindExisting(agentId: AgentId) {
+  const reflected = getAgentTypeByAgentId(agentId);
+  if (!reflected) throw new Error('Agent or registered type was not found');
+  return agentId.client(reflected);
+}
+```
+
+Lookup by `AgentId` does not create the agent. It returns `undefined` when the
+identity does not exist or its type cannot be resolved. Use
+`agentId.dynamicClient()` only for lifecycle-free infrastructure that already
+holds schema-native values and intentionally invokes arbitrary method names
+without discovery.
+
+## Phantom and Ephemeral Agents
+
+Reflected durable types expose the same three constructors as definition
+clients:
+
+```typescript
+const known = counterType.client.getPhantom({ name: 'main' }, savedPhantomId);
+const { client, agentId, phantomId } = counterType.client.newPhantom({ name: 'main' });
+```
+
+For an ephemeral reflected type, `get` is unavailable. `newPhantom` returns the
+logical reflected client directly, and each invocation returns its allocated
+one-shot identity in metadata:
+
+```typescript
+const requestType = getReflectedAgentType('RequestAgent');
+if (!requestType || requestType.mode !== 'ephemeral') {
+  throw new Error('RequestAgent must be ephemeral');
+}
+
+const request = requestType.client.newPhantom({ route: 'summarize' });
+if ('client' in request) throw new Error('unexpected durable phantom wrapper');
+
+const result = await request.method('run').invoke({ text: 'hello' });
+console.log(result.metadata.agentId, result.metadata.idempotencyKey);
+```
+
+`getPhantom` is also available when the caller already holds the phantom ID.
+It does not make a final, already-invoked ephemeral agent ID reusable.
+
+Do not treat an ephemeral proxy as having a reusable final `AgentId`. A final
+ephemeral identity cannot accept another invocation or be resumed.
+
+## Choosing the Client Surface
+
+| Situation | Use |
+|---|---|
+| Target definition and method known in source | `Target.client` |
+| Type or method selected at runtime | `getReflectedAgentType` / `getAllAgentTypes` |
+| Existing concrete identity needs its current schema | `getAgentTypeByAgentId` |
+| Existing identity plus a caller-owned typed contract | `agentId.client(contract)` |
+| Lifecycle-free invocation with schema-native values | `agentId.dynamicClient()` |

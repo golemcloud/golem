@@ -348,6 +348,9 @@ oplog_payload! {
             call_mode: EntityCallMode,
             error: SerializableToolRpcError,
         },
+        GolemAgentGetAgentTypeByAgentId {
+            agent_id: AgentId
+        },
     }
 }
 
@@ -901,7 +904,8 @@ pub mod host_functions {
         (WasiCliEnvironmentGetEnvironment => "cli::environment", "get-environment", CliEnvironmentGetEnvironment, CliEnvironmentGetEnvironment),
         (GolemRpcWasmRpcActivate => "golem::rpc::wasm-rpc", "activate", GolemRpcActivate, GolemRpcActivate),
         (GolemEntityInvoke => "golem::entity", "invoke", EntityInvocation, EntityInvocation),
-        (GolemToolInvocationRejected => "golem::tool::internal", "invocation-rejected", GolemToolInvocationRejected, EntityInvocation)
+        (GolemToolInvocationRejected => "golem::tool::internal", "invocation-rejected", GolemToolInvocationRejected, EntityInvocation),
+        (GolemAgentGetAgentTypeByAgentId => "golem::agent", "get_agent_type_by_agent_id", GolemAgentGetAgentTypeByAgentId, GolemAgentAgentType)
     }
 }
 

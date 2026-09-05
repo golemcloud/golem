@@ -708,6 +708,20 @@ impl HostWasmRpc for Context {
             .await
     }
 
+    async fn create(
+        &mut self,
+        agent_type_name: String,
+        constructor: golem_schema::schema::wit::wire::SchemaValueTree,
+        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
+        config: Vec<
+            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
+        >,
+    ) -> anyhow::Result<Result<Resource<WasmRpc>, RpcError>> {
+        self.durable_ctx
+            .create(agent_type_name, constructor, phantom_id, config)
+            .await
+    }
+
     async fn invoke_and_await(
         &mut self,
         self_: Resource<WasmRpc>,
@@ -807,6 +821,15 @@ impl AgentHost for Context {
         Option<golem_common::schema::agent::bindings::golem::agent::common::RegisteredAgentType>,
     > {
         AgentHost::get_agent_type(&mut self.durable_ctx, agent_type_name).await
+    }
+
+    async fn get_agent_type_by_agent_id(
+        &mut self,
+        agent_id: golem_schema::schema::wit::wire::AgentId,
+    ) -> anyhow::Result<
+        Option<golem_common::schema::agent::bindings::golem::agent::common::RegisteredAgentType>,
+    > {
+        AgentHost::get_agent_type_by_agent_id(&mut self.durable_ctx, agent_id).await
     }
 
     async fn make_agent_id(

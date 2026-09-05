@@ -1,14 +1,19 @@
 import { z } from "zod";
 import {
+  AgentId,
   AgentStream,
+  awaitPromise,
+  createPromise,
   defineAgent,
+  defineAgentClient,
+  getAgentTypeByAgentId,
+  getAllAgentTypes,
+  getReflectedAgentType,
+  isRemoteCallError,
   method,
   s,
-  clientFor,
-  createPromise,
-  awaitPromise,
 } from "@golemcloud/golem-ts-sdk";
-import type { PromiseId } from "golem:api/host@1.5.0";
+import { getSelfMetadata, type PromiseId } from "golem:api/host@1.5.0";
 import * as process from "node:process";
 
 const EnvVar = z.object({ key: z.string(), value: z.string() });
@@ -38,8 +43,6 @@ export const ChildAgent = defineAgent({
   },
 });
 
-const childClient = clientFor(ChildAgent);
-
 export const ChildAgentImpl = ChildAgent.implement({
   init: ({ id }) => ({ id: id.id }),
   methods: {
@@ -62,6 +65,56 @@ export const ChildAgentImpl = ChildAgent.implement({
   },
 });
 
+const EphemeralReuseReport = z.object({
+  value: z.string(),
+  agentId: z.string(),
+  idempotencyKey: z.string(),
+  category: z.string(),
+  errorTag: z.string(),
+  details: z.string(),
+});
+
+const ReflectionDiscoveryReport = z.object({
+  listed: z.boolean(),
+  typeName: z.string(),
+  methodName: z.string(),
+  firstValue: z.number(),
+  secondValue: z.number(),
+  missingName: z.boolean(),
+  missingAgentId: z.boolean(),
+});
+
+const ReflectedEphemeralReport = z.object({
+  value: z.string(),
+  agentId: z.string(),
+  idempotencyKey: z.string(),
+  proxyHasAgentId: z.boolean(),
+});
+
+export const EphemeralSingleUseAgent = defineAgent({
+  name: "EphemeralSingleUseAgent",
+  mode: "ephemeral",
+  id: { value: z.string() },
+  methods: {
+    capture: method({ input: {}, returns: z.string() }),
+  },
+});
+
+export const EphemeralSingleUseAgentImpl = EphemeralSingleUseAgent.implement({
+  init: ({ id }) => ({ value: id.value }),
+  methods: {
+    capture() {
+      return this.value;
+    },
+  },
+});
+
+const EphemeralReuseContract = defineAgentClient({
+  methods: {
+    capture: method({ input: {}, returns: z.string() }),
+  },
+});
+
 export const TestAgent = defineAgent({
   name: "TestAgent",
   id: { id: z.string() },
@@ -74,6 +127,15 @@ export const TestAgent = defineAgent({
     longRpcCall: method({
       input: { durationInMillis: z.number() },
       returns: z.void(),
+    }),
+    ephemeralReuseTest: method({ input: {}, returns: EphemeralReuseReport }),
+    reflectionDiscoveryTest: method({
+      input: {},
+      returns: ReflectionDiscoveryReport,
+    }),
+    reflectedEphemeralTest: method({
+      input: {},
+      returns: ReflectedEphemeralReport,
     }),
   },
 });
@@ -89,14 +151,14 @@ export const TestAgentImpl = TestAgent.implement({
       for (const chunk of chunks) {
         console.log(`Processing chunk ${chunk}`);
         const promises = chunk.map(
-          async (id) => await childClient({ id }).process(),
+          async (id) => await ChildAgent.client.get({ id }).process(),
         );
         result.push(...(await Promise.all(promises)));
       }
       return result;
     },
     async envVarTest() {
-      const child = await childClient({ id: 0 }).envVars();
+      const child = await ChildAgent.client.get({ id: 0 }).envVars();
       const parent = Object.entries(process.env).map(([key, value]) => ({
         key,
         value: value ?? "",
@@ -107,7 +169,121 @@ export const TestAgentImpl = TestAgent.implement({
       };
     },
     async longRpcCall({ durationInMillis }) {
-      await childClient({ id: 1000 }).longRpcCall({ durationInMillis });
+      await ChildAgent.client.get({ id: 1000 }).longRpcCall({
+        durationInMillis,
+      });
+    },
+    async ephemeralReuseTest() {
+      const first = await EphemeralSingleUseAgent.client
+        .newPhantom({ value: "captured" })
+        .capture();
+      const finalAgentId = AgentId.from({
+        componentId: getSelfMetadata().agentId.componentId,
+        agentId: first.metadata.agentId,
+      });
+
+      try {
+        await finalAgentId.client(EphemeralReuseContract).capture();
+        throw new Error("ephemeral agent identity was unexpectedly reusable");
+      } catch (error) {
+        if (!isRemoteCallError(error)) throw error;
+        if (error.cause.tag !== "remote-agent-error") {
+          throw new Error(
+            `expected remote-agent-error, got ${error.cause.tag}`,
+          );
+        }
+        if (error.cause.error.tag === "custom-error") {
+          throw new Error("expected a structured invalid-input error");
+        }
+        return {
+          value: first.value,
+          agentId: first.metadata.agentId,
+          idempotencyKey: first.metadata.idempotencyKey,
+          category: error.cause.tag,
+          errorTag: error.cause.error.tag,
+          details: error.cause.error.details,
+        };
+      }
+    },
+    async reflectionDiscoveryTest() {
+      const targetName = `reflection-${this.id}`;
+      const allTypes = getAllAgentTypes();
+      const reflected = getReflectedAgentType("SimpleChildAgent");
+      if (!reflected) throw new Error("SimpleChildAgent was not discovered");
+
+      const method = reflected.method("value");
+      if (!method) throw new Error("SimpleChildAgent.value was not discovered");
+
+      const missingAgentId = reflected.agentId({
+        name: `${targetName}-missing`,
+      });
+      const missingAgentIdResult =
+        getAgentTypeByAgentId(missingAgentId) === undefined;
+
+      const first = await reflected.client
+        .get({ name: targetName })
+        .method("value")
+        .invoke({});
+      if (typeof first.value !== "number") {
+        throw new Error(
+          "expected reflected SimpleChildAgent.value to return a number",
+        );
+      }
+
+      const concreteAgentId = reflected.agentId({ name: targetName });
+      const byAgentId = getAgentTypeByAgentId(concreteAgentId);
+      if (!byAgentId) {
+        throw new Error("existing SimpleChildAgent type was not resolved");
+      }
+
+      const second = await concreteAgentId
+        .client(byAgentId)
+        .method("value")
+        .invoke({});
+      if (typeof second.value !== "number") {
+        throw new Error(
+          "expected rebound SimpleChildAgent.value to return a number",
+        );
+      }
+
+      return {
+        listed: allTypes.some((agentType) => agentType.name === reflected.name),
+        typeName: reflected.name,
+        methodName: method.name,
+        firstValue: first.value,
+        secondValue: second.value,
+        missingName:
+          getReflectedAgentType("MissingReflectionAgent") === undefined,
+        missingAgentId: missingAgentIdResult,
+      };
+    },
+    async reflectedEphemeralTest() {
+      const reflected = getReflectedAgentType("EphemeralSingleUseAgent");
+      if (!reflected || reflected.mode !== "ephemeral") {
+        throw new Error(
+          "EphemeralSingleUseAgent was not discovered as ephemeral",
+        );
+      }
+
+      const fresh = reflected.client.newPhantom({ value: "reflected" });
+      const proxyHasAgentId = "agentId" in fresh;
+      if ("client" in fresh) {
+        throw new Error("ephemeral reflection returned a durable wrapper");
+      }
+
+      const invocation = await fresh.method("capture").invoke({});
+      if (typeof invocation.value !== "string") {
+        throw new Error(
+          "expected reflected ephemeral capture to return a string",
+        );
+      }
+
+      return {
+        value: invocation.value,
+        agentId: invocation.metadata.agentId,
+        idempotencyKey: invocation.metadata.idempotencyKey,
+        proxyHasAgentId,
+      };
     },
   },
 });
@@ -138,8 +314,6 @@ export const SelfRpcAgent = defineAgent({
   },
 });
 
-const selfRpcClient = clientFor(SelfRpcAgent);
-
 export const SelfRpcAgentImpl = SelfRpcAgent.implement({
   init: ({ id }) => ({ name: id.name }),
   methods: {
@@ -147,7 +321,7 @@ export const SelfRpcAgentImpl = SelfRpcAgent.implement({
       return;
     },
     async selfRpc() {
-      return selfRpcClient({ name: this.name }).doWork();
+      return SelfRpcAgent.client.get({ name: this.name }).doWork();
     },
   },
 });
@@ -216,9 +390,6 @@ export const TsBlockingAgentImpl = TsBlockingAgent.implement({
   },
 });
 
-const tsCounterClient = clientFor(TsCounter);
-const tsBlockingClient = clientFor(TsBlockingAgent);
-
 export const TsCancelTester = defineAgent({
   name: "TsCancelTester",
   id: { name: z.string() },
@@ -242,7 +413,7 @@ export const TsCancelTesterImpl = TsCancelTester.implement({
      * short delay, and returns "aborted" if the AbortError is caught.
      */
     async testAbortBeforeAwait({ counterName }) {
-      const counter = tsCounterClient({ name: counterName });
+      const counter = TsCounter.client.get({ name: counterName });
       const controller = new AbortController();
 
       // Abort after 100ms — slowIncBy takes 5000ms so it is still pending.
@@ -267,7 +438,7 @@ export const TsCancelTesterImpl = TsCancelTester.implement({
      * Returns the counter value.
      */
     async testAbortAfterComplete({ counterName }) {
-      const counter = tsCounterClient({ name: counterName });
+      const counter = TsCounter.client.get({ name: counterName });
       const controller = new AbortController();
 
       // Completes quickly.
@@ -297,7 +468,7 @@ export const TsCancelCallerAgentImpl = TsCancelCallerAgent.implement({
   init: ({ id }) => ({ name: id.name, lastOutcome: "none" }),
   methods: {
     async callAndAbort({ targetName, delayMs }) {
-      const blocker = tsBlockingClient({ name: targetName });
+      const blocker = TsBlockingAgent.client.get({ name: targetName });
       const controller = new AbortController();
 
       const timer = setTimeout(
@@ -472,8 +643,6 @@ export const TsStreamingRpcTargetImpl = TsStreamingRpcTarget.implement({
   },
 });
 
-const tsStreamingTargetClient = clientFor(TsStreamingRpcTarget);
-
 export const TsStreamingRpcCaller = defineAgent({
   name: "TsStreamingRpcCaller",
   id: { name: z.string() },
@@ -488,7 +657,7 @@ export const TsStreamingRpcCallerImpl = TsStreamingRpcCaller.implement({
   init: ({ id }) => ({ name: id.name }),
   methods: {
     async run() {
-      const target = tsStreamingTargetClient({ name: this.name });
+      const target = TsStreamingRpcTarget.client.get({ name: this.name });
 
       const inputOnly = await target.consume({
         input: AgentStream.from([1, 2, 3]),
@@ -553,15 +722,15 @@ export const TsStreamingRpcCallerImpl = TsStreamingRpcCaller.implement({
     },
     async callProducerError() {
       return collect(
-        await tsStreamingTargetClient({
-          name: this.name,
-        }).produceError(),
+        await TsStreamingRpcTarget.client
+          .get({ name: this.name })
+          .produceError(),
       );
     },
     async callStreamFree() {
-      return tsStreamingTargetClient({
-        name: this.name,
-      }).incrementScalar();
+      return TsStreamingRpcTarget.client
+        .get({ name: this.name })
+        .incrementScalar();
     },
   },
 });

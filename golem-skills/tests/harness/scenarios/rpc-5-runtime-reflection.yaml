@@ -1,0 +1,71 @@
+name: "rpc-5-runtime-reflection"
+steps:
+  - id: "create-project"
+    only_if:
+      language: "ts"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-reflected-rpc"
+    only_if:
+      language: "ts"
+    prompt: >
+      In the TypeScript test-app project, add a durable `ReflectionTarget` agent
+      identified by a string `name`. Give it an `echo` method that accepts a string
+      `message` and returns that message.
+
+      Add a second durable `ReflectionCaller` agent with a `run` method. In `run`, use
+      the Golem TypeScript SDK runtime reflection APIs to list the registered agent
+      types, look up `ReflectionTarget` by name, inspect its `echo` method, and invoke
+      `ReflectionTarget("target")` through the reflected client with `"hello"`.
+
+      Also define a complete caller-owned `ReflectionTarget` client contract whose
+      string ID uses a Standard Schema library. Construct the same target AgentId in
+      two ways: first through the contract's `agentId` helper, and then explicitly
+      with `AgentId.create` and a Golem `SchemaValue` built with the SDK's `v` helpers.
+      Bind the contract to each ID and invoke `echo` with `"schema library"` and
+      `"schema value"` respectively.
+
+      Construct the target's concrete AgentId from the reflected type, resolve its
+      current type with `getAgentTypeByAgentId` after the first invocation, bind that
+      reflected type to the AgentId, and invoke `echo` again with `"again"`.
+
+      Return exactly an object with fields `listed`, `typeName`, `methodName`, `first`,
+      `second`, `schemaIdsMatch`, `schemaLibrary`, and `schemaValue`. They must
+      respectively contain whether `ReflectionTarget` appeared in the discovered
+      list, the discovered type name, the reflected method name, the two reflected
+      echoed values, whether both caller-constructed AgentIds have the same agent ID
+      string, and the two contract-call results. Make sure the project builds
+      successfully.
+    expectedSkills:
+      - "golem-call-agent-reflectively-ts"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-reflected-rpc"
+    only_if:
+      language: "ts"
+    invoke_json:
+      agent: 'ReflectionCaller("main")'
+      method: "run"
+    expect:
+      result_json:
+        - path: "$.listed"
+          equals: true
+        - path: "$.typeName"
+          equals: "ReflectionTarget"
+        - path: "$.methodName"
+          equals: "echo"
+        - path: "$.first"
+          equals: "hello"
+        - path: "$.second"
+          equals: "again"
+        - path: "$.schemaIdsMatch"
+          equals: true
+        - path: "$.schemaLibrary"
+          equals: "schema library"
+        - path: "$.schemaValue"
+          equals: "schema value"

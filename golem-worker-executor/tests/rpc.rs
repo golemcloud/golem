@@ -2592,6 +2592,60 @@ async fn rust_rpc_missing_target(
             .contains("Agent type not registered")
     );
 
+    let oplog = executor
+        .get_oplog(&parent, golem_common::model::oplog::OplogIndex::INITIAL)
+        .await?;
+    assert!(oplog.iter().any(|entry| matches!(
+        entry.entry,
+        golem_common::model::oplog::PublicOplogEntry::Error(_)
+    )));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn rust_rpc_missing_target_is_recoverable_with_fallible_create(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    let parent_agent_id = agent_id!("RustParent", "fallible-create-missing-target");
+    let parent = executor
+        .start_agent(&component.id, parent_agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &parent_agent_id,
+            "inspect_missing_rpc_type",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+
+    assert!(result.contains("RemoteAgentError"));
+    assert!(result.contains("InvalidType"));
+    assert!(result.contains("MissingReflectedType"));
+
+    let oplog = executor
+        .get_oplog(&parent, golem_common::model::oplog::OplogIndex::INITIAL)
+        .await?;
+    assert!(oplog.iter().all(|entry| !matches!(
+        entry.entry,
+        golem_common::model::oplog::PublicOplogEntry::Error(_)
+    )));
+
     Ok(())
 }
 
@@ -3415,6 +3469,176 @@ async fn ts_abort_after_complete_is_noop(
 
     // The counter was incremented by 5, so getValue should return 5.0
     assert_eq!(result_value, 5.0);
+
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn ts_ephemeral_final_identity_cannot_be_reused(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+    let agent_id = agent_id!("TestAgent", "ts_ephemeral_final_identity_cannot_be_reused");
+
+    let report = executor
+        .invoke_and_await_agent(&component, &agent_id, "ephemeralReuseTest", data_value!())
+        .await?
+        .into_return_value()
+        .expect("expected an ephemeral reuse report");
+    let SchemaValue::Record { fields } = report else {
+        panic!("expected an ephemeral reuse report record");
+    };
+    let [
+        value,
+        final_agent_id,
+        idempotency_key,
+        category,
+        error_tag,
+        details,
+    ] = fields.as_slice()
+    else {
+        panic!("expected six fields in the ephemeral reuse report");
+    };
+
+    assert_eq!(value, &SchemaValue::String("captured".to_string()));
+    assert!(
+        matches!(final_agent_id, SchemaValue::String(value) if !value.is_empty()),
+        "final ephemeral agent ID must be non-empty"
+    );
+    assert!(
+        matches!(idempotency_key, SchemaValue::String(value) if !value.is_empty()),
+        "ephemeral invocation idempotency key must be non-empty"
+    );
+    assert_eq!(
+        category,
+        &SchemaValue::String("remote-agent-error".to_string())
+    );
+    assert_eq!(error_tag, &SchemaValue::String("invalid-input".to_string()));
+    assert!(
+        matches!(details, SchemaValue::String(value) if value.contains("An ephemeral agent cannot accept another invocation or be resumed")),
+        "unexpected ephemeral reuse details: {details:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn ts_reflection_discovers_binds_and_invokes_durable_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+    let agent_id = agent_id!(
+        "TestAgent",
+        "ts_reflection_discovers_binds_and_invokes_durable_agent"
+    );
+
+    let report = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "reflectionDiscoveryTest",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .expect("expected a reflection discovery report");
+    let SchemaValue::Record { fields } = report else {
+        panic!("expected a reflection discovery report record");
+    };
+    let [
+        listed,
+        type_name,
+        method_name,
+        first_value,
+        second_value,
+        missing_name,
+        missing_id,
+    ] = fields.as_slice()
+    else {
+        panic!("expected seven fields in the reflection discovery report");
+    };
+
+    assert_eq!(listed, &SchemaValue::Bool(true));
+    assert_eq!(
+        type_name,
+        &SchemaValue::String("SimpleChildAgent".to_string())
+    );
+    assert_eq!(method_name, &SchemaValue::String("value".to_string()));
+    assert_eq!(first_value, &SchemaValue::F64(1.0));
+    assert_eq!(second_value, &SchemaValue::F64(1.0));
+    assert_eq!(missing_name, &SchemaValue::Bool(true));
+    assert_eq!(missing_id, &SchemaValue::Bool(true));
+
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn ts_reflected_ephemeral_invocation_returns_final_metadata(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+    let agent_id = agent_id!(
+        "TestAgent",
+        "ts_reflected_ephemeral_invocation_returns_final_metadata"
+    );
+
+    let report = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "reflectedEphemeralTest",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .expect("expected a reflected ephemeral report");
+    let SchemaValue::Record { fields } = report else {
+        panic!("expected a reflected ephemeral report record");
+    };
+    let [value, final_agent_id, idempotency_key, proxy_has_agent_id] = fields.as_slice() else {
+        panic!("expected four fields in the reflected ephemeral report");
+    };
+
+    assert_eq!(value, &SchemaValue::String("reflected".to_string()));
+    assert!(
+        matches!(final_agent_id, SchemaValue::String(value) if !value.is_empty()),
+        "final reflected ephemeral agent ID must be non-empty"
+    );
+    assert!(
+        matches!(idempotency_key, SchemaValue::String(value) if !value.is_empty()),
+        "reflected ephemeral idempotency key must be non-empty"
+    );
+    assert_eq!(proxy_has_agent_id, &SchemaValue::Bool(false));
 
     Ok(())
 }

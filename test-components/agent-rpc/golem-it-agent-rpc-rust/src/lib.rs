@@ -35,6 +35,7 @@ pub trait RustParent {
 
     async fn spawn_child(&self, data: String) -> Uuid;
     async fn call_ts_agent(&self, name: String) -> f64;
+    fn inspect_missing_rpc_type(&self) -> String;
 }
 
 struct RustParentImpl {
@@ -62,6 +63,15 @@ impl RustParent for RustParentImpl {
     async fn call_ts_agent(&self, name: String) -> f64 {
         let client = SimpleChildAgentClient::get(name);
         client.value().await
+    }
+
+    fn inspect_missing_rpc_type(&self) -> String {
+        let constructor = encode_schema_value(&SchemaValue::Record { fields: Vec::new() })
+            .expect("failed to encode empty RPC constructor");
+        match WasmRpc::create("MissingReflectedType", constructor, None, Vec::new()) {
+            Ok(_) => "unexpected success".to_string(),
+            Err(error) => format!("{error:?}"),
+        }
     }
 }
 

@@ -16,9 +16,100 @@ import { makeAgentId, parseAgentId } from 'golem:agent/host@2.0.0';
 import { Uuid } from './uuid';
 import { Uuid as RawUuid } from 'golem:core/types@2.0.0';
 import { SchemaValue, schemaValueFromWit, schemaValueToWit } from './internal/schema-model';
+import { ComponentId } from './ids';
+import { DynamicAgentClient, type DynamicAgentClientSurface } from './dynamicClient';
+
+/** @internal Protocol implemented by typed contracts and reflected agent types. */
+export const bindAgentClient = '__golemBindAgentClient' as const;
+
+/** @internal A value that can bind itself to an existing agent identity. */
+export interface AgentClientBinding<Client> {
+  [bindAgentClient](agentId: AgentId): Client;
+}
+
+/** Globally unique identity of a Golem agent. */
+export interface AgentId {
+  readonly componentId: ComponentId;
+  readonly agentId: string;
+  /** Bind caller-supplied codecs or a reflected agent type to this identity. */
+  client<Client>(binding: AgentClientBinding<Client>): Client;
+  /** Invoke this identity with schema values and no discovery or typed contract. */
+  dynamicClient(): DynamicAgentClientSurface;
+}
+
+/** Explicit parts used to construct an {@link AgentId}. */
+export interface AgentIdCreateOptions {
+  readonly componentId: ComponentId;
+  readonly typeName: string;
+  readonly constructorValue: SchemaValue;
+  readonly phantomId?: Uuid;
+}
+
+/** Parsed semantic parts of an {@link AgentId}. */
+export interface AgentIdParts {
+  readonly componentId: ComponentId;
+  readonly typeName: string;
+  readonly constructorValue: SchemaValue;
+  readonly phantomId?: Uuid;
+}
+
+/** Construct and inspect full agent identities. */
+export const AgentId = Object.freeze({
+  from(value: {
+    readonly componentId: { readonly uuid: RawUuid };
+    readonly agentId: string;
+  }): AgentId {
+    return new AgentIdValue(ComponentId.from(value.componentId), value.agentId);
+  },
+
+  create(options: AgentIdCreateOptions): AgentId {
+    return new AgentIdValue(
+      options.componentId,
+      createAgentIdString(options.typeName, options.constructorValue, options.phantomId),
+    );
+  },
+
+  parse(value: AgentId): AgentIdParts {
+    const [typeName, typedParameters, rawPhantomId] = parseAgentId(value.agentId);
+    return {
+      componentId: value.componentId,
+      typeName,
+      constructorValue: schemaValueFromWit(typedParameters.value),
+      phantomId: rawPhantomId ? Uuid.from(rawPhantomId) : undefined,
+    };
+  },
+});
+
+class AgentIdValue implements AgentId {
+  constructor(
+    readonly componentId: ComponentId,
+    readonly agentId: string,
+  ) {}
+
+  client<Client>(binding: AgentClientBinding<Client>): Client {
+    const bind = binding[bindAgentClient];
+    if (typeof bind !== 'function') {
+      throw new TypeError('Expected an agent client contract or reflected agent type');
+    }
+    return bind.call(binding, this);
+  }
+
+  dynamicClient(): DynamicAgentClientSurface {
+    return new DynamicAgentClient(this);
+  }
+}
+
+function createAgentIdString(
+  agentTypeName: string,
+  parameters: SchemaValue,
+  phantomId?: RawUuid,
+): string {
+  const normalized = phantomId ? Uuid.from(phantomId) : undefined;
+  return makeAgentId(agentTypeName, schemaValueToWit(parameters), normalized);
+}
 
 /**
- * Globally unique ID of an `agent`.
+ * Parsed component-local agent identity string.
  *
  * A ParsedAgentId wraps the string representation of an agent ID and can parse it
  * into its constituent parts: agent type name, constructor parameters, and optional phantom ID.
@@ -41,10 +132,15 @@ export class ParsedAgentId {
    * @param agentTypeName Agent type name in kebab-case
    * @param parameters Constructor parameter values encoded as a {@link SchemaValue} record
    * @param phantomId Optional phantom ID
+   * @internal Use a definition's `agentId(...)` or {@link AgentId.create}.
    */
-  static make(agentTypeName: string, parameters: SchemaValue, phantomId?: RawUuid): ParsedAgentId {
+  static create(
+    agentTypeName: string,
+    parameters: SchemaValue,
+    phantomId?: RawUuid,
+  ): ParsedAgentId {
     const normalized = phantomId ? Uuid.from(phantomId) : undefined;
-    const value = makeAgentId(agentTypeName, schemaValueToWit(parameters), normalized);
+    const value = createAgentIdString(agentTypeName, parameters, normalized);
     const result = new ParsedAgentId(value);
     result.parsedCache = [agentTypeName, parameters, normalized];
     return result;

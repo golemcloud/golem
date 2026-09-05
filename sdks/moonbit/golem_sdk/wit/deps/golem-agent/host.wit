@@ -1,7 +1,7 @@
 package golem:agent@2.0.0;
 
 interface host {
-    use golem:core/types@2.0.0.{component-id, uuid, promise-id, schema-graph, schema-value-tree, typed-schema-value, permission-card};
+    use golem:core/types@2.0.0.{agent-id, component-id, uuid, promise-id, schema-graph, schema-value-tree, typed-schema-value, permission-card};
     use wasi:clocks/system-clock@0.3.0.{instant as datetime};
     use common.{agent-error, agent-type, registered-agent-type, typed-agent-config-value};
 
@@ -85,10 +85,11 @@ interface host {
 
     /// An RPC client for invoking remote agents
     resource wasm-rpc {
-      /// Constructs the RPC client connecting to the given target agent.
+      /// Creates an RPC client connecting to the given target agent.
       ///
       /// `constructor` is a value tree whose root encodes the target agent
-      /// constructor's parameter list.
+      /// constructor's parameter list. This fail-fast form traps if the client
+      /// cannot be created and is intended for statically generated clients.
       constructor(agent-type-name: string, %constructor: schema-value-tree, phantom-id: option<uuid>, agent-config: list<typed-agent-config-value>);
 
       /// Invokes a remote method with the given parameters, and awaits the result.
@@ -114,6 +115,14 @@ interface host {
       /// cancellation capability. Call cancel on the returned resource to
       /// cancel the invocation before the scheduled time.
       schedule-cancelable-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> result<cancelable-scheduled-invocation-receipt, rpc-error>;
+
+      /// Creates an RPC client connecting to the given target agent.
+      ///
+      /// `constructor` is a value tree whose root encodes the target agent
+      /// constructor's parameter list. This fallible form returns an RPC error
+      /// if the client cannot be created and is intended for reflective and
+      /// other dynamic clients.
+      create: static func(agent-type-name: string, %constructor: schema-value-tree, phantom-id: option<uuid>, agent-config: list<typed-agent-config-value>) -> result<wasm-rpc, rpc-error>;
     }
 
     /// Represents an asynchronous invocation result
@@ -149,4 +158,7 @@ interface host {
     }
 
     get-config-value: func(key: list<string>, expected: schema-graph) -> result<schema-value-tree, config-value-error>;
+
+    /// Gets the registered agent type used by an existing agent, identified by its agent ID.
+    get-agent-type-by-agent-id: func(agent-id: agent-id) -> option<registered-agent-type>;
 }

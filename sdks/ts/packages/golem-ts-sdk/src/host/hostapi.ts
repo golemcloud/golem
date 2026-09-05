@@ -17,6 +17,8 @@ import {
   getPromise,
   generateIdempotencyKey as rawGenerateIdempotencyKey,
   resolveComponentId as rawResolveComponentId,
+  resolveAgentId as rawResolveAgentId,
+  resolveAgentIdStrict as rawResolveAgentIdStrict,
   fork as rawFork,
   ForkResult as RawForkResult,
   getSelfMetadata as rawGetSelfMetadata,
@@ -33,7 +35,7 @@ import {
   OplogIndex,
 } from 'golem:api/host@1.5.0';
 import { ComponentId as RawComponentId } from 'golem:core/types@2.0.0';
-import { ParsedAgentId } from '../agentId';
+import { AgentId, ParsedAgentId } from '../agentId';
 import { awaitAbortable } from '../internal/pollableUtils';
 import * as wasiEnv from 'wasi:cli/environment@0.3.0';
 import { Uuid } from '../uuid';
@@ -55,8 +57,6 @@ export {
   updateAgent,
   forkAgent,
   revertAgent,
-  resolveAgentId,
-  resolveAgentIdStrict,
 } from 'golem:api/host@1.5.0';
 
 // Re-export classes (GetAgents is wrapped below)
@@ -91,11 +91,6 @@ export { ComponentId, AccountId, EnvironmentId } from '../ids';
 /**
  * Represents a Golem agent, consisting of a component ID and the agent's string identifier.
  */
-export type AgentId = {
-  componentId: ComponentId;
-  agentId: string;
-};
-
 /**
  * Metadata about an agent.
  */
@@ -111,10 +106,7 @@ export type AgentMetadata = {
 };
 
 function wrapAgentId(raw: RawAgentId): AgentId {
-  return {
-    componentId: ComponentId.from(raw.componentId),
-    agentId: raw.agentId,
-  };
+  return AgentId.from(raw);
 }
 
 function wrapAgentMetadata(raw: RawAgentMetadata): AgentMetadata {
@@ -144,6 +136,21 @@ export function generateIdempotencyKey(): Uuid {
 export function resolveComponentId(componentReference: string): ComponentId | undefined {
   const raw = rawResolveComponentId(componentReference);
   return raw ? ComponentId.from(raw) : undefined;
+}
+
+/** Resolve an agent reference and enrich the returned identity. */
+export function resolveAgentId(componentReference: string, agentName: string): AgentId | undefined {
+  const raw = rawResolveAgentId(componentReference, agentName);
+  return raw ? wrapAgentId(raw) : undefined;
+}
+
+/** Strictly resolve an agent reference and enrich the returned identity. */
+export function resolveAgentIdStrict(
+  componentReference: string,
+  agentName: string,
+): AgentId | undefined {
+  const raw = rawResolveAgentIdStrict(componentReference, agentName);
+  return raw ? wrapAgentId(raw) : undefined;
 }
 
 /**

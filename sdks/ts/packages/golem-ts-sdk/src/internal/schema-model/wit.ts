@@ -903,7 +903,10 @@ export async function schemaValueToWitAsync(value: SchemaValue): Promise<WitSche
   // aliased capabilities anywhere else in the tree have been rejected.
   assertSchemaValueRepresentable(value, true);
 
-  const newlyWrapped: Array<{ handle: GuestSchemaValueStreamHandle; value: unknown }> = [];
+  const newlyWrapped: Array<{
+    handle: Pick<GuestSchemaValueStreamHandle, 'peek' | 'take'>;
+    value: unknown;
+  }> = [];
 
   async function prepare(current: SchemaValue): Promise<void> {
     switch (current.tag) {

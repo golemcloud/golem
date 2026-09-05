@@ -9,6 +9,7 @@ export default {
   "golem-annotate-agent-ts": "Annotating Agents and Methods (TypeScript)",
   "golem-atomic-block-ts": "Atomic Blocks and Durability Controls (TypeScript)",
   "golem-call-from-external-ts": "Calling Agents from External TypeScript Applications",
+  "golem-call-agent-reflectively-ts": "Calling Agents with Runtime Reflection (TypeScript)",
   "golem-call-another-agent-ts": "Calling Another Agent (TypeScript)",
   "golem-configure-durability-ts": "Configuring Agent Durability (TypeScript)",
   "golem-add-cors-ts": "Configuring CORS for TypeScript HTTP Endpoints",

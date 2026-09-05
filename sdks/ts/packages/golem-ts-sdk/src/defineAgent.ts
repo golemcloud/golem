@@ -22,6 +22,7 @@ import { StandardSchemaV1 } from './schema/standardSchema';
 import { MethodSpec } from './method';
 import type { InputRecord, MethodHasHttpOf } from './method';
 import { ParsedAgentId } from './agentId';
+import { bindAgentClient, type AgentClientBinding, type AgentId } from './agentId';
 import { Principal } from './principal';
 import { Uuid } from './uuid';
 import { registerAgentInitiator, registerAgentType, RegisteredAgent } from './runtime';
@@ -31,6 +32,8 @@ import type { MountSpecCovering, WebhookVarsValid } from './httpTypes';
 import type { MarkerKindOf, SecretInnerOf } from './schema/markers';
 import type { Secret } from './secret';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
+import { buildAgentClientSurface } from './client';
+import type { AgentClientFactory } from './client';
 
 export type { ConfigSpec } from './config';
 
@@ -109,6 +112,14 @@ type InferRecord<R extends Record<string, StandardSchemaV1>> = {
   [K in keyof R]: StandardSchemaV1.InferOutput<R[K]>;
 };
 
+/** Keys whose values are supplied by the host rather than an RPC caller. */
+type AutoInjectedKeys<R extends Record<string, StandardSchemaV1>> = {
+  [K in keyof R & string]: [MarkerKindOf<R[K]>] extends ['principal'] ? K : never;
+}[keyof R & string];
+
+/** The schema fields an RPC caller supplies after host-injected fields are removed. */
+export type CallerInput<R extends Record<string, StandardSchemaV1>> = Omit<R, AutoInjectedKeys<R>>;
+
 /** The handler signature inferred for a method spec (no-arg when input is empty). */
 type HandlerFor<M> =
   M extends MethodSpec<infer Input, infer Output, boolean>
@@ -166,19 +177,49 @@ export interface AgentImpl {
   readonly name: string;
 }
 
-export interface AgentDefinition<
+export interface AgentClientContract<
   Id extends IdRecord,
   Methods extends MethodsRecord,
   Config extends ConfigSpec = {},
-  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
   Mode extends 'durable' | 'ephemeral' = 'durable',
 > {
   readonly name: string;
   readonly id: Id;
   readonly methods: Methods;
   readonly mode: Mode;
-  /** The agent's config schema (used by `clientFor` to encode config overrides). */
+  /** The agent's config schema used to encode RPC config overrides. */
   readonly config?: Config;
+}
+
+export interface AgentClientBindingDefinition<
+  Methods extends MethodsRecord,
+> extends AgentClientBinding<import('./client').RemoteClient<Methods>> {
+  readonly name?: string;
+  readonly methods: Methods;
+}
+
+export interface AgentClientDefinition<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+> extends AgentClientContract<Id, Methods, Config, Mode> {
+  /** Construct the full identity for an agent addressed by this definition. */
+  readonly agentId: Mode extends 'ephemeral'
+    ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => AgentId
+    : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => AgentId;
+  /** A client factory compiled from this definition's local schemas. */
+  readonly client: AgentClientFactory<Id, Methods, Mode>;
+  [bindAgentClient](agentId: AgentId): import('./client').RemoteClient<Methods, Mode>;
+}
+
+export interface AgentDefinition<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+> extends AgentClientDefinition<Id, Methods, Config, Mode> {
   /** Supply the runtime behaviour. Registers the agent at module-load time. */
   implement<State extends object & StandardSchemaV1.InferOutput<StateSchema>>(
     impl: AgentImplementation<Id, Methods, Config, State>,
@@ -328,15 +369,38 @@ export function defineAgent<
       `Definition failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  let implemented = false;
-  return {
+  const clientContract: AgentClientContract<Id, Methods, Config, Mode> & {
+    readonly name: string;
+    readonly id: Id;
+  } = {
     name,
     id: spec.id,
     methods: spec.methods,
     mode: spec.mode ?? ('durable' as Mode),
-    // Expose the config schema on the def so `clientFor` can encode config
+    // Expose the config schema so the client can encode config
     // overrides for RPC (config-on-RPC); undefined when the agent has no config.
     config: spec.config,
+  };
+  let implemented = false;
+  let surface:
+    | {
+        client: AgentClientFactory<Id, Methods, Mode>;
+        agentId: AgentClientDefinition<Id, Methods, Config, Mode>['agentId'];
+        [bindAgentClient]: AgentClientDefinition<Id, Methods, Config, Mode>[typeof bindAgentClient];
+      }
+    | undefined;
+  const getSurface = () => (surface ??= buildAgentClientSurface(clientContract, false));
+  return {
+    ...clientContract,
+    get agentId() {
+      return getSurface().agentId;
+    },
+    get client() {
+      return getSurface().client;
+    },
+    [bindAgentClient](agentId) {
+      return getSurface()[bindAgentClient](agentId);
+    },
     implement(impl) {
       if (implemented) {
         AgentTypeRegistry.recordRegistrationError(

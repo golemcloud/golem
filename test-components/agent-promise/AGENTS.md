@@ -27,7 +27,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-mark-read-only-ts` | Marking methods `readOnly` for a side-effect-free guarantee and result caching |
 | `golem-add-config-ts` | Adding typed configuration to a TypeScript agent |
 | `golem-add-secret-ts` | Adding secrets (`s.secret`, `Secret<T>`) to TypeScript agents |
-| `golem-call-another-agent-ts` | Calling another agent and awaiting the result (RPC) with `clientFor` |
+| `golem-call-another-agent-ts` | Calling another agent and awaiting the result over RPC through a definition client |
 | `golem-call-from-external-ts` | Calling agents from external Node.js apps using generated bridge SDKs |
 | `golem-fire-and-forget-ts` | Triggering an agent invocation without waiting for the result (`.trigger`) |
 | `golem-parallel-workers-ts` | Fan out work to multiple parallel agents and collect results |
@@ -36,7 +36,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-wait-for-external-input-ts` | Waiting for external input using Golem promises (human-in-the-loop) |
 | `golem-add-webhook-ts` | Creating and awaiting webhooks for webhook-driven external APIs |
 | `golem-multi-instance-agent-ts` | Creating multiple agent instances with phantom agents |
-| `golem-atomic-block-ts` | Atomic blocks, persistence control, and idempotency |
+| `golem-atomic-block-ts` | Atomic blocks and idempotency |
 | `golem-add-transactions-ts` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-ts` | Exposing an agent over HTTP with mount paths and endpoints |
 | `golem-http-params-ts` | Mapping path, query, header, and body parameters for HTTP endpoints |
@@ -254,15 +254,13 @@ Config values are provisioned via `golem.yaml` (`env`/`envDefaults`/`secretDefau
 
 ## Calling Other Agents (RPC)
 
-`clientFor(Def)` returns a factory; call it with an id record to get a typed proxy, or use `factory.newPhantom(id)` to create a phantom and return `{ client, phantomId }`. `await client.m(input, { signal })` invokes with optional cancellation; `client.m.trigger(input)` is fire-and-forget; `client.m.schedule(at, input)` enqueues for later and returns a `CancellationToken`.
+Every agent definition exposes a `.client` factory. Use `.get(id)` for a durable agent, `.getPhantom(id, phantomId)` for a known phantom, or `.newPhantom(id)` to create a phantom and return `{ client, agentId, phantomId }`. `await client.m(input, { signal })` invokes with optional cancellation; `client.m.trigger(input)` is fire-and-forget; `client.m.schedule(at, input)` enqueues for later and returns a `CancellationToken`.
 
 ```typescript
-import { clientFor } from '@golemcloud/golem-ts-sdk';
 import { Counter } from './counter-agent.js';
 
-const counter = clientFor(Counter);
-const next = await counter({ name: 'c1' }).add({ by: 5 });
-counter({ name: 'c1' }).add.trigger({ by: 1 });   // fire-and-forget
+const next = await Counter.client.get({ name: 'c1' }).add({ by: 5 });
+Counter.client.get({ name: 'c1' }).add.trigger({ by: 1 });   // fire-and-forget
 ```
 
 ## Snapshotting

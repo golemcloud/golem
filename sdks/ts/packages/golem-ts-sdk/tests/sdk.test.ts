@@ -14,16 +14,22 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
-import { makeAgentId, WasmRpc } from 'golem:agent/host@2.0.0';
+import { makeAgentId, parseAgentId, WasmRpc } from 'golem:agent/host@2.0.0';
 import type { CancellationToken, Datetime } from 'golem:agent/host@2.0.0';
 import { defineAgent } from '../src/defineAgent';
 import type { AgentSpec } from '../src/defineAgent';
 import { method } from '../src/method';
-import { clientFor, RemoteCallError } from '../src/client';
+import {
+  defineAgentClient,
+  isRemoteCallError,
+  RemoteCallError,
+  RemoteOutputError,
+} from '../src/client';
 import { compileSchema } from '../src/schema/adapter';
 import type { StandardSchemaV1 } from '../src/schema/standardSchema';
 import { s } from '../src/schema/markers';
 import { Uuid } from '../src/uuid';
+import { AgentId } from '../src/agentId';
 import { AgentClassName } from '../src/agentClassName';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
@@ -43,11 +49,14 @@ function remoteClientTypeChecks(): void {
       add: method({ input: { by: z.number() }, returns: z.number() }),
     },
   });
-  const factory = clientFor(def);
-  const client = factory({ name: 'counter' });
+  const factory = def.client;
+  const client = factory.get({ name: 'counter' });
+  const definitionClient = def.client.get({ name: 'counter' });
+  const agentId = def.agentId({ name: 'counter' });
   const controller = new AbortController();
   void client.ping({ signal: controller.signal });
   void client.add({ by: 1 }, { signal: controller.signal });
+  void definitionClient.ping();
   // @ts-expect-error cancellation is an option on the normal call, not a separate operation
   void client.ping.abortable(controller.signal);
   const at: Datetime = { seconds: 1n, nanoseconds: 0 };
@@ -65,20 +74,54 @@ function remoteClientTypeChecks(): void {
     id: { name: z.string() },
     methods: { ping: method({ input: {}, returns: z.string() }) },
   });
-  const ephemeralFactory = clientFor(ephemeralDef);
+  const ephemeralFactory = ephemeralDef.client;
   const ephemeral = ephemeralFactory.newPhantom({ name: 'counter' });
   void ephemeral.ping().then(({ metadata, value }) => ({ metadata, value }));
   const ephemeralMetadata = ephemeral.ping.trigger();
   const ephemeralReceipt = ephemeral.ping.schedule(at);
+  const knownEphemeral = ephemeralDef.client.getPhantom({ name: 'counter' }, new Uuid(1n, 2n));
+  const ephemeralAgentId = ephemeralDef.agentId({ name: 'counter' }, new Uuid(1n, 2n));
+  void knownEphemeral.ping();
   // @ts-expect-error ephemeral factories cannot address a stable agent directly
-  ephemeralFactory({ name: 'counter' });
+  ephemeralFactory.get({ name: 'counter' });
   // @ts-expect-error ephemeral clients have no reusable pre-invocation phantom id
   void ephemeral.phantomId;
   void pingToken;
   void addToken;
   void phantomId;
+  void agentId;
+  void ephemeralAgentId;
   void ephemeralMetadata;
   void ephemeralReceipt;
+
+  const exactEphemeralContract = defineAgentClient({
+    name: 'ExactEphemeralClientTypeChecks',
+    mode: 'ephemeral',
+    id: { name: z.string() },
+    methods: { ping: method({ input: {}, returns: z.string() }) },
+  });
+  const exactEphemeralClient = exactEphemeralContract.client.newPhantom({ name: 'counter' });
+  void exactEphemeralClient.ping().then(({ metadata, value }) => ({
+    agentId: metadata.agentId,
+    idempotencyKey: metadata.idempotencyKey,
+    value,
+  }));
+
+  const sharedContract = defineAgentClient({
+    methods: { ping: method({ input: {}, returns: z.string() }) },
+  });
+  void agentId.client(sharedContract).ping();
+  void agentId.dynamicClient().method('ping');
+  // @ts-expect-error lifecycle mode belongs to exact constructor definitions, not ID bindings
+  defineAgentClient({ mode: 'durable', methods: sharedContract.methods });
+  // @ts-expect-error name-only ID bindings do not carry lifecycle mode either
+  defineAgentClient({ name: 'Named', mode: 'ephemeral', methods: sharedContract.methods });
+  // @ts-expect-error binding definitions expose no synthetic lifecycle mode
+  void sharedContract.mode;
+  // @ts-expect-error method-only contracts do not construct exact-target identities
+  sharedContract.agentId({});
+  // @ts-expect-error method-only contracts do not expose constructor-based factories
+  sharedContract.client.get({});
 
   const ephemeralId = { name: z.string() };
   const ephemeralMethods = { ping: method({ input: {}, returns: z.string() }) };
@@ -523,12 +566,248 @@ describe('RPC client', () => {
       scheduleCancelableInvocation: ReturnType<typeof vi.fn>;
     };
 
+  it('exposes a cached client factory on authored agent definitions', () => {
+    expect(clientDef.client).toBe(clientDef.client);
+    const client = clientDef.client.get({ name: 'counter' }, { greeting: 'hello' });
+
+    expect(client.ping).toBeTypeOf('function');
+    expect(vi.mocked(WasmRpc).mock.calls.at(-1)![3]).toHaveLength(1);
+  });
+
+  it('builds a client-only definition from Standard Schema libraries without registration', () => {
+    const name = 'RuntimeBuiltClientOnlyAgent';
+    const before = AgentTypeRegistry.getRegisteredAgents().length;
+    const definition = defineAgentClient({
+      name,
+      id: { name: z.string() },
+      methods: { ping: method({ input: { message: z.string() }, returns: z.string() }) },
+    });
+    const client = definition.client.get({ name: 'counter' });
+
+    expect(client.ping).toBeTypeOf('function');
+    expect(AgentTypeRegistry.getRegisteredAgents()).toHaveLength(before);
+    expect(AgentTypeRegistry.exists(new AgentClassName(name))).toBe(false);
+  });
+
+  it('binds one method-only contract to differently shaped existing agent identities', async () => {
+    const contract = defineAgentClient({
+      methods: { ping: method({ input: { message: z.string() }, returns: z.string() }) },
+    });
+    const first = AgentId.from({
+      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
+      agentId: 'FirstAgent(one)',
+    });
+    const second = AgentId.from({
+      componentId: { uuid: { highBits: 0n, lowBits: 2n } },
+      agentId: 'SecondAgent(team,two)',
+    });
+    vi.mocked(parseAgentId)
+      .mockReturnValueOnce([
+        'FirstAgent',
+        {
+          graph: { typeNodes: [], defs: [], root: 0 },
+          value: schemaValueToWit(v.record([v.string('one')])),
+        },
+        undefined,
+      ])
+      .mockReturnValueOnce([
+        'SecondAgent',
+        {
+          graph: { typeNodes: [], defs: [], root: 0 },
+          value: schemaValueToWit(v.record([v.string('team'), v.string('two')])),
+        },
+        undefined,
+      ]);
+
+    expect(first.client(contract).ping).toBeTypeOf('function');
+    expect(second.client(contract).ping).toBeTypeOf('function');
+    expect(
+      vi
+        .mocked(WasmRpc.create)
+        .mock.calls.slice(-2)
+        .map((call) => call[0]),
+    ).toEqual(['FirstAgent', 'SecondAgent']);
+    expect(contract).not.toHaveProperty('mode');
+  });
+
+  it('binds a method-only contract to a durable phantom identity without discovery', () => {
+    const contract = defineAgentClient({
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const phantomId = new Uuid(1n, 2n);
+    const target = AgentId.from({
+      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
+      agentId: 'DurablePhantom(one)[00000000-0000-0001-0000-000000000002]',
+    });
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'DurablePhantom',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.string('one')])),
+      },
+      phantomId,
+    ]);
+
+    expect(target.client(contract).ping).toBeTypeOf('function');
+    expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![2]).toBe(phantomId);
+  });
+
+  it('rejects lifecycle fields on partial JavaScript binding contracts', () => {
+    expect(() =>
+      defineAgentClient({
+        mode: 'durable',
+        methods: { ping: method({ input: {}, returns: z.string() }) },
+      } as any),
+    ).toThrow(
+      'Agent ID binding contracts may only define methods and an optional name; id, config, and mode require a complete exact name + id definition',
+    );
+  });
+
+  it('binds an exact durable definition to its matching existing identity', () => {
+    const definition = defineAgentClient({
+      name: 'ExactDurableAgent',
+      id: { name: z.string() },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const target = AgentId.from({
+      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
+      agentId: 'ExactDurableAgent(one)',
+    });
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'ExactDurableAgent',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.string('one')])),
+      },
+      undefined,
+    ]);
+
+    expect(target.client(definition).ping).toBeTypeOf('function');
+  });
+
+  it('rejects binding an exact ephemeral definition to an existing identity', () => {
+    const definition = defineAgentClient({
+      name: 'ExactEphemeralAgent',
+      mode: 'ephemeral',
+      id: { name: z.string() },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const target = AgentId.from({
+      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
+      agentId: 'ExactEphemeralAgent(one)',
+    });
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'ExactEphemeralAgent',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.string('one')])),
+      },
+      undefined,
+    ]);
+    const creates = vi.mocked(WasmRpc.create).mock.calls.length;
+
+    expect(() => target.client(definition)).toThrow(
+      "Cannot bind existing AgentId 'ExactEphemeralAgent(one)' to ephemeral agent type 'ExactEphemeralAgent'; use its client.newPhantom(...) factory",
+    );
+    expect(WasmRpc.create).toHaveBeenCalledTimes(creates);
+  });
+
+  it('checks an optional exact name locally before creating the remote client', () => {
+    const contract = defineAgentClient({
+      name: 'ExpectedAgent',
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const target = AgentId.from({
+      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
+      agentId: 'OtherAgent(one)',
+    });
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'OtherAgent',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.string('one')])),
+      },
+      undefined,
+    ]);
+    const creates = vi.mocked(WasmRpc.create).mock.calls.length;
+
+    expect(() => target.client(contract)).toThrow(
+      "Agent client contract 'ExpectedAgent' cannot bind agent type 'OtherAgent'",
+    );
+    expect(WasmRpc.create).toHaveBeenCalledTimes(creates);
+  });
+
+  it('surfaces an incompatible target method as a structured remote error', async () => {
+    const contract = defineAgentClient({
+      methods: { analyze: method({ input: { topic: z.string() }, returns: z.string() }) },
+    });
+    const target = AgentId.from({
+      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
+      agentId: 'ReportArchive(reports)',
+    });
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'ReportArchive',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.string('reports')])),
+      },
+      undefined,
+    ]);
+    const client = target.client(contract);
+    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
+    rpc.asyncInvokeAndAwait.mockReturnValue({
+      metadata: { agentId: target.agentId, idempotencyKey: 'key' },
+      future: {
+        get: vi.fn().mockRejectedValue({
+          tag: 'remote-agent-error',
+          val: { tag: 'invalid-method', val: 'analyze is not defined' },
+        }),
+        cancel: vi.fn(),
+      },
+    });
+
+    await expect(client.analyze({ topic: 'demand' })).rejects.toMatchObject({
+      cause: {
+        tag: 'remote-agent-error',
+        error: { tag: 'invalid-method', details: 'analyze is not defined' },
+      },
+    });
+  });
+
+  it('surfaces client creation failures for runtime-built reflection definitions', () => {
+    const rpcError = { tag: 'not-found' as const, val: 'missing deployment' };
+    const definition = defineAgentClient({
+      name: 'FallibleClientDefinitionAgent',
+      id: {},
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    vi.mocked(WasmRpc.create).mockImplementationOnce(() => {
+      throw rpcError;
+    });
+
+    expect(() => definition.client.get({})).toThrow(RemoteCallError);
+  });
+
+  it('constructs identity on the definition even when a method name would collide', () => {
+    const phantomId = new Uuid(1n, 2n);
+    const def = defineAgentClient({
+      name: 'ClientIdentityAgent',
+      id: {},
+      methods: { agentId: method({ input: {}, returns: z.string() }) },
+    });
+    const client = def.client.getPhantom({}, phantomId);
+
+    expect(client.agentId).toBeTypeOf('function');
+    expect(def.agentId({}, phantomId)).toMatchObject({ agentId: 'MockAgent()' });
+  });
+
   it('creates a fresh phantom client and exposes the generated id', () => {
     const phantomId = new Uuid(1n, 2n);
     const generate = vi.spyOn(Uuid, 'generate').mockReturnValue(phantomId);
-    const phantom = clientFor(clientDef).newPhantom({ name: 'counter' }, { greeting: 'hello' });
+    const phantom = clientDef.client.newPhantom({ name: 'counter' }, { greeting: 'hello' });
 
     expect(phantom.phantomId).toBe(phantomId);
+    expect(phantom.agentId).toEqual(clientDef.agentId({ name: 'counter' }, phantomId));
     expect(phantom.client.ping).toBeTypeOf('function');
     const constructorArgs = vi.mocked(WasmRpc).mock.calls.at(-1)!;
     expect(constructorArgs[2]).toBe(phantomId);
@@ -544,14 +823,14 @@ describe('RPC client', () => {
         phantomId: method({ input: {}, returns: z.string() }),
       },
     });
-    const phantom = clientFor(def).newPhantom({});
+    const phantom = def.client.newPhantom({});
 
     expect(typeof phantom.client.phantomId).toBe('function');
     expect(phantom.phantomId).toBeInstanceOf(Uuid);
   });
 
   it('returns cancellation tokens from schedule and removes the old operations', () => {
-    const client = clientFor(clientDef)({ name: 'counter' });
+    const client = clientDef.client.get({ name: 'counter' });
     const rpc = latestRpc();
     const token = { cancel: vi.fn() };
     rpc.scheduleCancelableInvocation.mockReturnValue({
@@ -569,15 +848,15 @@ describe('RPC client', () => {
   });
 
   it('uses one logical client for ephemeral invocations and returns final identity metadata', async () => {
-    const ephemeralDef = defineAgent({
+    const ephemeralDef = defineAgentClient({
       name: 'EphemeralClientTestAgent',
       mode: 'ephemeral',
       id: { name: z.string() },
       methods: { ping: method({ input: {}, returns: z.void() }) },
     });
     const makeAgentIdCalls = vi.mocked(makeAgentId).mock.calls.length;
-    const client = clientFor(ephemeralDef).newPhantom({ name: 'counter' });
-    const rpc = latestRpc();
+    const client = ephemeralDef.client.newPhantom({ name: 'counter' });
+    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
     const metadata = { agentId: 'final-agent-id', idempotencyKey: 'key' };
     const future = {
       subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
@@ -592,7 +871,7 @@ describe('RPC client', () => {
     await expect(client.ping()).resolves.toEqual({ metadata, value: undefined });
     expect(client.ping.trigger()).toBe(metadata);
     expect(client.ping.schedule({ seconds: 1n, nanoseconds: 0 })).toBe(receipt);
-    expect(vi.mocked(WasmRpc).mock.calls.at(-1)![2]).toBeUndefined();
+    expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![2]).toBeUndefined();
     expect(vi.mocked(makeAgentId).mock.calls).toHaveLength(makeAgentIdCalls);
   });
 
@@ -605,7 +884,7 @@ describe('RPC client', () => {
     const phantomId = new Uuid(1n, 2n);
     const agentId = 'MissingSingleOutputAgent(1)[00000000-0000-0001-0000-000000000002]';
     vi.mocked(makeAgentId).mockReturnValueOnce(agentId);
-    const client = clientFor(def)({ id: 1n }, phantomId);
+    const client = def.client.getPhantom({ id: 1n }, phantomId);
     const rpc = latestRpc();
     rpc.asyncInvokeAndAwait.mockReturnValue({
       metadata: { agentId: 'agent-id', idempotencyKey: 'key' },
@@ -633,7 +912,7 @@ describe('RPC client', () => {
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
     vi.mocked(makeAgentId).mockReturnValueOnce('MismatchedSingleOutputAgent()');
-    const client = clientFor(def)({});
+    const client = def.client.get({});
     const rpc = latestRpc();
     rpc.asyncInvokeAndAwait.mockReturnValue({
       metadata: { agentId: 'agent-id', idempotencyKey: 'key' },
@@ -644,7 +923,7 @@ describe('RPC client', () => {
       },
     });
 
-    await expect(client.ping()).rejects.toBeInstanceOf(RemoteCallError);
+    await expect(client.ping()).rejects.toBeInstanceOf(RemoteOutputError);
   });
 
   it('preserves RemoteCallError when a remote custom error contains bigint values', async () => {
@@ -654,7 +933,7 @@ describe('RPC client', () => {
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
     vi.mocked(makeAgentId).mockReturnValueOnce('BigintRemoteErrorAgent()');
-    const client = clientFor(def)({});
+    const client = def.client.get({});
     const rpc = latestRpc();
     const errorCodec = compileSchema(s.u64());
     rpc.asyncInvokeAndAwait.mockReturnValue({
@@ -675,7 +954,31 @@ describe('RPC client', () => {
       },
     });
 
-    await expect(client.ping()).rejects.toBeInstanceOf(RemoteCallError);
+    try {
+      await client.ping();
+      throw new Error('expected the remote call to fail');
+    } catch (error) {
+      expect(isRemoteCallError(error)).toBe(true);
+      if (!isRemoteCallError(error)) throw error;
+      expect(error.cause).toMatchObject({
+        tag: 'remote-agent-error',
+        error: {
+          tag: 'custom-error',
+          value: { value: { tag: 'u64', value: 1n } },
+        },
+      });
+    }
+  });
+
+  it('narrows RemoteCallError structurally across package entry identities', () => {
+    expect(
+      isRemoteCallError({
+        _tag: 'RemoteCallError',
+        message: 'Remote call failed',
+        cause: { tag: 'denied', details: 'not allowed' },
+      }),
+    ).toBe(true);
+    expect(isRemoteCallError(new Error('not remote'))).toBe(false);
   });
 
   it('omits auto-injected principal fields from RPC constructor input', () => {
@@ -684,13 +987,18 @@ describe('RPC client', () => {
       id: { tenant: z.string(), caller: s.principal() },
       methods: { ping: method({ input: {}, returns: z.void() }) },
     });
-    const factory = clientFor(def);
+    const factory = def.client;
 
-    expect(() =>
-      (factory as unknown as (id: { tenant: string }) => unknown)({ tenant: 'acme' }),
-    ).not.toThrow();
+    expect(() => factory.get({ tenant: 'acme' })).not.toThrow();
     const constructorTree = vi.mocked(WasmRpc).mock.calls.at(-1)![1];
     expect(schemaValueFromWit(constructorTree)).toEqual({
+      tag: 'record',
+      fields: [{ tag: 'string', value: 'acme' }],
+    });
+
+    expect(() => def.agentId({ tenant: 'acme' })).not.toThrow();
+    const identityTree = vi.mocked(makeAgentId).mock.calls.at(-1)![1];
+    expect(schemaValueFromWit(identityTree)).toEqual({
       tag: 'record',
       fields: [{ tag: 'string', value: 'acme' }],
     });
@@ -704,7 +1012,7 @@ describe('RPC client', () => {
       methods: { ping: method({ input: {}, returns: z.void() }) },
     });
 
-    clientFor(def)({}, undefined, {});
+    def.client.get({}, {});
 
     expect(vi.mocked(WasmRpc).mock.calls.at(-1)![3]).toEqual([]);
   });
@@ -717,11 +1025,11 @@ describe('RPC client', () => {
       methods: { ping: method({ input: {}, returns: z.void() }) },
     });
 
-    expect(() => clientFor(def)({}, undefined, { nested: 'not-an-object' })).toThrow();
+    expect(() => def.client.get({}, { nested: 'not-an-object' })).toThrow();
   });
 
   it('accepts cancellation options on input and zero-input calls', async () => {
-    const client = clientFor(clientDef)({ name: 'counter' });
+    const client = clientDef.client.get({ name: 'counter' });
     const rpc = latestRpc();
     const controller = new AbortController();
     controller.abort('cancelled');

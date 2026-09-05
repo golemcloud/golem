@@ -126,14 +126,14 @@ if (reservationResult.isOk()) {
 
 ## 6. Splitting Tokens for Agent-to-Agent RPC
 
-Split a portion of your quota to pass to a child agent. Call the other agent with a `clientFor(...)` client (see `golem-call-another-agent-ts`), passing the child token as an input:
+Split a portion of your quota to pass to a child agent. Call the other agent through its definition client (see `golem-call-another-agent-ts`), passing the child token as an input:
 
 ```typescript
-import { clientFor, QuotaToken } from '@golemcloud/golem-ts-sdk';
+import { QuotaToken } from '@golemcloud/golem-ts-sdk';
 
 const childToken: QuotaToken = this.token.split(200n);
-const summarizer = clientFor(SummarizerAgent);
-const summary = await summarizer({ name: 'sum-1' }).summarize({ text, token: childToken });
+const summarizer = SummarizerAgent.client.get({ name: 'sum-1' });
+const summary = await summarizer.summarize({ text, token: childToken });
 ```
 
 The child agent declares the token input with the `s.quotaToken()` schema marker and uses it for its own reservations:

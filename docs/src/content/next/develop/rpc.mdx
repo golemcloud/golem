@@ -20,7 +20,7 @@ In the following example, we have two agents defined; a weather agent with a con
 
         ```typescript
         import { z } from 'zod';
-        import { defineAgent, method, clientFor } from '@golemcloud/golem-ts-sdk';
+        import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
         export const WeatherAgent = defineAgent({
             name: 'WeatherAgent',
@@ -56,7 +56,7 @@ In the following example, we have two agents defined; a weather agent with a con
             init: () => ({}),
             methods: {
                 async run() {
-                    const weatherInLondon = clientFor(WeatherAgent)({ location: "London" });
+                    const weatherInLondon = WeatherAgent.client.get({ location: "London" });
                     // ...
                     return "";
                 },
@@ -64,7 +64,7 @@ In the following example, we have two agents defined; a weather agent with a con
         });
         ```
 
-        Here `weatherInLondon` is the client for calling a remote `WeatherAgent`, obtained with `clientFor(WeatherAgent)` and the target agent's id record - it exposes the agent methods, such as `currentWeather` as its own methods.
+        Here `weatherInLondon` is the client for calling a remote `WeatherAgent`, obtained from `WeatherAgent.client` with the target agent's id record - it exposes the agent methods, such as `currentWeather` as its own methods.
     </Tabs.Tab>
 
     <Tabs.Tab>
@@ -219,7 +219,7 @@ Phantom agents are created through Agent-to-Agent communication or [forking](for
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
   <Tabs.Tab>
   ```typescript
-  const { client: phantomAgent, phantomId } = clientFor(WeatherAgent).newPhantom({ location: "London" });
+  const { client: phantomAgent, agentId, phantomId } = WeatherAgent.client.newPhantom({ location: "London" });
   ```
   </Tabs.Tab>
   <Tabs.Tab>
@@ -244,8 +244,8 @@ If we know the **phantom ID** of an agent, we can create a client targeting an e
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
   <Tabs.Tab>
   ```typescript
-  const { client: phantomAgent, phantomId } = clientFor(WeatherAgent).newPhantom({ location: "London" });
-  const samePhantomAgent = clientFor(WeatherAgent)({ location: "London" }, phantomId);
+  const { client: phantomAgent, agentId, phantomId } = WeatherAgent.client.newPhantom({ location: "London" });
+  const samePhantomAgent = WeatherAgent.client.getPhantom({ location: "London" }, phantomId);
   ```
   </Tabs.Tab>
   <Tabs.Tab>
@@ -269,6 +269,52 @@ If we know the **phantom ID** of an agent, we can create a client targeting an e
     ```
   </Tabs.Tab>
 </Tabs>
+
+### Phantom agents through TypeScript reflection
+
+When the target type is selected at runtime, its reflected `client` exposes the
+same phantom operations as a definition client:
+
+```typescript
+import { getReflectedAgentType } from "@golemcloud/golem-ts-sdk";
+
+const weatherType = getReflectedAgentType("WeatherAgent");
+if (!weatherType) throw new Error("WeatherAgent is not registered");
+
+if (weatherType.mode === "durable") {
+  const { client, agentId, phantomId } = weatherType.client.newPhantom({
+    location: "London",
+  });
+  const samePhantom = weatherType.client.getPhantom(
+    { location: "London" },
+    phantomId,
+  );
+}
+```
+
+For an ephemeral reflected type, `newPhantom` returns the reflected client
+directly rather than a reusable `{ client, agentId, phantomId }` wrapper. The
+final one-shot agent ID and idempotency key are returned by each invocation:
+
+```typescript
+const requestType = getReflectedAgentType("RequestAgent");
+if (!requestType || requestType.mode !== "ephemeral") {
+  throw new Error("RequestAgent must be ephemeral");
+}
+
+const request = requestType.client.newPhantom({ route: "summarize" });
+if ("client" in request) throw new Error("unexpected durable phantom wrapper");
+
+const result = await request.method("run").invoke({ text: "hello" });
+console.log(result.metadata.agentId, result.metadata.idempotencyKey);
+```
+
+Ephemeral reflected types also expose `getPhantom` when the caller already has
+the phantom ID. That explicit handle does not make a final, already-invoked
+ephemeral agent ID reusable.
+
+See [Calling Agents with Runtime Reflection](/next/how-to-guides/ts/golem-call-agent-reflectively-ts)
+for discovery, schema inspection, concrete `AgentId` binding, and error handling.
 
 ## Calling a remote agent method
 
@@ -308,7 +354,7 @@ It is possible to trigger the remote execution of an agent method without awaiti
     To trigger an agent method and return immediately, use the `trigger` method exposed on each remote method in the client:
 
     ```typescript
-    const remoteAgent = clientFor(BackgroundTaskAgent)({ jobId: backgroundJobId });
+    const remoteAgent = BackgroundTaskAgent.client.get({ jobId: backgroundJobId });
     remoteAgent.runTask.trigger({ message: "hello", count: 1234 });
     ```
     </Tabs.Tab>
@@ -351,7 +397,7 @@ An advanced case of triggering the execution of an agent method is to **schedule
     Similar to `.trigger`, there is a `.schedule` method as well on each remote agent method in the client:
 
     ```typescript
-    const remoteAgent = clientFor(BackgroundTaskAgent)({ jobId: backgroundJobId });
+    const remoteAgent = BackgroundTaskAgent.client.get({ jobId: backgroundJobId });
     remoteAgent.runTask.schedule({ seconds: 60n, nanoseconds: 0 }, { message: "hello", count: 1234 });
     ```
 

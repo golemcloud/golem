@@ -34,11 +34,16 @@ declare module 'golem:agent/host@2.0.0' {
    * @throws ConfigValueError
    */
   export function getConfigValue(key: string[], expected: SchemaGraph): SchemaValueTree;
+  /**
+   * Gets the registered agent type used by an existing agent, identified by its agent ID.
+   */
+  export function getAgentTypeByAgentId(agentId: AgentId): RegisteredAgentType | undefined;
   export class WasmRpc {
     /**
-     * Constructs the RPC client connecting to the given target agent.
+     * Creates an RPC client connecting to the given target agent.
      * `constructor` is a value tree whose root encodes the target agent
-     * constructor's parameter list.
+     * constructor's parameter list. This fail-fast form traps if the client
+     * cannot be created and is intended for statically generated clients.
      */
     constructor(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]);
     /**
@@ -72,6 +77,15 @@ declare module 'golem:agent/host@2.0.0' {
      * @throws RpcError
      */
     scheduleCancelableInvocation(scheduledTime: Datetime, methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): CancelableScheduledInvocationReceipt;
+    /**
+     * Creates an RPC client connecting to the given target agent.
+     * `constructor` is a value tree whose root encodes the target agent
+     * constructor's parameter list. This fallible form returns an RPC error
+     * if the client cannot be created and is intended for reflective and
+     * other dynamic clients.
+     * @throws RpcError
+     */
+    static create(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]): WasmRpc;
   }
   export class FutureInvokeResult {
     /**
@@ -91,6 +105,7 @@ declare module 'golem:agent/host@2.0.0' {
      */
     cancel(): void;
   }
+  export type AgentId = golemCore200Types.AgentId;
   export type ComponentId = golemCore200Types.ComponentId;
   export type Uuid = golemCore200Types.Uuid;
   export type PromiseId = golemCore200Types.PromiseId;

@@ -43,6 +43,9 @@ fn wasmImportMethodWasmRpcScheduleInvocation(p0 : Int, p1 : Int64, p2 : Int, p3 
 fn wasmImportMethodWasmRpcScheduleCancelableInvocation(p0 : Int, p1 : Int64, p2 : Int, p3 : Int, p4 : Int, p5 : Int, p6 : Int, p7 : Int, p8 : Int, p9 : Int, p10 : Int)  = "golem:agent/host@2.0.0" "[method]wasm-rpc.schedule-cancelable-invocation"
 
 ///|
+fn wasmImportStaticWasmRpcCreate(p0 : Int, p1 : Int, p2 : Int, p3 : Int, p4 : Int, p5 : Int, p6 : Int64, p7 : Int64, p8 : Int, p9 : Int, p10 : Int)  = "golem:agent/host@2.0.0" "[static]wasm-rpc.create"
+
+///|
 fn wasmImportMethodFutureInvokeResultGet(p0 : Int, p1 : Int) -> Int = "golem:agent/host@2.0.0" "[async-lower][method]future-invoke-result.get"
 
 ///|
@@ -53,6 +56,9 @@ fn wasmImportMethodCancellationTokenCancel(p0 : Int)  = "golem:agent/host@2.0.0"
 
 ///|
 fn wasmImportGetConfigValue(p0 : Int, p1 : Int, p2 : Int, p3 : Int, p4 : Int, p5 : Int, p6 : Int, p7 : Int)  = "golem:agent/host@2.0.0" "get-config-value"
+
+///|
+fn wasmImportGetAgentTypeByAgentId(p0 : Int64, p1 : Int64, p2 : Int, p3 : Int, p4 : Int)  = "golem:agent/host@2.0.0" "get-agent-type-by-agent-id"
 
 ///|
 #owned(bytes)
