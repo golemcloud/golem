@@ -1275,8 +1275,9 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
         .into_typed::<Result<(), String>>()?;
     assert!(
         initial_result.as_ref().is_err_and(|error| {
-            error.contains("RemoteInternalError")
-                && error.contains("sidecar invocation backend")
+            error.contains("RemoteToolError")
+                && error.contains("InvalidToolName")
+                && error.contains(tool_name.as_str())
                 && !error.contains("Denied")
                 && !error.contains("NotFound")
         }),
@@ -1418,8 +1419,9 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
         .into_typed::<Result<(), String>>()?;
     assert!(
         revoked_result.as_ref().is_err_and(|error| {
-            error.contains("RemoteInternalError")
-                && error.contains("sidecar invocation backend")
+            error.contains("RemoteToolError")
+                && error.contains("InvalidToolName")
+                && error.contains(tool_name.as_str())
                 && !error.contains("Denied")
                 && !error.contains("NotFound")
         }),
@@ -1455,8 +1457,9 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
         .into_typed::<Result<(), String>>()?;
     assert!(
         de_published_result.as_ref().is_err_and(|error| {
-            error.contains("RemoteInternalError")
-                && error.contains("sidecar invocation backend")
+            error.contains("RemoteToolError")
+                && error.contains("InvalidToolName")
+                && error.contains(tool_name.as_str())
                 && !error.contains("Denied")
                 && !error.contains("NotFound")
         }),

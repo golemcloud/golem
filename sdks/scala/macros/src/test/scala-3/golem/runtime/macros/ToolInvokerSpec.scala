@@ -69,7 +69,11 @@ object ToolInvokerSpec extends ZIOSpecDefault {
     }
   }
 
-  private final case class FakeStdin(content: String) extends ToolInputStream
+  private final case class FakeStdin(content: String) extends ToolInputStream {
+    override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
+      Future.successful(Right(None))
+    override def cancel(): Future[Unit] = Future.successful(())
+  }
 
   @toolDefinition(version = "0.1.0")
   trait Remote {
@@ -92,8 +96,7 @@ object ToolInvokerSpec extends ZIOSpecDefault {
   private final class FakeEnv(
     tools: Map[String, (ExtendedToolType, ToolInvokeHandler)] = Map.empty
   ) extends ToolInvokeEnv {
-    def stdout(): ToolOutputStream =
-      throw new UnsupportedOperationException("no stdout in tests")
+    val stdout: Option[ToolOutputStream]                            = None
     def invokerFor(toolName: String): Option[ToolInvokeHandler]     = tools.get(toolName).map(_._2)
     def extendedToolFor(toolName: String): Option[ExtendedToolType] = tools.get(toolName).map(_._1)
   }
@@ -134,7 +137,7 @@ object ToolInvokerSpec extends ZIOSpecDefault {
         val result = outcome(
           echoHandler.invoke(Nil, input(echoTool, Nil, SchemaValue.StringValue("hi")), None, anonymous)
         )
-        assertTrue(result == Right(ToolInvokeResult(Some(IntoSchema[String].toTyped("echo: hi")), None)))
+        assertTrue(result == Right(ToolInvokeResult(Some(IntoSchema[String].toTyped("echo: hi")))))
       },
       test("async methods are awaited") {
         val result = outcome(
@@ -145,7 +148,7 @@ object ToolInvokerSpec extends ZIOSpecDefault {
             anonymous
           )
         )
-        assertTrue(result == Right(ToolInvokeResult(Some(IntoSchema[String].toTyped("async: hi")), None)))
+        assertTrue(result == Right(ToolInvokeResult(Some(IntoSchema[String].toTyped("async: hi")))))
       },
       test("declared errors become custom-error payloads") {
         val result = outcome(
@@ -171,7 +174,7 @@ object ToolInvokerSpec extends ZIOSpecDefault {
         )
         assertTrue(
           fields == List("input"),
-          result == Right(ToolInvokeResult(Some(IntoSchema[String].toTyped("me/Anonymous")), None))
+          result == Right(ToolInvokeResult(Some(IntoSchema[String].toTyped("me/Anonymous"))))
         )
       },
       test("count flags decode from their u32 canonical field") {
@@ -188,7 +191,7 @@ object ToolInvokerSpec extends ZIOSpecDefault {
             anonymous
           )
         )
-        assertTrue(result == Right(ToolInvokeResult(Some(IntoSchema[String].toTyped("ababab")), None)))
+        assertTrue(result == Right(ToolInvokeResult(Some(IntoSchema[String].toTyped("ababab")))))
       },
       test("declared stdin streams are injected and excluded from the schema") {
         val idx    = echoTool.commandIndexByPath(List("slurp")).get
@@ -208,7 +211,7 @@ object ToolInvokerSpec extends ZIOSpecDefault {
         assertTrue(
           fields.isEmpty,
           stream.isDefined,
-          ok == Right(ToolInvokeResult(Some(IntoSchema[String].toTyped("piped")), None)),
+          ok == Right(ToolInvokeResult(Some(IntoSchema[String].toTyped("piped")))),
           missing == Left(
             ToolInvokeError.InvalidInput("tool invocation did not contain declared stdin stream")
           )
@@ -261,7 +264,7 @@ object ToolInvokerSpec extends ZIOSpecDefault {
           )
           assertTrue(
             result == Right(
-              ToolInvokeResult(Some(IntoSchema[String].toTyped("origin=https://example.com")), None)
+              ToolInvokeResult(Some(IntoSchema[String].toTyped("origin=https://example.com")))
             )
           )
         },

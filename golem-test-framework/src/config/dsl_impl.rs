@@ -270,6 +270,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         name: &str,
         unique: bool,
         mut agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
+        tool_agent_bindings: BTreeMap<
+            ToolName,
+            BTreeMap<AgentTypeName, golem_common::model::tool::ToolBindingInput>,
+        >,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
@@ -306,6 +310,14 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             (None, None)
         };
 
+        let mut tool_deployment_configs = default_tool_deployment_configs(&tools)?;
+        for (tool_name, agent_bindings) in tool_agent_bindings {
+            let config = tool_deployment_configs
+                .get_mut(&tool_name)
+                .ok_or_else(|| anyhow!("Component does not declare tool {tool_name}"))?;
+            config.agent_bindings.extend(agent_bindings);
+        }
+
         let component = client
             .create_component(
                 &environment_id.0,
@@ -313,7 +325,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     component_name,
                     agent_types,
                     agent_type_provision_configs,
-                    tool_deployment_configs: default_tool_deployment_configs(&tools)?,
+                    tool_deployment_configs,
                     tools,
                 },
                 File::open(source_path).await?,

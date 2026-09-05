@@ -131,12 +131,13 @@ const importObject = {
 for (const imported of WebAssembly.Module.imports(module)) {
   if (
     imported.kind === "function" &&
-    imported.module === "golem:tool/host@0.1.0" &&
-    imported.name.includes("tool-rpc.invoke-and-await")
+    imported.module === "golem:tool/host@0.1.0"
   ) {
     importObject[imported.module] ??= {}
     importObject[imported.module][imported.name] = () => {
-      throw new Error("cancelled tool input unexpectedly reached the host RPC")
+      throw new Error(
+        `cancelled tool input unexpectedly reached the host: ${imported.name}`,
+      )
     }
     continue
   }

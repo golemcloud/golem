@@ -86,8 +86,8 @@ object ToolMiddlewareContractFixtures {
        |  override def copy(
        |    underlying: PublicEchoUnderlying,
        |    config: String,
-       |    stdin: golem.tool.ToolInputStream
-       |  ): Future[Either[ToolInvokeError[Nothing], (Long, golem.tool.ToolOutputStream)]] =
+       |    stdin: golem.tool.ToolMiddlewareInputHandle
+       |  ): Future[Either[ToolInvokeError[Nothing], (Long, golem.tool.ToolMiddlewareOutputHandle)]] =
        |    underlying.copy(config, stdin)
        |
        |  override def inspect(
@@ -133,8 +133,8 @@ object ToolMiddlewareContractFixtures {
        |  override def copy(
        |    underlying: BackendEchoUnderlying,
        |    config: String,
-       |    stdin: golem.tool.ToolInputStream
-       |  ): Future[Either[ToolInvokeError[Nothing], (Long, golem.tool.ToolOutputStream)]] =
+       |    stdin: golem.tool.ToolMiddlewareInputHandle
+       |  ): Future[Either[ToolInvokeError[Nothing], (Long, golem.tool.ToolMiddlewareOutputHandle)]] =
        |    Future.successful(Left(ToolInvokeError.ConstraintViolation("copy is not supported")))
        |
        |  override def inspect(
@@ -162,7 +162,7 @@ object ToolMiddlewareContractFixtures {
        |  override def invoke(
        |    invocation: UniversalToolMiddlewareInvocation,
        |    underlying: UniversalToolUnderlying
-       |  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
+       |  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
        |    underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
        |}
        |""".stripMargin
@@ -244,12 +244,12 @@ object ToolMiddlewareContractFixtures {
   val ordinaryClientSurface: List[String] = List(
     "trait BaselineToolClient {",
     "def baselineTool(config: String): _root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[_root_.scala.Nothing], _root_.scala.Unit]]",
-    "def run(config: String, value: String, stdin: _root_.golem.tool.ToolInputStream): _root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[BaselineError], (Long, _root_.golem.tool.ToolOutputStream)]]",
+    "def run(config: String, value: String, stdin: _root_.golem.tool.ToolInputStream): _root_.scala.Either[_root_.golem.tool.ToolError[BaselineError], _root_.golem.tool.ToolInvocation[BaselineError, Long]]",
     "def nested(config: String, prefix: String): BaselineToolClient.NestedClient",
     "final class NestedClient private[BaselineToolClient] (",
     "def inspect(name: String): _root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[_root_.scala.Nothing], String]]"
   )
 
   val ordinaryClientSnapshotSha256: String =
-    "50920f78e984f5ad52b3b84f7b43ad2066ac34f20755112414201cc1da39274c"
+    "21454470afc4ac56f876b903ee3c3de045ed96f35d37fbad39547a6e2d58da73"
 }

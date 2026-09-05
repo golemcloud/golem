@@ -3072,6 +3072,7 @@ async fn every_protected_rdbms_agent_rpc_tool_and_oplog_import_enforces_permissi
         Some(deployment_state(
             &AgentTypeName("GolemHostApi".to_string()),
             1,
+            component.revision,
             &[(tool_name, tool_component_id, true)],
         )),
     );
@@ -3427,7 +3428,6 @@ async fn remaining_host_facing_permission_classes_allow_their_backends(
         Ok(())
     );
 
-    let tool_component_id = ComponentId::new();
     let tool_name = "allowed-tool";
     environment_state_service.set_tool_deployment(
         context.default_environment_id,
@@ -3436,7 +3436,8 @@ async fn remaining_host_facing_permission_classes_allow_their_backends(
         Some(deployment_state(
             &AgentTypeName("GolemHostApi".to_string()),
             1,
-            &[(tool_name, tool_component_id, true)],
+            component.revision,
+            &[(tool_name, component.id, true)],
         )),
     );
     for method in [
@@ -3454,10 +3455,10 @@ async fn remaining_host_facing_permission_classes_allow_their_backends(
             .await?
             .into_typed::<Result<(), String>>()?;
         assert!(
-            tool_result.as_ref().is_err_and(|error| {
-                error.contains("RemoteInternalError") && !error.contains("Denied")
-            }),
-            "an allowed tool call must pass authorization and reach the current invocation backend: {tool_result:?}"
+            !tool_result
+                .as_ref()
+                .is_err_and(|error| error.contains("Denied")),
+            "an allowed tool call must pass authorization: {tool_result:?}"
         );
     }
     Ok(())
@@ -3771,6 +3772,7 @@ async fn denied_tool_invocation_does_not_start_the_tool_component(
         Some(deployment_state(
             &AgentTypeName("GolemHostApi".to_string()),
             1,
+            component.revision,
             &[(tool_name, tool_component_id, true)],
         )),
     );

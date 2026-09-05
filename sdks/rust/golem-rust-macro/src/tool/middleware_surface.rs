@@ -294,7 +294,21 @@ fn projected_command_params(
     inherited_root_params(ir, command, tool_name)
         .into_iter()
         .chain(command.params.iter().cloned())
-        .filter(|param| type_last_ident(&param.ty).as_deref() != Some("OutputStream"))
+        .filter_map(
+            |mut param| match crate::tool::helpers::stream_type(&param.ty) {
+                Some((crate::tool::helpers::StreamKind::Output, _)) => None,
+                Some((crate::tool::helpers::StreamKind::Input, true)) => {
+                    param.ty = syn::parse_quote!(golem_rust::tool::InputStream);
+                    Some(param)
+                }
+                Some((crate::tool::helpers::StreamKind::Input, false)) => {
+                    param.ty =
+                        syn::parse_quote!(::std::option::Option<golem_rust::tool::InputStream>);
+                    Some(param)
+                }
+                None => Some(param),
+            },
+        )
         .collect()
 }
 
@@ -744,10 +758,18 @@ fn emit_underlying_method(
     let stdin = input
         .params
         .iter()
-        .find(|param| type_last_ident(&param.ty).as_deref() == Some("InputStream"))
-        .map(|param| {
-            let ident = &param.ident;
-            quote! { ::std::option::Option::Some(#ident) }
+        .find_map(|param| match crate::tool::helpers::stream_type(&param.ty) {
+            Some((crate::tool::helpers::StreamKind::Input, required)) => {
+                Some((&param.ident, required))
+            }
+            _ => None,
+        })
+        .map(|(ident, required)| {
+            if required {
+                quote! { ::std::option::Option::Some(#ident) }
+            } else {
+                quote! { #ident }
+            }
         })
         .unwrap_or_else(|| quote! { ::std::option::Option::None });
     let invoke = underlying_invoke(&input.output, stdin, &command_path_ident, &input_ident, sdk);
@@ -810,31 +832,36 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
             quote! {
                 let #ident = #principal_ident.clone();
             }
-        } else if type_last_ident(ty).as_deref() == Some("InputStream") {
-            quote! {
-                let #ident = #stdin_ident.take().ok_or_else(|| {
-                    #sdk::tool::ToolInvokeError::InvalidInput(
-                        "tool invocation did not contain declared stdin stream".to_string()
-                    )
-                })?;
-            }
         } else {
-            quote! {
-                let #ident = {
-                    let #field_index_ident = #input_fields_ident
-                        .iter()
-                        .position(|field| field.name == #canonical_name)
-                        .ok_or_else(|| {
-                            #sdk::tool::ToolInvokeError::InvalidInput(
-                                format!("missing canonical tool input field `{}`", #canonical_name)
-                            )
-                        })?;
-                    let #field_ident = #input_fields_ident.remove(#field_index_ident);
-                    <#ty as #sdk::FromSchema>::from_value(&#field_ident.value)
-                        .map_err(|error| {
-                            #sdk::tool::ToolInvokeError::InvalidInput(error.to_string())
-                        })?
-                };
+            match crate::tool::helpers::stream_type(ty) {
+                Some((crate::tool::helpers::StreamKind::Input, true)) => quote! {
+                    let #ident = #stdin_ident.take().ok_or_else(|| {
+                        #sdk::tool::ToolInvokeError::InvalidInput(
+                            "tool invocation did not contain declared stdin stream".to_string()
+                        )
+                    })?;
+                },
+                Some((crate::tool::helpers::StreamKind::Input, false)) => quote! {
+                    let #ident = #stdin_ident.take();
+                },
+                Some((crate::tool::helpers::StreamKind::Output, _)) => unreachable!(),
+                None => quote! {
+                    let #ident = {
+                        let #field_index_ident = #input_fields_ident
+                            .iter()
+                            .position(|field| field.name == #canonical_name)
+                            .ok_or_else(|| {
+                                #sdk::tool::ToolInvokeError::InvalidInput(
+                                    format!("missing canonical tool input field `{}`", #canonical_name)
+                                )
+                            })?;
+                        let #field_ident = #input_fields_ident.remove(#field_index_ident);
+                        <#ty as #sdk::FromSchema>::from_value(&#field_ident.value)
+                            .map_err(|error| {
+                                #sdk::tool::ToolInvokeError::InvalidInput(error.to_string())
+                            })?
+                    };
+                },
             }
         }
     });
@@ -1080,17 +1107,6 @@ fn fresh_projected_ident(params: &[ProjectedParam], preferred: &str) -> Ident {
         candidate.push('_');
     }
     Ident::new(&candidate, Span::call_site())
-}
-
-fn type_last_ident(ty: &Type) -> Option<String> {
-    match ty {
-        Type::Path(path) => path
-            .path
-            .segments
-            .last()
-            .map(|segment| segment.ident.to_string()),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

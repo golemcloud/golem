@@ -23,11 +23,18 @@ declare pub fn get_tool(name : String) -> Result[@common.Tool, @common.ToolError
 /// the body's schema.
 ///
 /// `stdin` is supplied when the selected body declared a stdin
-/// `stream-spec`. The callee consumes the stream for the duration of the
-/// call; dropping its reader closes further consumption.
+/// `stream-spec`. Clean EOF is underlying stream closure. A final failed
+/// item reports recoverable source failure, abandonment, resource
+/// exhaustion, or cancellation before closure. Dropping the reader closes
+/// further consumption.
+///
+/// `stdout` is supplied when the selected body declared a stdout
+/// `stream-spec`. The implementation writes while this function is still
+/// running and explicitly finishes or fails the endpoint. Dropping an open
+/// writer abandons it. The first selected terminal is immutable.
 ///
 /// `principal` carries the caller's authenticated identity for
 /// authorization and audit, identical in semantics to the parameter
 /// of the same name in `golem:agent/guest.invoke`.
 #warnings("-declaration_unimplemented")
-declare pub async fn invoke(tool_name : String, command_path : Array[String], input : @types.TypedSchemaValue, stdin : @async-core.Stream[Byte]?, principal : @common0.Principal, background_group : @async-core.TaskGroup[Unit]) -> Result[@common.InvocationResult, @common.ToolError]
+declare pub async fn invoke(tool_name : String, command_path : Array[String], input : @types.TypedSchemaValue, stdin : @async-core.Stream[Result[FixedArray[Byte], @host.ByteStreamFailure]]?, stdout : @host.ToolStdoutWriter?, principal : @common0.Principal, background_group : @async-core.TaskGroup[Unit]) -> Result[@common.InvocationResult, @common.ToolError]
