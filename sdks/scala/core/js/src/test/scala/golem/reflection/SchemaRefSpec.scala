@@ -10,6 +10,7 @@
 
 package golem.reflection
 
+import golem.Uuid
 import golem.schema._
 import golem.schema.SchemaTypeBody._
 import golem.schema.SchemaValue._
@@ -96,6 +97,32 @@ object SchemaRefSpec extends ZIOSpecDefault {
       assertTrue(
         rendered.get("$schema").one == Right(Json.String("https://json-schema.org/draft/2020-12/schema")),
         rendered.get("type").one == Right(Json.String("object"))
+      )
+    },
+    test("detects nested stream schemas") {
+      val streaming = SchemaRef(
+        SchemaGraph(
+          ListMap.empty,
+          SchemaType(RecordType(List(NamedFieldType("items", SchemaType(StreamType(Some(SchemaType(StringType))))))))
+        )
+      )
+      assertTrue(!SchemaRef(graph).containsStream, streaming.containsStream)
+    },
+    test("rejects missing, unexpected, and malformed reflected outputs") {
+      val input    = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(RecordType(Nil))))
+      val output   = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(StringType)))
+      val metadata = InvocationMetadata(AgentId(ComponentId(Uuid(0, 0)), "test"), "key")
+      val unit     = AgentMethod("unit", "", None, input, None)
+      val single   = AgentMethod("single", "", None, input, Some(output))
+
+      assertTrue(
+        ReflectionInternals.validateInvocationOutput(unit, Invocation(metadata, None)).isRight,
+        ReflectionInternals.validateInvocationOutput(unit, Invocation(metadata, Some(StringValue("extra")))).isLeft,
+        ReflectionInternals.validateInvocationOutput(single, Invocation(metadata, None)).isLeft,
+        ReflectionInternals.validateInvocationOutput(single, Invocation(metadata, Some(U32Value(1)))).isLeft,
+        ReflectionInternals
+          .validateInvocationOutput(single, Invocation(metadata, Some(StringValue("ok"))))
+          .isRight
       )
     }
   )

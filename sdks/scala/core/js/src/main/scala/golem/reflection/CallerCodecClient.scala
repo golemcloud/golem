@@ -20,7 +20,6 @@ import scala.util.control.NonFatal
 
 /** A discovery-free, caller-authored typed agent contract. */
 final class AgentClientDefinition[Constructor] private (
-  val componentId: ComponentId,
   val name: String,
   val mode: AgentMode,
   val constructor: InputRecordCodec[Constructor]
@@ -33,16 +32,32 @@ final class AgentClientDefinition[Constructor] private (
     output: OutputCodec[Output]
   ): CallerCodecMethod[Input, Output] =
     CallerCodecMethod(name, input, output)
+
+  def bind(agentId: AgentId): Either[GolemReflectError, CallerCodecAgentClient[Constructor]] =
+    for {
+      parts <- agentId.parts
+      _     <- Either.cond(
+             parts.typeName == name,
+             (),
+             GolemReflectError.Identity(s"Agent client contract '$name' cannot bind '${parts.typeName}'")
+           )
+      _ <- Either.cond(
+             mode == AgentMode.Durable,
+             (),
+             GolemReflectError.Identity(s"Cannot bind an existing identity to ephemeral agent type '$name'")
+           )
+      componentId <- Reflection.componentIdFor(name)
+      transport   <- Transport.create(componentId, name, parts.constructorValue, parts.phantomId)
+    } yield new CallerCodecAgentClient(this, transport)
 }
 
 object AgentClientDefinition {
   def apply[Constructor](
-    componentId: ComponentId,
     name: String,
     constructor: InputRecordCodec[Constructor],
     mode: AgentMode = AgentMode.Durable
   ): AgentClientDefinition[Constructor] =
-    new AgentClientDefinition(componentId, name, mode, constructor)
+    new AgentClientDefinition(name, mode, constructor)
 }
 
 final case class CallerCodecMethod[Input, Output](
@@ -74,8 +89,10 @@ final class CallerCodecClientFactory[Constructor] private[reflection] (
       val phantom = Uuid.random()
       for {
         constructor <- encodeConstructor(input)
-        id          <- AgentId.create(definition.componentId, definition.name, constructor, Some(phantom))
-        client      <- createValue(constructor, Some(phantom))
+        componentId <- Reflection.componentIdFor(definition.name)
+        id          <- AgentId.create(componentId, definition.name, constructor, Some(phantom))
+        transport   <- Transport.create(componentId, definition.name, constructor, Some(phantom))
+        client       = new CallerCodecAgentClient(definition, transport)
       } yield Right(CallerCodecPhantomClient(id, phantom, client))
     }
 
@@ -89,8 +106,9 @@ final class CallerCodecClientFactory[Constructor] private[reflection] (
     constructor: SchemaValue,
     phantomId: Option[Uuid]
   ): Either[GolemReflectError, CallerCodecAgentClient[Constructor]] =
-    Transport
-      .create(definition.componentId, definition.name, constructor, phantomId)
+    Reflection
+      .componentIdFor(definition.name)
+      .flatMap(Transport.create(_, definition.name, constructor, phantomId))
       .map(new CallerCodecAgentClient(definition, _))
 
   private def encodeConstructor(input: Constructor): Either[GolemReflectError, SchemaValue] =
@@ -129,10 +147,12 @@ final class CallerCodecBoundMethod[Input, Output] private[reflection] (
     }
 
   def trigger(input: Input): Either[GolemReflectError, InvocationMetadata] =
-    encodeInput(input).flatMap(transport.trigger(definition.name, _))
+    rejectNonAwaitedStreams("trigger").flatMap(_ => encodeInput(input)).flatMap(transport.trigger(definition.name, _))
 
   def schedule(at: Datetime, input: Input): Either[GolemReflectError, ScheduledInvocation] =
-    encodeInput(input).flatMap(transport.schedule(at, definition.name, _))
+    rejectNonAwaitedStreams("schedule")
+      .flatMap(_ => encodeInput(input))
+      .flatMap(transport.schedule(at, definition.name, _))
 
   private def encodeInput(input: Input): Either[GolemReflectError, SchemaValue] =
     try Right(definition.input.toValue(input))
@@ -156,6 +176,18 @@ final class CallerCodecBoundMethod[Input, Output] private[reflection] (
               .map(error => GolemReflectError.SchemaDecode(error.message))
           )
     }
+
+  private def rejectNonAwaitedStreams(operation: String): Either[GolemReflectError, Unit] = {
+    val outputContainsStream = definition.output.metadata match {
+      case OutputMetadata.Unit          => false
+      case OutputMetadata.Single(graph) => graph.containsStream
+    }
+    Either.cond(
+      !definition.input.graph.containsStream && !outputContainsStream,
+      (),
+      GolemReflectError.Validation(s"$operation is unavailable for streaming method '${definition.name}'")
+    )
+  }
 }
 
 final case class TypedInvocation[+A](metadata: InvocationMetadata, value: A)
