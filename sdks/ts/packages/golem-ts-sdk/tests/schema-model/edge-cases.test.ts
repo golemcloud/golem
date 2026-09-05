@@ -22,9 +22,15 @@ import type {
 } from 'golem:core/types@2.0.0';
 
 import {
-  GuestSecretHandle,
-  GuestQuotaTokenHandle,
-  GuestPermissionCardHandle,
+  createGuestSecretHandle,
+  createGuestQuotaTokenHandle,
+  createGuestPermissionCardHandle,
+  peekGuestSecretHandle,
+  peekGuestQuotaTokenHandle,
+  peekGuestPermissionCardHandle,
+  takeGuestSecretHandle,
+  takeGuestQuotaTokenHandle,
+  takeGuestPermissionCardHandle,
   SchemaBuilder,
   SchemaEncodeError,
   classifyDiscriminatorPair,
@@ -279,18 +285,18 @@ describe('rich semantic and capability values', () => {
 
   it('secret handle is lowered once and lifted back as an opaque handle', () => {
     const raw = { id: 'opaque-secret' } as never;
-    const handle = GuestSecretHandle.fromRaw(SECRET_INTERNAL, raw);
-    expect(handle.isPresent()).toBe(true);
+    const handle = createGuestSecretHandle(SECRET_INTERNAL, raw);
+    expect(peekGuestSecretHandle(SECRET_INTERNAL, handle)).toBe(raw);
 
     const wit = schemaValueToWit(v.secret(handle));
     expect(wit.valueNodes[wit.root]).toEqual({ tag: 'secret-value', val: raw });
-    expect(handle.isPresent()).toBe(false);
+    expect(peekGuestSecretHandle(SECRET_INTERNAL, handle)).toBeUndefined();
 
     const decoded = schemaValueFromWit(wit);
     expect(decoded.tag).toBe('secret');
     if (decoded.tag === 'secret') {
-      expect(decoded.handle.isPresent()).toBe(true);
-      expect(decoded.handle.take()).toBe(raw);
+      expect(peekGuestSecretHandle(SECRET_INTERNAL, decoded.handle)).toBe(raw);
+      expect(takeGuestSecretHandle(SECRET_INTERNAL, decoded.handle)).toBe(raw);
     }
   });
 
@@ -298,30 +304,30 @@ describe('rich semantic and capability values', () => {
     // `own<quota-token>` is opaque; a plain sentinel object stands in for the
     // generated resource handle.
     const raw = { id: 'opaque-quota-token' } as never;
-    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, raw);
-    expect(handle.isPresent()).toBe(true);
+    const handle = createGuestQuotaTokenHandle(QUOTA_INTERNAL, raw);
+    expect(peekGuestQuotaTokenHandle(QUOTA_INTERNAL, handle)).toBe(raw);
 
     const wit = schemaValueToWit(v.quotaToken(handle));
     // Lowering moves the owned handle into a `quota-token-handle` wire node...
     expect(wit.valueNodes[wit.root]).toEqual({ tag: 'quota-token-handle', val: raw });
     // ...and consumes the source handle (affine: send-once).
-    expect(handle.isPresent()).toBe(false);
+    expect(peekGuestQuotaTokenHandle(QUOTA_INTERNAL, handle)).toBeUndefined();
 
     const decoded = schemaValueFromWit(wit);
     expect(decoded.tag).toBe('quota-token');
     if (decoded.tag === 'quota-token') {
-      expect(decoded.handle.isPresent()).toBe(true);
-      expect(decoded.handle.take()).toBe(raw);
+      expect(peekGuestQuotaTokenHandle(QUOTA_INTERNAL, decoded.handle)).toBe(raw);
+      expect(takeGuestQuotaTokenHandle(QUOTA_INTERNAL, decoded.handle)).toBe(raw);
     }
   });
 
   it('permission-card handles transfer once through nested schema values', () => {
     const raw = { id: 'opaque-permission-card' } as never;
-    const handle = GuestPermissionCardHandle.fromRaw(PERMISSION_CARD_INTERNAL, raw);
+    const handle = createGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, raw);
 
     const wit = schemaValueToWit(v.tuple([v.string('card'), v.permissionCard(handle)]));
     expect(wit.valueNodes).toContainEqual({ tag: 'permission-card-handle', val: raw });
-    expect(handle.isPresent()).toBe(false);
+    expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, handle)).toBeUndefined();
 
     const decoded = schemaValueFromWit(wit);
     expect(decoded.tag).toBe('tuple');
@@ -329,17 +335,69 @@ describe('rich semantic and capability values', () => {
       const card = decoded.elements[1];
       expect(card.tag).toBe('permission-card');
       if (card.tag === 'permission-card') {
-        expect(card.handle.take()).toBe(raw);
+        expect(takeGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, card.handle)).toBe(raw);
       }
     }
   });
 
+  it('a frozen secret wire node fails before claiming its raw handle', () => {
+    const raw = { id: 'frozen-secret' } as never;
+    const frozen: WitSchemaValueTree = {
+      valueNodes: [Object.freeze({ tag: 'secret-value', val: raw })],
+      root: 0,
+    };
+
+    expect(() => schemaValueFromWit(frozen)).toThrow(TypeError);
+
+    const mutable: WitSchemaValueTree = {
+      valueNodes: [{ tag: 'secret-value', val: raw }],
+      root: 0,
+    };
+    const decoded = schemaValueFromWit(mutable);
+    expect(decoded.tag).toBe('secret');
+    if (decoded.tag === 'secret') {
+      expect(takeGuestSecretHandle(SECRET_INTERNAL, decoded.handle)).toBe(raw);
+    }
+  });
+
+  it('a frozen quota-token wire node is dropped without creating a hidden owner', () => {
+    const raw = { id: 'frozen-quota-token' } as never;
+    const frozen: WitSchemaValueTree = {
+      valueNodes: [Object.freeze({ tag: 'quota-token-handle', val: raw })],
+      root: 0,
+    };
+
+    expect(() => schemaValueFromWit(frozen)).toThrow(TypeError);
+
+    const mutable: WitSchemaValueTree = {
+      valueNodes: [{ tag: 'quota-token-handle', val: raw }],
+      root: 0,
+    };
+    expect(() => schemaValueFromWit(mutable)).toThrow(/already owned/);
+  });
+
+  it('a frozen permission-card wire node is dropped without creating a hidden owner', () => {
+    const raw = { id: 'frozen-permission-card' } as never;
+    const frozen: WitSchemaValueTree = {
+      valueNodes: [Object.freeze({ tag: 'permission-card-handle', val: raw })],
+      root: 0,
+    };
+
+    expect(() => schemaValueFromWit(frozen)).toThrow(TypeError);
+
+    const mutable: WitSchemaValueTree = {
+      valueNodes: [{ tag: 'permission-card-handle', val: raw }],
+      root: 0,
+    };
+    expect(() => schemaValueFromWit(mutable)).toThrow(/already owned/);
+  });
+
   it('permission-card encoding rejects aliases atomically and consumed handles', () => {
-    const handle = GuestPermissionCardHandle.fromRaw(PERMISSION_CARD_INTERNAL, {} as never);
+    const handle = createGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, {} as never);
     const aliased = v.tuple([v.permissionCard(handle), v.permissionCard(handle)]);
 
     expect(() => schemaValueToWit(aliased)).toThrow(/more than once/);
-    expect(handle.isPresent()).toBe(true);
+    expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, handle)).toBeDefined();
 
     schemaValueToWit(v.permissionCard(handle));
     expect(() => schemaValueToWit(v.permissionCard(handle))).toThrow(/already transferred/);
@@ -377,24 +435,24 @@ describe('rich semantic and capability values', () => {
   });
 
   it('encoding an already-transferred quota-token handle is rejected', () => {
-    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, {} as never);
+    const handle = createGuestQuotaTokenHandle(QUOTA_INTERNAL, {} as never);
     schemaValueToWit(v.quotaToken(handle));
     expect(() => schemaValueToWit(v.quotaToken(handle))).toThrow(/already transferred/);
   });
 
   it('aliasing one quota-token handle twice in a tree is rejected without transferring it', () => {
-    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, {} as never);
+    const handle = createGuestQuotaTokenHandle(QUOTA_INTERNAL, {} as never);
     const aliased: SchemaValue = {
       tag: 'record',
       fields: [v.quotaToken(handle), v.quotaToken(handle)],
     };
     expect(() => schemaValueToWit(aliased)).toThrow(/more than once/);
     // The preflight rejects before any handle is moved out (atomic lowering).
-    expect(handle.isPresent()).toBe(true);
+    expect(peekGuestQuotaTokenHandle(QUOTA_INTERNAL, handle)).toBeDefined();
   });
 
   it('encoding a tree where a sibling fails leaves the quota-token handle untransferred', () => {
-    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, {} as never);
+    const handle = createGuestQuotaTokenHandle(QUOTA_INTERNAL, {} as never);
     // Tuple([quota-token, datetime-with-invalid-nanoseconds]): the datetime would
     // be rejected by the boundary, so the encode preflight must fail before the
     // affine handle is moved out of its cell.
@@ -406,17 +464,17 @@ describe('rich semantic and capability values', () => {
       ],
     };
     expect(() => schemaValueToWit(tree)).toThrow(/datetime/);
-    expect(handle.isPresent()).toBe(true);
+    expect(peekGuestQuotaTokenHandle(QUOTA_INTERNAL, handle)).toBeDefined();
   });
 
   it('rejects a sparse model list before transferring a quota-token sibling', () => {
-    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, {} as never);
+    const handle = createGuestQuotaTokenHandle(QUOTA_INTERNAL, {} as never);
     const fields = new Array<SchemaValue>(2);
     fields[1] = v.quotaToken(handle);
     const tree: SchemaValue = { tag: 'record', fields };
 
     expect(() => schemaValueToWit(tree)).toThrow(SchemaEncodeError);
-    expect(handle.isPresent()).toBe(true);
+    expect(peekGuestQuotaTokenHandle(QUOTA_INTERNAL, handle)).toBeDefined();
   });
 
   it('decoding a tree where a later node is invalid neither lifts nor leaks the quota-token handle', () => {
@@ -449,7 +507,7 @@ describe('rich semantic and capability values', () => {
   });
 
   it('encoding a tree with an unknown sibling tag leaves the quota-token handle untransferred', () => {
-    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, {} as never);
+    const handle = createGuestQuotaTokenHandle(QUOTA_INTERNAL, {} as never);
     // Tuple([quota-token, {tag:'bogus'}]): the unknown tag is rejected by the
     // encode preflight before the affine handle is moved out of its cell, rather
     // than later in `emitNode` after the take.
@@ -458,7 +516,7 @@ describe('rich semantic and capability values', () => {
       elements: [v.quotaToken(handle), { tag: 'bogus' }],
     } as unknown as SchemaValue;
     expect(() => schemaValueToWit(tree)).toThrow(/unknown schema value tag/);
-    expect(handle.isPresent()).toBe(true);
+    expect(peekGuestQuotaTokenHandle(QUOTA_INTERNAL, handle)).toBeDefined();
   });
 
   it('decoding a tree with two nodes carrying the same raw quota resource is rejected', () => {
@@ -495,7 +553,7 @@ describe('rich semantic and capability values', () => {
   });
 
   it('quota-token handles cannot be serialized to JSON', () => {
-    const handle = GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, {} as never);
+    const handle = createGuestQuotaTokenHandle(QUOTA_INTERNAL, {} as never);
     expect(() => JSON.stringify(handle)).toThrow(/cannot be serialized/);
   });
 

@@ -49,6 +49,14 @@ impl TypedAgentConfigEntry {
     }
 }
 
+impl AgentMetadataDto {
+    pub fn redact_host_managed_values_for_external(&mut self) {
+        for entry in &mut self.config {
+            entry.value = crate::schema::redact_host_managed_typed_value(entry.value.clone());
+        }
+    }
+}
+
 impl UntypedAgentConfigEntry {
     pub fn enrich_with_type(
         self,

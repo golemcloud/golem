@@ -26,6 +26,10 @@ import { SchemaCodec, freezeSchemaCodec, SchemaWalker } from './codec';
 import { isStandardSchema, type StandardSchemaV1 } from './standardSchema';
 import { isMarkerSchema, WIT_MARKER } from './markers';
 import { RecursionRegistry } from './recursion';
+import {
+  isolateCapabilityRoot,
+  withCapabilityAdoptionTransaction,
+} from '../internal/schema-model/capabilityTransaction';
 
 const walkers = new Map<string, SchemaWalker>();
 
@@ -45,7 +49,8 @@ export function registeredVendors(): string[] {
  * the registry is threaded through the recursive walk (see {@link compileSchemaWith}).
  */
 export function compileSchema(schema: unknown): SchemaCodec {
-  return freezeSchemaCodec(compileSchemaWith(schema, new RecursionRegistry()));
+  const codec = compileSchemaWith(schema, new RecursionRegistry());
+  return freezeSchemaCodec({ ...codec, toValue: isolateCapabilityRoot(codec.toValue) });
 }
 
 /**
@@ -87,5 +92,9 @@ function compileSchemaWith(schema: unknown, registry: RecursionRegistry): Schema
 }
 
 function withSourceSchema(codec: SchemaCodec, schema: StandardSchemaV1): SchemaCodec {
-  return codec.sourceSchema === schema ? codec : { ...codec, sourceSchema: schema };
+  return {
+    ...codec,
+    sourceSchema: schema,
+    toValue: (value) => withCapabilityAdoptionTransaction(() => codec.toValue(value)),
+  };
 }

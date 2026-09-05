@@ -958,6 +958,87 @@ mod agent_entry_points {
     }
 
     #[test]
+    fn external_input_schema_rejects_nested_host_managed_capabilities() {
+        let capabilities = SchemaType::record(vec![
+            NamedFieldType {
+                name: "secret".to_string(),
+                body: SchemaType::secret(Default::default()),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "quota".to_string(),
+                body: SchemaType::quota_token(Default::default()),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "card".to_string(),
+                body: SchemaType::permission_card(Default::default()),
+                metadata: Default::default(),
+            },
+        ]);
+        let input = InputSchema::Parameters(vec![NamedField::user_supplied(
+            "capabilities",
+            capabilities,
+        )]);
+        let doc = input_schema_to_json_schema(
+            &SchemaGraph::empty(),
+            &input,
+            JsonSchemaConfig::WITHOUT_DRAFT_MARKER,
+        );
+        let properties = &doc["properties"]["capabilities"]["properties"];
+
+        for name in ["secret", "quota", "card"] {
+            assert_eq!(
+                properties[name]["not"],
+                json!({}),
+                "external input capability must be unsatisfiable: {doc}"
+            );
+        }
+    }
+
+    #[test]
+    fn external_output_schema_exposes_only_nested_redacted_placeholders() {
+        let capabilities = SchemaType::record(vec![
+            NamedFieldType {
+                name: "secret".to_string(),
+                body: SchemaType::secret(Default::default()),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "quota".to_string(),
+                body: SchemaType::quota_token(Default::default()),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "card".to_string(),
+                body: SchemaType::permission_card(Default::default()),
+                metadata: Default::default(),
+            },
+        ]);
+        let doc = output_schema_to_json_schema(
+            &SchemaGraph::empty(),
+            &OutputSchema::Single(Box::new(capabilities)),
+            JsonSchemaConfig::WITHOUT_DRAFT_MARKER,
+        )
+        .expect("output schema");
+        let properties = &doc["properties"];
+
+        assert_eq!(properties["secret"]["const"], json!("<redacted: secret>"));
+        assert_eq!(
+            properties["quota"]["const"],
+            json!("<redacted: quota-token>")
+        );
+        assert_eq!(
+            properties["card"]["const"],
+            json!("<redacted: permission-card>")
+        );
+        for name in ["secret", "quota", "card"] {
+            assert_eq!(properties[name]["type"], json!("string"));
+            assert!(properties[name].get("properties").is_none());
+        }
+    }
+
+    #[test]
     fn text_with_languages_renders_canonical_shape() {
         use crate::schema::schema_type::TextRestrictions;
         let ty = SchemaType::text(TextRestrictions {

@@ -657,6 +657,76 @@ fn guest_mode_emits_standalone_schema_value_codecs_and_moon_checks() {
 }
 
 #[test]
+fn guest_mode_moon_checks_host_managed_capability_methods() {
+    let capability_tuple = SchemaType::tuple(vec![
+        SchemaType::secret(Default::default()),
+        SchemaType::quota_token(Default::default()),
+        SchemaType::permission_card(Default::default()),
+    ]);
+    let envelope = SchemaType::record(vec![named_field(
+        "capabilities",
+        SchemaType::list(capability_tuple),
+    )]);
+    let capability_modalities = multimodal(vec![
+        ("secret", SchemaType::secret(Default::default())),
+        ("quota", SchemaType::quota_token(Default::default())),
+        (
+            "permission",
+            SchemaType::permission_card(Default::default()),
+        ),
+    ]);
+    let agent_type = agent(
+        "CapabilityAgent",
+        "moonbit",
+        vec![],
+        vec![
+            method(
+                "transfer",
+                vec![field("envelope", ref_to("capability-envelope"))],
+                Some(ref_to("capability-envelope")),
+            ),
+            method(
+                "transferMultimodal",
+                vec![field("capabilities", capability_modalities.clone())],
+                Some(capability_modalities),
+            ),
+        ],
+        vec![def("capability-envelope", envelope)],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
+    let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+    let package = std::fs::read_to_string(guest.path().join("client/moon.pkg")).unwrap();
+
+    assert!(source.contains("@model.GuestSecretHandle"));
+    assert!(source.contains("@quota.QuotaToken"));
+    assert!(source.contains("@model.GuestPermissionCardHandle"));
+    assert!(source.contains("@schema.to_value_as"));
+    assert!(source.contains("@schema.from_value_as"));
+    assert!(package.contains("\"golemcloud/golem_sdk/quota\""));
+    assert!(package.contains("\"golemcloud/golem_sdk/schema\""));
+    moon_check_wasm(guest.path());
+
+    let without_quota = generate_without_check(
+        agent(
+            "SecretAgent",
+            "moonbit",
+            vec![],
+            vec![method(
+                "transfer",
+                vec![field("secret", SchemaType::secret(Default::default()))],
+                Some(SchemaType::secret(Default::default())),
+            )],
+            vec![],
+            AgentMode::Durable,
+        ),
+        MoonBitBridgeMode::GuestWasmRpc,
+    );
+    let package = std::fs::read_to_string(without_quota.path().join("client/moon.pkg")).unwrap();
+    assert!(!package.contains("golemcloud/golem_sdk/quota"));
+}
+
+#[test]
 fn guest_mode_emits_native_agent_client_and_exact_config_graph() {
     let mut agent_type = agent(
         "ConfiguredCounter",

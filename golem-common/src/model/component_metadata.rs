@@ -108,6 +108,15 @@ impl ComponentMetadata {
         }
     }
 
+    pub fn redact_host_managed_values_for_external(&mut self) {
+        let data = Arc::make_mut(&mut self.data);
+        for provision in data.agent_type_provision_configs.values_mut() {
+            for entry in &mut provision.config {
+                entry.value = crate::schema::redact_host_managed_typed_value(entry.value.clone());
+            }
+        }
+    }
+
     /// Returns a new `ComponentMetadata` with its tools replaced.
     /// All component analysis and agent metadata is preserved.
     pub fn with_tools(&self, tools: BTreeMap<ToolName, ToolDeploymentMetadata>) -> Self {

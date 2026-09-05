@@ -60,7 +60,7 @@ use golem_common::model::worker::{
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
 };
-use golem_common::schema::TypedSchemaValue;
+use golem_common::schema::{ExternalSchemaValue, TypedSchemaValue};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -512,11 +512,13 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     app_name: app_name.0,
                     env_name: env_name.0,
                     agent_type_name: agent_id.agent_type.0.clone(),
-                    parameters: agent_id.parameters.value().clone(),
+                    parameters: ExternalSchemaValue::try_from(agent_id.parameters.value().clone())
+                        .map_err(anyhow::Error::msg)?,
                     phantom_id: agent_id.phantom_id,
                     config: None,
                     method_name: method_name.to_string(),
-                    method_parameters,
+                    method_parameters: ExternalSchemaValue::try_from(method_parameters)
+                        .map_err(anyhow::Error::msg)?,
                     mode: golem_client::model::AgentInvocationMode::Schedule,
                     schedule_at: None,
                     idempotency_key: None,
@@ -577,11 +579,13 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     app_name: app_name.0,
                     env_name: env_name.0,
                     agent_type_name: agent_id.agent_type.0.clone(),
-                    parameters: agent_id.parameters.value().clone(),
+                    parameters: ExternalSchemaValue::try_from(agent_id.parameters.value().clone())
+                        .map_err(anyhow::Error::msg)?,
                     phantom_id: agent_id.phantom_id,
                     config: None,
                     method_name: method_name.to_string(),
-                    method_parameters,
+                    method_parameters: ExternalSchemaValue::try_from(method_parameters)
+                        .map_err(anyhow::Error::msg)?,
                     mode: golem_client::model::AgentInvocationMode::Await,
                     schedule_at: None,
                     idempotency_key: None,
@@ -593,7 +597,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
         match result.result {
             Some(typed_output) => {
-                let (_graph, value) = typed_output.into_parts();
+                let (_graph, value) = typed_output.into_inner().into_parts();
                 Ok(AgentResult::new(Some(value)))
             }
             None => Ok(AgentResult::new(None)),
