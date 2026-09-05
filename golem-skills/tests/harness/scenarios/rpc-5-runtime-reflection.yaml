@@ -105,7 +105,7 @@ steps:
       `method_name`, `json_value`, `caller_codec`, `reflected_value`, and
       `direct_value`. Make sure the project builds successfully.
     expectedSkills:
-      - "golem-call-agent-reflectively-rust"
+      - "golem-agent-reflection-rust"
     verify:
       build: true
       deploy: true
