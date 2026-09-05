@@ -728,16 +728,14 @@ fn preflight_streams(
 ///|
 pub async fn schema_value_to_wit_async(
   value : SchemaValue,
-) -> @types.SchemaValueTree raise SchemaModelError {
+) -> @types.SchemaValueTree {
   preflight_value(value)
   prepare_outgoing_streams(value)
   schema_value_to_wit(value)
 }
 
 ///|
-async fn prepare_outgoing_streams(
-  value : SchemaValue,
-) -> Unit raise SchemaModelError {
+async fn prepare_outgoing_streams(value : SchemaValue) -> Unit {
   match value {
     Stream(handle) => handle.prepare_outgoing()
     Record(xs) | Tuple(xs) | List(xs) | FixedList(xs) =>
@@ -1384,7 +1382,7 @@ pub fn typed_schema_value_to_wit(
 /// streams nested in its value tree before transferring their handles.
 pub async fn typed_schema_value_to_wit_async(
   tv : TypedSchemaValue,
-) -> @types.TypedSchemaValue raise SchemaModelError {
+) -> @types.TypedSchemaValue {
   {
     graph: schema_graph_to_wit(tv.graph),
     value: schema_value_to_wit_async(tv.value),

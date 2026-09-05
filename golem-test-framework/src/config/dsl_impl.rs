@@ -270,6 +270,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         name: &str,
         unique: bool,
         mut agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
+        tool_agent_bindings: BTreeMap<
+            ToolName,
+            BTreeMap<AgentTypeName, golem_common::model::tool::ToolBindingInput>,
+        >,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
@@ -306,6 +310,14 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             (None, None)
         };
 
+        let mut tool_deployment_configs = default_tool_deployment_configs(&tools)?;
+        for (tool_name, agent_bindings) in tool_agent_bindings {
+            let config = tool_deployment_configs
+                .get_mut(&tool_name)
+                .ok_or_else(|| anyhow!("Component does not declare tool {tool_name}"))?;
+            config.agent_bindings.extend(agent_bindings);
+        }
+
         let component = client
             .create_component(
                 &environment_id.0,
@@ -313,7 +325,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     component_name,
                     agent_types,
                     agent_type_provision_configs,
-                    tool_deployment_configs: default_tool_deployment_configs(&tools)?,
+                    tool_deployment_configs,
                     tools,
                 },
                 File::open(source_path).await?,
@@ -1037,6 +1049,8 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
             current_revision: plan.current_revision,
             expected_deployment_hash: plan.deployment_hash,
             version: DeploymentVersion(Uuid::new_v4().to_string()),
+            publish_tools: Vec::new(),
+            remote_tools: Vec::new(),
             agent_secret_defaults: Vec::new(),
             quota_resource_defaults: Vec::new(),
             retry_policy_defaults: Vec::new(),

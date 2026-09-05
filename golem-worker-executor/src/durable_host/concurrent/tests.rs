@@ -200,6 +200,7 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
             durable_execution_state,
             "test:monotonic_clock::now",
         ),
+        executor_shutdown: tokio_util::sync::CancellationToken::new(),
         requires_agent_authority: false,
         agent_auth_ctx: None,
         drop_sink: Some(sink),
@@ -242,6 +243,7 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
             durable_execution_state,
             "test:monotonic_clock::now",
         ),
+        executor_shutdown: tokio_util::sync::CancellationToken::new(),
         requires_agent_authority: false,
         agent_auth_ctx: None,
         drop_sink: None,
@@ -295,6 +297,7 @@ async fn cleanup_after_terminal_keeps_live_permit_until_event_is_consumed() {
                 begin_index: idx(4),
                 function_type: DurableFunctionType::ReadRemote,
                 request_upload: PendingUpload::already_durable(),
+                executor_shutdown: tokio_util::sync::CancellationToken::new(),
                 atomic_lease: None,
                 trap_context: DurableCallTrapContext {
                     retry_from: idx(4),
@@ -369,7 +372,7 @@ async fn live_delivery_token(
         })
         .await;
     let seed_oplog_dyn: Arc<dyn Oplog> = seed_oplog;
-    let replay_state = ReplayState::new(
+    let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
             agent_id: golem_common::model::AgentId {
@@ -380,6 +383,7 @@ async fn live_delivery_token(
         seed_oplog_dyn,
         golem_common::model::regions::DeletedRegions::default(),
         None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
     )
     .await
     .expect("failed to build replay state");
@@ -464,7 +468,7 @@ async fn completion_delivery_markers_preserve_handoff_order() {
         })
         .await;
     let seed_oplog_dyn: Arc<dyn Oplog> = seed_oplog;
-    let replay_state = ReplayState::new(
+    let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
             agent_id: golem_common::model::AgentId {
@@ -475,6 +479,7 @@ async fn completion_delivery_markers_preserve_handoff_order() {
         seed_oplog_dyn,
         golem_common::model::regions::DeletedRegions::default(),
         None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
     )
     .await
     .expect("failed to build replay state");
@@ -704,7 +709,7 @@ async fn tail_gated_token_over_crash_tail(
         oplog.add(entry).await;
     }
     let oplog_dyn: Arc<dyn Oplog> = oplog.clone();
-    let replay_state = ReplayState::new(
+    let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
             agent_id: golem_common::model::AgentId {
@@ -715,6 +720,7 @@ async fn tail_gated_token_over_crash_tail(
         oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
         None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
     )
     .await
     .expect("failed to build replay state");
@@ -1165,6 +1171,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
             begin_index: start_idx,
             function_type: DurableFunctionType::ReadRemote,
             request_upload: PendingUpload::already_durable(),
+            executor_shutdown: tokio_util::sync::CancellationToken::new(),
             atomic_lease: None,
             trap_context: DurableCallTrapContext {
                 retry_from: start_idx,
@@ -1178,7 +1185,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
     assert_eq!(permit_counter.load(Ordering::Acquire), 1);
 
     let persist_oplog: Arc<dyn Oplog> = oplog.clone();
-    let persist_replay_state = ReplayState::new(
+    let persist_replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
             agent_id: golem_common::model::AgentId {
@@ -1189,6 +1196,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
         persist_oplog.clone(),
         golem_common::model::regions::DeletedRegions::default(),
         None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
     )
     .await
     .expect("failed to build replay state");
@@ -1197,7 +1205,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
     let persist = tokio::spawn(async move {
         let response = HostResponseMonotonicClockTimestamp { nanos: 42 };
         let result = DurableCallSession::<host_functions::MonotonicClockNow, NotCancellable>::
-                persist_access_terminal(persist_oplog, completion_marker_recorder, &mut guard, start_idx, &response, None)
+                persist_access_terminal(persist_oplog, completion_marker_recorder, &mut guard, start_idx, response, None)
             .await;
         (result, guard)
     });
@@ -1320,6 +1328,19 @@ fn drop_not_cancellable_unfinished_signals_policy_violation() {
         }
         other => panic!("expected UnfinishedNotCancellable, got {other:?}"),
     }
+}
+
+#[test]
+fn executor_shutdown_leaves_unfinished_call_incomplete_for_replay() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    {
+        let handle = live_unfinished_handle::<NotCancellable>(idx(8), tx);
+        handle.executor_shutdown.cancel();
+    }
+    assert!(
+        rx.try_recv().is_err(),
+        "executor shutdown must not report cancellation or a policy violation"
+    );
 }
 
 #[test]
@@ -1731,6 +1752,7 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
         begin_index: idx(4),
         function_type: DurableFunctionType::ReadRemote,
         request_upload: PendingUpload::already_durable(),
+        executor_shutdown: tokio_util::sync::CancellationToken::new(),
         atomic_lease: unregistered_atomic_lease(Some(idx(3)), true),
         trap_context: DurableCallTrapContext {
             retry_from: idx(3),
@@ -1745,6 +1767,7 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
         begin_index: idx(8),
         function_type: DurableFunctionType::ReadRemote,
         request_upload: PendingUpload::already_durable(),
+        executor_shutdown: tokio_util::sync::CancellationToken::new(),
         atomic_lease: None,
         trap_context: DurableCallTrapContext {
             retry_from: idx(8),

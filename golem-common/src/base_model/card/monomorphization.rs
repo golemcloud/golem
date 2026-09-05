@@ -201,10 +201,16 @@ fn monomorphize_permission(
         PolymorphicPermissionPattern::AccountPlugin(p) => {
             mono_permission!(AccountPlugin, p, context)
         }
+        PolymorphicPermissionPattern::AccountToolRelease(p) => {
+            mono_permission!(AccountToolRelease, p, context)
+        }
         PolymorphicPermissionPattern::Application(p) => mono_permission!(Application, p, context),
         PolymorphicPermissionPattern::Environment(p) => mono_permission!(Environment, p, context),
         PolymorphicPermissionPattern::EnvironmentPluginGrant(p) => {
             mono_permission!(EnvironmentPluginGrant, p, context)
+        }
+        PolymorphicPermissionPattern::EnvironmentToolGrant(p) => {
+            mono_permission!(EnvironmentToolGrant, p, context)
         }
         PolymorphicPermissionPattern::EnvironmentDomainRegistration(p) => {
             mono_permission!(EnvironmentDomainRegistration, p, context)

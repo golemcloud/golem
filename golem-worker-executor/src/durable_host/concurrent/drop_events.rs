@@ -25,6 +25,10 @@ pub struct DroppedCall {
     pub(super) begin_index: OplogIndex,
     pub(super) function_type: DurableFunctionType,
     pub(super) request_upload: PendingUpload,
+    /// Shared signal for process-equivalent executor teardown. An unfinished call dropped after
+    /// this signal is intentionally left incomplete for replay rather than treated as guest
+    /// cancellation or a host-call programming error.
+    pub(super) executor_shutdown: tokio_util::sync::CancellationToken,
     /// The dropped call's atomic-region ownership lease, shared with every other holder (the
     /// originating handle, terminal guards). Released — store-free and idempotently — once the
     /// call's terminal is recorded.
@@ -59,6 +63,10 @@ impl DroppedCall {
 
     pub fn request_upload(&self) -> &PendingUpload {
         &self.request_upload
+    }
+
+    pub(super) fn is_executor_shutting_down(&self) -> bool {
+        self.executor_shutdown.is_cancelled()
     }
 
     /// The atomic region currently owning the dropped call, read through its lease.
@@ -178,6 +186,12 @@ pub enum DropEvent {
     /// point, since drain points are deterministic replay points; otherwise the span is derived
     /// (no span oplog entries exist) and is finished in memory only.
     FinishSpan { span_id: SpanId, durable: bool },
+    /// A guest dropped a durable readable stream endpoint synchronously. Wasmtime cannot await
+    /// the durable consumer intent or source cancellation from the resource destructor, so the
+    /// next safe worker-access window performs both before invocation progress can overtake them.
+    CancelDroppedDurableInput {
+        cancellation: Box<DroppedDurableInput>,
+    },
 }
 
 struct AccessDropEventDrainGuard {
@@ -367,6 +381,16 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                 finish_span_in_memory(ctx, &span_id)
                     .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?;
             }
+        }
+        DropEvent::CancelDroppedDurableInput { cancellation } => {
+            cancellation.cancel().await.map_err(|error| {
+                TerminalCallError::new(
+                    WorkerExecutorError::runtime(format!(
+                        "failed to cancel dropped durable stream: {error}"
+                    )),
+                    ambient_trap_context(ctx),
+                )
+            })?;
         }
     }
     Ok(())
@@ -635,6 +659,23 @@ where
                     if first_error.is_none() {
                         first_error = Some(TerminalCallError::new(
                             err,
+                            store.with(|mut access| {
+                                let ctx = get_ctx(access.data_mut());
+                                ambient_trap_context(ctx)
+                            }),
+                        ));
+                    }
+                } else {
+                    recorded += 1;
+                }
+            }
+            DropEvent::CancelDroppedDurableInput { cancellation } => {
+                if let Err(error) = cancellation.cancel().await {
+                    if first_error.is_none() {
+                        first_error = Some(TerminalCallError::new(
+                            WorkerExecutorError::runtime(format!(
+                                "failed to cancel dropped durable stream: {error}"
+                            )),
                             store.with(|mut access| {
                                 let ctx = get_ctx(access.data_mut());
                                 ambient_trap_context(ctx)

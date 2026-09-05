@@ -41,6 +41,7 @@ use crate::durable_host::durable_stream::{
     StreamAttachmentControl,
 };
 use crate::durable_host::schema_value_stream::contains_stream;
+use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::durable_host::{
     agent_effective_surface_from_component_metadata, agent_monomorphization_context,
     recover_stderr_logs,
@@ -112,7 +113,9 @@ use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::entity::{ExecutableTarget, FilesystemCapability, OwnerRuntime};
+use golem_common::model::entity::{
+    ExecutableTarget, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
+};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     AgentError, OplogEntry, OplogIndex, OplogPayload, TimestampedUpdateDescription,
@@ -1063,6 +1066,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn create_entity_context(
         self: &Arc<Self>,
         runtime: OwnerRuntime,
+        execution_mode: InvocationExecutionMode,
         filesystem: FilesystemCapability,
         executable_component: golem_service_base::model::component::Component,
         activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
@@ -1126,13 +1130,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ),
             ));
         }
-        let retained_memory_grant = Arc::new(StdMutex::new(
-            self.active_agents()
-                .acquire_memory(initial_linear_memory)
-                .await,
-        ));
+        let retained_memory_grant = Arc::new(StdMutex::new(match execution_mode {
+            InvocationExecutionMode::Live => {
+                self.active_agents()
+                    .acquire_memory(initial_linear_memory)
+                    .await
+            }
+            InvocationExecutionMode::ReplayingCompleted
+            | InvocationExecutionMode::ReplayingIncomplete => {
+                MemoryGrant::inert(initial_linear_memory)
+            }
+        }));
         let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
-        let replaying = self.owner_execution.replay().await?.is_replay();
+        let replaying = matches!(
+            execution_mode,
+            InvocationExecutionMode::ReplayingCompleted
+                | InvocationExecutionMode::ReplayingIncomplete
+        );
         let linear_memory = LinearMemoryTracker::new_with_metering(
             initial_linear_memory,
             admitted_startup_bytes,
@@ -1197,6 +1211,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             None,
             worker_metadata.original_phantom_id,
             runtime,
+            Some(execution_mode),
             self.owner_execution(),
             self.owner_runtime_resources(),
             filesystem,
@@ -1357,18 +1372,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Transition the worker into a deleting state.
     /// Rejects all new invocations and stops any running execution.
     async fn start_deleting_internal(&self) -> Result<(), WorkerExecutorError> {
-        self.queue_interrupt(
-            InterruptKind::Interrupt(Timestamp::now_utc()),
-            false,
-            UnloadReason::Deleting,
-        )
-        .await;
+        let interrupt_kind = InterruptKind::Interrupt(Timestamp::now_utc());
+        self.queue_interrupt(interrupt_kind, false, UnloadReason::Deleting)
+            .await;
         if let Some(active_agent) = self
             .active_agents()
             .try_get_active_agent(&self.owned_agent_id)
             .await
         {
-            active_agent.fence_entity_bodies();
+            active_agent
+                .fence_entity_bodies(OwnerFailureWinner::Lifecycle(interrupt_kind))
+                .await;
         }
         // Stop any future background flush or clean-checkpoint write from resurrecting the cached
         // status after the upcoming `WorkerService::remove`/`remove_cached_status` deletes it (the
@@ -1539,6 +1553,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         )
     }
 
+    pub(crate) fn interrupt_current_execution(&self) {
+        let interrupt_signal = match &*self.execution_status.read().unwrap() {
+            ExecutionStatus::Running {
+                interrupt_signal, ..
+            } => Some(interrupt_signal.clone()),
+            _ => None,
+        };
+        if let Some(interrupt_signal) = interrupt_signal {
+            let _ = interrupt_signal.send(InterruptKind::Interrupt(Timestamp::now_utc()));
+        }
+    }
+
     fn mark_as_loading(&self, start_attempt: Uuid) {
         self.startup_attempt.begin(Some(start_attempt));
         let mut execution_status = self.execution_status.write().unwrap();
@@ -1633,6 +1659,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.state_actor.non_detached_status().await
     }
 
+    /// Returns the authoritative status, reattaching it to the oplog first when necessary.
+    /// Unlike [`Self::get_non_detached_last_known_status`], this is safe for independent store
+    /// tasks that can overlap an invocation-loop jump or replay completion.
+    pub async fn get_attached_last_known_status(&self) -> AgentStatusRecord {
+        self.state_actor.attached_status().await.as_ref().clone()
+    }
+
     pub(crate) fn owned_agent_id(&self) -> &OwnedAgentId {
         &self.owned_agent_id
     }
@@ -1669,14 +1702,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             return None;
         }
-        if let Some(active_agent) = self
+        let active_agent = self
             .active_agents()
             .try_get_active_agent(&self.owned_agent_id)
-            .await
-        {
-            active_agent.fence_entity_bodies();
+            .await;
+        if let Some(active_agent) = &active_agent {
+            debug!(agent_id = %self.owned_agent_id, ?interrupt_kind, "Beginning entity fence for worker interruption");
+            active_agent
+                .begin_fence_entity_bodies(OwnerFailureWinner::Lifecycle(interrupt_kind))
+                .await;
         }
-        self.notify_queued_interrupt(interrupt_kind).await
+        let receiver = self.notify_queued_interrupt(interrupt_kind).await;
+        if let Some(active_agent) = active_agent {
+            active_agent.drain_fenced_entity_bodies().await;
+        }
+        debug!(agent_id = %self.owned_agent_id, ?interrupt_kind, "Worker interruption entity drain completed");
+        receiver
     }
 
     async fn notify_queued_interrupt(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
@@ -1686,43 +1727,46 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         drop(instance_guard);
 
-        let mut execution_status = self.execution_status.write().unwrap();
-        let current_execution_status = execution_status.clone();
-        match current_execution_status {
-            ExecutionStatus::Running {
-                interrupt_signal, ..
-            } => {
-                let _ = interrupt_signal.send(interrupt_kind);
-                let (sender, receiver) = tokio::sync::broadcast::channel(1);
-                *execution_status = ExecutionStatus::Interrupting {
-                    interrupt_kind,
-                    await_interruption: Arc::new(sender),
-                    agent_mode: execution_status.agent_mode(),
-                    timestamp: Timestamp::now_utc(),
-                };
-                Some(receiver)
-            }
-            ExecutionStatus::Suspended { .. } => None,
-            ExecutionStatus::Interrupting {
-                interrupt_kind: current_kind,
-                await_interruption,
-                agent_mode,
-                timestamp,
-            } => {
-                let receiver = await_interruption.subscribe();
-                if matches!(current_kind, InterruptKind::Restart)
-                    && !matches!(interrupt_kind, InterruptKind::Restart)
-                {
+        {
+            debug!(agent_id = %self.owned_agent_id, ?interrupt_kind, "Signalling primary Store interruption");
+            let mut execution_status = self.execution_status.write().unwrap();
+            let current_execution_status = execution_status.clone();
+            match current_execution_status {
+                ExecutionStatus::Running {
+                    interrupt_signal, ..
+                } => {
+                    let _ = interrupt_signal.send(interrupt_kind);
+                    let (sender, receiver) = tokio::sync::broadcast::channel(1);
                     *execution_status = ExecutionStatus::Interrupting {
                         interrupt_kind,
-                        await_interruption,
-                        agent_mode,
-                        timestamp,
+                        await_interruption: Arc::new(sender),
+                        agent_mode: execution_status.agent_mode(),
+                        timestamp: Timestamp::now_utc(),
                     };
+                    Some(receiver)
                 }
-                Some(receiver)
+                ExecutionStatus::Suspended { .. } => None,
+                ExecutionStatus::Interrupting {
+                    interrupt_kind: current_kind,
+                    await_interruption,
+                    agent_mode,
+                    timestamp,
+                } => {
+                    let receiver = await_interruption.subscribe();
+                    if matches!(current_kind, InterruptKind::Restart)
+                        && !matches!(interrupt_kind, InterruptKind::Restart)
+                    {
+                        *execution_status = ExecutionStatus::Interrupting {
+                            interrupt_kind,
+                            await_interruption,
+                            agent_mode,
+                            timestamp,
+                        };
+                    }
+                    Some(receiver)
+                }
+                ExecutionStatus::Loading { .. } => None,
             }
-            ExecutionStatus::Loading { .. } => None,
         }
     }
 
@@ -4290,7 +4334,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .with_consumer_journal(self.durable_stream_consumer_journal())
         .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
         match result {
-            Ok(()) => streams.complete().await,
+            Ok(()) => streams.complete_or_defer_for_forwarded_inputs().await,
             Err(details) => streams.fail(details).await,
         }
         .map_err(WorkerExecutorError::runtime)?;
@@ -6831,6 +6875,7 @@ impl RunningWorker {
             LinearMemoryGrantRegistration::new(parent.clone(), memory_grant);
 
         let panic_parent = Arc::clone(&parent);
+        let invocation_loops = parent.active_agents().invocation_loops();
         let invocation_loop_task = async move {
             RunningWorker::invocation_loop(
                 receiver,
@@ -6852,7 +6897,7 @@ impl RunningWorker {
             .await;
             drop((memory_grant_registration, component_charge));
         };
-        let handle = tokio::task::spawn(async move {
+        let handle = invocation_loops.spawn(async move {
             run_invocation_loop_task(
                 invocation_loop_task,
                 move |error: WorkerExecutorError| async move {
@@ -6903,6 +6948,14 @@ impl RunningWorker {
         CreateWorkerInstanceError,
     > {
         let component_id = parent.owned_agent_id.component_id();
+        let entity_generation = parent
+            .active_agents()
+            .try_get_active_agent(&parent.owned_agent_id)
+            .await
+            .map(|active_agent| {
+                let generation = active_agent.entity_fence_generation();
+                (active_agent, generation)
+            });
 
         // we might have detached the worker status during the last invocation loop. Make sure it's attached and we are fully up-to-date on the oplog
         parent.reattach_worker_status().await;
@@ -7097,11 +7150,14 @@ impl RunningWorker {
             })?;
         let retained_memory_grant = parent.linear_memory_grant();
         let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
+        // The tracker starts in replay mode so the admitted startup reservation stays protected
+        // and prepays the growth replayed from the oplog; `DurableWorkerCtx::create` switches it
+        // to live once the replay state is known to be live.
         let linear_memory = LinearMemoryTracker::new_with_metering(
             parent.startup_linear_memory_bytes(),
             admitted_startup_bytes,
             parent.agent_mode(),
-            false,
+            true,
             Arc::clone(&parent.resource_entry),
             retained_memory_grant,
             parent.config().resource_usage_metering.memory,
@@ -7250,6 +7306,7 @@ impl RunningWorker {
             pending_update,
             worker_metadata.original_phantom_id,
             OwnerRuntime::Agent,
+            None,
             parent.owner_execution(),
             parent.owner_runtime_resources(),
             FilesystemCapability::Capable,
@@ -7293,6 +7350,12 @@ impl RunningWorker {
             );
         }
         let (instance, mut store) = hosted.into_parts();
+        if let Some((active_agent, generation)) = entity_generation {
+            let interrupt_state = parent.interrupt_signal.lock().await;
+            if !interrupt_state.has_interrupt() {
+                active_agent.reopen_entity_admission_if_generation(generation);
+            }
+        }
         let prepare_result =
             Ctx::prepare_instance(&parent.owned_agent_id.agent_id, &instance, &mut store).await;
         let decision = match prepare_result {

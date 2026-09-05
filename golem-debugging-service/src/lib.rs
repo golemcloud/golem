@@ -63,7 +63,7 @@ use golem_worker_executor::services::worker_enumeration::{
 };
 use golem_worker_executor::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
-use golem_worker_executor::services::{All, rdbms};
+use golem_worker_executor::services::{All, HasActiveAgents, rdbms};
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::{Bootstrap, create_worker_executor_impl};
 use humansize::ISizeFormatter;
@@ -429,6 +429,7 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized + Sen
         epoch_stop,
         shutdown,
         leak_detector: worker_executor_impl.leak_detector(),
+        invocation_loops: worker_executor_impl.active_agents().invocation_loops(),
     })
 }
 

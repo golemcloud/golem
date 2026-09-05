@@ -10,18 +10,21 @@ fn main() {
     let root_yaml_path = PathBuf::from("../openapi/golem-service.yaml");
     let local_yaml_path = PathBuf::from("openapi/golem-service.yaml");
 
-    println!("cargo::rerun-if-changed={}", root_yaml_path.display());
-    println!("cargo::rerun-if-changed={}", local_yaml_path.display());
-
     println!("Starting code generation for Golem OpenAPI client.");
 
     println!("Output directory: {out_dir:?}");
     println!("Workspace OpenAPI file: {root_yaml_path:?}");
 
+    // Only the file this build actually reads from is tracked. The local copy is written by this
+    // script, so tracking it while it is (re)created would make the script stale on the very next
+    // cargo invocation and recompile golem-client and all of its dependents.
     if root_yaml_path.exists() {
+        println!("cargo::rerun-if-changed={}", root_yaml_path.display());
         // Copying the file to the crate so it gets packaged
         std::fs::create_dir_all(local_yaml_path.parent().unwrap()).unwrap();
         copy_if_different(root_yaml_path.clone(), local_yaml_path.clone()).unwrap();
+    } else {
+        println!("cargo::rerun-if-changed={}", local_yaml_path.display());
     };
     generate(local_yaml_path.clone(), out_dir)
 }
@@ -51,16 +54,20 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             // account usage
             (
-                "StorageUsage",
-                "golem_common::model::account_usage::StorageUsage",
+                "AccountUsage",
+                "golem_common::model::account_usage::AccountUsage",
             ),
             (
-                "StorageUsageHistory",
-                "golem_common::model::account_usage::StorageUsageHistory",
+                "AccountUsageMetrics",
+                "golem_common::model::account_usage::AccountUsageMetrics",
             ),
             (
-                "StorageUsageMetrics",
-                "golem_common::model::account_usage::StorageUsageMetrics",
+                "AccountUsageMetering",
+                "golem_common::model::account_usage::AccountUsageMetering",
+            ),
+            (
+                "MeteringStatus",
+                "golem_common::model::account_usage::MeteringStatus",
             ),
             (
                 "StorageLimit",
@@ -71,8 +78,8 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::account_usage::SetStorageLimit",
             ),
             (
-                "StorageUsagePeriod",
-                "golem_common::model::account_usage::StorageUsagePeriod",
+                "AccountUsagePeriod",
+                "golem_common::model::account_usage::AccountUsagePeriod",
             ),
             (
                 "MemoryLimit",
@@ -215,6 +222,83 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             (
                 "DeployedRegisteredTool",
                 "golem_common::model::tool::DeployedRegisteredTool",
+            ),
+            ("ToolSource", "golem_common::model::tool::ToolSource"),
+            (
+                "ToolRelease",
+                "golem_common::model::tool_release::ToolRelease",
+            ),
+            (
+                "ToolReleaseMetadata",
+                "golem_common::model::tool_release::ToolReleaseMetadata",
+            ),
+            (
+                "ToolReleaseReference",
+                "golem_common::model::tool_release::ToolReleaseReference",
+            ),
+            (
+                "ToolReleaseById",
+                "golem_common::model::tool_release::ToolReleaseById",
+            ),
+            (
+                "ToolReleaseByCoordinates",
+                "golem_common::model::tool_release::ToolReleaseByCoordinates",
+            ),
+            (
+                "ToolReleaseLifecycle",
+                "golem_common::model::tool_release::ToolReleaseLifecycle",
+            ),
+            (
+                "ToolReleaseOrigin",
+                "golem_common::model::tool_release::ToolReleaseOrigin",
+            ),
+            (
+                "SystemToolAvailability",
+                "golem_common::model::tool_release::SystemToolAvailability",
+            ),
+            (
+                "ToolPublication",
+                "golem_common::model::tool_release::ToolPublication",
+            ),
+            (
+                "ToolPublicationPlanAction",
+                "golem_common::model::tool_release::ToolPublicationPlanAction",
+            ),
+            (
+                "ToolPublicationPlanEntry",
+                "golem_common::model::tool_release::ToolPublicationPlanEntry",
+            ),
+            (
+                "EnvironmentToolGrant",
+                "golem_common::model::environment_tool_grant::EnvironmentToolGrant",
+            ),
+            (
+                "EnvironmentToolGrantCreation",
+                "golem_common::model::environment_tool_grant::EnvironmentToolGrantCreation",
+            ),
+            (
+                "EnvironmentToolGrantDeletion",
+                "golem_common::model::environment_tool_grant::EnvironmentToolGrantDeletion",
+            ),
+            (
+                "EnvironmentToolGrantLifecycle",
+                "golem_common::model::environment_tool_grant::EnvironmentToolGrantLifecycle",
+            ),
+            (
+                "EnvironmentToolGrantWithDetails",
+                "golem_common::model::environment_tool_grant::EnvironmentToolGrantWithDetails",
+            ),
+            (
+                "EnvironmentToolGrantReconciliation",
+                "golem_common::model::environment_tool_grant::EnvironmentToolGrantReconciliation",
+            ),
+            (
+                "EnvironmentToolValidation",
+                "golem_common::model::environment_tool_grant::EnvironmentToolValidation",
+            ),
+            (
+                "EnvironmentToolValidationResult",
+                "golem_common::model::environment_tool_grant::EnvironmentToolValidationResult",
             ),
             // domain_registration
             (

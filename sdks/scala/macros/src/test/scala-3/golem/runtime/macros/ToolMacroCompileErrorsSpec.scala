@@ -393,7 +393,7 @@ object ToolMacroCompileErrorsSpec extends ZIOSpecDefault {
             def invoke(
               invocation: UniversalToolMiddlewareInvocation,
               underlying: UniversalToolUnderlying
-            ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
+            ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
               underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
           }
           ToolMiddlewareMacro.universalHandle[UniversalPolicy]
@@ -414,7 +414,7 @@ object ToolMacroCompileErrorsSpec extends ZIOSpecDefault {
             def invoke(
               invocation: UniversalToolMiddlewareInvocation,
               underlying: UniversalToolUnderlying
-            ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
+            ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
               underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
           }
           @universalToolMiddleware(name = "universal")
@@ -438,7 +438,7 @@ object ToolMacroCompileErrorsSpec extends ZIOSpecDefault {
             def invoke(
               invocation: UniversalToolMiddlewareInvocation,
               underlying: UniversalToolUnderlying
-            ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
+            ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
               underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
           }
           ToolMiddlewareMacro.universalHandle[UniversalPolicy[String]]
@@ -446,6 +446,24 @@ object ToolMacroCompileErrorsSpec extends ZIOSpecDefault {
         )
         assertTrue(
           errors.exists(_.contains("tool middleware implementation must not have type parameters"))
+        )
+      },
+      test("middleware stream handles do not expose byte operations") {
+        val inputErrors = errorsOf(
+          """
+          import golem.tool.ToolMiddlewareInputHandle
+          def read(input: ToolMiddlewareInputHandle) = input.read()
+          """
+        )
+        val outputErrors = errorsOf(
+          """
+          import golem.tool.ToolMiddlewareOutputHandle
+          def write(output: ToolMiddlewareOutputHandle) = output.write(Array.emptyByteArray)
+          """
+        )
+        assertTrue(
+          inputErrors.exists(_.contains("read is not a member")),
+          outputErrors.exists(_.contains("write is not a member"))
         )
       },
       test("universal tool middleware classes require their annotation") {
@@ -459,7 +477,7 @@ object ToolMacroCompileErrorsSpec extends ZIOSpecDefault {
             def invoke(
               invocation: UniversalToolMiddlewareInvocation,
               underlying: UniversalToolUnderlying
-            ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
+            ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
               underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
           }
           ToolMiddlewareMacro.universalHandle[UniversalPolicy]

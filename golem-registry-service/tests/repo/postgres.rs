@@ -23,6 +23,7 @@ use golem_registry_service::repo::application::DbApplicationRepo;
 use golem_registry_service::repo::component::DbComponentRepo;
 use golem_registry_service::repo::deployment::DbDeploymentRepo;
 use golem_registry_service::repo::environment::DbEnvironmentRepo;
+use golem_registry_service::repo::environment_tool_grant::DbEnvironmentToolGrantRepo;
 use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
 use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::plan::DbPlanRepo;
@@ -30,6 +31,7 @@ use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeEvent, RegistryChangeRepo,
 };
+use golem_registry_service::repo::tool_release::DbToolReleaseRepo;
 use golem_registry_service::services::registry_change_notifier::{
     PostgresRegistryChangeNotifier, RegistryChangeNotifier,
 };
@@ -216,6 +218,7 @@ async fn make_deps(pool: PostgresPool) -> Deps {
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(pool.clone())),
         environment_repo: Box::new(DbEnvironmentRepo::logged(pool.clone())),
+        environment_tool_grant_repo: Box::new(DbEnvironmentToolGrantRepo::logged(pool.clone())),
         plan_repo: Box::new(DbPlanRepo::logged(pool.clone())),
         component_repo: Box::new(DbComponentRepo::logged(pool.clone())),
         http_api_deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(pool.clone())),
@@ -224,6 +227,7 @@ async fn make_deps(pool: PostgresPool) -> Deps {
         full_deployment_repo: Box::new(DbDeploymentRepo::logged(pool.clone())),
         plugin_repo: Box::new(DbPluginRepo::logged(pool.clone())),
         registry_change_repo: Box::new(DbRegistryChangeRepo::new(pool.clone())),
+        tool_release_repo: Box::new(DbToolReleaseRepo::logged(pool.clone())),
         test_db: TestDb::Postgres(pool.clone()),
     };
     deps.setup().await;
@@ -479,6 +483,13 @@ async fn test_component_delete_does_not_revoke_reused_agent_initial_card_id(
 }
 
 #[test]
+async fn test_component_delete_rejects_retained_source_references(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_component_delete_rejects_retained_source_references(deps).await;
+}
+
+#[test]
 async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_revisions(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
@@ -504,8 +515,8 @@ async fn test_account_usage(#[dimension(postgres_variant)] deps: &Deps) {
 }
 
 #[test]
-async fn test_storage_usage_history(#[dimension(postgres_variant)] deps: &Deps) {
-    crate::repo::common::test_storage_usage_history(deps).await;
+async fn test_account_usage_history(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_account_usage_history(deps).await;
 }
 
 #[test]
@@ -606,6 +617,13 @@ async fn test_registry_change_cursor_expired_detection(#[dimension(postgres_vari
 #[test]
 async fn test_registry_change_mixed_event_types(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_registry_change_mixed_event_types(deps).await;
+}
+
+#[test]
+async fn test_tool_release_and_grant_repository_contracts(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_tool_release_and_grant_repository_contracts(deps).await;
 }
 
 /// Tests that Postgres LISTEN/NOTIFY propagates events through the

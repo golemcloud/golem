@@ -1077,6 +1077,8 @@ where
                     .as_ref()
                     .map(|span| format!("consume-body:{}", span.send_start_index)),
                 request_identity: None,
+                entity_invocation_identity: None,
+                tool_invocation_identity: None,
                 parent_start_index: None,
                 observational_owner,
                 scope_replay_recovery,

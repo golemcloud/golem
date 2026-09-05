@@ -1,0 +1,45 @@
+manifestVersion: 1.6.0
+
+app: tool-streaming-scala
+
+componentTemplates:
+  scala-test-component:
+    presets:
+      release:
+        default: true
+        build:
+        - command: sbt -batch -no-colors -Dsbt.supershell=false "golemBuildComponent scala:examples .golem/scala.js"
+          sources:
+          - src
+          - build.sbt
+          - project
+          targets:
+          - .golem/scala.js
+        - injectToPrebuiltQuickjs: .generated/agent_guest.wasm
+          module: .golem/scala.js
+          into: "{{ golemTempDir }}/agents/scala_examples.dynamic.wasm"
+        - preinitializeJs: "{{ golemTempDir }}/agents/scala_examples.dynamic.wasm"
+          into: "{{ golemTempDir }}/agents/scala_examples.preinitialized.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/scala_examples.preinitialized.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/scala_examples.wasm"
+        customCommands:
+          copy:
+          - command: cp "{{ golemTempDir }}/agents/scala_examples.wasm" "{{ appRootDir }}/../golem_it_tool_streaming_scala.wasm"
+
+components:
+  scala:examples:
+    dir: .
+    templates: scala-test-component
+
+tools:
+  scala-streaming: {}
+
+agents:
+  ScalaToolStreamingCaller:
+    tools:
+      scala-streaming: {}
+
+environments:
+  local:
+    server: local
+    componentPresets: release

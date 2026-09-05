@@ -1,0 +1,7 @@
+.bsp/
+.generated/
+.golem/
+golem-temp/
+project/project/
+project/target/
+target/

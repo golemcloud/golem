@@ -14,7 +14,8 @@
 
 use crate::bridge_gen::fixtures::{
     agent, code_first_snippets_agent_type, def, field, local_config, method,
-    multi_agent_wrapper_2_types, ref_to, single_agent_wrapper_types,
+    multi_agent_wrapper_2_types, multimodal, named_field, ref_to, single_agent_wrapper_types,
+    variant_case,
 };
 use crate::bridge_gen::type_naming::test_type_naming;
 use camino::{Utf8Path, Utf8PathBuf};
@@ -363,6 +364,58 @@ fn generate_and_compile(agent_type: AgentTypeSchema, target_dir: &Utf8Path) {
             .unwrap()
             .success()
     );
+}
+
+#[test]
+fn external_streaming_generation_compiles_recursive_streams_and_config() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let streaming_multimodal = multimodal(vec![
+        variant_case("bytes", Some(SchemaType::stream(Some(SchemaType::u8())))),
+        variant_case("label", Some(SchemaType::string())),
+    ]);
+    let mut agent_type = agent(
+        "StreamingAgent",
+        "rust",
+        vec![field("name", SchemaType::string())],
+        vec![
+            method(
+                "exchange",
+                vec![field("input", ref_to("StreamingInput"))],
+                Some(SchemaType::option(ref_to("StreamingOutput"))),
+            ),
+            method(
+                "multimodal",
+                vec![field("items", streaming_multimodal.clone())],
+                Some(streaming_multimodal),
+            ),
+            method("status", vec![], Some(SchemaType::string())),
+        ],
+        vec![
+            def(
+                "StreamingInput",
+                SchemaType::record(vec![named_field(
+                    "chunks",
+                    SchemaType::list(SchemaType::stream(Some(SchemaType::binary(
+                        BinaryRestrictions::default(),
+                    )))),
+                )]),
+            ),
+            def(
+                "StreamingOutput",
+                SchemaType::record(vec![named_field(
+                    "parts",
+                    SchemaType::list(SchemaType::option(SchemaType::stream(Some(
+                        SchemaType::u8(),
+                    )))),
+                )]),
+            ),
+        ],
+        AgentMode::Durable,
+    );
+    agent_type.config = vec![local_config(vec!["stream", "mode"], SchemaType::string())];
+
+    generate_and_compile(agent_type, target_dir);
 }
 
 // Compiler-backed generator checks live in the integration target.
@@ -1231,6 +1284,17 @@ fn cargo_check(target_path: &Utf8Path) {
 #[test]
 fn tool_generation_compiles() {
     let (_dir, target_path) = generate_tool(grep_tool(), "grep-tool-guest-client");
+    let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+    assert!(lib_rs.contains("pub fn replace("), "{lib_rs}");
+    assert!(
+        lib_rs.contains("agentic::ToolInvocation<(), std::convert::Infallible>"),
+        "{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("agentic::start_tool_invocation("),
+        "{lib_rs}"
+    );
+    assert!(!lib_rs.contains("expect_stdout"), "{lib_rs}");
     cargo_check(&target_path);
 }
 #[test]

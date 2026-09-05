@@ -1,18 +1,22 @@
 use golem_rust::agentic::{BasicModality, Multimodal, UnstructuredBinary, UnstructuredText};
-use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::{agent_definition, agent_implementation, read_only};
 
-// Agent methods that don't take any arguments becomes a resource
+// Read-only agent methods that don't take any arguments become resources.
 // However they are dynamic because it depends on agent identity (constructor)
-// and therefore becomes "resource templates" according to MCP
+// and therefore become "resource templates" according to MCP.
 
 #[agent_definition]
 pub trait DynamicResource {
     // The resource depends on the agent identity
     fn new(name: String) -> Self;
 
+    #[read_only]
     fn get_weather_report(&self) -> String;
+    #[read_only]
     fn get_weather_report_with_images(&self) -> Multimodal;
+    #[read_only]
     fn get_weather_report_text(&self) -> UnstructuredText;
+    #[read_only]
     fn get_snow_fall_image(&self) -> UnstructuredBinary<String>;
 }
 

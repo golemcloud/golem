@@ -2,6 +2,7 @@
 pub using @toolCore {
   type Principal,
   type NoToolError,
+  type ProviderStdout,
   type ToolBuildError,
   type ToolDef,
   type CommandNodeDef,
@@ -28,8 +29,10 @@ pub using @toolCore {
   type CanonicalInputValue,
   type CanonicalInputModel,
   type InvocationResult,
+  type ToolStreamError,
   trait ToolErrorSchema,
   new_stdout,
+  provider_stdout,
   register_tool_def,
   register_tool_def_invoker,
   register_subtool_def_invoker,

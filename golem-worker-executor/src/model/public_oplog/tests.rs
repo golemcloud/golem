@@ -19,26 +19,31 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::payload::host_functions::HostFunctionName;
 use golem_common::model::oplog::payload::types::{
-    SerializableHttpErrorCode, SerializableHttpMethod, SerializableIpAddress,
-    SerializableP3HttpBodyChunk, SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
-    SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestOptions,
-    SerializableP3HttpScheme, SerializableP3IpSocketAddress, SerializableP3SocketErrorCode,
-    SerializableP3TcpChunk, SerializableP3UdpDatagram, SerializableResponseHeaders,
+    SerializableEntityBodyExecution, SerializableHttpErrorCode, SerializableHttpMethod,
+    SerializableIpAddress, SerializableP3HttpBodyChunk, SerializableP3HttpClientSend,
+    SerializableP3HttpClientSendResult, SerializableP3HttpConsumeBodyResult,
+    SerializableP3HttpRequestOptions, SerializableP3HttpScheme, SerializableP3IpSocketAddress,
+    SerializableP3SocketErrorCode, SerializableP3TcpChunk, SerializableP3UdpDatagram,
+    SerializableResponseHeaders, SerializableToolOperationTerminal,
+    SerializableToolStructuredResult,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestNoInput, HostRequestP3HttpClientSend,
-    HostRequestP3SocketsUdpSend, HostResponseP3BlobstoreIncomingValueStream,
-    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
-    HostResponseP3HttpClientSendResult, HostResponseP3KeyvalueIncomingValueStream,
-    HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceiveChunk,
-    HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend,
+    DurableFunctionType, HostRequestEntityInvocation, HostRequestNoInput,
+    HostRequestP3HttpClientSend, HostRequestP3SocketsUdpSend, HostResponseEntityInvocation,
+    HostResponseP3BlobstoreIncomingValueStream, HostResponseP3HttpClientConsumeBodyChunk,
+    HostResponseP3HttpClientConsumeBodyResult, HostResponseP3HttpClientSendResult,
+    HostResponseP3KeyvalueIncomingValueStream, HostResponseP3SocketsTcpAcquire,
+    HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsUdpReceive,
+    HostResponseP3SocketsUdpSend,
 };
 use golem_common::model::{
     AgentFingerprint, AgentMetadata, AgentStatusRecord, RetryConfig, Timestamp,
 };
 use golem_common::read_only_lock;
+use golem_common::schema::IntoTypedSchemaValue;
 use golem_service_base::model::component::Component;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+use prost::Message;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::RwLock;
 use test_r::test;
@@ -380,6 +385,48 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
         expected_ends.insert(end_idx, expected_response);
     }
 
+    // Generic entity calls already carry a self-contained typed terminal. The public oplog must
+    // expose that terminal directly rather than schema-encoding a TypedSchemaValue inside another
+    // TypedSchemaValue, which exceeds protobuf's recursion limit for realistic tool terminals.
+    let entity_input = "entity-input"
+        .to_string()
+        .into_typed_schema_value()
+        .unwrap();
+    let entity_terminal = SerializableToolOperationTerminal {
+        body_execution: SerializableEntityBodyExecution::Executed,
+        result: Ok(SerializableToolStructuredResult { result: None }),
+    }
+    .into_typed_schema_value()
+    .unwrap();
+    let entity_request: HostRequest = HostRequestEntityInvocation {
+        metadata: vec![1, 2, 3],
+        input: entity_input,
+    }
+    .into();
+    let entity_response: HostResponse = HostResponseEntityInvocation {
+        result: Ok(entity_terminal.clone()),
+    }
+    .into();
+    let expected_request = entity_request.clone().into_typed_schema_value().unwrap();
+    let (entity_start_idx, entity_end_idx) = oplog
+        .add_completed_host_call(
+            HostFunctionName::GolemEntityInvoke,
+            &entity_request,
+            &entity_response,
+            DurableFunctionType::WriteLocal,
+            None,
+        )
+        .await
+        .unwrap();
+    expected_starts.insert(
+        entity_start_idx,
+        (
+            HostFunctionName::GolemEntityInvoke.to_string(),
+            expected_request,
+        ),
+    );
+    expected_ends.insert(entity_end_idx, entity_terminal);
+
     // A host call terminated by `Cancelled` instead of `End`: a standalone
     // `Start` for a consume-body-chunk call, cancelled with a matching
     // partial P3 payload — the sequence the executor emits when a durable
@@ -489,9 +536,13 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             .clone()
             .try_into()
             .unwrap_or_else(|err| panic!("protobuf conversion of entry {index} failed: {err}"));
+        let encoded = proto_entry.encode_to_vec();
+        let proto_entry =
+            golem_api_grpc::proto::golem::worker::OplogEntry::decode(encoded.as_slice())
+                .unwrap_or_else(|err| panic!("protobuf decoding of entry {index} failed: {err}"));
         let round_tripped: PublicOplogEntry = proto_entry
             .try_into()
-            .unwrap_or_else(|err| panic!("protobuf decoding of entry {index} failed: {err}"));
+            .unwrap_or_else(|err| panic!("public entry conversion at {index} failed: {err}"));
         assert_eq!(round_tripped, public_entry);
 
         // They must also survive the WIT conversion used by the in-component

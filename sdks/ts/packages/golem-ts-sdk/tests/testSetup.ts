@@ -66,6 +66,8 @@ vi.mock('golem:agent/host@2.0.0', () => ({
 }));
 
 vi.mock('golem:tool/host@0.1.0', () => ({
+  createStdin: vi.fn(),
+  createStdout: vi.fn(),
   ToolRpc: vi.fn().mockImplementation(() => ({
     invokeAndAwait: vi.fn(),
     invoke: vi.fn(),

@@ -23,7 +23,7 @@
 //! free function; `#[tool_implementation]` emits the `#[ctor]` that registers
 //! the descriptor, so only an implemented tool is ever registered.
 
-use crate::tool::helpers::to_kebab_case;
+use crate::tool::helpers::{StreamKind, is_stream_type, stream_type, to_kebab_case};
 use crate::tool::ir::{
     ArgIr, ArgPlacement, ArgSubKind, CommandAnnotationsIr, CommandIr, ConstraintIr, DocIr,
     PathDirectionIr, PathKindIr, QuantifierIr, RefIr, RepeatableMode, ResultIr, ToolDefinitionIr,
@@ -1063,10 +1063,10 @@ fn reject_unconsumed_structural_attrs(arg: &ArgIr, kind: SurfaceKind) -> Result<
 }
 
 /// Rejects every `#[arg]` field other than documentation on a stdin/stdout
-/// stream parameter. A stream is projected purely from its `InputStream` /
-/// `OutputStream` type ([`stream_spec_tokens`] lowers only `doc`), so an explicit
-/// placement, `kind`, value-schema refinement, or any structural field would be
-/// silently dropped.
+/// stream parameter. A stream is projected purely from its required or optional
+/// `InputStream` / `OutputStream` type ([`stream_spec_tokens`] lowers only `doc`),
+/// so an explicit placement, `kind`, value-schema refinement, or any structural
+/// field would be silently dropped.
 fn reject_stream_attrs(arg: &ArgIr) -> Result<(), Error> {
     let span = arg.param.span();
     if arg.placement.is_some() {
@@ -1111,19 +1111,14 @@ fn classify(
     let name = to_kebab_case(&ident.to_string());
 
     // Streams are not value schemas; detect them by type name.
-    if let Some(last) = type_last_ident(ty) {
-        if last == "InputStream" {
-            if let Some(arg) = arg {
-                reject_stream_attrs(arg)?;
-            }
-            return Ok(Projection::Stdin(stream_spec_tokens(arg)));
+    if let Some((kind, required)) = stream_type(ty) {
+        if let Some(arg) = arg {
+            reject_stream_attrs(arg)?;
         }
-        if last == "OutputStream" {
-            if let Some(arg) = arg {
-                reject_stream_attrs(arg)?;
-            }
-            return Ok(Projection::Stdout(stream_spec_tokens(arg)));
-        }
+        return Ok(match kind {
+            StreamKind::Input => Projection::Stdin(stream_spec_tokens(arg, required)),
+            StreamKind::Output => Projection::Stdout(stream_spec_tokens(arg, required)),
+        });
     }
 
     // Unwrap a single `Option<T>` layer: it only makes the argument not-required.
@@ -1295,13 +1290,13 @@ fn classify(
     })
 }
 
-fn stream_spec_tokens(arg: Option<&ArgIr>) -> TokenStream {
+fn stream_spec_tokens(arg: Option<&ArgIr>, required: bool) -> TokenStream {
     let doc = arg_doc_tokens(arg);
     quote! {
         golem_rust::agentic::StreamSpec {
             doc: #doc,
             mime: ::std::vec::Vec::new(),
-            required: true,
+            required: #required,
         }
     }
 }
@@ -2345,13 +2340,6 @@ fn type_last_ident(ty: &Type) -> Option<String> {
     } else {
         None
     }
-}
-
-fn is_stream_type(ty: &Type) -> bool {
-    matches!(
-        type_last_ident(ty).as_deref(),
-        Some("InputStream" | "OutputStream")
-    )
 }
 
 fn is_auto_injected_principal_type(ty: &Type) -> bool {

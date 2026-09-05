@@ -1336,6 +1336,81 @@ async fn drive_gated_body_discard_round(
     Ok(())
 }
 
+/// After a primary worker replays a completed invocation to its natural tail, the first scoped
+/// host call of the next invocation must open its scope in live mode.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_opens_scope_after_primary_replay_tail(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const RESPONSE: &str = "replay-tail-body";
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let host_http_port = listener.local_addr()?.port();
+    let http_server = spawn({
+        let request_count = request_count.clone();
+        async move {
+            let route = Router::new().route(
+                "/",
+                axum::routing::get(move || {
+                    let request_count = request_count.clone();
+                    async move {
+                        request_count.fetch_add(1, Ordering::SeqCst);
+                        RESPONSE
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span()
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let first = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_idempotent", data_value!())
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(first, format!("200 {RESPONSE}"));
+
+    executor.simulated_crash(&worker_id).await?;
+
+    let second = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(&component, &agent_id, "get_idempotent", data_value!()),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(second, format!("200 {RESPONSE}"));
+    assert_eq!(
+        request_count.load(Ordering::SeqCst),
+        2,
+        "replay must not reissue the completed call and the new live call must run once"
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+    Ok(())
+}
+
 /// A restart after the send completed but before its spawned consume-body task committed the scope
 /// `Start` must safely re-issue an idempotent request and continue the recorded invocation.
 #[test]
