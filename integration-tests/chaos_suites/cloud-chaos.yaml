@@ -1097,7 +1097,7 @@ scenarios:
   # The executor holds one connection to the shard manager, built by
   # `GrpcClient::new` with an idle TTL of `Duration::MAX`
   # (golem-service-base/src/grpc/client.rs). DNS is consulted when that
-  # connection is established and never again while it lives, so NXDOMAIN
+  # connection is established and never again while it lives, so SERVFAIL
   # against a live channel should cost nothing at all. Establishing that is the
   # point: "a transient DNS outage costs us nothing" is a claim worth holding
   # evidence for rather than reading off the source. MF2 (GOL-537) is the

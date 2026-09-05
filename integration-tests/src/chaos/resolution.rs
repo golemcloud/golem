@@ -25,7 +25,7 @@
 //! (`golem-service-base/src/grpc/client.rs`). DNS is consulted when that
 //! connection is established and never again while it lives. A name that stops
 //! resolving therefore reaches nothing: no re-resolution is attempted, so the
-//! NXDOMAIN is never asked for.
+//! SERVFAIL is never asked for.
 //!
 //! That makes S4 the second scenario in the suite — after S19 — where a clean
 //! report and a report of nothing are the same document. The suite answers that
