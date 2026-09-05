@@ -57,7 +57,9 @@ use crate::preview2::golem::tool::host::{
     RegisteredTool as WitRegisteredTool, RpcError, StreamWriteError, TypedSchemaValue,
 };
 use crate::preview2::tool_guest::exports::golem::tool::guest as tool_guest_exports;
-use crate::services::environment_state::ToolDiscoveryError;
+use crate::services::environment_state::{
+    ToolActivationOutcome, ToolDiscoveryError, ToolDispatchTarget,
+};
 use crate::services::{HasActiveAgents, HasWorker};
 use crate::worker::instance::EntityInvocationBody;
 use crate::worker::invocation::{
@@ -67,14 +69,18 @@ use crate::worker::invocation::{
 use crate::workerctx::WorkerCtx;
 use anyhow::{Context, anyhow};
 use golem_common::model::OwnedAgentId;
+use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::{AgentPrincipal, AgentTypeName, Principal};
+use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::ToolOwnerPattern;
+use golem_common::model::component::ComponentName;
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationDescriptorIdentity,
     EntityInvocationRequestIdentity, InvocationExecutionMode, ToolInputDecodeFailure,
     ToolInvocationClaimIdentity, ToolInvocationDescriptor, ToolInvocationDescriptorIdentity,
     ToolInvocationRejectedIdentity,
 };
+use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::host_functions::{GolemToolGetAllTools, GolemToolGetTool};
 use golem_common::model::oplog::payload::types::{
     SerializableEntityBodyExecution, SerializableToolError, SerializableToolInvocationResult,
@@ -86,7 +92,7 @@ use golem_common::model::oplog::{
     HostRequestNoInput, HostResponseEntityInvocation, HostResponseGolemToolTool,
     HostResponseGolemToolTools,
 };
-use golem_common::model::tool::{RegisteredTool, ToolName, ToolSource};
+use golem_common::model::tool::ToolName;
 use golem_common::schema::render::cli_text::value_to_cli_text_unredacted;
 use golem_common::schema::tool::DiscoveredTool;
 use golem_common::schema::tool::canonical::CanonicalSurfaceRef;
@@ -1216,19 +1222,19 @@ fn project_tool_unit<Ctx: WorkerCtx>(
     response.map_err(|error| project_tool_rpc_error(error, ctx))
 }
 
-fn tool_owner<Ctx: WorkerCtx>(
-    ctx: &DurableWorkerCtx<Ctx>,
-    rpc: &ToolRpcEntry,
-    registered_tool: &RegisteredTool,
+fn caller_tool_owner(
+    account: &AccountEmail,
+    application: &ApplicationName,
+    environment: &EnvironmentName,
+    component: &ComponentName,
+    tool_name: &ToolName,
 ) -> ToolOwnerPattern {
-    let component = ctx.component_metadata();
-    let ToolSource::Component { component_name, .. } = &registered_tool.source;
     ToolOwnerPattern::Tool {
-        account: registered_tool.owner_account_email.clone(),
-        application: component.application_name.clone(),
-        environment: component.environment_name.clone(),
-        component: component_name.clone(),
-        tool: rpc.tool_name.to_string(),
+        account: account.clone(),
+        application: application.clone(),
+        environment: environment.clone(),
+        component: component.clone(),
+        tool: tool_name.to_string(),
     }
 }
 
@@ -1421,6 +1427,10 @@ where
     } = attempt;
     let environment_state_service =
         accessor.with(|mut access| access.get().state.environment_state_service.clone());
+    let (owner_component_id, owner_component_revision) = accessor.with(|mut access| {
+        let component = access.get().owner_component_metadata();
+        (component.id, component.revision)
+    });
     let input = match input {
         Ok(input) => input,
         Err(error) => {
@@ -1451,13 +1461,15 @@ where
     let activation_snapshot = match environment_state_service
         .get_tool_activation(
             rpc.owner.owner_id.environment_id,
+            owner_component_id,
+            owner_component_revision,
             &rpc.owner.agent_type,
             &rpc.tool_name,
         )
         .await
     {
-        Ok(Some(activation)) => activation,
-        Ok(None) => {
+        Ok(ToolActivationOutcome::Ready(activation)) => *activation,
+        Ok(ToolActivationOutcome::NotBound) => {
             return Ok(rejected_tool_call(
                 &rpc,
                 attempt_ordinal,
@@ -1468,8 +1480,25 @@ where
                 stdout_requested,
                 call_mode,
                 SerializableToolRpcError::Denied(format!(
-                    "tool '{}' is not accessible to agent type '{}'",
+                    "tool '{}' is not bound to agent type '{}'",
                     rpc.tool_name, rpc.owner.agent_type
+                )),
+                stdin,
+            ));
+        }
+        Ok(ToolActivationOutcome::NotRegistered) => {
+            return Ok(rejected_tool_call(
+                &rpc,
+                attempt_ordinal,
+                &command_path,
+                Some(input),
+                None,
+                has_stdin,
+                stdout_requested,
+                call_mode,
+                SerializableToolRpcError::NotFound(format!(
+                    "tool '{}' is not registered",
+                    rpc.tool_name
                 )),
                 stdin,
             ));
@@ -1524,8 +1553,42 @@ where
     let declares_stdout = command.stdout_required.is_some();
     let args = command.args;
 
+    let activation = match activation_snapshot.into_dispatch_target() {
+        Ok(ToolDispatchTarget::Component(activation)) => Arc::new(activation),
+        Ok(ToolDispatchTarget::Host { .. }) => {
+            return Ok(rejected_tool_call(
+                &rpc,
+                attempt_ordinal,
+                &command_path,
+                Some(input),
+                None,
+                has_stdin,
+                stdout_requested,
+                call_mode,
+                SerializableToolRpcError::RemoteInternalError(
+                    "host tool dispatch is not implemented by the executor".to_string(),
+                ),
+                stdin,
+            ));
+        }
+        Err(error) => {
+            let kind = classify_tool_discovery_error(&error);
+            return Err(anyhow::Error::new(ClassifiedHostError {
+                kind,
+                message: error.to_string(),
+            }));
+        }
+    };
+
     let target = accessor.with(|mut access| {
-        let owner = tool_owner(access.get(), &rpc, &registered_tool);
+        let component = access.get().owner_component_metadata();
+        let owner = caller_tool_owner(
+            &component.account_email,
+            &component.application_name,
+            &component.environment_name,
+            &component.component_name,
+            &rpc.tool_name,
+        );
         let command_path = command_path.iter().map(String::as_str).collect::<Vec<_>>();
         let args = args.iter().map(String::as_str).collect::<Vec<_>>();
         tool_target(owner, &command_path, &args)
@@ -1571,16 +1634,6 @@ where
         }
     };
 
-    let activation = Arc::new(
-        activation_snapshot
-            .into_entity_activation()
-            .map_err(|error| {
-                anyhow::Error::new(ClassifiedHostError {
-                    kind: classify_tool_discovery_error(&error),
-                    message: error.to_string(),
-                })
-            })?,
-    );
     let descriptor = EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
         attempt_ordinal,
         command_path,
@@ -4447,9 +4500,9 @@ mod tests {
     use super::{
         ResolvedToolCommand, SkippedToolAttachmentEndpoints, ToolStdinEntry,
         ToolStdinStreamConsumer, ToolStdoutWriterEntry, UnderlyingToolStdinStreamConsumer,
-        WitRegisteredTool, classify_tool_discovery_error, cleanup_tool_endpoints,
-        recorded_tool_body_is_skipped, resolve_tool_command, stdout_limit_error,
-        terminal_tool_discovery_error, validate_stream_attachments,
+        WitRegisteredTool, caller_tool_owner, classify_tool_discovery_error,
+        cleanup_tool_endpoints, recorded_tool_body_is_skipped, resolve_tool_command,
+        stdout_limit_error, terminal_tool_discovery_error, validate_stream_attachments,
     };
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use crate::durable_host::entity::RecordedEntityTerminal;
@@ -4459,15 +4512,18 @@ mod tests {
     use crate::preview2::golem::tool::host::{ByteStreamCloseCause, ByteStreamFailure};
     use crate::services::environment_state::ToolDiscoveryError;
     use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::application::ApplicationName;
+    use golem_common::model::card::owner::ToolOwnerPattern;
     use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
     use golem_common::model::deployment::DeploymentRevision;
     use golem_common::model::entity::EntityCallMode;
+    use golem_common::model::environment::EnvironmentName;
     use golem_common::model::oplog::HostResponseEntityInvocation;
     use golem_common::model::oplog::payload::types::{
         SerializableEntityBodyExecution, SerializableToolError, SerializableToolOperationTerminal,
         SerializableToolRpcError,
     };
-    use golem_common::model::tool::{RegisteredTool, ToolProvisionConfig, ToolSource};
+    use golem_common::model::tool::{RegisteredTool, ToolName, ToolProvisionConfig, ToolSource};
     use golem_common::schema::tool::{
         CommandBody, CommandNode, CommandTree, Constraint, DiscoveredTool, Doc, Globals,
         Positional, Positionals, Ref, Tool,
@@ -5161,6 +5217,7 @@ mod tests {
         (
             RegisteredTool {
                 deployment_revision: DeploymentRevision::try_from(1_u64).unwrap(),
+                release_id: None,
                 definition,
                 provision: ToolProvisionConfig::default(),
                 source: ToolSource::Component {
@@ -5171,6 +5228,7 @@ mod tests {
                 owner_account_id: AccountId::new(),
                 owner_account_email: AccountEmail::new("owner@example.com"),
                 metadata_version: "0.1.0".to_string(),
+                metadata_digest: Default::default(),
             },
             component_id,
         )
@@ -5191,6 +5249,40 @@ mod tests {
             expected_definition
         );
         assert_eq!(ComponentId::from(wit.implemented_by), component_id);
+    }
+
+    #[test]
+    fn tool_authorization_owner_is_entirely_caller_derived() {
+        let caller_account = AccountEmail::new("consumer@example.com");
+        let publisher_account = AccountEmail::new("publisher@example.com");
+        let application = ApplicationName::try_from("consumer-application").unwrap();
+        let environment = EnvironmentName::try_from("consumer-environment").unwrap();
+        let component = ComponentName("consumer:agent".to_string());
+        let tool_name = ToolName::try_from("search").unwrap();
+
+        let owner = caller_tool_owner(
+            &caller_account,
+            &application,
+            &environment,
+            &component,
+            &tool_name,
+        );
+
+        assert_eq!(
+            owner,
+            ToolOwnerPattern::Tool {
+                account: caller_account.clone(),
+                application,
+                environment,
+                component,
+                tool: tool_name.to_string(),
+            }
+        );
+        let ToolOwnerPattern::Tool { account, .. } = owner else {
+            panic!("authorization owner must identify one caller-owned tool")
+        };
+        assert_eq!(account, caller_account);
+        assert_ne!(account, publisher_account);
     }
 
     #[test]

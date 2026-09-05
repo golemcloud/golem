@@ -681,7 +681,10 @@ async fn __golem_tool_invoke_MoonBitStreaming(
       let __golem_value = MoonBitStreaming::stream(mode, stdin, stdout)
       Ok(
         @tool.invocation_result_value(__golem_value) catch {
-          error => return Err(error)
+          @asyncCore.Cancelled::Cancelled as error => raise error
+          @toolCommon.ToolError::InvalidResult(message) =>
+            return Err(@toolCommon.ToolError::InvalidResult(message))
+          error => raise error
         },
       )
     }
@@ -1187,7 +1190,10 @@ async fn __golem_tool_invoke_CanonicalGrep(
         Ok(__golem_value) =>
           Ok(
             @tool.invocation_result_value(__golem_value) catch {
-              error => return Err(error)
+              @asyncCore.Cancelled::Cancelled as error => raise error
+              @toolCommon.ToolError::InvalidResult(message) =>
+                return Err(@toolCommon.ToolError::InvalidResult(message))
+              error => raise error
             },
           )
         Err(error) => {
@@ -1202,7 +1208,10 @@ async fn __golem_tool_invoke_CanonicalGrep(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -1265,7 +1274,10 @@ async fn __golem_tool_invoke_CanonicalGrep(
         Ok(__golem_value) =>
           Ok(
             @tool.invocation_result_value(__golem_value) catch {
-              error => return Err(error)
+              @asyncCore.Cancelled::Cancelled as error => raise error
+              @toolCommon.ToolError::InvalidResult(message) =>
+                return Err(@toolCommon.ToolError::InvalidResult(message))
+              error => raise error
             },
           )
         Err(error) => {
@@ -1280,7 +1292,10 @@ async fn __golem_tool_invoke_CanonicalGrep(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -2117,7 +2132,10 @@ async fn __golem_tool_invoke_CanonicalGit(
         Ok(__golem_value) =>
           Ok(
             @tool.invocation_result_value(__golem_value) catch {
-              error => return Err(error)
+              @asyncCore.Cancelled::Cancelled as error => raise error
+              @toolCommon.ToolError::InvalidResult(message) =>
+                return Err(@toolCommon.ToolError::InvalidResult(message))
+              error => raise error
             },
           )
         Err(error) => {
@@ -2132,7 +2150,10 @@ async fn __golem_tool_invoke_CanonicalGit(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -2236,7 +2257,10 @@ async fn __golem_tool_invoke_CanonicalGit(
         Ok(__golem_value) =>
           Ok(
             @tool.invocation_result_value(__golem_value) catch {
-              error => return Err(error)
+              @asyncCore.Cancelled::Cancelled as error => raise error
+              @toolCommon.ToolError::InvalidResult(message) =>
+                return Err(@toolCommon.ToolError::InvalidResult(message))
+              error => raise error
             },
           )
         Err(error) => {
@@ -2250,7 +2274,10 @@ async fn __golem_tool_invoke_CanonicalGit(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -2740,7 +2767,10 @@ async fn __golem_tool_invoke_CanonicalRemote(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -2778,7 +2808,10 @@ async fn __golem_tool_invoke_CanonicalRemote(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -2856,7 +2889,10 @@ async fn __golem_tool_invoke_CanonicalRemote(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -3208,7 +3244,10 @@ async fn __golem_tool_invoke_CanonicalStash(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -3254,7 +3293,10 @@ async fn __golem_tool_invoke_CanonicalStash(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -3300,7 +3342,10 @@ async fn __golem_tool_invoke_CanonicalStash(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -3495,7 +3540,10 @@ async fn __golem_tool_invoke_CanonicalBigBound(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }

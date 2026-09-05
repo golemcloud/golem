@@ -36,6 +36,23 @@ componentTemplates:
           - "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
         componentWasm: "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
         outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm"
+  moonbit-test-build:
+    build:
+    - command: moon run cmd -- reexports "{{ appRootDir }}/../../sdks/moonbit/golem_sdk" "{{ componentDir }}" --role ordinary
+      dir: "{{ appRootDir }}/../../sdks/moonbit/golem_sdk_tools"
+    - command: moon run cmd -- agents "{{ componentDir }}" --component-dir . --role ordinary
+      dir: "{{ appRootDir }}/../../sdks/moonbit/golem_sdk_tools"
+    - command: moon -C "{{ appRootDir }}/../../sdks/moonbit" build "{{ componentDir }}" --target wasm --release --target-dir "{{ componentDir }}/_build"
+    - command: wasm-tools component embed "{{ appRootDir }}/../../sdks/moonbit/golem_sdk/wit" "{{ componentDir }}/_build/wasm/release/build/golemcloud/golem_it_agent_rpc_moonbit/golem_it_agent_rpc_moonbit.wasm" --world agent-guest --encoding utf16 --output "{{ componentDir }}/_build/wasm/release/{{ component_name | to_snake_case }}.embed.wasm"
+      mkdirs:
+      - "{{ componentDir }}/_build/wasm/release"
+    - command: wasm-tools component new "{{ componentDir }}/_build/wasm/release/{{ component_name | to_snake_case }}.embed.wasm" --output "{{ componentDir }}/_build/wasm/release/{{ component_name | to_snake_case }}.agent.wasm"
+    - command: wasm-tools validate --features all "{{ componentDir }}/_build/wasm/release/{{ component_name | to_snake_case }}.agent.wasm"
+    componentWasm: "{{ componentDir }}/_build/wasm/release/{{ component_name | to_snake_case }}.agent.wasm"
+    outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm"
+    customCommands:
+      copy:
+      - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_release.wasm"
 
 components:
   golem-it:agent-rpc-rust:
@@ -44,6 +61,9 @@ components:
   golem-it:agent-rpc:
     dir: "golem-it-agent-rpc"
     templates: ts, ts-test-component
+  golem-it:agent-rpc-moonbit:
+    dir: "golem-it-agent-rpc-moonbit"
+    templates: moonbit-test-build
 
 environments:
   local:

@@ -65,6 +65,7 @@ use golem_schema::schema::{
     NamedFieldType, SchemaGraph, SchemaType, SchemaValueStream, schema_fingerprint_v1,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::grpc::proto_agent_id_string;
 use prost::Message;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -73,6 +74,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
+use tracing::Instrument;
 
 pub(super) type InvocationSessionStream =
     Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send + 'static>>;
@@ -87,9 +89,17 @@ pub(super) async fn invoke_agent_session<
     let inbound = request.into_inner();
     let (responses, receiver) = mpsc::channel(32);
     let executor = (*executor).clone();
-    tokio::spawn(async move {
-        executor.run_agent_session(inbound, responses).await;
-    });
+    let span = tracing::info_span!(
+        "invoke_agent_session",
+        agent_id = tracing::field::Empty,
+        idempotency_key = tracing::field::Empty
+    );
+    tokio::spawn(
+        async move {
+            executor.run_agent_session(inbound, responses).await;
+        }
+        .instrument(span),
+    );
     Ok(Response::new(Box::pin(
         ReceiverStream::new(receiver).map(Ok),
     )))
@@ -699,6 +709,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await;
             return;
         }
+        {
+            let span = tracing::Span::current();
+            if let Some(agent_id) = proto_agent_id_string(&request_agent_id(&first)) {
+                span.record("agent_id", agent_id.as_str());
+            }
+            if let Some(key) = request_idempotency_key(&first) {
+                span.record("idempotency_key", key.value.as_str());
+            }
+        }
         let first = first.request.expect("validated request has a payload");
         let start = match first {
             invocation_request::Request::Start(start) => start,
@@ -925,7 +944,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 send_protocol_failure(&responses, finish_error).await;
                                 return;
                             }
-                            let _ = durable_streams.pump_input_cancellations(&responses).await;
+                            let _ = durable_streams.pump_input_cancellations(&responses, &high_waters).await;
                             let _ = durable_streams.pump_output_streams(&responses).await;
                             send_protocol_failure(&responses, details).await;
                             return;
@@ -990,7 +1009,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                             return;
                                         }
                                         let _ = durable_streams
-                                            .pump_input_cancellations(&responses)
+                                            .pump_input_cancellations(&responses, &high_waters)
                                             .await;
                                         let _ = durable_streams.pump_output_streams(&responses).await;
                                         send_protocol_failure(&responses, details).await;
@@ -1023,7 +1042,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     return;
                 }
                 if persisted_result.is_none() {
-                    let _ = durable_streams.pump_input_cancellations(&responses).await;
+                    let _ = durable_streams.pump_input_cancellations(&responses, &high_waters).await;
                     send_worker_failure(&responses, error).await;
                     return;
                 }
@@ -1085,7 +1104,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 return;
                             }
                             let _ = durable_streams
-                                .pump_input_cancellations(&responses)
+                                .pump_input_cancellations(&responses, &high_waters)
                                 .await;
                             if !output_pump_finished {
                                 let _ = output_pump.join_next().await;
@@ -1118,7 +1137,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                     return;
                                 }
                                 let _ = durable_streams
-                                    .pump_input_cancellations(&responses)
+                                    .pump_input_cancellations(&responses, &high_waters)
                                     .await;
                                 let _ = durable_streams.pump_output_streams(&responses).await;
                                 send_protocol_failure(&responses, error).await;
@@ -1141,7 +1160,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                     return;
                                 }
                                 let _ = durable_streams
-                                    .pump_input_cancellations(&responses)
+                                    .pump_input_cancellations(&responses, &high_waters)
                                     .await;
                                 if !output_pump_finished {
                                     let _ = output_pump.join_next().await;
@@ -1163,11 +1182,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 }
             }
             if let Some(Err(error)) = completed_output.take() {
-                let _ = durable_streams.pump_input_cancellations(&responses).await;
+                let _ = durable_streams.pump_input_cancellations(&responses, &high_waters).await;
                 send_worker_failure(&responses, error).await;
                 return;
             }
-            if let Err(error) = durable_streams.pump_input_cancellations(&responses).await {
+            if let Err(error) = durable_streams.complete().await {
+                send_protocol_failure(&responses, error).await;
+                return;
+            }
+            if let Err(error) = durable_streams.pump_input_cancellations(&responses, &high_waters).await {
                 send_protocol_failure(&responses, error).await;
                 return;
             }
@@ -1195,7 +1218,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                     return;
                                 }
                                 let _ = durable_streams
-                                    .pump_input_cancellations(&responses)
+                                    .pump_input_cancellations(&responses, &high_waters)
                                     .await;
                                 send_protocol_failure(&responses, details).await;
                                 return;
@@ -1589,21 +1612,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         tokio::pin!(attachment_revoked);
 
         let (persisted_result, already_finished) = loop {
-            match streams.persisted_result().await {
-                Ok(Some(result)) => break (Some(result), None),
-                Ok(None) => {}
+            let persisted_result = match streams.persisted_result().await {
+                Ok(result) => result,
                 Err(error) => {
                     send_protocol_failure(&responses, error).await;
                     return;
                 }
-            }
-            match streams.persisted_finished().await {
-                Ok(Some(result)) => break (None, Some(result)),
-                Ok(None) => {}
+            };
+            let already_finished = match streams.persisted_finished().await {
+                Ok(finished) => finished,
                 Err(error) => {
                     send_protocol_failure(&responses, error).await;
                     return;
                 }
+            };
+            if persisted_result.is_some() || already_finished.is_some() {
+                break (persisted_result, already_finished);
             }
             let changed = streams.producer.session_records_changed().notified();
             tokio::pin!(changed);
@@ -1722,6 +1746,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
         if let Some(result) = already_finished {
             send_resumed_finished(&responses, result).await;
+            drop(responses);
+            let _ = forwarder.await;
+            return;
+        }
+        if let Err(error) = streams.complete().await {
+            send_protocol_failure(&responses, error).await;
+            drop(responses);
+            let _ = forwarder.await;
+            return;
+        }
+        if let Err(error) = streams.pump_input_cancellations(&responses, &high_waters).await {
+            send_protocol_failure(&responses, error).await;
             drop(responses);
             let _ = forwarder.await;
             return;
@@ -2527,6 +2563,13 @@ async fn send_failure(
     message: String,
     worker_error: Option<WorkerExecutionError>,
 ) {
+    tracing::warn!(
+        kind = ?kind,
+        code,
+        message = %message,
+        worker_error = ?worker_error,
+        "Invocation session finished with failure"
+    );
     let _ = responses
         .send(InvocationResponse {
             response: Some(invocation_response::Response::Finished(

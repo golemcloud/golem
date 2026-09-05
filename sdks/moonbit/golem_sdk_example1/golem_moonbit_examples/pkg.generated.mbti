@@ -18,47 +18,9 @@ import {
 }
 
 // Values
-pub fn cabi_realloc(Int, Int, Int, Int) -> Int
-
 pub fn collect_app_config_overrides(AppConfigOverride, Array[String]) -> Array[@common.TypedAgentConfigValue] raise @common.AgentError
 
 pub fn collect_database_config_overrides(DatabaseConfigOverride, Array[String]) -> Array[@common.TypedAgentConfigValue] raise @common.AgentError
-
-pub fn wasmExportAsyncInitialize(Int, Int, Int) -> Int
-
-pub fn wasmExportAsyncInvokeGolemAgentGuest(Int, Int, Int) -> Int
-
-pub fn wasmExportAsyncInvokeGolemToolGuest(Int, Int, Int) -> Int
-
-pub fn wasmExportAsyncLoad(Int, Int, Int) -> Int
-
-pub fn wasmExportAsyncSave(Int, Int, Int) -> Int
-
-pub fn wasmExportDiscoverAgentTypes() -> Int
-
-pub fn wasmExportDiscoverAgentTypesPostReturn(Int) -> Unit
-
-pub fn wasmExportDiscoverTools() -> Int
-
-pub fn wasmExportDiscoverToolsPostReturn(Int) -> Unit
-
-pub fn wasmExportGetDefinition() -> Int
-
-pub fn wasmExportGetDefinitionPostReturn(Int) -> Unit
-
-pub fn wasmExportGetTool(Int, Int) -> Int
-
-pub fn wasmExportGetToolPostReturn(Int) -> Unit
-
-pub fn wasmExportInitialize(Int) -> Int
-
-pub fn wasmExportInvokeGolemAgentGuest(Int) -> Int
-
-pub fn wasmExportInvokeGolemToolGuest(Int) -> Int
-
-pub fn wasmExportLoad(Int, Int, Int, Int) -> Int
-
-pub fn wasmExportSave() -> Int
 
 // Errors
 

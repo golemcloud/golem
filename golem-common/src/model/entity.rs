@@ -364,17 +364,22 @@ impl EntityActivation {
                             .to_string(),
                     );
                 }
-                let crate::model::tool::ToolSource::Component {
-                    component_id,
-                    component_revision,
-                    ..
-                } = &binding.source;
-                if *component_id != executable.component_id
-                    || *component_revision != executable.component_revision
-                {
-                    return Err(
-                        "Entity executable does not match the tool binding source".to_string()
-                    );
+                match &binding.source {
+                    crate::model::tool::ToolSource::Component {
+                        component_id,
+                        component_revision,
+                        ..
+                    } => {
+                        if *component_id != executable.component_id
+                            || *component_revision != executable.component_revision
+                        {
+                            return Err("Entity executable does not match the tool binding source"
+                                .to_string());
+                        }
+                    }
+                    crate::model::tool::ToolSource::Host { .. } => {
+                        return Err("Host tools do not use component entity activation".to_string());
+                    }
                 }
                 if !binding
                     .secret_keys_revealable
@@ -1182,10 +1187,12 @@ mod tests {
         };
         let binding = CompiledToolBinding {
             deployment_revision,
+            release_id: None,
             agent_type_name: AgentTypeName("Example".to_string()),
             tool_name: ToolName::try_from("search").unwrap(),
             version: "1.0.0".to_string(),
             metadata_version: "0.1.0".to_string(),
+            metadata_digest: Default::default(),
             account_id: AccountId::new(),
             account_email: AccountEmail::new("owner@example.com"),
             parameters: NormalizedJsonValue::new(serde_json::json!({})),

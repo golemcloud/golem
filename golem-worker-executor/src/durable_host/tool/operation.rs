@@ -1918,6 +1918,8 @@ mod tests {
                     provision: ToolProvisionConfig::default(),
                     binding: Box::new(CompiledToolBinding {
                         deployment_revision,
+                        release_id: None,
+                        metadata_digest: Default::default(),
                         agent_type_name: golem_common::model::agent::AgentTypeName(
                             "Agent".to_string(),
                         ),

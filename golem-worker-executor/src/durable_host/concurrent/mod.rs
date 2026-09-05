@@ -55,6 +55,7 @@ use crate::durable_host::durability::{
     TaskRetryContext, TerminalCallError, mark_durable_call_trap_context,
     try_trigger_host_trap_retry,
 };
+use crate::durable_host::durable_session::DroppedDurableInput;
 use crate::durable_host::replay_state::{
     OplogEntryLookupResult, ReplayState, ReplayToLiveRole, ScopeStartClaimOutcome,
 };

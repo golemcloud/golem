@@ -803,7 +803,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 [tasks.cli-integration-tests-agents-streaming]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
 description = "Runs the it-cli 'agents_streaming' shard (app::agents streaming end-to-end tests)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_LOG_FILTER" = "golem_worker_executor::durable_host=debug,golem_worker_executor::grpc=debug,golem_worker_service::api::invocation_session=debug" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents_streaming" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}

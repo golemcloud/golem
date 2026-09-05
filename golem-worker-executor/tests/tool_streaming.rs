@@ -50,7 +50,7 @@ use golem_worker_executor::durable_host::tool::{
     ToolOwnerFailureMetadata,
 };
 use golem_worker_executor::services::environment_state::{
-    EnvironmentStateService, ToolActivationSnapshot, ToolDiscoveryError,
+    EnvironmentStateService, ToolActivationOutcome, ToolDiscoveryError,
 };
 use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
@@ -150,6 +150,8 @@ fn deployment_state(
             name,
             RegisteredTool {
                 deployment_revision,
+                release_id: None,
+                metadata_digest: Default::default(),
                 definition,
                 provision: ToolProvisionConfig::default(),
                 source: ToolSource::Component {
@@ -177,6 +179,8 @@ fn deployment_state(
                 name.clone(),
                 CompiledToolBinding {
                     deployment_revision,
+                    release_id: tool.release_id,
+                    metadata_digest: tool.metadata_digest,
                     agent_type_name: agent_type.clone(),
                     tool_name: name.clone(),
                     version: tool.definition.version.clone(),
@@ -303,18 +307,26 @@ impl EnvironmentStateService for ReorderedToolActivationService {
     async fn get_tool_activation(
         &self,
         environment_id: golem_common::model::environment::EnvironmentId,
+        component_id: golem_common::model::component::ComponentId,
+        component_revision: ComponentRevision,
         agent_type: &AgentTypeName,
         tool_name: &ToolName,
-    ) -> Result<Option<ToolActivationSnapshot>, ToolDiscoveryError> {
+    ) -> Result<ToolActivationOutcome, ToolDiscoveryError> {
         match self.activation_calls.fetch_add(1, Ordering::SeqCst) {
             0 => {
                 self.first_call_blocked.notify_one();
                 self.release_first_call.notified().await;
-                Ok(None)
+                Ok(ToolActivationOutcome::NotBound)
             }
             1 => {
                 self.inner
-                    .get_tool_activation(environment_id, agent_type, tool_name)
+                    .get_tool_activation(
+                        environment_id,
+                        component_id,
+                        component_revision,
+                        agent_type,
+                        tool_name,
+                    )
                     .await
             }
             ordinal => panic!(

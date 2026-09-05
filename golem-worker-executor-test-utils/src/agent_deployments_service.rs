@@ -20,15 +20,13 @@ use golem_common::model::agent_secret::{
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
-use golem_common::model::tool::{
-    CompiledToolBinding, RegisteredTool, ToolDeploymentState, ToolName,
-};
+use golem_common::model::tool::{ToolDeploymentState, ToolName};
 use golem_common::schema::tool::DiscoveredTool;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::AgentDeploymentDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_worker_executor::services::environment_state::{
-    EnvironmentStateService, ToolActivationSnapshot, ToolDiscoveryError, ToolDiscoverySnapshot,
+    EnvironmentStateService, ToolActivationOutcome, ToolDiscoveryError, ToolDiscoverySnapshot,
     get_accessible_tool_from_snapshot, get_accessible_tools_from_snapshot,
     get_tool_activation_from_deployment,
 };
@@ -129,6 +127,7 @@ pub struct TestEnvironmentStateService {
     agent_secret_revision_calls: AtomicUsize,
     accessible_tools_calls: AtomicUsize,
     accessible_tool_calls: AtomicUsize,
+    tool_activation_lookups: RwLock<Vec<(EnvironmentId, ComponentId, ComponentRevision)>>,
 }
 
 impl TestEnvironmentStateService {
@@ -176,6 +175,14 @@ impl TestEnvironmentStateService {
 
     pub fn accessible_tool_calls(&self) -> usize {
         self.accessible_tool_calls.load(Ordering::SeqCst)
+    }
+
+    pub fn tool_activation_calls(&self) -> usize {
+        self.tool_activation_lookups.read().unwrap().len()
+    }
+
+    pub fn tool_activation_lookups(&self) -> Vec<(EnvironmentId, ComponentId, ComponentRevision)> {
+        self.tool_activation_lookups.read().unwrap().clone()
     }
 }
 
@@ -228,49 +235,23 @@ impl EnvironmentStateService for TestEnvironmentStateService {
         Ok(Vec::new())
     }
 
-    async fn get_registered_tool(
-        &self,
-        environment_id: EnvironmentId,
-        tool_name: &ToolName,
-    ) -> Result<Option<RegisteredTool>, WorkerExecutorError> {
-        Ok(self
-            .tool_deployments
-            .read()
-            .unwrap()
-            .iter()
-            .find(|((candidate, _, _), _)| *candidate == environment_id)
-            .and_then(|(_, deployment)| deployment.state.registered_tools.get(tool_name))
-            .cloned())
-    }
-
-    async fn get_agent_tool_binding(
-        &self,
-        environment_id: EnvironmentId,
-        agent_type: &AgentTypeName,
-        tool_name: &ToolName,
-    ) -> Result<Option<CompiledToolBinding>, WorkerExecutorError> {
-        Ok(self
-            .tool_deployments
-            .read()
-            .unwrap()
-            .iter()
-            .find(|((candidate, _, _), _)| *candidate == environment_id)
-            .and_then(|(_, deployment)| deployment.state.agent_tool_bindings.get(agent_type))
-            .and_then(|bindings| bindings.get(tool_name))
-            .cloned())
-    }
-
     async fn get_tool_activation(
         &self,
         environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
         agent_type: &AgentTypeName,
         tool_name: &ToolName,
-    ) -> Result<Option<ToolActivationSnapshot>, ToolDiscoveryError> {
+    ) -> Result<ToolActivationOutcome, ToolDiscoveryError> {
+        self.tool_activation_lookups.write().unwrap().push((
+            environment_id,
+            component_id,
+            component_revision,
+        ));
         let deployments = self.tool_deployments.read().unwrap();
         let deployment = deployments
-            .iter()
-            .find(|((candidate, _, _), _)| *candidate == environment_id)
-            .map(|(_, deployment)| &deployment.state);
+            .get(&(environment_id, component_id, component_revision))
+            .map(|deployment| &deployment.state);
         get_tool_activation_from_deployment(deployment, agent_type, tool_name)
     }
 

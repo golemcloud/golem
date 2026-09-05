@@ -4308,7 +4308,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .with_consumer_journal(self.durable_stream_consumer_journal())
         .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
         match result {
-            Ok(()) => streams.complete().await,
+            Ok(()) => streams.complete_or_defer_for_forwarded_inputs().await,
             Err(details) => streams.fail(details).await,
         }
         .map_err(WorkerExecutorError::runtime)?;
@@ -7019,11 +7019,14 @@ impl RunningWorker {
             })?;
         let retained_memory_grant = parent.linear_memory_grant();
         let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
+        // The tracker starts in replay mode so the admitted startup reservation stays protected
+        // and prepays the growth replayed from the oplog; `DurableWorkerCtx::create` switches it
+        // to live once the replay state is known to be live.
         let linear_memory = LinearMemoryTracker::new_with_metering(
             parent.startup_linear_memory_bytes(),
             admitted_startup_bytes,
             parent.agent_mode(),
-            false,
+            true,
             Arc::clone(&parent.resource_entry),
             retained_memory_grant,
             parent.config().resource_usage_metering.memory,

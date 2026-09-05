@@ -820,3 +820,55 @@ pub const RESOURCE_GET: &str = "Examples:
 pub const RESOURCE_LIST: &str = "Examples:
   # List quota resources in the current environment
   golem-cli resource list";
+
+// Tool commands -----------------------------------------------------------------------------------
+
+pub const TOOL_LIST: &str = "Examples:
+  # List tools in the selected environment's current deployment
+  golem-cli tool list";
+
+pub const TOOL_GET: &str = "Examples:
+  # Get a deployed tool by name
+  golem-cli tool get search";
+
+pub const TOOL_GRANT_CREATE: &str = "Examples:
+  # Grant a release by ID to the selected environment
+  golem-cli tool grant create --release-id 00000000-0000-0000-0000-000000000001
+
+  # Grant a release by publisher, name, and version
+  golem-cli tool grant create --account publisher@example.com --name search --version 1.2.0";
+
+pub const TOOL_GRANT_LIST: &str = "Examples:
+  # List active grants in the selected environment
+  golem-cli tool grant list";
+
+pub const TOOL_GRANT_GET: &str = "Examples:
+  # Get an active grant by ID
+  golem-cli tool grant get 00000000-0000-0000-0000-000000000001";
+
+pub const TOOL_GRANT_DELETE: &str = "Examples:
+  # Delete an administrator-managed grant by ID
+  golem-cli tool grant delete 00000000-0000-0000-0000-000000000001";
+
+pub const TOOL_GRANT_RESTORE: &str = "Examples:
+  # Restore a deleted grant by ID
+  golem-cli tool grant restore 00000000-0000-0000-0000-000000000001";
+
+pub const TOOL_RELEASE_LIST: &str = "Examples:
+  # List releases owned by the authenticated account
+  golem-cli tool release list
+
+  # List releases for a specific account ID
+  golem-cli tool release list --account-id 00000000-0000-0000-0000-000000000001";
+
+pub const TOOL_RELEASE_GET: &str = "Examples:
+  # Get a published tool release by ID
+  golem-cli tool release get 00000000-0000-0000-0000-000000000001";
+
+pub const TOOL_RELEASE_DE_PUBLISH: &str = "Examples:
+  # Prevent new deployments and grants from using a release
+  golem-cli tool release de-publish 00000000-0000-0000-0000-000000000001";
+
+pub const TOOL_RELEASE_RESTORE: &str = "Examples:
+  # Make a de-published release available again
+  golem-cli tool release restore 00000000-0000-0000-0000-000000000001";

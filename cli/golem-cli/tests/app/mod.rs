@@ -23,6 +23,7 @@ mod cards;
 mod directory_source_ifs;
 mod moonbit_tool_middleware;
 mod plugins;
+mod remote_releases;
 mod scala_tool_middleware;
 mod tool_middleware;
 
@@ -359,11 +360,17 @@ struct TestContext {
     working_dir: PathBuf,
     startup_ports: Option<StartupPorts>,
     server_process: Option<Child>,
+    server_log: Option<PathBuf>,
     env: HashMap<String, String>,
 }
 
 impl Drop for TestContext {
     fn drop(&mut self) {
+        if std::thread::panicking()
+            && let Some(server_log) = &self.server_log
+        {
+            print_server_log_tail(server_log);
+        }
         let server_process = self.server_process.take();
         tokio::spawn(async move {
             if let Some(mut server_process) = server_process {
@@ -417,6 +424,22 @@ impl TestContext {
         println!("{} {:#?}", "> SDK Overrides:".bold(), sdk_overrides);
         env.extend(sdk_overrides);
 
+        // NOTE: in quiet mode the server output is not shown on the console but captured in a log
+        //       file, whose tail is printed when the test fails. GOLEM_CLI_TEST_SERVER_LOG_DIR
+        //       selects a persistent directory for these logs (e.g. for CI artifacts); otherwise
+        //       they live in the temporary test directory.
+        let server_log = quiet.then(|| {
+            let log_dir = match std::env::var("GOLEM_CLI_TEST_SERVER_LOG_DIR") {
+                Ok(path) if !path.trim().is_empty() => {
+                    let path = PathBuf::from(path);
+                    fs::create_dir_all(&path).unwrap();
+                    path
+                }
+                _ => working_dir.clone(),
+            };
+            log_dir.join(format!("golem-server-{}.log", Uuid::new_v4()))
+        });
+
         let ctx = Self {
             quiet,
             golem_path: test_binary_path(&binary_profile, "golem"),
@@ -428,6 +451,7 @@ impl TestContext {
             working_dir,
             startup_ports: None,
             server_process: None,
+            server_log,
             env,
         };
 
@@ -890,7 +914,7 @@ impl TestContext {
             });
         }
 
-        let mut args = vec![
+        let args = vec![
             "server",
             "run",
             "--config-dir",
@@ -907,18 +931,31 @@ impl TestContext {
             self.ports_file.to_str().unwrap(),
         ];
 
-        if self.quiet {
-            args.push("-q");
+        let mut command = Command::new(&self.golem_path);
+        command
+            .args(&args)
+            .current_dir(&self.working_dir)
+            .envs(&self.env);
+
+        if let Some(server_log) = &self.server_log {
+            println!("{} {}", "> server log file:".bold(), server_log.display());
+            let log_file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(server_log)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "Failed to open server log file {}: {err}",
+                        server_log.display()
+                    )
+                });
+            let log_file_stderr = log_file.try_clone().unwrap();
+            command
+                .stdout(Stdio::from(log_file))
+                .stderr(Stdio::from(log_file_stderr));
         }
 
-        self.server_process = Some(
-            Command::new(&self.golem_path)
-                .args(&args)
-                .current_dir(&self.working_dir)
-                .envs(&self.env)
-                .spawn()
-                .unwrap(),
-        );
+        self.server_process = Some(command.spawn().unwrap());
 
         {
             let start = Instant::now();
@@ -1502,6 +1539,35 @@ where
         self.expect(expectrl::Regex(expected))
             .with_context(|| format!("failed to match regex: {expected}"))?;
         Ok(())
+    }
+}
+
+const SERVER_LOG_TAIL_LINES: usize = 300;
+
+fn print_server_log_tail(server_log: &Path) {
+    match std::fs::read_to_string(server_log) {
+        Ok(content) => {
+            let lines: Vec<&str> = content.lines().collect();
+            let skipped = lines.len().saturating_sub(SERVER_LOG_TAIL_LINES);
+            println!(
+                "{} {} (last {} of {} lines)",
+                "> golem server log:".bold(),
+                server_log.display(),
+                lines.len() - skipped,
+                lines.len()
+            );
+            for line in &lines[skipped..] {
+                println!("{line}");
+            }
+            println!("{}", "> end of golem server log".bold());
+        }
+        Err(err) => {
+            println!(
+                "{} {}: {err}",
+                "> failed to read golem server log".bold(),
+                server_log.display()
+            );
+        }
     }
 }
 
