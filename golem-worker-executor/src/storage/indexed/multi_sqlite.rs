@@ -18,6 +18,7 @@ use super::{
 };
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use async_trait::async_trait;
+use bytes::Bytes;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::AgentId;
@@ -282,6 +283,21 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
             .await
     }
 
+    async fn append_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: &IndexedStorageNamespace,
+        key: &str,
+        pairs: Arc<[(u64, Bytes)]>,
+    ) -> Result<(), IndexedStorageError> {
+        self.storage_by_namespace(namespace)
+            .await?
+            .append_many(svc_name, api_name, entity_name, namespace, key, pairs)
+            .await
+    }
+
     async fn length(
         &self,
         svc_name: &'static str,
@@ -387,5 +403,77 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
             .await?
             .drop_prefix(svc_name, api_name, namespace, key, last_dropped_id)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::agent::AgentMode;
+    use golem_common::model::component::ComponentId;
+    use test_r::test;
+
+    fn oplog_namespace(agent_id: &str) -> IndexedStorageNamespace {
+        IndexedStorageNamespace::OpLog {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: agent_id.to_string(),
+            },
+            agent_mode: AgentMode::Durable,
+        }
+    }
+
+    #[test]
+    async fn append_many_preserves_per_agent_database_routing() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage = MultiSqliteIndexedStorage::new(tempdir.path(), 1, false);
+        let first_namespace = oplog_namespace("first-agent");
+        let second_namespace = oplog_namespace("second-agent");
+
+        storage
+            .append_many(
+                "test",
+                "append_many",
+                "entry",
+                &first_namespace,
+                "shared-key",
+                vec![(1, Bytes::from_static(b"first-agent-value"))].into(),
+            )
+            .await
+            .unwrap();
+        storage
+            .append_many(
+                "test",
+                "append_many",
+                "entry",
+                &second_namespace,
+                "shared-key",
+                vec![(1, Bytes::from_static(b"second-agent-value"))].into(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            storage
+                .read("test", "read", "entry", first_namespace, "shared-key", 1, 1,)
+                .await
+                .unwrap(),
+            vec![(1, b"first-agent-value".to_vec())]
+        );
+        assert_eq!(
+            storage
+                .read(
+                    "test",
+                    "read",
+                    "entry",
+                    second_namespace,
+                    "shared-key",
+                    1,
+                    1,
+                )
+                .await
+                .unwrap(),
+            vec![(1, b"second-agent-value".to_vec())]
+        );
     }
 }
