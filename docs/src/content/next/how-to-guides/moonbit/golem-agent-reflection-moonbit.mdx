@@ -1,0 +1,129 @@
+# Calling Agents with Runtime Reflection (MoonBit)
+
+Use generated clients when the complete target definition is available at
+compile time. Otherwise choose one authority and invocation path explicitly:
+caller-authored codecs, runtime-reflected schemas, or direct schema-free
+`SchemaValue` calls.
+
+## Discover and inspect schemas
+
+```moonbit
+let available = @reflection.get_all_agent_types()
+guard @reflection.get_agent_type("CounterAgent") is Some(counter_type) else {
+  raise @reflection.ReflectError::Discovery("CounterAgent is unavailable")
+}
+guard counter_type.find_method("add") is Some(add) else {
+  raise @reflection.ReflectError::Discovery("add is unavailable")
+}
+```
+
+Agent type names are unique within an environment. `AgentType` exposes its
+implementing component ID, lifecycle mode, constructor `SchemaRef`,
+and method schemas. `SchemaRef::pack_json` converts canonical JSON into a
+schema-native value; `unpack_json` performs the awaited conversion back.
+
+## Use the three Level 3 invocation paths
+
+JSON convenience automatically packs and unpacks:
+
+```moonbit
+let counter = counter_type.get_json(Json::object({
+  "name": Json::string("main"),
+}))
+let result = counter.invoke_json(
+  "add",
+  Json::object({ "by": Json::number(5.0) }),
+)
+```
+
+For explicit reflected packing, call `add.input.pack_json`, invoke through
+`invoke_value`, await the result, and call the output `SchemaRef::unpack_json`.
+
+For direct values, manually construct the positional record and use a dynamic
+client:
+
+```moonbit
+let result = dynamic.invoke_value(
+  "add",
+  @model.SchemaValue::Record([@model.SchemaValue::U32(5U)]),
+)
+```
+
+Direct clients never discover or validate schemas. Constructor and method
+record fields must be packed in declaration order; the runtime authoritatively
+accepts or rejects the attempt.
+
+Both reflected and direct clients support awaited, trigger, and scheduled
+calls through `invoke_value`, `trigger_value`, and `schedule_value`. Awaited
+calls use the asynchronous host invocation path and can carry live streams.
+Reflected trigger and scheduled calls reject methods whose input or output
+schema contains a stream.
+
+## Define a caller-codec typed contract
+
+`CallerCodecClient` does not discover payload schemas. The caller's
+`IntoSchema` and `FromSchema` implementations are the schema authority:
+
+```moonbit
+#derive.golem_schema
+struct CounterId { name : String }
+#derive.golem_schema
+struct AddInput { by : UInt }
+#derive.golem_schema
+struct AddOutput { value : UInt }
+
+let counter = @reflection.CallerCodecClient::create(
+  "CounterAgent",
+  CounterId::{ name: "main" },
+)
+let result : @reflection.Invocation[AddOutput] = counter.invoke(
+  "add",
+  AddInput::{ by: 5U },
+)
+```
+
+The type name is resolved to its current implementing component in the
+environment; callers do not pin component metadata. Existing IDs can be bound
+with `CallerCodecClient::bind(agent_id, "CounterAgent")`, which strictly
+checks the parsed type name. Caller codecs remain authoritative for payload
+encoding and decoding.
+
+For trigger or scheduled caller-codec calls, pass an output type tag so the
+SDK can reject live streams in either direction:
+
+```moonbit
+counter.trigger(
+  "reset",
+  ResetInput::{},
+  (@schema.type_tag() : @schema.TypeTag[Unit]),
+)
+```
+
+## Raw lifecycle attempts
+
+- Use a supplied `AgentId` with `DynamicAgentClient::from_agent_id`, or inspect
+  it with `AgentId::parts`.
+- Use `DynamicAgentClient::lookup` for a manually packed durable identity
+  without a phantom UUID.
+- Use `resume_phantom` with a known UUID.
+- Use `new_phantom` to generate a UUID and receive the client, reusable
+  `AgentId`, and phantom UUID together.
+- Use `DynamicAgentClient::ephemeral` for a raw invocation address built from
+  component ID, type name, and manually packed constructor values.
+
+Raw lifecycle helpers perform no discovery, schema validation, lifecycle-mode
+verification, or local factory checks. The runtime is authoritative.
+
+An ephemeral address has no guaranteed reusable pre-invocation identity. The
+final identity comes from invocation metadata and must not be treated as a
+resumable durable identity.
+
+## Choose an invocation path
+
+| Situation | Use |
+|---|---|
+| Generated definition available | Generated agent client |
+| Typed contract owned by the caller | `CallerCodecClient` resolved by environment type name |
+| Runtime-selected method with automatic JSON conversion | `invoke_json` |
+| Explicit runtime-schema packing | `SchemaRef::pack_json`, `invoke_value`, `unpack_json` |
+| Schema-free infrastructure with Golem values | `DynamicAgentClient` |
