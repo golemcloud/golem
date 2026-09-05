@@ -952,7 +952,18 @@ scenarios:
   # the fault inert by construction.
   - code: S19
     name: executor-clock-skew
-    enabled: true
+    # Parked, and it must stay parked until TimeChaos is understood here. The
+    # skew is applied by ptrace, and every attempt so far left the executor
+    # *stopped* rather than running on a moved clock, so the scenario has never
+    # measured the thing it exists to measure. The first attempt also left a
+    # chaos resource whose finalizer would not clear, which held Flux suspended
+    # for three hours.
+    #
+    # Disabled rather than deleted because the switch is exactly what it is for:
+    # a full suite pass skips this, and naming `S19` explicitly still runs it,
+    # which is what working on it needs. See docs/runbooks/cloud-chaos-s19.md in
+    # golem-cloud.
+    enabled: false
 
     fault:
       kind: clock-skew
