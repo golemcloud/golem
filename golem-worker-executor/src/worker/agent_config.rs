@@ -16,7 +16,7 @@ use golem_common::model::agent::{AgentConfigSource, ParsedAgentId};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use golem_common::schema::agent::typed_schema_value_with_projected_defs;
-use golem_common::schema::render::from_json_value;
+use golem_common::schema::render::from_untrusted_json_value;
 use golem_common::schema::schema_type::SecretSpec;
 use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
 use golem_common::schema::{
@@ -179,12 +179,14 @@ pub fn parse_worker_creation_agent_config(
         let declared_type = &config_declaration.value_type;
 
         let schema_value: SchemaValue =
-            from_json_value(&agent_type.schema, declared_type, &entry.value.0).map_err(|err| {
-                WorkerExecutorError::invalid_request(format!(
-                    "config value for path {} is not a valid schema value: {err}",
-                    entry.path.join(".")
-                ))
-            })?;
+            from_untrusted_json_value(&agent_type.schema, declared_type, &entry.value.0).map_err(
+                |err| {
+                    WorkerExecutorError::invalid_request(format!(
+                        "config value for path {} is not a valid schema value: {err}",
+                        entry.path.join(".")
+                    ))
+                },
+            )?;
 
         validate_value(&agent_type.schema, declared_type, &schema_value).map_err(|errors| {
             WorkerExecutorError::invalid_request(format!(

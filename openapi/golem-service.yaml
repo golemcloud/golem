@@ -12396,7 +12396,7 @@ components:
         agentTypeName:
           type: string
         parameters:
-          $ref: '#/components/schemas/SchemaValue'
+          $ref: '#/components/schemas/ExternalSchemaValue'
         phantomId:
           type: string
           format: uuid
@@ -12408,7 +12408,7 @@ components:
         methodName:
           type: string
         methodParameters:
-          $ref: '#/components/schemas/SchemaValue'
+          $ref: '#/components/schemas/ExternalSchemaValue'
         mode:
           $ref: '#/components/schemas/AgentInvocationMode'
         scheduleAt:
@@ -12438,7 +12438,7 @@ components:
         idempotencyKey:
           type: string
         result:
-          $ref: '#/components/schemas/TypedSchemaValue'
+          $ref: '#/components/schemas/ExternalTypedSchemaValue'
         componentRevision:
           type: integer
           format: uint64
@@ -13618,7 +13618,7 @@ components:
         agentTypeName:
           type: string
         parameters:
-          $ref: '#/components/schemas/SchemaValue'
+          $ref: '#/components/schemas/ExternalSchemaValue'
         phantomId:
           type: string
           format: uuid
@@ -13812,6 +13812,496 @@ components:
       required:
       - key
       - description
+    ExternalResultValuePayload:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          tag:
+            type: string
+            enum:
+            - ok
+          value:
+            nullable: true
+            allOf:
+            - $ref: '#/components/schemas/ExternalSchemaValue'
+            - nullable: true
+        required:
+        - tag
+      - type: object
+        properties:
+          tag:
+            type: string
+            enum:
+            - err
+          value:
+            nullable: true
+            allOf:
+            - $ref: '#/components/schemas/ExternalSchemaValue'
+            - nullable: true
+        required:
+        - tag
+    ExternalSchemaValue:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - bool
+          value:
+            type: boolean
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - s8
+          value:
+            type: integer
+            format: int8
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - s16
+          value:
+            type: integer
+            format: int16
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - s32
+          value:
+            type: integer
+            format: int32
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - s64
+          value:
+            type: integer
+            format: int64
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - u8
+          value:
+            type: integer
+            format: uint8
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - u16
+          value:
+            type: integer
+            format: uint16
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - u32
+          value:
+            type: integer
+            format: uint32
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - u64
+          value:
+            type: integer
+            format: uint64
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - f32
+          value:
+            type: number
+            format: float
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - f64
+          value:
+            type: number
+            format: double
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - char
+          value:
+            type: char
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - string
+          value:
+            type: string
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - record
+          value:
+            type: object
+            properties:
+              fields:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExternalSchemaValue'
+            required:
+            - fields
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - variant
+          value:
+            $ref: '#/components/schemas/ExternalVariantValuePayload'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - enum
+          value:
+            type: object
+            properties:
+              case:
+                type: integer
+                format: uint32
+            required:
+            - case
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - flags
+          value:
+            type: object
+            properties:
+              bits:
+                type: array
+                items:
+                  type: boolean
+            required:
+            - bits
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - tuple
+          value:
+            type: object
+            properties:
+              elements:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExternalSchemaValue'
+            required:
+            - elements
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - list
+          value:
+            type: object
+            properties:
+              elements:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExternalSchemaValue'
+            required:
+            - elements
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - fixed-list
+          value:
+            type: object
+            properties:
+              elements:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExternalSchemaValue'
+            required:
+            - elements
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - map
+          value:
+            type: object
+            properties:
+              entries:
+                type: array
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ExternalSchemaValue'
+                  minItems: 2
+                  maxItems: 2
+            required:
+            - entries
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - option
+          value:
+            type: object
+            properties:
+              inner:
+                nullable: true
+                allOf:
+                - $ref: '#/components/schemas/ExternalSchemaValue'
+                - nullable: true
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - result
+          value:
+            $ref: '#/components/schemas/ExternalResultValuePayload'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - text
+          value:
+            $ref: '#/components/schemas/TextValuePayload'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - binary
+          value:
+            $ref: '#/components/schemas/BinaryValuePayload'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - path
+          value:
+            type: object
+            properties:
+              path:
+                type: string
+            required:
+            - path
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - url
+          value:
+            type: object
+            properties:
+              url:
+                type: string
+            required:
+            - url
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - datetime
+          value:
+            type: object
+            properties:
+              value:
+                type: string
+                format: date-time
+            required:
+            - value
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - duration
+          value:
+            $ref: '#/components/schemas/DurationValuePayload'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - quantity
+          value:
+            $ref: '#/components/schemas/QuantityValue'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - union
+          value:
+            $ref: '#/components/schemas/ExternalUnionValuePayload'
+        required:
+        - kind
+        - value
+    ExternalTypedSchemaValue:
+      type: object
+      properties:
+        graph:
+          $ref: '#/components/schemas/SchemaGraph'
+        value:
+          $ref: '#/components/schemas/ExternalSchemaValue'
+      required:
+      - graph
+      - value
+    ExternalUnionValuePayload:
+      type: object
+      properties:
+        tag:
+          type: string
+        body:
+          $ref: '#/components/schemas/ExternalSchemaValue'
+      required:
+      - tag
+      - body
+    ExternalVariantValuePayload:
+      type: object
+      properties:
+        case:
+          type: integer
+          format: uint32
+        payload:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/ExternalSchemaValue'
+          - nullable: true
+      required:
+      - case
     FailedUpdate:
       title: FailedUpdate
       type: object
@@ -18878,7 +19368,7 @@ components:
         secretType:
           $ref: '#/components/schemas/SchemaGraph'
         secretValue:
-          $ref: '#/components/schemas/SchemaValue'
+          $ref: '#/components/schemas/ExternalSchemaValue'
       required:
       - path
       - secretType
@@ -18903,7 +19393,7 @@ components:
         secretType:
           $ref: '#/components/schemas/SchemaGraph'
         secretValue:
-          $ref: '#/components/schemas/SchemaValue'
+          $ref: '#/components/schemas/ExternalSchemaValue'
       required:
       - id
       - environmentId
@@ -18918,7 +19408,7 @@ components:
           type: integer
           format: uint64
         secretValue:
-          $ref: '#/components/schemas/OptionalFieldUpdate_SchemaValue'
+          $ref: '#/components/schemas/OptionalFieldUpdate_ExternalSchemaValue'
       required:
       - currentRevision
     AgentTypeInitialPermissions:
@@ -21194,17 +21684,17 @@ components:
       - doc
       - shape
       - required
-    OptionalFieldUpdate_SchemaValue:
+    OptionalFieldUpdate_ExternalSchemaValue:
       discriminator:
         propertyName: op
         mapping:
-          set: '#/components/schemas/OptionalFieldUpdate_SchemaValue_Set'
-          unset: '#/components/schemas/OptionalFieldUpdate_SchemaValue_Unset'
+          set: '#/components/schemas/OptionalFieldUpdate_ExternalSchemaValue_Set'
+          unset: '#/components/schemas/OptionalFieldUpdate_ExternalSchemaValue_Unset'
       type: object
       oneOf:
-      - $ref: '#/components/schemas/OptionalFieldUpdate_SchemaValue_Set'
-      - $ref: '#/components/schemas/OptionalFieldUpdate_SchemaValue_Unset'
-    OptionalFieldUpdate_SchemaValue_Set:
+      - $ref: '#/components/schemas/OptionalFieldUpdate_ExternalSchemaValue_Set'
+      - $ref: '#/components/schemas/OptionalFieldUpdate_ExternalSchemaValue_Unset'
+    OptionalFieldUpdate_ExternalSchemaValue_Set:
       type: object
       properties:
         op:
@@ -21212,11 +21702,11 @@ components:
           enum:
           - set
         value:
-          $ref: '#/components/schemas/SchemaValue'
+          $ref: '#/components/schemas/ExternalSchemaValue'
       required:
       - op
       - value
-    OptionalFieldUpdate_SchemaValue_Unset:
+    OptionalFieldUpdate_ExternalSchemaValue_Unset:
       type: object
       properties:
         op:

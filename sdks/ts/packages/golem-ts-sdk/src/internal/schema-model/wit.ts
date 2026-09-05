@@ -47,12 +47,35 @@ import {
   type NumericBound,
   emptyMetadata,
 } from './model';
-import { GuestSecretHandle } from './secretHandle';
+import {
+  assertGuestSecretHandleCanLiftFromWire,
+  GuestSecretHandle,
+  liftGuestSecretHandleFromWire,
+  peekGuestSecretHandle,
+  releaseGuestSecretHandle,
+  takeGuestSecretHandleToWire,
+} from './secretHandle';
 import { SECRET_INTERNAL } from './secretInternal';
-import { GuestQuotaTokenHandle } from './quotaTokenHandle';
+import {
+  abandonGuestQuotaTokenWireHandle,
+  assertGuestQuotaTokenHandleCanLiftFromWire,
+  GuestQuotaTokenHandle,
+  liftGuestQuotaTokenHandleFromWire,
+  peekGuestQuotaTokenHandle,
+  takeGuestQuotaTokenHandle,
+  takeGuestQuotaTokenHandleToWire,
+} from './quotaTokenHandle';
 import { QUOTA_INTERNAL } from './quotaInternal';
 import { GuestSchemaValueStreamHandle } from './schemaValueStreamHandle';
-import { GuestPermissionCardHandle } from './permissionCardHandle';
+import {
+  abandonGuestPermissionCardWireHandle,
+  assertGuestPermissionCardHandleCanLiftFromWire,
+  GuestPermissionCardHandle,
+  liftGuestPermissionCardHandleFromWire,
+  peekGuestPermissionCardHandle,
+  takeGuestPermissionCardHandle,
+  takeGuestPermissionCardHandleToWire,
+} from './permissionCardHandle';
 import { PERMISSION_CARD_INTERNAL } from './permissionCardInternal';
 import { SchemaDecodeError, SchemaEncodeError } from './errors';
 
@@ -598,7 +621,7 @@ export function assertSchemaValueRepresentable(
         if (!(v.handle instanceof GuestSecretHandle)) {
           throw new SchemaEncodeError('secret value contains an invalid secret handle');
         }
-        const raw = v.handle.withHandle((r) => r);
+        const raw = peekGuestSecretHandle(SECRET_INTERNAL, v.handle);
         if (raw === undefined) {
           throw new SchemaEncodeError(
             'secret handle was already transferred; an owned secret can only be sent once',
@@ -619,7 +642,7 @@ export function assertSchemaValueRepresentable(
         // Peek the underlying owned resource without consuming it, so two
         // distinct holders wrapping the same raw resource are also rejected, not
         // only the same holder used twice.
-        const raw = v.handle.withHandle((r) => r);
+        const raw = peekGuestQuotaTokenHandle(QUOTA_INTERNAL, v.handle);
         if (raw === undefined) {
           throw new SchemaEncodeError(
             'quota-token handle was already transferred; an owned quota-token can only be sent once',
@@ -656,7 +679,7 @@ export function assertSchemaValueRepresentable(
             'permission-card value contains an invalid permission-card handle',
           );
         }
-        const raw = v.handle.withHandle((r) => r);
+        const raw = peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, v.handle);
         if (raw === undefined) {
           throw new SchemaEncodeError(
             'permission-card handle was already transferred; an owned permission-card can only be sent once',
@@ -849,25 +872,35 @@ export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
       case 'union':
         return { tag: 'union-value', val: { tag: v.unionTag, body: emit(v.body) } };
       case 'secret': {
-        const raw = v.handle.take();
+        const node = { tag: 'secret-value', val: undefined } as unknown as Extract<
+          WitSchemaValueNode,
+          { tag: 'secret-value' }
+        >;
+        const raw = takeGuestSecretHandleToWire(SECRET_INTERNAL, v.handle, node);
         if (raw === undefined) {
           throw new SchemaEncodeError(
             'secret handle was already transferred; an owned secret can only be sent once',
           );
         }
-        return { tag: 'secret-value', val: raw };
+        node.val = raw;
+        return node;
       }
       case 'quota-token': {
         // Move the owned `own<quota-token>` resource out of the take-once cell.
         // The preflight above guarantees the handle is present and unique, so
         // this take always succeeds; the guard is defensive only.
-        const raw = v.handle.take();
+        const node = { tag: 'quota-token-handle', val: undefined } as unknown as Extract<
+          WitSchemaValueNode,
+          { tag: 'quota-token-handle' }
+        >;
+        const raw = takeGuestQuotaTokenHandleToWire(QUOTA_INTERNAL, v.handle, node);
         if (raw === undefined) {
           throw new SchemaEncodeError(
             'quota-token handle was already transferred; an owned quota-token can only be sent once',
           );
         }
-        return { tag: 'quota-token-handle', val: raw };
+        node.val = raw;
+        return node;
       }
       case 'stream': {
         const stream = v.handle.take();
@@ -880,13 +913,18 @@ export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
         return { tag: 'stream-value', val: stream.value };
       }
       case 'permission-card': {
-        const raw = v.handle.take();
+        const node = { tag: 'permission-card-handle', val: undefined } as unknown as Extract<
+          WitSchemaValueNode,
+          { tag: 'permission-card-handle' }
+        >;
+        const raw = takeGuestPermissionCardHandleToWire(PERMISSION_CARD_INTERNAL, v.handle, node);
         if (raw === undefined) {
           throw new SchemaEncodeError(
             'permission-card handle was already transferred; an owned permission-card can only be sent once',
           );
         }
-        return { tag: 'permission-card-handle', val: raw };
+        node.val = raw;
+        return node;
       }
       default:
         throw new SchemaEncodeError(`unknown schema value tag '${(v as { tag: string }).tag}'`);
@@ -1175,6 +1213,11 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
         if (seenRaw.has(raw)) {
           throw new SchemaDecodeError('the same secret resource appeared more than once');
         }
+        try {
+          assertGuestSecretHandleCanLiftFromWire(SECRET_INTERNAL, raw, n);
+        } catch (error) {
+          throw new SchemaDecodeError(error instanceof Error ? error.message : String(error));
+        }
         seenRaw.add(raw);
         secretReached.add(idx);
         return;
@@ -1240,6 +1283,11 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
         if (seenRaw.has(raw)) {
           throw new SchemaDecodeError('the same quota-token resource appeared more than once');
         }
+        try {
+          assertGuestQuotaTokenHandleCanLiftFromWire(QUOTA_INTERNAL, raw, n);
+        } catch (error) {
+          throw new SchemaDecodeError(error instanceof Error ? error.message : String(error));
+        }
         seenRaw.add(raw);
         ownedHandleReached.add(idx);
         return;
@@ -1254,6 +1302,11 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
         }
         if (seenRaw.has(raw)) {
           throw new SchemaDecodeError('the same permission-card resource appeared more than once');
+        }
+        try {
+          assertGuestPermissionCardHandleCanLiftFromWire(PERMISSION_CARD_INTERNAL, raw, n);
+        } catch (error) {
+          throw new SchemaDecodeError(error instanceof Error ? error.message : String(error));
         }
         seenRaw.add(raw);
         ownedHandleReached.add(idx);
@@ -1338,7 +1391,11 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
   // thrown error the whole decode is aborted and this local array is discarded,
   // so leaving stale `1`s during unwinding is harmless.
   const onPath = new Uint8Array(nodes.length);
-  const liftedSecrets: { node: { val: unknown }; raw: unknown }[] = [];
+  const liftedCapabilities: (
+    | { tag: 'secret'; node: { val: unknown }; handle: GuestSecretHandle }
+    | { tag: 'quota-token'; handle: GuestQuotaTokenHandle }
+    | { tag: 'permission-card'; handle: GuestPermissionCardHandle }
+  )[] = [];
 
   function fromIdx(idx: ValueNodeIndex): SchemaValue {
     if (idx < 0 || idx >= nodes.length) {
@@ -1457,8 +1514,15 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
           throw new SchemaDecodeError('secret handle referenced more than once');
         }
         (n as { val: unknown }).val = undefined;
-        liftedSecrets.push({ node: n as { val: unknown }, raw });
-        return { tag: 'secret', handle: GuestSecretHandle.fromRaw(SECRET_INTERNAL, raw) };
+        let handle: GuestSecretHandle;
+        try {
+          handle = liftGuestSecretHandleFromWire(SECRET_INTERNAL, raw, n);
+        } catch (error) {
+          (n as { val: unknown }).val = raw;
+          throw error;
+        }
+        liftedCapabilities.push({ tag: 'secret', node: n as { val: unknown }, handle });
+        return { tag: 'secret', handle };
       }
       case 'quota-token-handle': {
         // Lift the owned `own<quota-token>` resource into an opaque take-once
@@ -1471,7 +1535,9 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
           throw new SchemaDecodeError('quota-token handle referenced more than once');
         }
         (n as { val: unknown }).val = undefined;
-        return { tag: 'quota-token', handle: GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, raw) };
+        const handle = liftGuestQuotaTokenHandleFromWire(QUOTA_INTERNAL, raw, n);
+        liftedCapabilities.push({ tag: 'quota-token', handle });
+        return { tag: 'quota-token', handle };
       }
       case 'stream-value': {
         const raw = n.val as typeof n.val | undefined;
@@ -1490,10 +1556,9 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
           throw new SchemaDecodeError('permission-card handle referenced more than once');
         }
         (n as { val: unknown }).val = undefined;
-        return {
-          tag: 'permission-card',
-          handle: GuestPermissionCardHandle.fromRaw(PERMISSION_CARD_INTERNAL, raw),
-        };
+        const handle = liftGuestPermissionCardHandleFromWire(PERMISSION_CARD_INTERNAL, raw, n);
+        liftedCapabilities.push({ tag: 'permission-card', handle });
+        return { tag: 'permission-card', handle };
       }
       default:
         throw new SchemaDecodeError(
@@ -1506,8 +1571,19 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
   try {
     result = fromIdx(wit.root);
   } catch (e) {
-    for (const lifted of liftedSecrets) {
-      lifted.node.val = lifted.raw;
+    for (let i = liftedCapabilities.length - 1; i >= 0; i--) {
+      const lifted = liftedCapabilities[i]!;
+      switch (lifted.tag) {
+        case 'secret':
+          lifted.node.val = releaseGuestSecretHandle(SECRET_INTERNAL, lifted.handle);
+          break;
+        case 'quota-token':
+          takeGuestQuotaTokenHandle(QUOTA_INTERNAL, lifted.handle);
+          break;
+        case 'permission-card':
+          takeGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, lifted.handle);
+          break;
+      }
     }
     // On failure, release any handles still owned by the wire tree so a caught
     // error cannot leave live owned quota-token or permission-card resources dangling in the
@@ -1546,7 +1622,17 @@ export function drainUnconsumedQuotaAndPermissionCardHandles(
       (node as { val: unknown }).val !== undefined
     ) {
       if (first === undefined) first = i;
-      (node as { val: unknown }).val = undefined;
+      if (node.tag === 'quota-token-handle') {
+        abandonGuestQuotaTokenWireHandle(QUOTA_INTERNAL, node.val, node);
+      } else if (node.tag === 'permission-card-handle') {
+        abandonGuestPermissionCardWireHandle(PERMISSION_CARD_INTERNAL, node.val, node);
+      }
+      try {
+        (node as { val: unknown }).val = undefined;
+      } catch {
+        // The ownership ledger still marks the raw handle transferred even if
+        // a malformed non-writable carrier prevents clearing its last JS reference.
+      }
     }
   }
   return first;

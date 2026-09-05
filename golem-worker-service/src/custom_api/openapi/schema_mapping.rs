@@ -12,14 +12,16 @@
 
 //! Thin JSON bridge between the schema model and the OpenAPI 3.1 document.
 //!
-//! All `SchemaType` rendering goes through the Wave-1 renderer
-//! [`to_openapi_components`]; this module only splits the renderer's bundle
-//! into the inline root schema and the document-wide `components/schemas`
-//! entries, and provides the handful of fixed JSON schemas the emitter needs
-//! for non-schema-bearing bodies/headers (binary bodies, enum'd strings, …).
+//! All `SchemaType` rendering goes through the Wave-1 renderer. This module
+//! selects the external input/output capability policy, splits the renderer's
+//! bundle into the inline root schema and document-wide `components/schemas`
+//! entries, and provides the handful of fixed JSON schemas the emitter needs.
 
 use golem_common::schema::graph::SchemaGraph;
-use golem_common::schema::render::to_openapi_components;
+use golem_common::schema::render::{
+    to_external_input_openapi_components, to_external_output_openapi_components,
+    to_openapi_components,
+};
 use golem_common::schema::schema_type::SchemaType;
 use serde_json::{Map, Value, json};
 
@@ -38,7 +40,30 @@ pub fn render_schema(
     ty: &SchemaType,
     components: &mut Map<String, Value>,
 ) -> Result<Value, String> {
-    let bundle = to_openapi_components(graph, ty);
+    merge_bundle(to_openapi_components(graph, ty), components)
+}
+
+/// Render a schema for an untrusted external request. Host-managed capability
+/// leaves are unsatisfiable because callers cannot construct them.
+pub fn render_input_schema(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    components: &mut Map<String, Value>,
+) -> Result<Value, String> {
+    merge_bundle(to_external_input_openapi_components(graph, ty), components)
+}
+
+/// Render a schema for an externally visible response. Host-managed
+/// capability leaves expose only their redacted placeholder.
+pub fn render_output_schema(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    components: &mut Map<String, Value>,
+) -> Result<Value, String> {
+    merge_bundle(to_external_output_openapi_components(graph, ty), components)
+}
+
+fn merge_bundle(bundle: Value, components: &mut Map<String, Value>) -> Result<Value, String> {
     let Value::Object(mut bundle) = bundle else {
         return Err("OpenAPI renderer returned a non-object bundle".to_string());
     };
@@ -122,6 +147,45 @@ mod tests {
         let root = render_schema(&graph, &SchemaType::string(), &mut components).unwrap();
         assert_eq!(root, json!({ "type": "string" }));
         assert!(components.is_empty());
+    }
+
+    #[test]
+    fn external_input_and_output_components_are_directionally_namespaced() {
+        let capability_id = TypeId::new("app.Capability");
+        let graph = SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: capability_id.clone(),
+                name: Some("Capability".to_string()),
+                body: SchemaType::record(vec![NamedFieldType {
+                    name: "credential".to_string(),
+                    body: SchemaType::secret(Default::default()),
+                    metadata: Default::default(),
+                }]),
+            }],
+            root: SchemaType::bool(),
+        };
+        let root = SchemaType::ref_to(capability_id);
+        let mut components = Map::new();
+
+        let input = render_input_schema(&graph, &root, &mut components).unwrap();
+        let output = render_output_schema(&graph, &root, &mut components).unwrap();
+
+        assert_eq!(
+            input["$ref"],
+            json!("#/components/schemas/Input_app.Capability")
+        );
+        assert_eq!(
+            output["$ref"],
+            json!("#/components/schemas/Output_app.Capability")
+        );
+        assert_eq!(
+            components["Input_app.Capability"]["properties"]["credential"]["not"],
+            json!({})
+        );
+        assert_eq!(
+            components["Output_app.Capability"]["properties"]["credential"]["const"],
+            json!("<redacted: secret>")
+        );
     }
 
     #[test]

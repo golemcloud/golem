@@ -218,6 +218,7 @@ impl CardService for ScopeCardService {
         card: StoredCard,
         _provenance: CardManagedByRuntimeDerived,
     ) -> Result<StoredCard, WorkerExecutorError> {
+        self.authority.add_card(card.clone());
         Ok(card)
     }
 
@@ -3925,6 +3926,104 @@ async fn secret_reveal_authorizes_before_secret_revision_lookup(
         "stable secret authorization must not refresh card authority"
     );
     assert_eq!(environment_state_service.agent_secret_revision_calls(), 1);
+    Ok(())
+}
+
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
+async fn capabilities_round_trip_between_agents_and_codec_rejects_reuse(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let environment_state_service = Arc::new(TestEnvironmentStateService::default());
+    let secret_value = "capability-rpc-secret";
+    environment_state_service.set_agent_secret(AgentSecret {
+        id: AgentSecretId::new(),
+        environment_id: context.default_environment_id,
+        path: CanonicalAgentSecretPath(vec!["secretPath".to_string()]),
+        revision: AgentSecretRevision::INITIAL,
+        secret_type: SchemaGraph::anonymous(SchemaType::string()),
+        secret_value: Some(SchemaValue::String(secret_value.to_string())),
+    });
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            create_card_service: Some(Arc::new({
+                let authority = authority.clone();
+                move || {
+                    Arc::new(ScopeCardService {
+                        authority: authority.clone(),
+                    })
+                }
+            })),
+            environment_state_service: Some(environment_state_service),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .unique()
+        .update_agent_provision_config("CapabilityRpcSender", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+
+    let sender = agent_id!("CapabilityRpcSender", "capability-round-trip");
+    configure_scope_card_root(&authority, &component, &sender)?;
+    executor.start_agent(&component.id, sender.clone()).await?;
+    let observations = executor
+        .invoke_and_await_agent(
+            &component,
+            &sender,
+            "round_trip",
+            data_value!("capability-round-trip-receiver"),
+        )
+        .await?
+        .into_typed::<Result<Vec<String>, String>>()?
+        .map_err(anyhow::Error::msg)?;
+    assert_eq!(observations.len(), 7);
+    assert_eq!(observations[0], observations[1]);
+    assert_eq!(observations[0], observations[2]);
+    assert_eq!(observations[3], observations[4]);
+    assert_eq!(observations[3], observations[5]);
+    assert_eq!(observations[6], secret_value);
+
+    let codec_sender = agent_id!("CapabilityRpcSender", "capability-codec-rejections");
+    configure_scope_card_root(&authority, &component, &codec_sender)?;
+    executor
+        .start_agent(&component.id, codec_sender.clone())
+        .await?;
+    let errors = executor
+        .invoke_and_await_agent(&component, &codec_sender, "codec_rejections", data_value!())
+        .await?
+        .into_typed::<Result<Vec<String>, String>>()?
+        .map_err(anyhow::Error::msg)?;
+    assert_eq!(errors.len(), 6);
+    for (error, expected) in errors.iter().zip([
+        "same secret handle appeared more than once",
+        "secret handle was already transferred",
+        "same quota-token handle appeared more than once",
+        "quota-token handle was already transferred",
+        "same permission-card handle appeared more than once",
+        "permission-card handle was already transferred",
+    ]) {
+        assert!(
+            error.contains(expected),
+            "unexpected schema codec error, expected {expected:?}: {error}"
+        );
+    }
     Ok(())
 }
 

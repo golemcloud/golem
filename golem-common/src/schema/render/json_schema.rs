@@ -31,14 +31,20 @@ const MIME_TYPE_PATTERN: &str = "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$";
 
 /// Configuration for the JSON Schema renderer.
 ///
-/// The renderer always produces the same canonical structural document for
-/// every consumer; the only knob is whether to emit the `$schema` draft
-/// marker at the document root (consumers that embed the schema elsewhere,
-/// such as tool/resource schemas, omit it).
+/// The public constants select the trusted canonical representation; boundary
+/// renderers additionally select their host-managed capability policy.
 #[derive(Clone, Copy, Debug)]
 pub struct JsonSchemaConfig {
     /// Emit the `$schema` JSON Schema draft marker at the document root.
     pub include_draft_marker: bool,
+    host_managed: HostManagedSchemaPolicy,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum HostManagedSchemaPolicy {
+    TrustedSnapshot,
+    Reject,
+    Redact,
 }
 
 impl JsonSchemaConfig {
@@ -46,12 +52,24 @@ impl JsonSchemaConfig {
     /// draft marker).
     pub const CANONICAL: Self = Self {
         include_draft_marker: true,
+        host_managed: HostManagedSchemaPolicy::TrustedSnapshot,
     };
 
     /// Canonical JSON Schema document without the `$schema` draft marker, for
     /// consumers that embed the schema elsewhere (e.g. tool/resource schemas).
     pub const WITHOUT_DRAFT_MARKER: Self = Self {
         include_draft_marker: false,
+        host_managed: HostManagedSchemaPolicy::TrustedSnapshot,
+    };
+
+    pub(crate) const EXTERNAL_INPUT: Self = Self {
+        include_draft_marker: false,
+        host_managed: HostManagedSchemaPolicy::Reject,
+    };
+
+    pub(crate) const EXTERNAL_OUTPUT: Self = Self {
+        include_draft_marker: false,
+        host_managed: HostManagedSchemaPolicy::Redact,
     };
 }
 
@@ -119,6 +137,8 @@ pub fn to_json_schema_with_config(
 /// This reuses the same node rendering as [`to_json_schema_with_config`] by
 /// projecting the user-supplied parameter list onto a synthetic record root;
 /// the record renderer already emits an option-aware `required` array.
+/// Host-managed capability leaves are unsatisfiable because external callers
+/// cannot construct them.
 pub fn input_schema_to_json_schema(
     graph: &SchemaGraph,
     input: &InputSchema,
@@ -141,13 +161,22 @@ pub fn input_schema_to_json_schema(
         fields: record_fields,
         metadata: MetadataEnvelope::default(),
     };
-    to_json_schema_with_config(graph, &record, config)
+    to_json_schema_with_config(
+        graph,
+        &record,
+        JsonSchemaConfig {
+            include_draft_marker: config.include_draft_marker,
+            ..JsonSchemaConfig::EXTERNAL_INPUT
+        },
+    )
 }
 
 /// Render an [`OutputSchema`] to an optional JSON Schema document.
 ///
 /// `OutputSchema::Unit` renders to `None` (the method has no return value).
-/// `OutputSchema::Single(ty)` renders `ty` via [`to_json_schema_with_config`].
+/// `OutputSchema::Single(ty)` renders `ty` via [`to_json_schema_with_config`],
+/// with host-managed capability leaves represented by their redacted external
+/// placeholder.
 ///
 /// This renderer applies no protocol policy: it does **not** suppress
 /// multimodal outputs. Consumers that omit `outputSchema` for multimodal
@@ -159,7 +188,14 @@ pub fn output_schema_to_json_schema(
 ) -> Option<Value> {
     match output {
         OutputSchema::Unit => None,
-        OutputSchema::Single(ty) => Some(to_json_schema_with_config(graph, ty, config)),
+        OutputSchema::Single(ty) => Some(to_json_schema_with_config(
+            graph,
+            ty,
+            JsonSchemaConfig {
+                include_draft_marker: config.include_draft_marker,
+                ..JsonSchemaConfig::EXTERNAL_OUTPUT
+            },
+        )),
     }
 }
 
@@ -789,9 +825,21 @@ pub(super) fn render_type(
 
         SchemaType::Union { spec, .. } => Value::Object(union_schema(graph, spec, table, config)),
 
-        SchemaType::Secret { spec, .. } => Value::Object(secret_schema(spec)),
-        SchemaType::QuotaToken { spec, .. } => Value::Object(quota_token_schema(spec)),
-        SchemaType::PermissionCard { spec, .. } => Value::Object(permission_card_schema(spec)),
+        SchemaType::Secret { spec, .. } => {
+            host_managed_schema(config.host_managed, "secret", || {
+                Value::Object(secret_schema(spec))
+            })
+        }
+        SchemaType::QuotaToken { spec, .. } => {
+            host_managed_schema(config.host_managed, "quota-token", || {
+                Value::Object(quota_token_schema(spec))
+            })
+        }
+        SchemaType::PermissionCard { spec, .. } => {
+            host_managed_schema(config.host_managed, "permission-card", || {
+                Value::Object(permission_card_schema(spec))
+            })
+        }
 
         SchemaType::Future { .. } | SchemaType::Stream { .. } => obj([
             ("type", Value::String("null".to_string())),
@@ -808,6 +856,35 @@ pub(super) fn render_type(
     // Schema, not only named definitions.
     attach_metadata(&mut rendered, ty.metadata());
     rendered
+}
+
+fn host_managed_schema(
+    policy: HostManagedSchemaPolicy,
+    kind: &str,
+    trusted: impl FnOnce() -> Value,
+) -> Value {
+    match policy {
+        HostManagedSchemaPolicy::TrustedSnapshot => trusted(),
+        HostManagedSchemaPolicy::Reject => obj([
+            ("not", Value::Object(Map::new())),
+            (
+                "description",
+                Value::String(format!(
+                    "Host-managed {kind} capabilities cannot be supplied externally"
+                )),
+            ),
+        ]),
+        HostManagedSchemaPolicy::Redact => obj([
+            ("type", Value::String("string".to_string())),
+            ("const", Value::String(format!("<redacted: {kind}>"))),
+            (
+                "description",
+                Value::String(format!(
+                    "Host-managed {kind} capability values are redacted"
+                )),
+            ),
+        ]),
+    }
 }
 
 fn ref_pointer(id: &TypeId, _root: bool) -> String {

@@ -2375,7 +2375,7 @@ impl WorkerService {
         let agent_type = &registered_agent_type.agent_type;
 
         let constructor_parameters = json_input_schema_value_to_typed_schema_value(
-            request.parameters,
+            request.parameters.into_inner(),
             &agent_type.schema,
             &agent_type.constructor.input_schema,
         )
@@ -2472,7 +2472,7 @@ impl WorkerService {
         let agent_type = &registered_agent_type.agent_type;
 
         let constructor_parameters = json_input_schema_value_to_typed_schema_value(
-            request.parameters,
+            request.parameters.into_inner(),
             &agent_type.schema,
             &agent_type.constructor.input_schema,
         )
@@ -2567,7 +2567,7 @@ impl WorkerService {
             })?;
 
         let method_parameters = json_input_schema_value_to_typed_schema_value(
-            request.method_parameters,
+            request.method_parameters.into_inner(),
             &invocation_agent_type.schema,
             &method.input_schema,
         )
@@ -2656,6 +2656,11 @@ impl WorkerService {
                     .cloned()
                     .unwrap_or_else(|| SchemaType::tuple(Vec::new()));
                 let typed_output = TypedSchemaValue::new(output_graph, output_value);
+                let typed_output = typed_output.try_into().map_err(|error| {
+                    WorkerServiceError::Internal(format!(
+                        "Agent method result cannot cross the external JSON boundary: {error}"
+                    ))
+                })?;
                 Ok(AgentInvocationResult {
                     agent_id: response_agent_id,
                     idempotency_key: response_idempotency_key,
@@ -2735,8 +2740,8 @@ mod tests {
     use golem_common::schema::public_json::PublicStreamReference;
     use golem_common::schema::stream::SchemaValueStream;
     use golem_common::schema::{
-        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
-        OutputSchema, SchemaGraph, SchemaType, SchemaValue,
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, ExternalSchemaValue,
+        InputSchema, NamedField, OutputSchema, SchemaGraph, SchemaType, SchemaValue,
     };
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
     use golem_service_base::model::auth::AuthCtx;
@@ -4021,8 +4026,8 @@ mod tests {
         }
     }
 
-    fn empty_json_tuple() -> SchemaValue {
-        SchemaValue::Record { fields: vec![] }
+    fn empty_json_tuple() -> ExternalSchemaValue {
+        ExternalSchemaValue::try_from(SchemaValue::Record { fields: vec![] }).unwrap()
     }
 
     fn test_card() -> StoredCard {

@@ -13,8 +13,13 @@
 // limitations under the License.
 
 import type { TypedSchemaValue } from 'golem:tool/common@0.1.0';
-import { sourceValueIsCanonical, type SchemaCodec } from '../../schema/codec';
-import { t, typedSchemaValueToWit, v } from '../schema-model';
+import {
+  relinquishSchemaValueCapabilities,
+  sourceValueIsCanonical,
+  type SchemaCodec,
+} from '../../schema/codec';
+import { t, typedSchemaValueToWit, type SchemaValue, v } from '../schema-model';
+import { withCapabilityAdoptionTransaction } from '../schema-model/capabilityTransaction';
 import type { ExtendedErrorCase } from './model';
 import { schemaValueConforms } from './validation';
 
@@ -38,8 +43,9 @@ export function encodeToolValue(
   value: unknown,
   position: string,
 ): TypedSchemaValue {
+  let encoded: SchemaValue | undefined;
   try {
-    const encoded = codec.toValue(value);
+    encoded = withCapabilityAdoptionTransaction(() => codec.toValue(value));
     if (!schemaValueConforms(codec.graph, codec.graph.root, encoded)) {
       throw new Error('does not match its declared schema');
     }
@@ -48,6 +54,7 @@ export function encodeToolValue(
     }
     return typedSchemaValueToWit({ graph: codec.graph, value: encoded });
   } catch (error) {
+    if (encoded !== undefined) relinquishSchemaValueCapabilities(encoded);
     throw invalidToolResult(`${position}: ${errorMessage(error)}`);
   }
 }

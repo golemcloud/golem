@@ -14,8 +14,9 @@
 
 use golem_common::schema::agent::{FieldSource, InputSchema, NamedField};
 use golem_common::schema::graph::SchemaGraph;
+use golem_common::schema::host_managed::find_host_managed_type;
 use golem_common::schema::multimodal::multimodal_variant_cases;
-use golem_common::schema::render::json_value::from_json_value;
+use golem_common::schema::render::json_value::from_untrusted_json_value;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::SchemaValue;
 
@@ -65,7 +66,7 @@ pub fn extract_constructor_input_values(
             }
         };
 
-        let value = from_json_value(graph, &field.schema, &json_value)
+        let value = from_untrusted_json_value(graph, &field.schema, &json_value)
             .map_err(|e| format!("Failed to parse parameter '{}': {}", field.name, e))?;
         params.push(value);
     }
@@ -94,6 +95,15 @@ fn reject_multimodal(graph: &SchemaGraph, fields: &[&NamedField]) -> Result<(), 
 /// Reject unstructured (text/binary) constructor parameters, which cannot be
 /// supplied through the MCP agent-id encoding.
 fn ensure_supplyable_via_mcp(graph: &SchemaGraph, field: &NamedField) -> Result<(), String> {
+    if let Some(found) = find_host_managed_type(graph, &field.schema).map_err(|e| e.to_string())? {
+        return Err(format!(
+            "MCP cannot support host-managed {} constructor parameter '{}' at {}",
+            found.kind.kind_name(),
+            field.name,
+            found.path
+        ));
+    }
+
     match graph
         .resolve_ref(&field.schema)
         .map_err(|e| e.to_string())?
@@ -193,5 +203,17 @@ mod tests {
         let args = json!({}).as_object().unwrap().clone();
         let err = extract_constructor_input_values(&args, &graph(), &schema).unwrap_err();
         assert!(err.contains("multimodal"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_host_managed_constructor_schema_before_reading_arguments() {
+        let schema = input(vec![NamedField::user_supplied(
+            "credential",
+            SchemaType::secret(Default::default()),
+        )]);
+        let args = json!({}).as_object().unwrap().clone();
+
+        let err = extract_constructor_input_values(&args, &graph(), &schema).unwrap_err();
+        assert!(err.contains("host-managed secret"), "got: {err}");
     }
 }

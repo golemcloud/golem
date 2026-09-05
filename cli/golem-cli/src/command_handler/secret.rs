@@ -26,13 +26,11 @@ use crate::model::secret::{
 };
 use anyhow::bail;
 use golem_client::api::AgentSecretsClient;
-use golem_client::model::AgentSecretUpdate;
-use golem_common::model::agent_secret::{
-    AgentSecretCreation, AgentSecretDto, AgentSecretId, AgentSecretPath, CanonicalAgentSecretPath,
-};
+use golem_client::model::{AgentSecretCreation, AgentSecretDto, AgentSecretUpdate};
+use golem_common::model::agent_secret::{AgentSecretId, AgentSecretPath, CanonicalAgentSecretPath};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_common::schema::validation::validate_value;
-use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -144,8 +142,15 @@ impl SecretCommandHandler {
             }
         };
 
-        let secret_value: Option<SchemaValue> = match secret_value {
-            Some(sv) => Some(self.parse_secret_value(&sv, &secret_type, &source_language)?),
+        let secret_value: Option<ExternalSchemaValue> = match secret_value {
+            Some(sv) => Some(
+                ExternalSchemaValue::try_from(self.parse_secret_value(
+                    &sv,
+                    &secret_type,
+                    &source_language,
+                )?)
+                .map_err(anyhow::Error::msg)?,
+            ),
             None => None,
         };
 
@@ -194,10 +199,15 @@ impl SecretCommandHandler {
 
         let clients = self.ctx.golem_clients().await?;
 
-        let secret_value: Option<SchemaValue> = match secret_value {
-            Some(sv) => {
-                Some(self.parse_secret_value(&sv, &current.secret_type, &source_language)?)
-            }
+        let secret_value: Option<ExternalSchemaValue> = match secret_value {
+            Some(sv) => Some(
+                ExternalSchemaValue::try_from(self.parse_secret_value(
+                    &sv,
+                    &current.secret_type,
+                    &source_language,
+                )?)
+                .map_err(anyhow::Error::msg)?,
+            ),
             None => None,
         };
 
@@ -317,14 +327,15 @@ fn parse_secret_value_to_schema_value(
     if let Ok(parsed_value) =
         parse_value_for_language(input, secret_type, &secret_type.root, source_language)
     {
-        return Ok(parsed_value);
+        return ExternalSchemaValue::try_from(parsed_value).map(ExternalSchemaValue::into_inner);
     }
     // Fall back to a raw schema-native `SchemaValue` JSON, but only accept it
     // if it conforms to `secret_type`. Without this validation a user could
     // store any value for any secret type and the mismatch would only surface
     // much later at the consumer.
-    match serde_json::from_str::<SchemaValue>(input) {
+    match serde_json::from_str::<ExternalSchemaValue>(input) {
         Ok(value) => {
+            let value = value.into_inner();
             validate_value(secret_type, &secret_type.root, &value).map_err(|errs| {
                 format!(
                     "Secret value does not match the expected type: {}",

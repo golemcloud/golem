@@ -1127,9 +1127,12 @@ fn cli_output_schema_validates_schema_native_secret_outputs() {
         secret_type: golem_common::schema::SchemaGraph::anonymous(
             golem_common::schema::SchemaType::string(),
         ),
-        secret_value: Some(golem_common::schema::SchemaValue::String(
-            "super-secret".to_string(),
-        )),
+        secret_value: Some(
+            golem_common::schema::ExternalSchemaValue::try_from(
+                golem_common::schema::SchemaValue::String("super-secret".to_string()),
+            )
+            .unwrap(),
+        ),
     };
 
     let outputs = vec![
@@ -6054,7 +6057,9 @@ fn arb_secret() -> BoxedStrategy<golem_client::model::AgentSecretDto> {
                     revision: golem_common::model::agent_secret::AgentSecretRevision::new(revision)
                         .expect("generated revision should be valid"),
                     secret_type,
-                    secret_value,
+                    secret_value: secret_value.map(|value| {
+                        golem_common::schema::ExternalSchemaValue::try_from(value).unwrap()
+                    }),
                 }
             },
         )

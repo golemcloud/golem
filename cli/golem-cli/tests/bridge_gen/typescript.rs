@@ -14,7 +14,8 @@
 
 use crate::bridge_gen::fixtures::{
     agent, code_first_snippets_agent_type, def, field, local_config, method,
-    multi_agent_wrapper_2_types, named_field, ref_to, single_agent_wrapper_types,
+    multi_agent_wrapper_2_types, multimodal, named_field, ref_to, single_agent_wrapper_types,
+    variant_case,
 };
 use crate::bridge_gen::scala::grep_tool;
 use crate::bridge_gen::type_naming::test_type_naming;
@@ -766,6 +767,77 @@ fn guest_sdk_native_shapes_generate_direct_codecs_and_compile() {
     assert!(!source.contains("LegacySchemaValue"));
     assert!(!source.contains("toGuestSchemaValue"));
     assert!(!source.contains("fromGuestSchemaValue"));
+}
+
+#[test]
+fn guest_generation_compiles_host_managed_capability_methods() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let capability_tuple = SchemaType::tuple(vec![
+        SchemaType::secret(Default::default()),
+        SchemaType::quota_token(Default::default()),
+        SchemaType::permission_card(Default::default()),
+    ]);
+    let envelope = SchemaType::record(vec![named_field(
+        "capabilities",
+        SchemaType::list(capability_tuple),
+    )]);
+    let capability_modalities = multimodal(vec![
+        variant_case("secret", Some(SchemaType::secret(Default::default()))),
+        variant_case("quota", Some(SchemaType::quota_token(Default::default()))),
+        variant_case(
+            "permission",
+            Some(SchemaType::permission_card(Default::default())),
+        ),
+    ]);
+    let agent_type = agent(
+        "CapabilityAgent",
+        "typescript",
+        vec![],
+        vec![
+            method(
+                "transfer",
+                vec![field("envelope", ref_to("capability-envelope"))],
+                Some(ref_to("capability-envelope")),
+            ),
+            method(
+                "transferMultimodal",
+                vec![field("capabilities", capability_modalities.clone())],
+                Some(capability_modalities),
+            ),
+        ],
+        vec![def("capability-envelope", envelope)],
+        AgentMode::Durable,
+    );
+    generate_and_compile_with_mode(agent_type, target, TypeScriptBridgeMode::GuestWasmRpc);
+
+    let source = std::fs::read_to_string(
+        target.join("capability-agent-guest-client/capability-agent-guest-client.ts"),
+    )
+    .unwrap();
+    for capability_type in [
+        "base.SecretHandle",
+        "base.QuotaToken",
+        "base.PermissionCardHandle",
+    ] {
+        assert!(
+            source.contains(capability_type),
+            "missing generated capability type {capability_type}:\n{source}"
+        );
+    }
+    for codec in [
+        "base.secretHandleToSchemaValue(",
+        "base.secretHandleFromSchemaValue(",
+        "base.quotaTokenToSchemaValue(",
+        "base.quotaTokenFromSchemaValue(",
+        "base.permissionCardHandleToSchemaValue(",
+        "base.permissionCardHandleFromSchemaValue(",
+    ] {
+        assert!(
+            source.contains(codec),
+            "missing generated capability codec {codec}:\n{source}"
+        );
+    }
 }
 
 #[test]

@@ -284,6 +284,95 @@ describe('public bridge runtime', () => {
     });
   });
 
+  it('keeps bridge capability conversions opaque and affine', () => {
+    const assertOpaque = (handle: unknown) => {
+      expect((handle as { take?: unknown }).take).toBeUndefined();
+      expect((handle as { withHandle?: unknown }).withHandle).toBeUndefined();
+      expect((handle as { isPresent?: unknown }).isPresent).toBeUndefined();
+    };
+
+    const secretRaw = { id: 'secret' } as never;
+    const secret = bridge.secretHandleToSchemaValue(secretRaw);
+    assertOpaque(secret.handle);
+    expect(() => bridge.secretHandleToSchemaValue(secretRaw)).toThrow(/already owned/);
+    expect(() =>
+      bridge.schemaValueFromWit({
+        valueNodes: [{ tag: 'secret-value', val: secretRaw }],
+        root: 0,
+      }),
+    ).toThrow(/already owned/);
+    expect(bridge.secretHandleFromSchemaValue(secret)).toBe(secretRaw);
+    expect(() => bridge.secretHandleFromSchemaValue(secret)).toThrow(/already consumed/);
+    expect(() => bridge.secretHandleToSchemaValue(secretRaw)).not.toThrow();
+
+    const cardRaw = { id: 'permission-card' } as never;
+    const card = bridge.permissionCardHandleToSchemaValue(cardRaw);
+    assertOpaque(card.handle);
+    expect(() => bridge.permissionCardHandleToSchemaValue(cardRaw)).toThrow(/already owned/);
+    expect(() =>
+      bridge.schemaValueFromWit({
+        valueNodes: [{ tag: 'permission-card-handle', val: cardRaw }],
+        root: 0,
+      }),
+    ).toThrow(/already owned/);
+    expect(bridge.permissionCardHandleFromSchemaValue(card)).toBe(cardRaw);
+    expect(() => bridge.permissionCardHandleFromSchemaValue(card)).toThrow(/already consumed/);
+
+    const quotaRaw = { id: 'quota-token' } as never;
+    const quotaValue = bridge.schemaValueFromWit({
+      valueNodes: [{ tag: 'quota-token-handle', val: quotaRaw }],
+      root: 0,
+    });
+    expect(quotaValue.tag).toBe('quota-token');
+    if (quotaValue.tag !== 'quota-token') throw new Error('expected quota-token');
+    assertOpaque(quotaValue.handle);
+    const quotaAliasTree = {
+      valueNodes: [{ tag: 'quota-token-handle' as const, val: quotaRaw }],
+      root: 0,
+    };
+    expect(() => bridge.schemaValueFromWit(quotaAliasTree)).toThrow(/already owned/);
+
+    let fakeKey: unknown;
+    const fakeToken = {
+      _toSchemaValue: (key: unknown) => {
+        fakeKey = key;
+        return quotaValue;
+      },
+    } as never;
+    expect(() => bridge.quotaTokenToSchemaValue(fakeToken)).toThrow(/invalid quota token/);
+    expect(fakeKey).toBeUndefined();
+
+    let intercepted = false;
+    const quotaClass = bridge.QuotaToken as unknown as Record<string, unknown>;
+    const quotaPrototype = bridge.QuotaToken.prototype as unknown as Record<string, unknown>;
+    quotaClass._fromSchemaValue = () => {
+      intercepted = true;
+    };
+    quotaPrototype._toSchemaValue = () => {
+      intercepted = true;
+    };
+    try {
+      const token = bridge.quotaTokenFromSchemaValue(quotaValue);
+      const alias = bridge.quotaTokenFromSchemaValue(quotaValue);
+      const encoded = bridge.quotaTokenToSchemaValue(token);
+      expect(intercepted).toBe(false);
+      const wire = bridge.schemaValueToWit(encoded);
+      expect(() =>
+        bridge.schemaValueFromWit({
+          valueNodes: [{ tag: 'quota-token-handle', val: quotaRaw }],
+          root: 0,
+        }),
+      ).toThrow(/already owned/);
+      expect(bridge.schemaValueFromWit(wire).tag).toBe('quota-token');
+      expect(() => bridge.schemaValueToWit(bridge.quotaTokenToSchemaValue(alias))).toThrow(
+        /already transferred/,
+      );
+    } finally {
+      delete quotaClass._fromSchemaValue;
+      delete quotaPrototype._toSchemaValue;
+    }
+  });
+
   it('rejects custom-error payloads whose rich value records are malformed', () => {
     const payload = {
       graph: bridge.schemaGraphToWit({

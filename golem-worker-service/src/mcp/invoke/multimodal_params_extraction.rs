@@ -14,7 +14,7 @@
 
 use crate::mcp::invoke::{schema_binary_value_from_json, schema_text_value_from_json};
 use golem_common::schema::graph::SchemaGraph;
-use golem_common::schema::render::json_value::from_json_value;
+use golem_common::schema::render::json_value::from_untrusted_json_value;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::SchemaValue;
 
@@ -43,7 +43,7 @@ pub fn extract_multimodal_element_value(
             schema_binary_value_from_json(value_json, restrictions)
                 .map_err(|e| format!("parts[{}] '{}': {}", index, name, e))
         }
-        _ => from_json_value(graph, case_schema, value_json)
+        _ => from_untrusted_json_value(graph, case_schema, value_json)
             .map_err(|e| format!("parts[{}] '{}': failed to parse value: {}", index, name, e)),
     }
 }

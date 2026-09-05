@@ -60,7 +60,7 @@ use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::{AgentTypeSchema, typed_schema_value_with_projected_defs};
-use golem_common::schema::render::from_json_value;
+use golem_common::schema::render::from_untrusted_json_value;
 use golem_common::schema::tool::Tool;
 use golem_common::schema::tool::validation::validate_tool;
 use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
@@ -1461,13 +1461,12 @@ fn validate_and_transform_config_entries(
         let declared_type = &matching_declaration.value_type;
 
         let schema_value: SchemaValue =
-            from_json_value(&agent_type.schema, declared_type, &config_value.value.0).map_err(
-                |err| ComponentError::AgentConfigTypeMismatch {
+            from_untrusted_json_value(&agent_type.schema, declared_type, &config_value.value.0)
+                .map_err(|err| ComponentError::AgentConfigTypeMismatch {
                     agent: agent_type.type_name.clone(),
                     key: config_value.path.clone(),
                     errors: vec![format!("config value is not a valid schema value: {err}")],
-                },
-            )?;
+                })?;
 
         validate_value(&agent_type.schema, declared_type, &schema_value).map_err(|errors| {
             ComponentError::AgentConfigTypeMismatch {
