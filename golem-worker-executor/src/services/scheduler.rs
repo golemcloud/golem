@@ -1045,7 +1045,7 @@ mod tests {
         async fn set_assignment_tracking(
             &self,
             _owned_agent_id: &OwnedAgentId,
-            _status_value: &AgentStatusRecord,
+            _tracked: bool,
         ) -> Result<(), String> {
             Ok(())
         }

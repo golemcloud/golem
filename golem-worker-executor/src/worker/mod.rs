@@ -22,7 +22,7 @@ pub mod status_flusher;
 use self::agent_config::{
     ensure_required_agent_secrets_are_configured, parse_worker_creation_agent_config,
 };
-use self::status::update_status_with_new_entries;
+use self::status::fold_status_with_new_entries;
 use crate::durable_host::recover_stderr_logs;
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::metrics::workers::AdmissionPhase;
@@ -35,7 +35,7 @@ use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::plugin::ForwardingOplog;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, downcast_oplog};
-use crate::services::worker::GetWorkerMetadataResult;
+use crate::services::worker::{DefaultWorkerService, GetWorkerMetadataResult};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
     All, HasActiveWorkers, HasAgentTypesService, HasAgentWebhooksService, HasAll,
@@ -654,16 +654,31 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.last_known_status.read().await.clone()
     }
 
-    // Outside of reverts and updates, this will return the same status as get_latest_worker_metadata.
+    /// Reads from the last known status under its lock, for callers that need a field or two
+    /// and not a copy of the record (whose `invocation_results` grows with every invocation
+    /// served). Unlike `with_non_detached_last_known_status`, this makes no claim about the
+    /// status being fully folded up to the oplog tip.
+    pub async fn with_last_known_status<R>(&self, f: impl FnOnce(&AgentStatusRecord) -> R) -> R {
+        f(&*self.last_known_status.read().await)
+    }
+
+    // Outside of reverts and updates, this reads the same status as get_latest_worker_metadata.
     // This just has an additional assert built in for when decisions need to be sure that they are fully up to date on the oplog.
     // _NEVER_ call this from outside the invocation loop, as that is the only place that can reason about whether the status is detached or not.
-    pub async fn get_non_detached_last_known_status(&self) -> AgentStatusRecord {
+    //
+    // Takes a closure rather than returning the record: the record owns `invocation_results`,
+    // which gains an entry per invocation and is never pruned, so copying it out costs more on
+    // every call. Callers read the field or two they need under the guard instead.
+    pub async fn with_non_detached_last_known_status<R>(
+        &self,
+        f: impl FnOnce(&AgentStatusRecord) -> R,
+    ) -> R {
         // hold the update lock so we know that the atomic bool and state are consistent
         let update_state_lock_guard = self.update_state_lock.lock().await;
 
         let is_detached = self.last_known_status_detached.load(Ordering::Relaxed);
         assert!(!is_detached);
-        let result = self.last_known_status.read().await.clone();
+        let result = f(&*self.last_known_status.read().await);
 
         // ensure we hold mutex for the full duration
         drop(update_state_lock_guard);
@@ -1938,7 +1953,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
-        let status = self.last_known_status.read().await.clone();
+        // Snapshot the three fields used here instead of cloning the record.
+        // The record also owns `invocation_results`, which gains an entry per
+        // invocation and is never pruned, so cloning it to reach these made each
+        // lookup cost more than the last. Read under one guard at the point the
+        // clone was taken, so the values are the same consistent snapshot.
+        let status = {
+            let record = self.last_known_status.read().await;
+            InvocationLookupStatus {
+                agent_status: record.status,
+                current_idempotency_key: record.current_idempotency_key.clone(),
+                key_is_pending: record
+                    .pending_invocations
+                    .iter()
+                    .any(|entry| entry.has_idempotency_key(key)),
+            }
+        };
         let maybe_result = self.invocation_results.read().await.get(key).cloned();
         if let Some(mut result) = maybe_result {
             result
@@ -1946,12 +1976,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
             lookup_result_from_cached_result(&status, key, result)
         } else {
-            let is_pending = status
-                .pending_invocations
-                .iter()
-                .any(|entry| entry.has_idempotency_key(key));
             let is_current = status.current_idempotency_key.as_ref() == Some(key);
-            if is_pending || is_current {
+            if status.key_is_pending || is_current {
                 LookupResult::Pending
             } else {
                 LookupResult::New
@@ -2161,18 +2187,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
 
-        // Collect all idempotency keys to fail: pending invocations + currently running invocation
-        let status = self.last_known_status.read().await.clone();
-        let mut keys_to_fail: Vec<IdempotencyKey> = status
-            .pending_invocations
-            .iter()
-            .filter_map(|inv| inv.idempotency_key().cloned())
-            .collect();
-        if let Some(current_key) = &status.current_idempotency_key
-            && !keys_to_fail.contains(current_key)
-        {
-            keys_to_fail.push(current_key.clone());
-        }
+        // Collect all idempotency keys to fail: pending invocations + currently running invocation.
+        // Read under the guard rather than from a clone of the record, which
+        // would copy the unbounded `invocation_results` map along with them.
+        let keys_to_fail: Vec<IdempotencyKey> = {
+            let record = self.last_known_status.read().await;
+            let mut keys: Vec<IdempotencyKey> = record
+                .pending_invocations
+                .iter()
+                .filter_map(|inv| inv.idempotency_key().cloned())
+                .collect();
+            if let Some(current_key) = &record.current_idempotency_key
+                && !keys.contains(current_key)
+            {
+                keys.push(current_key.clone());
+            }
+            keys
+        };
 
         let mut invocation_results = self.invocation_results.write().await;
         for idempotency_key in &keys_to_fail {
@@ -2537,7 +2568,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             // Install the recomputed status while still detached, so a concurrent background sweep
             // keeps skipping (the in-memory status is not authoritative until it is installed).
-            self.update_last_known_status(worker_status.clone()).await;
+            self.update_last_known_status(worker_status).await;
 
             // Now the in-memory status is authoritative again; clear the flag and force a flush.
             self.last_known_status_detached
@@ -2568,28 +2599,68 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> bool {
         let new_entries = self.oplog.commit(commit_level).await;
 
-        if !self.last_known_status_detached.load(Ordering::Acquire) {
-            let old_status = self.last_known_status.read().await.clone();
+        if self.last_known_status_detached.load(Ordering::Acquire) {
+            return false;
+        }
+        if new_entries.is_empty() {
+            // Folding nothing onto the record is the identity, so there is nothing to install.
+            return false;
+        }
 
-            let updated_status = update_status_with_new_entries(
+        // Fold the new entries onto the record in place. The record owns `invocation_results`,
+        // which gains an entry per invocation and is never pruned, so every copy of it costs more
+        // than the last, and this runs on every oplog commit. So the record is taken out of the
+        // lock, folded, and put back, without a copy at any step. The fold is synchronous and
+        // proportional to the number of new entries, so the write lock is held only briefly.
+        let previous_metrics_status = self.metrics_status.status();
+        let (old_agent_status, old_tracked, folded) = {
+            let mut guard = self.last_known_status.write().await;
+            let old_status = std::mem::take(&mut *guard);
+            let old_agent_status = old_status.status;
+            let old_tracked =
+                DefaultWorkerService::should_track_for_assignment_recovery(&old_status);
+            match fold_status_with_new_entries(
                 self.agent_mode(),
-                old_status.clone(),
+                old_status,
                 new_entries,
                 &self.config().retry,
-            );
-
-            if let Some(updated_status) = updated_status {
-                if updated_status != old_status {
-                    self.update_last_known_status(updated_status.clone()).await;
-
-                    self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
-                        .await;
-
-                    true
-                } else {
-                    false
+            ) {
+                Ok(updated_status) => {
+                    let new_agent_status = updated_status.status;
+                    let new_oplog_idx = updated_status.oplog_idx;
+                    *guard = updated_status;
+                    (
+                        old_agent_status,
+                        old_tracked,
+                        Some((new_agent_status, new_oplog_idx)),
+                    )
                 }
-            } else {
+                Err(old_status) => {
+                    *guard = old_status;
+                    (old_agent_status, old_tracked, None)
+                }
+            }
+        };
+
+        match folded {
+            Some((new_agent_status, new_oplog_idx)) => {
+                self.on_last_known_status_replaced(
+                    previous_metrics_status,
+                    old_tracked,
+                    new_agent_status,
+                )
+                .await;
+
+                self.schedule_oplog_archive_if_needed(
+                    old_agent_status,
+                    new_agent_status,
+                    new_oplog_idx,
+                )
+                .await;
+
+                true
+            }
+            None => {
                 // The status can no longer be incrementally computed by adding the new oplog entries, instead a full reload needs to be performed.
                 // This can happen during a revert or a snapshot update for example.
                 tracing::debug!("Detaching worker_status from oplog");
@@ -2601,29 +2672,28 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 self.status_flusher.invalidate_baseline().await;
                 true
             }
-        } else {
-            false
         }
     }
 
     async fn schedule_oplog_archive_if_needed(
         &self,
-        old_status: &AgentStatusRecord,
-        new_status: &AgentStatusRecord,
+        old_status: AgentStatus,
+        new_status: AgentStatus,
+        new_oplog_idx: OplogIndex,
     ) {
-        if old_status.status != new_status.status
+        if old_status != new_status
             && matches!(
-                new_status.status,
+                new_status,
                 AgentStatus::Idle | AgentStatus::Failed | AgentStatus::Exited
             )
         {
             let archive_interval = self.config().oplog.archive_interval;
-            let last_oplog_index = new_status.oplog_idx;
+            let last_oplog_index = new_oplog_idx;
             let account_id = self.initial_worker_metadata.created_by;
 
             debug!(
                 worker_id = %self.owned_agent_id,
-                new_status = ?new_status.status,
+                new_status = ?new_status,
                 "Scheduling ArchiveOplog after status transition"
             );
 
@@ -2694,9 +2764,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if self.last_known_status_detached.load(Ordering::Acquire) {
             return;
         }
-        let status = self.last_known_status.read().await.clone();
         self.status_checkpointer
-            .maybe_checkpoint(&status, reason)
+            .maybe_checkpoint(&self.last_known_status, None, reason)
             .await;
     }
 
@@ -2717,15 +2786,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if self.last_known_status_detached.load(Ordering::Acquire) {
             return;
         }
-        let status = self.last_known_status.read().await.clone();
-        if let Some(marker) = min_exposed_marker
-            && status.oplog_idx > marker
-        {
-            return;
-        }
         self.status_checkpointer
             .maybe_checkpoint(
-                &status,
+                &self.last_known_status,
+                min_exposed_marker,
                 status_checkpointer::CheckpointReason::MidInvocation,
             )
             .await;
@@ -2748,19 +2812,39 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn update_last_known_status(&self, new_status: AgentStatusRecord) {
         let previous_metrics_status = self.metrics_status.status();
+        let new_agent_status = new_status.status;
         // The in-memory `last_known_status` is the authoritative live status; the flusher reads it
-        // when it persists the cached blob. We replace it here and hand the (previous, new) pair to
-        // the flusher, which updates the `RunningWorkers` recovery index synchronously and either
-        // marks the worker dirty for the background sweeper or writes the blob inline (when
-        // background flushing is disabled).
-        let previous_status = {
+        // when it persists the cached blob. We replace it here, keeping only what the follow-up
+        // needs from the old record, so neither record is copied.
+        let previous_tracked = {
             let mut guard = self.last_known_status.write().await;
-            std::mem::replace(&mut *guard, new_status.clone())
+            let previous_tracked =
+                DefaultWorkerService::should_track_for_assignment_recovery(&guard);
+            *guard = new_status;
+            previous_tracked
         };
+        self.on_last_known_status_replaced(
+            previous_metrics_status,
+            previous_tracked,
+            new_agent_status,
+        )
+        .await;
+    }
+
+    /// The follow-up to installing a new `last_known_status`: the status metric moves, and the
+    /// flusher updates the `RunningWorkers` recovery index synchronously and either marks the
+    /// worker dirty for the background sweeper or writes the blob inline (when background flushing
+    /// is disabled).
+    async fn on_last_known_status_replaced(
+        &self,
+        previous_metrics_status: AgentStatus,
+        previous_tracked: bool,
+        new_agent_status: AgentStatus,
+    ) {
         self.metrics_status
-            .update(previous_metrics_status, new_status.status);
+            .update(previous_metrics_status, new_agent_status);
         self.status_flusher
-            .on_status_changed(&previous_status, &new_status)
+            .on_status_changed(previous_tracked)
             .await;
     }
 }
@@ -3558,8 +3642,21 @@ impl InvocationResult {
     }
 }
 
+/// The fields of `AgentStatusRecord` an invocation lookup reads.
+///
+/// Owned rather than borrowed: `lookup_invocation_result` awaits between taking
+/// these and using them, and holding a status read guard across that await would
+/// block every writer.
+struct InvocationLookupStatus {
+    agent_status: AgentStatus,
+    current_idempotency_key: Option<IdempotencyKey>,
+    /// Whether `pending_invocations` held an entry for the key being looked up.
+    /// Resolved under the guard, since the answer is a bool and the list is not.
+    key_is_pending: bool,
+}
+
 fn lookup_result_from_cached_result(
-    status: &AgentStatusRecord,
+    status: &InvocationLookupStatus,
     key: &IdempotencyKey,
     result: InvocationResult,
 ) -> LookupResult {
@@ -3578,7 +3675,10 @@ fn lookup_result_from_cached_result(
                     ..
                 }),
         } if status.current_idempotency_key.as_ref() == Some(key)
-            && !matches!(status.status, AgentStatus::Failed | AgentStatus::Exited) =>
+            && !matches!(
+                status.agent_status,
+                AgentStatus::Failed | AgentStatus::Exited
+            ) =>
         {
             LookupResult::Pending
         }
@@ -3626,11 +3726,14 @@ mod tests {
     use golem_common::model::oplog::AgentError;
     use test_r::test;
 
-    fn status_with_current_key(status: AgentStatus, key: &IdempotencyKey) -> AgentStatusRecord {
-        AgentStatusRecord {
-            status,
+    fn status_with_current_key(
+        agent_status: AgentStatus,
+        key: &IdempotencyKey,
+    ) -> InvocationLookupStatus {
+        InvocationLookupStatus {
+            agent_status,
             current_idempotency_key: Some(key.clone()),
-            ..AgentStatusRecord::default()
+            key_is_pending: false,
         }
     }
 

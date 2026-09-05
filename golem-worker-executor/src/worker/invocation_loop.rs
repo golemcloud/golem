@@ -39,7 +39,7 @@ use golem_common::model::{
     IdempotencyKey, OwnedAgentId, TimestampedAgentInvocation,
 };
 use golem_common::model::{
-    AgentStatusRecord, OplogIndex, Timestamp,
+    OplogIndex, Timestamp,
     invocation_context::{AttributeValue, InvocationContextStack},
 };
 use golem_common::retries::get_delay;
@@ -638,17 +638,28 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// first pending_updates, then pending_invocations
     async fn drain_pending_from_status(&mut self) -> CommandOutcome {
         loop {
-            let status = self.parent.get_non_detached_last_known_status().await;
+            // Read the three things this needs under the status guard rather than copying the
+            // record, whose `invocation_results` grows with every invocation ever served.
+            let (has_pending_update, first_pending_invocation, last_automatic_snapshot_timestamp) =
+                self.parent
+                    .with_non_detached_last_known_status(|status| {
+                        (
+                            status.pending_updates.front().is_some(),
+                            status.pending_invocations.first().cloned(),
+                            status.last_automatic_snapshot_timestamp,
+                        )
+                    })
+                    .await;
 
             // First, try to process a pending update
-            if status.pending_updates.front().is_some() {
+            if has_pending_update {
                 // if the update made it to pending_updates (instead of pending invocations), it is ready
                 // to be processed on next restart. So just restart here and let the recovery logic take over
                 break CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
             }
 
             // Then, try to process a pending invocation
-            if let Some(pending_invocation) = status.pending_invocations.first() {
+            if let Some(pending_invocation) = &first_pending_invocation {
                 let idempotency_key = pending_invocation.idempotency_key();
                 let origin = match idempotency_key {
                     Some(idempotency_key) => self
@@ -728,8 +739,13 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                         // agents get a chance to run. The worker will self-wake
                         // and re-acquire its permit through the FIFO queue if
                         // more durable work remains.
-                        let status = self.parent.get_non_detached_last_known_status().await;
-                        if !status.pending_invocations.is_empty() {
+                        let more_pending = self
+                            .parent
+                            .with_non_detached_last_known_status(|status| {
+                                !status.pending_invocations.is_empty()
+                            })
+                            .await;
+                        if more_pending {
                             // More durable work remains — self-wake so we return
                             // to the outer loop, release the permit (entering
                             // idle), and re-enter through the scheduler queue.
@@ -741,7 +757,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 }
             }
 
-            match self.periodic_snapshot_action(&status) {
+            match self.periodic_snapshot_action(last_automatic_snapshot_timestamp) {
                 PeriodicSnapshotAction::DueNow => {
                     self.inject_snapshot_as_next_action().await;
                     break CommandOutcome::Continue;
@@ -770,9 +786,14 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 }
             }
             SnapshotPolicy::Periodic { .. } => {
-                let status = self.parent.get_non_detached_last_known_status().await;
+                let last_automatic_snapshot_timestamp = self
+                    .parent
+                    .with_non_detached_last_known_status(|status| {
+                        status.last_automatic_snapshot_timestamp
+                    })
+                    .await;
                 if matches!(
-                    self.periodic_snapshot_action(&status),
+                    self.periodic_snapshot_action(last_automatic_snapshot_timestamp),
                     PeriodicSnapshotAction::DueNow
                 ) {
                     self.inject_snapshot_as_next_action().await;
@@ -785,14 +806,17 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         }
     }
 
-    fn periodic_snapshot_action(&self, status: &AgentStatusRecord) -> PeriodicSnapshotAction {
+    fn periodic_snapshot_action(
+        &self,
+        last_automatic_snapshot_timestamp: Option<Timestamp>,
+    ) -> PeriodicSnapshotAction {
         let SnapshotPolicy::Periodic { period } = self.parent.snapshot_policy() else {
             return PeriodicSnapshotAction::NotNeeded;
         };
 
         let created_at = self.parent.get_initial_worker_metadata().created_at;
         let last_snapshot_timestamp =
-            snapshot_baseline_timestamp(status.last_automatic_snapshot_timestamp, created_at);
+            snapshot_baseline_timestamp(last_automatic_snapshot_timestamp, created_at);
 
         snapshot_action_at(last_snapshot_timestamp, *period, Timestamp::now_utc())
     }

@@ -223,6 +223,21 @@ pub fn update_status_with_new_entries(
     // TODO: changing the retry policy will cause inconsistencies when reading existing oplogs.
     default_retry_policy: &RetryConfig,
 ) -> Option<AgentStatusRecord> {
+    fold_status_with_new_entries(agent_mode, last_known, new_entries, default_retry_policy).ok()
+}
+
+/// Folds `new_entries` onto `last_known`, consuming it.
+///
+/// `Err` hands `last_known` back untouched when the status cannot be computed from the new
+/// entries alone (a jump or revert covered its oplog index) and needs recalculating from the
+/// beginning. Returning the record rather than dropping it lets a caller that took it out of a
+/// lock put the same record back instead of a copy.
+pub fn fold_status_with_new_entries(
+    agent_mode: AgentMode,
+    last_known: AgentStatusRecord,
+    new_entries: BTreeMap<OplogIndex, OplogEntry>,
+    default_retry_policy: &RetryConfig,
+) -> Result<AgentStatusRecord, AgentStatusRecord> {
     let deleted_regions =
         calculate_deleted_regions(last_known.deleted_regions.clone(), &new_entries);
 
@@ -260,7 +275,7 @@ pub fn update_status_with_new_entries(
         // We might have already calculated the status with these skipped regions as an override during a snapshot update.
         // No need to recompute in this case, we are already up to date.
         if effective_skipped_regions_changed {
-            return None;
+            return Err(last_known);
         }
     }
 
@@ -364,7 +379,7 @@ pub fn update_status_with_new_entries(
         agent_mode,
     };
 
-    Some(result)
+    Ok(result)
 }
 
 fn calculate_latest_worker_status(

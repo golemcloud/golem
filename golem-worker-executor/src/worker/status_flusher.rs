@@ -156,11 +156,10 @@ impl AgentStatusFlusher {
     /// synchronously (only when the tracking predicate transitions) and then either marks the
     /// worker dirty for the background sweeper or, when background flushing is disabled, flushes the
     /// blob synchronously.
-    pub async fn on_status_changed(
-        &self,
-        previous_status: &AgentStatusRecord,
-        new_status: &AgentStatusRecord,
-    ) {
+    /// `previous_tracked` is whether the status being replaced satisfied
+    /// [`DefaultWorkerService::should_track_for_assignment_recovery`]; the new status is read from
+    /// the shared `current_status`, which the caller has already updated.
+    pub async fn on_status_changed(&self, previous_tracked: bool) {
         if self.is_ephemeral {
             return;
         }
@@ -168,13 +167,14 @@ impl AgentStatusFlusher {
         // Recovery index: keep it synchronous (it must be timely for crash/reshard recovery), but
         // only touch the KV store when the predicate actually changes, to avoid a round-trip per
         // commit.
-        let track_now = DefaultWorkerService::should_track_for_assignment_recovery(new_status);
-        let track_before =
-            DefaultWorkerService::should_track_for_assignment_recovery(previous_status);
-        if track_now != track_before
+        let track_now = {
+            let status = self.current_status.read().await;
+            DefaultWorkerService::should_track_for_assignment_recovery(&status)
+        };
+        if track_now != previous_tracked
             && let Err(err) = self
                 .worker_service
-                .set_assignment_tracking(&self.owned_agent_id, new_status)
+                .set_assignment_tracking(&self.owned_agent_id, track_now)
                 .await
         {
             // Fatal, deliberately. This index is what a reshard or a crash consults to decide which
@@ -424,7 +424,7 @@ mod tests {
     #[derive(Default)]
     struct MockState {
         writes: Vec<RecordedWrite>,
-        tracking_calls: Vec<AgentStatus>,
+        tracking_calls: Vec<bool>,
         fail_writes: bool,
         fail_tracking: bool,
     }
@@ -532,10 +532,10 @@ mod tests {
         async fn set_assignment_tracking(
             &self,
             _owned_agent_id: &OwnedAgentId,
-            status_value: &AgentStatusRecord,
+            tracked: bool,
         ) -> Result<(), String> {
             let mut state = self.state.lock().unwrap();
-            state.tracking_calls.push(status_value.status);
+            state.tracking_calls.push(tracked);
             if state.fail_tracking {
                 return Err("injected tracking failure".to_string());
             }
@@ -772,14 +772,10 @@ mod tests {
     async fn ephemeral_is_noop() {
         let ws = MockWorkerService::arc();
         let queue = test_queue();
-        let (flusher, _current, _) = make_flusher(true, true, ws.clone(), queue.clone());
+        let (flusher, current, _) = make_flusher(true, true, ws.clone(), queue.clone());
 
-        flusher
-            .on_status_changed(
-                &status(AgentStatus::Idle, 0),
-                &status(AgentStatus::Running, 1),
-            )
-            .await;
+        *current.write().await = status(AgentStatus::Running, 1);
+        flusher.on_status_changed(false).await;
         flusher.mark_dirty();
         let _ = flusher.flush(FlushReason::Forced).await;
         queue.sweep().await;
@@ -793,31 +789,20 @@ mod tests {
     async fn assignment_tracking_fires_only_on_transition() {
         let ws = MockWorkerService::arc();
         let queue = test_queue();
-        let (flusher, _current, _) = make_flusher(false, true, ws.clone(), queue.clone());
+        let (flusher, current, _) = make_flusher(false, true, ws.clone(), queue.clone());
 
         // Idle -> Running: predicate transitions false -> true, fires.
-        flusher
-            .on_status_changed(
-                &status(AgentStatus::Idle, 0),
-                &status(AgentStatus::Running, 1),
-            )
-            .await;
+        *current.write().await = status(AgentStatus::Running, 1);
+        flusher.on_status_changed(false).await;
         // Running -> Running: no transition, does not fire.
-        flusher
-            .on_status_changed(
-                &status(AgentStatus::Running, 1),
-                &status(AgentStatus::Running, 2),
-            )
-            .await;
+        *current.write().await = status(AgentStatus::Running, 2);
+        flusher.on_status_changed(true).await;
         // Running -> Idle: transitions true -> false, fires.
-        flusher
-            .on_status_changed(
-                &status(AgentStatus::Running, 2),
-                &status(AgentStatus::Idle, 3),
-            )
-            .await;
+        *current.write().await = status(AgentStatus::Idle, 3);
+        flusher.on_status_changed(true).await;
 
         assert_eq!(ws.tracking_count(), 2);
+        assert_eq!(ws.state.lock().unwrap().tracking_calls, vec![true, false]);
     }
 
     #[test]
@@ -827,12 +812,7 @@ mod tests {
         let (flusher, current, _) = make_flusher(false, false, ws.clone(), queue.clone());
 
         *current.write().await = status(AgentStatus::Running, 1);
-        flusher
-            .on_status_changed(
-                &status(AgentStatus::Idle, 0),
-                &status(AgentStatus::Running, 1),
-            )
-            .await;
+        flusher.on_status_changed(false).await;
 
         // Blob written synchronously, nothing left in the queue.
         assert_eq!(ws.write_count(), 1);

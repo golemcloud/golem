@@ -64,9 +64,9 @@ use golem_common::model::oplog::{
     AgentError, EphemeralCannotSuspendError, EphemeralFuelExhaustedError,
     TimestampedUpdateDescription,
 };
+use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey,
-    OwnedAgentId,
+    AgentId, AgentInvocation, AgentInvocationOutput, IdempotencyKey, OwnedAgentId,
 };
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
@@ -487,13 +487,13 @@ impl ExternalOperations<Context> for Context {
         this: &T,
         agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        worker_status_record: &AgentStatusRecord,
+        deleted_regions: &DeletedRegions,
     ) -> Option<LastError> {
         DurableWorkerCtx::<Context>::get_last_error_and_retry_count(
             this,
             agent_id,
             agent_mode,
-            worker_status_record,
+            deleted_regions,
         )
         .await
     }
