@@ -21,6 +21,7 @@ import zio.test.Assertion._
 import zio.test._
 
 import scala.collection.immutable.ListMap
+import scala.concurrent.Future
 import scala.util.Try
 
 object SchemaModelSpec extends ZIOSpecDefault {
@@ -501,10 +502,14 @@ object SchemaModelSpec extends ZIOSpecDefault {
       ),
       suite("schema value stream affine semantics")(
         test("decoding rejects distinct wrappers for the same owned stream resource") {
-          val raw    = new Object
-          val first  = GuestSchemaValueStreamHandle.wrapped(raw, () => throw new AssertionError("must not unwrap"))
-          val second = GuestSchemaValueStreamHandle.wrapped(raw, () => throw new AssertionError("must not unwrap"))
-          val bad    = WitSchemaValueTree(
+          val raw   = new Object
+          val first = GuestSchemaValueStreamHandle.endpoint(
+            GuestSchemaValueStream.Wrapped(raw, () => throw new AssertionError("must not unwrap"))
+          )
+          val second = GuestSchemaValueStreamHandle.endpoint(
+            GuestSchemaValueStream.Wrapped(raw, () => throw new AssertionError("must not unwrap"))
+          )
+          val bad = WitSchemaValueTree(
             Vector(
               WitSchemaValueNode.TupleValue(Vector(1, 2)),
               WitSchemaValueNode.StreamValue(first),
@@ -515,6 +520,48 @@ object SchemaModelSpec extends ZIOSpecDefault {
           val res = Try(SchemaWire.schemaValueFromWit(bad))
           assert(res)(isFailure(isSubtype[SchemaDecodeError](anything))) &&
           assertTrue(!first.isPresent, !second.isPresent)
+        },
+        test("a later decode failure disposes an already-reached stream") {
+          var finalizations = 0
+          val stream        = AgentStream.fromPull[SchemaValue](
+            () => Future.successful(None),
+            () => {
+              finalizations += 1
+              Future.successful(())
+            }
+          )
+          val handle = GuestSchemaValueStreamHandle.native(stream)
+          val bad    = WitSchemaValueTree(
+            Vector(
+              WitSchemaValueNode.TupleValue(Vector(1, 2)),
+              WitSchemaValueNode.StreamValue(handle),
+              WitSchemaValueNode.ListValue(Vector(99))
+            ),
+            0
+          )
+
+          val res = Try(SchemaWire.schemaValueFromWit(bad))
+          assert(res)(isFailure(isSubtype[SchemaDecodeError](anything))) &&
+          assertTrue(!handle.isPresent, finalizations == 1)
+        },
+        test("a malformed typed graph disposes its accompanying stream value") {
+          var finalizations = 0
+          val stream        = AgentStream.fromPull[SchemaValue](
+            () => Future.successful(None),
+            () => {
+              finalizations += 1
+              Future.successful(())
+            }
+          )
+          val handle = GuestSchemaValueStreamHandle.native(stream)
+          val bad    = WitTypedSchemaValue(
+            WitSchemaGraph(Vector.empty, Vector.empty, 0),
+            WitSchemaValueTree(Vector(WitSchemaValueNode.StreamValue(handle)), 0)
+          )
+
+          val res = Try(SchemaWire.typedSchemaValueFromWit(bad))
+          assert(res)(isFailure(isSubtype[SchemaDecodeError](anything))) &&
+          assertTrue(!handle.isPresent, finalizations == 1)
         }
       ),
       suite("permission-card handle affine semantics")(

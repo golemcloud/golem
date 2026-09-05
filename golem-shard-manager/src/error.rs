@@ -70,7 +70,17 @@ impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
                 details,
                 api::error_code::INTERNAL_UNKNOWN,
             ),
+            ShardManagerError::ConcurrentModification => error(
+                shard_manager_error::Error::Unknown,
+                "Concurrent modification of the persisted shard state".to_string(),
+                api::error_code::CONCURRENT_UPDATE,
+            ),
             ShardManagerError::RepoError(err) => error(
+                shard_manager_error::Error::Unknown,
+                err.to_string(),
+                api::error_code::INTERNAL_DEPENDENCY_FAILURE,
+            ),
+            ShardManagerError::EtcdError(err) => error(
                 shard_manager_error::Error::Unknown,
                 err.to_string(),
                 api::error_code::INTERNAL_DEPENDENCY_FAILURE,

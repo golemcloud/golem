@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "vectors": [
+    {
+      "canonical": "{\"attemptId\":\"ca7e5a82-2064-4c18-8359-806145c1562f\",\"config\":[],\"idempotencyKey\":\"upload-42\",\"methodParameters\":{\"source\":{\"$stream\":{\"provisionalRef\":\"0dff1c71-f12f-4bb1-996c-23d693bdc825\"}}},\"selector\":{\"agentType\":\"media\",\"application\":\"demo\",\"constructorParameters\":{\"name\":\"encoder\"},\"environment\":\"default\",\"method\":\"transcode\"},\"type\":\"invocationStart\",\"version\":1}",
+      "direction": "client",
+      "name": "invocation-start",
+      "type": "invocationStart"
+    },
+    {
+      "canonical": "{\"attemptId\":\"47be00cd-78aa-4e41-a41d-2517060e540e\",\"operation\":\"resume\",\"outputCursors\":[\"gai1_AQMNdGVzdC1rZXktMjAyNgEAAAAPdGVzdC1kZXBsb3ltZW50AgAAABZnb2xlbS1hZ2VudC1pbnZvY2F0aW9uAwAAAAthY2NvdW50LTEyMwQAAAAQdXNlcjphY2NvdW50LTEyMwUAAAAIAAAAAGqQz4AwAAAAEBEREREREUERgRERERERERExAAAAEEREREREREREhEREREREREQyAAAAGAABAgMEBQYHCAkKCwwNDg8QERITFBUWF_NpiiqMxokYRrY9zgziLTeXDIVSWuOBWTCzRl8FmyvD\"],\"sessionToken\":\"gai1_AQENdGVzdC1rZXktMjAyNgEAAAAPdGVzdC1kZXBsb3ltZW50AgAAABZnb2xlbS1hZ2VudC1pbnZvY2F0aW9uAwAAAAthY2NvdW50LTEyMwQAAAAQdXNlcjphY2NvdW50LTEyMwUAAAAIAAAAAGqQz4AQAAAABGRlbW8RAAAAB2RlZmF1bHQSAAAADW1lZGlhL2VuY29kZXITAAAACXVwbG9hZC00MhQAAAAQERERERERQRGBERERERERERUAAAAQIiIiIiIiQiKCIiIiIiIiIhYAAAAIAAAAAAAAAAcXAAAAEDMzMzMzM0MzgzMzMzMzMzOOr8IrJpKFa-Z2wL_Wo0ncXPTXp4nF72UxJoQkksjvOA\",\"type\":\"resumeAttach\",\"version\":1}",
+      "direction": "client",
+      "name": "resume-attach",
+      "type": "resumeAttach"
+    },
+    {
+      "canonical": "{\"channel\":1,\"sequence\":\"0\",\"type\":\"inputStreamItem\",\"value\":{\"event\":\"ready\"},\"version\":1}",
+      "direction": "client",
+      "name": "input-stream-item",
+      "type": "inputStreamItem"
+    },
+    {
+      "canonical": "{\"channel\":1,\"sequence\":\"1\",\"type\":\"inputStreamEnd\",\"version\":1}",
+      "direction": "client",
+      "name": "input-stream-end",
+      "type": "inputStreamEnd"
+    },
+    {
+      "canonical": "{\"channel\":2,\"reason\":\"consumer-drop\",\"type\":\"streamCancel\",\"version\":1}",
+      "direction": "client",
+      "name": "client-stream-cancel",
+      "type": "streamCancel"
+    },
+    {
+      "canonical": "{\"attemptId\":\"ca7e5a82-2064-4c18-8359-806145c1562f\",\"idempotencyKey\":\"upload-42\",\"mappings\":[{\"channel\":1,\"direction\":\"input\",\"inputHighWater\":{\"sequence\":\"0\",\"terminal\":false},\"provisionalRef\":\"0dff1c71-f12f-4bb1-996c-23d693bdc825\",\"streamToken\":\"gai1_AQINdGVzdC1rZXktMjAyNgEAAAAPdGVzdC1kZXBsb3ltZW50AgAAABZnb2xlbS1hZ2VudC1pbnZvY2F0aW9uAwAAAAthY2NvdW50LTEyMwQAAAAQdXNlcjphY2NvdW50LTEyMwUAAAAIAAAAAGqQz4AgAAAAEBEREREREUERgREREREREREhAAAAEGZmZmZmZkZmhmZmZmZmZmYiAAAAD2V4dGVybmFsLWNsaWVudCMAAAAQMzMzMzMzQzODMzMzMzMzMyQAAAAIAAAAAAAAAColAAAAIMDBwsPExcbHyMnKy8zNzs_Q0dLT1NXW19jZ2tvc3d7fJgAAAAEBJwAAABB3d3d3d3dHd4d3d3d3d3d3pdh6Ghfk28mH7ytVjumpJUjR_ZI-c1XYwNsiGelsgdA\"}],\"sessionToken\":\"gai1_AQENdGVzdC1rZXktMjAyNgEAAAAPdGVzdC1kZXBsb3ltZW50AgAAABZnb2xlbS1hZ2VudC1pbnZvY2F0aW9uAwAAAAthY2NvdW50LTEyMwQAAAAQdXNlcjphY2NvdW50LTEyMwUAAAAIAAAAAGqQz4AQAAAABGRlbW8RAAAAB2RlZmF1bHQSAAAADW1lZGlhL2VuY29kZXITAAAACXVwbG9hZC00MhQAAAAQERERERERQRGBERERERERERUAAAAQIiIiIiIiQiKCIiIiIiIiIhYAAAAIAAAAAAAAAAcXAAAAEDMzMzMzM0MzgzMzMzMzMzOOr8IrJpKFa-Z2wL_Wo0ncXPTXp4nF72UxJoQkksjvOA\",\"type\":\"invocationAccepted\",\"version\":1}",
+      "direction": "server",
+      "name": "invocation-accepted",
+      "type": "invocationAccepted"
+    },
+    {
+      "canonical": "{\"attemptId\":\"ca7e5a82-2064-4c18-8359-806145c1562f\",\"code\":\"validation-error\",\"message\":\"method parameters do not match the selected method\",\"retryable\":false,\"type\":\"invocationRejected\",\"version\":1}",
+      "direction": "server",
+      "name": "invocation-rejected",
+      "type": "invocationRejected"
+    },
+    {
+      "canonical": "{\"code\":\"malformed-message\",\"message\":\"invalid first message\",\"retryable\":false,\"type\":\"invocationRejected\",\"version\":1}",
+      "direction": "server",
+      "name": "invocation-rejected-without-attempt",
+      "type": "invocationRejected"
+    },
+    {
+      "canonical": "{\"mappings\":[{\"channel\":2,\"direction\":\"output\",\"streamToken\":\"gai1_AQINdGVzdC1rZXktMjAyNgEAAAAPdGVzdC1kZXBsb3ltZW50AgAAABZnb2xlbS1hZ2VudC1pbnZvY2F0aW9uAwAAAAthY2NvdW50LTEyMwQAAAAQdXNlcjphY2NvdW50LTEyMwUAAAAIAAAAAGqQz4AgAAAAEBEREREREUERgREREREREREhAAAAEEREREREREREhEREREREREQiAAAADW1lZGlhL2VuY29kZXIjAAAAEDMzMzMzM0MzgzMzMzMzMzMkAAAACAAAAAAAAAAqJQAAACCgoaKjpKWmp6ipqqusra6vsLGys7S1tre4ubq7vL2-vyYAAAABAicAAAAQVVVVVVVVRVWFVVVVVVVVVTZdibUL3La5UMpvnhbF5tDUvjLrbRqWXjg8DA0t6PMl\"}],\"result\":{\"kind\":\"value\",\"value\":{\"stream\":{\"$stream\":{\"streamToken\":\"gai1_AQINdGVzdC1rZXktMjAyNgEAAAAPdGVzdC1kZXBsb3ltZW50AgAAABZnb2xlbS1hZ2VudC1pbnZvY2F0aW9uAwAAAAthY2NvdW50LTEyMwQAAAAQdXNlcjphY2NvdW50LTEyMwUAAAAIAAAAAGqQz4AgAAAAEBEREREREUERgREREREREREhAAAAEEREREREREREhEREREREREQiAAAADW1lZGlhL2VuY29kZXIjAAAAEDMzMzMzM0MzgzMzMzMzMzMkAAAACAAAAAAAAAAqJQAAACCgoaKjpKWmp6ipqqusra6vsLGys7S1tre4ubq7vL2-vyYAAAABAicAAAAQVVVVVVVVRVWFVVVVVVVVVTZdibUL3La5UMpvnhbF5tDUvjLrbRqWXjg8DA0t6PMl\"}}}},\"type\":\"invocationResult\",\"version\":1}",
+      "direction": "server",
+      "name": "invocation-result-value",
+      "type": "invocationResult"
+    },
+    {
+      "canonical": "{\"mappings\":[],\"result\":{\"kind\":\"none\"},\"type\":\"invocationResult\",\"version\":1}",
+      "direction": "server",
+      "name": "invocation-result-none",
+      "type": "invocationResult"
+    },
+    {
+      "canonical": "{\"channel\":2,\"cursorToken\":\"gai1_AQMNdGVzdC1rZXktMjAyNgEAAAAPdGVzdC1kZXBsb3ltZW50AgAAABZnb2xlbS1hZ2VudC1pbnZvY2F0aW9uAwAAAAthY2NvdW50LTEyMwQAAAAQdXNlcjphY2NvdW50LTEyMwUAAAAIAAAAAGqQz4AwAAAAEBEREREREUERgRERERERERExAAAAEEREREREREREhEREREREREQyAAAAGAABAgMEBQYHCAkKCwwNDg8QERITFBUWF_NpiiqMxokYRrY9zgziLTeXDIVSWuOBWTCzRl8FmyvD\",\"mappings\":[],\"sequence\":\"0\",\"type\":\"outputStreamItem\",\"value\":{\"event\":\"ready\"},\"version\":1}",
+      "direction": "server",
+      "name": "output-stream-item",
+      "type": "outputStreamItem"
+    },
+    {
+      "canonical": "{\"channel\":2,\"cursorToken\":\"gai1_AQMNdGVzdC1rZXktMjAyNgEAAAAPdGVzdC1kZXBsb3ltZW50AgAAABZnb2xlbS1hZ2VudC1pbnZvY2F0aW9uAwAAAAthY2NvdW50LTEyMwQAAAAQdXNlcjphY2NvdW50LTEyMwUAAAAIAAAAAGqQz4AwAAAAEBEREREREUERgRERERERERExAAAAEEREREREREREhEREREREREQyAAAAGAABAgMEBQYHCAkKCwwNDg8QERITFBUWF_NpiiqMxokYRrY9zgziLTeXDIVSWuOBWTCzRl8FmyvD\",\"outcome\":{\"kind\":\"ok\"},\"sequence\":\"1\",\"type\":\"outputStreamEnd\",\"version\":1}",
+      "direction": "server",
+      "name": "output-stream-end-ok",
+      "type": "outputStreamEnd"
+    },
+    {
+      "canonical": "{\"channel\":2,\"cursorToken\":\"gai1_AQMNdGVzdC1rZXktMjAyNgEAAAAPdGVzdC1kZXBsb3ltZW50AgAAABZnb2xlbS1hZ2VudC1pbnZvY2F0aW9uAwAAAAthY2NvdW50LTEyMwQAAAAQdXNlcjphY2NvdW50LTEyMwUAAAAIAAAAAGqQz4AwAAAAEBEREREREUERgRERERERERExAAAAEEREREREREREhEREREREREQyAAAAGAABAgMEBQYHCAkKCwwNDg8QERITFBUWF_NpiiqMxokYRrY9zgziLTeXDIVSWuOBWTCzRl8FmyvD\",\"outcome\":{\"code\":\"producer-error\",\"kind\":\"error\",\"message\":\"producer failed\"},\"sequence\":\"1\",\"type\":\"outputStreamEnd\",\"version\":1}",
+      "direction": "server",
+      "name": "output-stream-end-error",
+      "type": "outputStreamEnd"
+    },
+    {
+      "canonical": "{\"channel\":2,\"outcome\":{\"kind\":\"cancelled\",\"reason\":\"consumer-drop\"},\"sequence\":\"0\",\"type\":\"outputStreamEnd\",\"version\":1}",
+      "direction": "server",
+      "name": "output-stream-end-cancelled",
+      "type": "outputStreamEnd"
+    },
+    {
+      "canonical": "{\"channel\":1,\"highestContiguousSequence\":\"1\",\"mappings\":[],\"terminal\":false,\"type\":\"inputStreamAck\",\"version\":1}",
+      "direction": "server",
+      "name": "input-stream-ack",
+      "type": "inputStreamAck"
+    },
+    {
+      "canonical": "{\"channel\":1,\"reason\":\"source-unavailable\",\"type\":\"streamCancel\",\"version\":1}",
+      "direction": "server",
+      "name": "server-stream-cancel",
+      "type": "streamCancel"
+    },
+    {
+      "canonical": "{\"reason\":\"replaced\",\"type\":\"attachmentRevoked\",\"version\":1}",
+      "direction": "server",
+      "name": "attachment-revoked",
+      "type": "attachmentRevoked"
+    },
+    {
+      "canonical": "{\"outcome\":{\"kind\":\"success\"},\"type\":\"invocationFinished\",\"version\":1}",
+      "direction": "server",
+      "name": "invocation-finished-success",
+      "type": "invocationFinished"
+    },
+    {
+      "canonical": "{\"outcome\":{\"code\":\"invocation-failed\",\"kind\":\"failure\",\"message\":\"invocation failed\"},\"type\":\"invocationFinished\",\"version\":1}",
+      "direction": "server",
+      "name": "invocation-finished-failure",
+      "type": "invocationFinished"
+    }
+  ]
+}

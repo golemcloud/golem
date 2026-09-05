@@ -16,7 +16,7 @@
 use crate::config::HealthCheckMode::K8s;
 use golem_common::SafeDisplay;
 use golem_common::config::{
-    ConfigExample, ConfigLoader, DbConfig, DbSqliteConfig, HasConfigExamples,
+    ConfigExample, ConfigLoader, DbPostgresConfig, DbSqliteConfig, HasConfigExamples,
 };
 use golem_common::model::{Empty, RetryConfig};
 use golem_common::tracing::TracingConfig;
@@ -31,7 +31,7 @@ use std::time::Duration;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShardManagerConfig {
     pub tracing: TracingConfig,
-    pub db: DbConfig,
+    pub persistence: PersistenceConfig,
     pub worker_executors: WorkerExecutorServiceConfig,
     pub health_check: HealthCheckConfig,
     pub http_port: u16,
@@ -52,8 +52,12 @@ impl SafeDisplay for ShardManagerConfig {
         let mut result = String::new();
         let _ = writeln!(&mut result, "tracing:");
         let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
-        let _ = writeln!(&mut result, "db:");
-        let _ = writeln!(&mut result, "{}", self.db.to_safe_string_indented());
+        let _ = writeln!(&mut result, "persistence:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.persistence.to_safe_string_indented()
+        );
         let _ = writeln!(&mut result, "worker executors:");
         let _ = writeln!(
             &mut result,
@@ -109,10 +113,7 @@ impl Default for ShardManagerConfig {
     fn default() -> Self {
         Self {
             tracing: TracingConfig::local_dev("shard-manager"),
-            db: DbConfig::Sqlite(DbSqliteConfig {
-                database: "golem_shard_manager.db".to_string(),
-                ..Default::default()
-            }),
+            persistence: PersistenceConfig::default(),
             worker_executors: WorkerExecutorServiceConfig::default(),
             health_check: HealthCheckConfig::default(),
             http_port: 8081,
@@ -130,27 +131,130 @@ impl Default for ShardManagerConfig {
 
 impl HasConfigExamples<ShardManagerConfig> for ShardManagerConfig {
     fn examples() -> Vec<ConfigExample<ShardManagerConfig>> {
+        let etcd_example: ConfigExample<ShardManagerConfig> = (
+            "with etcd persistence (distributed mode)",
+            Self {
+                persistence: PersistenceConfig::Etcd(EtcdConfig::default()),
+                ..Self::default()
+            },
+        );
+
         #[cfg(feature = "kubernetes")]
         {
-            vec![(
-                "with k8s healthcheck",
-                Self {
-                    health_check: HealthCheckConfig {
-                        delay: Duration::from_secs(1),
-                        mode: K8s(HealthCheckK8sConfig {
-                            namespace: "namespace".to_string(),
-                        }),
-                        silent: false,
+            vec![
+                (
+                    "with k8s healthcheck",
+                    Self {
+                        health_check: HealthCheckConfig {
+                            delay: Duration::from_secs(1),
+                            mode: K8s(HealthCheckK8sConfig {
+                                namespace: "namespace".to_string(),
+                            }),
+                            silent: false,
+                        },
+                        ..Self::default()
                     },
-                    ..Self::default()
-                },
-            )]
+                ),
+                etcd_example,
+            ]
         }
 
         #[cfg(not(feature = "kubernetes"))]
         {
-            Vec::new()
+            vec![etcd_example]
         }
+    }
+}
+
+/// Where the shard manager persists its state, which also selects the deployment mode.
+///
+/// * `Postgres` / `Sqlite` - **local mode**: a single shard manager instance, with the shard
+///   lease state and the quota state in one SQL database.
+/// * `Etcd` - **distributed mode**: the shard lease state lives in etcd behind a
+///   compare-and-swap on the key's `mod_revision`. Quota state is not durable in this mode.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum PersistenceConfig {
+    Postgres(DbPostgresConfig),
+    Sqlite(DbSqliteConfig),
+    Etcd(EtcdConfig),
+}
+
+impl Default for PersistenceConfig {
+    fn default() -> Self {
+        Self::Sqlite(DbSqliteConfig {
+            database: "golem_shard_manager.db".to_string(),
+            ..Default::default()
+        })
+    }
+}
+
+impl SafeDisplay for PersistenceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            PersistenceConfig::Postgres(postgres) => {
+                let _ = writeln!(&mut result, "postgres:");
+                let _ = writeln!(&mut result, "{}", postgres.to_safe_string_indented());
+            }
+            PersistenceConfig::Sqlite(sqlite) => {
+                let _ = writeln!(&mut result, "sqlite:");
+                let _ = writeln!(&mut result, "{}", sqlite.to_safe_string_indented());
+            }
+            PersistenceConfig::Etcd(etcd) => {
+                let _ = writeln!(&mut result, "etcd:");
+                let _ = writeln!(&mut result, "{}", etcd.to_safe_string_indented());
+            }
+        }
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EtcdConfig {
+    /// Client URLs of the etcd cluster.
+    ///
+    /// TLS is not configurable, so only `http://` endpoints are accepted; the shard manager
+    /// refuses to start otherwise.
+    ///
+    /// An environment override must be bracketed, otherwise it is read as a single string and
+    /// fails to deserialize:
+    /// `GOLEM__PERSISTENCE__CONFIG__ENDPOINTS=["http://a:2379","http://b:2379"]`
+    pub endpoints: Vec<String>,
+    /// Defaulted, so that selecting etcd by environment variable does not also require setting
+    /// every timeout: figment merges `GOLEM__PERSISTENCE__CONFIG__*` over the *default* variant's
+    /// map, which is SQLite's, so these two would otherwise be missing rather than inherited.
+    #[serde(with = "humantime_serde", default = "default_etcd_connect_timeout")]
+    pub connect_timeout: Duration,
+    #[serde(with = "humantime_serde", default = "default_etcd_request_timeout")]
+    pub request_timeout: Duration,
+}
+
+fn default_etcd_connect_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
+fn default_etcd_request_timeout() -> Duration {
+    Duration::from_secs(5)
+}
+
+impl Default for EtcdConfig {
+    fn default() -> Self {
+        Self {
+            endpoints: vec!["http://localhost:2379".to_string()],
+            connect_timeout: default_etcd_connect_timeout(),
+            request_timeout: default_etcd_request_timeout(),
+        }
+    }
+}
+
+impl SafeDisplay for EtcdConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "endpoints: {}", self.endpoints.join(", "));
+        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
+        let _ = writeln!(&mut result, "request timeout: {:?}", self.request_timeout);
+        result
     }
 }
 
@@ -384,14 +488,75 @@ pub fn make_config_loader() -> ConfigLoader<ShardManagerConfig> {
     ConfigLoader::new_with_examples(Path::new("config/shard-manager.toml"))
 }
 
+/// Environment variables that configured the shard manager's database before `db` became
+/// [`PersistenceConfig`].
+const LEGACY_DB_ENV_VAR_PREFIX: &str = "GOLEM__DB__";
+
+fn legacy_db_env_vars<I: IntoIterator<Item = String>>(names: I) -> Vec<String> {
+    let mut found: Vec<String> = names
+        .into_iter()
+        .filter(|name| name.starts_with(LEGACY_DB_ENV_VAR_PREFIX))
+        .collect();
+    found.sort();
+    found
+}
+
+/// Fails if the environment still configures the shard manager through the removed `db` key.
+///
+/// figment layers the environment over the defaults and serde then discards unknown keys, so
+/// without this a deployment that was not updated starts *successfully* on the default SQLite
+/// database, with an empty routing table and a quota ledger that resets on every restart.
+pub fn reject_legacy_db_env_vars() -> Result<(), String> {
+    let found = legacy_db_env_vars(std::env::vars().map(|(name, _)| name));
+    if found.is_empty() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "The shard manager's `db` configuration was replaced by `persistence`, which also selects \
+         which backend holds the shard lease state. The following environment variables are no \
+         longer read, and ignoring them would start the shard manager on the default SQLite \
+         database with an empty routing table:\n  {}\nRename them to `GOLEM__PERSISTENCE__*` (for \
+         example `GOLEM__DB__TYPE` becomes `GOLEM__PERSISTENCE__TYPE`).",
+        found.join("\n  ")
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use test_r::test;
 
-    use crate::config::make_config_loader;
+    use crate::config::{legacy_db_env_vars, make_config_loader};
 
     #[test]
     pub fn config_is_loadable() {
         let _ = make_config_loader().load().expect("Failed to load config");
+    }
+
+    #[test]
+    pub fn legacy_db_env_vars_are_detected() {
+        let found = legacy_db_env_vars(
+            [
+                "GOLEM__DB__CONFIG__HOST",
+                "GOLEM__PERSISTENCE__CONFIG__HOST",
+                "GOLEM__DB__TYPE",
+                "GOLEM__HTTP_PORT",
+                "PATH",
+                "SOMETHING__GOLEM__DB__TYPE",
+                "GOLEM__DBX__TYPE",
+            ]
+            .map(str::to_string),
+        );
+
+        assert_eq!(found, vec!["GOLEM__DB__CONFIG__HOST", "GOLEM__DB__TYPE"]);
+    }
+
+    #[test]
+    pub fn an_environment_without_the_legacy_key_is_accepted() {
+        let found = legacy_db_env_vars(
+            ["GOLEM__PERSISTENCE__TYPE", "GOLEM__HTTP_PORT"].map(str::to_string),
+        );
+
+        assert!(found.is_empty(), "unexpected legacy variables: {found:?}");
     }
 }

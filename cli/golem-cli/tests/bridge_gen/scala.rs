@@ -28,6 +28,7 @@ use golem_cli::bridge_gen::type_naming::{TypeName, TypeNaming};
 use golem_cli::bridge_gen::{
     BridgeGenerator, BridgeMode, bridge_client_directory_name, tool_bridge_client_directory_name,
 };
+use golem_cli::sdk_overrides::workspace_root;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef};
 use golem_common::schema::tool::{
@@ -83,6 +84,28 @@ fn compile(package_dir: &Utf8Path) {
     assert!(
         output.status.success(),
         "sbt compile failed in {package_dir}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn run_sbt_test(package_dir: &Utf8Path, source: &str) {
+    let test_dir = package_dir.join("src/test/scala/golem/bridge/runtime");
+    std::fs::create_dir_all(&test_dir).unwrap();
+    std::fs::write(test_dir.join("StreamRuntimeTest.scala"), source).unwrap();
+    let build_path = package_dir.join("build.sbt");
+    let mut build = std::fs::read_to_string(&build_path).unwrap();
+    build.push_str("\nlibraryDependencies += \"org.scalameta\" %% \"munit\" % \"1.0.2\" % Test\n");
+    std::fs::write(build_path, build).unwrap();
+    let output = std::process::Command::new("sbt")
+        .arg("--batch")
+        .arg("test")
+        .current_dir(package_dir)
+        .output()
+        .expect("failed to run sbt");
+    assert!(
+        output.status.success(),
+        "sbt test failed in {package_dir}\n--- stdout ---\n{}\n--- stderr ---\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -296,6 +319,320 @@ fn single_agent_compiles(#[tagged_as("scala_single_agent")] pkg: &GeneratedPacka
     compile(pkg.package_dir().as_path());
 }
 
+/// Recursive stream leaves retain their structural position and compile to
+/// nested `AgentStream` values in both inputs and outputs.
+#[test]
+fn recursive_stream_agent_compiles() {
+    let tree = SchemaType::record(vec![named_field(
+        "children",
+        SchemaType::list(SchemaType::option(ref_to("tree"))),
+    )]);
+    let streamed_tree = SchemaType::stream(Some(ref_to("tree")));
+    let pkg = GeneratedPackage::new(agent(
+        "RecursiveStreamAgent",
+        "scala",
+        vec![],
+        vec![method(
+            "transform",
+            vec![field(
+                "input",
+                SchemaType::record(vec![named_field("nested", streamed_tree.clone())]),
+            )],
+            Some(SchemaType::tuple(vec![
+                SchemaType::string(),
+                SchemaType::list(streamed_tree),
+            ])),
+        )],
+        vec![def("tree", tree)],
+        AgentMode::Durable,
+    ));
+    compile(pkg.package_dir().as_path());
+}
+
+#[test]
+fn referenced_u8_stream_uses_binary_lane_through_ref_chain() {
+    let pkg = GeneratedPackage::new(agent(
+        "ReferencedByteStreamAgent",
+        "scala",
+        vec![],
+        vec![method(
+            "copy",
+            vec![field(
+                "input",
+                SchemaType::stream(Some(ref_to("ByteAlias"))),
+            )],
+            Some(SchemaType::stream(Some(ref_to("ByteAlias")))),
+        )],
+        vec![
+            def("ByteAlias", ref_to("Byte")),
+            def("Byte", SchemaType::u8()),
+        ],
+        AgentMode::Durable,
+    ));
+    compile(pkg.package_dir().as_path());
+    let client = std::fs::read_to_string(
+        pkg.package_dir().join(
+            "src/main/scala/golem/bridge/client/referenced_byte_stream_agent/ReferencedByteStreamAgentClient.scala",
+        ),
+    )
+    .unwrap();
+    assert!(
+        client.contains("StreamSession.input")
+            && client.contains("StreamSession.output")
+            && client.matches(", \"u8\",").count() >= 2,
+        "stream<ref ByteAlias -> ref Byte -> u8> must use the direct packed-u8 lane:\n{client}"
+    );
+}
+
+/// Executes the generated runtime's package-private state machines. This is a
+/// behavioral test: it proves ACK gating/replay, strict envelope checks,
+/// delivery-based queue release, and affine cancellation rather than merely
+/// compiling the runtime.
+#[test]
+fn stream_runtime_state_semantics_execute() {
+    let pkg = GeneratedPackage::new(agent(
+        "StreamRuntimeAgent",
+        "scala",
+        vec![],
+        vec![method(
+            "copy",
+            vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+            Some(SchemaType::stream(Some(SchemaType::u8()))),
+        )],
+        vec![],
+        AgentMode::Durable,
+    ));
+    std::fs::copy(
+        workspace_root()
+            .unwrap()
+            .join("golem-client/tests/fixtures/stream-session-v1/binary-messages.json"),
+        pkg.package_dir().join("binary-messages.json"),
+    )
+    .unwrap();
+    for fixture in ["json-messages.json", "malformed.json"] {
+        std::fs::copy(
+            workspace_root()
+                .unwrap()
+                .join("golem-client/tests/fixtures/stream-session-v1")
+                .join(fixture),
+            pkg.package_dir().join(fixture),
+        )
+        .unwrap();
+    }
+    run_sbt_test(
+        pkg.package_dir().as_path(),
+        r#"package golem.bridge.runtime
+
+import scala.concurrent.{Await, Future}
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.duration.*
+import golem.bridge.runtime.AgentStreamStep.*
+import golem.bridge.runtime.StreamSessionState.*
+import golem.bridge.runtime.json.Json
+
+class StreamRuntimeTest extends munit.FunSuite {
+  test("text codec directly consumes frozen canonical and malformed fixtures") {
+    val messages = Json.parse(java.nio.file.Files.readString(java.nio.file.Path.of("json-messages.json"))).toOption.get
+    Json.asArray(Json.requireField(messages, "vectors").toOption.get).toOption.get.foreach { vector =>
+      val canonical = Json.asString(Json.requireField(vector, "canonical").toOption.get).toOption.get
+      assertEquals(Json.parse(canonical).toOption.get.render, canonical)
+    }
+    val malformed = Json.parse(java.nio.file.Files.readString(java.nio.file.Path.of("malformed.json"))).toOption.get
+    val invalid = Json.asArray(Json.requireField(malformed, "vectors").toOption.get).toOption.get.find { vector =>
+      Json.field(vector, "name").flatMap(Json.asString(_).toOption).contains("invalid-json")
+    }.get
+    assert(Json.parse(Json.asString(Json.requireField(invalid, "input").toOption.get).toOption.get).isLeft)
+  }
+
+  test("binary codec matches every frozen public v1 frame") {
+    val fixture = Json.parse(java.nio.file.Files.readString(java.nio.file.Path.of("binary-messages.json"))).toOption.get
+    val vectors = Json.asArray(Json.requireField(fixture, "vectors").toOption.get).toOption.get
+    vectors.foreach { vector =>
+      val name = Json.asString(Json.requireField(vector, "name").toOption.get).toOption.get
+      val metadataText = Json.asString(Json.requireField(vector, "metadata").toOption.get).toOption.get
+      val payloadHex = Json.asString(Json.requireField(vector, "payloadHex").toOption.get).toOption.get
+      val golden = java.util.Base64.getDecoder.decode(Json.asString(Json.requireField(vector, "frameBase64").toOption.get).toOption.get).toVector
+      val payload = payloadHex.grouped(2).map(Integer.parseInt(_, 16).toByte).toVector
+      val actual = StreamSessionProtocol.encodeBinaryEnvelope(Json.parse(metadataText).toOption.get, payload)
+      assertEquals(actual, golden, name)
+    }
+  }
+
+  test("input is ACK gated and pending data is replayed on a fresh channel") {
+    val sent = collection.mutable.ArrayBuffer.empty[Long]
+    val replayedCounts = collection.mutable.ArrayBuffer.empty[BigInt]
+    val state = InputState()
+    state.remap(1, 0, false)
+    def batch(first: BigInt, count: BigInt): PendingInput = PendingData(
+      first,
+      count,
+      count.toInt,
+      ch => { sent += ch; replayedCounts += count; Future.successful(()) },
+      Some(high => batch(high, first + count - high))
+    )
+    val pending = batch(0, 3)
+    val (reserved, channel) = state.reserve(pending)
+    reserved.send(channel)
+    assertEquals(sent.toList, List(1L))
+    intercept[BridgeException](state.reserve(PendingData(3, 1, 1, _ => Future.successful(()))))
+    state.remap(9, 1, false).foreach { case (p, ch) => p.send(ch) }
+    assertEquals(sent.toList, List(1L, 9L))
+    assertEquals(replayedCounts.toList, List(BigInt(3), BigInt(2)))
+    assert(state.acknowledge(3, false))
+    intercept[BridgeException](state.acknowledge(4, false))
+    state.detach()
+    val (detached, noChannel) = state.reserve(batch(3, 1))
+    assertEquals(noChannel, 0L)
+    state.remap(11, 3, false).foreach { case (p, ch) => p.send(ch) }
+    assertEquals(sent.last, 11L)
+    assertEquals(replayedCounts.last, BigInt(1))
+  }
+
+  test("packed u8 metadata is strict and overflow safe") {
+    val metadata = StreamSessionProtocol.inputBinaryMetadata("input-u8", 7, 4, 3, None)
+    assertEquals(StreamSessionProtocol.u64(metadata, "itemCount"), BigInt(3))
+    intercept[BridgeException](StreamSessionProtocol.inputBinaryMetadata("input-u8", 7, StreamSessionProtocol.MaxU64, 2, None))
+    intercept[BridgeException](StreamSessionProtocol.inputBinaryMetadata("input-u8", 7, 0, 1, Some("text/plain")))
+    val malformed = Json.parse("{\"version\":1,\"type\":\"streamCancel\",\"channel\":1,\"reason\":\"cancelled\",\"extra\":1}").toOption.get
+    intercept[BridgeException](StreamSessionProtocol.validate(malformed, "streamCancel", Set("channel", "reason")))
+  }
+
+  test("public codec uses structural, s64, and binary protocol shapes") {
+    val graph = """{"root":{"kind":"record","value":{"fields":[{"name":"count","body":{"kind":"s64","value":{}}},{"name":"data","body":{"kind":"binary","value":{"restrictions":{"minBytes":2,"mimeTypes":["application/octet-stream"]}}}}]}}}"""
+    val codec = PublicValueCodec.fromSchemaGraphJson(graph)
+    val value = SchemaValue.RecordValue(List(
+      SchemaValue.S64Value(Long.MinValue),
+      SchemaValue.BinaryValue(Vector[Byte](0, -1), Some("application/octet-stream"))
+    ))
+    val encoded = codec.encode(value)
+    assertEquals(encoded.render, """{"count":"-9223372036854775808","data":{"bytes":"AP8=","mimeType":"application/octet-stream"}}""")
+    assertEquals(codec.decode(encoded), value)
+    intercept[BridgeException](codec.decode(Json.parse("""{"count":"1","data":{"bytes":"AA==","mimeType":"application/octet-stream"}}""").toOption.get))
+  }
+
+  test("public codec enforces quantity bounds restrictions unions and integer boundaries") {
+    val quantity = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"quantity","value":{"spec":{"baseUnit":"m","allowedSuffixes":["cm"],"min":{"mantissa":1,"scale":0,"unit":"m"},"max":{"mantissa":200,"scale":0,"unit":"m"}}}}}""")
+    val q = SchemaValue.QuantityValue(150, 0, "cm")
+    assertEquals(quantity.decode(quantity.encode(q)), q)
+    intercept[BridgeException](quantity.decode(Json.parse("""{"mantissa":"201","scale":0,"unit":"cm"}""").toOption.get))
+    intercept[BridgeException](quantity.decode(Json.parse("""{"mantissa":"1","scale":0,"unit":"km"}""").toOption.get))
+
+    val overflowing = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"quantity","value":{"spec":{"baseUnit":"m","allowedSuffixes":[],"min":{"mantissa":1,"scale":-2147483648,"unit":"m"}}}}}""")
+    intercept[BridgeException](overflowing.decode(Json.parse("""{"mantissa":"1","scale":2147483647,"unit":"m"}""").toOption.get))
+
+    val bounded = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"u32","value":{"restrictions":{"min":{"kind":"unsigned","value":10},"max":{"kind":"unsigned","value":20}}}}}""")
+    assertEquals(bounded.decode(Json.parse("15").toOption.get), SchemaValue.U32Value(15))
+    intercept[BridgeException](bounded.decode(Json.parse("9").toOption.get))
+
+    val union = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"union","value":{"spec":{"branches":[{"tag":"command","body":{"kind":"string","value":{}},"discriminator":{"rule":"prefix","value":{"prefix":"cmd:"}}}]}}}}""")
+    val unionValue = SchemaValue.UnionValue("command", SchemaValue.StringValue("cmd:run"))
+    assertEquals(union.decode(union.encode(unionValue)), unionValue)
+    intercept[BridgeException](union.decode(Json.parse("""{"$union":"command","value":"run"}""").toOption.get))
+
+    val u64 = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"u64","value":{}}}""")
+    assertEquals(u64.decode(Json.parse("\"18446744073709551615\"").toOption.get), SchemaValue.U64Value(-1L))
+    val url = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"url","value":{"restrictions":{"allowedSchemes":["mailto"]}}}}""")
+    assertEquals(url.decode(Json.parse("\"mailto:user@example.com\"").toOption.get), SchemaValue.UrlValue("mailto:user@example.com"))
+  }
+
+  test("channels preserve the complete public u32 range") {
+    val mapping = Json.parse("""{"channel":4294967295,"direction":"output","streamToken":"token"}""").toOption.get
+    StreamSessionProtocol.validateMapping(mapping)
+    assertEquals(StreamSessionProtocol.channel(mapping), 4294967295L)
+  }
+
+  test("queue charges release on delivery and cancellation") {
+    var charged = 8
+    val queue = OutputQueue[Int](n => charged -= n)
+    queue.offer(Delivery(3, Right(() => Item(1))))
+    assertEquals(Await.result(queue.pull(), 1.second), Item(1))
+    assertEquals(charged, 5)
+    queue.offer(Delivery(5, Right(() => Item(2))))
+    Await.result(queue.drop(), 1.second)
+    assertEquals(charged, 0)
+  }
+
+  test("stream consumption and cancellation are affine") {
+    var cancelled = 0
+    val stream = AgentStream.fromPull[Int](() => Future.successful(End), () => { cancelled += 1; Future.successful(()) })
+    val consumer = Await.result(stream.consume(), 1.second)
+    intercept[Throwable](Await.result(stream.consume(), 1.second))
+    Await.result(consumer.cancel(), 1.second)
+    Await.result(consumer.cancel(), 1.second)
+    assertEquals(cancelled, 1)
+  }
+}
+"#,
+    );
+}
+
+// PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
+#[test]
+fn provisional_invocation_input_acquires_scala_stream_ownership_immediately() {
+    let pkg = GeneratedPackage::new(agent(
+        "AffineInputAgent",
+        "scala",
+        vec![],
+        vec![method(
+            "consume",
+            vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+            None,
+        )],
+        vec![],
+        AgentMode::Durable,
+    ));
+    run_sbt_test(
+        pkg.package_dir().as_path(),
+        r#"package golem.bridge.runtime
+
+import scala.concurrent.{Await, Future}
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.duration.*
+import golem.bridge.runtime.AgentStreamStep.End
+
+class StreamRuntimeTest extends munit.FunSuite {
+  test("input ownership moves into an invocation during registration") {
+    val stream = AgentStream.fromPull[Int](() => Future.successful(End))
+    val codec = PublicValueCodec.fromSchemaGraphJson(
+      """{"root":{"kind":"tuple","value":{"elements":[]}}}"""
+    )
+    val resolved = ResolvedAgent(
+      Configuration(GolemServer.Custom("ftp://invalid", "token"), "app", "env", global),
+      "AffineInputAgent",
+      SchemaValue.TupleValue(List.empty),
+      None,
+      List.empty,
+      None,
+    )
+    val invocation = StreamSession.invoke(
+      resolved,
+      "consume",
+      () => {
+        StreamSession.input[Int](
+          stream,
+          value => SchemaValue.U8Value(value),
+          "u8",
+          PublicValueCodec.fromSchemaGraphJson(
+            """{"root":{"kind":"u8","value":{}}}"""
+          ),
+        )
+        SchemaValue.TupleValue(List.empty)
+      },
+      codec,
+      codec,
+      None,
+      List.empty,
+    )
+
+    intercept[Throwable](Await.result(stream.consume(), 1.second))
+    Await.ready(invocation, 1.second)
+    assert(invocation.value.exists(_.isFailure))
+  }
+}
+"#,
+    );
+}
+
 /// The generated project lays out the static runtime and the per-agent client
 /// in the expected packages.
 #[test]
@@ -324,6 +661,10 @@ fn generated_project_layout_is_correct() {
         "GolemServer.scala",
         "BridgeException.scala",
         "AgentId.scala",
+        "AgentStream.scala",
+        "StreamSession.scala",
+        "StreamSessionProtocol.scala",
+        "StreamSessionState.scala",
         "json/Json.scala",
     ] {
         assert!(

@@ -3662,8 +3662,46 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         } else {
             debug!("Snapshot loaded successfully from oplog index {snapshot_index}");
             Self::emit_snapshot_recovery_event(store, snapshot_index, true, None);
+            if snapshot_source == Some(SnapshotSource::Automatic) {
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .state
+                    .replaying_automatic_snapshot_tail = true;
+            }
             SnapshotRecoveryResult::Success
         }
+    }
+
+    /// Abandons an automatic snapshot whose replayed tail diverged from the recorded oplog: the
+    /// worker is recreated with automatic snapshot recovery disabled so it replays the full oplog.
+    fn abandon_diverged_automatic_snapshot(
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        full_function_name: &str,
+        error: &AgentError,
+    ) -> RetryDecision {
+        let snapshot_index = store
+            .as_context()
+            .data()
+            .durable_ctx()
+            .state
+            .last_snapshot_index
+            .expect("an automatic snapshot tail is only replayed after loading a snapshot");
+        let error = format!(
+            "Replaying {full_function_name} after loading the snapshot diverged from the recorded oplog: {}; falling back to full replay",
+            error.message()
+        );
+        warn!("{error}");
+        Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
+        store
+            .as_context()
+            .data()
+            .get_public_state()
+            .worker()
+            .snapshot_recovery_disabled
+            .store(true, Ordering::Release);
+        RetryDecision::Immediate
     }
 
     fn emit_snapshot_recovery_event(
@@ -5390,10 +5428,23 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                 {
                                     break Err(err);
                                 }
+                                // An invocation that was interrupted by a crash reaches its end
+                                // here, in live mode, instead of in the invocation loop, so its
+                                // durable Stream Session must be finished here as well;
+                                // otherwise resumed session clients never observe completion.
+                                if store.as_context().data().durable_ctx().is_live()
+                                    && let Err(error) = worker
+                                        .complete_durable_streaming_session(&idempotency_key)
+                                        .await
+                                {
+                                    error!(%error, "Failed to complete durable streaming session");
+                                    break Err(error);
+                                }
                                 number_of_replayed_functions += 1;
                                 continue;
                             }
                             _ => {
+                                let details = format!("{invoke_result:?}");
                                 let trap_type = match invoke_result {
                                     Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
                                     Err(error) => {
@@ -5407,6 +5458,32 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     }
                                 };
                                 let decision = match trap_type {
+                                    // A recorded invocation that fails while its entries are still
+                                    // being replayed after an automatic snapshot load most likely
+                                    // diverged from the recorded execution because the guest state
+                                    // restored from the snapshot differs from the original one. The
+                                    // recorded oplog is authoritative, so instead of committing the
+                                    // failure the snapshot is abandoned and the worker replays from
+                                    // the beginning, which reproduces the recorded outcome.
+                                    Some(TrapType::Error { error, .. })
+                                        if store
+                                            .as_context()
+                                            .data()
+                                            .durable_ctx()
+                                            .state
+                                            .replaying_automatic_snapshot_tail
+                                            && !store
+                                                .as_context()
+                                                .data()
+                                                .durable_ctx()
+                                                .is_live() =>
+                                    {
+                                        Some(Self::abandon_diverged_automatic_snapshot(
+                                            store,
+                                            &full_function_name,
+                                            &error,
+                                        ))
+                                    }
                                     Some(trap_type) => {
                                         let decision = store
                                             .as_context_mut()
@@ -5415,6 +5492,17 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                             .await;
 
                                         if decision == RetryDecision::None {
+                                            // Like the invocation loop, permanently fail the
+                                            // durable Stream Session of an invocation that was
+                                            // interrupted by a crash and cannot be retried.
+                                            if store.as_context().data().durable_ctx().is_live() {
+                                                let _ = worker
+                                                    .fail_durable_streaming_session(
+                                                        &idempotency_key,
+                                                        details,
+                                                    )
+                                                    .await;
+                                            }
                                             // Cannot retry so we need to fail
                                             match trap_type {
                                                 TrapType::Interrupt(_interrupt_kind) => {
@@ -5465,6 +5553,15 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         };
 
         record_number_of_replayed_functions(number_of_replayed_functions);
+
+        if matches!(resume_result, Ok(None)) {
+            store
+                .as_context_mut()
+                .data_mut()
+                .durable_ctx_mut()
+                .state
+                .replaying_automatic_snapshot_tail = false;
+        }
 
         resume_result
     }
@@ -9174,6 +9271,12 @@ struct PrivateDurableWorkerState {
     current_phantom_id: Option<Uuid>,
     last_snapshot_index: Option<OplogIndex>,
     last_snapshot_source: Option<SnapshotSource>,
+    /// Set while the recorded invocations following a loaded automatic snapshot are being
+    /// replayed. The snapshot restores the agent's own state but not every implementation detail
+    /// of the guest (for example caches of an embedded database), so the replayed tail can issue a
+    /// host-call sequence different from the recorded one. Such a divergence is a snapshot recovery
+    /// failure: the snapshot is abandoned and the worker replays the full oplog instead.
+    replaying_automatic_snapshot_tail: bool,
 
     /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).
     /// Reset to 0 at the start of each exported function invocation.
@@ -9436,6 +9539,7 @@ impl PrivateDurableWorkerState {
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
             last_snapshot_source,
+            replaying_automatic_snapshot_tail: false,
             resource_limit_entry,
         })
     }

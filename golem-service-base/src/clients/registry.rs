@@ -80,6 +80,23 @@ pub trait RegistryInvalidationHandler: Send + Sync {
     async fn on_event(&self, event: RegistryInvalidationEvent);
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ResourceUsageMetering {
+    pub compute: bool,
+    pub memory: bool,
+    pub filesystem: bool,
+}
+
+impl ResourceUsageMetering {
+    pub const fn all_enabled() -> Self {
+        Self {
+            compute: true,
+            memory: true,
+            filesystem: true,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResourceUsageUpdate {
     pub fuel_delta: i64,
@@ -88,6 +105,7 @@ pub struct ResourceUsageUpdate {
     pub durable_storage_byte_seconds_delta: i64,
     pub ephemeral_storage_byte_seconds_delta: i64,
     pub memory_gb_seconds_delta: i64,
+    pub metering: ResourceUsageMetering,
 }
 
 #[async_trait]
@@ -589,6 +607,9 @@ impl RegistryService for GrpcRegistryService {
                 durable_storage_byte_seconds_delta: v.durable_storage_byte_seconds_delta,
                 ephemeral_storage_byte_seconds_delta: v.ephemeral_storage_byte_seconds_delta,
                 memory_gb_seconds_delta: v.memory_gb_seconds_delta,
+                compute_metering_enabled: v.metering.compute,
+                memory_metering_enabled: v.metering.memory,
+                filesystem_metering_enabled: v.metering.filesystem,
             })
             .collect();
 
