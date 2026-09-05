@@ -1,8 +1,3 @@
----
-name: golem-call-agent-reflectively-moonbit
-description: "Discovering and calling Golem agents through runtime reflection in MoonBit. Use when agent types or methods are selected dynamically, schemas must be inspected at runtime, caller-authored codecs are needed, or SchemaValue calls must avoid discovery."
----
-
 # Calling Agents with Runtime Reflection (MoonBit)
 
 Use generated clients when the complete target definition is available at
@@ -22,7 +17,8 @@ guard counter_type.find_method("add") is Some(add) else {
 }
 ```
 
-`AgentType` exposes its component ID, lifecycle mode, constructor `SchemaRef`,
+Agent type names are unique within an environment. `AgentType` exposes its
+implementing component ID, lifecycle mode, constructor `SchemaRef`,
 and method schemas. `SchemaRef::pack_json` converts canonical JSON into a
 schema-native value; `unpack_json` performs the awaited conversion back.
 
@@ -58,12 +54,15 @@ record fields must be packed in declaration order; the runtime authoritatively
 accepts or rejects the attempt.
 
 Both reflected and direct clients support awaited, trigger, and scheduled
-calls through `invoke_value`, `trigger_value`, and `schedule_value`.
+calls through `invoke_value`, `trigger_value`, and `schedule_value`. Awaited
+calls use the asynchronous host invocation path and can carry live streams.
+Reflected trigger and scheduled calls reject methods whose input or output
+schema contains a stream.
 
 ## Define a caller-codec typed contract
 
-`CallerCodecClient` is discovery-free. The caller's `IntoSchema` and
-`FromSchema` implementations are the schema authority:
+`CallerCodecClient` does not discover payload schemas. The caller's
+`IntoSchema` and `FromSchema` implementations are the schema authority:
 
 ```moonbit
 #derive.golem_schema
@@ -74,13 +73,29 @@ struct AddInput { by : UInt }
 struct AddOutput { value : UInt }
 
 let counter = @reflection.CallerCodecClient::create(
-  component_id,
   "CounterAgent",
   CounterId::{ name: "main" },
 )
 let result : @reflection.Invocation[AddOutput] = counter.invoke(
   "add",
   AddInput::{ by: 5U },
+)
+```
+
+The type name is resolved to its current implementing component in the
+environment; callers do not pin component metadata. Existing IDs can be bound
+with `CallerCodecClient::bind(agent_id, "CounterAgent")`, which strictly
+checks the parsed type name. Caller codecs remain authoritative for payload
+encoding and decoding.
+
+For trigger or scheduled caller-codec calls, pass an output type tag so the
+SDK can reject live streams in either direction:
+
+```moonbit
+counter.trigger(
+  "reset",
+  ResetInput::{},
+  (@schema.type_tag() : @schema.TypeTag[Unit]),
 )
 ```
 
@@ -108,7 +123,7 @@ resumable durable identity.
 | Situation | Use |
 |---|---|
 | Generated definition available | Generated agent client |
-| Typed contract owned by the caller | `CallerCodecClient` |
+| Typed contract owned by the caller | `CallerCodecClient` resolved by environment type name |
 | Runtime-selected method with automatic JSON conversion | `invoke_json` |
 | Explicit runtime-schema packing | `SchemaRef::pack_json`, `invoke_value`, `unpack_json` |
 | Schema-free infrastructure with Golem values | `DynamicAgentClient` |

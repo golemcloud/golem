@@ -32,23 +32,22 @@ pub(all) struct ReflectedAgentClient {
 }
 
 ///|
-fn decode_root(
+fn decode_root_type(
   graph : @types.SchemaGraph,
   root : Int,
-) -> @model.SchemaGraph raise ReflectError {
-  @model.schema_graph_from_wit({ ..graph, root, }) catch {
+) -> @model.SchemaType raise ReflectError {
+  let decoded = @model.schema_graph_from_wit({ ..graph, root, }) catch {
     error => raise Schema("failed to decode reflected schema: \{repr(error)}")
   }
+  decoded.root
 }
 
 ///|
 fn decode_input(
   graph : @types.SchemaGraph,
+  decoded : @model.SchemaGraph,
   input : @common.InputSchema,
 ) -> SchemaRef raise ReflectError {
-  let decoded = @model.schema_graph_from_wit(graph) catch {
-    error => raise Schema("failed to decode reflected schema: \{repr(error)}")
-  }
   let raw_fields = match input {
     Parameters(fields) => fields
   }
@@ -58,7 +57,7 @@ fn decode_input(
       UserSupplied =>
         fields.push({
           name: field.name,
-          body: decode_root(graph, field.schema).root,
+          body: decode_root_type(graph, field.schema),
           metadata: field.metadata,
         })
       AutoInjected(_) => ()
@@ -73,11 +72,18 @@ fn decode_input(
 ///|
 fn decode_output(
   graph : @types.SchemaGraph,
+  decoded : @model.SchemaGraph,
   output : @common.OutputSchema,
 ) -> SchemaRef? raise ReflectError {
   match output {
     Unit => None
-    Single(root) => Some(SchemaRef::new(decode_root(graph, root)))
+    Single(root) =>
+      Some(
+        SchemaRef::new({
+          defs: decoded.defs,
+          root: decode_root_type(graph, root),
+        }),
+      )
   }
 }
 
@@ -86,14 +92,17 @@ fn decode_agent_type(
   registered : @common.RegisteredAgentType,
 ) -> AgentType raise ReflectError {
   let raw = registered.agent_type
+  let decoded = @model.schema_graph_from_wit(raw.schema) catch {
+    error => raise Schema("failed to decode reflected schema: \{repr(error)}")
+  }
   let methods : Array[AgentMethod] = []
   for raw_method in raw.methods {
     methods.push({
       name: raw_method.name,
       description: raw_method.description,
       prompt_hint: raw_method.prompt_hint,
-      input: decode_input(raw.schema, raw_method.input_schema),
-      output: decode_output(raw.schema, raw_method.output_schema),
+      input: decode_input(raw.schema, decoded, raw_method.input_schema),
+      output: decode_output(raw.schema, decoded, raw_method.output_schema),
     })
   }
   {
@@ -105,7 +114,11 @@ fn decode_agent_type(
       EPHEMERAL => Ephemeral
     },
     implemented_by: registered.implemented_by,
-    constructor_input: decode_input(raw.schema, raw.constructor_.input_schema),
+    constructor_input: decode_input(
+      raw.schema,
+      decoded,
+      raw.constructor_.input_schema,
+    ),
     methods,
   }
 }
@@ -120,6 +133,20 @@ pub fn get_agent_type(name : String) -> AgentType? raise ReflectError {
   match @agentHost.get_agent_type(name) {
     Some(agent_type) => Some(decode_agent_type(agent_type))
     None => None
+  }
+}
+
+///|
+/// Resolves the component implementing an environment-unique agent type name.
+/// Unlike `get_agent_type`, absence is an error because identity metadata
+/// cannot be constructed without an implementing component.
+pub fn component_id_for(name : String) -> @types.ComponentId raise ReflectError {
+  match @agentHost.get_agent_type(name) {
+    Some(agent_type) => agent_type.implemented_by
+    None =>
+      raise Discovery(
+        "agent type '" + name + "' is not registered in the current environment",
+      )
   }
 }
 
@@ -293,8 +320,9 @@ pub async fn ReflectedAgentClient::invoke_value(
   method_name : String,
   input : @model.SchemaValue,
 ) -> Invocation[@model.SchemaValue?] {
-  ignore(self.require_method(method_name))
-  self.transport.invoke_value(method_name, input)
+  let entry = self.require_method(method_name)
+  let invocation = self.transport.invoke_value(method_name, input)
+  validate_invocation_output(entry, invocation)
 }
 
 ///|
@@ -323,7 +351,8 @@ pub fn ReflectedAgentClient::trigger_value(
   method_name : String,
   input : @model.SchemaValue,
 ) -> InvocationMetadata raise ReflectError {
-  ignore(self.require_method(method_name))
+  let entry = self.require_method(method_name)
+  reject_non_awaited_streams(entry, "trigger")
   self.transport.trigger_value(method_name, input)
 }
 
@@ -334,6 +363,7 @@ pub fn ReflectedAgentClient::trigger_json(
   input : Json,
 ) -> InvocationMetadata raise ReflectError {
   let entry = self.require_method(method_name)
+  reject_non_awaited_streams(entry, "trigger")
   self.transport.trigger_value(method_name, entry.input.pack_json(input))
 }
 
@@ -344,7 +374,8 @@ pub fn ReflectedAgentClient::schedule_value(
   method_name : String,
   input : @model.SchemaValue,
 ) -> ScheduledInvocation raise ReflectError {
-  ignore(self.require_method(method_name))
+  let entry = self.require_method(method_name)
+  reject_non_awaited_streams(entry, "schedule")
   self.transport.schedule_value(scheduled_at, method_name, input)
 }
 
@@ -356,11 +387,40 @@ pub fn ReflectedAgentClient::schedule_json(
   input : Json,
 ) -> ScheduledInvocation raise ReflectError {
   let entry = self.require_method(method_name)
+  reject_non_awaited_streams(entry, "schedule")
   self.transport.schedule_value(
     scheduled_at,
     method_name,
     entry.input.pack_json(input),
   )
+}
+
+///|
+fn reject_non_awaited_streams(
+  entry : AgentMethod,
+  operation : String,
+) -> Unit raise ReflectError {
+  let output_contains_stream = match entry.output {
+    Some(output) => output.contains_stream()
+    None => false
+  }
+  guard !entry.input.contains_stream() && !output_contains_stream else {
+    raise Schema(
+      operation + " is unavailable for streaming method '" + entry.name + "'",
+    )
+  }
+}
+
+///|
+fn validate_invocation_output(
+  entry : AgentMethod,
+  invocation : Invocation[@model.SchemaValue?],
+) -> Invocation[@model.SchemaValue?] raise ReflectError {
+  match (entry.output, invocation.value) {
+    (None, None) | (Some(_), Some(_)) => invocation
+    (None, Some(_)) => raise Schema("unit method returned a value")
+    (Some(_), None) => raise Schema("single-output method returned no value")
+  }
 }
 
 ///|
