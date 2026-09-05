@@ -69,3 +69,66 @@ steps:
           equals: "schema library"
         - path: "$.schemaValue"
           equals: "schema value"
+
+  - id: "create-rust-project"
+    only_if:
+      language: "rust"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-rust-reflected-rpc"
+    only_if:
+      language: "rust"
+    prompt: >
+      In the Rust test-app project, add a durable `ReflectionTarget` agent
+      identified by a string `name`. Give it an `echo` method that accepts a
+      string `message` and returns that message.
+
+      Add a second durable `ReflectionCaller` agent with an async `run` method.
+      In `run`, use the Golem Rust SDK runtime reflection APIs to list the
+      registered agent types, look up `ReflectionTarget` by name, inspect its
+      `echo` method, and invoke `ReflectionTarget("target")` through the JSON
+      convenience API with `"hello"`.
+
+      Define a partial caller-owned contract for `ReflectionTarget` with
+      `#[agent_client]`, bind it to the reflected target ID without performing
+      discovery in the contract, and invoke `echo` with `"caller codec"`.
+      Then explicitly pack `{ "message": "reflected value" }` with the
+      reflected method's `SchemaRef`, invoke through `invoke_value`, and await
+      `unpack_json`. Finally bind a dynamic client to the same ID, manually
+      construct the positional input `SchemaValue::Record`, and invoke `echo`
+      with `"direct value"` without using a schema for that call.
+
+      Return a schema-derived record with fields `listed`, `type_name`,
+      `method_name`, `json_value`, `caller_codec`, `reflected_value`, and
+      `direct_value`. Make sure the project builds successfully.
+    expectedSkills:
+      - "golem-agent-reflection-rust"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-rust-reflected-rpc"
+    only_if:
+      language: "rust"
+    invoke_json:
+      agent: 'ReflectionCaller("main")'
+      method: "run"
+    expect:
+      result_json:
+        - path: "$.listed"
+          equals: true
+        - path: "$.type_name"
+          equals: "ReflectionTarget"
+        - path: "$.method_name"
+          equals: "echo"
+        - path: "$.json_value"
+          equals: "hello"
+        - path: "$.caller_codec"
+          equals: "caller codec"
+        - path: "$.reflected_value"
+          equals: "reflected value"
+        - path: "$.direct_value"
+          equals: "direct value"

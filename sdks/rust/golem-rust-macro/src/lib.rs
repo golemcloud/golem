@@ -86,6 +86,11 @@ pub fn agent_implementation(attr: TokenStream, item: TokenStream) -> TokenStream
 }
 
 #[proc_macro_attribute]
+pub fn agent_client(attr: TokenStream, item: TokenStream) -> TokenStream {
+    agentic::agent_client_impl(attr, item, &get_golem_rust_crate_ident())
+}
+
+#[proc_macro_attribute]
 pub fn tool_definition(attr: TokenStream, item: TokenStream) -> TokenStream {
     tool::tool_definition_impl(attr, item, &get_golem_rust_crate_ident())
 }

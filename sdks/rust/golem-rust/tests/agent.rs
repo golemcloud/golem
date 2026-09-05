@@ -504,7 +504,7 @@ mod tests {
 
         fn rpc_call_schedule(&self, string: String) {
             let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
-            client.schedule_echo(
+            let _ = client.schedule_echo(
                 string,
                 ScheduledTime {
                     seconds: 1,
