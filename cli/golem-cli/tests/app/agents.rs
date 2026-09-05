@@ -1137,11 +1137,11 @@ async fn test_generated_streaming_bridges_end_to_end() {
         .current_dir(&rust_client);
     let rust_output = run_generated_driver(rust_command).await;
     rust_proxy_task.abort();
+    assert_generated_driver(rust_output, "Rust", "RUST_STREAMING_BRIDGE_E2E_OK");
     assert!(
         rust_interrupted.load(std::sync::atomic::Ordering::SeqCst),
         "Rust driver did not reach post-acceptance reconnect coverage"
     );
-    assert_generated_driver(rust_output, "Rust", "RUST_STREAMING_BRIDGE_E2E_OK");
 
     let typescript_client =
         ctx.cwd_path_join("typescript-streaming-bridge/streaming-rpc-target-client");
@@ -1219,14 +1219,14 @@ async fn test_generated_streaming_bridges_end_to_end() {
         .current_dir(&typescript_client);
     let typescript_output = run_generated_driver(typescript_command).await;
     typescript_proxy_task.abort();
-    assert!(
-        typescript_interrupted.load(std::sync::atomic::Ordering::SeqCst),
-        "TypeScript driver did not reach post-acceptance reconnect coverage"
-    );
     assert_generated_driver(
         typescript_output,
         "TypeScript",
         "TYPESCRIPT_STREAMING_BRIDGE_E2E_OK",
+    );
+    assert!(
+        typescript_interrupted.load(std::sync::atomic::Ordering::SeqCst),
+        "TypeScript driver did not reach post-acceptance reconnect coverage"
     );
 
     let scala_client = ctx.cwd_path_join("scala-streaming-bridge/streaming-rpc-target-client");
@@ -1311,11 +1311,11 @@ async fn test_generated_streaming_bridges_end_to_end() {
         .current_dir(&scala_client);
     let scala_output = run_generated_driver(scala_command).await;
     scala_proxy_task.abort();
+    assert_generated_driver(scala_output, "Scala", "SCALA_STREAMING_BRIDGE_E2E_OK");
     assert!(
         scala_interrupted.load(std::sync::atomic::Ordering::SeqCst),
         "Scala driver did not reach post-acceptance reconnect coverage"
     );
-    assert_generated_driver(scala_output, "Scala", "SCALA_STREAMING_BRIDGE_E2E_OK");
 
     let moonbit_client = ctx.cwd_path_join("moonbit-streaming-bridge/streaming-rpc-target-client");
     let mut moonbit_test_command = std::process::Command::new("moon");

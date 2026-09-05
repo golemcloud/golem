@@ -47,7 +47,11 @@ use golem_common::model::diff::{
     self, AgentTypeProvisionConfigDiff, BTreeMapDiffValue, DeploymentDiff, DiffForHashOf, Hashable,
 };
 use golem_common::model::environment::EnvironmentName;
+use golem_common::model::environment_tool_grant::EnvironmentToolGrantId;
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation};
+use golem_common::model::tool::ToolName;
+use golem_common::model::tool_release::ToolReleaseId;
+pub use golem_common::model::tool_release::{ToolPublicationPlanAction, ToolPublicationPlanEntry};
 use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
 use itertools::Itertools;
@@ -62,6 +66,10 @@ use thiserror::Error;
 pub struct DeploymentDisplay {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub components: BTreeMap<String, DeploymentDisplayComponent>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub remote_tools: BTreeMap<String, DeploymentDisplayRemoteTool>,
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub published_tools: BTreeSet<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub http_api_deployments: BTreeMap<String, DeploymentDisplayHttpApiDeployment>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -155,6 +163,123 @@ pub struct EnvironmentSetupPlan {
     pub resource_defaults: Vec<ResourceDefinitionCreation>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EnvironmentToolGrantPlanAction {
+    Create,
+    UpdateReference,
+    Delete,
+    RetainProtected,
+    RetainAdministratorManaged,
+}
+
+impl std::fmt::Display for EnvironmentToolGrantPlanAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Create => "create",
+            Self::UpdateReference => "update reference",
+            Self::Delete => "delete",
+            Self::RetainProtected => "retain protected",
+            Self::RetainAdministratorManaged => "retain administrator-managed",
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentToolGrantPlanEntry {
+    pub action: EnvironmentToolGrantPlanAction,
+    pub release_id: Option<ToolReleaseId>,
+    pub account: Option<String>,
+    pub name: Option<String>,
+    pub version: Option<String>,
+    pub grant_id: Option<EnvironmentToolGrantId>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentToolGrantPlanView {
+    pub entries: Vec<EnvironmentToolGrantPlanEntry>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolPublicationPlan {
+    #[serde(skip)]
+    tools: BTreeSet<ToolName>,
+    pub entries: Vec<ToolPublicationPlanEntry>,
+}
+
+impl ToolPublicationPlan {
+    pub fn new(tools: BTreeSet<ToolName>, entries: Vec<ToolPublicationPlanEntry>) -> Self {
+        Self { tools, entries }
+    }
+
+    pub fn tools(&self) -> &BTreeSet<ToolName> {
+        &self.tools
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn has_work(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| matches!(entry.action, ToolPublicationPlanAction::Publish))
+    }
+
+    pub fn has_conflicts(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.action == ToolPublicationPlanAction::Conflict)
+    }
+}
+
+impl EnvironmentToolGrantPlanView {
+    pub fn has_changes(&self) -> bool {
+        self.entries.iter().any(|entry| {
+            matches!(
+                entry.action,
+                EnvironmentToolGrantPlanAction::Create
+                    | EnvironmentToolGrantPlanAction::UpdateReference
+                    | EnvironmentToolGrantPlanAction::Delete
+            )
+        })
+    }
+}
+
+impl StructuredOutput for EnvironmentToolGrantPlanView {
+    const KIND: &'static str = "deploy.environment-tool-grants";
+}
+
+impl TextOutput for EnvironmentToolGrantPlanView {
+    fn log(&self) {
+        let mut table = new_table_full_condensed(vec![
+            Column::new("Action"),
+            Column::new("Release ID"),
+            Column::new("Account"),
+            Column::new("Tool"),
+            Column::new("Version"),
+            Column::new("Grant ID"),
+        ]);
+        for entry in &self.entries {
+            table.add_row(vec![
+                entry.action.to_string(),
+                entry
+                    .release_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_default(),
+                entry.account.clone().unwrap_or_default(),
+                entry.name.clone().unwrap_or_default(),
+                entry.version.clone().unwrap_or_default(),
+                entry.grant_id.map(|id| id.to_string()).unwrap_or_default(),
+            ]);
+        }
+        log_table(table);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,6 +354,38 @@ mod tests {
             unit: "unit".to_string(),
             units: "units".to_string(),
         }
+    }
+
+    #[::test_r::test]
+    fn tool_publication_plan_distinguishes_work_and_conflicts() {
+        let entry = |action| ToolPublicationPlanEntry {
+            action,
+            name: "example".to_string(),
+            version: "1.0.0".to_string(),
+            reason: None,
+        };
+
+        assert!(
+            !ToolPublicationPlan::new(
+                BTreeSet::new(),
+                vec![entry(ToolPublicationPlanAction::NoChange)]
+            )
+            .has_work()
+        );
+        assert!(
+            ToolPublicationPlan::new(
+                BTreeSet::new(),
+                vec![entry(ToolPublicationPlanAction::Publish)]
+            )
+            .has_work()
+        );
+        assert!(
+            ToolPublicationPlan::new(
+                BTreeSet::new(),
+                vec![entry(ToolPublicationPlanAction::Conflict)]
+            )
+            .has_conflicts()
+        );
     }
 
     #[::test_r::test]
@@ -785,10 +942,35 @@ pub struct DeploymentDisplayMcpAgentOptions {
     pub security_scheme: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentDisplayRemoteTool {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_account: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provision: Option<golem_common::model::tool::ToolProvisionConfig>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub bindings: BTreeMap<String, diff::EffectiveToolBinding>,
+}
+
 impl DeploymentDisplay {
     pub fn from_context(ctx: DeploymentDisplayContext<'_>) -> anyhow::Result<Self> {
         Ok(Self {
             components: display_components(&ctx)?,
+            remote_tools: display_remote_tools(&ctx)?,
+            published_tools: display_published_tools(&ctx),
             http_api_deployments: display_http_api_deployments(&ctx),
             mcp_deployments: display_mcp_deployments(&ctx),
         })
@@ -822,8 +1004,106 @@ impl DeploymentDisplay {
 
     fn is_empty(&self) -> bool {
         self.components.is_empty()
+            && self.remote_tools.is_empty()
+            && self.published_tools.is_empty()
             && self.http_api_deployments.is_empty()
             && self.mcp_deployments.is_empty()
+    }
+}
+
+fn display_remote_tools(
+    ctx: &DeploymentDisplayContext<'_>,
+) -> anyhow::Result<BTreeMap<String, DeploymentDisplayRemoteTool>> {
+    display_keys(
+        ctx.mode,
+        &ctx.deployment.remote_tools,
+        &ctx.diff.remote_tools,
+    )
+    .filter(|tool_name| ctx.deployment.remote_tools.contains_key(*tool_name))
+    .map(|tool_name| {
+        let remote_tool = ctx
+            .deployment
+            .remote_tools
+            .get(tool_name)
+            .expect("displayed remote tool must exist in deployment");
+        let hash = Some(remote_tool.hash()?.to_string());
+        let Some(remote_tool) = remote_tool.as_value() else {
+            return Ok((
+                tool_name.clone(),
+                DeploymentDisplayRemoteTool {
+                    hash,
+                    release_id: None,
+                    version: None,
+                    source_digest: None,
+                    owner_account: None,
+                    metadata_version: None,
+                    metadata_digest: None,
+                    provision: None,
+                    bindings: BTreeMap::new(),
+                },
+            ));
+        };
+
+        let mut provision = remote_tool.provision.clone();
+        provision.config = NormalizedJsonValue(mask_json_secret_for_deploy_diff(
+            ctx.masking,
+            &provision.config,
+        )?);
+        provision.env = display_env(ctx.masking, &provision.env);
+        for plugin in &mut provision.plugins {
+            plugin.parameters = plugin
+                .parameters
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        mask_sensitive_key_value_for_deploy_diff(ctx.masking, key, value),
+                    )
+                })
+                .collect();
+        }
+
+        let bindings = remote_tool
+            .bindings
+            .iter()
+            .map(|(agent, binding)| {
+                let mut binding = binding.clone();
+                binding.parameters = NormalizedJsonValue(mask_json_secret_for_deploy_diff(
+                    ctx.masking,
+                    &binding.parameters,
+                )?);
+                Ok((agent.to_string(), binding))
+            })
+            .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+
+        Ok((
+            tool_name.clone(),
+            DeploymentDisplayRemoteTool {
+                hash,
+                release_id: Some(remote_tool.release_id.to_string()),
+                version: Some(remote_tool.version.clone()),
+                source_digest: Some(remote_tool.source_digest.to_string()),
+                owner_account: Some(remote_tool.owner_account_email.to_string()),
+                metadata_version: Some(remote_tool.metadata_version.clone()),
+                metadata_digest: Some(remote_tool.metadata_digest.to_string()),
+                provision: Some(provision),
+                bindings,
+            },
+        ))
+    })
+    .collect()
+}
+
+fn display_published_tools(ctx: &DeploymentDisplayContext<'_>) -> BTreeSet<String> {
+    match ctx.mode {
+        DeploymentDisplayMode::ChangedOnly => ctx
+            .diff
+            .published_tools
+            .keys()
+            .filter(|tool_name| ctx.deployment.published_tools.contains(*tool_name))
+            .cloned()
+            .collect(),
+        DeploymentDisplayMode::Full => ctx.deployment.published_tools.clone(),
     }
 }
 
@@ -1739,6 +2019,47 @@ impl TextOutput for DeploymentDiff {
             }
             logln("");
         }
+        if !self.remote_tools.is_empty() {
+            logln("Remote tool changes:".log_color_help_group().to_string());
+            for (tool_name, remote_tool_diff) in &self.remote_tools {
+                let action = match remote_tool_diff {
+                    BTreeMapDiffValue::Create => "create".green(),
+                    BTreeMapDiffValue::Delete => "delete".red(),
+                    BTreeMapDiffValue::Update(_) => "update".yellow(),
+                };
+                logln(format!(
+                    "  - {} remote tool {}",
+                    action,
+                    tool_name.log_color_highlight(),
+                ));
+            }
+            logln("");
+        }
+        if !self.published_tools.is_empty() {
+            logln(
+                "Deployment tool release changes:"
+                    .log_color_help_group()
+                    .to_string(),
+            );
+            for (tool_name, publication_diff) in &self.published_tools {
+                let change = match publication_diff {
+                    diff::BTreeSetDiffValue::Create => format!(
+                        "include tool release reference {} in this deployment",
+                        tool_name.log_color_highlight(),
+                    )
+                    .green()
+                    .to_string(),
+                    diff::BTreeSetDiffValue::Delete => format!(
+                        "remove tool release {} from this deployment (release remains available)",
+                        tool_name.log_color_highlight(),
+                    )
+                    .red()
+                    .to_string(),
+                };
+                logln(format!("  - {change}"));
+            }
+            logln("");
+        }
     }
 
     fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()> {
@@ -1798,6 +2119,44 @@ fn mask_deployment_diff_secrets(diff: &mut DeploymentDiff) -> anyhow::Result<()>
                 continue;
             };
             mask_agent_type_provision_config_diff(provision_config_diff)?;
+        }
+    }
+
+    for remote_tool_change in diff.remote_tools.values_mut() {
+        let BTreeMapDiffValue::Update(remote_tool_diff) = remote_tool_change else {
+            continue;
+        };
+        let DiffForHashOf::ValueDiff { diff: remote_tool } = remote_tool_diff else {
+            continue;
+        };
+
+        remote_tool.provision.config = NormalizedJsonValue(mask_json_secret_for_deploy_diff(
+            MaskingConfig::hide_secrets(),
+            &remote_tool.provision.config,
+        )?);
+        remote_tool.provision.env =
+            display_env(MaskingConfig::hide_secrets(), &remote_tool.provision.env);
+        for plugin in &mut remote_tool.provision.plugins {
+            plugin.parameters = plugin
+                .parameters
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        mask_sensitive_key_value_for_deploy_diff(
+                            MaskingConfig::hide_secrets(),
+                            key,
+                            value,
+                        ),
+                    )
+                })
+                .collect();
+        }
+        for binding in remote_tool.bindings.values_mut() {
+            binding.parameters = NormalizedJsonValue(mask_json_secret_for_deploy_diff(
+                MaskingConfig::hide_secrets(),
+                &binding.parameters,
+            )?);
         }
     }
 
@@ -1919,6 +2278,7 @@ impl Serialize for EnvironmentSetupPlanView<'_> {
 
 pub struct DeployPlanView<'a> {
     pub deployment_diff: &'a DeploymentDiff,
+    pub tool_publications: &'a ToolPublicationPlan,
     pub environment_setup: Option<&'a EnvironmentSetupPlan>,
 }
 
@@ -1926,6 +2286,7 @@ pub struct DeployPlanView<'a> {
 #[serde(rename_all = "camelCase")]
 struct DeployPlanFields<'a> {
     deployment_diff: &'a DeploymentDiff,
+    tool_publications: &'a ToolPublicationPlan,
     environment_setup: Option<&'a EnvironmentSetupDisplay>,
 }
 
@@ -1942,6 +2303,7 @@ impl Serialize for DeployPlanView<'_> {
 
         DeployPlanFields {
             deployment_diff: &deployment_diff,
+            tool_publications: self.tool_publications,
             environment_setup: self.environment_setup.map(|setup| &setup.display),
         }
         .serialize(serializer)
@@ -1950,12 +2312,37 @@ impl Serialize for DeployPlanView<'_> {
 
 impl TextOutput for DeployPlanView<'_> {
     fn log(&self) {
-        let has_deployment_changes = !self.deployment_diff.components.is_empty()
+        let has_deployment_request_changes = !self.deployment_diff.components.is_empty()
             || !self.deployment_diff.http_api_deployments.is_empty()
-            || !self.deployment_diff.mcp_deployments.is_empty();
+            || !self.deployment_diff.mcp_deployments.is_empty()
+            || !self.deployment_diff.remote_tools.is_empty()
+            || !self.deployment_diff.published_tools.is_empty();
 
-        if has_deployment_changes {
+        if has_deployment_request_changes {
             self.deployment_diff.log();
+        }
+
+        if !self.tool_publications.entries.is_empty() {
+            logln("Tool publication plan:".log_color_help_group().to_string());
+            for entry in &self.tool_publications.entries {
+                let coordinate = format!("{}@{}", entry.name, entry.version);
+                let action = match entry.action {
+                    ToolPublicationPlanAction::NoChange => entry.action.to_string().normal(),
+                    ToolPublicationPlanAction::Publish => entry.action.to_string().green(),
+                    ToolPublicationPlanAction::Conflict => entry.action.to_string().red(),
+                };
+                logln(format!(
+                    "  - {} {}{}",
+                    action,
+                    coordinate.log_color_highlight(),
+                    entry
+                        .reason
+                        .as_ref()
+                        .map(|reason| format!(": {reason}"))
+                        .unwrap_or_default()
+                ));
+            }
+            logln("");
         }
 
         if let Some(environment_setup) = self.environment_setup.map(EnvironmentSetupPlanView)
@@ -1987,6 +2374,7 @@ impl StructuredOutput for DeployPlanView<'_> {
 
         DeployPlanFields {
             deployment_diff: &deployment_diff,
+            tool_publications: self.tool_publications,
             environment_setup: self.environment_setup.map(|setup| &setup.display),
         }
         .serialize(serializer)
