@@ -42,11 +42,14 @@ use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
     AgentMethodInvocationParameters, AgentResourceId, AttributeMap, DurableFunctionType,
     JsonSnapshotData, LogLevel, MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart,
-    OplogEntry, OplogPayload, PluginInstallationDescription, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
-    PublicLocalSpanData, PublicOplogEntry, PublicQueuedCardEvent, PublicSnapshotData,
-    PublicSpanData, PublicTypedAgentConfigEntry, PublicUpdateDescription, QueuedCardEvent,
-    RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
+    OplogEntry, OplogPayload, PluginInstallationDescription, PublicAgentEntity,
+    PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute,
+    PublicAttributeValue, PublicDurableFunctionType, PublicEntityCallMode, PublicEntityInvocation,
+    PublicEntityInvocationContext, PublicEntityInvocationOperation, PublicLocalSpanData,
+    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex,
+    PublicQueuedCardEvent, PublicSnapshotData, PublicSpanData, PublicToolInvocationOperation,
+    PublicTypedAgentConfigEntry, PublicUpdateDescription, QueuedCardEvent, RawSnapshotData,
+    SnapshotBasedUpdateParameters, StringAttributeValue,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
@@ -98,10 +101,92 @@ fn observational_start_public_protobuf_roundtrip() {
 }
 
 #[test]
+fn entity_attribution_public_protobuf_and_json_roundtrip() {
+    let ancestor = PublicEntityInvocation {
+        entity: PublicAgentEntity {
+            kind: PublicAgentEntityKind::ToolMiddleware,
+            name: "audit".to_string(),
+        },
+        start_index: OplogIndex::from_u64(7),
+        call_mode: PublicEntityCallMode::Synchronous,
+        operation: None,
+    };
+    let invocation = PublicEntityInvocation {
+        entity: PublicAgentEntity {
+            kind: PublicAgentEntityKind::Tool,
+            name: "lookup".to_string(),
+        },
+        start_index: OplogIndex::from_u64(11),
+        call_mode: PublicEntityCallMode::Asynchronous,
+        operation: Some(PublicEntityInvocationOperation::Tool(
+            PublicToolInvocationOperation {
+                command_path: vec!["bin".to_string(), "lookup".to_string()],
+                has_stdin: false,
+                has_stdout: true,
+                declares_stdout: true,
+            },
+        )),
+    };
+    let entry = PublicOplogEntryWithIndex {
+        oplog_index: OplogIndex::from_u64(13),
+        attribution: PublicOplogEntryAttribution::entity(PublicEntityInvocationContext {
+            invocation,
+            ancestors: vec![ancestor],
+        }),
+        entry: PublicOplogEntry::NoOp(NoOpParams {
+            timestamp: Timestamp::now_utc().rounded(),
+        }),
+    };
+
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntryWithIndex =
+        entry.clone().try_into().unwrap();
+    let decoded: PublicOplogEntryWithIndex = proto.try_into().unwrap();
+    assert_eq!(decoded, entry);
+
+    let json = serde_json::to_value(&entry).unwrap();
+    assert_eq!(json["attribution"]["type"], "Entity");
+    assert_eq!(
+        json["attribution"]["ancestors"][0]["entity"]["kind"],
+        "toolMiddleware"
+    );
+    assert_eq!(
+        json["attribution"]["invocation"]["operation"]["type"],
+        "Tool"
+    );
+}
+
+#[test]
+fn entity_attribution_public_protobuf_rejects_invalid_start_index() {
+    let invocation = PublicEntityInvocation {
+        entity: PublicAgentEntity {
+            kind: PublicAgentEntityKind::Tool,
+            name: "lookup".to_string(),
+        },
+        start_index: OplogIndex::from_u64(11),
+        call_mode: PublicEntityCallMode::Synchronous,
+        operation: None,
+    };
+    let mut proto: golem_api_grpc::proto::golem::worker::PublicEntityInvocation = invocation.into();
+
+    proto.start_index = None;
+    assert_eq!(
+        PublicEntityInvocation::try_from(proto.clone()).unwrap_err(),
+        "Missing entity start index"
+    );
+
+    proto.start_index = Some(0);
+    assert_eq!(
+        PublicEntityInvocation::try_from(proto).unwrap_err(),
+        "Invalid entity start index: 0"
+    );
+}
+
+#[test]
 fn entity_attribution_raw_protobuf_roundtrip() {
     let parent_start_index = Some(OplogIndex::from_u64(17));
     let span_id = SpanId::generate();
     let entries = vec![
+        OplogEntry::no_op(parent_start_index),
         OplogEntry::Log {
             timestamp: Timestamp::now_utc().rounded(),
             parent_start_index,
@@ -139,6 +224,14 @@ fn entity_attribution_raw_protobuf_roundtrip() {
             entry.clone().try_into().unwrap();
         assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
     }
+
+    let mut invalid: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+        OplogEntry::no_op(parent_start_index).try_into().unwrap();
+    invalid.entity_parent_start_index = Some(0);
+    assert_eq!(
+        OplogEntry::try_from(invalid).unwrap_err(),
+        "Invalid entity parent Start index: 0"
+    );
 }
 
 /// Build a single-root [`TypedSchemaValue`] fixture from an anonymous schema
@@ -1301,28 +1394,33 @@ fn phase_five_raw_card_oplog_entries_protobuf_roundtrip() {
     let entries = vec![
         OplogEntry::CardInstalled {
             timestamp,
+            entity_parent_start_index: None,
             queued_event_index: None,
             card: source_card.clone().into(),
             wallet_generation: Some(1),
         },
         OplogEntry::CardDerived {
             timestamp,
+            entity_parent_start_index: None,
             card: source_card.clone().into(),
             wallet_generation: Some(3),
         },
         OplogEntry::CardRevoked {
             timestamp,
+            entity_parent_start_index: None,
             queued_event_index: OplogIndex::from_u64(1),
             card_id: source_card_id,
             wallet_generation: Some(4),
         },
         OplogEntry::CardExpired {
             timestamp,
+            entity_parent_start_index: None,
             card_id: installed_card_id,
             wallet_generation: Some(5),
         },
         OplogEntry::CardTransferStarted {
             timestamp,
+            entity_parent_start_index: None,
             transfer_id,
             card_id: source_card_id,
             source_holder: Some(source_holder.clone()),
@@ -1331,6 +1429,7 @@ fn phase_five_raw_card_oplog_entries_protobuf_roundtrip() {
         },
         OplogEntry::CardTransferred {
             timestamp,
+            entity_parent_start_index: None,
             transfer_id,
             source_card_id: Some(source_card_id),
             installed_card_id,
@@ -1340,12 +1439,14 @@ fn phase_five_raw_card_oplog_entries_protobuf_roundtrip() {
         },
         OplogEntry::CardRevokedCascade {
             timestamp,
+            entity_parent_start_index: None,
             revoked_card_ids: vec![source_card_id, installed_card_id],
             affected_wallets: vec![source_holder.clone(), target_holder.clone()],
             local_wallet_generation: Some(8),
         },
         OplogEntry::CardTransferConfirmed {
             timestamp,
+            entity_parent_start_index: None,
             transfer_id,
             source_card_id,
             installed_card_id,
@@ -1353,10 +1454,12 @@ fn phase_five_raw_card_oplog_entries_protobuf_roundtrip() {
         },
         OplogEntry::CardEventQueued {
             timestamp,
+            entity_parent_start_index: None,
             event: QueuedCardEvent::transfer_started(transfer_id, source_card, application_holder),
         },
         OplogEntry::CardTransferStarted {
             timestamp,
+            entity_parent_start_index: None,
             transfer_id: Uuid::new_v4(),
             card_id: installed_card_id,
             source_holder: None,
@@ -1554,11 +1657,12 @@ fn remove_retry_policy_serialization_poem_serde_equivalence() {
 }
 
 mod scope_scan {
+    use crate::model::card::CardId;
     use crate::model::invocation_context::SpanId;
     use crate::model::oplog::host_functions::HostFunctionName;
     use crate::model::oplog::raw_types::PayloadId;
     use crate::model::oplog::{
-        AttributeMap, DurableFunctionType, LogLevel, OplogEntry, OplogPayload,
+        AgentError, AttributeMap, DurableFunctionType, LogLevel, OplogEntry, OplogPayload,
         OplogScopeProjection, ScopeScanState,
     };
     use crate::model::regions::OplogRegion;
@@ -1639,6 +1743,64 @@ mod scope_scan {
             .collect::<Vec<_>>();
 
         assert_eq!(projected, vec![10, 12, 13, 15, 17, 18]);
+    }
+
+    #[test]
+    fn scope_projection_uses_entity_anchor_instead_of_retry_grouping() {
+        let entries = [
+            (10, start(None, DurableFunctionType::WriteLocal)),
+            (
+                11,
+                OplogEntry::error(
+                    Some(idx(10)),
+                    AgentError::TransientError("entity-owned".to_string()),
+                    idx(99),
+                    false,
+                    None,
+                ),
+            ),
+            (
+                12,
+                OplogEntry::error(
+                    None,
+                    AgentError::TransientError("agent-owned".to_string()),
+                    idx(10),
+                    false,
+                    None,
+                ),
+            ),
+            (13, OplogEntry::no_op(Some(idx(10)))),
+            (14, OplogEntry::no_op(None)),
+            (
+                15,
+                OplogEntry::CardExpired {
+                    timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: Some(idx(10)),
+                    card_id: CardId::new(),
+                    wallet_generation: None,
+                },
+            ),
+            (
+                16,
+                OplogEntry::StreamSession {
+                    timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: Some(idx(10)),
+                    record: OplogPayload::External {
+                        payload_id: PayloadId::new(),
+                        md5_hash: vec![0; 16],
+                        cached: None,
+                    },
+                },
+            ),
+        ];
+        let mut projection = OplogScopeProjection::new(idx(10));
+
+        let projected = entries
+            .iter()
+            .filter_map(|(index, entry)| projection.includes(idx(*index), entry).then_some(*index))
+            .collect::<Vec<_>>();
+
+        assert_eq!(projected, vec![10, 11, 13, 15, 16]);
     }
 
     #[test]
@@ -1749,6 +1911,7 @@ mod scope_scan {
                 12,
                 OplogEntry::Jump {
                     timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
                     jump: OplogRegion {
                         start: idx(11),
                         end: idx(12),
@@ -1815,22 +1978,27 @@ mod scope_scan {
         let entries = [
             OplogEntry::StreamRegistered {
                 timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
                 record: external_payload!(),
             },
             OplogEntry::StreamItems {
                 timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
                 record: external_payload!(),
             },
             OplogEntry::StreamEnd {
                 timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
                 record: external_payload!(),
             },
             OplogEntry::StreamCancel {
                 timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
                 record: external_payload!(),
             },
             OplogEntry::StreamSession {
                 timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
                 record: external_payload!(),
             },
         ];

@@ -198,6 +198,7 @@ impl Drop for LiveCallPermit {
 
 #[derive(Debug, Clone)]
 pub(super) struct BegunCallExecutionScope {
+    pub(super) entity_parent_start_index: Option<OplogIndex>,
     /// The durable scope this host-call `Start` will be nested under, if any. This is derived from
     /// the call's own function type / begin index, never from temporally-open sibling scopes.
     pub(super) parent_start_index: Option<OplogIndex>,
@@ -216,6 +217,7 @@ impl BegunCallExecutionScope {
         atomic_lease: Option<Arc<AtomicRegionLease>>,
     ) -> CallExecutionScope {
         CallExecutionScope {
+            entity_parent_start_index: self.entity_parent_start_index,
             retry_from: self
                 .observational_owner
                 .or(self.parent_start_index)
@@ -229,6 +231,7 @@ impl BegunCallExecutionScope {
 
 #[derive(Debug, Clone)]
 pub(super) struct CallExecutionScope {
+    pub(super) entity_parent_start_index: Option<OplogIndex>,
     /// The retry point owned by this in-flight call: the enclosing durable scope `Start` if present,
     /// otherwise the host-call `Start` itself.
     pub(super) retry_from: OplogIndex,
@@ -1477,6 +1480,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             custom_invocation_scope,
         )?;
         let execution_scope = BegunCallExecutionScope {
+            entity_parent_start_index: ctx.entity_parent_start_index(),
             parent_start_index,
             atomic_region,
             observational_owner,
@@ -2403,7 +2407,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         prepared
                             .public_state
                             .worker()
-                            .add_and_commit_oplog(OplogEntry::jump(deleted_region))
+                            .add_and_commit_oplog(OplogEntry::jump(
+                                prepared.entity_parent_start_index,
+                                deleted_region,
+                            ))
                             .await;
                         prepared
                             .public_state
@@ -2644,6 +2651,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let begin_index = boundary.begin_index();
         let durable_execution_state = InFunctionRetryHost::durable_execution_state(ctx);
         let execution_scope = BegunCallExecutionScope {
+            entity_parent_start_index: ctx.entity_parent_start_index(),
             parent_start_index: ctx.child_parent_start_index(&function_type, begin_index),
             atomic_region: ctx
                 .state
@@ -2963,6 +2971,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
         let mut retry_host = TaskRetryContext {
             retry_point,
+            entity_parent_start_index: self.execution_scope.entity_parent_start_index,
             environment_state_service,
             environment_id,
             default_retry_policy,

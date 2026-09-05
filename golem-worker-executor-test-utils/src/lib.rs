@@ -673,6 +673,7 @@ impl TestWorkerExecutor {
             .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
         Ok(worker
             .add_to_oplog(OplogEntry::card_event_queued(
+                None,
                 golem_common::base_model::oplog::QueuedCardEvent::revoke(card_id),
             ))
             .await)
@@ -691,6 +692,7 @@ impl TestWorkerExecutor {
             .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
         worker
             .add_and_commit_oplog(OplogEntry::card_event_queued(
+                None,
                 golem_common::base_model::oplog::QueuedCardEvent::install(card),
             ))
             .await;
@@ -3600,7 +3602,7 @@ impl Oplog for TestOplog {
             .additional_test_deps
             .take_no_op_oplog_read(&self.owned_agent_id.agent_id, oplog_index)
         {
-            return OplogEntry::no_op();
+            return OplogEntry::no_op(None);
         }
         self.oplog.read(oplog_index).await
     }

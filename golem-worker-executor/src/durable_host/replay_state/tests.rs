@@ -210,6 +210,7 @@ async fn test_replay_state(
 fn noop() -> OplogEntry {
     OplogEntry::NoOp {
         timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
     }
 }
 
@@ -1007,6 +1008,7 @@ async fn custom_claim_id_can_be_reused_after_replay_restart() {
 fn begin_atomic_region() -> OplogEntry {
     OplogEntry::BeginAtomicRegion {
         timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
     }
 }
 
@@ -1523,6 +1525,7 @@ async fn permission_events_replay_after_invocation_wallet_pin() {
         invocation_started(wallet_pin.clone()),
         OplogEntry::CardDerived {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
             card: derived_card.clone(),
             wallet_generation: Some(0),
         },
@@ -1576,6 +1579,7 @@ async fn recorded_success_replays_without_live_expiry_or_authority_inputs() {
         noop(),
         OplogEntry::CardInstalled {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
             queued_event_index: None,
             card: card.clone(),
             wallet_generation: Some(7),
@@ -1644,6 +1648,7 @@ async fn permission_events_are_recovered_from_skipped_regions() {
         noop(),
         OplogEntry::CardTransferred {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
             transfer_id,
             source_card_id: Some(source_card_id),
             installed_card_id: card.card_id(),
@@ -1682,6 +1687,7 @@ async fn snapshot_prefix_suppresses_replayed_permission_events() {
         noop(),
         OplogEntry::CardInstalled {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
             queued_event_index: None,
             card,
             wallet_generation: Some(1),
@@ -2123,6 +2129,7 @@ async fn error_hint_between_start_and_end_resolves() {
         noop(),
         start_now(),
         OplogEntry::error(
+            None,
             AgentError::TransientError("boom".to_string()),
             OplogIndex::from_u64(2),
             false,
@@ -4415,6 +4422,7 @@ fn cancelled_with_partial_for(start_index: u64, nanos: u64) -> OplogEntry {
 fn end_atomic_region(begin_index: u64) -> OplogEntry {
     OplogEntry::EndAtomicRegion {
         timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
         begin_index: OplogIndex::from_u64(begin_index),
     }
 }

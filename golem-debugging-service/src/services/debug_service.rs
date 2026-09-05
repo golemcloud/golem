@@ -1089,6 +1089,7 @@ mod tests {
     fn noop_entry() -> OplogEntry {
         OplogEntry::NoOp {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
         }
     }
 
@@ -1118,6 +1119,7 @@ mod tests {
     fn jump_entry(start: u64, end: u64) -> OplogEntry {
         OplogEntry::Jump {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
             jump: OplogRegion {
                 start: OplogIndex::from_u64(start),
                 end: OplogIndex::from_u64(end),
@@ -1399,6 +1401,7 @@ mod tests {
                 // Any other oplog entry other than export function completed
                 OplogEntry::NoOp {
                     timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
                 }
             }
         }
