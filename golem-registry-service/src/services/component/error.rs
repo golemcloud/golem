@@ -61,6 +61,8 @@ pub enum ComponentError {
     },
     #[error("Concurrent update of component")]
     ConcurrentUpdate,
+    #[error("Component {0} is referenced by a tool release or deployment snapshot")]
+    ComponentSourceInUse(ComponentId),
     #[error("Environment not found: {0}")]
     ParentEnvironmentNotFound(EnvironmentId),
     #[error("Deployment revision {0} not found")]
@@ -187,6 +189,7 @@ impl SafeDisplay for ComponentError {
             Self::EnvironmentPluginNotFound(_) => self.to_string(),
             Self::InvalidPluginScope { .. } => self.to_string(),
             Self::ConcurrentUpdate => self.to_string(),
+            Self::ComponentSourceInUse(_) => self.to_string(),
             Self::PluginInstallationNotFound(_) => self.to_string(),
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::DeploymentRevisionNotFound(_) => self.to_string(),

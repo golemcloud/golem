@@ -480,7 +480,7 @@ pub fn encode_invocation_input(
 ///|
 pub async fn[T : @schema.IntoSchema] encode_result_value(
   value : T,
-) -> @types.TypedSchemaValue raise @toolCommon.ToolError {
+) -> @types.TypedSchemaValue {
   let typed = @schema.try_into_typed_schema_value(value) catch {
     error =>
       raise @toolCommon.ToolError::InvalidResult(
@@ -488,6 +488,10 @@ pub async fn[T : @schema.IntoSchema] encode_result_value(
       )
   }
   @model.typed_schema_value_to_wit_async(typed) catch {
+    @async-core.Cancelled::Cancelled as error => {
+      typed.value.release_resources(@model_host.resource_drops())
+      raise error
+    }
     e => {
       typed.value.release_resources(@model_host.resource_drops())
       raise @toolCommon.ToolError::InvalidResult(
@@ -505,7 +509,7 @@ pub fn invocation_result_empty() -> @toolCommon.InvocationResult {
 ///|
 pub async fn[T : @schema.IntoSchema] invocation_result_value(
   value : T,
-) -> @toolCommon.InvocationResult raise @toolCommon.ToolError {
+) -> @toolCommon.InvocationResult {
   { result: Some(encode_result_value(value)), stdout: None, }
 }
 
@@ -520,7 +524,7 @@ pub fn invocation_result_stdout(
 pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(
   value : T,
   stdout : @async-core.Stream[Byte],
-) -> @toolCommon.InvocationResult raise @toolCommon.ToolError {
+) -> @toolCommon.InvocationResult {
   errdefer stdout.drop_sync()
   { result: Some(encode_result_value(value)), stdout: Some(stdout), }
 }
@@ -528,8 +532,12 @@ pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(
 ///|
 pub async fn encode_error_payload(
   payload : @model.TypedSchemaValue,
-) -> @types.TypedSchemaValue raise @toolCommon.ToolError {
+) -> @types.TypedSchemaValue {
   @model.typed_schema_value_to_wit_async(payload) catch {
+    @async-core.Cancelled::Cancelled as error => {
+      payload.value.release_resources(@model_host.resource_drops())
+      raise error
+    }
     error => {
       payload.value.release_resources(@model_host.resource_drops())
       raise @toolCommon.ToolError::InvalidResult(

@@ -106,12 +106,17 @@ fn[T : @schema.FromSchema] decode_param_with_resource_drops(
 
 ///|
 /// Encodes a method/constructor return value into a wire output value.
-/// Serialization errors are mapped to `AgentError::InvalidType`.
+/// Serialization errors are mapped to `AgentError::InvalidType`; operation
+/// cancellation is propagated unchanged.
 pub async fn[T : @schema.IntoSchema] encode_output(
   value : T,
-) -> @types.SchemaValueTree raise @common.AgentError {
+) -> @types.SchemaValueTree {
   let model_value = @schema.to_value_as(value)
   @model.schema_value_to_wit_async(model_value) catch {
+    @async-core.Cancelled::Cancelled as error => {
+      model_value.release_resources(@model_host.resource_drops())
+      raise error
+    }
     e => {
       model_value.release_resources(@model_host.resource_drops())
       raise @common.AgentError::InvalidType(
@@ -144,9 +149,13 @@ pub fn encode_invocation_input(
 /// invocation, including native streams nested anywhere in the input record.
 pub async fn encode_invocation_input_async(
   values : Array[@model.SchemaValue],
-) -> @types.SchemaValueTree raise @common.AgentError {
+) -> @types.SchemaValueTree {
   let model_value = @model.SchemaValue::Record(values)
   @model.schema_value_to_wit_async(model_value) catch {
+    @async-core.Cancelled::Cancelled as error => {
+      model_value.release_resources(@model_host.resource_drops())
+      raise error
+    }
     e => {
       model_value.release_resources(@model_host.resource_drops())
       raise @common.AgentError::InvalidInput(

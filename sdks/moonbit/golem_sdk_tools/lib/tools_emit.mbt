@@ -1829,11 +1829,11 @@ fn emit_invocation_value(command : ToolCommandInfo, value : String) -> String {
       "Ok(@tool.invocation_result_value_with_stdout(" +
       value +
       ", __golem_stdout" +
-      ") catch { error => return Err(error) })"
+      ") catch { @asyncCore.Cancelled::Cancelled as error => raise error\n@toolCommon.ToolError::InvalidResult(message) => return Err(@toolCommon.ToolError::InvalidResult(message))\nerror => raise error })"
     None =>
       "Ok(@tool.invocation_result_value(" +
       value +
-      ") catch { error => return Err(error) })"
+      ") catch { @asyncCore.Cancelled::Cancelled as error => raise error\n@toolCommon.ToolError::InvalidResult(message) => return Err(@toolCommon.ToolError::InvalidResult(message))\nerror => raise error })"
   }
 }
 
@@ -1858,7 +1858,7 @@ fn emit_custom_error(command : ToolCommandInfo, error_value : String) -> String 
   error_type +
   "::to_error_payload_value(" +
   error_value +
-  ") { Ok(payload) => payload\nErr(encode_error) => return Err(@toolCommon.ToolError::InvalidResult(\"failed serializing custom tool error: \" + encode_error)) }\nlet payload = @tool.encode_error_payload(payload) catch { encode_error => return Err(encode_error) }\nErr(@toolCommon.ToolError::CustomError(payload))\n}"
+  ") { Ok(payload) => payload\nErr(encode_error) => return Err(@toolCommon.ToolError::InvalidResult(\"failed serializing custom tool error: \" + encode_error)) }\nlet payload = @tool.encode_error_payload(payload) catch { @asyncCore.Cancelled::Cancelled as error => raise error\n@toolCommon.ToolError::InvalidResult(message) => return Err(@toolCommon.ToolError::InvalidResult(message))\nerror => raise error }\nErr(@toolCommon.ToolError::CustomError(payload))\n}"
 }
 
 ///|

@@ -580,13 +580,6 @@ pub fn is_multimodal_type(pt : ParamType) -> Bool {
 }
 
 ///|
-/// Returns true if the parameter type cannot be serialized for RPC transport.
-/// Currently always returns false.
-pub fn is_rpc_incompatible_type(_pt : ParamType) -> Bool {
-  false
-}
-
-///|
 /// Returns true if the parameter type is `Principal` or `@common.Principal`.
 pub fn is_principal_type(pt : ParamType) -> Bool {
   match pt {
