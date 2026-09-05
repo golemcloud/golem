@@ -11,6 +11,72 @@ pub fn SchemaRef::new(graph : @model.SchemaGraph) -> SchemaRef {
 }
 
 ///|
+/// Reports whether this schema root contains a live stream, following named
+/// references without looping on recursive definitions.
+pub fn SchemaRef::contains_stream(self : SchemaRef) -> Bool {
+  self.type_contains_stream(self.root, Map([]))
+}
+
+///|
+fn SchemaRef::type_contains_stream(
+  self : SchemaRef,
+  schema : @model.SchemaType,
+  visited : Map[String, Unit],
+) -> Bool {
+  match schema.body {
+    Stream(_) => true
+    Ref(id) =>
+      if visited.contains(id) {
+        false
+      } else {
+        visited[id] = ()
+        match self.graph.defs.iter().find_first(def => def.id == id) {
+          Some(def) => self.type_contains_stream(def.body, visited)
+          None => false
+        }
+      }
+    Record(fields) =>
+      fields.any(field => self.type_contains_stream(field.body, visited))
+    Variant(cases) =>
+      cases.any(case => {
+        match case.payload {
+          Some(payload) => self.type_contains_stream(payload, visited)
+          None => false
+        }
+      })
+    Tuple(elements) =>
+      elements.any(element => self.type_contains_stream(element, visited))
+    List(element)
+    | FixedList(element, _)
+    | Option(element)
+    | Secret({ inner: element, .. }) =>
+      self.type_contains_stream(element, visited)
+    Map(key, value) =>
+      self.type_contains_stream(key, visited) ||
+      self.type_contains_stream(value, visited)
+    Result(ok, err) => {
+      let ok_contains = match ok {
+        Some(element) => self.type_contains_stream(element, visited)
+        None => false
+      }
+      let err_contains = match err {
+        Some(element) => self.type_contains_stream(element, visited)
+        None => false
+      }
+      ok_contains || err_contains
+    }
+    Union(branches) =>
+      branches.any(branch => self.type_contains_stream(branch.body, visited))
+    Future(inner) =>
+      match inner {
+        Some(element) => self.type_contains_stream(element, visited)
+        None => false
+      }
+    _ => false
+  }
+}
+
+///|
 fn SchemaRef::resolve(
   self : SchemaRef,
   schema : @model.SchemaType,
