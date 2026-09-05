@@ -92,6 +92,18 @@ function snapshotStateTypeChecks(): void {
     init: () => ({ arbitrary: true }),
     methods: {},
   });
+
+  defineAgent({
+    name: 'SnapshotBarePolicyRequiresSave',
+    id: {},
+    snapshotting: 'default',
+    methods: {},
+  }).implement({
+    init: () => ({}),
+    methods: {},
+    // @ts-expect-error snapshotting without a state schema requires custom save and load
+    snapshot: { load: () => ({}) },
+  });
 }
 void snapshotStateTypeChecks;
 
@@ -225,6 +237,23 @@ defineAgent({
   },
 });
 
+defineAgent({
+  name: 'SnapTypedSaveCustomLoad',
+  id: { name: z.string() },
+  snapshotting: { state: z.object({ count: z.number() }) },
+  methods: {},
+}).implement({
+  init: () => ({ count: 4 }),
+  methods: {},
+  snapshot: {
+    load(bytes) {
+      return {
+        count: JSON.parse(new TextDecoder().decode(bytes)).count,
+      };
+    },
+  },
+});
+
 describe('snapshot — typed state', () => {
   it('serializes the declared state fields without config or helpers', async () => {
     const agent = await initiate('SnapTypedCounter');
@@ -270,6 +299,16 @@ describe('snapshot — schema-backed config', () => {
 });
 
 describe('snapshot — custom save/load', () => {
+  it('uses typed saving with a custom load-only restoration factory', async () => {
+    const initial = await initiate('SnapTypedSaveCustomLoad');
+    const snapshot = await initial.saveSnapshot();
+    expect(snapshot.mimeType).toBe('application/json');
+    expect(jsonOf(snapshot.data)).toEqual({ count: 4 });
+
+    const restored = await restore('SnapTypedSaveCustomLoad', snapshot.data);
+    expect(jsonOf((await restored.saveSnapshot()).data)).toEqual({ count: 4 });
+  });
+
   it('uses the user bytes verbatim (octet-stream) and restores from them', async () => {
     const agent = await initiate('SnapCustom');
     const snap = await agent.saveSnapshot();
@@ -391,6 +430,12 @@ describe('snapshot — multipart databases', () => {
         methods: {
           get() {
             return this.count;
+          },
+        },
+        snapshot: {
+          load(bytes) {
+            const { count } = JSON.parse(new TextDecoder().decode(bytes));
+            return { count, database: new FakeDatabaseSync(':memory:') };
           },
         },
       });

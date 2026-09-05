@@ -183,11 +183,24 @@ describe('agent metadata (Phase 3)', () => {
     } as never);
 
     expect(AgentTypeRegistry.getRegistrationError('SnapshotLoadOnly')).toEqual([
-      'Implementation failed: custom snapshotting requires both snapshot.save and snapshot.load',
+      'Implementation failed: snapshotting without a state schema requires snapshot.save and snapshot.load',
     ]);
     expect(AgentTypeRegistry.getRegistrationError('SnapshotSaveOnly')).toEqual([
       'Implementation failed: custom snapshotting requires both snapshot.save and snapshot.load',
     ]);
+
+    defineAgent({
+      name: 'SnapshotSchemaLoadOnly',
+      snapshotting: { state: z.object({ count: z.number() }) },
+      id: {},
+      methods: {},
+    }).implement({
+      init: () => ({ count: 0 }),
+      methods: {},
+      snapshot: { load: () => ({ count: 1 }) },
+    });
+
+    expect(AgentTypeRegistry.getRegistrationError('SnapshotSchemaLoadOnly')).toBeUndefined();
   });
 
   it('emits an agent-dependency record from a declared dependency', () => {

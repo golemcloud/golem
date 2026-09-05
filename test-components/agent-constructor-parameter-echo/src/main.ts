@@ -57,7 +57,10 @@ export const EphemeralEchoAgentImpl = EphemeralEchoAgent.implement({
 export const SnapshotCounterAgent = defineAgent({
     name: 'SnapshotCounterAgent',
     id: { id: z.string() },
-    snapshotting: { everyNInvocations: 1 },
+    snapshotting: {
+        policy: { everyNInvocations: 1 },
+        state: z.object({ count: z.number() }),
+    },
     methods: {
         increment: method({ input: {}, returns: z.number() }),
         get: method({ input: {}, returns: z.number() }),
@@ -81,7 +84,10 @@ export const SnapshotCounterAgentImpl = SnapshotCounterAgent.implement({
 export const SqliteSnapshotAgent = defineAgent({
     name: 'SqliteSnapshotAgent',
     id: { id: z.string() },
-    snapshotting: { everyNInvocations: 2 },
+    snapshotting: {
+        policy: { everyNInvocations: 2 },
+        state: z.object({ label: z.string() }),
+    },
     methods: {
         addItem: method({ input: { value: z.string() }, returns: z.number() }),
         addLog: method({ input: { message: z.string() }, returns: z.number() }),
@@ -123,6 +129,16 @@ export const SqliteSnapshotAgentImpl = SqliteSnapshotAgent.implement({
                 items: items.map((r) => r.value),
                 logs: logs.map((r) => r.message),
             });
+        },
+    },
+    snapshot: {
+        load(bytes) {
+            const { label } = JSON.parse(new TextDecoder().decode(bytes)) as { label: string };
+            return {
+                label,
+                memDb: new DatabaseSync(':memory:'),
+                fileDb: new DatabaseSync('/tmp/sqlite-snapshot-test.db'),
+            };
         },
     },
 });

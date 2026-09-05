@@ -462,7 +462,7 @@ class ResolvedAgentImpl {
     private readonly agentId: ParsedAgentId,
     /** Optional user-supplied snapshot serializer (`implement({ snapshot })`). */
     private readonly customSnapshot?: {
-      save: () => Uint8Array | Promise<Uint8Array>;
+      save?: () => Uint8Array | Promise<Uint8Array>;
     },
   ) {}
 
@@ -557,7 +557,7 @@ class ResolvedAgentImpl {
   //           fields of `this`, plus a `db:<field>` SQLite part per DatabaseSync.
   // The principal/version envelope is added by the guest (`src/index.ts`).
   async saveSnapshot(): Promise<{ data: Uint8Array; mimeType: string }> {
-    if (this.customSnapshot) {
+    if (this.customSnapshot?.save) {
       const data = await this.customSnapshot.save.call(this.instance);
       return { data, mimeType: 'application/octet-stream' };
     }
@@ -724,7 +724,7 @@ async function validateSnapshotState(
 /** Register the agent's initiator. On `initiate`, decode id, run `init`, wire handlers. */
 export function registerAgentInitiator(
   reg: RegisteredAgent,
-  impl: AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object>,
+  impl: AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object, boolean>,
 ): void {
   if (AgentInitiatorRegistry.exists(reg.name)) {
     throw new Error(`Agent "${reg.name}" already has an implementation`);

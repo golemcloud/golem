@@ -151,6 +151,7 @@ export interface AgentImplementation<
   Methods extends MethodsRecord,
   Config extends ConfigSpec,
   State extends object,
+  HasSnapshotState extends boolean = false,
 > {
   init: (ctx: InitContext<Id, Config>) => State | Promise<State>;
   /** One handler per declared method; `this` is bound to `State` + SDK helpers. */
@@ -159,16 +160,22 @@ export interface AgentImplementation<
   >;
   /**
    * Optional custom snapshot serializer and restoration factory. Restoration is
-   * an alternative to `init`: it must return a complete fresh state object.
+   * an alternative to `init`: it must return a complete fresh state object. When
+   * a snapshot state schema is declared, `save` may be omitted to use typed saving.
    */
   snapshot?: {
-    save: (this: State & AgentContext<Config>) => Uint8Array | Promise<Uint8Array>;
     load: (
       this: void,
       bytes: Uint8Array,
       ctx: SnapshotRestoreContext<Id, Config>,
     ) => State | Promise<State>;
-  };
+  } & (HasSnapshotState extends true
+    ? {
+        save?: (this: State & AgentContext<Config>) => Uint8Array | Promise<Uint8Array>;
+      }
+    : {
+        save: (this: State & AgentContext<Config>) => Uint8Array | Promise<Uint8Array>;
+      });
 }
 
 export interface AgentImpl {
@@ -181,6 +188,7 @@ export interface AgentDefinition<
   Config extends ConfigSpec = {},
   StateSchema extends StandardSchemaV1 = StandardSchemaV1,
   Mode extends 'durable' | 'ephemeral' = 'durable',
+  HasSnapshotState extends boolean = false,
 > {
   readonly name: string;
   readonly id: Id;
@@ -190,7 +198,7 @@ export interface AgentDefinition<
   readonly config?: Config;
   /** Supply the runtime behaviour. Registers the agent at module-load time. */
   implement<State extends object & StandardSchemaV1.InferOutput<StateSchema>>(
-    impl: AgentImplementation<Id, Methods, Config, State>,
+    impl: AgentImplementation<Id, Methods, Config, State, HasSnapshotState>,
   ): AgentImpl;
 }
 
@@ -235,7 +243,7 @@ interface AgentSpecBase<
    * `agent-dependency` record built from the dependency's already-registered
    * `AgentType`. The dependency MUST have been `defineAgent`-ed before this one.
    */
-  dependencies?: AgentDefinition<any, any, any, any, any>[];
+  dependencies?: AgentDefinition<any, any, any, any, any, any>[];
   /** Snapshotting policy; defaults to `'disabled'`. Surfaced as `agent-type.snapshotting`. */
   snapshotting?: SnapshottingSpec<StateSchema>;
   /**
@@ -313,8 +321,32 @@ export function defineAgent<
   StateSchema extends StandardSchemaV1 = StandardSchemaV1,
   Mode extends 'durable' | 'ephemeral' = 'durable',
 >(
+  spec: AgentSpec<Id, Methods, Config, MV, WV, StateSchema, Mode> & {
+    snapshotting: { policy?: SnapshotPolicy; state: StateSchema };
+  },
+): AgentDefinition<Id, Methods, Config, StateSchema, Mode, true>;
+export function defineAgent<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  MV extends string = keyof Id & string,
+  WV extends string = never,
+  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+>(
   spec: AgentSpec<Id, Methods, Config, MV, WV, StateSchema, Mode>,
-): AgentDefinition<Id, Methods, Config, StateSchema, Mode> {
+): AgentDefinition<Id, Methods, Config, StateSchema, Mode, false>;
+export function defineAgent<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  MV extends string = keyof Id & string,
+  WV extends string = never,
+  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+>(
+  spec: AgentSpec<Id, Methods, Config, MV, WV, StateSchema, Mode>,
+): AgentDefinition<Id, Methods, Config, StateSchema, Mode, boolean> {
   const name = spec.name;
   let registered: RegisteredAgent | undefined;
   try {
@@ -359,20 +391,21 @@ export function defineAgent<
           const enabled = policy !== undefined && policy !== 'disabled';
           const hasStateSchema = typeof policy === 'object' && policy !== null && 'state' in policy;
           const hasCustomSnapshot = impl.snapshot !== undefined;
-          if (
-            hasCustomSnapshot &&
-            (typeof impl.snapshot?.save !== 'function' || typeof impl.snapshot.load !== 'function')
-          ) {
+          if (hasCustomSnapshot && typeof impl.snapshot?.load !== 'function') {
             throw new Error('custom snapshotting requires both snapshot.save and snapshot.load');
           }
-          if (enabled && !hasStateSchema && !hasCustomSnapshot) {
+          if (
+            enabled &&
+            !hasStateSchema &&
+            (!hasCustomSnapshot || typeof impl.snapshot?.save !== 'function')
+          ) {
             throw new Error(
               'snapshotting without a state schema requires snapshot.save and snapshot.load',
             );
           }
           registerAgentInitiator(
             registered,
-            impl as AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object>,
+            impl as AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object, boolean>,
           );
         } catch (error) {
           AgentTypeRegistry.recordRegistrationError(
