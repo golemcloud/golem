@@ -592,6 +592,29 @@ async fn run_chaos(
                 ChaosScenarioArg::S5 => chaos::ScenarioCode::S5,
                 ChaosScenarioArg::S12 => chaos::ScenarioCode::S12,
                 ChaosScenarioArg::S13 => chaos::ScenarioCode::S13,
+                ChaosScenarioArg::S10 => chaos::ScenarioCode::S10,
+                ChaosScenarioArg::S11 => chaos::ScenarioCode::S11,
+                ChaosScenarioArg::S3 => chaos::ScenarioCode::S3,
+                ChaosScenarioArg::S2 => chaos::ScenarioCode::S2,
+                ChaosScenarioArg::S4 => chaos::ScenarioCode::S4,
+                ChaosScenarioArg::Mf2 => chaos::ScenarioCode::MF2,
+                ChaosScenarioArg::S7 => chaos::ScenarioCode::S7,
+                ChaosScenarioArg::S6 => chaos::ScenarioCode::S6,
+                ChaosScenarioArg::S9 => chaos::ScenarioCode::S9,
+                ChaosScenarioArg::S16 => chaos::ScenarioCode::S16,
+                ChaosScenarioArg::S22 => chaos::ScenarioCode::S22,
+                ChaosScenarioArg::S14 => chaos::ScenarioCode::S14,
+                ChaosScenarioArg::S18 => chaos::ScenarioCode::S18,
+                ChaosScenarioArg::S17 => chaos::ScenarioCode::S17,
+                ChaosScenarioArg::S15 => chaos::ScenarioCode::S15,
+                ChaosScenarioArg::S15A => chaos::ScenarioCode::S15A,
+                ChaosScenarioArg::S15B => chaos::ScenarioCode::S15B,
+                ChaosScenarioArg::S15C => chaos::ScenarioCode::S15C,
+                ChaosScenarioArg::S23 => chaos::ScenarioCode::S23,
+                ChaosScenarioArg::Mf1 => chaos::ScenarioCode::MF1,
+                ChaosScenarioArg::Mf1b => chaos::ScenarioCode::MF1B,
+                ChaosScenarioArg::S21 => chaos::ScenarioCode::S21,
+                ChaosScenarioArg::S19 => chaos::ScenarioCode::S19,
             };
             let config = suite
                 .scenario(code, allow_disabled)
@@ -622,6 +645,56 @@ async fn run_chaos(
                 }
                 chaos::ScenarioCode::S13 => {
                     chaos::scenarios::s13::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S10 => {
+                    chaos::scenarios::s10::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S11 => {
+                    chaos::scenarios::s11::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S3 => {
+                    chaos::scenarios::s3::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S19 => {
+                    chaos::scenarios::s19::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                code @ (chaos::ScenarioCode::S4 | chaos::ScenarioCode::MF2) => {
+                    chaos::scenarios::dns_fault::run(
+                        code, &config, &manifest, &deps, &signals, &outputs,
+                    )
+                    .await
+                }
+                code @ (chaos::ScenarioCode::S2 | chaos::ScenarioCode::S21) => {
+                    chaos::scenarios::relay_fault::run(
+                        code, &config, &manifest, &deps, &signals, &outputs,
+                    )
+                    .await
+                }
+                chaos::ScenarioCode::S7 => {
+                    chaos::scenarios::s7::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S6 => {
+                    chaos::scenarios::s6::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S9 => {
+                    chaos::scenarios::s9::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                code @ (chaos::ScenarioCode::S14
+                | chaos::ScenarioCode::S15
+                | chaos::ScenarioCode::S15A
+                | chaos::ScenarioCode::S15B
+                | chaos::ScenarioCode::S15C
+                | chaos::ScenarioCode::S16
+                | chaos::ScenarioCode::S17
+                | chaos::ScenarioCode::S18
+                | chaos::ScenarioCode::S22
+                | chaos::ScenarioCode::S23
+                | chaos::ScenarioCode::MF1
+                | chaos::ScenarioCode::MF1B) => {
+                    chaos::scenarios::storage_fault::run(
+                        code, &config, &manifest, &deps, &signals, &outputs,
+                    )
+                    .await
                 }
             };
 
@@ -855,7 +928,7 @@ async fn run_density(
 
             // Emit the cell result as a single-result suite so the JSON shape
             // matches cloud-perf (BenchmarkSuiteResultCollection), and the
-            // buildspec can upload it directly to S3.
+            // buildspec can upload it directly to golem-bench-results.
             let mut suite_result = BenchmarkSuiteResult::new(&format!("density-{section}"));
             suite_result.add(result);
             if let Some(run_id) = cloud_bench_run_id() {

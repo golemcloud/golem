@@ -63,6 +63,7 @@ use crate::chaos::history::Stream;
 use crate::chaos::workload::{self, WorkloadContext};
 use anyhow::Context;
 use golem_common::base_model::agent::ParsedAgentId;
+use golem_common::model::component::ComponentDto;
 use golem_common::model::{AgentId, RoutingTable};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
@@ -116,29 +117,56 @@ pub fn candidate_agent_name(key_prefix: &str, index: u32) -> String {
     format!("{key_prefix}-{}-{index:04}", Stream::PinnedHttp)
 }
 
-/// The routing-table `AgentId` for one pinned agent.
+/// The routing-table `AgentId` for one agent of `agent_type`.
 ///
 /// This has to match how the worker-service builds the id it routes on —
 /// the component id plus the *string form* of the parsed agent id — or the
 /// ownership calculation would be answering a different question from the one
 /// the platform answers.
-fn routing_agent_id(ctx: &WorkloadContext, agent: &str) -> AgentId {
-    let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+pub fn routing_agent_id(ctx: &WorkloadContext, agent_type: &str, agent: &str) -> AgentId {
+    routing_agent_id_in(&ctx.counters, agent_type, agent)
+}
+
+/// [`routing_agent_id`] against a named component rather than the counters one.
+///
+/// Ownership is per agent id and an agent id contains its component, so an agent
+/// type that lives in a different component — S11's waiters are in the promise
+/// component — hashes to a different shard than the same name would under
+/// `counters`. Looking one up against the wrong component would silently aim a
+/// kill at whichever executor happened to own a name nothing uses.
+pub fn routing_agent_id_in(component: &ComponentDto, agent_type: &str, agent: &str) -> AgentId {
+    let parsed: ParsedAgentId = agent_id!(agent_type, agent.to_string());
     AgentId {
-        component_id: ctx.counters.id,
+        component_id: component.id,
         agent_id: parsed.to_string(),
     }
 }
 
-/// Groups candidate agents by the executor that owns them.
-fn owners(
+/// Groups agents of `agent_type` by the executor that owns them.
+///
+/// Takes the type rather than assuming `Counter` because S10 asks the same
+/// question about its schedule targets, and ownership is per agent id: two
+/// agent types with the same name are two different agents on two possibly
+/// different executors.
+pub fn owners_by_pod(
     ctx: &WorkloadContext,
     table: &RoutingTable,
-    candidates: &[String],
+    agent_type: &str,
+    agents: &[String],
+) -> BTreeMap<String, Vec<String>> {
+    owners_by_pod_in(&ctx.counters, table, agent_type, agents)
+}
+
+/// [`owners_by_pod`] against a named component. See [`routing_agent_id_in`].
+pub fn owners_by_pod_in(
+    component: &ComponentDto,
+    table: &RoutingTable,
+    agent_type: &str,
+    agents: &[String],
 ) -> BTreeMap<String, Vec<String>> {
     let mut by_pod: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for agent in candidates {
-        if let Some(pod) = table.lookup(&routing_agent_id(ctx, agent)) {
+    for agent in agents {
+        if let Some(pod) = table.lookup(&routing_agent_id_in(component, agent_type, agent)) {
             by_pod
                 .entry(pod.to_string())
                 .or_default()
@@ -146,6 +174,27 @@ fn owners(
         }
     }
     by_pod
+}
+
+/// Groups candidate pinned agents by the executor that owns them.
+fn owners(
+    ctx: &WorkloadContext,
+    table: &RoutingTable,
+    candidates: &[String],
+) -> BTreeMap<String, Vec<String>> {
+    owners_by_pod(ctx, table, COUNTER_AGENT, candidates)
+}
+
+/// Host part of an executor address, which is what a Kubernetes `status.podIP`
+/// field selector matches.
+///
+/// No port at all is not a shape the shard-manager produces, but degrading to
+/// the whole string beats panicking mid-run.
+pub fn pod_ip_of(pod_address: &str) -> String {
+    pod_address
+        .rsplit_once(':')
+        .map(|(host, _)| host.to_string())
+        .unwrap_or_else(|| pod_address.to_string())
 }
 
 /// Chooses an executor and the agents it owns.
@@ -201,10 +250,7 @@ pub async fn select(
     }
 
     let agents: Vec<String> = owned.into_iter().take(config.agents as usize).collect();
-    let pod_ip = pod_address
-        .rsplit_once(':')
-        .map(|(host, _)| host.to_string())
-        .unwrap_or_else(|| pod_address.clone());
+    let pod_ip = pod_ip_of(&pod_address);
 
     info!(
         "S8: pinned {} agents to executor {pod_address} (scanned {pool} candidates across {} executors)",
@@ -242,7 +288,7 @@ pub async fn verify_ownership(
     let mut drifted: Vec<String> = Vec::new();
     for agent in &selection.agents {
         let owner = table
-            .lookup(&routing_agent_id(ctx, agent))
+            .lookup(&routing_agent_id(ctx, COUNTER_AGENT, agent))
             .map(|pod| pod.to_string());
         if owner.as_deref() != Some(selection.pod_address.as_str()) {
             drifted.push(format!(
@@ -379,16 +425,10 @@ mod tests {
     /// hold for the `ip:port` form the routing table actually produces.
     #[test]
     fn a_pod_address_splits_into_an_ip_the_workflow_can_select_on() {
-        let split = |address: &str| {
-            address
-                .rsplit_once(':')
-                .map(|(host, _)| host.to_string())
-                .unwrap_or_else(|| address.to_string())
-        };
-        assert_eq!(split("10.0.14.207:9000"), "10.0.14.207");
+        assert_eq!(pod_ip_of("10.0.14.207:9000"), "10.0.14.207");
         // No port at all is not a shape the shard-manager produces, but
         // degrading to the whole string beats panicking mid-run.
-        assert_eq!(split("10.0.14.207"), "10.0.14.207");
+        assert_eq!(pod_ip_of("10.0.14.207"), "10.0.14.207");
     }
 
     /// Candidate names carry the run prefix and the stream, and are zero-padded

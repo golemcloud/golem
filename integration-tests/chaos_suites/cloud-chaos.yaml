@@ -175,7 +175,11 @@ scenarios:
       # executors that stay connected keep getting told the truth, and the
       # disagreement between the two groups is the whole experiment.
       targetCount: 1
-      durationSecs: 120
+      # Must equal phases.faultSecs; see the note on S16. The joiner partition
+      # this scenario applies mid-fault is already sized from faultSecs, so a
+      # shorter value here also made the two partitions lapse at different
+      # times.
+      durationSecs: 180
 
     phases:
       baselineSecs: 300
@@ -318,6 +322,151 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
+  # S10 — executor pod kill while scheduled actions are pending (GOL-378).
+  #
+  # The only scenario whose workload the driver is not holding a connection to.
+  # Every target registers an action ten seconds ahead, over and over, so a few
+  # hundred actions are always accepted and not yet run. Killing the executor
+  # that owns their shards asks whether the platform still runs each of them,
+  # exactly once, after the shards move.
+  #
+  # Like S8 the driver names the pod: it picks the executor owning the largest
+  # share of targets and reports its address in `baseline-ready.json`. Unlike
+  # S8, the targets on the *other* executor keep registering too — they are the
+  # control group, and the report splits the two.
+  - code: S10
+    name: executor-crash-during-scheduled-fire
+    enabled: true
+
+    fault:
+      kind: pod-kill
+      target: worker-executor
+      # The workflow narrows the selector to the pod the driver named; `one`
+      # stays as the belt-and-braces bound, exactly as in S8.
+      mode: one
+      durationSecs: 60
+
+    phases:
+      # Eighteen leads' worth of registrations, so the baseline measures a
+      # cluster that has been firing scheduled actions steadily rather than one
+      # that has just started.
+      baselineSecs: 180
+      # Covers the kill, the reschedule, and the shard reassignment that has to
+      # happen before anything claims the dead executor's due actions.
+      faultSecs: 120
+      # Registrations continue throughout. Long enough that the actions
+      # registered during the fault also fall due, fire and are accounted for
+      # inside the run rather than after it.
+      recoverySecs: 300
+
+    scheduled:
+      # 100 targets, each with its own emitter. Also the resolution of the
+      # report: a lost action localises to one target out of a hundred.
+      targets: 100
+      # 50 registrations a second overall, which is half what the mixed workload
+      # offers. The scheduled path is the whole experiment here rather than one
+      # stream of four, so the rate is set by what keeps the pending population
+      # large rather than by a share of a budget.
+      intervalMillis: 2000
+      # 500 actions accepted and not yet run at any instant. It also has to
+      # comfortably exceed the workflow's inject-and-verify path — signal poll
+      # (5s) plus `kubectl apply` plus waiting for `AllInjected` — or everything
+      # registered before the kill would already have fired by the time the pod
+      # died.
+      leadSecs: 10
+      # What recovering a pending action may cost, and the number the fire-delay
+      # percentiles are reported against. Derived rather than picked: the
+      # executor's scheduler holds a 30s lease and refreshes every 2s, and a
+      # shard reassignment has to complete before the surviving executor claims
+      # anything at all. 60s covers both without being so generous that a
+      # regression would sit inside it.
+      #
+      # Recorded, not asserted. A p99 past it is an attention line and a number
+      # in the result, because how much a reassignment may cost is a judgement.
+      leaseBudgetSecs: 60
+
+    retryPolicy:
+      # Identical to the others and load-bearing for the same reason, with one
+      # extra consequence here: the retry goes out under the original key, and
+      # that key is what the scheduled action carries back to the target. So a
+      # retried registration that registered twice shows up as one token firing
+      # twice, not as an arithmetic argument about totals.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # S11 — executor pod kill while agents are suspended on promises (GOL-377).
+  #
+  # The only scenario whose agents are asleep when the fault lands. Each waiter
+  # creates a promise, parks inside an invocation awaiting it, and is resolved
+  # from outside a few seconds later. Killing the executor that owns them asks
+  # whether a completion the platform accepted still reaches the agent it was
+  # meant to wake, exactly once, after the shards move.
+  #
+  # Like S10 the driver names the pod and keeps driving the waiters on the other
+  # executor as a control group. Unlike every other scenario, its agents live in
+  # the promise component rather than the counters one.
+  - code: S11
+    name: executor-crash-during-promise-completion
+    enabled: true
+
+    fault:
+      kind: pod-kill
+      target: worker-executor
+      # The workflow narrows the selector to the pod the driver named; `one`
+      # stays as the belt-and-braces bound, exactly as in S8 and S10.
+      mode: one
+      durationSecs: 60
+
+    phases:
+      # Long enough for cold starts and route warm-up to settle, so the kill
+      # lands on a population that has been cycling steadily rather than one
+      # still arriving.
+      baselineSecs: 180
+      # Covers the kill, the reschedule, and the shard reassignment that has to
+      # happen before anything can resume a waiter the dead executor owned.
+      faultSecs: 120
+      # Rounds continue throughout. Long enough that waiters disturbed by the
+      # kill get several whole rounds afterwards, so a waiter that recovered
+      # late is distinguishable from one that never did.
+      recoverySecs: 300
+
+    promise:
+      # 200 waiters, each parked on at most one promise, so 200 agents are
+      # suspended at any instant. Also the resolution of the report: a lost
+      # wakeup localises to one waiter out of two hundred.
+      waiters: 200
+      # 5s parked before the completion goes out, so ~40 completions a second
+      # across the pool. It has to comfortably exceed the workflow's
+      # inject-and-verify path — signal poll (5s) plus `kubectl apply` plus
+      # waiting for `AllInjected` — or every promise armed before the kill would
+      # already have been completed by the time the pod died.
+      dwellMillis: 5000
+      # What resuming a suspended waiter may cost, and the number the wakeup
+      # delay percentiles are reported against. Derived rather than picked: a
+      # shard reassignment has to complete before anything owns the waiter, and
+      # then the worker has to be recovered and its oplog replayed to the point
+      # it was parked at. 60s covers both without being so generous that a
+      # regression would sit inside it.
+      #
+      # Recorded, not asserted. A p99 past it is an attention line and a number
+      # in the result, because how much a reassignment may cost is a judgement.
+      wakeupBudgetSecs: 60
+
+    retryPolicy:
+      # Identical to the others. One extra consequence here, spelled out in
+      # integration-tests/src/chaos/waiters.rs: a completion retry can repair a
+      # wakeup that was lost, but only for a completion that had *not* already
+      # been accepted — so the question this scenario asks, about completions the
+      # platform confirmed, is untouched by it.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
   # S13 — rolling executor restarts under load (GOL-367).
   #
   # One executor killed every 60 seconds for five minutes while the mixed
@@ -377,6 +526,2590 @@ scenarios:
       # removes half the capacity for as long as the reschedule takes, so a
       # rate that is comfortable at two executors has to stay survivable at one.
       ratePerSec: 100
+
+    retryPolicy:
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # S3 — executor / worker-service network partition (GOL-370).
+  #
+  # The only fault in the suite the platform never learns about. S1 cuts the
+  # shard-manager off from an executor and the cluster reacts: health checks are
+  # missed and the shards move. S3 cuts the link worker-service uses, leaves the
+  # shard-manager link alone, and so the executor keeps its shards and stays in
+  # the routing table. worker-service is told, correctly, that this pod owns
+  # those agents, and keeps trying to reach a pod it cannot reach. There is no
+  # route around it, because as far as the platform is concerned nothing is
+  # wrong.
+  #
+  # Like S8, S10 and S11 the driver names the pod rather than letting Chaos Mesh
+  # pick one, and keeps driving the agents on the other executor as the control
+  # group. That control group is where the interesting finding would be: a
+  # partition it is not part of should cost it nothing.
+  - code: S3
+    name: executor-worker-service-partition
+    enabled: true
+
+    fault:
+      kind: network-partition
+      target: worker-executor
+      # The workflow narrows the selector to the pod the driver named; `one`
+      # stays as the belt-and-braces bound, exactly as in S8, S10 and S11.
+      #
+      # Only the executor side is pinned. The other side of the cut is every
+      # worker-service replica, selected by label — a partition from two of the
+      # three would leave the agents reachable through the third and the run
+      # would measure nothing.
+      mode: one
+      durationSecs: 180
+
+    phases:
+      # Long enough for cold starts and route warm-up to settle, so the cut
+      # lands on a population that has been cycling steadily.
+      baselineSecs: 300
+      # Has to comfortably exceed the caller's 120s attempt timeout, or no
+      # operation would ever reach the timeout inside the window and the
+      # pending-then-timeout behaviour the scenario exists to show would fall
+      # outside it. 180s leaves room for the first attempt to time out, the
+      # one permitted retry to go out, and that retry to still be waiting when
+      # the link comes back.
+      faultSecs: 180
+      # Every isolated agent has to get several whole operations after the heal,
+      # so one that recovered slowly is distinguishable from one that never did.
+      recoverySecs: 420
+
+    isolation:
+      # 200 agents, split by shard ownership across the two executors, so ~100
+      # end up isolated and ~100 are the control group. Also the resolution of
+      # the report: a lost agent localises to one out of two hundred.
+      agents: 200
+      # One operation per agent per second, so ~200 ops/s offered while
+      # everything is reachable. Higher than the other scenarios' 100/s because
+      # half of it stops the moment the fault lands: the number that has to be
+      # large is the *control* group's, since a collateral-damage finding is a
+      # percentage change in its throughput and a small sample cannot show one.
+      intervalMillis: 1000
+      # The most of its baseline the isolated group may keep for the partition
+      # to count as observed. Not zero: an operation submitted late in the fault
+      # window can still be waiting when the link returns, and then confirms.
+      # At this cadence that is a handful against a baseline of hundreds, so
+      # anything near 25% means the cut did not take hold.
+      isolatedCeilingPercent: 25
+      # The least of its baseline the control group must keep. Below this,
+      # serving an unreachable executor cost the agents that had nothing to do
+      # with it — the sharpest finding this scenario can produce.
+      #
+      # 75% rather than 95%: worker-service invalidates one process-wide routing
+      # table entry on every failed call, so some shared cost is expected by
+      # construction. `invalidation_min_delay` bounds it to twice a second,
+      # which should keep it far above this line.
+      controlFloorPercent: 75
+      # What being served again may cost an isolated agent once the link is
+      # back. Recorded, not asserted: nothing has to be recovered here — no
+      # shard moves and no worker restarts — so this is really a measure of how
+      # long worker-service's own retry loop takes to notice, and how long that
+      # may be is a judgement.
+      recoveryBudgetSecs: 60
+
+    retryPolicy:
+      # Identical to the others and load-bearing for the same reason, with one
+      # consequence specific to S3: the retry is what turns a single 120s stall
+      # into a second attempt under the same key. If the link heals in between,
+      # that retry succeeds against work the first attempt may already have
+      # started — which is exactly the case the exactly-once probe is here to
+      # rule on.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # S2 — executor-to-executor partition, cross-pod RPC control (GOL-368).
+  #
+  # The suite's control, and the only scenario whose fault is expected to change
+  # nothing at all.
+  #
+  # Executors hold no connection to each other. `WorkerExecutorClient` appears
+  # nowhere in golem-worker-executor; when an agent invokes an agent its own
+  # executor does not own, `DirectWorkerInvocationRpc::invoke_and_await` hands
+  # the call to `worker_proxy`, which is a client of worker-service. So executor
+  # A reaches executor B's agents through a third party, and cutting the A-to-B
+  # link cuts a link carrying no traffic. This run is what turns that reading of
+  # the code into a measurement on a real cluster, and what fails if someone
+  # later adds a direct path.
+  #
+  # ── Why a control needs more guards than a normal scenario ───────────────────
+  #
+  # A scenario that expects damage fails safe: the fault misses, the damage is
+  # absent, and the report says the fault was not observed. This one fails the
+  # other way. A run whose pairs were accidentally co-located, or whose workload
+  # never started, produces exactly the clean report a good run produces. Hence
+  # `crossPodFloorPercent` below, which stops the run before the fault window
+  # rather than letting it report numbers it did not earn.
+  #
+  # One weakness is inherent and stated in the result rather than hidden: nothing
+  # in the cluster is supposed to stop, so there is no in-run evidence the
+  # partition took hold. Chaos Mesh reporting AllInjected is all there is.
+  - code: S2
+    name: executor-executor-partition
+    enabled: true
+
+    fault:
+      kind: network-partition
+      target: worker-executor
+      # Both sides selected by label, and `all` on both. On the two-replica
+      # topology a chaos run uses that is every executor there is, so each drops
+      # traffic to the other and there is no pod for the driver to name — unlike
+      # S3, where naming one side is the whole basis of the comparison.
+      #
+      # The populations here are divided by where each agent *pair* landed, not
+      # by which executor the fault was aimed at, so pinning would buy nothing.
+      mode: all
+      durationSecs: 180
+
+    phases:
+      # Same as S3: long enough for cold starts and route warm-up to settle, so
+      # the cut lands on a population that has been cycling steadily. A control
+      # is only as good as the baseline it is compared against.
+      baselineSecs: 300
+      # Comfortably past the caller's 120s attempt timeout. If executor-to-
+      # executor traffic did exist, an RPC caught by the cut would stall for a
+      # full attempt and its retry, and both have to fit inside the window or
+      # the collapse this scenario hunts would land in the recovery phase.
+      faultSecs: 180
+      # Long enough that a population which held up during the fault and then
+      # fell over afterwards is distinguishable from one that never moved.
+      recoverySecs: 420
+
+    ownership:
+      # Shards must not move here: nothing in this fault touches the
+      # shard-manager. Sampled so that a run where they did move says so, since
+      # a reassignment would mean the two populations are no longer the ones
+      # that were paired.
+      settleSecs: 120
+
+    relay:
+      # The least share of callers whose callee must be on the other executor.
+      #
+      # Neither the driver nor the platform chooses this — both halves of a pair
+      # are placed by hashing their agent ids, so on two executors it lands near
+      # 50% but is not guaranteed. 25% is a floor, not an expectation: below it
+      # the partition has almost nothing to cut and the run aborts with
+      # FaultTargetUnverified rather than reporting a clean result.
+      crossPodFloorPercent: 25
+      # The assertion. Deliberately higher than any other floor in the suite:
+      # every other scenario sets one low enough to survive the disruption it
+      # injects, and here there is nothing to survive. A real drop means an
+      # executor was talking to an executor.
+      #
+      # 90 rather than 100 because throughput is measured against the group's
+      # own baseline and ordinary cluster jitter moves that a few percent.
+      crossPodFloorThroughputPercent: 90
+      # The same floor for pairs that landed on one executor. They never leave
+      # the pod, so the partition cannot reach them even in principle — and if
+      # both populations drop the cause is not the link under test. Kept as a
+      # separate number so the report can tell those two apart.
+      coLocatedFloorThroughputPercent: 90
+      # The guard against this whole scenario being vacuous, and the one the
+      # first run showed was needed.
+      #
+      # Throughput cannot tell the two populations apart: the driver sets the
+      # cadence, so both run at the rate they were asked to whether or not a
+      # call leaves the pod. The first run's cells were 9.51/s and 10.49/s
+      # before, during and after, which says nothing about where the callees
+      # were. Latency does say: run 33789281692 measured cross-pod at 151ms p50
+      # against co-located at 101ms, a flat 50ms premium in every phase, and
+      # that premium is the relay hop through worker-service.
+      #
+      # So if the two populations cost the same, they are not two populations,
+      # and every comparison this scenario makes is between two samples of the
+      # same thing.
+      #
+      # 5ms rather than something near the measured 50: this is a floor against
+      # *zero*, not a model of what the hop should cost, and a cluster with
+      # faster links should not fail for being fast.
+      crossPodPremiumFloorMs: 5
+
+    workload:
+      # S12's mixed workload plus the stream that makes this scenario mean
+      # anything. `rpcAgents` is the load-bearing one: every other stream is one
+      # client call landing on one agent, so no other traffic in the suite ever
+      # crosses an executor boundary of its own accord.
+      #
+      # Each RPC caller implies a second agent, its callee, so 200 here creates
+      # 400 agents. The caller runs `Counter.increment_through_rpc`, which calls
+      # `Counter.increment` on `{caller}-inner` — the driver reproduces that
+      # derivation to decide, before the run, which executor owns each half.
+      #
+      # 200 for the same reason S3 drives 200 agents: the verdict is a
+      # percentage change in each population's throughput, roughly half of
+      # these land in each population, and a small pool cannot show one.
+      #
+      # The durable stream is halved against S1's 200 to keep the total agent
+      # count in the same range, since each RPC caller brings a callee with it.
+      durableAgents: 100
+      ephemeralAgents: 50
+      scheduledAgents: 50
+      promiseAgents: 50
+      # Zero. Quota traffic crosses the shard-manager link, which this fault
+      # does not touch, so it would add load without adding signal.
+      quotaAgents: 0
+      rpcAgents: 200
+      ratePerSec: 100
+
+    retryPolicy:
+      # Identical to every other scenario. Not load-bearing here in the usual
+      # way — a run where nothing fails has nothing to retry — but a retry is
+      # exactly what would appear if the architecture claim were false, so
+      # leaving it on is what makes that visible.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # S21 — worker-service CPU saturation under cross-pod RPC (GOL-382).
+  #
+  # S2's populations with S2's fault taken away. S2 cut the link between the two
+  # executors and expected nothing to happen, because an agent-to-agent call the
+  # local executor does not own is relayed through worker-service. This one
+  # leaves the link alone and starves that relay of CPU instead.
+  #
+  # ── What is actually being measured ──────────────────────────────────────────
+  #
+  # Both populations cross worker-service. A cross-pod call crosses it twice
+  # (driver → worker-service → executor A → worker-service → executor B) and a
+  # co-located call crosses it once, so the *gap* between them is one
+  # worker-service hop and nothing else. S2 measured that gap at 38-50ms p50
+  # across two runs while looking for evidence its pairing was real. Here it is
+  # the instrument: a fault that reaches worker-service widens it, and a fault
+  # that slowed the two populations equally would leave it flat whatever it hit.
+  #
+  # This matters because throughput cannot do the job. The driver sets the
+  # cadence, so both populations run at the rate they were asked to until the
+  # platform is too slow to keep up at all. S2's cells were 9.51/s and 10.49/s
+  # before, during and after a partition. Waiting for those to move would mean
+  # waiting for worker-service to have already fallen over.
+  #
+  # ── How the stress is sized ──────────────────────────────────────────────────
+  #
+  # A word on the field name first, because this suite uses "worker" for three
+  # unrelated things. `stressors.cpu.workers` in the manifest is Chaos Mesh's own
+  # field for the number of **stress-ng CPU burner threads** it starts inside the
+  # target container. It is not a worker-executor, not a worker-service replica,
+  # and not the running-workers set several scenarios below talk about.
+  #
+  # worker-service on golem-dev requests 200m of CPU and sets no limit, so those
+  # threads are bounded by `workers × load` rather than by a cgroup quota, and
+  # the workflow scales the deployment to 3 replicas on 4-vCPU management nodes,
+  # one replica per node. The ceiling is a probe deadline rather than a core
+  # count: the liveness probe hits /healthcheck every 15s with a 1s timeout and a
+  # failure threshold of 3, so roughly 45 seconds of a starved event loop is a
+  # kill, and the readiness probe pulls a pod out of the Service endpoints in
+  # about 30. Either turns this scenario into an unplanned worker-service outage
+  # and answers a different question. A worker-service restart across this window
+  # is a finding, not noise — see the runbook.
+  - code: S21
+    name: worker-service-cpu-saturation
+    enabled: true
+
+    fault:
+      kind: cpu-stress
+      target: worker-service
+      # Every replica, by label. Loading one of three would leave two thirds of
+      # the relay traffic untouched, and the premium is a p50 across all of it.
+      mode: all
+      durationSecs: 180
+
+    phases:
+      # Same shape as S2, and for the same reason: the premium is compared
+      # against an undisturbed baseline, so that baseline has to be past cold
+      # starts and route warm-up.
+      baselineSecs: 300
+      faultSecs: 180
+      # Long enough to tell a population that degraded and came back from one
+      # that degraded and stayed down. That distinction is the run's correctness
+      # claim, since the fault itself is bounded in time.
+      recoverySecs: 420
+
+    ownership:
+      # Nothing here touches the shard-manager, so shards must not move. If they
+      # do, the pairing describes agents that have since relocated and the two
+      # populations are no longer the ones that were measured.
+      settleSecs: 120
+
+    relay:
+      # Identical to S2: the split is decided by hashing agent ids, not by
+      # anything this scenario arranges, so it needs the same gate against a run
+      # whose pairs all landed together.
+      crossPodFloorPercent: 25
+      # Read only by the after-heal check under this expectation. Cross-pod is
+      # *supposed* to fall inside the window, so a during-fault drop is recorded
+      # as the degradation the run set out to measure rather than raised as a
+      # finding. What is not allowed is failing to come back: the fault is
+      # bounded in time, so its effect has to be bounded too.
+      crossPodFloorThroughputPercent: 70
+      # Carried for the shared report shape. Under relay-degraded the co-located
+      # population is judged against cross-pod rather than against this floor —
+      # a co-located call crosses worker-service once and a cross-pod call
+      # crosses it twice, so the shorter path losing more is the finding, at
+      # whatever absolute level both of them sit.
+      coLocatedFloorThroughputPercent: 70
+      # The same vacuity guard S2 needs, and needed first: if the two
+      # populations cost the same on the undisturbed baseline they are not two
+      # populations, and everything below compares a thing to itself.
+      crossPodPremiumFloorMs: 5
+      expectation: relay-degraded
+      # The only size this scenario judges. Not how much the fault hurt — that
+      # is what the run is for and the numbers are reported — but whether the
+      # hurt stopped when the fault did.
+      #
+      # Two floors used to sit here asking the fault to degrade by a minimum.
+      # Both went: 150% on the premium was a guess against a measured 120%, and
+      # the run that cleared it turned out to have caught a bimodal baseline on
+      # the right side of its swing. Meanwhile both runs at this rate left
+      # latency above baseline a full recovery window after the heal and still
+      # climbing, which is the thing worth failing on.
+      #
+      # 110 rather than tighter because the recovery window follows the fault
+      # immediately and its first minute is legitimately still draining.
+      recoveryFloorPercent: 110
+
+    workload:
+      # S2's populations unchanged, and deliberately so: the placement split is
+      # decided by hashing agent ids, so keeping the counts keeps the two
+      # populations the same two populations S2 measured. Only the rate below
+      # differs.
+      durableAgents: 100
+      ephemeralAgents: 50
+      scheduledAgents: 50
+      promiseAgents: 50
+      # Zero, as in S2. Quota traffic crosses the shard-manager link rather than
+      # worker-service, so it would add load without adding signal.
+      quotaAgents: 0
+      rpcAgents: 200
+      # Eight times the rest of the suite, and knowingly past the 25% cap
+      # documented on `rate_per_sec`. That cap is a margin for faults that remove
+      # capacity — S13 kills executors, so a rate comfortable at two has to
+      # survive one — and this fault removes none. What it does need is a
+      # worker-service that is actually spending CPU, because a fault that takes
+      # CPU away from a service that wants none measures scheduling delay rather
+      # than saturation.
+      #
+      # The first run measured what it wants: 0.05 cores per pod at 91 ops/s,
+      # on 4-vCPU nodes carrying one replica each. Two stressors take 1.8 cores
+      # and leave 2.2, so worker-service has to want 2.2 before losing them
+      # registers, which is 44x this rate. Eight times gets it to 0.4 cores and
+      # leaves the executors at 2.8 of their 8, measured flat at 0.35 through
+      # the whole first run. Closing the rest of the gap belongs to the
+      # stressor, not to the workload.
+      #
+      # The agent counts do not rise with it. Each agent is delivering 0.2 ops/s
+      # against a serial ceiling near 8/s, so the rate has roughly 40x of room
+      # before an agent is the constraint.
+      ratePerSec: 800
+
+    retryPolicy:
+      # Load-bearing here in a way it is not in S2. A starved relay is exactly
+      # what produces transport failures, and a retry that succeeds is the
+      # difference between a degraded platform and a lossy one.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # S19 — one executor's wall clock moved half a minute behind (GOL-383).
+  #
+  # A clock that is uniformly wrong is undetectable from inside the pod it runs
+  # on: every comparison the pod makes between two of its own readings is
+  # correct, because the error cancels. Only a comparison between its clock and
+  # another machine's can go wrong, and on this platform there is exactly one of
+  # those — the quota lease. The shard-manager mints `expiresAt` on its clock and
+  # the executor decides against its own clock when to renew and whether the
+  # lease is already dead.
+  #
+  # The scheduler is deliberately *not* the target, though the ticket names it.
+  # An executor claims due actions `WHERE shardId = ANY(...) AND availableAtMs <=
+  # now`, and shard sets are disjoint, so two executors can never contend for one
+  # action however far apart their clocks are. There is no lease to lose and no
+  # double fire to produce: the owner fires late, by exactly the skew. It is
+  # still driven here, because the *recovery edge* is where that lateness becomes
+  # visible — see `skew.rs`.
+  #
+  # ── Why a skew run needs more guards than a normal scenario ──────────────────
+  #
+  # This is the S2 problem in a sharper form. A run whose injection silently
+  # failed produces exactly the report a run whose injection landed and did no
+  # harm produces, and neither has anything missing from it. Two guards close
+  # that: `skew.toleranceMs` fails a run whose measured offset does not match the
+  # one asked for, and the driver refuses to inject at all if every quota agent
+  # landed on one executor — the shard-manager only reclaims a stale lease when
+  # some *other* pod touches the same resource, so a one-sided population makes
+  # the fault inert by construction.
+  - code: S19
+    name: executor-clock-skew
+    # Parked, and it must stay parked until TimeChaos is understood here. The
+    # skew is applied by ptrace, and every attempt so far left the executor
+    # *stopped* rather than running on a moved clock, so the scenario has never
+    # measured the thing it exists to measure. The first attempt also left a
+    # chaos resource whose finalizer would not clear, which held Flux suspended
+    # for three hours.
+    #
+    # Disabled rather than deleted because the switch is exactly what it is for:
+    # a full suite pass skips this, and naming `S19` explicitly still runs it,
+    # which is what working on it needs. See docs/runbooks/cloud-chaos-s19.md in
+    # golem-cloud.
+    enabled: false
+
+    fault:
+      kind: clock-skew
+      target: worker-executor
+      # One executor, and the workflow narrows the selector to the pod the
+      # driver named. `all` would move every clock by the same amount, which is
+      # a cluster that agrees with itself and disagrees only with the driver —
+      # no lease disagreement anywhere, and a run that measures nothing.
+      mode: one
+      # Must equal phases.faultSecs, for S16's reason: Chaos Mesh recovers a
+      # TimeChaos on its own `duration` while the workflow holds the phase for
+      # faultSecs, so a shorter value here leaves the tail of the fault phase
+      # measuring a cluster whose clock was already correct.
+      durationSecs: 420
+
+    phases:
+      # Long enough for cold starts and route warm-up to settle, and for several
+      # lease renewals to have gone round undisturbed, so the baseline is a
+      # steady state rather than a warm-up.
+      baselineSecs: 300
+      # Sized to the renewal cycle rather than to a caller's timeout. On
+      # golem-dev the lease runs 60s and the executor renews when it believes
+      # fewer than 20s remain, so a pod 30s behind renews about 10s after its
+      # lease has actually expired, once every ~70s. 420s gives half a dozen of
+      # those exposure windows, which is enough for a p50 to mean something.
+      faultSecs: 420
+      # Two things have to finish in here: the quota stream returning to its own
+      # baseline once the clock is corrected, which costs at most one renewal
+      # cycle, and the scheduled backlog draining under a corrected clock, which
+      # is where the skew's cost to scheduled work actually shows.
+      recoverySecs: 300
+
+    workload:
+      # The population the fault can reach. Split by shard ownership across the
+      # two executors, so ~60 sit on the skewed pod and ~60 are the control —
+      # and the control half is not decoration: without a second pod renewing
+      # against the same resource, nothing ever reclaims the stale lease.
+      quotaAgents: 120
+      # Along for the exactly-once oracle. A duplicate execution is the headline
+      # guarantee the ticket asks about, and the durable stream is the only one
+      # that can be read back exactly.
+      durableAgents: 60
+      # Zero on purpose, same as S16: only the `scheduled` block's registrations
+      # carry a token into the target's fire log, and setting both is refused at
+      # load time.
+      scheduledAgents: 0
+      # Nothing about a promise or an ephemeral agent crosses a clock boundary,
+      # so both would add operations to the report without adding evidence.
+      ephemeralAgents: 0
+      promiseAgents: 0
+      rpcAgents: 0
+      # Split evenly between the two active streams, so ~50 quota reservations a
+      # second. Far below the `chaos-quota` rate limit, deliberately: a refusal
+      # here has to mean a lease the executor could not renew, not a bucket the
+      # workload drained itself.
+      ratePerSec: 100
+
+    scheduled:
+      # 60 targets, classified against whichever executor the quota split picked
+      # rather than choosing it themselves. Ownership is per agent id and these
+      # are a different agent type, so the executor holding most quota agents
+      # need not hold most targets — which is fine, and why the placement is
+      # read separately.
+      targets: 60
+      # 20 registrations a second overall. Lower than S10's 50 because the fire
+      # log here is read after a 420s fault and a 300s recovery, and every fire
+      # is an entry the target has to hand back in one invocation.
+      intervalMillis: 3000
+      # Comfortably longer than the skew, so an action registered during the
+      # fault is still pending when the clock is corrected. That is the whole
+      # scheduled measurement: the backlog fires with a *corrected* stamp and
+      # shows a real delay of about the skew, where during the fault the same
+      # fires read as perfectly punctual because the pod stamps its own late
+      # fire with its own late clock.
+      leadSecs: 30
+      # What a late fire may cost, and the number the delay percentiles are
+      # reported against. Sized to the skew rather than to a reassignment: no
+      # shard moves here, so the only thing an action can be late by is the
+      # offset plus the scheduler's own poll interval.
+      leaseBudgetSecs: 60
+
+    skew:
+      # Half a minute, backwards. Not a round number: on golem-dev the executor
+      # renews with 20s of headroom, so any skew smaller than that keeps every
+      # renewal inside the valid window and the fault is inert. 30s overshoots
+      # it by 10, so the skewed pod renews 10s after its lease has expired by
+      # the granting clock, every cycle, for the whole window.
+      #
+      # Forwards does nothing at all: a clock that runs fast makes the executor
+      # renew early, which costs an extra RPC and produces no disagreement.
+      # Refused at load time.
+      injectedOffsetMs: -30000
+      # What the measured offset may be out by before the run is called one that
+      # injected nothing. Generous against the number it guards — the probe
+      # carries its own invocation round trip, which is milliseconds — and far
+      # enough below 30000 that a clock which never moved cannot pass.
+      toleranceMs: 5000
+      # How far above its own baseline the quota stream's p50 may still sit once
+      # the clock is corrected. 150 rather than the 110 the relay scenario uses,
+      # because this p50 is a plain invocation of tens of milliseconds and a
+      # tenth of that is inside ordinary run-to-run spread.
+      #
+      # Reported, not failed: losing a lease under skew is a legitimate response
+      # and how long getting it back may take is a judgement.
+      recoveryFloorPercent: 150
+      # Readings per group per round, and there are four rounds — one on the
+      # undisturbed baseline and three through the fault. A median rather than a
+      # single reading, so one probe that caught a slow invocation cannot decide
+      # the run.
+      probesPerRound: 3
+
+    retryPolicy:
+      # Identical to the others. The consequence specific to this scenario is
+      # that a reservation parked behind a lost lease looks like a slow call
+      # rather than a failed one, so the retry rarely fires — which is itself
+      # worth knowing, and why the latency cells are the measurement rather than
+      # the acceptance counts.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # S7 — executor pod kill during agent state revert (GOL-371).
+  #
+  # The only scenario that disturbs work the platform is trying to *undo*. Each
+  # agent builds its counter up with a run of increments and then asks for some
+  # of them back, over and over, while an executor is killed underneath.
+  #
+  # It is also the only read-back in the suite with no band of doubt in it. The
+  # last increment of a round returns the counter's value, so the driver knows
+  # exactly what the agent was worth before the revert and exactly how many
+  # invocations it asked to take back. Afterwards there are two legal values and
+  # nothing between them, which is why S7's findings fail the run outright.
+  #
+  # S4 — the shard manager's name stops resolving on one worker-executor
+  # (GOL-373).
+  #
+  # The second control of the set, next to S2, and the one whose expected result
+  # is hardest to distinguish from a run that measured nothing.
+  #
+  # The executor holds one connection to the shard manager, built by
+  # `GrpcClient::new` with an idle TTL of `Duration::MAX`
+  # (golem-service-base/src/grpc/client.rs). DNS is consulted when that
+  # connection is established and never again while it lives, so SERVFAIL
+  # against a live channel should cost nothing at all. Establishing that is the
+  # point: "a transient DNS outage costs us nothing" is a claim worth holding
+  # evidence for rather than reading off the source. MF2 (GOL-537) is the
+  # companion that takes the connection away first and forces a re-resolution
+  # while the name is poisoned.
+  #
+  # ── What the fault can reach ─────────────────────────────────────────────────
+  #
+  # Two things, and neither is what the ticket first assumed. `register` once at
+  # startup, and quota lease renewal every ten seconds. The executor never calls
+  # `get_routing_table` — only worker-service does — and ownership and health
+  # checks are both pushed shard-manager to executor, so the executor's own
+  # resolver cannot affect either. "Without ownership loss" is right, but because
+  # a DNS problem here cannot get near ownership, not because ownership survives
+  # one.
+  #
+  # ── What proves the fault landed ─────────────────────────────────────────────
+  #
+  # Nothing in this file, and nothing the driver can see. The whole scenario
+  # expects flat numbers, so an unapplied fault and a correctly applied one
+  # produce the same result — the shape that cost a window on S2 and again on
+  # S19. The workflow proves it separately, before the baseline: it puts a
+  # busybox pod under the same DNSChaos with the same patterns and requires the
+  # poisoned name to fail and an external name to still resolve. See
+  # docs/runbooks/cloud-chaos-s4.md in golem-cloud.
+  #
+  # ── Infrastructure this needs, which no other scenario does ──────────────────
+  #
+  # A Chaos Mesh DNS server, network policy in both directions around it, and a
+  # target whose root filesystem is writable — chaos-daemon injects by writing a
+  # backup and a temp file into the container's /etc, so it cannot inject into a
+  # read-only root at all. The first two are Flux-managed and must be on
+  # golem-cloud's main before a run; the third the workflow patches on and off
+  # around the run. All three are in the runbook.
+  - code: S4
+    name: executor-shard-manager-dns-failure
+    enabled: true
+
+    fault:
+      kind: dns-failure
+      target: worker-executor
+      # One executor, and the workflow narrows the selector to the pod the driver
+      # named. The other executor is not a spare: the headline number is this
+      # one's quota latency as a percentage of the other's over the same window,
+      # so `all` would leave the run with nothing to divide by.
+      mode: one
+      # Must equal phases.faultSecs, for S16's reason: Chaos Mesh recovers a
+      # DNSChaos on its own `duration` while the workflow holds the phase for
+      # faultSecs, so a shorter value here leaves the tail of the fault phase
+      # measuring an executor whose resolver was already back.
+      durationSecs: 300
+
+    phases:
+      # Long enough for cold starts and route warm-up to settle, and for several
+      # lease renewals to have gone round undisturbed, so the baseline the
+      # recovery reading is taken against is a steady state.
+      baselineSecs: 300
+      # Thirty renewal cycles. Sized to the renewal loop rather than to a
+      # caller's timeout, because the renewal is the only executor traffic the
+      # poisoned name is on the path of, and one that never re-resolves has to
+      # be given many chances not to before "it never re-resolves" is worth
+      # saying.
+      faultSecs: 300
+      # Shorter than the fault window, unlike most scenarios here. There is no
+      # backlog to drain and no reassignment to settle — if the fault reached
+      # nothing there is nothing to come back from, and if it reached the quota
+      # stream a rebuilt connection is one renewal cycle away.
+      recoverySecs: 240
+
+    ownership:
+      # Shards must not move here: nothing in this fault touches the shard
+      # manager, and the executor's resolver is on the far side of every path
+      # that could. Sampled so that a run where they did move says so, since a
+      # reassignment would mean the two groups are no longer the ones the
+      # comparison was aimed with.
+      settleSecs: 120
+
+    workload:
+      # The population the fault can reach, split by shard ownership across the
+      # two executors so roughly 60 sit on the target and 60 are the control.
+      # The control half is the measurement, not a comfort — see `resolution`.
+      quotaAgents: 120
+      # Along for the exactly-once oracle. A duplicate execution is the headline
+      # guarantee, and the durable stream is the only one that can be read back
+      # exactly.
+      durableAgents: 60
+      # Zero on purpose. Nothing about a scheduled action, a promise, an
+      # ephemeral agent or a cross-pod call crosses the executor's own resolver,
+      # so each would add operations to the report without adding evidence.
+      scheduledAgents: 0
+      ephemeralAgents: 0
+      promiseAgents: 0
+      rpcAgents: 0
+      # Split evenly between the two active streams, so ~50 quota reservations a
+      # second. Far below the `chaos-quota` rate limit, deliberately: a refusal
+      # here has to mean a lease the executor could not renew, not a bucket the
+      # workload drained itself.
+      ratePerSec: 100
+
+    resolution:
+      # Mirrored from kubernetes/chaos/golem-dev/dnschaos-s4.yaml rather than read
+      # from it, because the driver never touches Kubernetes and an archived
+      # result should say what was made unresolvable without the manifest beside
+      # it. Nothing checks the two agree; the workflow's capability preflight is
+      # where that is established.
+      poisonedName: shard-manager.golem-release.svc.cluster.local
+      # How far above the *control executor's* p99, in the same window, this
+      # executor's quota p99 may sit before the run records `quota-degraded`.
+      #
+      # Against the other executor rather than against its own baseline, because
+      # a cost here would be concurrent with the fault: both halves run the same
+      # workload against the same shard manager at the same instant, so the
+      # difference between them is the fault and not the hour.
+      #
+      # A p99 rather than a p50, and MF2 run 2 is why. What this fault does when
+      # it bites is park a minority of reservations for tens of seconds, which
+      # barely moves a median: that run read 122% at p50 while the same cells
+      # carried 124,064% at p99. Comparing medians for a tail phenomenon
+      # measures the wrong thing.
+      #
+      # 300 rather than something tighter because a p99 between two populations
+      # of sixty agents is not a stable number — S4 run 1 read 121% here on a
+      # cluster where the fault provably reached nothing, and its baseline
+      # windows sat around 129%. 300 clears that spread with room and is still
+      # three orders of magnitude below what a real park produces.
+      degradationCeilingPercent: 300
+      # How far above its own baseline this executor's post-fault quota p50 may
+      # sit before the run records `quota-did-not-recover`. 150 for S19's reason:
+      # a tenth of a tens-of-milliseconds p50 is inside ordinary run-to-run
+      # spread.
+      #
+      # Both are recorded rather than failed. A quota stream that ran slower on
+      # the pod that could not resolve the shard manager is the most interesting
+      # result S4 could produce, and failing the run on it would bury it under a
+      # red cross instead of putting it in front of someone.
+      recoveryFloorPercent: 150
+      # Which way the ceiling is read. `survives` means a target group that fell
+      # behind its control is the finding — something re-resolved a name it was
+      # not supposed to need. MF2 sets the opposite and is checked against this
+      # one at load time.
+      expectation: survives
+
+    retryPolicy:
+      # Identical to the others. The consequence specific to this scenario is
+      # that there should be nothing for it to do: the fault is not expected to
+      # produce a transport error at all, so a retry that fires here is itself
+      # worth reading.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # MF2 — the same DNS failure, held across a shard-manager restart (GOL-537).
+  #
+  # S4 with the thing that makes it null taken away. S4 established that an
+  # executor rides out a DNS outage because its shard-manager channel is built
+  # once with an infinite idle TTL and never rebuilt. MF2 restarts the shard
+  # manager inside the DNS window, so the channel has to be rebuilt and the
+  # rebuild is the first moment resolution matters.
+  #
+  # ── Why the control group is sharper here than anywhere else ─────────────────
+  #
+  # The restart is a *shared* shock. Both executors lose their connection to it,
+  # not just the one under DNS chaos. The only thing that differs between them is
+  # whether they can resolve `shard-manager...` to get the connection back. So
+  # the gap between the two groups is the DNS failure with everything else held
+  # constant — same workload, same shard manager, same instant.
+  #
+  # That is also why `expectation: degrades` is load-bearing rather than
+  # cosmetic. Under it, two executors that came out alike is the finding: it
+  # means the restart did not force a re-resolution and the run measured S4
+  # again under an MF code.
+  #
+  # ── What the restart is expected NOT to do ──────────────────────────────────
+  #
+  # Move shards. The shard manager rebuilds its assignment from Aurora on
+  # startup and discovers executors through the Kubernetes API rather than by
+  # waiting to be registered — `shard-manager-pod-reader` in the golem-release
+  # RBAC is that grant. Health checks run shard-manager to executor, so the
+  # target's broken resolver cannot affect them either. A run where shards moved
+  # is reporting something other than what it injected, and the ownership
+  # samples on both sides of the restart are there to say so.
+  #
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+  #
+  # Identical to S4's, and just as absent by default: an operator opens the DNS
+  # chaos window before the run. See docs/runbooks/cloud-chaos-mf2.md and
+  # docs/runbooks/chaos-dns-capability.md in golem-cloud.
+  - code: MF2
+    name: executor-dns-failure-across-shard-manager-restart
+    enabled: true
+
+    fault:
+      kind: dns-failure
+      target: worker-executor
+      mode: one
+      # Must equal phases.faultSecs, for S16's reason.
+      durationSecs: 420
+      # Named rather than globbed: a composed scenario has two manifests sharing
+      # its code, so leaving the choice to alphabetical order would decide which
+      # fault is which.
+      manifest: dnschaos-mf2.yaml
+
+    composed:
+      kind: pod-kill
+      target: shard-manager
+      manifest: podchaos-mf2.yaml
+      # A third of the way in, leaving ~280s of overlap. The number that matters
+      # is what it has to clear, and that is the quota lease, not a timeout.
+      #
+      # On golem-dev the lease runs 60s and the executor renews when it believes
+      # fewer than 20s remain. After the restart drops the connection, the target
+      # executor's next renewal attempt has to resolve the name and cannot, so
+      # the lease runs out at most 60s later and its reservations park. 280s is
+      # four of those cycles: enough that the parking is a steady state rather
+      # than a single blip, and enough for the p50 to mean something.
+      afterFraction: 0.33
+      # The floor is one full lease plus headroom. Below 90s the overlap may not
+      # have outlasted a single lease lifetime, and then the run cannot
+      # distinguish "could not re-resolve" from "had not needed to yet" — which
+      # is exactly the confusion this scenario exists to remove.
+      minOverlapSecs: 90
+
+    phases:
+      # S4's, so the pair is readable against each other.
+      baselineSecs: 300
+      # Longer than S4's 300. The window has to contain the restart, the
+      # executor noticing its connection is gone, several failed renewals, the
+      # lease lapsing, and then long enough after that for the parked
+      # reservations to be a measurement rather than an edge.
+      faultSecs: 420
+      # Longer than S4's too. There is real work to come back from here: the
+      # target has to re-resolve, rebuild the channel, re-acquire a lease and
+      # drain whatever parked behind it. S4's 240 would cut that short and
+      # report a recovery that had not finished.
+      recoverySecs: 420
+
+    ownership:
+      # Sampled either side of the restart as well as at the end. The shard
+      # manager going away is the one part of this composition that could move
+      # shards, and a run where it did is no longer comparing the two
+      # populations it was aimed with.
+      settleSecs: 120
+
+    workload:
+      # S4's exactly. The pair is only readable if the population is the same.
+      quotaAgents: 120
+      durableAgents: 60
+      scheduledAgents: 0
+      ephemeralAgents: 0
+      promiseAgents: 0
+      rpcAgents: 0
+      ratePerSec: 100
+
+    resolution:
+      poisonedName: shard-manager.golem-release.svc.cluster.local
+      # The same ceiling as S4, read the other way. Under `degrades` a reading
+      # at or under 300% is the finding: both executors lost the connection and
+      # only one could resolve the name to rebuild it, so they should not match.
+      #
+      # Kept identical to S4's on purpose. A different number would make the two
+      # runs incomparable, and comparability is the entire reason MF2 exists as
+      # a separate scenario rather than as a variant of S4.
+      #
+      # Run 2 measured 124,064% here, so the margin either side of this number is
+      # enormous — which is what a well-chosen threshold for a fault this blunt
+      # should look like.
+      degradationCeilingPercent: 300
+      # Higher than S4's 150. The target executor here really does have to
+      # re-acquire a lease after the name comes back, so its post-fault p50
+      # legitimately sits above baseline for a cycle or two. 200 is generous
+      # against a p50 of tens of milliseconds and still catches a stream that
+      # never came back at all.
+      recoveryFloorPercent: 200
+      expectation: degrades
+
+    retryPolicy:
+      # Identical to S4's. Unlike S4 the retry is expected to fire here: a
+      # reservation parked behind a lease the executor cannot renew will time
+      # out, and one same-key retry after 5s is the bounded response.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # Like S8, S10, S11 and S3 the driver names the pod and keeps driving the
+  # agents on the other executor as a control group.
+  - code: S7
+    name: executor-crash-during-revert
+    enabled: true
+
+    fault:
+      kind: pod-kill
+      target: worker-executor
+      # The workflow narrows the selector to the pod the driver named; `one`
+      # stays as the belt-and-braces bound, as in every other pinned scenario.
+      mode: one
+      durationSecs: 60
+
+    phases:
+      # Long enough for cold starts to settle, so the kill lands on a population
+      # that has been cycling rounds steadily rather than one still arriving.
+      baselineSecs: 180
+      # Covers the kill, the reschedule, and the shard reassignment that has to
+      # happen before anything can revert an agent the dead executor owned.
+      faultSecs: 120
+      # Rounds continue throughout. Long enough that every agent runs several
+      # whole rounds after the kill, so a round disturbed by it is followed by
+      # ones that were not.
+      recoverySecs: 300
+
+    revert:
+      # 200 agents, split by shard ownership across the two executors. Also the
+      # resolution of the report: a torn revert localises to one agent out of
+      # two hundred.
+      agents: 200
+      # Four increments then a revert of two, so a completed round is worth +2.
+      #
+      # `revertInvocations` must not exceed `incrementsPerRound`: a revert that
+      # reached further back would land in the region an earlier revert already
+      # deleted, and the platform refuses that outright — every round would fail
+      # and the run would measure nothing. The driver checks this before
+      # starting rather than discovering it per round.
+      incrementsPerRound: 4
+      revertInvocations: 2
+      # Between rounds. With five operations per round this keeps roughly one
+      # agent in six mid-round at any instant, which is the population a kill
+      # has something to land in. It also has to leave the round long enough
+      # that the workflow's inject-and-verify path — signal poll (5s) plus
+      # `kubectl apply` plus waiting for `AllInjected` — does not fall entirely
+      # between two rounds.
+      intervalMillis: 500
+      # What recovering a reverted agent may cost. Recorded, not asserted: the
+      # floor is a shard reassignment plus the worker recovery that replays the
+      # oplog up to the revert, and how much more than that is acceptable is a
+      # judgement.
+      recoveryBudgetSecs: 60
+
+    retryPolicy:
+      # Applies to the increments only. **The revert is never retried**, and
+      # that exception is load-bearing rather than an oversight: a revert has no
+      # idempotency key and is not idempotent — asking twice for "the last two
+      # invocations" takes back four. A retried revert that had actually landed
+      # would look exactly like the platform tearing a truncation, which is the
+      # finding this scenario exists to make. See `chaos/reverts.rs`.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # S6 — executor pod kill during agent deletion (GOL-372).
+  #
+  # S7 asks the platform to forget some of an agent's work. S6 asks it to forget
+  # the agent, and kills the executor while it is doing so.
+  #
+  # The same two-value oracle, one step further: invoking a deleted id creates a
+  # *new* agent, so when a slot is used again it must report either 1 (the
+  # deletion took) or its old value plus one (it did not). Neither is a defect
+  # alone — a lost response leaves the question open — but "the platform
+  # confirmed the deletion and the agent is still worth what it was" is the
+  # resurrection this scenario is named for, and it fails the run.
+  #
+  # Worth knowing before reading a result: the happy path is already defended.
+  # `Worker::start_deleting` stops the background status flush and checkpointer
+  # first, specifically so neither can resurrect the cached status after the
+  # durable removal. The question is whether that defence survives the pod dying
+  # between the mark and the removal.
+  - code: S6
+    name: executor-crash-during-deletion
+    enabled: true
+
+    fault:
+      kind: pod-kill
+      target: worker-executor
+      # The workflow narrows the selector to the pod the driver named; `one`
+      # stays as the belt-and-braces bound, as in every other pinned scenario.
+      mode: one
+      durationSecs: 60
+
+    phases:
+      baselineSecs: 180
+      faultSecs: 120
+      # Rounds continue throughout, so every slot is reused several times after
+      # the kill and a round it disturbed is followed by ones it did not.
+      recoverySecs: 300
+
+    delete:
+      # 200 slots, split by shard ownership. Also the resolution of the report:
+      # a resurrection localises to one slot out of two hundred.
+      agents: 200
+      # Three increments before each delete, so an agent is worth 3 when it
+      # goes. More than one is load-bearing rather than arbitrary: with a single
+      # increment a fresh agent and a resurrected one both read 1 and the oracle
+      # cannot tell them apart. The driver refuses to start below 2.
+      incrementsPerRound: 3
+      # Between rounds. A round is four operations, so this keeps the delete a
+      # meaningful share of each slot's cycle and gives the kill something to
+      # land in.
+      intervalMillis: 500
+      # What recovering a slot may cost once its executor is back. Recorded, not
+      # asserted.
+      recoveryBudgetSecs: 60
+
+    retryPolicy:
+      # Applies to the increments only. **The delete is never retried**, for a
+      # reason specific to this scenario: `delete_worker_internal` starts with a
+      # metadata lookup and returns `worker_not_found` when there is nothing
+      # there, so deleting twice does not succeed twice. A delete whose response
+      # was lost but which landed would come back on retry as a refusal, and the
+      # run would record "refused, and gone anyway" — one of the violations this
+      # scenario exists to detect. See `chaos/deletions.rs`.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # S9 — executor pod kill during a component rollback (GOL-369).
+  #
+  # S5 moves agents forward onto a new build and kills an executor while that is
+  # happening. S9 moves them forward, waits for that to land, and then moves them
+  # back — killing an executor during the return leg.
+  #
+  # The return leg is the one that matters operationally. A rollback is what you
+  # reach for when the new build is already going wrong, so a rollback happening
+  # under a dying executor is the situation you would actually be in.
+  #
+  # The rollback is a redeploy: `agent-counters` is uploaded again as a new
+  # revision and every agent is asked to move to it. `Counter::component_version`
+  # is compiled into each build, so an agent that has genuinely returned reports
+  # 1 from the code that is running rather than from metadata about what the
+  # platform believes.
+  - code: S9
+    name: executor-crash-during-rollback
+    enabled: true
+
+    fault:
+      kind: pod-kill
+      target: worker-executor
+      # `one` plus the namespace and opt-in label selectors in podchaos-s9.yaml
+      # bound the blast radius. Unlike S8 the driver does not name the pod:
+      # agents are mid-rollback across both executors, so either one interrupts
+      # returns in flight and which one carries no information.
+      mode: one
+      durationSecs: 60
+
+    phases:
+      # Long enough for cold starts and route warm-up to settle, so the roll
+      # forward is applied to a population that is running rather than arriving.
+      baselineSecs: 300
+      # Has to cover the kill, the reschedule, and the rollback finishing on
+      # both the surviving executor and the replacement.
+      faultSecs: 120
+      # Returns continue after the kill and agents have to converge before the
+      # census decides which build they are on.
+      recoverySecs: 300
+
+    workload:
+      # Durable agents are the population being rolled back, so the pool is
+      # large: a stuck agent localises to one out of 200.
+      durableAgents: 200
+      # Not rolled back — they exist to show whether acceptance degraded during
+      # the kill, separately from the rollback.
+      ephemeralAgents: 50
+      # Durable state the rollback does not touch, so they are the control:
+      # their read-back should be unaffected.
+      scheduledAgents: 50
+      promiseAgents: 0
+      # No quota stream, for the same reason as S5: a lease that cannot be
+      # renewed would add a second failure mode to a scenario that has one.
+      quotaAgents: 0
+      ratePerSec: 100
+
+    rollback:
+      # How long to let the roll-forward land before measuring it. Too short and
+      # the census reads a population still in transit, and the gate below
+      # refuses a rollback that would have been fine.
+      settleSecs: 90
+      # The share of agents that must actually report the new build before the
+      # rollback is attempted at all. Below it the driver stops: rolling agents
+      # back to a build they never left would pass every check and prove
+      # nothing, which is the worst artifact this suite can produce.
+      rolledForwardFloorPercent: 90
+      # Retries for the rollback *control plane*, counted apart from the
+      # workload's own. Different question: a request refused because its
+      # agent's executor just died says nothing about correctness, but an agent
+      # nobody successfully asked to come back explains a stale agent later
+      # without excusing one.
+      controlRetries: 2
+      controlRetryDelaySecs: 5
+      # How far into the rollback to ask for the kill. As in S5 this is when the
+      # driver *asks*; applying the PodChaos and confirming it takes a few
+      # seconds more, and the result records both so how far in it landed is
+      # readable rather than assumed.
+      killDelaySecs: 2
+
+    retryPolicy:
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # S16 — key-value PostgreSQL outage recovery (GOL-379).
+  #
+  # The first fault in the suite aimed at something the platform depends on
+  # rather than at the platform itself. The executors keep running, keep their
+  # shards and keep answering the shard-manager. What they lose is the Aurora
+  # cluster underneath them, which on golem-dev carries promises, the
+  # running-workers set, user key-value data and the scheduler's own schema.
+  #
+  # The oplog is on a different cluster and the worker-status hot cache is in
+  # Redis, and neither is touched. That is the interesting part: the platform
+  # keeps the ability to record what it did and loses the ability to know what
+  # it is doing.
+  #
+  # There is no control group of executors, because all three share the cluster.
+  # The control is the baseline window, and the first thing the report has to
+  # establish is that throughput collapsed at all — a partition that silently
+  # failed to take hold would otherwise produce a clean-looking account of an
+  # undisturbed cluster.
+  - code: S16
+    name: keyvalue-postgres-outage
+    enabled: true
+
+    fault:
+      kind: network-partition
+      target: worker-executor
+      # Every executor, unlike every other partition in this suite. A storage
+      # outage that only some executors could see would be a routing fault
+      # wearing a database's clothes, and S3 already covers that shape.
+      mode: all
+      # Must equal phases.faultSecs. Chaos Mesh recovers a NetworkChaos on its
+      # own `duration`, while the workflow holds the phase for faultSecs and
+      # only then deletes the object. Setting this lower lifts the partition
+      # early and leaves the tail of the fault phase measuring a healed
+      # cluster, which is how the first S16 run came to report 16.87% of
+      # baseline throughput during a total outage.
+      durationSecs: 60
+
+    phases:
+      # Long enough for cold starts, component loading and route warm-up to
+      # settle, and for the scheduler to be firing steadily, so the cut lands on
+      # a cluster in steady state.
+      baselineSecs: 300
+      # Sized to the outage this scenario models rather than to the caller's
+      # timeout: the worst case an AWS storage failover imposes, which is an
+      # Aurora reader promotion of about a minute and an ElastiCache Multi-AZ
+      # promotion of about thirty seconds. The key-value retry budget is built
+      # to cover exactly that, so an outage of this length is one the platform
+      # is expected to absorb without losing an executor.
+      #
+      # Deliberately shorter than S3's 180s, and not for the reason S3 gives.
+      # S3 needs the caller's 120s attempt timeout to fire inside the window
+      # because pending-then-timeout is the behaviour it exists to show. Here
+      # the opposite is the claim: invocations issued during the cut should
+      # still be waiting when the link returns and then complete. Throughput is
+      # attributed by completion, so the fault window still reads as a collapse
+      # and the recovery window as the catch-up, which is what says the
+      # partition took hold.
+      #
+      # Do not raise this past the retry budget without meaning to. The budget
+      # is 15 attempts, ~93s of capped backoff plus a 5s pool acquire apiece
+      # against a blackholed endpoint, so roughly 168s. Beyond that the
+      # recovery-index write in `status_flusher` exhausts and panics by design,
+      # and the scenario stops measuring absorption and starts measuring the
+      # crash it is supposed to have removed.
+      faultSecs: 60
+      # Every stream has to get several whole operations after the heal, so a
+      # stream that recovered slowly is distinguishable from one that never
+      # did. Scheduled actions registered during the outage also have to fall
+      # due and fire inside the run rather than after it.
+      recoverySecs: 420
+
+    workload:
+      # The population read back agent by agent, so a lost increment localises
+      # to one agent out of 200.
+      durableAgents: 200
+      # No durable state of their own, but they still need the running-workers
+      # set to start, so they say whether acceptance degraded separately from
+      # whether state survived.
+      ephemeralAgents: 50
+      # Zero on purpose. The scheduled stream is driven by the `scheduled` block
+      # below instead, because only its registrations carry a token into the
+      # target's fire log and scheduler lag cannot be measured without one.
+      # Setting both is refused at load time.
+      scheduledAgents: 0
+      # Promises live in the cluster being taken away, so this stream is
+      # directly on the fault path rather than incidental to it.
+      promiseAgents: 50
+      # No quota stream: a lease renewal failing would add a shard-manager
+      # failure mode to a scenario that is about storage.
+      quotaAgents: 0
+      ratePerSec: 100
+
+    scheduled:
+      # 100 targets, each with its own emitter, same as S10. Also the resolution
+      # of the report: a lost action localises to one target out of a hundred.
+      targets: 100
+      intervalMillis: 2000
+      # 500 actions accepted and not yet run at any instant, so the outage
+      # begins with a large population of work the platform has promised to do
+      # and cannot currently read.
+      leadSecs: 10
+      # What recovering a pending action may cost. Larger than S10's 60s and
+      # deliberately so: there is no shard reassignment here, but the scheduler
+      # cannot claim or acknowledge anything for the whole 180s outage, so the
+      # floor is the outage itself. 240s covers the outage plus a lease TTL and
+      # some catch-up without being so generous that a regression hides inside
+      # it.
+      #
+      # Recorded, not asserted, like every other budget in the suite.
+      leaseBudgetSecs: 240
+
+    storage:
+      # The Aurora writer endpoint the workflow names in the NetworkChaos
+      # manifest's `externalTargets`. Recorded here so the archived result says
+      # which storage the run was about; the driver never resolves or contacts
+      # it.
+      endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+      # The least of the fault window every stream must answer nothing at all
+      # for, as a share of that window, for the outage to count as observed.
+      #
+      # This was a ceiling on during-fault throughput as a share of baseline.
+      # That number is still reported, but it cannot be the verdict: it is a
+      # rate averaged over the whole window, while an absorbed outage does all
+      # its serving in the few seconds at the window's edges. The same handful
+      # of edge confirmations reads as ~8% of a 180s window and ~26% of a 60s
+      # one, so the threshold tracked the window length rather than the
+      # platform, and shortening this window to 60s duly tripped it on a
+      # partition that had plainly landed (run 33099228775: quiet 58.0s of
+      # 62.3s on every stream, yet 25.79% against a 15% ceiling).
+      #
+      # Quiet time is measured against the window's own edges, so it means the
+      # same thing whatever the window is. 50% is far from both outcomes it has
+      # to tell apart: a landed outage is quiet for over 90% of the window, an
+      # undisturbed cluster for a few percent.
+      expect:
+        # Everything is behind this cut, so every stream that was serving is
+        # expected to stop. See `OutageExpectation` for why the rule is named
+        # per scenario rather than shared: S18 cuts a store only part of the
+        # workload touches, and this rule reads that arrangement backwards.
+        kind: whole-workload
+        quietFloorPercent: 50
+      # What serving again may cost once the cluster is reachable. Recorded, not
+      # asserted: this is really a measure of how long sqlx's pool takes to
+      # notice, plus whatever recovery scan the executors run, and how long that
+      # may be is a judgement.
+      recoveryBudgetSecs: 120
+
+    retryPolicy:
+      # Identical to the others and load-bearing for the same reason, with one
+      # consequence specific to S16: the retry is what turns a single stalled
+      # attempt into a second one under the same key. If the database comes back
+      # in between, that retry lands against work the first attempt may already
+      # have half-done, which is exactly what the exactly-once probe is here to
+      # rule on.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # S22 — the long-outage companion to S16 (GOL-499). Same cut, same driver,
+  # held past the point where the platform can absorb it.
+  #
+  # S16 asks whether golem rides out a storage failover. This asks what happens
+  # when the storage does not come back in time. The key-value retry budget is
+  # 15 attempts, roughly 93s of capped backoff plus a 5s pool acquire apiece
+  # against a blackholed endpoint, so about 168s. Past that the recovery-index
+  # write in `status_flusher` panics on purpose, on the grounds that an executor
+  # which cannot maintain its own running-workers index should be replaced
+  # rather than left running with agents it can no longer account for.
+  #
+  # So executor restarts are the *expected* outcome here, not a defect, and
+  # nothing in this entry treats them as one. What the run has to establish is
+  # that the exit is the intended one and that nothing is lost across it: the
+  # scheduled-fire account and the exactly-once account are the same assertions
+  # S16 makes, and they are the ones that fail the build.
+  - code: S22
+    name: keyvalue-postgres-outage-past-budget
+    enabled: true
+
+    fault:
+      kind: network-partition
+      target: worker-executor
+      # Every executor, as in S16. A budget exhausted on only some of them would
+      # leave the survivors serving and make the replay cost unreadable.
+      mode: all
+      # Must equal phases.faultSecs; see the note on S16.
+      durationSecs: 300
+
+    phases:
+      # Same as S16: long enough for cold starts, component loading and route
+      # warm-up to settle, and for the scheduler to be firing steadily.
+      baselineSecs: 300
+      # Comfortably past the ~168s budget rather than just over it. A window
+      # that only just exceeds the budget would make the run's outcome depend
+      # on which second an operation happened to start in, so a rerun could
+      # come back with restarts or without them for no reason worth reporting.
+      # At 300s every tracked transition in the window exhausts.
+      faultSecs: 300
+      # Longer than S16's 420s, and for a reason S16 does not have: the
+      # executors are replaced here, so recovery is not just a pool noticing
+      # its database came back. It is pods rescheduling, rejoining the routing
+      # table, and every agent that was on them replaying from oplog or
+      # snapshot. Scheduled actions registered during the outage also have to
+      # fall due and fire inside the run rather than after it.
+      recoverySecs: 600
+
+    workload:
+      # Identical to S16 on purpose. The two runs are meant to be read side by
+      # side, and a different population would make the difference between them
+      # a question about the workload rather than about the outage length.
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 0
+      promiseAgents: 50
+      quotaAgents: 0
+      ratePerSec: 100
+
+    scheduled:
+      targets: 100
+      intervalMillis: 2000
+      leadSecs: 10
+      # Wider than S16's 240s. The lease has to outlast the outage plus the
+      # replay behind it, or actions would be judged late for the recovery this
+      # scenario exists to measure.
+      leaseBudgetSecs: 480
+
+    storage:
+      endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+      # Same rule and floor as S16, and it should be met even more comfortably:
+      # an outage this long leaves the streams silent for nearly the whole
+      # window.
+      expect:
+        kind: whole-workload
+        quietFloorPercent: 50
+      # Recorded, not asserted, as everywhere else — but read differently here.
+      # In S16 this measures a connection pool noticing. Here it measures a
+      # cluster rebuilding itself, and it is the number that says whether the
+      # deliberate crash is an acceptable trade.
+      recoveryBudgetSecs: 300
+
+    retryPolicy:
+      # Identical to S16's, for the same reason.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # S14 — the oplog half of the storage matrix (GOL-376). Same driver as S16 and
+  # S22, same cut, aimed at the other Aurora cluster.
+  #
+  # S16 takes away the cluster that says what the platform is doing: promises,
+  # the running-workers set, user key-value data and the scheduler's schema. S14
+  # takes away the one that says what it did. The oplog is the only thing on the
+  # indexed cluster, so under this cut promises still resolve, the scheduler
+  # still claims and acknowledges on time, and the running-workers set is still
+  # writable — and nothing durable can be committed. The two scenarios are
+  # near-mirror images and are meant to be read side by side.
+  #
+  # The retry budget is not the interesting quantity here the way it is in S16
+  # and S22. golem-dev gives indexed storage 200 attempts with a 10s cap, which
+  # is over half an hour of stalling, so this window cannot exhaust it. What is
+  # worth watching instead is the error classification: `retry_storage_op`
+  # panics immediately on any indexed-storage error it was not handed as
+  # transient, and transient means `PoolTimedOut` or `Io` and nothing else. An
+  # executor lost during this run is a misclassification finding, not an
+  # exhaustion one.
+  - code: S14
+    name: indexed-oplog-postgres-outage
+    enabled: true
+
+    fault:
+      kind: network-partition
+      target: worker-executor
+      # Every executor, as in S16 and for the same reason: a storage outage only
+      # some executors could see would be a routing fault wearing a database's
+      # clothes.
+      mode: all
+      # Must equal phases.faultSecs; see the note on S16.
+      durationSecs: 60
+
+    phases:
+      # Same as S16, so the two are comparable: long enough for cold starts,
+      # component loading and route warm-up to settle, and for the scheduler to
+      # be firing steadily.
+      baselineSecs: 300
+      # The same worst-case Aurora writer promotion S16 is sized to, about a
+      # minute. GOL-376 was written with 30s, before that number had been
+      # worked out; 60s is the failover this is supposed to model and matching
+      # S16 is what makes the two results readable against each other.
+      faultSecs: 60
+      # As S16: every stream needs several whole operations after the heal, and
+      # scheduled actions registered during the outage have to fall due and fire
+      # inside the run.
+      recoverySecs: 420
+
+    workload:
+      # Identical to S16, deliberately. The comparison between the two runs is
+      # the point, and a different population would turn the difference into a
+      # question about the workload.
+      durableAgents: 200
+      ephemeralAgents: 50
+      # Zero for the same reason as S16: the scheduled stream comes from the
+      # block below, because only its registrations carry a token into the
+      # target's fire log. Setting both is refused at load time.
+      scheduledAgents: 0
+      # Promises live on the cluster this cut leaves alone, so unlike in S16
+      # this stream is not directly on the fault path. It still degrades,
+      # because completing a promise wakes an agent that then cannot commit,
+      # and that gap between "the promise was written" and "the agent got
+      # anywhere" is worth having on the record.
+      promiseAgents: 50
+      quotaAgents: 0
+      ratePerSec: 100
+
+    scheduled:
+      targets: 100
+      intervalMillis: 2000
+      leadSecs: 10
+      # Same as S16's, and it should be met with room to spare. The scheduler is
+      # outside this cut, so claims and acknowledgements keep their timing and
+      # the delay reduces to how long the fired invocation could not commit.
+      # That makes S14 the cleanest read of scheduler lag in the suite: in S16
+      # and S22 the scheduler is inside the outage and the two costs cannot be
+      # separated.
+      leaseBudgetSecs: 240
+
+    storage:
+      # The indexed writer endpoint, not the key-value one. This is the only
+      # field that differs materially from S16.
+      endpoint: golem-postgres-dev-indexed.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+      # Same rule, floor and reasoning as S16.
+      expect:
+        kind: whole-workload
+        quietFloorPercent: 50
+      # Recorded, not asserted. Expected to be small: nothing is replaced here,
+      # so this is a connection pool noticing its database is back plus whatever
+      # the stalled commits still have to do.
+      recoveryBudgetSecs: 120
+
+    retryPolicy:
+      # Identical to S16's, for the same reason.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # ---------------------------------------------------------------------------
+  # S18 — Redis outage (GOL-384)
+  #
+  # The fourth scenario on the storage driver and the first that does not cut a
+  # database. golem-dev runs the key-value layer as `NamespaceRouted`: the
+  # `Worker`, `AgentStatus` and `AgentStatusCheckpoint` namespaces go to a Redis
+  # cache and everything else goes to Postgres. S16 cut the Postgres half and
+  # left this one standing; S18 cuts exactly what S16 left.
+  #
+  # It is sized differently from the other three, and the reason is in the
+  # config rather than in the ambition. Those three are measured against a
+  # platform retry budget — S16 and S14 stay inside one, S22 runs past one. This
+  # client has no budget to run past: golem-dev sets the cache's
+  # RETRIES__MAX_ATTEMPTS to 0, which the code turns into a fred reconnect
+  # policy with unlimited attempts, and fred's defaults then give the client no
+  # command timeout and an unbounded command buffer. A cache write during the
+  # cut does not fail. It waits.
+  #
+  # So the only clock that can run out is the caller's, and the window is set
+  # against that instead: past the 120s attempt timeout, so operations time out
+  # and retry under the same idempotency key while the original write is still
+  # queued inside fred. Two landings of one operation is what this run is for.
+  # ---------------------------------------------------------------------------
+  - code: S18
+    name: redis-cache-outage
+    enabled: true
+
+    fault:
+      kind: network-partition
+      target: worker-executor
+      # Every executor, as in the other three: a cache outage only some
+      # executors could see would be a routing fault wearing a cache's clothes.
+      mode: all
+      # Must equal phases.faultSecs; see the note on S16.
+      durationSecs: 180
+
+    phases:
+      # Same as the other three, so all four are comparable.
+      baselineSecs: 300
+      # Past the workload's 120s ATTEMPT_TIMEOUT plus its 5s retry delay, so an
+      # operation that starts early in the window times out, retries, and has
+      # that retry still in flight when the heal arrives. At 60s nothing would
+      # time out and the run would only show slower operations completing, which
+      # the config already tells us without spending a run.
+      faultSecs: 180
+      # As the others. The drain here is larger than S14's — three minutes of
+      # coalesced status writes and queued commands come back at once — so this
+      # needs to cover a burst rather than a trickle.
+      recoverySecs: 420
+
+    workload:
+      # Identical to S16 and S14, deliberately, so the difference between the
+      # four results is the fault and not the population.
+      durableAgents: 200
+      ephemeralAgents: 50
+      # Zero for the same reason as the others: the scheduled stream comes from
+      # the block below. Setting both is refused at load time.
+      scheduledAgents: 0
+      # Expected to be one of the two streams that actually stops. Completing a
+      # promise suspends and wakes an agent, and a suspend is a lifecycle
+      # boundary, which is one of the few things that still crosses this cache
+      # synchronously.
+      promiseAgents: 50
+      quotaAgents: 0
+      ratePerSec: 100
+
+    scheduled:
+      targets: 100
+      intervalMillis: 2000
+      leadSecs: 10
+      # Raised from the 240 the other three use, because the window itself is
+      # 180s. A fire at the start of the outage is delayed by roughly the whole
+      # window before it can make progress, and then joins a drain queue behind
+      # three minutes of backlog. 300 leaves headroom for that tail without
+      # making a delay the platform should be ashamed of look acceptable.
+      leaseBudgetSecs: 300
+
+    storage:
+      # The Redis primary endpoint, not either Aurora writer. Both Postgres
+      # clusters stay reachable for the whole run.
+      endpoint: master.golem-redis-dev.intsie.use1.cache.amazonaws.com
+      # The one scenario in this family that does not use the whole-workload
+      # rule, because this cut is partial by construction and that rule reads a
+      # partial cut backwards. Run 33130077355 proved it: `durable` held 100%
+      # of its baseline throughout, exactly as NamespaceRoutedKeyValueStorage
+      # says it should, and the shared rule reported the partition as one that
+      # never landed.
+      #
+      # `ephemeral` is the only stream named. Its agents are created and torn
+      # down per operation, so every one of them crosses a lifecycle boundary,
+      # which is one of the few things that still reaches this cache
+      # synchronously. It went silent for 99.997% of that first window.
+      #
+      # `promise` was expected to be the second and was not: the mixed
+      # workload's promise stream is get_promise+complete in one round trip
+      # against a durable agent and never suspends. The suspending variant is
+      # `promise-wait`, which S11 drives and this scenario does not enable.
+      #
+      # The serving floor is the half a shared rule cannot state. Durable,
+      # scheduled and promise are claimed to be off this fault path because of
+      # where the code routes their namespaces, and that claim is worth
+      # asserting: a stall there would mean the status blob is not off the
+      # commit path the way AgentStatusFlusher describes. All three held
+      # 99.94-100.06% on the first run, so 50 catches a real regression without
+      # tripping on noise.
+      expect:
+        kind: partial-workload
+        silenced: [ephemeral]
+        quietFloorPercent: 50
+        servingFloorPercent: 50
+      # Recorded, not asserted. Expected to be larger than S14's: nothing is
+      # replaced, but three minutes of coalesced status writes and buffered
+      # commands all arrive at once when the connection returns.
+      recoveryBudgetSecs: 180
+
+    retryPolicy:
+      # Identical to the other three, and load-bearing here rather than
+      # incidental. Retrying transport errors once under the same idempotency
+      # key is the whole mechanism by which a stalled operation and its retry
+      # can both land, which is the question the run exists to answer.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # ---------------------------------------------------------------------------
+  # S17 — Redis latency degradation (GOL-375)
+  #
+  # The fifth scenario on the storage driver, and the first that does not break
+  # anything. S18 took the Redis cache away; this leaves it reachable and makes
+  # it slow. That is a different question rather than a milder version of the
+  # same one: S18 asked whether the platform survives losing its worker-status
+  # store, and this asks whether it degrades or breaks when that store gets
+  # slower. "It went quiet" would be a failure here, not the expected result.
+  #
+  # GOL-375 asks for three things S18 could not give it — invocation latency
+  # under load, RSS peak, and pending-work evidence — and for a determination of
+  # whether worker-status writes block invocation completion or are best effort.
+  # S18 answered half of that: best effort for a resident durable agent, because
+  # AgentStatusFlusher takes the blob off the commit path, and blocking for
+  # anything crossing a lifecycle boundary. This run gets the other half, which
+  # is what that costs when the store is merely slow rather than gone.
+  # ---------------------------------------------------------------------------
+  - code: S17
+    name: redis-cache-latency
+    enabled: true
+
+    fault:
+      # Recorded for the archive rather than acted on: the workflow selects the
+      # manifest by scenario code and reads the Chaos Mesh kind out of the
+      # manifest itself. It compares this string only against `none`,
+      # `network-partition` and `pod-kill`, none of which this is.
+      kind: network-delay
+      target: worker-executor
+      # Every executor, as in every other storage scenario. A cache that is slow
+      # for only some executors is a routing fault wearing a cache's clothes.
+      mode: all
+      # Must equal phases.faultSecs; see the note on S16.
+      durationSecs: 300
+
+    phases:
+      # Same as every other storage scenario, so they stay comparable.
+      baselineSecs: 300
+      # Longer than any of the others, and not for the reason S18's window is
+      # long. Nothing times out under a 500ms delay — an ephemeral operation
+      # goes from about 212ms to under a second, nowhere near the 120s attempt
+      # timeout — so there is no caller clock to outrun. The length is for the
+      # two things GOL-375 asks for that need time to develop: a memory series
+      # long enough to show whether the executor's dirty-status set grows, and
+      # a steady state rather than a transient. At the workflow's 15s sampling
+      # interval this is about 20 memory samples inside the window.
+      faultSecs: 300
+      # As the others.
+      recoverySecs: 420
+
+    workload:
+      # Identical to S14, S16, S18 and S22, so the difference between the five
+      # results is the fault and not the population.
+      durableAgents: 200
+      ephemeralAgents: 50
+      # Zero for the same reason as the others: the scheduled stream comes from
+      # the block below. Setting both is refused at load time.
+      scheduledAgents: 0
+      promiseAgents: 50
+      quotaAgents: 0
+      ratePerSec: 100
+
+    scheduled:
+      targets: 100
+      intervalMillis: 2000
+      leadSecs: 10
+      # The scheduler keeps its own schema on Postgres, which this fault does
+      # not touch, so its claims and acknowledgements should be unaffected. S18
+      # confirmed that: during-fault p99 was 2094ms against a 2099ms baseline.
+      # 240 as the other three, and it should not be approached.
+      leaseBudgetSecs: 240
+
+    storage:
+      # The same Redis endpoint S18 cuts. Both Aurora clusters stay reachable
+      # and unslowed for the whole run.
+      endpoint: master.golem-redis-dev.intsie.use1.cache.amazonaws.com
+
+      expect:
+        # Neither of the rules a cut uses. Under a delay nothing is supposed to
+        # fall silent, so silence is not available as evidence that the fault
+        # landed and time has to stand in for it.
+        kind: latency-degradation
+
+        # `ephemeral` alone, for the reason S18 measured rather than predicted:
+        # its agents are created and torn down per operation, so every one
+        # crosses a lifecycle boundary, and that is one of the few things still
+        # reaching this cache synchronously. Under S18 it was the only stream
+        # that stopped.
+        slowed: [ephemeral]
+
+        # Ephemeral's baseline median was 212ms in S18's run. The delay is 500ms
+        # applied to egress only (`direction: to`, which Chaos Mesh's webhook
+        # requires for netem against an external target), so one Redis round
+        # trip inside the operation puts it at about 712ms, or 3.4x. Two put it
+        # near 5.7x.
+        #
+        # 2.0 sits below the single-round-trip case with room to spare while
+        # still failing the run that matters: a netem rule that never applied
+        # leaves the stream at roughly 1.0x, and the report would otherwise be
+        # full of healthy numbers describing an experiment that never happened.
+        slowdownFloor: 2.0
+
+        # The other three, and the claim that makes the 6.59x above attributable
+        # to this cache rather than to a slower cluster. Their agents are
+        # resident and durable, so `AgentStatusFlusher` keeps the status blob off
+        # the commit path and nothing they do crosses Redis synchronously — and
+        # the first run bore that out exactly, at 61ms, 100ms and 91ms in all
+        # three windows. S15 makes the mirror claim with the two lists swapped.
+        steady: [durable, promise, scheduled]
+
+        # Room for the spill of sharing executors and a runtime with a stream
+        # that is six times slower than usual, and nothing like the multiple a
+        # real dependency on this cache would produce. Measured at 1.00x.
+        steadyCeiling: 1.5
+
+        # A delay should cost time, not work. Throughput is not expected to move
+        # much: the per-stream in-flight budget is MAX_IN_FLIGHT/4 = 256, and at
+        # 33 operations per second and 712ms each the stream sits around 23 in
+        # flight, so nothing queues. A stream falling below half its baseline
+        # therefore means the added latency broke something rather than slowed
+        # it — a timeout fired, a pool drained — and that is worth failing on.
+        servingFloorPercent: 50
+
+      # Recorded, not asserted. Expected to be near zero: nothing was ever
+      # unreachable, so there is no reconnect to wait for and no backlog to
+      # drain, only the last few in-flight operations finishing at their slower
+      # pace.
+      recoveryBudgetSecs: 60
+
+    retryPolicy:
+      # Identical to every other storage scenario. Not load-bearing here the
+      # way it is in S18, because nothing should time out and so nothing should
+      # retry — but a retry count above zero would itself be a finding, and
+      # leaving the policy the same is what makes that comparable.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # ---------------------------------------------------------------------------
+  # S15 — key-value PostgreSQL latency degradation (GOL-374)
+  #
+  # S17 with the two halves of the key-value layer swapped. That fault slows the
+  # Redis cache and this one slows the Aurora cluster behind it, and because
+  # `NamespaceRoutedKeyValueStorage` splits the namespaces between them, the two
+  # runs should move opposite sets of streams. Reading them side by side is the
+  # point: each is the other's control.
+  #
+  # ── Which streams actually reach this cluster ──────────────────────────────
+  #
+  # Worth spelling out, because "the workload is promise- and schedule-heavy"
+  # undersells it and the durable stream is the surprise.
+  #
+  #   * durable — `AgentStatusFlusher::on_status_changed` updates the
+  #     `RunningWorkers` recovery index *synchronously on the hot path*, and
+  #     only when the tracking predicate flips. An idle agent invoked once goes
+  #     Idle → Running → Idle, so the predicate flips twice and the invocation
+  #     waits on two writes to this cluster. The status blob itself is off the
+  #     commit path; the recovery index deliberately is not.
+  #   * promise — `create` is one `set_if_not_exists` and `complete` is an
+  #     `exists` followed by another, all in the `Promise` namespace, which
+  #     routes here.
+  #   * scheduled — the emitter's `schedule_poll_at` registers into the
+  #     scheduler's own schema, which lives on this same cluster under
+  #     `GOLEM__SCHEDULER_STORAGE__CONFIG__HOST`.
+  #   * ephemeral — reaches none of it. `on_status_changed` returns immediately
+  #     for an ephemeral agent, and its status goes to the Redis cache, so this
+  #     is the one stream the delay should not touch. Under S17 it was the only
+  #     one that did.
+  #
+  # ── What the first run measured, which was not what it predicted ──────────
+  #
+  # Run 33210769609. The prediction here was 17x on durable and promise and 6x
+  # on scheduled, from counting round trips, with a note that the connection
+  # pools would fit "neither by much". The measurement was 644x, 939x and
+  # 1640x: durable went from 61ms to 39s, promise from 92ms to 86s, scheduled
+  # from 62ms to 102s. A 500ms delay came out three orders of magnitude larger
+  # at the caller.
+  #
+  # So this is not a degradation scenario in practice. Counting round trips
+  # gives the cost of one operation running alone; it says nothing about what
+  # happens when every operation is doing the same thing to a pool of 64
+  # connections, and queueing is the whole answer. Nothing was lost — every key
+  # exactly once, every schedule fired once, 300/300 agents consistent, every
+  # stream serving again within 4s — but the platform did not stay usable.
+  #
+  # Two predictions that were wrong in an informative direction:
+  #
+  #   * No executor was lost. `PoolTimedOut` never reached the panic, so the
+  #     S16 finding was not reproduced from latency alone. The queue built in
+  #     front of the pool rather than inside its acquire timeout.
+  #   * `ephemeral`, which reaches none of this cluster, ran 235x slower. 46
+  #     seconds is ninety 500ms round trips and the stream makes none, so it was
+  #     queueing behind the three streams that do. Whatever gate that is, it is
+  #     not the per-account concurrency semaphore — golem-dev sets
+  #     `MAX_CONCURRENT_AGENTS_PER_EXECUTOR` to the unlimited sentinel, so that
+  #     path is bypassed. See the runbook.
+  # ---------------------------------------------------------------------------
+  - code: S15
+    name: keyvalue-postgres-latency
+    enabled: true
+
+    fault:
+      # As S17. Recorded for the archive rather than acted on: the workflow
+      # picks the manifest by scenario code and reads the Chaos Mesh kind out of
+      # the manifest itself.
+      kind: network-delay
+      target: worker-executor
+      # Every executor. A store that is slow for only some of them is a routing
+      # fault wearing a database's clothes.
+      mode: all
+      # Must equal phases.faultSecs; see the note on S16.
+      durationSecs: 300
+
+    phases:
+      # S17's, unchanged, so the two delays differ only in what they aim at.
+      baselineSecs: 300
+      # 300s for S17's reasons and one more. Nothing here should approach the
+      # 120s attempt timeout, so there is no caller clock to outrun; the length
+      # is for a memory series long enough to have a slope and for a steady
+      # state rather than a transient. The one more is the pool arithmetic
+      # above: a pool that is going to saturate does it by filling, and filling
+      # takes time that a 60s window does not give it.
+      faultSecs: 300
+      recoverySecs: 420
+
+    workload:
+      # Identical to the other full-workload storage scenarios, deliberately,
+      # even though GOL-374 asks for "promise- and schedule-heavy" work and a
+      # reweighted population would
+      # press the pools harder. Two of the storage runs are a matched pair
+      # and comparability is what makes the pair worth anything; and the durable
+      # stream turns out to be the heaviest user of this cluster anyway, at two
+      # synchronous writes per invocation. Deliberately overloading the pool is
+      # a different experiment — S22 is to S16 what that would be to this — and
+      # it should be its own scenario rather than a thumb on this one's scale.
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 0
+      promiseAgents: 50
+      quotaAgents: 0
+      ratePerSec: 100
+
+    scheduled:
+      targets: 100
+      intervalMillis: 2000
+      leadSecs: 10
+      # As the others. Unlike S17 the scheduler is *inside* this delay, so its
+      # claims and acknowledgements each gain a round trip — but 240s of lease
+      # against a claim that costs milliseconds plus 500ms is not a number this
+      # run can approach, and a lease expiry here would be a real finding rather
+      # than a threshold that was set too tight.
+      leaseBudgetSecs: 240
+
+    storage:
+      # The key-value Aurora cluster, which is also where the scheduler keeps
+      # its schema. The same endpoint S16 and S22 cut. Neither Redis nor the
+      # indexed-oplog cluster is touched: slowing a second store would leave
+      # every finding unattributable.
+      endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+
+      expect:
+        # As S17. Under a delay nothing is supposed to fall silent, so silence
+        # is not available as evidence that the fault landed and time has to
+        # stand in for it.
+        kind: latency-degradation
+
+        # The three streams that reach this cluster synchronously, per the
+        # walk-through above. Measured at 644x, 939x and 1640x — see the note
+        # above for why the round-trip arithmetic underestimated that by two
+        # orders of magnitude.
+        slowed: [durable, promise, scheduled]
+
+        # 2.0, as S17, and for the same reason rather than for the arithmetic
+        # above: the floor exists to fail a run where the netem rule never
+        # applied, which leaves every stream near 1.0x. Setting it near the
+        # predicted 6x would instead be a second, unannounced assertion that the
+        # prediction is right, and the prediction is the thing under test.
+        slowdownFloor: 2.0
+
+        # The control, and the mirror image of S17's list. An ephemeral agent
+        # never enters the recovery index and its status goes to Redis, so if
+        # this stream slows with the others, the delay reached something wider
+        # than this cluster and the run cannot say what it measured.
+        steady: [ephemeral]
+
+        # As S17. Ephemeral is the noisiest stream in the suite at rest — its
+        # p99 runs to seven times its median — but the check is on medians, and
+        # the median has held at 196-212ms across every storage run so far.
+        #
+        # The first run broke this at 235x, and deliberately left as it is: the
+        # ceiling did its job. Raising it to accommodate the result would turn
+        # the one number that caught the coupling into a number that describes
+        # it.
+        steadyCeiling: 1.5
+
+        # A delay should cost time, not work. Held at 50 for comparability, but
+        # the first run showed this floor cannot be read on its own once the
+        # in-flight budget saturates: throughput is concurrency over latency, so
+        # a stream 900x slower cannot hold its rate however healthy it is.
+        # Promise came in at 11.9% of baseline while carrying a hundred times
+        # more work in flight than at rest. `outage.rs` now suppresses the
+        # finding when the stream's own slowdown accounts for the shortfall,
+        # which is the only case where the two floors were measuring one fact.
+        servingFloorPercent: 50
+
+      # Recorded, not asserted, and expected to be near zero: nothing was ever
+      # unreachable, so there is no reconnect to wait for. If an executor was
+      # lost to the pool timeout this will be the number that shows it, as the
+      # replacement has to reload its agents before it can serve.
+      recoveryBudgetSecs: 60
+
+    retryPolicy:
+      # Identical to every other storage scenario. Nothing should time out and
+      # so nothing should retry; a retry count above zero is itself a finding.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # ---------------------------------------------------------------------------
+  # S15A / S15B / S15C — the S15 elimination series
+  #
+  # S15's first run left one thing unexplained. `ephemeral` slowed 235x under a
+  # delay aimed at a cluster it never touches, and the search for a shared gate
+  # inside the executor came up empty: worker-service was exonerated by the
+  # traces, agent creation ran in single-digit milliseconds, memory and
+  # filesystem pools had headroom, the per-account concurrency semaphore is
+  # bypassed on golem-dev, the tokio global queue was flat at zero with the busy
+  # ratio *falling*, and neither the oplog cluster nor Redis moved. Everything
+  # was parked, nothing was competing, and no mechanism in the source accounts
+  # for it.
+  #
+  # So the next step is elimination rather than more forensics: hold the fault
+  # and the ephemeral stream fixed, and add one stream at a time until ephemeral
+  # starts to suffer. Whichever addition does it names the interaction, and the
+  # code reading has somewhere to start.
+  #
+  #   S15A   ephemeral                              the control: nothing should move
+  #   S15B   ephemeral + durable                    durable is the heaviest user
+  #   S15C   ephemeral + durable + promise
+  #   S15    ephemeral + durable + promise + scheduled   already run: 235x
+  #
+  # ── Why ratePerSec differs between them, which is not a knob being fiddled ──
+  #
+  # `workload::start` divides `ratePerSec` evenly across the streams that have
+  # agents, so a constant here would give ephemeral 100/s alone and 33/s in a
+  # threesome, and the comparison would be between three different ephemeral
+  # workloads rather than between three fault environments. Each entry sets the
+  # rate that holds ephemeral near the ~33/s S15 ran it at. Near, not at: S15
+  # and S15C give it 100/3 = 33.33/s while S15B and S15A give it 34/s, a 2%
+  # spread left uncorrected because S15A and S15B have already been run at 34
+  # and changing the rate now would break comparison with their results.
+  #
+  # A second confound is not removable the same way. `MAX_IN_FLIGHT /
+  # active.len()` gives ephemeral a budget of 1024, 512 and 341 across S15A,
+  # S15B and S15C, and that ceiling is a constant in the driver rather than a
+  # suite setting. It bounds throughput, not latency, and latency is what this
+  # series reads, so it is recorded rather than corrected. It does *not*
+  # separate S15C from S15: `active` counts only streams with agents in the
+  # workload block, and S15 leaves `scheduledAgents` at zero because its
+  # scheduled stream comes from the separate emitter, so both run three streams
+  # at 341 and that pair is free of this confound entirely.
+  #
+  # ── Why the scheduled block is present with zero targets ───────────────────
+  #
+  # `storage_fault::run` requires the block. Zero targets means no registrations
+  # and no fires, so the scheduled stream is not driven and `drives_stream`
+  # reports it as absent, which is what keeps it out of the expectations below.
+  # ---------------------------------------------------------------------------
+  - code: S15A
+    name: keyvalue-postgres-latency-ephemeral-only
+    enabled: true
+
+    fault:
+      kind: network-delay
+      target: worker-executor
+      mode: all
+      # The same file S15 applies, not a copy of it. Four manifests that must
+      # stay identical by hand is four chances for the fault to diverge from the
+      # run it is being compared against.
+      manifest: networkchaos-s15.yaml
+      durationSecs: 300
+
+    phases:
+      # S15's exactly. Shorter windows would be cheaper and the effect is large
+      # enough to survive them, but the whole value of this series is that its
+      # ephemeral numbers are comparable with S15's, and a median taken over a
+      # different window length is a different measurement.
+      baselineSecs: 300
+      faultSecs: 300
+      recoverySecs: 420
+
+    workload:
+      durableAgents: 0
+      ephemeralAgents: 50
+      scheduledAgents: 0
+      promiseAgents: 0
+      quotaAgents: 0
+      # One active stream, so ephemeral gets all of it.
+      ratePerSec: 34
+
+    scheduled:
+      targets: 0
+      intervalMillis: 2000
+      leadSecs: 10
+      leaseBudgetSecs: 240
+
+    storage:
+      endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+
+      expect:
+        kind: latency-degradation
+
+        # Empty, and the only entry in the suite that is. Nothing this workload
+        # drives reaches the delayed cluster, so there is no stream whose
+        # slowdown could evidence the fault. That makes this a control rather
+        # than an experiment, and it means the run cannot fail on
+        # `slowdown-not-observed`: it cannot tell a delay that landed and did
+        # not matter from one that never applied.
+        #
+        # The evidence has to come from outside the workload, and it does. The
+        # scheduler polls its own schema on this cluster whether or not anything
+        # is scheduled, so `db_success_seconds{svc="scheduler_storage"}` moves
+        # under the fault regardless of what the workload does. Check it before
+        # believing a clean result here.
+        slowed: []
+
+        # Required by the schema and inert here, because the floor is only ever
+        # applied to the streams `slowed` names and it names none. Left at the
+        # series' value rather than at something arbitrary, so a later edit that
+        # gives this run a slowed stream inherits a floor that means what it
+        # does everywhere else.
+        slowdownFloor: 2.0
+
+        # The whole question. If ephemeral holds its 196ms median with nothing
+        # else running, then the 235x in S15 came from the company it was
+        # keeping and not from the fault.
+        steady: [ephemeral]
+        steadyCeiling: 1.5
+
+        servingFloorPercent: 50
+
+      recoveryBudgetSecs: 60
+
+    retryPolicy:
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  - code: S15B
+    name: keyvalue-postgres-latency-plus-durable
+    enabled: true
+
+    fault:
+      kind: network-delay
+      target: worker-executor
+      mode: all
+      manifest: networkchaos-s15.yaml
+      durationSecs: 300
+
+    phases:
+      baselineSecs: 300
+      faultSecs: 300
+      recoverySecs: 420
+
+    workload:
+      # S15's durable population, unchanged, so the load this adds is the load
+      # S15 had rather than a scaled-down version of it.
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 0
+      promiseAgents: 0
+      quotaAgents: 0
+      # Two active streams, so 34/s each.
+      ratePerSec: 68
+
+    scheduled:
+      targets: 0
+      intervalMillis: 2000
+      leadSecs: 10
+      leaseBudgetSecs: 240
+
+    storage:
+      endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+
+      expect:
+        kind: latency-degradation
+        # Durable waits on two synchronous writes to this cluster per
+        # invocation, so it should move a long way. S15 measured 644x.
+        slowed: [durable]
+        slowdownFloor: 2.0
+        # And this is the reading that matters. If ephemeral moves here, durable
+        # alone is enough to do it and the interaction is between those two.
+        steady: [ephemeral]
+        steadyCeiling: 1.5
+        servingFloorPercent: 50
+
+      recoveryBudgetSecs: 60
+
+    retryPolicy:
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  - code: S15C
+    name: keyvalue-postgres-latency-plus-promise
+    enabled: true
+
+    fault:
+      kind: network-delay
+      target: worker-executor
+      mode: all
+      manifest: networkchaos-s15.yaml
+      durationSecs: 300
+
+    phases:
+      baselineSecs: 300
+      faultSecs: 300
+      recoverySecs: 420
+
+    workload:
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 0
+      promiseAgents: 50
+      quotaAgents: 0
+      # Three active streams, so 33.3/s each — the rate S15 ran them at.
+      ratePerSec: 100
+
+    scheduled:
+      targets: 0
+      intervalMillis: 2000
+      leadSecs: 10
+      leaseBudgetSecs: 240
+
+    storage:
+      endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+
+      expect:
+        kind: latency-degradation
+        # Promise makes the most calls of any stream: three of its own, plus the
+        # two its durable agent pays on each of the two invocations an operation
+        # takes. S15 measured 939x.
+        slowed: [durable, promise]
+        slowdownFloor: 2.0
+        steady: [ephemeral]
+        steadyCeiling: 1.5
+        servingFloorPercent: 50
+
+      recoveryBudgetSecs: 60
+
+    retryPolicy:
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # ---------------------------------------------------------------------------
+  # S23 — indexed-oplog PostgreSQL latency degradation (GOL-525)
+  #
+  # S14 with the cut replaced by a delay, and the last empty cell of the storage
+  # matrix: outage and latency are now both covered on the key-value cluster
+  # (S16/S22 and S15), on the Redis cache (S18 and S17), and here on the
+  # indexed-oplog cluster (S14 and this).
+  #
+  # The fault shape, the phase lengths, the workload and the thresholds are
+  # S15's, unchanged, so the two reports differ only in which store was slowed.
+  #
+  # ── Why this one has no control stream ─────────────────────────────────────
+  #
+  # S15 and S17 each keep one stream on the far side of the delay, and that
+  # stream holding its pace is what proves the fault reached only what it aimed
+  # at. Nothing here can play that part, because every agent commits its oplog
+  # to this cluster:
+  #
+  #   * durable — `PrimaryOplogService` *is* the indexed storage, so every
+  #     commit is an `append_many` against `index_storage`.
+  #   * ephemeral — never opens the primary, but `EphemeralOplogState::commit`
+  #     appends to `lower.first()`, and with `indexed_storage_layers: 2` that
+  #     first lower layer is a `CompressedOplogArchiveService` on the same
+  #     indexed storage. So it pays an indexed write too, one layer down.
+  #   * promise — its keys are on the key-value cluster, which this leaves
+  #     alone. What it pays is the oplog commit of the durable agent underneath
+  #     it, twice per operation.
+  #   * scheduled — the scheduler's schema is also on the key-value cluster, so
+  #     claims and acknowledgements are outside this delay. What is inside it is
+  #     the fired invocation's own commit.
+  #
+  # And the write is on the caller's path in all four, not merely somewhere in
+  # the lifecycle: `InvocationHooks::on_agent_invocation_started` commits with
+  # `CommitLevel::Always` *before* the invocation body runs, for every agent
+  # mode.
+  #
+  # So `steady` is empty and the run asserts nothing about routing. The evidence
+  # that the delay reached only this cluster has to come from metrics instead,
+  # and the runbook says which: `db_*{svc="oplog"}` and `svc="compressed_oplog"`
+  # are this cluster, while `svc="worker"`, `"key_value"`, `"promise"` and
+  # `"scheduler_storage"` are the one that should stay flat. That `svc` names
+  # the caller rather than the pool is the correction S14 shipped.
+  #
+  # ── The arithmetic, and the gate S15 does not have ─────────────────────────
+  #
+  # golem-dev sets `GOLEM__INDEXED_STORAGE__CONFIG__MAX_CONCURRENT_OPS` to 64 in
+  # front of a 96-connection pool, and `PostgresIndexedStorage::configured`
+  # turns that setting into a `Semaphore`. The gate is therefore tighter than
+  # the pool, and it is the gate that binds: under a 500ms one-way delay it
+  # clears about 128 indexed operations per second per pod where the pool alone
+  # would clear 192. No other store in the suite has such a gate, which makes
+  # this the one run that can measure what it costs.
+  #
+  # Nothing here predicts a multiple from that. S15 counted round trips, said
+  # 17x, and measured 644x, because counting round trips gives the cost of one
+  # operation running alone and queueing was the whole answer. The same applies
+  # with more force here, since this cluster carries the heaviest write traffic
+  # the platform produces.
+  #
+  # ── What could break, which is not what S15 could break ────────────────────
+  #
+  # A delay produces no errors, so the indexed retry budget — 200 attempts with
+  # a 10s cap on golem-dev — should never be entered at all. The way in is
+  # queueing rather than failure: an acquire that waits past sqlx's default 30s
+  # yields `PoolTimedOut`, `RepoError::is_transient` classifies it transient, and
+  # `retry_storage_op` retries. That path re-serializes the whole commit batch
+  # per attempt (GOL-480), so a run that enters it turns a code reading into a
+  # measurement. A run that does not enter it says the gate held.
+  #
+  # This is also the first scenario to put the on-executor oplog sweep under a
+  # degraded indexed store: its scan and its archive reads both cross this
+  # cluster and take permits from the same semaphore. Recorded, not asserted.
+  # ---------------------------------------------------------------------------
+  - code: S23
+    name: indexed-oplog-postgres-latency
+    enabled: true
+
+    fault:
+      # As S15 and S17. Recorded for the archive rather than acted on: the
+      # workflow picks the manifest by scenario code and reads the Chaos Mesh
+      # kind out of the manifest itself.
+      kind: network-delay
+      target: worker-executor
+      # Every executor. A store that is slow for only some of them is a routing
+      # fault wearing a database's clothes.
+      mode: all
+      # Must equal phases.faultSecs; see the note on S16.
+      durationSecs: 300
+
+    phases:
+      # S15's, unchanged, so the pair is readable. Long enough for a memory
+      # series with a slope, for a steady state rather than a transient, and for
+      # a pool that is going to saturate to actually fill.
+      baselineSecs: 300
+      faultSecs: 300
+      recoverySecs: 420
+
+    workload:
+      # Identical to the other six. Comparability is the whole reason the
+      # storage runs share a workload, and this one is half of a matched pair
+      # with S15.
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 0
+      promiseAgents: 50
+      quotaAgents: 0
+      ratePerSec: 100
+
+    scheduled:
+      targets: 100
+      intervalMillis: 2000
+      leadSecs: 10
+      # As the others. Unlike S15 the scheduler is *outside* this delay, so a
+      # claim costs what it always did and 240s is not a number this run can
+      # approach. A lease expiry here would be a real finding rather than a
+      # threshold set too tight — and it would mean the delay reached a cluster
+      # it does not name.
+      leaseBudgetSecs: 240
+
+    storage:
+      # The indexed Aurora cluster's writer endpoint, carrying the oplog and
+      # nothing else. The same endpoint S14 cuts. Neither the key-value cluster
+      # nor Redis is touched: slowing a second store would leave every finding
+      # unattributable.
+      endpoint: golem-postgres-dev-indexed.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+
+      expect:
+        # As S15 and S17. Under a delay nothing is supposed to fall silent, so
+        # silence is not available as evidence that the fault landed and time
+        # has to stand in for it.
+        kind: latency-degradation
+
+        # All four, per the walk-through above. This is the only entry in the
+        # suite that names every stream, and it is not a hedge: each one has a
+        # named synchronous write to this cluster on its caller's path.
+        slowed: [durable, ephemeral, promise, scheduled]
+
+        # 2.0, as S15 and S17. The floor exists to fail a run where the netem
+        # rule never applied, which leaves every stream near 1.0x. Setting it
+        # near a predicted figure would instead assert that the prediction is
+        # right, and the prediction is the thing under test.
+        slowdownFloor: 2.0
+
+        # Deliberately empty, and the one field of this entry that is a loss
+        # rather than a copy. See the walk-through: there is no stream on the
+        # far side of this delay to hold up as evidence, so the routing check
+        # S15 and S17 get for free has to be done by hand against the `svc`
+        # series named above.
+        steady: []
+
+        # A delay should cost time, not work. Held at 50 for comparability with
+        # S15, and read with S15's lesson attached: throughput is concurrency
+        # over latency, so once a stream's in-flight budget saturates a stream
+        # slowed by three orders of magnitude *must* fall below any serving
+        # floor. `outage.rs` suppresses the finding when the stream's own
+        # slowdown accounts for the shortfall, which is the case this run is
+        # most likely to produce on every stream at once.
+        servingFloorPercent: 50
+
+      # Recorded, not asserted. Expected to be near zero: nothing was ever
+      # unreachable, so there is no reconnect to wait for and no backlog to
+      # drain, only the last few in-flight commits finishing at their slower
+      # pace. If an executor was lost to the pool timeout this is the number
+      # that shows it, as the replacement has to reload its agents first.
+      recoveryBudgetSecs: 60
+
+    retryPolicy:
+      # Identical to the other six. Nothing should time out and so nothing
+      # should retry; a retry count above zero is itself a finding.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # ── MF1 ──────────────────────────────────────────────────────────────────
+  #
+  # The first composed fault: an executor killed while the key-value cluster is
+  # unreachable (GOL-381).
+  #
+  # Neither half is new. S16 takes the key-value cluster away for the length of
+  # an AWS failover and the platform absorbs it; S8 and S10 kill an executor
+  # under load and the platform recovers its shards. What is new is that each of
+  # those two faults leaves the platform a way out that the other one takes
+  # away.
+  #
+  # Under S16 nobody is lost. The shards nobody can currently read are still
+  # owned by a process that will read them when the store comes back, so the
+  # recovery is a matter of waiting. Under S8 the store that records the
+  # handover is working: the shard-manager reassigns, the survivor reads the
+  # running-workers set, and it knows which agents to bring up.
+  #
+  # Held together, a survivor has to take over shards while the running-workers
+  # set, the promises and the scheduler's schema are all behind the cut. That is
+  # the question, and it has no answer anywhere in the single-fault matrix.
+  #
+  # ── Why the window is 120s and not S16's 60s ─────────────────────────────
+  #
+  # Two constraints from opposite directions, and this is the only number in
+  # the entry that has to sit between them.
+  #
+  # The ceiling is the key-value retry budget, roughly 168s (see S16). Past it
+  # the recovery-index write in `status_flusher` exhausts and panics by design,
+  # every executor is replaced, and the run stops being about a kill during an
+  # outage and starts being S22 with an extra step. 120s leaves 48s of margin
+  # against the worst case, which is an operation issued at the instant of
+  # injection.
+  #
+  # The floor is what has to fit inside the *overlap*, which is half the window:
+  # the shard-manager has to notice the executor is gone, revoke and reassign
+  # its shards, and the survivor has to try to bring those agents up against a
+  # store it cannot reach. S16's 60s window would leave 30s for all of that, and
+  # a run that heals before the survivor has finished trying has not asked the
+  # question.
+  #
+  # ── The one thing this entry cannot check for you ────────────────────────
+  #
+  # `composed.minOverlapSecs` is judged after the fact, not enforced. Every
+  # other gate in this suite can refuse before the window is spent — S2's
+  # pairing gate, S9's forward leg, the fire-count proof below — because the
+  # driver still holds the run at that point. Here it does not: by the time the
+  # second fault is due the fault window belongs to the workflow. So a
+  # composition that missed is reported rather than prevented, and the report
+  # says so loudly enough that a reader cannot mistake it for a clean run.
+  - code: MF1
+    name: executor-kill-during-keyvalue-outage
+    enabled: true
+
+    fault:
+      # The enclosing fault, and the one whose window the phases follow. Every
+      # executor cut off from the key-value cluster, exactly as S16.
+      kind: network-partition
+      target: worker-executor
+      mode: all
+      # Named explicitly rather than left to the workflow's glob. A composed
+      # scenario has two manifests carrying its code, and picking between them
+      # by alphabetical order is not a decision anyone made.
+      manifest: networkchaos-mf1.yaml
+      # Must equal phases.faultSecs; see the note on S16.
+      durationSecs: 120
+
+    composed:
+      # The second fault, injected inside the first one's window and left in
+      # force until it heals. Recorded here for the archive; the workflow
+      # applies the manifest and the driver learns about it from the signal.
+      kind: pod-kill
+      target: worker-executor
+      manifest: podchaos-mf1.yaml
+      # 0.6 of the window, which leaves 48s of overlap, and the number that
+      # matters is the one it is under.
+      #
+      # `GOLEM__WORKER_EXECUTORS__ASSIGN_SHARDS_TIMEOUT` is **60s** on golem-dev
+      # and golem-prod. It was raised from the 5s default in August 2026 after a
+      # chaos run found the same failure on the revoke leg: 5s cannot cover a
+      # handover whose handler recovers every agent it was just given, so the
+      # shard-manager dropped the shards from the routing table and put them
+      # back on a pod that had already let them go.
+      #
+      # MF1's claim is that the platform rides the outage out, and that claim
+      # only holds while the reassignment call outlives the outage. The first
+      # run was at 0.5 and produced 59.63s of overlap against that 60s ceiling —
+      # it passed with under four tenths of a second to spare, by luck rather
+      # than by design, and a slightly slower fault would have turned it into a
+      # different experiment without saying so.
+      #
+      # The overlap can only ever come out *shorter* than this fraction implies,
+      # never longer: the workflow measures the remainder from the wall clock,
+      # so time spent confirming the injection comes out of the overlap. That is
+      # why there is a floor below and no ceiling above it.
+      #
+      # MF1B is the deliberate version of the run this nearly became.
+      afterFraction: 0.6
+      # Below this the two faults did meet, but with too little of the outage
+      # left for a shard reassignment to run into it, which is the whole
+      # experiment. Comfortably under the 48s the schedule delivers, so an
+      # injection that took its time being confirmed still counts.
+      minOverlapSecs: 30
+
+    phases:
+      # S16's, unchanged. Long enough for cold starts, component loading and
+      # route warm-up to settle, and for the scheduler to be firing steadily.
+      baselineSecs: 300
+      # See the walk-through above for both bounds.
+      faultSecs: 120
+      # Longer than S16's 420. There is one more thing to wait for here: the
+      # killed executor has to be rescheduled, register with the shard-manager,
+      # take its shards back and reload the agents on them, and only then can
+      # the streams be said to have recovered. Scheduled actions registered
+      # during the outage still have to fall due and fire inside the run.
+      recoverySecs: 600
+
+    workload:
+      # S16's population, unchanged, so the two results are readable side by
+      # side. That comparability is the point of not tuning it: MF1's numbers
+      # only mean something against a run that had the outage and not the kill.
+      durableAgents: 200
+      ephemeralAgents: 50
+      # Zero on purpose. The scheduled stream is driven by the `scheduled` block
+      # below, because only its registrations carry a token into the target's
+      # fire log. Setting both is refused at load time.
+      scheduledAgents: 0
+      promiseAgents: 50
+      # No quota stream. A lease renewal failing would add a shard-manager
+      # failure mode to a run that already has two faults to attribute between.
+      quotaAgents: 0
+      ratePerSec: 100
+
+    scheduled:
+      # 100 targets, as S16 — and here they do a second job. The driver aims the
+      # kill at the executor owning the largest share of them, which is what
+      # turns the fire account's killed/elsewhere axis from a degenerate column
+      # into the run's own control group. In the ten single-fault storage codes
+      # nothing is killed and every target reads as `elsewhere`.
+      targets: 100
+      intervalMillis: 2000
+      leadSecs: 10
+      # Larger than S16's 240. The floor there was the outage itself; here it is
+      # the outage plus a shard reassignment that cannot complete until the
+      # store comes back. Recorded, not asserted, like every other budget here.
+      leaseBudgetSecs: 300
+
+    storage:
+      # The key-value Aurora cluster's writer endpoint. The same one S16 cuts,
+      # which is what makes the two runs comparable.
+      endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+
+      expect:
+        # Everything is behind this cut, as in S16. Quiet time is measured
+        # against the window's own edges, so the floor means the same thing at
+        # 120s as it does at 60s.
+        kind: whole-workload
+        quietFloorPercent: 50
+
+      # Doubled from S16's 120, and for a reason that is not slack: serving
+      # again here means an executor that did not exist when the store came back
+      # has to be scheduled, registered and reloaded first. Recorded, not
+      # asserted.
+      recoveryBudgetSecs: 240
+
+    retryPolicy:
+      # Identical to S16's, and load-bearing for the same reason: retrying only
+      # transport errors, once, under the same idempotency key is what lets a
+      # retry reveal double execution rather than hide it.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # ── MF1B ─────────────────────────────────────────────────────────────────
+  #
+  # MF1 with the overlap pushed past the shard-manager's assign timeout
+  # (GOL-381). Same two faults, same manifests, same workload, same endpoint.
+  # One number differs, and it is the one the result turns on.
+  #
+  # `GOLEM__WORKER_EXECUTORS__ASSIGN_SHARDS_TIMEOUT` is 60s on golem-dev and
+  # golem-prod. MF1 keeps its overlap under that and the reassignment call
+  # outlives the outage; here the overlap is ~97s, so the call gives up while the
+  # storage is still gone. What the cluster does next is not written down
+  # anywhere.
+  #
+  # ── Why this is a scenario and not a knob on MF1 ─────────────────────────
+  #
+  # Same reason S22 is not a longer S16. The two runs are judged by opposite
+  # expectations: MF1 says nothing should be disturbed, MF1B says the handover
+  # should fail and then recover. Folding them into one entry would leave the
+  # report unable to say which outcome it was hoping for, and the pair only
+  # means anything read side by side.
+  #
+  # ── The arithmetic, because three ceilings meet here ─────────────────────
+  #
+  #   * The overlap must exceed **60s**, or the assign call never times out and
+  #     this is MF1 with extra steps. 130s * (1 - 0.25) = 97.5s, and the
+  #     workflow can only make that shorter, never longer.
+  #   * The whole window must stay inside the **~168s** key-value retry budget,
+  #     or the executors panic and the run is S22. 130s leaves 38s of margin.
+  #   * A *fully* failed assign takes five attempts at 60s plus ~15s of backoff,
+  #     about **315s**, which no survivable outage can contain. So this run does
+  #     not reach "the shard-manager gave up and put the shards back". It
+  #     reaches the first timeout and the retry after it, and that is the
+  #     honest limit of what this fault can show.
+  #
+  # That last bound is worth stating plainly rather than discovering: on the
+  # timeouts golem-dev runs today, the routing-table corruption the August 2026
+  # investigation documented is **unreachable through a storage outage**,
+  # because the executor's own retry budget expires first. MF1B measures the
+  # near miss.
+  - code: MF1B
+    name: executor-kill-past-the-assign-timeout
+    enabled: true
+
+    fault:
+      kind: network-partition
+      target: worker-executor
+      # MF1's manifest, named rather than copied. Two files that must stay
+      # identical by hand is how a comparison silently stops being one; the
+      # S15A/S15B/S15C entries share S15's manifest for the same reason.
+      manifest: networkchaos-mf1.yaml
+      mode: all
+      # Must equal phases.faultSecs; see the note on S16.
+      durationSecs: 130
+
+    composed:
+      kind: pod-kill
+      target: worker-executor
+      manifest: podchaos-mf1.yaml
+      # A quarter in, leaving ~97.5s of overlap: past the 60s assign timeout
+      # with room for the retry after it to run for half a minute before the
+      # heal.
+      afterFraction: 0.25
+      # The floor is the assign timeout plus headroom, not an arbitrary
+      # fraction. Below 70s the overlap may not have outlasted a single
+      # `assign_shards` attempt, and then the run is MF1 wearing MF1B's code —
+      # which is exactly the confusion this pair exists to remove.
+      minOverlapSecs: 70
+
+    phases:
+      # MF1's, so the two are readable side by side.
+      baselineSecs: 300
+      # See the three ceilings above.
+      faultSecs: 130
+      # MF1's. The handover has one more thing to do here — a timed-out assign
+      # has to be retried after the storage returns — so the recovery window is
+      # if anything more load-bearing than it is there.
+      recoverySecs: 600
+
+    workload:
+      # MF1's population, unchanged. Only the timing differs between these two
+      # entries, and that is the entire point.
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 0
+      promiseAgents: 50
+      quotaAgents: 0
+      ratePerSec: 100
+
+    scheduled:
+      targets: 100
+      intervalMillis: 2000
+      leadSecs: 10
+      # Larger than MF1's 300s. The floor there was the outage plus one shard
+      # reassignment; here it is the outage plus a reassignment that has to be
+      # attempted twice. Recorded, not asserted.
+      leaseBudgetSecs: 360
+
+    storage:
+      endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+
+      expect:
+        kind: whole-workload
+        quietFloorPercent: 50
+
+      # MF1's 240s. The extra failed assign attempt is the shard-manager's time,
+      # not the streams', so this does not need to grow with the window.
+      recoveryBudgetSecs: 240
 
     retryPolicy:
       transportOnly: true

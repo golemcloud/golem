@@ -14,9 +14,13 @@
 
 //! Chaos scenario implementations.
 //!
-//! One module per scenario code. Each one owns its phase choreography — which
-//! is the part that differs, and the part worth reading — while everything
-//! around it lives here: where artifacts go, how a signal failure becomes a
+//! One module per scenario code, except where several codes are the same
+//! choreography under different settings: `storage_fault` runs S14, S15, S16,
+//! S17, S18, S22 and S23, the S15A/S15B/S15C eliminations and the composed MF1,
+//! which differ in which store the fault is aimed at, what the fault does to
+//! it, for how long, and whether a second fault is injected inside it. Each
+//! module owns its phase choreography — which is the part that differs, and the
+//! part worth reading — while everything around it lives here: where artifacts go, how a signal failure becomes a
 //! termination reason, how a routing table is sampled, and how a result is
 //! assembled.
 //!
@@ -25,20 +29,31 @@
 //! abort path, or that invented a phase window it never reached, would still
 //! produce a plausible-looking report from a wasted maintenance window.
 
+pub mod dns_fault;
+pub mod relay_fault;
 pub mod s1;
+pub mod s10;
+pub mod s11;
 pub mod s12;
 pub mod s13;
+pub mod s19;
+pub mod s3;
 pub mod s5;
+pub mod s6;
+pub mod s7;
 pub mod s8;
+pub mod s9;
+pub mod storage_fault;
 
 use crate::chaos::ScenarioConfig;
 use crate::chaos::history::{OperationHistory, OperationRecord, Stream};
 use crate::chaos::ownership::OwnershipSample;
 use crate::chaos::pinned::PinnedSelection;
 use crate::chaos::result::{ChaosResult, Phases, RESULT_SCHEMA_VERSION, RunScope};
+use crate::chaos::scheduled::ScheduledSelection;
 use crate::chaos::signal::SignalError;
 use crate::chaos::summary::{
-    AgentReadback, ChaosSummary, ExactlyOnceReport, RoutingSnapshot, TerminationReason,
+    AgentReadback, ChaosSummary, ExactlyOnceReport, Note, RoutingSnapshot, TerminationReason,
 };
 use crate::chaos::workload::{self, WorkloadContext};
 use chrono::{DateTime, Utc};
@@ -76,6 +91,21 @@ pub struct ScenarioOutcome {
     pub termination_reason: TerminationReason,
     /// Present only for scenarios that pin the fault to one executor.
     pub pinned_selection: Option<PinnedSelection>,
+    /// Present only for S10, which divides its targets around the executor the
+    /// fault was aimed at rather than driving only the ones it owns.
+    pub scheduled_selection: Option<ScheduledSelection>,
+    /// Present only for S11, which divides its waiters around the executor the
+    /// fault was aimed at the same way S10 divides its targets.
+    pub promise_selection: Option<crate::chaos::split::PodSplit>,
+    /// Present only for S3, which divides its agents around the executor the
+    /// partition cuts off rather than around one that dies.
+    pub isolation_selection: Option<crate::chaos::split::PodSplit>,
+    /// Present only for S7, which divides the agents whose state is being
+    /// reverted around the executor the kill is aimed at.
+    pub revert_selection: Option<crate::chaos::split::PodSplit>,
+    /// Present only for S6, which divides the agent slots being deleted around
+    /// the executor the kill is aimed at.
+    pub delete_selection: Option<crate::chaos::split::PodSplit>,
 }
 
 /// Assembles the archived result.
@@ -99,6 +129,19 @@ pub fn build_result(config: &ScenarioConfig, outcome: ScenarioOutcome) -> ChaosR
         workload: config.workload.clone(),
         pinned: config.pinned.clone(),
         pinned_selection: outcome.pinned_selection,
+        scheduled: config.scheduled.clone(),
+        scheduled_selection: outcome.scheduled_selection,
+        promise: config.promise.clone(),
+        promise_selection: outcome.promise_selection,
+        isolation: config.isolation.clone(),
+        isolation_selection: outcome.isolation_selection,
+        revert: config.revert.clone(),
+        revert_selection: outcome.revert_selection,
+        delete: config.delete.clone(),
+        delete_selection: outcome.delete_selection,
+        rollback: config.rollback.clone(),
+        storage: config.storage.clone(),
+        composed: config.composed.clone(),
         retry_policy: config.retry_policy.clone(),
         scope: outcome.scope,
         summary: outcome.summary,
@@ -201,11 +244,14 @@ const ROUTING_POLL_SECS: u64 = 3;
 /// Blocks until the routing table covers every shard, or the timeout lapses.
 ///
 /// Returns the line to record, so the result says which of the two happened
-/// rather than leaving a reader to infer it from timings.
+/// rather than leaving a reader to infer it from timings. A settled table is
+/// context — it is what every healthy run reports. An unsettled one is a
+/// finding, because the baseline then measures convergence rather than the
+/// platform.
 pub async fn wait_for_settled_routing(
     deps: &BenchmarkTestDependencies,
     snapshots: &mut Vec<RoutingSnapshot>,
-) -> String {
+) -> Note {
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(ROUTING_SETTLE_TIMEOUT_SECS);
     // Assigned on every path through the loop below before it is read.
@@ -224,7 +270,7 @@ pub async fn wait_for_settled_routing(
                 if assigned == total && executors > 0 {
                     snapshots.push(snapshot_routing(deps, "settled-before-start").await);
                     info!("Chaos: {last} — settled");
-                    return format!("{last} (settled before measuring)");
+                    return Note::context(format!("{last} (settled before measuring)"));
                 }
                 info!("Chaos: {last} — waiting for the table to cover every shard");
             }
@@ -237,11 +283,11 @@ pub async fn wait_for_settled_routing(
         if std::time::Instant::now() >= deadline {
             snapshots.push(snapshot_routing(deps, "unsettled-before-start").await);
             warn!("Chaos: {last} — proceeding anyway after {ROUTING_SETTLE_TIMEOUT_SECS}s");
-            return format!(
+            return Note::attention(format!(
                 "WARNING: measured against an unsettled cluster — {last}. \
                  Baseline numbers may reflect routing convergence rather than the \
                  platform."
-            );
+            ));
         }
         tokio::time::sleep(std::time::Duration::from_secs(ROUTING_POLL_SECS)).await;
     }
@@ -394,6 +440,18 @@ pub enum ReadKind {
     Polls,
     /// `QuotaCounter.count`, paired with `QuotaCounter.refused`.
     QuotaCounter,
+    /// `Counter.count` on the *callee* of an RPC pair (GOL-368).
+    ///
+    /// The only kind that reads a different agent from the one it is filed
+    /// under. The history records the caller, because that is the agent the
+    /// driver invoked and the one whose executor decides whether the call
+    /// crosses a pod; the count lives on the callee, because that is the agent
+    /// `increment_through_rpc` actually advances.
+    ///
+    /// Recording the callee instead would make read-back a one-liner and lose
+    /// the thing S2 exists to measure: which side of the partition each
+    /// operation started on.
+    RpcInner,
 }
 
 /// How many agents are read back at once.
@@ -438,6 +496,10 @@ pub async fn read_back_agents(
                     ReadKind::Counter => workload::read_counter(&ctx, &agent).await,
                     ReadKind::Polls => workload::read_polls(&ctx, &agent).await,
                     ReadKind::QuotaCounter => workload::read_quota_counter(&ctx, &agent).await,
+                    ReadKind::RpcInner => {
+                        let callee = workload::rpc_callee_name(&agent);
+                        workload::read_counter(&ctx, &callee).await
+                    }
                 };
                 // Only the quota stream has a second number, and it is the one
                 // that says what losing a lease actually cost.

@@ -48,9 +48,20 @@
 //! handful of suspect keys on it, which the workflow turns into ready-made trace
 //! queries. One global counter would have produced a haystack instead.
 
+use crate::chaos::composed::ComposedFaultReport;
+use crate::chaos::fires::ScheduleFireReport;
 use crate::chaos::history::{Outcome, Phase, Stream};
+use crate::chaos::outage::StorageFaultReport;
 use crate::chaos::ownership::OwnershipSample;
-use crate::chaos::probe::KeyProbe;
+use crate::chaos::probe::{KeyProbe, SkipReason};
+use crate::chaos::reachability::ReachabilityReport;
+use crate::chaos::relay::RelayReport;
+use crate::chaos::resolution::ResolutionReport;
+use crate::chaos::resurrection::ResurrectionReport;
+use crate::chaos::rollback::RollbackReport;
+use crate::chaos::skew::SkewReport;
+use crate::chaos::truncation::TruncationReport;
+use crate::chaos::wakeups::WakeupReport;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -358,6 +369,16 @@ pub struct ExactlyOnceReport {
     /// report so a clean verdict over a large number of them can be read for
     /// what it is: a weaker claim.
     pub keys_inconclusive: u64,
+    /// Of the inconclusive keys, the ones the probe pass never asked about at
+    /// all, by reason.
+    ///
+    /// Separated from the rest because the cause is different: an inconclusive
+    /// key was asked about and the exchange failed, a skipped key was never
+    /// asked. The pass only skips when it gives up — an agent that stopped
+    /// answering, or a pass that ran out of budget — so an entry here means the
+    /// run measured less than it set out to, whatever the verdict says.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub keys_skipped: BTreeMap<SkipReason, u64>,
     /// Keys that had a final result after recovery.
     pub keys_with_final_result: u64,
     /// Keys the driver never got a result for, but which the platform produced
@@ -427,6 +448,9 @@ impl ExactlyOnceReport {
                         .is_some_and(|class| class.is_definite_rejection());
                     if !definitive {
                         report.keys_inconclusive += 1;
+                        if let Some(reason) = probe.skipped {
+                            *report.keys_skipped.entry(reason).or_default() += 1;
+                        }
                         continue;
                     }
                     report.findings.push(ExactlyOnceFinding {
@@ -484,6 +508,62 @@ impl ExactlyOnceReport {
     }
 }
 
+/// Whether a line a scenario reports is a finding or context.
+///
+/// The distinction exists because CI branches on it. An annotation that fires
+/// on every run — and one fires on every run if "routing settled before we
+/// measured" counts as something needing review — trains its readers to ignore
+/// it, which is worse than not having it. Context still reaches the report; it
+/// just does not claim a human has to act.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteLevel {
+    /// Something a human should look at before trusting the run.
+    Attention,
+    /// Something a human needs in order to read the run, but which is not
+    /// itself a problem.
+    Context,
+}
+
+/// One operator-facing line, and which of the two lists it belongs in.
+///
+/// Scenarios build these as they go and hand the whole batch to
+/// [`ChaosSummary::absorb`] at the end, so the classification lives next to the
+/// condition that produced it rather than in whatever reads the result later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Note {
+    pub level: NoteLevel,
+    pub message: String,
+}
+
+impl Note {
+    /// A line that means a human should look before trusting the run.
+    pub fn attention(message: impl Into<String>) -> Self {
+        Self {
+            level: NoteLevel::Attention,
+            message: message.into(),
+        }
+    }
+
+    /// A line that a human needs in order to read the run, but which is not
+    /// itself a problem.
+    pub fn context(message: impl Into<String>) -> Self {
+        Self {
+            level: NoteLevel::Context,
+            message: message.into(),
+        }
+    }
+
+    /// Picks the level from a condition, for the common case where the same
+    /// sentence is a finding or context depending on the numbers in it.
+    pub fn leveled(needs_attention: bool, message: impl Into<String>) -> Self {
+        if needs_attention {
+            Self::attention(message)
+        } else {
+            Self::context(message)
+        }
+    }
+}
+
 /// Everything the driver reports for a scenario.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -503,6 +583,67 @@ pub struct ChaosSummary {
     /// read as "checked, nothing found".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exactly_once: Option<ExactlyOnceReport>,
+    /// The scheduled-fire account, for scenarios that pair scheduled actions
+    /// against the registrations that made them. Absent for scenarios that do
+    /// not, rather than an empty report that would read as "checked, nothing
+    /// found".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_fires: Option<ScheduleFireReport>,
+    /// The promise-wakeup account, for scenarios that pair completions against
+    /// the waiters they were supposed to resume. Absent for scenarios that do
+    /// not, for the same reason as `scheduleFires`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promise_wakeups: Option<WakeupReport>,
+    /// The reachability account, for scenarios that cut one executor off from
+    /// the tier that routes to it. Absent for scenarios that do not, for the
+    /// same reason as `scheduleFires`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reachability: Option<ReachabilityReport>,
+    /// The cross-pod RPC account, for the one scenario that cuts two executors
+    /// off from each other. `None` everywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay: Option<RelayReport>,
+    /// The clock-skew account, for the one scenario that moves an executor's
+    /// clock away from the rest of the cluster. `None` everywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skew: Option<SkewReport>,
+    /// The name-resolution account, for the one scenario that stops a name
+    /// resolving on one executor. `None` everywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<ResolutionReport>,
+    /// The truncation account, for scenarios that revert agent state. Absent
+    /// for scenarios that do not, for the same reason as `scheduleFires`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncation: Option<TruncationReport>,
+    /// The resurrection account, for scenarios that delete agents. Absent for
+    /// scenarios that do not, for the same reason as `scheduleFires`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resurrection: Option<ResurrectionReport>,
+    /// The rollback account, for scenarios that move agents between builds and
+    /// back. Absent for scenarios that do not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback: Option<RollbackReport>,
+    /// The storage-fault account, for scenarios that break a storage
+    /// dependency underneath every executor at once — by taking it away or by
+    /// slowing it down. Absent for scenarios that do not, for the same reason
+    /// as `scheduleFires`.
+    ///
+    /// Serialised as `storageOutage` rather than under the field's own name.
+    /// The wire name predates the scenarios that degrade a store rather than
+    /// removing one, and every archived result and the report generator that
+    /// reads them use it. Renaming the field would cost a schema bump and
+    /// silently stop rendering the runs already in the bucket, which is a worse
+    /// outcome than one name that has outlived its accuracy.
+    #[serde(
+        rename = "storageOutage",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub storage_fault: Option<StorageFaultReport>,
+    /// How the two faults of a composed scenario lined up. Absent for the
+    /// scenarios that inject one, which is all of them but the `MF` codes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composed_fault: Option<ComposedFaultReport>,
     /// Shard-ownership samples, in the order they were taken. Empty for
     /// scenarios that do not sample executor assignments.
     ///
@@ -512,8 +653,19 @@ pub struct ChaosSummary {
     /// it interpretable.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ownership: Vec<OwnershipSample>,
-    /// The read-back verdicts that need a human, hoisted for scanning.
+    /// The verdicts and findings that need a human, hoisted for scanning.
+    ///
+    /// CI raises an annotation when this is non-empty, so nothing belongs here
+    /// that is true of a healthy run. Context goes in [`Self::notes`].
     pub attention: Vec<String>,
+    /// Lines a human needs in order to read the run, which are not themselves
+    /// problems: how the routing table looked before measuring, how much of the
+    /// mechanism under test the fault actually landed in, and so on.
+    ///
+    /// Kept out of [`Self::attention`] so that list keeps meaning "look at
+    /// this". Absent from older results, hence `default`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 impl ChaosSummary {
@@ -621,14 +773,42 @@ impl ChaosSummary {
                 .collect(),
             routing_snapshots,
             exactly_once: None,
+            schedule_fires: None,
+            promise_wakeups: None,
+            reachability: None,
+            relay: None,
+            skew: None,
+            resolution: None,
+            truncation: None,
+            resurrection: None,
+            rollback: None,
+            storage_fault: None,
+            composed_fault: None,
             ownership: Vec::new(),
             attention,
+            notes: Vec::new(),
+        }
+    }
+
+    /// Files a batch of scenario notes into the two lists by their level.
+    pub fn absorb(&mut self, notes: impl IntoIterator<Item = Note>) {
+        for note in notes {
+            match note.level {
+                NoteLevel::Attention => self.attention.push(note.message),
+                NoteLevel::Context => self.notes.push(note.message),
+            }
         }
     }
 
     /// Attaches the exactly-once account and hoists its findings into
     /// [`Self::attention`], so a reader scanning the top of a report sees them
     /// next to the read-back verdicts rather than further down.
+    /// Skipped keys are hoisted alongside the findings, unlike the rest of the
+    /// numbers. They do not fail a run, but a clean verdict computed without
+    /// them is a weaker claim than the same verdict computed over everything,
+    /// and that has to be visible next to the verdict rather than only in the
+    /// account underneath it. A healthy pass skips nothing, so this stays quiet
+    /// on runs where it would only be noise.
     pub fn with_exactly_once(mut self, report: ExactlyOnceReport) -> Self {
         for finding in &report.findings {
             self.attention.push(format!(
@@ -636,7 +816,170 @@ impl ChaosSummary {
                 finding.violation, finding.idempotency_key, finding.agent, finding.detail
             ));
         }
+        for (reason, count) in &report.keys_skipped {
+            self.attention.push(format!(
+                "the probe pass never asked about {count} keys — {}",
+                reason.describe()
+            ));
+        }
         self.exactly_once = Some(report);
+        self
+    }
+
+    /// Attaches the scheduled-fire account and hoists everything it wants a
+    /// human to see into [`Self::attention`].
+    ///
+    /// More than the findings, unlike [`Self::with_exactly_once`]: an
+    /// unreadable target or a truncated fire log weakens every verdict the
+    /// report makes, and that has to be visible next to the verdicts rather
+    /// than only in the numbers underneath them.
+    pub fn with_schedule_fires(mut self, report: ScheduleFireReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.schedule_fires = Some(report);
+        self
+    }
+
+    /// Attaches the promise-wakeup account and hoists everything it wants a
+    /// human to see into [`Self::attention`].
+    ///
+    /// Same split as [`Self::with_schedule_fires`], and one extra reason for it:
+    /// a waiter that could not be read is normally the weakest outcome there is,
+    /// but for a suspended waiter it can be the strongest evidence in the run.
+    /// The report decides which, and only what it classifies as attention lands
+    /// there.
+    pub fn with_promise_wakeups(mut self, report: WakeupReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.promise_wakeups = Some(report);
+        self
+    }
+
+    /// Attaches the reachability account and hoists everything it wants a human
+    /// to see into [`Self::attention`].
+    ///
+    /// Same split as [`Self::with_schedule_fires`]. The one line worth calling
+    /// out is the inconclusive case: a partition that never cut the executor off
+    /// produces a report full of healthy numbers, and that has to read as
+    /// "this run tested nothing" rather than as a pass.
+    pub fn with_reachability(mut self, report: ReachabilityReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.reachability = Some(report);
+        self
+    }
+
+    /// Attaches the cross-pod RPC account and hoists everything it wants a
+    /// human to see into [`Self::attention`].
+    ///
+    /// Same split as [`Self::with_reachability`], with the polarity reversed:
+    /// there, healthy numbers under a partition that never landed read as
+    /// "this run tested nothing". Here healthy numbers are the expected result,
+    /// so what has to reach a reader is the evidence that the run could have
+    /// failed — which is why the note lines carry the split and the partition
+    /// evidence on every run, findings or not.
+    pub fn with_relay(mut self, report: RelayReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.relay = Some(report);
+        self
+    }
+
+    /// Attaches the clock-skew account and hoists everything it wants a human
+    /// to see into [`Self::attention`].
+    ///
+    /// Same split as [`Self::with_relay`], for a sharper version of the same
+    /// reason. A skew changes nothing a pod can see about itself, so a run whose
+    /// injection silently failed produces the same clean report as one whose
+    /// injection landed and did no harm. The measured offset therefore goes into
+    /// the notes on every run, findings or not: it is the only line that says
+    /// the experiment happened.
+    pub fn with_skew(mut self, report: SkewReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.skew = Some(report);
+        self
+    }
+
+    /// Attaches the name-resolution account.
+    ///
+    /// Same split as [`Self::with_skew`], and the notes matter more here than
+    /// anywhere else: S4's expected result is that nothing changed, so without
+    /// a line saying what was compared, a clean result and a run that injected
+    /// nothing are the same document.
+    pub fn with_resolution(mut self, report: ResolutionReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.resolution = Some(report);
+        self
+    }
+
+    /// Attaches the truncation account and hoists everything it wants a human
+    /// to see into [`Self::attention`].
+    ///
+    /// Same split as [`Self::with_schedule_fires`]. The line worth calling out
+    /// here is the inconclusive one: a kill that caught no revert in flight
+    /// proves nothing about crashing during a revert, and every clean number
+    /// underneath it describes reverts that completed either side of the fault.
+    pub fn with_truncation(mut self, report: TruncationReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.truncation = Some(report);
+        self
+    }
+
+    /// Attaches the resurrection account and hoists everything it wants a human
+    /// to see into [`Self::attention`].
+    ///
+    /// Same split as [`Self::with_truncation`], including the inconclusive line:
+    /// a kill that caught no delete in flight proves nothing about crashing
+    /// during a deletion.
+    pub fn with_resurrection(mut self, report: ResurrectionReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.resurrection = Some(report);
+        self
+    }
+
+    /// Attaches the rollback account and hoists everything it wants a human to
+    /// see into [`Self::attention`].
+    ///
+    /// Same split as the others. The line worth calling out is the forward-leg
+    /// one: a rollback of agents that never left the old build proves nothing,
+    /// and that has to read as inconclusive rather than as a pass.
+    pub fn with_rollback(mut self, report: RollbackReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.rollback = Some(report);
+        self
+    }
+
+    /// Attaches the storage-outage account and hoists everything it wants a
+    /// human to see into [`Self::attention`].
+    ///
+    /// Same split as the others. The line worth calling out is the
+    /// outage-not-observed one: a partition that failed to take hold leaves
+    /// every cell underneath it describing an undisturbed cluster, and that has
+    /// to read as "this run tested nothing" rather than as a pass.
+    pub fn with_storage_fault(mut self, report: StorageFaultReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.storage_fault = Some(report);
+        self
+    }
+
+    /// Attaches the composed-fault account and hoists everything it wants a
+    /// human to see into [`Self::attention`].
+    ///
+    /// Same split as the others, with one line that is context on every run
+    /// rather than only on a bad one: where in the enclosing window the second
+    /// fault landed. Every figure in the rest of the report was measured on a
+    /// cluster under two faults, and a reader who does not know when the second
+    /// one arrived cannot place any of them.
+    pub fn with_composed_fault(mut self, report: ComposedFaultReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.composed_fault = Some(report);
         self
     }
 
@@ -688,6 +1031,30 @@ pub enum TerminationReason {
     /// owners is an agent whose state can fork, and there is no instant at
     /// which that is legitimate.
     ShardOwnershipViolated { findings: u64, first: String },
+    /// An agent the platform said it had deleted came back with its state, or a
+    /// deletion landed somewhere other than the two answers it was allowed.
+    /// Asserted for the same reason as `RevertTruncationViolated`: invoking a
+    /// deleted id creates a new agent, so there are exactly two legal values and
+    /// no band of doubt. See [`crate::chaos::resurrection`].
+    AgentResurrected { findings: u64, first: String },
+    /// A revert landed somewhere other than the two values it was allowed to.
+    /// Asserted rather than reported, and the only read-back in the suite that
+    /// earns that: the driver knows the counter's value before the revert and
+    /// exactly how many invocations it asked to take back, so there is no band
+    /// of doubt around the answer. See [`crate::chaos::truncation`].
+    RevertTruncationViolated { findings: u64, first: String },
+    /// A scheduled action the platform accepted never fired, fired twice, or
+    /// fired after being refused. Asserted rather than reported: unlike a
+    /// count-based read-back, each of these is a statement about one named
+    /// action paired with one named registration, with no band of doubt around
+    /// it. See [`crate::chaos::fires`].
+    ScheduledFireViolated { findings: u64, first: String },
+    /// A promise completion the platform accepted never woke its waiter, woke it
+    /// twice, or woke it after being refused. Asserted for the same reason as
+    /// [`Self::ScheduledFireViolated`]: each is a statement about one named
+    /// completion paired with one named waiter, with no band of doubt around it.
+    /// See [`crate::chaos::wakeups`].
+    PromiseWakeupViolated { findings: u64, first: String },
     /// An agent's durable state did not survive a component update. Asserted
     /// because an update is supposed to change what an agent runs and nothing
     /// about what it remembers — state that moved is the one outcome an update
@@ -744,6 +1111,40 @@ mod tests {
 
     fn at(secs: i64) -> chrono::DateTime<chrono::Utc> {
         Utc.timestamp_opt(1_800_000_000 + secs, 0).unwrap()
+    }
+
+    /// The field is `storage_fault` in Rust and `storageOutage` on disk, and
+    /// that mismatch is deliberate rather than an oversight.
+    ///
+    /// The wire name predates the scenarios that slow a store down instead of
+    /// removing one. Every result already in the bucket uses it, and so does
+    /// the report generator that renders them. Renaming it would stop those
+    /// runs rendering to buy nothing, so the `#[serde(rename)]` stays and this
+    /// test is what stops a later tidy-up from quietly dropping it.
+    #[test]
+    fn the_storage_fault_account_still_serialises_under_its_original_name() {
+        let summary = ChaosSummary::build(&[], Vec::new(), Vec::new(), None).with_storage_fault(
+            StorageFaultReport::build(
+                &[],
+                None,
+                "db.example",
+                crate::chaos::OutageExpectation::WholeWorkload {
+                    quiet_floor_percent: 50.0,
+                },
+                std::time::Duration::from_secs(120),
+            ),
+        );
+
+        let json = serde_json::to_value(&summary).unwrap();
+        assert!(
+            json.get("storageOutage").is_some(),
+            "the on-disk name must not drift, got keys: {:?}",
+            json.as_object().map(|o| o.keys().collect::<Vec<_>>())
+        );
+        assert!(
+            json.get("storageFault").is_none(),
+            "renaming this field silently orphans every archived result"
+        );
     }
 
     fn op(op_id: u64, stream: Stream, phase: Phase, outcome: Outcome) -> OperationRecord {
@@ -960,12 +1361,31 @@ mod tests {
 
     /// A reader must never have to wonder whether a stream was skipped or just
     /// had nothing to say.
+    ///
+    /// The waiter stream is here for a different reason from the other two, and
+    /// the distinction is worth keeping straight: those two have no durable
+    /// count to read, while this one has a count that is *weaker* than what the
+    /// scenario already does with it. Its absence from the count-based read-back
+    /// means the token pairing in `promiseWakeups` is the account, not that
+    /// nothing was checked.
     #[test]
     fn streams_without_readback_are_named_rather_than_omitted() {
         let summary = ChaosSummary::build(&[], Vec::new(), Vec::new(), None);
         assert_eq!(
             summary.streams_without_readback,
-            vec![Stream::Ephemeral, Stream::Promise]
+            // `Revert` is here for a different reason from the other three.
+            // Those keep no comparable durable state; a revert agent does, but
+            // some of its acknowledged work was deliberately taken back, so a
+            // generic counter comparison would report every reverted increment
+            // as lost. `crate::chaos::truncation` judges those agents exactly
+            // instead, which is strictly stronger.
+            vec![
+                Stream::Ephemeral,
+                Stream::Promise,
+                Stream::PromiseWait,
+                Stream::Revert,
+                Stream::Delete
+            ]
         );
     }
 
@@ -1060,5 +1480,65 @@ mod tests {
         let stats = LatencyStats::from_durations(Vec::new());
         assert_eq!(stats.count, 0);
         assert_eq!(stats.max_ms, 0);
+    }
+
+    fn empty_summary() -> ChaosSummary {
+        ChaosSummary::build(&[], Vec::new(), Vec::new(), None)
+    }
+
+    #[test]
+    fn notes_are_filed_by_level_rather_than_all_into_attention() {
+        let mut summary = empty_summary();
+        summary.absorb([
+            Note::context("routing at start: 1024/1024 shards (settled before measuring)"),
+            Note::attention("WARNING: measured against an unsettled cluster"),
+        ]);
+
+        assert_eq!(summary.attention.len(), 1);
+        assert!(summary.attention[0].contains("unsettled"));
+        assert_eq!(summary.notes.len(), 1);
+        assert!(summary.notes[0].contains("settled before measuring"));
+    }
+
+    /// The reason the split exists. CI raises an annotation when `attention` is
+    /// non-empty, so a clean run has to leave it empty — otherwise the
+    /// annotation fires every time and stops meaning anything.
+    #[test]
+    fn a_run_with_only_context_raises_nothing_for_ci() {
+        let mut summary = empty_summary();
+        summary.absorb([
+            Note::context("routing at start: 1024/1024 shards (settled before measuring)"),
+            Note::context("S10 killed the executor with 353 actions pending"),
+        ]);
+
+        assert!(summary.attention.is_empty());
+        assert_eq!(summary.notes.len(), 2);
+    }
+
+    #[test]
+    fn leveled_picks_the_list_from_the_condition() {
+        assert_eq!(Note::leveled(true, "x").level, NoteLevel::Attention);
+        assert_eq!(Note::leveled(false, "x").level, NoteLevel::Context);
+    }
+
+    /// Older results have no `notes` key at all, and must still deserialise.
+    #[test]
+    fn a_result_written_before_notes_existed_still_reads() {
+        let mut summary = empty_summary();
+        summary.absorb([Note::context("context")]);
+        let mut json: serde_json::Value = serde_json::to_value(&summary).unwrap();
+        assert!(json.get("notes").is_some(), "notes are serialised when set");
+
+        json.as_object_mut().unwrap().remove("notes");
+        let back: ChaosSummary = serde_json::from_value(json).unwrap();
+        assert!(back.notes.is_empty());
+    }
+
+    /// An empty `notes` is omitted rather than written as `[]`, matching how
+    /// every other optional block in this result behaves.
+    #[test]
+    fn an_empty_notes_list_is_not_serialised() {
+        let json = serde_json::to_value(empty_summary()).unwrap();
+        assert!(json.get("notes").is_none());
     }
 }
