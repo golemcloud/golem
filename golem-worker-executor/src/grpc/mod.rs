@@ -15,7 +15,7 @@
 mod invocation;
 mod invocation_session;
 
-pub(crate) use invocation_session::build_durable_streaming_request;
+pub(crate) use invocation_session::{build_durable_streaming_request, decode_invocation_input};
 
 use crate::durable_host::agent_monomorphization_context;
 use crate::grpc::invocation::{CanStartWorker, from_proto_invocation_context};

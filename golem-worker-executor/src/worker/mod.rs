@@ -121,9 +121,10 @@ use golem_common::model::worker::{
     AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget, TypedAgentConfigEntry,
 };
 use golem_common::model::{
-    AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
-    AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, Timestamp, TimestampedAgentInvocation,
+    AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
+    AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, Timestamp,
+    TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -578,6 +579,24 @@ impl<Ctx: WorkerCtx> UsesAllDeps for Worker<Ctx> {
     fn all(&self) -> &All<Self::Ctx> {
         &self.deps
     }
+}
+
+fn into_pending_invocation_parts(
+    invocation: AgentInvocation,
+) -> (
+    Option<IdempotencyKey>,
+    IdempotencyKey,
+    AgentInvocationPayload,
+    InvocationContextStack,
+) {
+    let semantic_idempotency_key = invocation.idempotency_key().cloned();
+    let (storage_idempotency_key, payload, invocation_context) = invocation.into_parts();
+    (
+        semantic_idempotency_key,
+        storage_idempotency_key,
+        payload,
+        invocation_context,
+    )
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
@@ -3126,17 +3145,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
             }
 
-            let (idempotency_key, invocation_payload, invocation_context) = invocation.into_parts();
+            let (
+                semantic_idempotency_key,
+                idempotency_key,
+                invocation_payload,
+                invocation_context,
+            ) = into_pending_invocation_parts(invocation);
             let invocation_context = invocation_context
                 .limit_depth(self.deps.config().limits.max_invocation_context_stack_depth);
-            let invocation = AgentInvocation::from_parts(
-                idempotency_key.clone(),
-                invocation_payload.clone(),
-                invocation_context.clone(),
-            );
             let payload = self
                 .oplog
-                .upload_payload(&invocation_payload)
+                .upload_payload_owned(invocation_payload)
                 .await
                 .map_err(|e| {
                     WorkerExecutorError::invalid_request(format!(
@@ -3151,10 +3170,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 invocation_context.trace_states,
                 invocation_context_spans,
             );
-            let timestamped_invocation = TimestampedAgentInvocation {
-                timestamp: entry.timestamp(),
-                invocation,
-            };
 
             // Snapshot the epoch under the instance lock that commits the
             // pending entry. Read-only captures the current epoch for later
@@ -3176,7 +3191,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.add_and_commit_oplog_internal(&instance_guard, entry, None)
                 .await;
 
-            if let Some(idempotency_key) = timestamped_invocation.invocation.idempotency_key() {
+            if let Some(idempotency_key) = semantic_idempotency_key {
                 // Captured here, inside the producer span, because a consumer links
                 // back to the *creation context* of the work rather than to wherever
                 // the caller happened to call from.
@@ -3189,7 +3204,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 self.external_invocation_origins
                     .write()
                     .await
-                    .insert(idempotency_key.clone(), origin);
+                    .insert(idempotency_key, origin);
             }
 
             if let WorkerInstance::Running(running) = &*instance_guard {
@@ -3388,7 +3403,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .limit_depth(self.deps.config().limits.max_invocation_context_stack_depth);
         let payload = self
             .oplog
-            .upload_payload(&invocation_payload)
+            .upload_payload_owned(invocation_payload)
             .await
             .map_err(|error| {
                 WorkerExecutorError::invalid_request(format!(
@@ -7698,6 +7713,22 @@ mod tests {
     use golem_common::model::oplog::AgentError;
     use std::path::Path;
     use test_r::test;
+
+    #[test]
+    fn pending_manual_update_keeps_storage_key_but_has_no_semantic_key() {
+        let target_revision = ComponentRevision::new(2).unwrap();
+        let (semantic_key, storage_key, payload, _) =
+            into_pending_invocation_parts(AgentInvocation::ManualUpdate { target_revision });
+
+        assert!(semantic_key.is_none());
+        assert!(!storage_key.value.is_empty());
+        assert!(matches!(
+            payload,
+            AgentInvocationPayload::ManualUpdate {
+                target_revision: actual
+            } if actual == target_revision
+        ));
+    }
 
     #[test]
     fn reconstruction_agent_quota_maps_to_startup_suspension() {
