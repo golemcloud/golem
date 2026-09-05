@@ -1204,16 +1204,26 @@ scenarios:
       # it. Nothing checks the two agree; the workflow's capability preflight is
       # where that is established.
       poisonedName: shard-manager.golem-release.svc.cluster.local
-      # How far above the *control executor's* p50, in the same window, this
-      # executor's quota p50 may sit before the run records `quota-degraded`.
+      # How far above the *control executor's* p99, in the same window, this
+      # executor's quota p99 may sit before the run records `quota-degraded`.
       #
       # Against the other executor rather than against its own baseline, because
       # a cost here would be concurrent with the fault: both halves run the same
       # workload against the same shard manager at the same instant, so the
-      # difference between them is the fault and not the hour. 130 rather than
-      # something tighter because a quota p50 is tens of milliseconds and two
-      # populations of sixty agents do not agree to the percent.
-      degradationCeilingPercent: 130
+      # difference between them is the fault and not the hour.
+      #
+      # A p99 rather than a p50, and MF2 run 2 is why. What this fault does when
+      # it bites is park a minority of reservations for tens of seconds, which
+      # barely moves a median: that run read 122% at p50 while the same cells
+      # carried 124,064% at p99. Comparing medians for a tail phenomenon
+      # measures the wrong thing.
+      #
+      # 300 rather than something tighter because a p99 between two populations
+      # of sixty agents is not a stable number — S4 run 1 read 121% here on a
+      # cluster where the fault provably reached nothing, and its baseline
+      # windows sat around 129%. 300 clears that spread with room and is still
+      # three orders of magnitude below what a real park produces.
+      degradationCeilingPercent: 300
       # How far above its own baseline this executor's post-fault quota p50 may
       # sit before the run records `quota-did-not-recover`. 150 for S19's reason:
       # a tenth of a tens-of-milliseconds p50 is inside ordinary run-to-run
@@ -1346,13 +1356,17 @@ scenarios:
     resolution:
       poisonedName: shard-manager.golem-release.svc.cluster.local
       # The same ceiling as S4, read the other way. Under `degrades` a reading
-      # at or under 130% is the finding: both executors lost the connection and
+      # at or under 300% is the finding: both executors lost the connection and
       # only one could resolve the name to rebuild it, so they should not match.
       #
       # Kept identical to S4's on purpose. A different number would make the two
       # runs incomparable, and comparability is the entire reason MF2 exists as
       # a separate scenario rather than as a variant of S4.
-      degradationCeilingPercent: 130
+      #
+      # Run 2 measured 124,064% here, so the margin either side of this number is
+      # enormous — which is what a well-chosen threshold for a fault this blunt
+      # should look like.
+      degradationCeilingPercent: 300
       # Higher than S4's 150. The target executor here really does have to
       # re-acquire a lease after the name comes back, so its post-fault p50
       # legitimately sits above baseline for a cycle or two. 200 is generous

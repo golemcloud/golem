@@ -51,6 +51,30 @@
 //! a fault that cost something and then failed to give it back is a different
 //! result from one that cost nothing.
 //!
+//! ### Why the headline is p99 and the recovery reading is p50
+//!
+//! Not a hedge: the two questions have different shapes, and MF2 run 1 proved
+//! it the expensive way.
+//!
+//! What this fault does when it bites is **park a minority of reservations for
+//! tens of seconds** behind a lease the executor cannot renew. Most operations
+//! are untouched, so the median barely moves. That run measured the target
+//! executor at p50 62ms against the control's 51ms — a 122% ratio that read as
+//! "no effect" — while the same cells carried a p90 of **37 seconds** and a p99
+//! of **100 seconds** against the control's 63ms and 81ms. Comparing medians
+//! for a tail phenomenon is measuring the wrong thing, and it reported
+//! `fault-did-not-bite` for a fault that bit as hard as anything in the suite.
+//!
+//! "Did it come back", though, *is* a location question. The tail after the
+//! heal is the parked work draining, which is the expected shape of a recovery
+//! rather than a failure to recover; the median returning to baseline is what
+//! says the steady state is back. So the recovery reading stays on p50, and the
+//! post-fault p99 is reported as context rather than judged.
+//!
+//! [`crate::chaos::skew`] compares p50 for both, and that is not an
+//! inconsistency: a clock skew shifts *every* renewal's timing, which is a
+//! location shift. The statistic follows the mechanism.
+//!
 //! Both are recorded rather than failed. What fails an S4 run lives elsewhere:
 //! the exactly-once oracle, and a shard assignment that moved.
 //!
@@ -73,6 +97,7 @@ use crate::chaos::history::{OperationRecord, Stream};
 use crate::chaos::split::{
     self, FaultWindow, Group, PodSplit, StreamCell, Window, recovery_percent, round2,
 };
+use crate::chaos::summary::LatencyStats;
 use serde::{Deserialize, Serialize};
 
 /// What the run's fault is supposed to do to name resolution.
@@ -171,13 +196,29 @@ pub struct ResolutionReport {
     /// before [`ResolutionViolation::QuotaDidNotRecover`] is recorded.
     pub recovery_floor_percent: f64,
     pub cells: Vec<StreamCell>,
-    /// Target group's during-fault p50 as a percentage of the control group's,
-    /// in the same window. The headline. Reported whether or not it breaches.
+    /// Target group's during-fault **p99** as a percentage of the control
+    /// group's, in the same window. The headline, and the number the ceiling is
+    /// read against. Reported whether or not it breaches.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub during_fault_percent: Option<f64>,
+    /// The same comparison at p50, reported as context and judged against
+    /// nothing.
+    ///
+    /// Carried because the gap between the two is the shape of the fault: a
+    /// median that held while the tail blew out is work parking, which is what
+    /// this fault does when it bites.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub during_fault_median_percent: Option<f64>,
     /// Target group's post-fault p50 as a percentage of its own baseline.
+    ///
+    /// p50 on purpose, unlike the headline. See the module doc: the tail after
+    /// the heal is parked work draining, and judging it would fail a recovery
+    /// for recovering.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quota_recovery_percent: Option<f64>,
+    /// Post-fault p99, reported as context so the drain is visible.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_fault_tail_ms: Option<u64>,
     pub findings: Vec<ResolutionFinding>,
 }
 
@@ -272,46 +313,50 @@ pub fn build(records: &[OperationRecord], inputs: ResolutionInputs<'_>) -> Resol
         degradation_ceiling_percent: inputs.degradation_ceiling_percent,
         recovery_floor_percent: inputs.recovery_floor_percent,
         during_fault_percent: None,
+        during_fault_median_percent: None,
         quota_recovery_percent: recovery_percent(&cells),
+        after_fault_tail_ms: None,
         cells,
         findings: Vec::new(),
     };
 
-    report.during_fault_percent = during_fault_percent(&report);
+    report.during_fault_percent = during_fault_ratio(&report, |l| l.p99_ms);
+    report.during_fault_median_percent = during_fault_ratio(&report, |l| l.p50_ms);
+    report.after_fault_tail_ms = report
+        .cell(Group::OnPod, Window::AfterFault)
+        .map(|c| c.latency.p99_ms);
     report.findings = findings(&report);
     report
 }
 
-/// Target group's during-fault p50 against the control group's, same window.
+/// Target group's during-fault latency against the control group's, same
+/// window, at whichever percentile the caller asks for.
 ///
 /// `None` when either side confirmed nothing in the window, or when the control
-/// side's p50 was zero. A percentage of nothing is not a comparison, and one
+/// side's reading was zero. A percentage of nothing is not a comparison, and one
 /// reported anyway would be read as evidence.
-fn during_fault_percent(report: &ResolutionReport) -> Option<f64> {
-    let control = report
-        .cell(Group::Elsewhere, Window::DuringFault)?
-        .latency
-        .p50_ms as f64;
-    let target = report
-        .cell(Group::OnPod, Window::DuringFault)?
-        .latency
-        .p50_ms as f64;
+fn during_fault_ratio(
+    report: &ResolutionReport,
+    stat: impl Fn(&LatencyStats) -> u64,
+) -> Option<f64> {
+    let control = stat(&report.cell(Group::Elsewhere, Window::DuringFault)?.latency) as f64;
+    let target = stat(&report.cell(Group::OnPod, Window::DuringFault)?.latency) as f64;
     (control > 0.0).then(|| round2(100.0 * target / control))
 }
 
 fn findings(report: &ResolutionReport) -> Vec<ResolutionFinding> {
     let mut findings = Vec::new();
 
-    let target_p50 = |window| {
+    let target_p99 = |window| {
         report
             .cell(Group::OnPod, window)
-            .map(|c| c.latency.p50_ms)
+            .map(|c| c.latency.p99_ms)
             .unwrap_or_default()
     };
-    let control_p50 = |window| {
+    let control_p99 = |window| {
         report
             .cell(Group::Elsewhere, window)
-            .map(|c| c.latency.p50_ms)
+            .map(|c| c.latency.p99_ms)
             .unwrap_or_default()
     };
 
@@ -325,12 +370,12 @@ fn findings(report: &ResolutionReport) -> Vec<ResolutionFinding> {
                     violation: ResolutionViolation::QuotaDegraded,
                     detail: format!(
                         "the executor that could not resolve {} ran its quota work at {percent}% \
-                         of the executor that could ({}ms against {}ms at p50), over a ceiling of \
+                         of the executor that could ({}ms against {}ms at p99), over a ceiling of \
                          {}%. The shard-manager channel is built once with an infinite idle TTL, \
                          so a cost here means something rebuilt it",
                         report.poisoned_name,
-                        target_p50(Window::DuringFault),
-                        control_p50(Window::DuringFault),
+                        target_p99(Window::DuringFault),
+                        control_p99(Window::DuringFault),
                         report.degradation_ceiling_percent,
                     ),
                 });
@@ -343,14 +388,14 @@ fn findings(report: &ResolutionReport) -> Vec<ResolutionFinding> {
                     violation: ResolutionViolation::FaultDidNotBite,
                     detail: format!(
                         "the executor that could not resolve {} ran its quota work at {percent}% \
-                         of the executor that could ({}ms against {}ms at p50), under a ceiling \
+                         of the executor that could ({}ms against {}ms at p99), under a ceiling \
                          of {}%. Both lost their shard-manager connection to the restart and only \
                          one could resolve the name to rebuild it, so they should not match. \
                          Check that the restart landed inside the DNS window and that the \
                          executor actually reconnected — a run reading like this measured S4",
                         report.poisoned_name,
-                        target_p50(Window::DuringFault),
-                        control_p50(Window::DuringFault),
+                        target_p99(Window::DuringFault),
+                        control_p99(Window::DuringFault),
                         report.degradation_ceiling_percent,
                     ),
                 });
@@ -385,7 +430,7 @@ mod tests {
     use std::collections::BTreeMap;
     use test_r::test;
 
-    const CEILING: f64 = 130.0;
+    const CEILING: f64 = 300.0;
     const FLOOR: f64 = 150.0;
     const NAME: &str = "shard-manager.golem-release.svc.cluster.local";
 
@@ -477,6 +522,42 @@ mod tests {
         let report = build_as(&matched(200, 20), ResolutionExpectation::Degrades);
         assert_eq!(report.during_fault_percent, Some(1000.0));
         assert!(!report.has_violations(), "{:?}", report.findings);
+    }
+
+    /// The shape MF2 run 2 actually produced, and the reason the headline is a
+    /// p99.
+    ///
+    /// A minority of reservations park for tens of seconds behind a lease the
+    /// executor cannot renew; the rest are untouched. The median barely moves
+    /// and the tail blows out. An account comparing medians called that
+    /// `fault-did-not-bite` for a fault that bit as hard as anything in the
+    /// suite.
+    #[test]
+    fn a_held_median_with_a_blown_tail_is_the_fault_biting() {
+        // Ninety fast operations and ten parked ones, on the target only.
+        let mut records: Vec<OperationRecord> = (0..90)
+            .flat_map(|i| [op("target-a", 120 + i, 60), op("control-a", 120 + i, 60)])
+            .collect();
+        // Inside the window: the fault runs at(100)..at(200), and latency is
+        // filed by completion, so a stamp outside it lands in another cell.
+        records.extend((0..10).map(|i| op("target-a", 150 + i, 40_000)));
+
+        let report = build_as(&records, ResolutionExpectation::Degrades);
+        assert_eq!(
+            report.during_fault_median_percent,
+            Some(100.0),
+            "the median is supposed to hold — that is the trap"
+        );
+        assert!(
+            report.during_fault_percent.unwrap() > 300.0,
+            "the tail is where the fault shows: {:?}",
+            report.during_fault_percent
+        );
+        assert!(
+            !report.has_violations(),
+            "a blown tail under `degrades` is the expected result, not a finding: {:?}",
+            report.findings
+        );
     }
 
     /// MF2's actual failure mode, and the one it exists to catch: the second
