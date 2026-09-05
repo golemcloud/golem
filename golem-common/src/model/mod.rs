@@ -77,6 +77,7 @@ use crate::model::oplog::{AgentResourceId, OplogEntry, RawSnapshotData};
 use crate::model::regions::DeletedRegions;
 use crate::schema::{ResultValuePayload, SchemaValue};
 use crate::{SafeDisplay, grpc_uri};
+use chrono::{DateTime, Utc};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
@@ -86,7 +87,7 @@ use im::OrdMap;
 use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::ops::Add;
@@ -518,48 +519,163 @@ pub struct RoutingTableEntry {
     pod: Pod,
 }
 
+/// Ownership generation of a single shard, granted by the shard manager.
+///
+/// The epoch advances only when a shard changes owner, never on a lease
+/// renewal, so an executor can assert the set it believes it holds without the
+/// assertion racing the manager. This is the executor's own newtype; it never
+/// imports the shard manager's `sharding::model::ShardEpoch`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ShardEpoch(pub u64);
+
+impl Display for ShardEpoch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// The shards this executor currently holds, with the epoch each was granted
+/// at, and the absolute server time at which the lease over them lapses.
 #[derive(Clone, Debug, Default)]
 pub struct ShardAssignment {
     pub number_of_shards: usize,
-    pub shard_ids: HashSet<ShardId>,
+    /// Exactly the shards this executor holds. The shard manager pushes the
+    /// complete set; anything absent from it has been dropped.
+    pub shard_epochs: HashMap<ShardId, ShardEpoch>,
+    /// Absolute server time at which the shard lease lapses. `None` means the
+    /// lease never expires (single-shard mode, the debugging service, and the
+    /// pre-registration placeholder).
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 impl ShardAssignment {
-    pub fn assign_shards(&mut self, shard_ids: &HashSet<ShardId>) {
-        for shard_id in shard_ids {
-            self.shard_ids.insert(*shard_id);
+    /// An assignment that never expires, with every shard at epoch 0. Used by
+    /// the single-shard implementations and by tests, which have no shard
+    /// manager to grant epochs.
+    pub fn unexpiring(
+        number_of_shards: usize,
+        shard_ids: impl IntoIterator<Item = ShardId>,
+    ) -> Self {
+        Self {
+            number_of_shards,
+            shard_epochs: shard_ids
+                .into_iter()
+                .map(|shard_id| (shard_id, ShardEpoch::default()))
+                .collect(),
+            expires_at: None,
         }
     }
 
-    pub fn register(&mut self, number_of_shards: usize, shard_ids: &HashSet<ShardId>) {
-        self.number_of_shards = number_of_shards;
-        self.shard_ids = shard_ids.clone();
+    pub fn contains(&self, shard_id: &ShardId) -> bool {
+        self.shard_epochs.contains_key(shard_id)
     }
 
-    pub fn set_shards(&mut self, number_of_shards: usize, shard_ids: &HashSet<ShardId>) {
+    pub fn is_empty(&self) -> bool {
+        self.shard_epochs.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.shard_epochs.len()
+    }
+
+    pub fn shard_ids(&self) -> impl Iterator<Item = ShardId> + '_ {
+        self.shard_epochs.keys().copied()
+    }
+
+    pub fn shard_id_set(&self) -> HashSet<ShardId> {
+        self.shard_epochs.keys().copied().collect()
+    }
+
+    pub fn epoch_of(&self, shard_id: &ShardId) -> Option<ShardEpoch> {
+        self.shard_epochs.get(shard_id).copied()
+    }
+
+    /// The claim sent on a lease renewal: exactly the set last received, in a
+    /// deterministic order.
+    pub fn claim(&self) -> BTreeMap<ShardId, ShardEpoch> {
+        self.shard_epochs
+            .iter()
+            .map(|(shard_id, epoch)| (*shard_id, *epoch))
+            .collect()
+    }
+
+    /// Full replace: hold exactly these shards, drop everything else.
+    pub fn set_shards(
+        &mut self,
+        number_of_shards: usize,
+        shard_epochs: &HashMap<ShardId, ShardEpoch>,
+        expires_at: Option<DateTime<Utc>>,
+    ) {
         self.number_of_shards = number_of_shards;
-        self.shard_ids = shard_ids.clone();
+        self.shard_epochs = shard_epochs.clone();
+        self.expires_at = expires_at;
+    }
+
+    /// A granted renewal: the same set, at a new expiry.
+    /// Applies a granted lease and reports whether the owned set moved.
+    ///
+    /// A renewal normally returns exactly what was claimed (D4 keeps epochs
+    /// stable), so this is `false` on the common path. It is `true` when the
+    /// shard manager answered with a set this executor did not have — the
+    /// corrective delivery its docs describe — and the caller then has to
+    /// recover agents for it, exactly as an `AssignShards` push would.
+    pub fn update_lease(
+        &mut self,
+        shard_epochs: &HashMap<ShardId, ShardEpoch>,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> bool {
+        let ownership_changed = self.shard_epochs != *shard_epochs;
+        self.shard_epochs = shard_epochs.clone();
+        self.expires_at = expires_at;
+        ownership_changed
     }
 
     pub fn revoke_shards(&mut self, shard_ids: &HashSet<ShardId>) {
         for shard_id in shard_ids {
-            self.shard_ids.remove(shard_id);
+            self.shard_epochs.remove(shard_id);
+        }
+    }
+
+    /// Drops every shard, keeping `number_of_shards`, and leaves the lease
+    /// **lapsed** as of `now`. Used when the shard manager no longer knows this
+    /// executor's lease.
+    ///
+    /// Ruling E14: the expiry is not reset to `None`, because `None` means
+    /// "never expires". A cleared assignment must read as not ready, so
+    /// admission keeps refusing until a re-registration installs a fresh grant.
+    pub fn clear(&mut self, now: DateTime<Utc>) {
+        self.shard_epochs.clear();
+        self.expires_at = Some(now);
+    }
+
+    /// The single place the never-expires rule is spelled: a `None` expiry is
+    /// always live.
+    pub fn lease_is_live(&self, now: DateTime<Utc>) -> bool {
+        match self.expires_at {
+            None => true,
+            Some(expires_at) => now < expires_at,
         }
     }
 }
 
 impl Display for ShardAssignment {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let shard_ids = self
-            .shard_ids
-            .iter()
-            .map(|shard_id| shard_id.to_string())
+        let mut entries = self.shard_epochs.iter().collect::<Vec<_>>();
+        entries.sort_by_key(|(shard_id, _)| shard_id.value);
+        let shard_epochs = entries
+            .into_iter()
+            .map(|(shard_id, epoch)| format!("{shard_id}@{epoch}"))
             .collect::<Vec<_>>()
             .join(",");
         write!(
             f,
-            "{{ number_of_shards: {}, shard_ids: {} }}",
-            self.number_of_shards, shard_ids
+            "{{ number_of_shards: {}, shard_epochs: {}, expires_at: {} }}",
+            self.number_of_shards,
+            shard_epochs,
+            match self.expires_at {
+                Some(expires_at) => expires_at.to_rfc3339(),
+                None => "never".to_string(),
+            }
         )
     }
 }
@@ -1643,5 +1759,63 @@ impl RdbmsPoolKey {
 impl Display for RdbmsPoolKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.masked_address())
+    }
+}
+
+#[cfg(test)]
+mod shard_assignment_tests {
+    use super::{ShardAssignment, ShardEpoch, ShardId};
+    use chrono::{Duration as ChronoDuration, Utc};
+    use std::collections::HashMap;
+    use test_r::test;
+
+    test_r::enable!();
+
+    fn epochs(entries: impl IntoIterator<Item = (i64, u64)>) -> HashMap<ShardId, ShardEpoch> {
+        entries
+            .into_iter()
+            .map(|(shard_id, epoch)| (ShardId::new(shard_id), ShardEpoch(epoch)))
+            .collect()
+    }
+
+    /// Plan D2: the push says "exactly these"; anything absent is dropped.
+    #[test]
+    fn set_shards_replaces_the_set_rather_than_merging_into_it() {
+        let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0), ShardId::new(1)]);
+
+        assignment.set_shards(8, &epochs([(1, 4)]), None);
+
+        assert!(!assignment.contains(&ShardId::new(0)));
+        assert_eq!(assignment.epoch_of(&ShardId::new(1)), Some(ShardEpoch(4)));
+        assert_eq!(assignment.len(), 1);
+    }
+
+    /// Ruling E14: `clear()` lapses the lease as of `now`. `None` would mean
+    /// "never expires", which would leave a fenced executor reading as ready.
+    #[test]
+    fn clear_lapses_the_lease_instead_of_making_it_unexpiring() {
+        let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
+        let now = Utc::now();
+        assert!(assignment.lease_is_live(now));
+
+        assignment.clear(now);
+
+        assert!(assignment.is_empty());
+        assert_eq!(assignment.expires_at, Some(now));
+        assert!(
+            !assignment.lease_is_live(now),
+            "ruling E14: a cleared assignment is lapsed, not never-expiring"
+        );
+        assert!(!assignment.lease_is_live(now + ChronoDuration::seconds(1)));
+    }
+
+    /// The single-shard implementations and the debugging service run with no
+    /// expiry at all and must never fence themselves.
+    #[test]
+    fn a_lease_without_an_expiry_is_always_live() {
+        let assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
+
+        assert!(assignment.lease_is_live(Utc::now()));
+        assert!(assignment.lease_is_live(Utc::now() + ChronoDuration::days(365)));
     }
 }

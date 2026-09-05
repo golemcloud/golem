@@ -75,6 +75,8 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        _shard_service: Arc<dyn golem_worker_executor::services::shard::ShardService>,
+        _shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<dyn ShardManagerService> {
         Arc::new(golem_worker_executor::services::shard_manager::ShardManagerServiceSingleShard)
     }

@@ -75,13 +75,14 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
+use golem_common::model::protobuf::shard_epochs_from_proto;
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, TypedAgentConfigEntry,
 };
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata,
-    AgentStatus, IdempotencyKey, OwnedAgentId, ScanCursor, ShardId, Timestamp,
+    AgentStatus, IdempotencyKey, OwnedAgentId, ScanCursor, ShardEpoch, ShardId, Timestamp,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
@@ -164,20 +165,30 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         info!(port, "Registering worker executor");
 
+        // Ruling E15: a re-registration after `LeaseNotFound` must announce the
+        // new assignment exactly as this function and `assign_shards_internal`
+        // do. The renewal loop cannot name `Ctx`, so it is handed this hook —
+        // installed before `register`, which is what starts that loop.
+        let hook_services = services.clone();
+        worker_executor
+            .shard_manager_service()
+            .set_assignment_changed_hook(Arc::new(move || {
+                let services = hook_services.clone();
+                Box::pin(async move { Ctx::on_shard_assignment_changed(&services).await })
+            }));
+
         let pod_name = std::env::var_os("POD_NAME").map(|s| s.to_string_lossy().to_string());
         let shard_assignment = worker_executor
             .shard_manager_service()
             .register(port, pod_name)
             .await?;
 
-        info!(
-            "Received initial shard assignment (n_shards={}, assigned_shards={:?})",
-            shard_assignment.number_of_shards, shard_assignment.shard_ids
-        );
+        info!("Received initial shard assignment ({shard_assignment})");
 
         worker_executor.shard_service().register(
             shard_assignment.number_of_shards,
-            &shard_assignment.shard_ids,
+            &shard_assignment.shard_epochs,
+            shard_assignment.expires_at,
         );
 
         Ctx::on_shard_assignment_changed(&worker_executor)
@@ -219,11 +230,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
+    /// The single ownership check behind every inbound `WorkerExecutor` RPC
+    /// that names an agent. Every one of those is an ADMISSION decision — there
+    /// is no remote fallback, rejecting is the only outcome — so this is where
+    /// the self-fence goes.
     fn ensure_worker_belongs_to_this_executor(
         &self,
         agent_id: impl AsRef<AgentId>,
     ) -> Result<(), WorkerExecutorError> {
-        self.shard_service().check_worker(agent_id.as_ref())
+        self.shard_service().check_admission(agent_id.as_ref())
     }
 
     /// Rewrites the `OwnedAgentId` so that `environment_id` comes from the
@@ -968,33 +983,41 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(())
     }
 
+    /// Full replace (plan D2): the request carries this executor's complete
+    /// shard set with epochs, the lease expiry, and the cluster's shard count.
+    /// Anything absent from the set is dropped, and any agent whose shard went
+    /// away is restarted — the sweep the RPC this one absorbs used to run.
     async fn assign_shards_internal(
         &self,
         request: golem::workerexecutor::v1::AssignShardsRequest,
     ) -> Result<(), WorkerExecutorError> {
-        let proto_shard_ids = request.shard_ids;
+        let shard_epochs: HashMap<ShardId, ShardEpoch> =
+            shard_epochs_from_proto(request.shard_epochs)
+                .map_err(WorkerExecutorError::invalid_request)?;
 
-        let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
-
-        self.shard_service().assign_shards(&shard_ids)?;
-        Ctx::on_shard_assignment_changed(self).await?;
-
-        Ok(())
-    }
-
-    async fn set_shard_assignment_internal(
-        &self,
-        request: golem::workerexecutor::v1::SetShardAssignmentRequest,
-    ) -> Result<(), WorkerExecutorError> {
-        let shard_ids = request.shard_ids.into_iter().map(ShardId::from).collect();
-        let number_of_shards = request
+        let number_of_shards: usize = request
             .number_of_shards
             .try_into()
-            .map_err(|_| WorkerExecutorError::runtime("Invalid number of shards"))?;
+            .map_err(|_| WorkerExecutorError::invalid_request("Invalid number of shards"))?;
+
+        // `ShardId::from_agent_id` divides by it.
+        if number_of_shards == 0 {
+            return Err(WorkerExecutorError::invalid_request(
+                "AssignShardsRequest.number_of_shards must not be 0",
+            ));
+        }
+
+        let expires_at = golem_common::model::protobuf::lease_expiry_from_proto(
+            request.expires_at,
+            "AssignShardsRequest.expires_at",
+        )
+        .map_err(WorkerExecutorError::invalid_request)?;
 
         self.shard_service()
-            .set_shard_assignment(number_of_shards, &shard_ids)?;
+            .assign_shards(number_of_shards, &shard_epochs, expires_at)?;
 
+        // Pure set membership on purpose: a lapsed lease must not restart every
+        // running agent. Draining on lease loss is ticket 5's.
         for (agent_id, worker_details) in self.active_agents().snapshot().await {
             if self.shard_service().check_worker(&agent_id).is_err()
                 && let Some(mut await_interrupted) = worker_details
@@ -2138,42 +2161,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     golem::workerexecutor::v1::AssignShardsResponse {
                         result: Some(
                             golem::workerexecutor::v1::assign_shards_response::Result::Failure(
-                                err.clone().into(),
-                            ),
-                        ),
-                    },
-                )),
-                &mut err,
-            ),
-        }
-    }
-
-    async fn set_shard_assignment(
-        &self,
-        request: Request<golem::workerexecutor::v1::SetShardAssignmentRequest>,
-    ) -> Result<Response<golem::workerexecutor::v1::SetShardAssignmentResponse>, Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!("set_shard_assignment",);
-
-        match self
-            .set_shard_assignment_internal(request)
-            .instrument(record.span.clone())
-            .await
-        {
-            Ok(_) => record.succeed(Ok(Response::new(
-                golem::workerexecutor::v1::SetShardAssignmentResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::set_shard_assignment_response::Result::Success(
-                            golem::common::Empty {},
-                        ),
-                    ),
-                },
-            ))),
-            Err(mut err) => record.fail(
-                Ok(Response::new(
-                    golem::workerexecutor::v1::SetShardAssignmentResponse {
-                        result: Some(
-                            golem::workerexecutor::v1::set_shard_assignment_response::Result::Failure(
                                 err.clone().into(),
                             ),
                         ),

@@ -178,10 +178,8 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     assert_eq!(executor.get_worker_metadata_opt(&worker_id).await?, None);
-    let assignment = golem_common::model::ShardAssignment {
-        number_of_shards: 1,
-        shard_ids: HashSet::from([golem_common::model::ShardId::new(0)]),
-    };
+    let assignment =
+        golem_common::model::ShardAssignment::unexpiring(1, [golem_common::model::ShardId::new(0)]);
     assert_eq!(
         scheduler
             .count_due(chrono::Utc::now() + chrono::Duration::days(1), &assignment)

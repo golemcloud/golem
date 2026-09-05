@@ -2,16 +2,26 @@ syntax = "proto3";
 
 package golem.shardmanager.v1;
 
+import public "golem/common/empty.proto";
 import public "golem/common/environment.proto";
 import public "golem/common/quota.proto";
 import public "golem/shardmanager/pod.proto";
 import public "golem/shardmanager/routing_table.proto";
+import public "golem/shardmanager/shard_epoch.proto";
 import public "golem/shardmanager/shard_id.proto";
 import public "golem/shardmanager/v1/shard_manager_error.proto";
+import "google/protobuf/timestamp.proto";
 
 service ShardManagerService {
   rpc GetRoutingTable(GetRoutingTableRequest) returns (GetRoutingTableResponse);
   rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // Shard lease management.
+  // Executors renew their shard lease on a timer and release it on a graceful
+  // shutdown. Both RPCs identify the executor by the UUID it sent in Register;
+  // neither carries a port — the address comes from the stored lease.
+  rpc RenewShardLease(RenewShardLeaseRequest) returns (RenewShardLeaseResponse);
+  rpc Deregister(DeregisterRequest) returns (DeregisterResponse);
 
   // Quota lease management.
   // Executors call these RPCs to acquire, renew, and release quota leases.
@@ -35,6 +45,11 @@ message GetRoutingTableResponse {
 message RegisterRequest {
   int32 port = 1;
   optional string pod_name = 2;
+  // UUID generated once by the executor at startup, and the identity of its
+  // shard lease. Stable across retries of the same registration: the same id at
+  // the same address refreshes the existing lease rather than creating a second
+  // one. An empty or non-UUID value is rejected before any state is touched.
+  string executor_id = 3;
 }
 
 message RegisterResponse {
@@ -46,6 +61,52 @@ message RegisterResponse {
 
 message RegisterSuccess {
   uint32 number_of_shards = 1;
+  // The shards this executor holds, with their epochs. Empty on a first
+  // registration: nothing is assigned yet and AssignShards delivers the
+  // initial set.
+  repeated golem.shardmanager.ShardEpochEntry shard_epochs = 2;
+  // Absolute server time at which this executor's shard lease expires.
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+// An executor's shard lease: the complete set of shards it owns with the epoch
+// of each, and the absolute time the lease lapses if it is not renewed.
+message ShardLease {
+  repeated golem.shardmanager.ShardEpochEntry shard_epochs = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+// Extends the executor's shard lease before it expires. shard_epochs must be
+// exactly the set the executor was last told it holds: every entry must exist,
+// be owned by this executor, and be at that epoch, or the whole renewal fails
+// with stale_epoch and nothing is renewed. Renewal never advances an epoch.
+message RenewShardLeaseRequest {
+  string executor_id = 1;
+  repeated golem.shardmanager.ShardEpochEntry shard_epochs = 2;
+}
+
+message RenewShardLeaseResponse {
+  oneof result {
+    ShardLease success = 1;
+    golem.shardmanager.v1.ShardLeaseError failure = 2;
+  }
+}
+
+// Releases the shard lease on a graceful shutdown so the manager can re-home
+// the shards without waiting for the lease to expire. shard_epochs is the set
+// the executor believes it is handing back; the manager treats it leniently, so
+// a stale entry never fails a shutdown. Deregistering an executor the manager
+// does not know about succeeds.
+message DeregisterRequest {
+  string executor_id = 1;
+  repeated golem.shardmanager.ShardEpochEntry shard_epochs = 2;
+}
+
+message DeregisterResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.shardmanager.v1.ShardLeaseError failure = 2;
+  }
 }
 
 // Declares interest in a quota and requests an initial lease.

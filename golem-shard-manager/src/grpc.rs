@@ -15,18 +15,21 @@
 use crate::ShardLeaseState;
 use crate::error::ShardManagerTraceErrorKind;
 use crate::quota::QuotaService;
-use crate::sharding::ExecutorAddr;
 use crate::sharding::error::ShardManagerError;
 use crate::sharding::shard_management::ShardManagement;
+use crate::sharding::{ExecutorAddr, ExecutorId, RegisterAck, ShardEpoch};
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerService;
-use golem_common::model::Pod;
+use golem_common::model::{Pod, ShardId};
 use golem_common::recorded_grpc_api_request;
+use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::num::TryFromIntError;
 use std::sync::Arc;
+use std::time::SystemTime;
 use tonic::Response;
 use tracing::{Instrument, debug};
+use uuid::Uuid;
 
 pub struct ShardManagerServiceImpl {
     shard_management: Arc<ShardManagement>,
@@ -49,16 +52,17 @@ impl ShardManagerServiceImpl {
 
     async fn register_internal(
         &self,
+        executor_id: ExecutorId,
         pod: Pod,
         pod_name: Option<String>,
-    ) -> Result<(), ShardManagerError> {
-        debug!("Received request to register executor at: {}", pod);
-        let executor_id = self
+    ) -> Result<RegisterAck, ShardManagerError> {
+        debug!(executor_id = %executor_id, "Received request to register executor at: {}", pod);
+        let ack = self
             .shard_management
-            .register_executor(ExecutorAddr::from(pod), pod_name)
-            .await;
+            .register_executor(executor_id, ExecutorAddr::from(pod), pod_name)
+            .await?;
         debug!(executor_id = %executor_id, addr = %pod, "Registered executor");
-        Ok(())
+        Ok(ack)
     }
 }
 
@@ -97,25 +101,33 @@ impl ShardManagerService for ShardManagerServiceImpl {
 
         let request = request.into_inner();
 
+        // Before anything touches the state: an executor that cannot name itself has no identity to
+        // renew or deregister a lease with.
+        let executor_id = parse_executor_id(&request.executor_id)?;
+
         let record = recorded_grpc_api_request!(
             "register",
             source_ip = source_ip.to_string(),
             port = &request.port.to_string(),
             pod_name = request.pod_name(),
+            executor_id = executor_id.to_string(),
         );
 
         let pod = make_pod(source_ip, request.port)?;
 
         let response = self
-            .register_internal(pod, request.pod_name)
+            .register_internal(executor_id, pod, request.pod_name)
             .instrument(record.span.clone())
             .await;
 
         let result = match response {
-            Ok(_) => record.succeed(golem::shardmanager::v1::register_response::Result::Success(
+            Ok(ack) => record.succeed(golem::shardmanager::v1::register_response::Result::Success(
                 golem::shardmanager::v1::RegisterSuccess {
-                    number_of_shards: self.get_routing_table_internal().await.number_of_shards
-                        as u32,
+                    number_of_shards: ack.number_of_shards as u32,
+                    shard_epochs: shard_epoch_entries(&ack.grant.shard_epochs),
+                    expires_at: Some(prost_types::Timestamp::from(SystemTime::from(
+                        ack.grant.expires_at,
+                    ))),
                 },
             )),
             Err(error) => {
@@ -128,6 +140,69 @@ impl ShardManagerService for ShardManagerServiceImpl {
         };
 
         Ok(Response::new(golem::shardmanager::v1::RegisterResponse {
+            result: Some(result),
+        }))
+    }
+
+    async fn renew_shard_lease(
+        &self,
+        request: tonic::Request<golem::shardmanager::v1::RenewShardLeaseRequest>,
+    ) -> Result<Response<golem::shardmanager::v1::RenewShardLeaseResponse>, tonic::Status> {
+        let request = request.into_inner();
+
+        // Both before any state is touched: an executor that cannot name itself has no lease to
+        // renew, and a claim the manager cannot decode is not one it can validate.
+        let executor_id = parse_executor_id(&request.executor_id)?;
+        let claimed = parse_shard_epochs(request.shard_epochs)?;
+
+        let result = match self
+            .shard_management
+            .renew_shard_lease(executor_id, &claimed)
+            .await
+        {
+            Ok(grant) => golem::shardmanager::v1::renew_shard_lease_response::Result::Success(
+                golem::shardmanager::v1::ShardLease {
+                    shard_epochs: shard_epoch_entries(&grant.shard_epochs),
+                    expires_at: Some(prost_types::Timestamp::from(SystemTime::from(
+                        grant.expires_at,
+                    ))),
+                },
+            ),
+            Err(error) => {
+                golem::shardmanager::v1::renew_shard_lease_response::Result::Failure(error.into())
+            }
+        };
+
+        Ok(Response::new(
+            golem::shardmanager::v1::RenewShardLeaseResponse {
+                result: Some(result),
+            },
+        ))
+    }
+
+    async fn deregister(
+        &self,
+        request: tonic::Request<golem::shardmanager::v1::DeregisterRequest>,
+    ) -> Result<Response<golem::shardmanager::v1::DeregisterResponse>, tonic::Status> {
+        let request = request.into_inner();
+
+        let executor_id = parse_executor_id(&request.executor_id)?;
+        let claimed = parse_shard_epochs(request.shard_epochs)?;
+
+        let result = match self
+            .shard_management
+            .deregister_executor(executor_id, &claimed)
+            .await
+        {
+            Ok(()) => golem::shardmanager::v1::deregister_response::Result::Success(
+                golem::common::Empty {},
+            ),
+            Err(error) => {
+                golem::shardmanager::v1::deregister_response::Result::Failure(error.into())
+            }
+        };
+
+        Ok(Response::new(golem::shardmanager::v1::DeregisterResponse {
             result: Some(result),
         }))
     }
@@ -354,6 +429,49 @@ impl ShardManagerService for ShardManagerServiceImpl {
             )),
         }
     }
+}
+
+/// The executor-generated UUID that identifies a shard lease. Empty or malformed is a client
+/// error, refused before any state is touched.
+fn parse_executor_id(raw: &str) -> Result<ExecutorId, tonic::Status> {
+    if raw.is_empty() {
+        return Err(tonic::Status::invalid_argument("missing executor_id"));
+    }
+    Uuid::parse_str(raw)
+        .map(ExecutorId)
+        .map_err(|err| tonic::Status::invalid_argument(format!("invalid executor_id: {err}")))
+}
+
+/// The shard set an executor claims, decoded from the wire.
+///
+/// A `ShardEpochEntry` without a shard id names no shard, so it cannot be validated against
+/// anything: that is a malformed request, refused before any state is touched rather than silently
+/// dropped from a claim whose whole point is to be exact.
+fn parse_shard_epochs(
+    entries: Vec<golem::shardmanager::ShardEpochEntry>,
+) -> Result<BTreeMap<ShardId, ShardEpoch>, tonic::Status> {
+    entries
+        .into_iter()
+        .map(|entry| {
+            let shard_id: ShardId = entry
+                .shard_id
+                .ok_or_else(|| tonic::Status::invalid_argument("missing shard_id"))?
+                .into();
+            Ok((shard_id, ShardEpoch(entry.epoch)))
+        })
+        .collect()
+}
+
+fn shard_epoch_entries(
+    shard_epochs: &BTreeMap<ShardId, ShardEpoch>,
+) -> Vec<golem::shardmanager::ShardEpochEntry> {
+    shard_epochs
+        .iter()
+        .map(|(shard_id, epoch)| golem::shardmanager::ShardEpochEntry {
+            shard_id: Some((*shard_id).into()),
+            epoch: epoch.0,
+        })
+        .collect()
 }
 
 fn make_pod(ip: IpAddr, port: i32) -> Result<Pod, tonic::Status> {

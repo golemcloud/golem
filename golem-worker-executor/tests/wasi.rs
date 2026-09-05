@@ -2009,7 +2009,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
     deps: &WorkerExecutorTestDependencies,
     initial_file_system: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_api_grpc::proto::golem::shardmanager::ShardId;
+    use golem_api_grpc::proto::golem::shardmanager::{ShardEpochEntry, ShardId};
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         AssignShardsRequest, RevokeShardsRequest, assign_shards_response, revoke_shards_response,
     };
@@ -2095,7 +2095,17 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
     assert!(!executor.worker_is_loaded(&owned_agent_id).await);
     let assigned = client
         .assign_shards(AssignShardsRequest {
-            shard_ids: vec![shard],
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(shard),
+                epoch: 0,
+            }],
+            // A lease expiry is required on the wire, so send one far enough out
+            // that this round trip still does not depend on a clock.
+            expires_at: Some(prost_types::Timestamp {
+                seconds: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
+                nanos: 0,
+            }),
+            number_of_shards: 1,
         })
         .await?
         .into_inner();

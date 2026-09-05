@@ -58,6 +58,9 @@ Shard manager exposes the following Prometheus metrics:
 | `redis_failure_total`               | counter   | `svc`, `api`, `cmd` | Number of failed Redis calls                                                    |
 | `redis_serialized_size_bytes`       | histogram | `svc`, `entity`     | Size of serialized Redis entities                                               |
 | `redis_deserialized_size_bytes`     | histogram | `svc`, `entity`     | Size of deserialized Redis entities                                             |
+| `shard_manager_is_leader`           | gauge     |                     | 1 while this replica holds the etcd leadership lease, 0 while it stands by (distributed mode only) |
+| `shard_manager_leader_since_epoch`  | gauge     |                     | Unix seconds at which this replica was elected, 0 while it stands by (distributed mode only) |
+| `shard_manager_campaign_attempt_failures_total` | counter |            | Attempts to reach etcd on the way to leadership that failed retriably and were retried (distributed mode only) |
 
 ### Worker Executor
 

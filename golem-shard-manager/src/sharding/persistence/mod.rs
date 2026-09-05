@@ -136,8 +136,11 @@ mod tests {
     use crate::sharding::model::{ExecutorAddr, ExecutorId, ShardAssignmentEntry, ShardEpoch};
     use chrono::{DateTime, Utc};
     use golem_common::model::{Pod, ShardId};
-    use golem_common::serialization::serialize;
+    use golem_common::serialization::{
+        SERIALIZATION_VERSION_V1, SERIALIZATION_VERSION_V2, serialize,
+    };
     use std::net::{IpAddr, Ipv4Addr};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::time::Duration;
     use uuid::Uuid;
 
@@ -207,6 +210,82 @@ mod tests {
         match decode_shard_state(&bytes) {
             Err(ShardManagerError::SerializationError(_)) => {}
             other => panic!("expected SerializationError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_dropped_serialization_version_is_rejected() {
+        for version in [SERIALIZATION_VERSION_V1, SERIALIZATION_VERSION_V2] {
+            let bytes = [version, 0u8, 0u8, 0u8];
+            match decode_shard_state(&bytes) {
+                Err(ShardManagerError::SerializationError(msg)) => {
+                    assert!(msg.contains("no longer supported"), "{msg}");
+                }
+                other => panic!("expected SerializationError, got {other:?}"),
+            }
+        }
+    }
+
+    const POD_NAME: &str = "worker-executor-0";
+
+    /// A valid blob whose `pod_name` length prefix has been made negative.
+    ///
+    /// desert encodes a string's length as a zigzag varint, so a name under 64 bytes is prefixed
+    /// by the single byte `2 * len`; setting its low bit decodes as `-(len + 1)`, which reaches
+    /// `read_bytes` as a `usize` near `usize::MAX`.
+    fn blob_with_a_negative_pod_name_length() -> Vec<u8> {
+        let mut shard_state = ShardLeaseState::new(16);
+        shard_state.add_executor(
+            ExecutorId(Uuid::from_u128(1)),
+            ExecutorAddr::from(pod(1, 9010)),
+            Some(POD_NAME.to_string()),
+            t0(),
+            TTL,
+        );
+        let mut bytes = serialize(&shard_state).unwrap();
+
+        let at = bytes
+            .windows(POD_NAME.len())
+            .position(|window| window == POD_NAME.as_bytes())
+            .expect("the pod name is stored verbatim");
+        let length_prefix = at - 1;
+        assert_eq!(bytes[length_prefix], (POD_NAME.len() as u8) << 1);
+        bytes[length_prefix] |= 1;
+        bytes
+    }
+
+    fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+        payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("<non-string panic payload>")
+    }
+
+    /// Characterisation, not a guarantee: a negative length prefix crashes rather than errors.
+    ///
+    /// Catchable only because cargo forces `panic = "unwind"` on test targets; the profiles the
+    /// shard manager ships in abort the process instead. The panic message on stderr is expected.
+    #[test]
+    fn a_negative_length_prefix_panics_the_decoder() {
+        let blob = blob_with_a_negative_pod_name_length();
+        let caught = catch_unwind(AssertUnwindSafe(|| decode_shard_state(&blob)));
+        match caught {
+            // With overflow checks on the add traps; without them the following slice index
+            // panics instead.
+            Err(payload) => {
+                let message = panic_message(&*payload);
+                assert!(
+                    message.contains("attempt to add with overflow")
+                        || message.contains("slice index starts at"),
+                    "the panic did not come from desert's bounds check: {message}"
+                );
+            }
+            Ok(Ok(_)) => panic!("a negative length prefix decoded successfully"),
+            Ok(Err(err)) => panic!(
+                "a negative length prefix now returns {err:?}; if the decoder rejects it, replace \
+                 this characterisation with an assertion on the error and restore the guard"
+            ),
         }
     }
 

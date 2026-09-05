@@ -10,6 +10,7 @@ import "golem/common/revert_worker_response.proto";
 import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
 import "golem/component/component_id.proto";
+import "golem/shardmanager/shard_epoch.proto";
 import "golem/shardmanager/shard_id.proto";
 import "golem/worker/agent_config.proto";
 import "golem/worker/cursor.proto";
@@ -30,6 +31,7 @@ import "golem/worker/worker_filter.proto";
 import "golem/worker/worker_id.proto";
 import "golem/worker/worker_metadata.proto";
 import "golem/worker/worker_status.proto";
+import "google/protobuf/timestamp.proto";
 
 service WorkerExecutor {
   rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);
@@ -40,7 +42,6 @@ service WorkerExecutor {
   rpc InterruptWorker(InterruptWorkerRequest) returns (InterruptWorkerResponse);
   rpc RevokeShards(RevokeShardsRequest) returns (RevokeShardsResponse);
   rpc AssignShards(AssignShardsRequest) returns (AssignShardsResponse);
-  rpc SetShardAssignment(SetShardAssignmentRequest) returns (SetShardAssignmentResponse);
   rpc GetAgentMetadata(GetAgentMetadataRequest) returns (GetAgentMetadataResponse);
   rpc ResumeWorker(ResumeWorkerRequest) returns (ResumeWorkerResponse);
   rpc GetRunningWorkersMetadata(GetRunningWorkersMetadataRequest) returns (GetRunningWorkersMetadataResponse);
@@ -181,22 +182,20 @@ message RevokeShardsResponse {
 }
 
 message AssignShardsRequest {
-  repeated golem.shardmanager.ShardId shard_ids = 1;
+  reserved 1;
+  reserved "shard_ids";
+  // The executor's complete shard set with epochs: hold exactly these, drop
+  // everything else.
+  repeated golem.shardmanager.ShardEpochEntry shard_epochs = 2;
+  // Absolute server time at which the executor's shard lease expires; past it
+  // the executor stops admitting work for these shards.
+  google.protobuf.Timestamp expires_at = 3;
+  // Total number of shards in the cluster; never 0 — the executor divides by
+  // it in check_worker.
+  uint32 number_of_shards = 4;
 }
 
 message AssignShardsResponse {
-  oneof result {
-    golem.common.Empty success = 1;
-    golem.worker.v1.WorkerExecutionError failure = 2;
-  }
-}
-
-message SetShardAssignmentRequest {
-  uint32 number_of_shards = 1;
-  repeated golem.shardmanager.ShardId shard_ids = 2;
-}
-
-message SetShardAssignmentResponse {
   oneof result {
     golem.common.Empty success = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;

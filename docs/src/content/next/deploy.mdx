@@ -12,6 +12,7 @@ The services are using the following storage backends:
 - Relational Database (RDB) - [PostgreSQL](https://www.postgresql.org/) or SQLite (for running locally)
 - [Redis](https://redis.io/)
 - Blob storage - Shared File System or S3
+- [etcd](https://etcd.io/) - optional, only for the shard manager's distributed mode
 
 ## Golem Services
 
@@ -49,7 +50,27 @@ See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-wo
 
 ### Shard Manager
 
-[golem-shard-manager](https://github.com/golemcloud/golem/tree/main/golem-shard-manager) is a single node in charge of maintaining the worker executors' shard assignments; only one instance can be alive at any given time. The service uses Redis as data storage.
+[golem-shard-manager](https://github.com/golemcloud/golem/tree/main/golem-shard-manager) maintains the worker executors' shard assignments. It runs in one of two modes, selected by the `persistence` configuration:
+
+- **Local mode** (`persistence.type = "Postgres"` or `"Sqlite"`) stores the shard state and the quota state in one SQL database. There is no leader election, so **exactly one instance may run**.
+- **Distributed mode** (`persistence.type = "Etcd"`) stores the shard state in etcd. Any number of replicas may run: one wins an etcd lease campaign and drives all topology decisions while the rest stand by. Quota enforcement is not available in this mode yet: the quota state has no store outside the SQL database, so every quota lease request fails.
+
+Every worker executor holds a **lease** on its shard assignment and renews it with the shard manager. A lease lasts `shard_lease_duration` (1m by default) and an executor renews at a third of the time it has left, so roughly every 20s. Each renewal carries the epoch of every shard the executor holds; a shard's epoch is its ownership generation, advanced only when the shard moves to another executor and never by a renewal. A renewal whose epochs do not match the shard manager's view is rejected as a whole and renews nothing - the executor keeps serving the shards it holds and is corrected by the next assignment push. An executor that stops renewing loses its lease, and the shard manager reclaims and redistributes those shards on its next pass, which runs at least every third of `shard_lease_duration` even in a cluster where nothing else is happening; a crashed or unreachable executor's shards are therefore re-homed within about one lease duration plus one pass. An executor whose own copy of the lease has expired stops **admitting** new work for its shards and reports that sharding is not ready, which a worker service retries after refreshing its routing table - invocations already running are not interrupted. A graceful stop deregisters the executor instead of waiting for its lease to expire, so its shards move on the next pass. A shard manager restart or failover re-grants the lease of every executor that still answers the startup health check, so a restart never evicts a healthy cluster: only executors that fail that check are removed.
+
+Distributed mode talks to etcd over **plaintext HTTP** and without authentication. Every entry in `persistence.config.endpoints` must start with `http://`; a replica configured with anything else refuses to start. etcd therefore has to be reachable unauthenticated, either on a trusted network or through a TLS-terminating proxy running alongside the shard manager, with the endpoints pointing at that proxy.
+
+Give `persistence.config.endpoints` a **single load-balanced address** - the Kubernetes Service in front of the etcd cluster - rather than a list of members. With a member list the client keeps a member that is down in its rotation: reads retry through it and recover, but writes do not, and a leadership campaign can spend tens of seconds landing on the dead member before it gets anywhere.
+
+`persistence.config.request_timeout` must be at most half of `persistence.config.leader_lease_ttl`, and startup refuses the configuration otherwise. A lease is granted and its keepalive opened back to back, each bounded by the request timeout, so a larger value could let a lease expire before it was ever renewed.
+
+**Failover** in distributed mode costs a graceful stop almost nothing: on SIGTERM or Ctrl-C a leader releases its lease and a standby takes over within milliseconds, and a standby stopped the same way leaves the election queue at once. A leader that is killed or partitioned releases nothing, so it holds its lease until etcd expires it and a standby is elected between two thirds of `persistence.config.leader_lease_ttl` and the full value (10s by default) after that leader's last renewal. On top of that comes the new leader's own startup, whose initial executor health check is capped at 15s. A broken etcd connection is not a failover: an etcd member restart or a raft leader change ends the keepalive stream and the leader reconnects it, so only etcd declaring the lease gone, or a full lease period with no acknowledged renewal, ends a leadership.
+
+During that window the shard manager's gRPC port is closed on every replica. A worker service does not ride it out on a warm routing table cache: the first executor-level error it hits discards the cached table, and the worker service is then blocked until a leader binds its gRPC port again. A worker executor that starts inside the window retries its registration for about 10s in total with the default `shard_manager.retries` and exits when that budget runs out, so raise `shard_manager.retries.max_attempts` on the executors if their startup has to survive a shard manager failover.
+
+A registration is persisted before it is acknowledged, so an executor that receives a successful registration response holds a lease the next leader will find. A registration that could not be persisted - because the leader lost its lease part-way through the write, for instance - is answered with an error instead, and the executor retries it within its `shard_manager.retries` budget.
+
+In distributed mode a standby does **not** open its gRPC port (`grpc.port`) until it is elected, and that is what routes traffic to the leader. Configure probes accordingly: **liveness** against the HTTP port (`http_port`), **readiness** against the gRPC port. Wiring readiness to HTTP would place every standby in the Service's endpoints, and clients would get connection-refused on every request that did not land on the leader. Over HTTP a standby and a stuck replica look the same, and the metrics close that gap only partly. `shard_manager_is_leader` separates the leader from every non-leader - the sum across replicas should always be 1 - but it reads 0 for a healthy standby and for a wedged one alike. `shard_manager_campaign_attempt_failures_total` is what tells those apart: rising means the replica cannot reach etcd and is retrying, flat means it is simply waiting for the leadership.
+
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-shard-manager/config/shard-manager.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-shard-manager/config/shard-manager.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-shard-manager)
 
 ### Component Compilation Service
