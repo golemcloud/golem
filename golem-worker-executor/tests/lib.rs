@@ -23,6 +23,7 @@ use std::fmt::Debug;
 use std::sync::Once;
 use test_r::{sequential_suite, tag_suite, test_dep};
 
+pub mod active_agents;
 pub mod agent;
 pub mod agent_sdk_ts;
 pub mod api;
@@ -97,6 +98,7 @@ tag_suite!(rdbms, group1);
 
 tag_suite!(hot_update, group2);
 tag_suite!(instance_layer, group2);
+tag_suite!(active_agents, group2);
 tag_suite!(transactions, group2);
 tag_suite!(observability, group2);
 tag_suite!(retry_policies, group2);
