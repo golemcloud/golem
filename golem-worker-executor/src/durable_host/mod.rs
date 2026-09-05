@@ -1788,7 +1788,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .get_non_detached_last_known_status()
             .await;
         let status_idx = status.oplog_idx;
-        let status_pending = status.pending_card_events;
+        let status_pending = status.pending_card_events.clone();
 
         let oplog = self.public_state.worker().oplog();
         let current_idx = oplog.current_oplog_index().await;

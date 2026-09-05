@@ -645,7 +645,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             .parent
                                             .get_non_detached_last_known_status()
                                             .await
-                                            .current_idempotency_key;
+                                            .current_idempotency_key
+                                            .clone();
                                         match kind {
                                             InterruptKind::Suspend(_) => {
                                                 self.parent.add_and_commit_oplog(OplogEntry::suspend()).await;
