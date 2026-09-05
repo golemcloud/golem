@@ -132,3 +132,61 @@ steps:
           equals: "reflected value"
         - path: "$.direct_value"
           equals: "direct value"
+
+  - id: "create-scala-project"
+    only_if:
+      language: "scala"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-scala-reflected-rpc"
+    only_if:
+      language: "scala"
+    prompt: >
+      In the Scala test-app project, add a durable `ReflectionTarget` agent
+      identified by a string `name`, with an `echo` method accepting and
+      returning a string. Add a durable `ReflectionCaller` whose async `run`
+      method discovers `ReflectionTarget`, inspects `echo`, and invokes it
+      through the JSON convenience path with `hello`.
+
+      Also define a discovery-free caller-codec contract using
+      `InputRecordCodec` and `OutputCodec`, and invoke `echo` with
+      `caller codec`. Explicitly pack JSON through the reflected method
+      `SchemaRef`, invoke its value API, await the result, and unpack it as
+      `reflected value`. Finally bind a dynamic client to the same AgentId,
+      manually construct the positional `SchemaValue.RecordValue`, and invoke
+      `echo` with `direct value` without schemas.
+
+      Return a schema-derived record containing `listed`, `typeName`,
+      `methodName`, `jsonValue`, `callerCodec`, `reflectedValue`, and
+      `directValue`. Make sure the project builds successfully.
+    expectedSkills:
+      - "golem-agent-reflection-scala"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-scala-reflected-rpc"
+    only_if:
+      language: "scala"
+    invoke_json:
+      agent: 'ReflectionCaller("main")'
+      method: "run"
+    expect:
+      result_json:
+        - path: "$.listed"
+          equals: true
+        - path: "$.typeName"
+          equals: "ReflectionTarget"
+        - path: "$.methodName"
+          equals: "echo"
+        - path: "$.jsonValue"
+          equals: "hello"
+        - path: "$.callerCodec"
+          equals: "caller codec"
+        - path: "$.reflectedValue"
+          equals: "reflected value"
+        - path: "$.directValue"
+          equals: "direct value"
