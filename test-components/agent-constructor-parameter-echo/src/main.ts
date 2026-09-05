@@ -134,6 +134,7 @@ export const SqliteSnapshotAgentImpl = SqliteSnapshotAgent.implement({
     snapshot: {
         load(bytes) {
             const { label } = JSON.parse(new TextDecoder().decode(bytes)) as { label: string };
+            mkdirSync('/tmp', { recursive: true });
             return {
                 label,
                 memDb: new DatabaseSync(':memory:'),
