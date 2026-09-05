@@ -23,6 +23,7 @@ mod cards;
 mod directory_source_ifs;
 mod moonbit_tool_middleware;
 mod plugins;
+mod remote_releases;
 mod scala_tool_middleware;
 mod tool_middleware;
 

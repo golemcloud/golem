@@ -15,6 +15,7 @@
 use self::resource_definition::ResourceDefinitionCommandHandler;
 use self::retry_policy::RetryPolicyCommandHandler;
 use self::secret::SecretCommandHandler;
+use self::tool::ToolCommandHandler;
 use crate::command::agent_type::AgentTypeSubcommand;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
@@ -78,6 +79,7 @@ mod resource_definition;
 mod retry_policy;
 mod secret;
 pub(crate) mod template;
+mod tool;
 
 // NOTE: We are explicitly not using #[async_trait] here to be able to NOT have a Send bound
 // on the `handler_server_commands` method. Having a Send bound there causes "Send is not generic enough"
@@ -381,6 +383,13 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .handle_command(subcommand)
                         .await
                 }
+                GolemCliSubcommand::Tool { subcommand } => {
+                    ctx.get_or_init()
+                        .await?
+                        .tool_handler()
+                        .handle_command(subcommand)
+                        .await
+                }
                 GolemCliSubcommand::Component { subcommand } => {
                     ctx.get_or_init()
                         .await?
@@ -585,6 +594,7 @@ pub trait Handlers {
     fn card_handler(&self) -> CardCommandHandler;
     fn component_handler(&self) -> ComponentCommandHandler;
     fn environment_handler(&self) -> EnvironmentCommandHandler;
+    fn tool_handler(&self) -> ToolCommandHandler;
     fn error_handler(&self) -> ErrorHandler;
     fn interactive_handler(&self) -> InteractiveHandler;
     fn log_handler(&self) -> LogHandler;
@@ -650,6 +660,10 @@ impl Handlers for Arc<Context> {
 
     fn environment_handler(&self) -> EnvironmentCommandHandler {
         EnvironmentCommandHandler::new(self.clone())
+    }
+
+    fn tool_handler(&self) -> ToolCommandHandler {
+        ToolCommandHandler::new(self.clone())
     }
 
     fn error_handler(&self) -> ErrorHandler {
