@@ -56,6 +56,9 @@ object ComponentId {
 final case class AgentId(componentId: ComponentId, value: String) {
   def parts: Either[GolemReflectError, AgentIdParts]               = AgentId.parse(this)
   def dynamicClient: Either[GolemReflectError, DynamicAgentClient] = DynamicAgentClient.fromAgentId(this)
+  def client[Constructor](
+    definition: AgentClientDefinition[Constructor]
+  ): Either[GolemReflectError, CallerCodecAgentClient[Constructor]] = definition.bind(this)
 }
 
 final case class AgentIdParts(typeName: String, constructorValue: SchemaValue, phantomId: Option[Uuid])
@@ -71,7 +74,7 @@ object AgentId {
       AgentHostApi
         .makeAgentId(typeName, payload, phantomId)
         .left
-        .map(GolemReflectError.Identity)
+        .map(GolemReflectError.Identity.apply)
         .map(AgentId(componentId, _))
     )
 
@@ -79,7 +82,7 @@ object AgentId {
     AgentHostApi
       .parseAgentId(agentId.value)
       .left
-      .map(GolemReflectError.Identity)
+      .map(GolemReflectError.Identity.apply)
       .flatMap { parts =>
         try
           Right(
@@ -168,17 +171,26 @@ object Reflection {
         .fold[Either[GolemReflectError, Option[AgentType]]](Right(None))(_.map(Some(_)))
     catch { case NonFatal(error) => Left(GolemReflectError.Discovery(error.getMessage)) }
 
+  private[reflection] def componentIdFor(name: String): Either[GolemReflectError, ComponentId] =
+    try
+      AgentHostApi
+        .registeredAgentType(name)
+        .map(value => ComponentId.fromJs(value.implementedBy))
+        .toRight(GolemReflectError.Discovery(s"Agent type '$name' is not registered in the current environment"))
+    catch { case NonFatal(error) => Left(GolemReflectError.Discovery(error.getMessage)) }
+
   private def decodeAgentType(registered: AgentHostApi.RegisteredAgentType): Either[GolemReflectError, AgentType] =
     try {
       val raw     = registered.agentType
       val graph   = raw.schema
+      val decoded = SchemaWire.schemaGraphFromWit(SchemaWireInterop.graphFromJs(graph))
       val methods = raw.methods.toList.map { method =>
         AgentMethod(
           method.name,
           method.description,
           method.promptHint.toOption,
-          inputRef(graph, method.inputSchema),
-          outputRef(graph, method.outputSchema)
+          inputRef(graph, decoded, method.inputSchema),
+          outputRef(graph, decoded, method.outputSchema)
         )
       }
       val mode = raw.mode match {
@@ -193,15 +205,14 @@ object Reflection {
           raw.sourceLanguage,
           mode,
           ComponentId.fromJs(registered.implementedBy),
-          inputRef(graph, raw.constructor.inputSchema),
+          inputRef(graph, decoded, raw.constructor.inputSchema),
           methods
         )
       )
     } catch { case NonFatal(error) => Left(GolemReflectError.SchemaDecode(error.getMessage)) }
 
-  private def inputRef(graph: JsSchemaGraph, input: JsInputSchema): SchemaRef = {
+  private def inputRef(graph: JsSchemaGraph, decoded: SchemaGraph, input: JsInputSchema): SchemaRef = {
     if (input.tag != "parameters") throw new IllegalArgumentException(s"unknown input schema '${input.tag}'")
-    val decoded = SchemaWire.schemaGraphFromWit(SchemaWireInterop.graphFromJs(graph))
     val entries = input.asInstanceOf[js.Dynamic].selectDynamic("val").asInstanceOf[js.Array[JsNamedField]].toList
     val fields  = entries.collect {
       case entry if entry.source.tag == "user-supplied" =>
@@ -211,12 +222,13 @@ object Reflection {
     SchemaRef(SchemaGraph(decoded.defs, SchemaType(RecordType(fields))))
   }
 
-  private def outputRef(graph: JsSchemaGraph, output: JsOutputSchema): Option[SchemaRef] =
+  private def outputRef(graph: JsSchemaGraph, decoded: SchemaGraph, output: JsOutputSchema): Option[SchemaRef] =
     output.tag match {
       case "unit"   => None
       case "single" =>
-        val root = output.asInstanceOf[js.Dynamic].selectDynamic("val").asInstanceOf[Int]
-        Some(SchemaRef(SchemaWire.schemaGraphFromWit(SchemaWireInterop.graphFromJs(graph).copy(root = root))))
+        val root   = output.asInstanceOf[js.Dynamic].selectDynamic("val").asInstanceOf[Int]
+        val rooted = SchemaWire.schemaGraphFromWit(SchemaWireInterop.graphFromJs(graph).copy(root = root)).root
+        Some(SchemaRef(decoded, rooted))
       case other => throw new IllegalArgumentException(s"unknown output schema '$other'")
     }
 }
@@ -300,11 +312,14 @@ final class ReflectedAgentMethod private[reflection] (val definition: AgentMetho
   def invokeValue(input: SchemaValue): Future[Either[GolemReflectError, Invocation[SchemaValue]]] =
     validate(definition.input, input) match {
       case Left(error) => Future.successful(Left(error))
-      case Right(_)    => transport.invokeAndAwait(definition.name, input)
+      case Right(_)    =>
+        transport.invokeAndAwait(definition.name, input).map(_.flatMap(validateInvocationOutput(definition, _)))
     }
 
   def triggerValue(input: SchemaValue): Either[GolemReflectError, InvocationMetadata] =
-    validate(definition.input, input).flatMap(_ => transport.trigger(definition.name, input))
+    rejectNonAwaitedStreams("trigger")
+      .flatMap(_ => validate(definition.input, input))
+      .flatMap(_ => transport.trigger(definition.name, input))
 
   def triggerJson(input: Json): Either[GolemReflectError, InvocationMetadata] =
     definition.input
@@ -314,7 +329,9 @@ final class ReflectedAgentMethod private[reflection] (val definition: AgentMetho
       .flatMap(triggerValue)
 
   def scheduleValue(at: Datetime, input: SchemaValue): Either[GolemReflectError, ScheduledInvocation] =
-    validate(definition.input, input).flatMap(_ => transport.schedule(at, definition.name, input))
+    rejectNonAwaitedStreams("schedule")
+      .flatMap(_ => validate(definition.input, input))
+      .flatMap(_ => transport.schedule(at, definition.name, input))
 
   def scheduleJson(at: Datetime, input: Json): Either[GolemReflectError, ScheduledInvocation] =
     definition.input
@@ -322,6 +339,13 @@ final class ReflectedAgentMethod private[reflection] (val definition: AgentMetho
       .left
       .map(error => GolemReflectError.Validation(error.message))
       .flatMap(scheduleValue(at, _))
+
+  private def rejectNonAwaitedStreams(operation: String): Either[GolemReflectError, Unit] =
+    Either.cond(
+      !definition.input.containsStream && !definition.output.exists(_.containsStream),
+      (),
+      GolemReflectError.Validation(s"$operation is unavailable for streaming method '${definition.name}'")
+    )
 }
 
 final case class InvocationMetadata(agentId: AgentId, idempotencyKey: String)
@@ -409,13 +433,24 @@ private[reflection] object Transport {
     }
 }
 
-private object ReflectionInternals {
+private[reflection] object ReflectionInternals {
   def validate(schema: SchemaRef, value: SchemaValue): Either[GolemReflectError, Unit] =
     schema
       .validateValue(value)
       .left
       .map(errors => GolemReflectError.Validation(errors.map(_.message).mkString("; ")))
       .map(_ => ())
+
+  def validateInvocationOutput(
+    definition: AgentMethod,
+    invocation: Invocation[SchemaValue]
+  ): Either[GolemReflectError, Invocation[SchemaValue]] =
+    (definition.output, invocation.value) match {
+      case (None, None)                => Right(invocation)
+      case (Some(schema), Some(value)) => validate(schema, value).map(_ => invocation)
+      case (None, Some(_))             => Left(GolemReflectError.SchemaDecode("unit method returned a value"))
+      case (Some(_), None)             => Left(GolemReflectError.SchemaDecode("single-output method returned no value"))
+    }
 
   def encode(value: SchemaValue): Either[GolemReflectError, JsSchemaValueTree] =
     try Right(SchemaWireInterop.valueTreeToJs(SchemaWire.schemaValueToWit(value)))
