@@ -26,6 +26,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::card::{AgentResourcePattern, AgentVerb};
 use golem_common::model::component::ComponentDto;
+use golem_common::model::durable_stream::StreamSessionRecordV1;
 use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
 use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, PromiseId};
 use golem_common::schema::schema_value::ResultValuePayload;
@@ -1299,6 +1300,30 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
     assert_eq!(first_result, Some(SchemaValue::U64(42)));
     drop(requests);
     drop(responses);
+
+    // Finished precedes asynchronous attachment cleanup; Resume requires the persisted detach.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            for entry in executor
+                .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
+                .await?
+            {
+                if let PublicOplogEntry::StreamSession(session) = entry.entry
+                    && matches!(
+                        StreamSessionRecordV1::from_value(session.record.value())
+                            .map_err(anyhow::Error::msg)?,
+                        StreamSessionRecordV1::Detached(record)
+                            if record.epoch == first_accepted.epoch
+                    )
+                {
+                    return Ok::<(), anyhow::Error>(());
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("finished session did not detach before resume"))??;
 
     let Some(invocation_request::Request::Start(start)) = start_request.request.as_ref() else {
         anyhow::bail!("durable input resume request is not Start");
