@@ -106,8 +106,17 @@ pub enum ScenarioCode {
     /// The second control of the set. The executor builds that connection once
     /// with an infinite idle TTL, so DNS is consulted at connect time and never
     /// again — a name that stops resolving should reach nothing. MF2 is the
-    /// companion that takes the connection away first.
+    /// companion that removes the cached connection first.
     S4,
+    /// S4's DNS failure held across a shard-manager restart, so the executor
+    /// has to rebuild the connection and resolve a name that no longer
+    /// resolves.
+    ///
+    /// The composition is what makes it a different question. Both executors
+    /// lose the connection to the same restart; only one of them can resolve
+    /// the name to get it back, so the gap between them is the DNS failure with
+    /// everything else held constant.
+    MF2,
     /// Executor pod kill while agents are having their state reverted.
     S7,
     /// Executor pod kill while agents are being deleted.
@@ -209,6 +218,7 @@ impl ScenarioCode {
             ScenarioCode::S3 => "S3",
             ScenarioCode::S2 => "S2",
             ScenarioCode::S4 => "S4",
+            ScenarioCode::MF2 => "MF2",
             ScenarioCode::S7 => "S7",
             ScenarioCode::S6 => "S6",
             ScenarioCode::S9 => "S9",
@@ -232,7 +242,7 @@ impl ScenarioCode {
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 27] = [
+    pub const ALL: [ScenarioCode; 28] = [
         ScenarioCode::S1,
         ScenarioCode::S2,
         ScenarioCode::S3,
@@ -260,6 +270,7 @@ impl ScenarioCode {
         ScenarioCode::S23,
         ScenarioCode::MF1,
         ScenarioCode::MF1B,
+        ScenarioCode::MF2,
     ];
 
     pub fn parse(s: &str) -> Option<Self> {
@@ -814,6 +825,15 @@ pub struct ResolutionConfig {
     /// [`resolution::ResolutionViolation::QuotaDidNotRecover`] is recorded.
     #[serde(default = "default_recovery_floor_percent")]
     pub recovery_floor_percent: f64,
+    /// Which way the ceiling is read.
+    ///
+    /// Not a cosmetic label, and the same split the relay account carries.
+    /// Under `survives` a target group that fell behind its control is the
+    /// finding. Under `degrades` that is the expected result and the finding is
+    /// the opposite one — a composition that changed nothing, which means the
+    /// run measured S4 wearing an MF code.
+    #[serde(default)]
+    pub expectation: resolution::ResolutionExpectation,
 }
 
 impl IsolationConfig {
@@ -1634,7 +1654,15 @@ impl ScenarioConfig {
         // mistake costs a build rather than where it costs the maintenance
         // window the driver would spend discovering there was nothing to aim
         // at.
-        if !self.drives_stream(Stream::Scheduled) {
+        //
+        // Only when the second fault is aimed at an executor, which is not the
+        // same as "always". MF2 restarts the *shard manager*, and there is only
+        // one of those: Chaos Mesh selects it by label and the driver has
+        // nothing to pin, so requiring a schedule population would demand a
+        // workload the run has no use for. What matters for that shape is that
+        // the second fault lands inside the first one's window, which the
+        // checks above already cover.
+        if config.target == "worker-executor" && !self.drives_stream(Stream::Scheduled) {
             anyhow::bail!(
                 "chaos scenario {}: a composed run aims its second fault at the executor owning                  the most schedule targets, and this entry registers none",
                 self.code
@@ -2572,6 +2600,38 @@ mod tests {
         }
     }
 
+    /// The two DNS scenarios must disagree about what their fault does.
+    ///
+    /// Both read the same cells and the same ceiling, and the only thing that
+    /// separates a control from a composition is `expectation`. A copy-paste
+    /// that left MF2 on the default would report `quota-degraded` as a defect
+    /// for a fault composed on purpose to cause it, and would file no finding
+    /// at all if the shard-manager restart never forced a re-resolution — which
+    /// is the one outcome MF2 exists to catch.
+    #[test]
+    fn the_two_dns_scenarios_expect_opposite_things() {
+        use crate::chaos::resolution::ResolutionExpectation;
+        let suite = ChaosSuite::load(suite_path()).unwrap();
+        let expectation = |code: ScenarioCode| {
+            suite
+                .scenarios
+                .iter()
+                .find(|entry| entry.scenario_code().ok() == Some(code))
+                .unwrap_or_else(|| panic!("{code} is missing from the suite"))
+                .require_resolution()
+                .unwrap_or_else(|e| panic!("{code} has an unusable resolution block: {e}"))
+                .expectation
+        };
+        assert_eq!(
+            expectation(ScenarioCode::S4),
+            ResolutionExpectation::Survives
+        );
+        assert_eq!(
+            expectation(ScenarioCode::MF2),
+            ResolutionExpectation::Degrades
+        );
+    }
+
     /// The poisoned name a DNS scenario reports must be the one the executor
     /// actually dials.
     ///
@@ -2789,6 +2849,12 @@ mod tests {
                     entry.require_workload().unwrap();
                     entry.require_resolution().unwrap();
                     entry.require_ownership().unwrap();
+                }
+                ScenarioCode::MF2 => {
+                    entry.require_workload().unwrap();
+                    entry.require_resolution().unwrap();
+                    entry.require_ownership().unwrap();
+                    entry.require_composed().unwrap();
                 }
                 ScenarioCode::S2 | ScenarioCode::S21 => {
                     entry.require_workload().unwrap();

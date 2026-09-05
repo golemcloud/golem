@@ -53,6 +53,21 @@
 //!
 //! Both are recorded rather than failed. What fails an S4 run lives elsewhere:
 //! the exactly-once oracle, and a shard assignment that moved.
+//!
+//! ### The same table, read two opposite ways
+//!
+//! MF2 (GOL-537) is S4 with the cached connection taken away: it restarts the
+//! shard manager inside the DNS window, so the executor has to rebuild the
+//! channel and the rebuild is the first moment resolution matters. Both
+//! executors lose the connection; only one of them can resolve the name to get
+//! it back. That is why the comparison is the same one S4 makes, and why the
+//! verdict is inverted rather than duplicated.
+//!
+//! Under [`ResolutionExpectation::Survives`] a target group that fell behind
+//! its control is the finding. Under [`ResolutionExpectation::Degrades`] it is
+//! the expected result, and the finding is the opposite one — a composition
+//! that changed nothing, which means the second fault failed to force a
+//! re-resolution and the run measured S4 again under an MF code.
 
 use crate::chaos::history::{OperationRecord, Stream};
 use crate::chaos::split::{
@@ -60,7 +75,43 @@ use crate::chaos::split::{
 };
 use serde::{Deserialize, Serialize};
 
-const SCENARIO: &str = "S4";
+/// What the run's fault is supposed to do to name resolution.
+///
+/// The two scenarios built on this account measure the same things and disagree
+/// only about which way the numbers should point, so the split lives here
+/// rather than in two copies of the report. Same shape as
+/// [`crate::chaos::relay::RelayExpectation`], for the same reason.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResolutionExpectation {
+    /// The fault cannot reach anything, and the run exists to show that.
+    ///
+    /// S4: one executor cannot resolve the shard manager, but its connection to
+    /// the shard manager is already up and never expires. The default, because
+    /// it is what this module was built for.
+    #[default]
+    Survives,
+    /// The fault is expected to bite, because something took the cached
+    /// connection away and the executor has to resolve the name to rebuild it.
+    ///
+    /// MF2: the shard manager is restarted inside the DNS window.
+    Degrades,
+}
+
+impl ResolutionExpectation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ResolutionExpectation::Survives => "survives",
+            ResolutionExpectation::Degrades => "degrades",
+        }
+    }
+}
+
+impl std::fmt::Display for ResolutionExpectation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// What the account can say went wrong, both recorded rather than failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +122,12 @@ pub enum ResolutionViolation {
     QuotaDegraded,
     /// It was still slower than its own baseline after the name came back.
     QuotaDidNotRecover,
+    /// Expected to bite and did not. Only reachable under
+    /// [`ResolutionExpectation::Degrades`]: the second fault was supposed to
+    /// take the cached connection away and force a re-resolution, and the two
+    /// executors came out indistinguishable anyway — so the run measured S4
+    /// under an MF code and says nothing new.
+    FaultDidNotBite,
 }
 
 impl ResolutionViolation {
@@ -78,6 +135,7 @@ impl ResolutionViolation {
         match self {
             ResolutionViolation::QuotaDegraded => "quota-degraded",
             ResolutionViolation::QuotaDidNotRecover => "quota-did-not-recover",
+            ResolutionViolation::FaultDidNotBite => "fault-did-not-bite",
         }
     }
 }
@@ -93,11 +151,21 @@ pub struct ResolutionFinding {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolutionReport {
+    /// Which scenario produced this, so the lines a reader sees name the run
+    /// rather than the module. S4 and MF2 share every number below.
+    pub scenario: String,
+    /// Which way the numbers are supposed to point. See
+    /// [`ResolutionExpectation`]; it decides what counts as a finding, not just
+    /// how the report is worded.
+    pub expectation: ResolutionExpectation,
     /// The name the fault was pointed at, mirrored from the suite so an
     /// archived result says what was poisoned without needing the manifest.
     pub poisoned_name: String,
     /// How far above the control group the target group's during-fault p50 may
     /// sit before [`ResolutionViolation::QuotaDegraded`] is recorded.
+    ///
+    /// Under [`ResolutionExpectation::Degrades`] the same number is read the
+    /// other way: staying *under* it is the finding.
     pub degradation_ceiling_percent: f64,
     /// How far above its own baseline the target group's post-fault p50 may sit
     /// before [`ResolutionViolation::QuotaDidNotRecover`] is recorded.
@@ -128,28 +196,41 @@ impl ResolutionReport {
     pub fn attention_lines(&self) -> Vec<String> {
         self.findings
             .iter()
-            .map(|f| format!("{SCENARIO} {}: {}", f.violation.as_str(), f.detail))
+            .map(|f| format!("{} {}: {}", self.scenario, f.violation.as_str(), f.detail))
             .collect()
     }
 
     /// Context a reader needs to judge the numbers, findings or not.
     ///
     /// The comparison goes here on every run, including the clean ones. It is
-    /// the only line that says what the run looked at, and this is a scenario
-    /// where a clean report and a report of nothing read identically.
+    /// the only line that says what the run looked at, and both scenarios built
+    /// on this account are ones where a clean report and a report of nothing
+    /// read identically.
     pub fn note_lines(&self) -> Vec<String> {
+        let scenario = &self.scenario;
         let mut lines = Vec::new();
 
         match self.during_fault_percent {
-            Some(percent) => lines.push(format!(
-                "{SCENARIO}: with {} unresolvable on the target executor, its quota p50 ran at \
-                 {percent}% of the control executor's over the same window (ceiling {}%). The \
-                 executor's shard-manager channel never expires, so the expected reading is \
-                 about 100",
-                self.poisoned_name, self.degradation_ceiling_percent
-            )),
+            Some(percent) => {
+                let expected = match self.expectation {
+                    ResolutionExpectation::Survives => {
+                        "The executor's shard-manager channel never expires, so the expected \
+                         reading is about 100"
+                    }
+                    ResolutionExpectation::Degrades => {
+                        "The shard manager was restarted inside this window, so the channel had \
+                         to be rebuilt and the expected reading is well above 100"
+                    }
+                };
+                lines.push(format!(
+                    "{scenario}: with {} unresolvable on the target executor, its quota p50 ran \
+                     at {percent}% of the control executor's over the same window (ceiling {}%). \
+                     {expected}",
+                    self.poisoned_name, self.degradation_ceiling_percent
+                ));
+            }
             None => lines.push(format!(
-                "{SCENARIO}: no during-fault quota comparison could be made — one of the two \
+                "{scenario}: no during-fault quota comparison could be made — one of the two \
                  executor groups confirmed nothing in that window, so the run says nothing about \
                  whether {} mattered",
                 self.poisoned_name
@@ -158,7 +239,7 @@ impl ResolutionReport {
 
         if let Some(percent) = self.quota_recovery_percent {
             lines.push(format!(
-                "{SCENARIO}: the target executor's quota p50 settled at {percent}% of its own \
+                "{scenario}: the target executor's quota p50 settled at {percent}% of its own \
                  baseline after the name came back (floor {}%)",
                 self.recovery_floor_percent
             ));
@@ -171,6 +252,8 @@ impl ResolutionReport {
 /// Everything the caller has to decide, kept out of the suite YAML's way.
 #[derive(Debug, Clone)]
 pub struct ResolutionInputs<'a> {
+    pub scenario: &'a str,
+    pub expectation: ResolutionExpectation,
     pub split: &'a PodSplit,
     pub fault: Option<FaultWindow>,
     pub poisoned_name: String,
@@ -183,6 +266,8 @@ pub fn build(records: &[OperationRecord], inputs: ResolutionInputs<'_>) -> Resol
     let cells = split::stream_cells(records, Stream::Quota, inputs.split, inputs.fault);
 
     let mut report = ResolutionReport {
+        scenario: inputs.scenario.to_string(),
+        expectation: inputs.expectation,
         poisoned_name: inputs.poisoned_name,
         degradation_ceiling_percent: inputs.degradation_ceiling_percent,
         recovery_floor_percent: inputs.recovery_floor_percent,
@@ -217,26 +302,65 @@ fn during_fault_percent(report: &ResolutionReport) -> Option<f64> {
 fn findings(report: &ResolutionReport) -> Vec<ResolutionFinding> {
     let mut findings = Vec::new();
 
-    if let Some(percent) = report.during_fault_percent
-        && percent > report.degradation_ceiling_percent
-    {
-        let target = report.cell(Group::OnPod, Window::DuringFault);
-        let control = report.cell(Group::Elsewhere, Window::DuringFault);
-        findings.push(ResolutionFinding {
-            violation: ResolutionViolation::QuotaDegraded,
-            detail: format!(
-                "the executor that could not resolve {} ran its quota work at {percent}% of the \
-                 executor that could ({}ms against {}ms at p50), over a ceiling of {}%. The \
-                 shard-manager channel is built once with an infinite idle TTL, so a cost here \
-                 means something re-resolved the name — which is what MF2 asks about on purpose",
-                report.poisoned_name,
-                target.map(|c| c.latency.p50_ms).unwrap_or_default(),
-                control.map(|c| c.latency.p50_ms).unwrap_or_default(),
-                report.degradation_ceiling_percent,
-            ),
-        });
+    let target_p50 = |window| {
+        report
+            .cell(Group::OnPod, window)
+            .map(|c| c.latency.p50_ms)
+            .unwrap_or_default()
+    };
+    let control_p50 = |window| {
+        report
+            .cell(Group::Elsewhere, window)
+            .map(|c| c.latency.p50_ms)
+            .unwrap_or_default()
+    };
+
+    if let Some(percent) = report.during_fault_percent {
+        match report.expectation {
+            // The fault should reach nothing. A gap between the two executors
+            // means something re-resolved the name, which is what MF2 sets out
+            // to force on purpose.
+            ResolutionExpectation::Survives if percent > report.degradation_ceiling_percent => {
+                findings.push(ResolutionFinding {
+                    violation: ResolutionViolation::QuotaDegraded,
+                    detail: format!(
+                        "the executor that could not resolve {} ran its quota work at {percent}% \
+                         of the executor that could ({}ms against {}ms at p50), over a ceiling of \
+                         {}%. The shard-manager channel is built once with an infinite idle TTL, \
+                         so a cost here means something rebuilt it",
+                        report.poisoned_name,
+                        target_p50(Window::DuringFault),
+                        control_p50(Window::DuringFault),
+                        report.degradation_ceiling_percent,
+                    ),
+                });
+            }
+            // The fault should bite, because the second one took the cached
+            // connection away. Two executors that came out alike mean it did
+            // not, and every number below describes S4 rather than this run.
+            ResolutionExpectation::Degrades if percent <= report.degradation_ceiling_percent => {
+                findings.push(ResolutionFinding {
+                    violation: ResolutionViolation::FaultDidNotBite,
+                    detail: format!(
+                        "the executor that could not resolve {} ran its quota work at {percent}% \
+                         of the executor that could ({}ms against {}ms at p50), under a ceiling \
+                         of {}%. Both lost their shard-manager connection to the restart and only \
+                         one could resolve the name to rebuild it, so they should not match. \
+                         Check that the restart landed inside the DNS window and that the \
+                         executor actually reconnected — a run reading like this measured S4",
+                        report.poisoned_name,
+                        target_p50(Window::DuringFault),
+                        control_p50(Window::DuringFault),
+                        report.degradation_ceiling_percent,
+                    ),
+                });
+            }
+            _ => {}
+        }
     }
 
+    // Read the same way under both expectations. Losing the lease is a
+    // legitimate response to either fault; never getting it back is not.
     if let Some(percent) = report.quota_recovery_percent
         && percent > report.recovery_floor_percent
     {
@@ -308,10 +432,18 @@ mod tests {
         }
     }
 
-    fn build_with(records: &[OperationRecord]) -> ResolutionReport {
+    fn build_as(
+        records: &[OperationRecord],
+        expectation: ResolutionExpectation,
+    ) -> ResolutionReport {
         build(
             records,
             ResolutionInputs {
+                scenario: match expectation {
+                    ResolutionExpectation::Survives => "S4",
+                    ResolutionExpectation::Degrades => "MF2",
+                },
+                expectation,
                 split: &split(),
                 fault: Some(fault()),
                 poisoned_name: NAME.to_string(),
@@ -319,6 +451,57 @@ mod tests {
                 recovery_floor_percent: FLOOR,
             },
         )
+    }
+
+    fn build_with(records: &[OperationRecord]) -> ResolutionReport {
+        build_as(records, ResolutionExpectation::Survives)
+    }
+
+    /// The pair of agents both scenarios drive: a matched population on each
+    /// executor, inside the fault window.
+    fn matched(target_ms: u64, control_ms: u64) -> Vec<OperationRecord> {
+        (0..10)
+            .flat_map(|i| {
+                [
+                    op("target-a", 120 + i, target_ms),
+                    op("control-a", 120 + i, control_ms),
+                ]
+            })
+            .collect()
+    }
+
+    /// MF2's expected result: the executor that could not re-resolve fell
+    /// behind the one that could, so there is nothing to report.
+    #[test]
+    fn under_degrades_a_slower_target_is_the_expected_result() {
+        let report = build_as(&matched(200, 20), ResolutionExpectation::Degrades);
+        assert_eq!(report.during_fault_percent, Some(1000.0));
+        assert!(!report.has_violations(), "{:?}", report.findings);
+    }
+
+    /// MF2's actual failure mode, and the one it exists to catch: the second
+    /// fault did not force a re-resolution, so the run measured S4.
+    #[test]
+    fn under_degrades_two_alike_executors_mean_the_fault_never_bit() {
+        let report = build_as(&matched(20, 20), ResolutionExpectation::Degrades);
+        assert_eq!(report.during_fault_percent, Some(100.0));
+        assert_eq!(
+            report.findings.first().map(|f| f.violation),
+            Some(ResolutionViolation::FaultDidNotBite)
+        );
+    }
+
+    /// The same numbers, read the opposite way by the other scenario. This is
+    /// the whole reason `expectation` exists rather than two copies of the
+    /// account.
+    #[test]
+    fn the_same_cells_produce_opposite_verdicts_under_the_two_expectations() {
+        let alike = matched(20, 20);
+        let slower = matched(200, 20);
+        assert!(!build_as(&alike, ResolutionExpectation::Survives).has_violations());
+        assert!(build_as(&alike, ResolutionExpectation::Degrades).has_violations());
+        assert!(build_as(&slower, ResolutionExpectation::Survives).has_violations());
+        assert!(!build_as(&slower, ResolutionExpectation::Degrades).has_violations());
     }
 
     /// The expected result, and the one that has to stay quiet.

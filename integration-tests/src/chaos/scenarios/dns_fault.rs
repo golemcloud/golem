@@ -12,11 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! S4 — the shard manager's name stops resolving on one executor (GOL-373).
+//! The shard manager's name stops resolving on one executor: S4 (GOL-373) and
+//! MF2 (GOL-537).
 //!
-//! [`crate::chaos::resolution`] carries the argument: why the expected answer is
-//! that nothing happens, and why the comparison is across executors rather than
-//! across time. This module is the choreography that produces it.
+//! [`crate::chaos::resolution`] carries the argument: why the comparison is
+//! across executors rather than across time, and why the same table is read two
+//! opposite ways. This module is the choreography that produces it.
+//!
+//! ### Why the two are one module
+//!
+//! MF2 is S4 with the thing that makes S4 null taken away. Same fault, same
+//! population, same instrument; it adds a **shard-manager restart inside the
+//! DNS window**, which drops the executor's cached connection and forces it to
+//! resolve a name that no longer resolves.
+//!
+//! That also makes the control group sharper than it is anywhere else in the
+//! suite. Both executors lose the connection to the same restart — it is a
+//! shared shock, not a targeted one — and the only thing that differs between
+//! them is whether they can resolve the name to rebuild it. So the gap between
+//! the two groups is the DNS failure with everything else held constant.
 //!
 //! ### What the fault can reach, which is less than the ticket assumed
 //!
@@ -55,11 +69,14 @@
 //!    have gone round undisturbed.
 //! 4. **Fault** — keep driving, and sample the assignment late in the window. A
 //!    DNS failure on an executor has no business moving shards, and a run where
-//!    it did is a different experiment.
+//!    it did is a different experiment. MF2 additionally waits for the second
+//!    fault and samples the assignment around it, because a shard-manager
+//!    restart is the one part of this that plausibly *could* move shards.
 //! 5. **Heal**, then keep driving long enough for the quota stream to settle.
 //! 6. **Read back and probe** — the same completion and exactly-once oracles
 //!    the rest of the suite ends with.
 
+use crate::chaos::composed::ComposedFaultReport;
 use crate::chaos::history::{OperationHistory, OperationRecord, Outcome, Phase, Stream};
 use crate::chaos::ownership::OwnershipSample;
 use crate::chaos::prep::ChaosPrepManifest;
@@ -70,7 +87,7 @@ use crate::chaos::scenarios::{
     read_back_agents, read_counters, sample_ownership, signal_termination, snapshot_routing,
     wait_for_settled_routing, write_outputs,
 };
-use crate::chaos::signal::{BaselineReady, FaultSignals, FaultTarget};
+use crate::chaos::signal::{BaselineReady, FaultInjected, FaultSignals, FaultTarget};
 use crate::chaos::split::{self, FaultWindow, PodSplit};
 use crate::chaos::summary::{
     AgentReadback, ChaosSummary, ExactlyOnceReport, Note, TerminationReason,
@@ -80,6 +97,7 @@ use crate::chaos::{ScenarioCode, ScenarioConfig, probe, resolution, workload};
 use chrono::Utc;
 use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::dsl::TestDsl;
+use std::time::Duration;
 use tracing::{info, warn};
 
 /// Where in the fault window the assignment is sampled, as a fraction of it.
@@ -89,8 +107,27 @@ use tracing::{info, warn};
 /// than one that looks untouched immediately.
 const OWNERSHIP_SAMPLE_FRACTION: f64 = 0.8;
 
-/// Runs S4 end to end.
+/// How long past the enclosing fault window a composed run keeps waiting for
+/// the second fault before giving up on it.
+///
+/// Generous, and the reason is that a wait which runs out produces a *weaker*
+/// report than one that catches a late signal:
+/// `secondary-outside-primary` tells a reader the composition missed, where
+/// `secondary-never-injected` only says nothing arrived.
+const SECONDARY_WAIT_MARGIN: Duration = Duration::from_secs(120);
+
+/// How long to let the cluster react to the shard-manager restart before
+/// sampling the assignment again.
+///
+/// The restart is the one fault here that could plausibly move shards, and a
+/// sample taken the instant it lands would describe the cluster before it had a
+/// chance to. Capped against what remains of the window by the caller, so it
+/// cannot fall past the heal and describe a cluster whose DNS was already back.
+const RESTART_SETTLE: Duration = Duration::from_secs(60);
+
+/// Runs S4 or MF2 end to end.
 pub async fn run(
+    code: ScenarioCode,
     config: &ScenarioConfig,
     manifest: &ChaosPrepManifest,
     deps: &BenchmarkTestDependencies,
@@ -100,8 +137,14 @@ pub async fn run(
     let started_at = Utc::now();
     let workload_config = config.require_workload()?;
     let resolution_config = config.require_resolution()?;
-    let history = OperationHistory::new(ScenarioCode::S4.as_str());
-    let key_prefix = crate::chaos::scenario_key_prefix(ScenarioCode::S4);
+    // Only MF2 has one. `require_composed` is the loud version, used once the
+    // presence of the block has already said the run intends a composition.
+    let composed_config = match config.composed {
+        Some(_) => Some(config.require_composed()?),
+        None => None,
+    };
+    let history = OperationHistory::new(code.as_str());
+    let key_prefix = crate::chaos::scenario_key_prefix(code);
 
     let user = manifest.user_context(deps);
     let counters = user
@@ -141,6 +184,8 @@ pub async fn run(
     let mut fault_target_observed = None;
     let mut selection: Option<PodSplit> = None;
     let mut attention_extra: Vec<Note> = Vec::new();
+    let mut secondary: Option<FaultInjected> = None;
+    let mut composed_report: Option<ComposedFaultReport> = None;
 
     macro_rules! finish {
         ($reason:expr, $records:expr, $readback:expr, $exactly_once:expr, $resolution:expr) => {{
@@ -157,6 +202,9 @@ pub async fn run(
             }
             if let Some(report) = $resolution {
                 summary = summary.with_resolution(report);
+            }
+            if let Some(report) = composed_report.clone() {
+                summary = summary.with_composed_fault(report);
             }
             let result = build_result(
                 config,
@@ -193,13 +241,13 @@ pub async fn run(
     routing_snapshots.push(snapshot_routing(deps, "before-warmup").await);
     attention_extra.push(wait_for_settled_routing(deps, &mut routing_snapshots).await);
 
-    info!("S4: warming {} quota agents", quota_agents.len());
+    info!("{code}: warming {} quota agents", quota_agents.len());
     let warm: Vec<(Stream, String, ReadKind)> = quota_agents
         .iter()
         .map(|agent| (Stream::Quota, agent.clone(), ReadKind::QuotaCounter))
         .collect();
     let _ = read_back_agents(&ctx, &[], warm).await;
-    info!("S4: warmed, settling {WARMUP_SETTLE:?}");
+    info!("{code}: warmed, settling {WARMUP_SETTLE:?}");
     tokio::time::sleep(WARMUP_SETTLE).await;
 
     // ── Aim ─────────────────────────────────────────────────────────────────
@@ -211,7 +259,7 @@ pub async fn run(
     let split = match split::select(subject, deps, &quota_agents).await {
         Ok(split) => split,
         Err(e) => {
-            warn!("S4: cannot aim the DNS failure: {e:#}");
+            warn!("{code}: cannot aim the DNS failure: {e:#}");
             let records = history.snapshot();
             finish!(
                 TerminationReason::FaultTargetUnverified {
@@ -232,12 +280,12 @@ pub async fn run(
     // rescues its own lease and the fault is inert. Here the fault would be
     // just as real and the run would still have nothing to say about it.
     if split.elsewhere.is_empty() {
-        warn!("S4: every quota agent landed on one executor, so there is no control group");
+        warn!("{code}: every quota agent landed on one executor, so there is no control group");
         let records = history.snapshot();
         finish!(
             TerminationReason::FaultTargetUnverified {
                 detail: format!(
-                    "all {} quota agents are owned by {}, and S4's measurement is the target \
+                    "all {} quota agents are owned by {}, and the measurement is the target \
                      executor's quota latency as a percentage of the other executor's over the \
                      same window, so a one-sided split leaves nothing to compare against",
                     quota_agents.len(),
@@ -253,7 +301,7 @@ pub async fn run(
 
     // ── Baseline ────────────────────────────────────────────────────────────
     info!(
-        "S4: baseline phase, mixed workload for {:?}",
+        "{code}: baseline phase, mixed workload for {:?}",
         config.phases.baseline()
     );
     phases.baseline = Some(PhaseWindow::started(Utc::now()));
@@ -268,7 +316,7 @@ pub async fn run(
 
     let baseline_operations = history.confirmed_in_phase(Phase::Baseline);
     if baseline_operations == 0 {
-        warn!("S4: baseline produced no confirmed operations, aborting before injection");
+        warn!("{code}: baseline produced no confirmed operations, aborting before injection");
         mixed.stop().await;
         let records = history.snapshot();
         finish!(
@@ -286,7 +334,7 @@ pub async fn run(
     // the control group as the affected one and vice versa — a report that is
     // not merely wrong but confidently inverted.
     if let Err(e) = split::verify_ownership(subject, deps, &split).await {
-        warn!("S4: ownership drifted between selection and injection: {e:#}");
+        warn!("{code}: ownership drifted between selection and injection: {e:#}");
         mixed.stop().await;
         let records = history.snapshot();
         finish!(
@@ -301,12 +349,12 @@ pub async fn run(
     }
 
     info!(
-        "S4: baseline complete ({baseline_operations} confirmed ops), naming {} and signalling \
-         readiness",
+        "{code}: baseline complete ({baseline_operations} confirmed ops), naming {} and \
+         signalling readiness",
         split.pod_address
     );
     signals.write_baseline_ready(&BaselineReady {
-        scenario_code: ScenarioCode::S4.as_str().to_string(),
+        scenario_code: code.as_str().to_string(),
         ready_at: Utc::now(),
         baseline_operations,
         fault_target: Some(FaultTarget {
@@ -320,14 +368,14 @@ pub async fn run(
     let injected = match signals.await_fault_injected(config.signal_timeout()).await {
         Ok(injected) => injected,
         Err(e) => {
-            warn!("S4: no fault-injected signal arrived: {e}");
+            warn!("{code}: no fault-injected signal arrived: {e}");
             mixed.stop().await;
             let records = history.snapshot();
             finish!(signal_termination(&e), &records, Vec::new(), None, None);
         }
     };
     info!(
-        "S4: fault {} ({} on {}) reported active at {}",
+        "{code}: fault {} ({} on {}) reported active at {}",
         injected.fault_id, injected.kind, injected.target, injected.injected_at
     );
     fault_injected_at = Some(injected.injected_at);
@@ -336,26 +384,85 @@ pub async fn run(
     ctx.phase.set(Phase::Fault);
     phases.fault = Some(PhaseWindow::started(injected.injected_at));
 
+    // ── The second fault, for MF2 ───────────────────────────────────────────
+    //
+    // The workflow applies it and reports it; the driver only learns when. What
+    // it does with that is sample the assignment on both sides of it, because a
+    // shard-manager restart is the one part of this composition that could
+    // plausibly move shards — and if it did, the two quota populations below
+    // are no longer the ones the run was aimed with.
+    //
+    // A wait that runs out is not an abort. The run still has an enclosing
+    // fault, a workload and every account after this; what it does not have is
+    // the composition, and the report says exactly that.
+    if composed_config.is_some() {
+        let deadline = config.phases.fault() + SECONDARY_WAIT_MARGIN;
+        match signals.await_secondary_fault(deadline).await {
+            Ok(signal) => {
+                info!(
+                    "{code}: second fault {} ({} on {}) reported active at {}",
+                    signal.fault_id, signal.kind, signal.target, signal.injected_at
+                );
+                ownership
+                    .push(sample_ownership(deps, "after-restart", ownership.last(), false).await);
+                routing_snapshots.push(snapshot_routing(deps, "after-restart").await);
+                secondary = Some(signal);
+
+                // Then again once the cluster has had time to react, capped
+                // against what is left of the window so the sample cannot land
+                // after the heal and describe an executor whose DNS was back.
+                if let Some(composed) = composed_config {
+                    let remaining = config
+                        .phases
+                        .fault()
+                        .mul_f64((1.0 - composed.after_fraction).max(0.0));
+                    let settle = RESTART_SETTLE.min(remaining / 2);
+                    info!("{code}: sampling assignment again in {settle:?}");
+                    tokio::time::sleep(settle).await;
+                    ownership.push(
+                        sample_ownership(deps, "after-restart-settled", ownership.last(), false)
+                            .await,
+                    );
+                }
+            }
+            Err(e) => {
+                warn!("{code}: no secondary-fault signal arrived within {deadline:?}: {e}");
+            }
+        }
+    }
+
     // One stop, late in the window. Unlike S19 there is nothing to probe here:
     // the driver cannot see the executor's resolver, and what it would want to
     // measure — whether a resolution was attempted — is not visible from any
     // agent. The workflow's DNS capability preflight is where that claim is
     // established instead.
-    tokio::time::sleep(config.phases.fault().mul_f64(OWNERSHIP_SAMPLE_FRACTION)).await;
-    info!("S4: sampling assignment late in the fault window");
+    //
+    // Timed from here rather than from injection, because on MF2 the block
+    // above has already spent part of the window: sleeping the full fraction
+    // again would run past the heal and take the "during-fault" sample after
+    // the fault.
+    let elapsed = Utc::now()
+        .signed_duration_since(injected.injected_at)
+        .to_std()
+        .unwrap_or(Duration::ZERO);
+    let sample_at = config.phases.fault().mul_f64(OWNERSHIP_SAMPLE_FRACTION);
+    if let Some(wait) = sample_at.checked_sub(elapsed) {
+        tokio::time::sleep(wait).await;
+    }
+    info!("{code}: sampling assignment late in the fault window");
     ownership.push(sample_ownership(deps, "during-fault", ownership.last(), false).await);
 
     let recovered = match signals.await_fault_recovered(config.signal_timeout()).await {
         Ok(recovered) => recovered,
         Err(e) => {
-            warn!("S4: no fault-recovered signal arrived: {e}");
+            warn!("{code}: no fault-recovered signal arrived: {e}");
             mixed.stop().await;
             let records = history.snapshot();
             finish!(signal_termination(&e), &records, Vec::new(), None, None);
         }
     };
     info!(
-        "S4: name resolving again at {} ({})",
+        "{code}: name resolving again at {} ({})",
         recovered.recovered_at, recovered.termination_reason
     );
     fault_recovered_at = Some(recovered.recovered_at);
@@ -363,11 +470,29 @@ pub async fn run(
         window.end(recovered.recovered_at);
     }
 
+    // Built here rather than at the end, so an abort during recovery or
+    // read-back still says whether the two faults ever met. Every account after
+    // this point describes a cluster that was under both, and a reader who
+    // cannot tell that apart from one under a single fault has been given the
+    // wrong document.
+    if let Some(composed) = composed_config {
+        let report = ComposedFaultReport::build(
+            &injected,
+            fault_recovered_at,
+            secondary.as_ref(),
+            composed.min_overlap(),
+        );
+        for finding in &report.findings {
+            warn!("{code}: {}: {}", finding.violation, finding.detail);
+        }
+        composed_report = Some(report);
+    }
+
     // ── Recovery ────────────────────────────────────────────────────────────
     ctx.phase.set(Phase::Recovery);
     phases.recovery = Some(PhaseWindow::started(Utc::now()));
     info!(
-        "S4: recovery phase, running for {:?}",
+        "{code}: recovery phase, running for {:?}",
         config.phases.recovery()
     );
     tokio::time::sleep(config.phases.recovery()).await;
@@ -390,6 +515,8 @@ pub async fn run(
     let resolution_report = resolution::build(
         &records,
         ResolutionInputs {
+            scenario: code.as_str(),
+            expectation: resolution_config.expectation,
             split: &split,
             fault,
             poisoned_name: resolution_config.poisoned_name.clone(),
@@ -414,8 +541,8 @@ pub async fn run(
         &after_probe,
     );
     info!(
-        "S4: exactly-once account — {} keys checked, {} with a final result, {} recovered by the \
-         probe, {} findings",
+        "{code}: exactly-once account — {} keys checked, {} with a final result, {} \
+         recovered by the probe, {} findings",
         exactly_once.keys_checked,
         exactly_once.keys_with_final_result,
         exactly_once.keys_recovered_by_probe,
@@ -442,8 +569,9 @@ pub async fn run(
 /// Neither [`resolution::ResolutionViolation`] appears. Both are comparisons
 /// between two executors, and a comparison is a number to read rather than a
 /// contract to break: a quota stream that ran slower on the pod that could not
-/// resolve the shard manager would be the most interesting result S4 could
-/// produce, and failing the run on it would bury that under a red cross instead
+/// resolve the shard manager is the most interesting result either scenario can
+/// produce — the point of S4 under one expectation, the point of MF2 under the
+/// other — and failing the run on it would bury that under a red cross instead
 /// of putting it in front of someone. The assignment check is not here either —
 /// [`sample_ownership`] files a movement into the summary's attention list on
 /// its own.

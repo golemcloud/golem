@@ -255,6 +255,10 @@ pub enum ChaosScenarioArg {
     /// connection to it stays up. The second control: that connection is built
     /// once with an infinite idle TTL, so DNS is never consulted again.
     S4,
+    /// The same DNS failure, held across a shard-manager restart so the
+    /// executor has to rebuild the connection and resolve a name that no longer
+    /// resolves. S4's companion.
+    Mf2,
     /// Executor pod kill while agents are having their state reverted.
     S7,
     /// Executor pod kill while agents are being deleted.

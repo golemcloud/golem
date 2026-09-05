@@ -1224,12 +1224,147 @@ scenarios:
       # result S4 could produce, and failing the run on it would bury it under a
       # red cross instead of putting it in front of someone.
       recoveryFloorPercent: 150
+      # Which way the ceiling is read. `survives` means a target group that fell
+      # behind its control is the finding — something re-resolved a name it was
+      # not supposed to need. MF2 sets the opposite and is checked against this
+      # one at load time.
+      expectation: survives
 
     retryPolicy:
       # Identical to the others. The consequence specific to this scenario is
       # that there should be nothing for it to do: the fault is not expected to
       # produce a transport error at all, so a retry that fires here is itself
       # worth reading.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # MF2 — the same DNS failure, held across a shard-manager restart (GOL-537).
+  #
+  # S4 with the thing that makes it null taken away. S4 established that an
+  # executor rides out a DNS outage because its shard-manager channel is built
+  # once with an infinite idle TTL and never rebuilt. MF2 restarts the shard
+  # manager inside the DNS window, so the channel has to be rebuilt and the
+  # rebuild is the first moment resolution matters.
+  #
+  # ── Why the control group is sharper here than anywhere else ─────────────────
+  #
+  # The restart is a *shared* shock. Both executors lose their connection to it,
+  # not just the one under DNS chaos. The only thing that differs between them is
+  # whether they can resolve `shard-manager...` to get the connection back. So
+  # the gap between the two groups is the DNS failure with everything else held
+  # constant — same workload, same shard manager, same instant.
+  #
+  # That is also why `expectation: degrades` is load-bearing rather than
+  # cosmetic. Under it, two executors that came out alike is the finding: it
+  # means the restart did not force a re-resolution and the run measured S4
+  # again under an MF code.
+  #
+  # ── What the restart is expected NOT to do ──────────────────────────────────
+  #
+  # Move shards. The shard manager rebuilds its assignment from Aurora on
+  # startup and discovers executors through the Kubernetes API rather than by
+  # waiting to be registered — `shard-manager-pod-reader` in the golem-release
+  # RBAC is that grant. Health checks run shard-manager to executor, so the
+  # target's broken resolver cannot affect them either. A run where shards moved
+  # is reporting something other than what it injected, and the ownership
+  # samples on both sides of the restart are there to say so.
+  #
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+  #
+  # Identical to S4's, and just as absent by default: an operator opens the DNS
+  # chaos window before the run. See docs/runbooks/cloud-chaos-mf2.md and
+  # docs/runbooks/chaos-dns-capability.md in golem-cloud.
+  - code: MF2
+    name: executor-dns-failure-across-shard-manager-restart
+    enabled: true
+
+    fault:
+      kind: dns-failure
+      target: worker-executor
+      mode: one
+      # Must equal phases.faultSecs, for S16's reason.
+      durationSecs: 420
+      # Named rather than globbed: a composed scenario has two manifests sharing
+      # its code, so leaving the choice to alphabetical order would decide which
+      # fault is which.
+      manifest: dnschaos-mf2.yaml
+
+    composed:
+      kind: pod-kill
+      target: shard-manager
+      manifest: podchaos-mf2.yaml
+      # A third of the way in, leaving ~280s of overlap. The number that matters
+      # is what it has to clear, and that is the quota lease, not a timeout.
+      #
+      # On golem-dev the lease runs 60s and the executor renews when it believes
+      # fewer than 20s remain. After the restart drops the connection, the target
+      # executor's next renewal attempt has to resolve the name and cannot, so
+      # the lease runs out at most 60s later and its reservations park. 280s is
+      # four of those cycles: enough that the parking is a steady state rather
+      # than a single blip, and enough for the p50 to mean something.
+      afterFraction: 0.33
+      # The floor is one full lease plus headroom. Below 90s the overlap may not
+      # have outlasted a single lease lifetime, and then the run cannot
+      # distinguish "could not re-resolve" from "had not needed to yet" — which
+      # is exactly the confusion this scenario exists to remove.
+      minOverlapSecs: 90
+
+    phases:
+      # S4's, so the pair is readable against each other.
+      baselineSecs: 300
+      # Longer than S4's 300. The window has to contain the restart, the
+      # executor noticing its connection is gone, several failed renewals, the
+      # lease lapsing, and then long enough after that for the parked
+      # reservations to be a measurement rather than an edge.
+      faultSecs: 420
+      # Longer than S4's too. There is real work to come back from here: the
+      # target has to re-resolve, rebuild the channel, re-acquire a lease and
+      # drain whatever parked behind it. S4's 240 would cut that short and
+      # report a recovery that had not finished.
+      recoverySecs: 420
+
+    ownership:
+      # Sampled either side of the restart as well as at the end. The shard
+      # manager going away is the one part of this composition that could move
+      # shards, and a run where it did is no longer comparing the two
+      # populations it was aimed with.
+      settleSecs: 120
+
+    workload:
+      # S4's exactly. The pair is only readable if the population is the same.
+      quotaAgents: 120
+      durableAgents: 60
+      scheduledAgents: 0
+      ephemeralAgents: 0
+      promiseAgents: 0
+      rpcAgents: 0
+      ratePerSec: 100
+
+    resolution:
+      poisonedName: shard-manager.golem-release.svc.cluster.local
+      # The same ceiling as S4, read the other way. Under `degrades` a reading
+      # at or under 130% is the finding: both executors lost the connection and
+      # only one could resolve the name to rebuild it, so they should not match.
+      #
+      # Kept identical to S4's on purpose. A different number would make the two
+      # runs incomparable, and comparability is the entire reason MF2 exists as
+      # a separate scenario rather than as a variant of S4.
+      degradationCeilingPercent: 130
+      # Higher than S4's 150. The target executor here really does have to
+      # re-acquire a lease after the name comes back, so its post-fault p50
+      # legitimately sits above baseline for a cycle or two. 200 is generous
+      # against a p50 of tens of milliseconds and still catches a stream that
+      # never came back at all.
+      recoveryFloorPercent: 200
+      expectation: degrades
+
+    retryPolicy:
+      # Identical to S4's. Unlike S4 the retry is expected to fire here: a
+      # reservation parked behind a lease the executor cannot renew will time
+      # out, and one same-key retry after 5s is the bounded response.
       transportOnly: true
       maxRetries: 1
       delaySecs: 5
