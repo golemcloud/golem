@@ -21,6 +21,8 @@ import scala.collection.immutable.ListMap
 final case class SchemaIssue(message: String, path: List[String] = Nil)
 
 final class SchemaRef private (val graph: SchemaGraph, val root: SchemaType) {
+  def containsStream: Boolean = graph.containsStream
+
   def validateValue(value: SchemaValue): Either[List[SchemaIssue], SchemaValue] =
     ValueValidation
       .validateValue(graph, root, value)
