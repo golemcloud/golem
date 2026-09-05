@@ -46,7 +46,7 @@ use crate::services::card_interest::{
     CardAuthorityRecoveryEpoch, CardAuthorityRecoveryFinalize, CardInterestIndex,
 };
 use crate::services::golem_config::{
-    AgentStatusFlushConfig, FilesystemStorageConfig, MemoryConfig,
+    ActiveAgentsConfig, AgentStatusFlushConfig, FilesystemStorageConfig, MemoryConfig,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::worker::Worker;
@@ -420,6 +420,7 @@ impl InvocationLoops {
 
 /// Holds owner-keyed active agent groups.
 pub struct ActiveAgents<Ctx: WorkerCtx> {
+    _unloaded_worker_eviction: UnloadedWorkerEvictionTask,
     agents: Cache<OwnedAgentId, (), Arc<ActiveAgent<Ctx>>, WorkerExecutorError>,
     card_interest_index: Arc<CardInterestIndex>,
     agent_filesystems: Arc<AgentFilesystems>,
@@ -442,6 +443,41 @@ pub struct ActiveAgents<Ctx: WorkerCtx> {
     invocation_loops: InvocationLoops,
 }
 
+struct UnloadedWorkerEvictionTask(JoinHandle<()>);
+
+impl UnloadedWorkerEvictionTask {
+    fn start<Ctx: WorkerCtx>(
+        agents: Cache<OwnedAgentId, (), Arc<ActiveAgent<Ctx>>, WorkerExecutorError>,
+        card_interest_index: Arc<CardInterestIndex>,
+        ttl: Duration,
+        shutdown_token: CancellationToken,
+    ) -> Self {
+        const MAX_SWEEP_PERIOD: Duration = Duration::from_secs(60);
+        const ZERO_TTL_SWEEP_PERIOD: Duration = Duration::from_secs(1);
+
+        let period = if ttl.is_zero() {
+            ZERO_TTL_SWEEP_PERIOD
+        } else {
+            ttl.min(MAX_SWEEP_PERIOD)
+        };
+        Self(tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => break,
+                    _ = tokio::time::sleep(period) => {}
+                }
+                evict_expired_unloaded_agents(&agents, &card_interest_index, ttl).await;
+            }
+        }))
+    }
+}
+
+impl Drop for UnloadedWorkerEvictionTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Identifies a compiled component for module-charge accounting.
 type ComponentChargeKey = (ComponentId, ComponentRevision);
 
@@ -450,6 +486,7 @@ pub type WorkerComponentCharge = ComponentChargeGuard<ComponentChargeKey, GateCh
 
 impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     pub fn new(
+        active_agents_config: &ActiveAgentsConfig,
         memory_config: &MemoryConfig,
         storage_config: &FilesystemStorageConfig,
         agent_status_flush_config: &AgentStatusFlushConfig,
@@ -461,6 +498,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         let probe = default_probe(memory_config.system_memory_override);
         Self::new_with_probe(
             probe,
+            active_agents_config,
             memory_config,
             storage_config,
             agent_status_flush_config,
@@ -474,6 +512,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     /// decision is deterministic and isolated from the shared test process's RSS.
     pub fn new_with_probe(
         probe: Box<dyn MemoryProbe>,
+        active_agents_config: &ActiveAgentsConfig,
         memory_config: &MemoryConfig,
         storage_config: &FilesystemStorageConfig,
         agent_status_flush_config: &AgentStatusFlushConfig,
@@ -495,9 +534,16 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         let component_charges = ComponentChargeRegistry::new(GateChargeSource {
             admission: admission.clone(),
         });
+        let card_interest_index = Arc::new(CardInterestIndex::new());
         let active_agents = Self {
+            _unloaded_worker_eviction: UnloadedWorkerEvictionTask::start(
+                agents.clone(),
+                card_interest_index.clone(),
+                active_agents_config.ttl,
+                shutdown_token.clone(),
+            ),
             agents,
-            card_interest_index: Arc::new(CardInterestIndex::new()),
+            card_interest_index,
             agent_filesystems,
             concurrent_agents: Arc::new(ConcurrentAgentsScheduler::new()),
             acquire_retry_delay: memory_config.acquire_retry_delay,
@@ -634,6 +680,11 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         owned_agent_id: &OwnedAgentId,
     ) -> Option<Arc<ActiveAgent<Ctx>>> {
         self.agents.get(owned_agent_id).await
+    }
+
+    /// Checks whether an owner group is cached without refreshing its TTL.
+    pub async fn contains_cached_agent(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        self.agents.contains_key(owned_agent_id).await
     }
 
     /// Inspects all currently known entity slots for an active owner. No durable child status is
@@ -853,6 +904,42 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     /// Initializes worker gauges. Subsequent changes are recorded inline at the mutation sites.
     fn initialize_metrics(&self) {
         crate::metrics::workers::initialize_worker_metrics();
+    }
+}
+
+async fn evict_expired_unloaded_agents<Ctx: WorkerCtx>(
+    agents: &Cache<OwnedAgentId, (), Arc<ActiveAgent<Ctx>>, WorkerExecutorError>,
+    card_interest_index: &CardInterestIndex,
+    ttl: Duration,
+) {
+    for (owned_agent_id, active_agent) in agents.entries_older_than(ttl).await {
+        let worker = &active_agent.primary;
+        let Some(retirement) = worker.try_begin_cache_retirement().await else {
+            continue;
+        };
+        if Arc::strong_count(&active_agent) != 2 || Arc::strong_count(worker) != 1 {
+            continue;
+        }
+
+        let removed = card_interest_index
+            .clear_agent_interest_if(
+                &owned_agent_id,
+                agents.remove_if_cached_older_than(&owned_agent_id, ttl, |current| {
+                    Arc::ptr_eq(current, &active_agent)
+                        // `entries_older_than` owns the only reference besides the cache.
+                        && Arc::strong_count(current) == 2
+                        // The cached ActiveAgent must be the Worker's only strong owner.
+                        && Arc::strong_count(&current.primary) == 1
+                        // Fence entity work only after all final removal checks pass while
+                        // concurrent cache lookups are excluded by the cache entry lock.
+                        && current.try_fence_idle_entity_bodies().is_some()
+                }),
+            )
+            .await;
+
+        if removed {
+            retirement.commit();
+        }
     }
 }
 

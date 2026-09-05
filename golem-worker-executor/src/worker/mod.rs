@@ -459,6 +459,9 @@ pub struct Worker<Ctx: WorkerCtx> {
 
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
     instance: Arc<Mutex<WorkerInstance>>,
+    /// Prevents weak-reference background work from starting while an unloaded
+    /// worker is being conditionally removed from `ActiveAgents`.
+    cache_retirement_in_progress: AtomicBool,
     startup_attempt: StartupAttemptTracker,
     linear_memory_grant: StdMutex<Option<Arc<StdMutex<MemoryGrant>>>>,
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
@@ -972,6 +975,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 EphemeralInvocationState::Available
             }),
             instance,
+            cache_retirement_in_progress: AtomicBool::new(false),
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
@@ -2698,6 +2702,36 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// distinguish those two states.
     pub async fn is_loaded(&self) -> bool {
         matches!(&*self.instance.lock().await, WorkerInstance::Running(_))
+    }
+
+    /// Starts a conditional `ActiveAgents` retirement if this worker is
+    /// exactly unloaded. The returned guard rolls the marker back unless the
+    /// cache removal commits.
+    pub(crate) async fn try_begin_cache_retirement(&self) -> Option<WorkerCacheRetirement<'_>> {
+        if self
+            .cache_retirement_in_progress
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return None;
+        }
+
+        let retirement = WorkerCacheRetirement {
+            in_progress: &self.cache_retirement_in_progress,
+            committed: false,
+        };
+        if matches!(
+            &*self.instance.lock().await,
+            WorkerInstance::Unloaded { .. }
+        ) {
+            Some(retirement)
+        } else {
+            None
+        }
+    }
+
+    fn cache_retirement_in_progress(&self) -> bool {
+        self.cache_retirement_in_progress.load(Ordering::Acquire)
     }
 
     /// Classifies the worker for eviction ordering under memory pressure.
@@ -4890,6 +4924,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let Some(worker) = worker.upgrade() else {
                     break;
                 };
+                if worker.cache_retirement_in_progress() {
+                    continue;
+                }
                 if let Err(error) = worker.recover_durable_stream_topologies().await {
                     warn!(
                         agent_id = %worker.agent_id(),
@@ -7419,6 +7456,25 @@ pub(crate) enum EvictionStopOutcome {
     CleanupFailed,
 }
 
+pub(crate) struct WorkerCacheRetirement<'a> {
+    in_progress: &'a AtomicBool,
+    committed: bool,
+}
+
+impl WorkerCacheRetirement<'_> {
+    pub(crate) fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for WorkerCacheRetirement<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.in_progress.store(false, Ordering::Release);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FilesystemPressureEligibility {
     idle_since: u64,
@@ -7725,6 +7781,26 @@ mod tests {
         assert!(!running_worker_can_be_evicted(
             true, false, false, false, false, true
         ));
+    }
+
+    #[test]
+    fn cache_retirement_guard_rolls_back_uncommitted_attempts_only() {
+        let in_progress = AtomicBool::new(true);
+        {
+            let _retirement = WorkerCacheRetirement {
+                in_progress: &in_progress,
+                committed: false,
+            };
+        }
+        assert!(!in_progress.load(Ordering::Acquire));
+
+        in_progress.store(true, Ordering::Release);
+        WorkerCacheRetirement {
+            in_progress: &in_progress,
+            committed: false,
+        }
+        .commit();
+        assert!(in_progress.load(Ordering::Acquire));
     }
 
     #[test]

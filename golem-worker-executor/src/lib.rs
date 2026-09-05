@@ -185,6 +185,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<Arc<ActiveAgents<Ctx>>> {
         Ok(Arc::new(ActiveAgents::<Ctx>::new(
+            &golem_config.active_agents,
             &golem_config.memory,
             &golem_config.filesystem_storage,
             &golem_config.agent_status_flush,

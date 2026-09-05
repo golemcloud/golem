@@ -745,6 +745,22 @@ impl TestWorkerExecutor {
         }
     }
 
+    /// Returns whether a Worker shell is currently in `ActiveAgents` without
+    /// refreshing its last-access time.
+    pub async fn worker_is_cached(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        match self.additional_test_deps.active_agents.get() {
+            Some(active_agents) => active_agents.contains_cached_agent(owned_agent_id).await,
+            None => false,
+        }
+    }
+
+    pub async fn tracked_card_ids(&self) -> Vec<CardId> {
+        match self.additional_test_deps.active_agents.get() {
+            Some(active_agents) => active_agents.tracked_card_ids().await,
+            None => Vec::new(),
+        }
+    }
+
     pub async fn stop_worker_if_idle(&self, owned_agent_id: &OwnedAgentId) -> anyhow::Result<bool> {
         let worker = self
             .additional_test_deps
@@ -2140,6 +2156,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         match golem_config.memory.system_memory_override {
             Some(limit) => Ok(Arc::new(ActiveAgents::new_with_probe(
                 Box::new(FixedProbe::new(limit, 0)),
+                &golem_config.active_agents,
                 &golem_config.memory,
                 &golem_config.filesystem_storage,
                 &golem_config.agent_status_flush,
@@ -2149,6 +2166,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
                 let mut memory_config = golem_config.memory.clone();
                 memory_config.enable_measured_admission = false;
                 Ok(Arc::new(ActiveAgents::new(
+                    &golem_config.active_agents,
                     &memory_config,
                     &golem_config.filesystem_storage,
                     &golem_config.agent_status_flush,
