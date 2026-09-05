@@ -45,6 +45,7 @@ pub async fn run(
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<RunDetails, anyhow::Error> {
     golem_config.durable_stream.validate()?;
+    golem_config.invocation_results.validate()?;
     bootstrap_and_run_worker_executor(
         &ServerBootstrap,
         golem_config,

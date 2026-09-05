@@ -114,6 +114,9 @@ impl MultiSqliteKeyValueStorage {
             KeyValueStorageNamespace::AgentStatus { agent_id } => {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
+            KeyValueStorageNamespace::AgentInvocationResultIndex { agent_id } => {
+                format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
+            }
             KeyValueStorageNamespace::AgentStatusCheckpoint { agent_id } => {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }

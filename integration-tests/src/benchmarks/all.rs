@@ -110,6 +110,14 @@ async fn main() {
         }),
     );
     benchmarks_by_name.insert(
+        "idempotency-key-lookup",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                integration_tests::benchmarks::idempotency_key::IdempotencyKeyLookup,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
         "throughput-echo",
         Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(run_benchmark::<

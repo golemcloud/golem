@@ -100,33 +100,45 @@ async fn build_namespace_routed_kvs(
 }
 
 #[test]
-async fn routes_worker_namespace_to_redis(deps: &WorkerExecutorTestDependencies) {
+async fn routes_agent_namespaces_to_redis(deps: &WorkerExecutorTestDependencies) {
     let (kvs, redis, postgres, _postgres_container) = build_namespace_routed_kvs(deps).await;
 
-    let ns = KeyValueStorageNamespace::Worker {
-        agent_id: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "route-test-agent".to_string(),
-        },
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "route-test-agent".to_string(),
     };
-    let key = "worker-route-key";
-    let value = b"worker-route-value";
+    let cases = [
+        (
+            KeyValueStorageNamespace::Worker {
+                agent_id: agent_id.clone(),
+            },
+            "worker-route-key",
+            b"worker-route-value".as_slice(),
+        ),
+        (
+            KeyValueStorageNamespace::AgentInvocationResultIndex { agent_id },
+            "result-index-route-key",
+            b"result-index-route-value".as_slice(),
+        ),
+    ];
 
-    kvs.set("test", "api", "entity", ns.clone(), key, value)
-        .await
-        .unwrap();
+    for (namespace, key, value) in cases {
+        kvs.set("test", "api", "entity", namespace.clone(), key, value)
+            .await
+            .unwrap();
 
-    let redis_read = redis
-        .get("test", "api", "entity", ns.clone(), key)
-        .await
-        .unwrap();
-    let postgres_read = postgres
-        .get("test", "api", "entity", ns, key)
-        .await
-        .unwrap();
+        let redis_read = redis
+            .get("test", "api", "entity", namespace.clone(), key)
+            .await
+            .unwrap();
+        let postgres_read = postgres
+            .get("test", "api", "entity", namespace, key)
+            .await
+            .unwrap();
 
-    assert_eq!(redis_read, Some(value.as_slice().into()));
-    assert_eq!(postgres_read, None);
+        assert_eq!(redis_read, Some(value.into()));
+        assert_eq!(postgres_read, None);
+    }
 }
 
 #[test]

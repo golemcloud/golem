@@ -2635,9 +2635,9 @@ dependencies = [
 
 [[package]]
 name = "desert_core"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "623ecd066d1ec74037f703e5a5833304a5621a0c0201ad72ea04a80054483fc7"
+checksum = "ac6b6856f399753c591dcdb7b57fd651eee3e07787672392cf551b8ba1725bdd"
 dependencies = [
  "bigdecimal",
  "bit-vec 0.6.3",
@@ -2647,6 +2647,7 @@ dependencies = [
  "chrono-tz",
  "flate2",
  "hashbrown 0.16.1",
+ "im",
  "lazy_static",
  "mac_address",
  "nonempty-collections",
@@ -2658,9 +2659,9 @@ dependencies = [
 
 [[package]]
 name = "desert_macro"
-version = "0.1.10"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9ed06e04bc6899b2609b595a931e84d79a5f4187225d6f4cd942b2ebf54db81"
+checksum = "4573798d7c0123902a9fc19f43c1c0dd2daf587c121119fd5ebcdab46f4e984a"
 dependencies = [
  "bytes",
  "desert_core",
@@ -2672,12 +2673,13 @@ dependencies = [
 
 [[package]]
 name = "desert_rust"
-version = "0.1.10"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fd78c31bbbee1a0cd9203362cb1b00306344759d064fc1e8636d5c8c64bfc61"
+checksum = "88084a4ce8019c315bcc0142f2fa97c1d7b389a96cfadea6f07a5607126667a0"
 dependencies = [
  "desert_core",
  "desert_macro",
+ "im",
 ]
 
 [[package]]

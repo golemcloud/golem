@@ -401,10 +401,26 @@ fn ns3() -> Namespaces {
     }
 }
 
+#[test_dep(scope = PerWorker, tagged_as = "ns4")]
+fn ns4() -> Namespaces {
+    Namespaces {
+        ns: KeyValueStorageNamespace::AgentInvocationResultIndex {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "test".to_string(),
+            },
+        },
+        ns2: KeyValueStorageNamespace::UserDefined {
+            environment_id: EnvironmentId(uuid!("296aa41a-ff44-4882-8f34-08b7fe431aa4")),
+            bucket: "test-bucket-3".to_string(),
+        },
+    }
+}
+
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
 define_matrix_dimension!(kvs: Arc<dyn GetKeyValueStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres", "namespace_routed");
-define_matrix_dimension!(nss: Namespaces -> "ns1", "ns2", "ns3");
+define_matrix_dimension!(nss: Namespaces -> "ns1", "ns2", "ns3", "ns4");
 
 #[test]
 #[tracing::instrument]
@@ -562,6 +578,57 @@ async fn get_all_returns_namespace_snapshot(
             ("field1".to_string(), bytes::Bytes::from_static(b"value1")),
             ("field2".to_string(), bytes::Bytes::from_static(b"value2")),
         ]
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn agent_invocation_result_index_is_separate_from_agent_status(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
+) {
+    let kvs = kvs.get_key_value_storage().await;
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "test".to_string(),
+    };
+    let status_ns = KeyValueStorageNamespace::AgentStatus {
+        agent_id: agent_id.clone(),
+    };
+    let result_index_ns = KeyValueStorageNamespace::AgentInvocationResultIndex { agent_id };
+
+    kvs.set(
+        "test",
+        "api",
+        "entity",
+        status_ns.clone(),
+        "same-key",
+        b"status-value",
+    )
+    .await
+    .unwrap();
+    kvs.set(
+        "test",
+        "api",
+        "entity",
+        result_index_ns.clone(),
+        "same-key",
+        b"result-index-value",
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        kvs.get("test", "api", "entity", status_ns, "same-key")
+            .await
+            .unwrap(),
+        Some(bytes::Bytes::from_static(b"status-value"))
+    );
+    assert_eq!(
+        kvs.get("test", "api", "entity", result_index_ns, "same-key",)
+            .await
+            .unwrap(),
+        Some(bytes::Bytes::from_static(b"result-index-value"))
     );
 }
 

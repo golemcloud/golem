@@ -18,8 +18,11 @@ use figment::providers::{Format, Toml};
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbPostgresConfig, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
-use golem_common::model::RetryConfig;
 use golem_common::model::base64::Base64;
+use golem_common::model::{
+    DEFAULT_INVOCATION_RESULT_BLOOM_BITS, DEFAULT_INVOCATION_RESULT_BLOOM_HASHES,
+    DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY, InvocationResultMembership, RetryConfig,
+};
 use golem_common::tracing::TracingConfig;
 use golem_common::{SafeDisplay, grpc_uri};
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
@@ -78,6 +81,8 @@ pub struct GolemConfig {
     pub agent_status_flush: AgentStatusFlushConfig,
     #[serde(default)]
     pub agent_status_checkpoint: AgentStatusCheckpointConfig,
+    #[serde(default)]
+    pub invocation_results: InvocationResultsConfig,
     pub scheduler: SchedulerConfig,
     pub public_worker_api: WorkerServiceGrpcConfig,
     pub memory: MemoryConfig,
@@ -224,6 +229,12 @@ impl SafeDisplay for GolemConfig {
             "{}",
             self.agent_status_checkpoint.to_safe_string_indented()
         );
+        let _ = writeln!(&mut result, "invocation_results:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.invocation_results.to_safe_string_indented()
+        );
         let _ = writeln!(&mut result, "scheduler:");
         let _ = writeln!(&mut result, "{}", self.scheduler.to_safe_string_indented());
         let _ = writeln!(&mut result, "public worker api:");
@@ -357,6 +368,7 @@ impl Default for GolemConfig {
             active_agents: ActiveAgentsConfig::default(),
             agent_status_flush: AgentStatusFlushConfig::default(),
             agent_status_checkpoint: AgentStatusCheckpointConfig::default(),
+            invocation_results: InvocationResultsConfig::default(),
             public_worker_api: WorkerServiceGrpcConfig::default(),
             memory: MemoryConfig::default(),
             filesystem_storage: FilesystemStorageConfig::default(),
@@ -772,6 +784,75 @@ impl Default for AgentStatusFlushConfig {
             enabled: true,
             interval: Duration::from_secs(1),
             max_concurrency: 128,
+        }
+    }
+}
+
+/// Controls the bounded in-memory and physical invocation-result lookup structures.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InvocationResultsConfig {
+    /// Maximum number of recent invocation results retained exactly in agent status.
+    pub recent_capacity: usize,
+    /// Number of bits in the persistent invocation-result Bloom filter.
+    pub bloom_bits: usize,
+    /// Number of hash probes used by the persistent invocation-result Bloom filter.
+    pub bloom_hashes: u8,
+    /// Maximum number of oplog entries processed by one physical-index catch-up step.
+    pub physical_index_catch_up_chunk_size: u64,
+    /// Maximum number of invocation results hydrated from the oplog and retained in memory.
+    pub hydrated_cache_capacity: usize,
+}
+
+impl InvocationResultsConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.bloom_bits > 0,
+            "invocation result Bloom filter must not be empty"
+        );
+        anyhow::ensure!(
+            self.bloom_hashes > 0,
+            "invocation result Bloom filter must use at least one hash"
+        );
+        anyhow::ensure!(
+            self.physical_index_catch_up_chunk_size > 0,
+            "invocation result physical-index catch-up chunk size must be at least one"
+        );
+        Ok(())
+    }
+
+    pub fn membership(&self) -> InvocationResultMembership {
+        InvocationResultMembership::new(self.recent_capacity, self.bloom_bits, self.bloom_hashes)
+    }
+}
+
+impl SafeDisplay for InvocationResultsConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "recent capacity: {}", self.recent_capacity);
+        let _ = writeln!(&mut result, "bloom bits: {}", self.bloom_bits);
+        let _ = writeln!(&mut result, "bloom hashes: {}", self.bloom_hashes);
+        let _ = writeln!(
+            &mut result,
+            "physical index catch-up chunk size: {}",
+            self.physical_index_catch_up_chunk_size
+        );
+        let _ = writeln!(
+            &mut result,
+            "hydrated cache capacity: {}",
+            self.hydrated_cache_capacity
+        );
+        result
+    }
+}
+
+impl Default for InvocationResultsConfig {
+    fn default() -> Self {
+        Self {
+            recent_capacity: DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY,
+            bloom_bits: DEFAULT_INVOCATION_RESULT_BLOOM_BITS,
+            bloom_hashes: DEFAULT_INVOCATION_RESULT_BLOOM_HASHES,
+            physical_index_catch_up_chunk_size: 1024,
+            hydrated_cache_capacity: 1024,
         }
     }
 }
@@ -2457,7 +2538,7 @@ pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DurableStreamConfig, Limits};
+    use super::{DurableStreamConfig, InvocationResultsConfig, Limits};
     use golem_common::SafeDisplay;
     use serde_json::Value;
     use test_r::test;
@@ -2468,6 +2549,43 @@ mod tests {
         assert!(config.validate().is_ok());
         config.renewal_interval = config.lease_ttl;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn invocation_results_config_rejects_invalid_lookup_structures() {
+        let mut config = InvocationResultsConfig::default();
+        assert!(config.validate().is_ok());
+
+        config.bloom_bits = 0;
+        assert!(config.validate().is_err());
+
+        config.bloom_bits = 1;
+        config.bloom_hashes = 0;
+        assert!(config.validate().is_err());
+
+        config.bloom_hashes = 1;
+        config.physical_index_catch_up_chunk_size = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn invocation_results_config_constructs_configured_membership() {
+        let config = InvocationResultsConfig {
+            recent_capacity: 2,
+            bloom_bits: 128,
+            bloom_hashes: 3,
+            ..InvocationResultsConfig::default()
+        };
+        let mut membership = config.membership();
+        for index in 1..=3 {
+            membership.insert(
+                golem_common::model::IdempotencyKey::fresh(),
+                golem_common::model::oplog::OplogIndex::from_u64(index),
+            );
+        }
+
+        assert_eq!(membership.len(), 2);
+        assert!(!membership.is_exact_complete());
     }
 
     #[test]
