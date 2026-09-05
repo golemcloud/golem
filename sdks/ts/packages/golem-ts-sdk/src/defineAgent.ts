@@ -391,7 +391,12 @@ export function defineAgent<
           const enabled = policy !== undefined && policy !== 'disabled';
           const hasStateSchema = typeof policy === 'object' && policy !== null && 'state' in policy;
           const hasCustomSnapshot = impl.snapshot !== undefined;
-          if (hasCustomSnapshot && typeof impl.snapshot?.load !== 'function') {
+          if (
+            hasCustomSnapshot &&
+            (typeof impl.snapshot?.load !== 'function' ||
+              (typeof impl.snapshot?.save !== 'function' &&
+                !(hasStateSchema && impl.snapshot?.save === undefined)))
+          ) {
             throw new Error('custom snapshotting requires both snapshot.save and snapshot.load');
           }
           if (

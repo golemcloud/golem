@@ -183,7 +183,7 @@ describe('agent metadata (Phase 3)', () => {
     } as never);
 
     expect(AgentTypeRegistry.getRegistrationError('SnapshotLoadOnly')).toEqual([
-      'Implementation failed: snapshotting without a state schema requires snapshot.save and snapshot.load',
+      'Implementation failed: custom snapshotting requires both snapshot.save and snapshot.load',
     ]);
     expect(AgentTypeRegistry.getRegistrationError('SnapshotSaveOnly')).toEqual([
       'Implementation failed: custom snapshotting requires both snapshot.save and snapshot.load',
@@ -202,6 +202,37 @@ describe('agent metadata (Phase 3)', () => {
 
     expect(AgentTypeRegistry.getRegistrationError('SnapshotSchemaLoadOnly')).toBeUndefined();
   });
+
+  it.each([123, null, false, 'invalid'])(
+    'rejects non-function snapshot save %s with a state schema',
+    (save) => {
+      const name = `SnapshotInvalidSave${String(save)}`;
+      defineAgent({
+        name,
+        snapshotting: { state: z.object({ count: z.number() }) },
+        id: {},
+        methods: {},
+      }).implement({
+        init: () => ({ count: 0 }),
+        methods: {},
+        snapshot: { save, load: () => ({ count: 1 }) },
+      } as never);
+      expect(AgentTypeRegistry.getRegistrationError(name)).toBeDefined();
+    },
+  );
+
+  it.each([undefined, 'disabled'] as const)(
+    'rejects schema-less load-only snapshots with policy %s',
+    (snapshotting) => {
+      const name = `SnapshotLoadOnlyPolicy${String(snapshotting)}`;
+      defineAgent({ name, snapshotting, id: {}, methods: {} }).implement({
+        init: () => ({}),
+        methods: {},
+        snapshot: { load: () => ({}) },
+      } as never);
+      expect(AgentTypeRegistry.getRegistrationError(name)).toBeDefined();
+    },
+  );
 
   it('emits an agent-dependency record from a declared dependency', () => {
     const childDef = defineAgent({
