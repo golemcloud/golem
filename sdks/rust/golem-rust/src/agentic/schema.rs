@@ -53,7 +53,10 @@ pub trait Schema {
     }
 }
 
-fn schema_contains_stream(graph: &SchemaGraph) -> bool {
+pub(crate) fn schema_type_contains_stream(
+    root: &SchemaType,
+    defs: &[crate::schema::SchemaTypeDef],
+) -> bool {
     fn visit(
         ty: &SchemaType,
         defs: &std::collections::HashMap<&str, &SchemaType>,
@@ -105,12 +108,15 @@ fn schema_contains_stream(graph: &SchemaGraph) -> bool {
         }
     }
 
-    let defs = graph
-        .defs
+    let defs = defs
         .iter()
         .map(|definition| (definition.id.as_str(), &definition.body))
         .collect();
-    visit(&graph.root, &defs, &mut std::collections::HashSet::new())
+    visit(root, &defs, &mut std::collections::HashSet::new())
+}
+
+fn schema_contains_stream(graph: &SchemaGraph) -> bool {
+    schema_type_contains_stream(&graph.root, &graph.defs)
 }
 
 #[allow(clippy::large_enum_variant)]

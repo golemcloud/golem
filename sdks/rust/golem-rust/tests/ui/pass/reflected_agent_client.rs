@@ -1,3 +1,4 @@
+use golem_rust::agentic::AgentStream;
 use golem_rust::{AgentClientDefinition, IntoSchema, agent_client};
 
 #[derive(IntoSchema)]
@@ -9,6 +10,7 @@ struct Query {
 trait SearchApi {
     fn status(&self) -> String;
     fn search(&self, query: Query, limit: u32) -> Vec<String>;
+    fn transform(&self, input: AgentStream<String>) -> AgentStream<String>;
     fn invalidate(&self, key: String);
 }
 

@@ -1,3 +1,8 @@
+---
+name: golem-agent-reflection-rust
+description: "Discovering and calling Golem agents through runtime reflection in Rust. Use when agent types or methods are selected dynamically, schemas must be inspected at runtime, caller-owned method contracts are needed, or schema-native values are invoked directly."
+---
+
 # Calling Agents with Runtime Reflection (Rust)
 
 Use generated clients when the target definition is available at compile time.
@@ -7,7 +12,7 @@ invocation.
 
 ## Discover Agent Types
 
-Discover the agent types registered for the running component revision:
+Discover the agent types registered in the current environment:
 
 ```rust
 use golem_rust::{get_agent_type, get_all_agent_types};
@@ -21,9 +26,11 @@ for method in counter_type.methods() {
 }
 ```
 
-`AgentType` exposes its implementation component, lifecycle mode, constructor
-schema, and method schemas. Discovery is authoritative for reflected calls; it
-does not modify a caller-owned contract or retry a call after schema changes.
+Agent type names are environment-unique. `AgentType` exposes the current
+implementation component, lifecycle mode, constructor schema, and method
+schemas. Discovery is authoritative for reflected calls; it does not modify a
+caller-owned contract or retry a call after schema changes. Rust lookup helpers
+are strict: a missing type is returned as `GolemReflectError::AgentTypeNotFound`.
 
 ## Inspect and Pack Schemas
 
@@ -62,7 +69,10 @@ println!("{}", result.metadata.agent_id.agent_id);
 
 Reflected methods also expose `trigger_value`, `pending_value`, and
 `schedule_value`. Pending invocations are futures and can be cancelled before
-completion. Scheduled invocations return a cancellation token.
+completion. Scheduled invocations return a cancellation token. Live stream
+inputs and outputs are supported by awaited `invoke_value` calls. They are not
+supported by trigger or scheduled calls; a pending call cannot accept a live
+stream input.
 
 ## Define a Caller-Owned Typed Contract
 
@@ -84,7 +94,10 @@ fn bind(agent_id: &AgentId) -> Result<CounterContractClient, golem_rust::GolemRe
 }
 ```
 
-Generated named methods are awaited calls. The client also generates
+Binding resolves the type's current implementation metadata by its
+environment-unique name, but the trait's codecs remain the schema authority.
+It fails when that type is not registered. Generated named methods are awaited
+calls. The client also generates
 `trigger_<method>`, `pending_<method>`, and `schedule_<method>`. Binding checks
 the agent type name but does not discover the remote schema or lifecycle.
 

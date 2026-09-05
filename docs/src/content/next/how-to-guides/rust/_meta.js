@@ -9,7 +9,7 @@ export default {
   "golem-annotate-agent-rust": "Annotating Agent Methods (Rust)",
   "golem-atomic-block-rust": "Atomic Blocks and Durability Controls (Rust)",
   "golem-call-from-external-rust": "Calling Agents from External Rust Applications",
-  "golem-call-agent-reflectively-rust": "Calling Agents with Runtime Reflection (Rust)",
+  "golem-agent-reflection-rust": "Calling Agents with Runtime Reflection (Rust)",
   "golem-call-another-agent-rust": "Calling Another Agent (Rust)",
   "golem-configure-durability-rust": "Configuring Agent Durability (Rust)",
   "golem-add-cors-rust": "Configuring CORS for Rust HTTP Endpoints",
