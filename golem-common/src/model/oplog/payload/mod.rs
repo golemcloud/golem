@@ -136,9 +136,6 @@ oplog_payload! {
         GolemAgentGetAgentType {
             agent_type_name: AgentTypeName
         },
-        GolemAgentGetAgentTypeByAgentId {
-            agent_id: AgentId
-        },
         GolemRdbmsRequest {
             request: Option<SerializableRdbmsRequest>
         },
@@ -350,6 +347,9 @@ oplog_payload! {
             has_stdout: bool,
             call_mode: EntityCallMode,
             error: SerializableToolRpcError,
+        },
+        GolemAgentGetAgentTypeByAgentId {
+            agent_id: AgentId
         },
     }
 }
@@ -825,7 +825,6 @@ pub mod host_functions {
         (P3SocketsIpNameLookupResolveAddresses => "sockets::ip-name-lookup", "resolve-addresses", P3SocketsResolveName, P3SocketsResolveName),
         (GolemAgentGetAllAgentTypes => "golem::agent", "get_all_agent_types", NoInput, GolemAgentAgentTypes),
         (GolemAgentGetAgentType => "golem::agent", "get_agent_type", GolemAgentGetAgentType, GolemAgentAgentType),
-        (GolemAgentGetAgentTypeByAgentId => "golem::agent", "get_agent_type_by_agent_id", GolemAgentGetAgentTypeByAgentId, GolemAgentAgentType),
         (GolemAgentCreateWebhook => "golem::agent", "create_webhook", GolemApiPromiseId, GolemAgentWebhookUrl),
         (GolemAgentGetConfigValue => "golem::agent", "get_config_value", GolemAgentGetConfigValue, GolemAgentGetConfigValue),
         (GolemApiCreatePromise => "golem::api", "create_promise", NoInput, GolemApiPromiseId),
@@ -915,7 +914,8 @@ pub mod host_functions {
         (WasiCliEnvironmentGetEnvironment => "cli::environment", "get-environment", CliEnvironmentGetEnvironment, CliEnvironmentGetEnvironment),
         (GolemRpcWasmRpcActivate => "golem::rpc::wasm-rpc", "activate", GolemRpcActivate, GolemRpcActivate),
         (GolemEntityInvoke => "golem::entity", "invoke", EntityInvocation, EntityInvocation),
-        (GolemToolInvocationRejected => "golem::tool::internal", "invocation-rejected", GolemToolInvocationRejected, EntityInvocation)
+        (GolemToolInvocationRejected => "golem::tool::internal", "invocation-rejected", GolemToolInvocationRejected, EntityInvocation),
+        (GolemAgentGetAgentTypeByAgentId => "golem::agent", "get_agent_type_by_agent_id", GolemAgentGetAgentTypeByAgentId, GolemAgentAgentType)
     }
 }
 
