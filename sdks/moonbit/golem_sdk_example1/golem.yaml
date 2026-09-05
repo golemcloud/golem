@@ -85,3 +85,11 @@ components:
   golem:tool-middleware-examples:
     templates: moonbit-tool-middleware-local
     dir: golem_tool_middleware_examples
+
+tools:
+  moonbit-streaming: {}
+
+agents:
+  MoonBitToolStreamingCaller:
+    tools:
+      moonbit-streaming: {}

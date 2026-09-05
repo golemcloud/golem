@@ -11,6 +11,9 @@ license-file = "../LICENSE"
 
 autotests = false
 
+[features]
+test-utils = []
+
 [lib]
 path = "src/lib.rs"
 harness = false

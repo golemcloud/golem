@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use wasmtime::component::Resource;
+use futures::executor::block_on;
+use wasmtime::component::{Accessor, HasSelf, Resource};
 
 use crate::durable_host::concurrent::{DurableCallSession, NotCancellable};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
+use crate::preview2::p2_monotonic_clock::wasi::clocks0_2_6::monotonic_clock::{
+    Duration, Host, HostWithStore, Instant, Pollable,
+};
 use crate::services::HasWorker;
 use crate::services::oplog::CommitLevel;
 use crate::workerctx::WorkerCtx;
@@ -24,90 +28,128 @@ use golem_common::model::oplog::{
     HostResponseMonotonicClockTimestamp, host_functions,
 };
 use wasmtime_wasi::clocks::WasiClocksView as _;
-use wasmtime_wasi::p2::bindings::clocks::monotonic_clock::{Duration, Host, Instant, Pollable};
+use wasmtime_wasi::p2::bindings::clocks::monotonic_clock::Host as WasiMonotonicClockHost;
 
-impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn now(&mut self) -> wasmtime::Result<Instant> {
-        // `now()` is a re-executable `ReadLocal`, so it uses the `DurableCallSession::run` combinator: the
-        // live clock read is supplied as the action and is run on the live path or re-run if replay
-        // finds the `Start` without its `End`; a committed `End` replays without touching the clock.
-        let handle =
-            DurableCallSession::<host_functions::MonotonicClockNow, NotCancellable>::start(
-                self,
+impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
+
+fn current_monotonic_time<U: Send + 'static, Ctx: WorkerCtx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+) -> wasmtime::Result<Instant> {
+    accessor.with(|mut access| {
+        let mut view = access.get().as_wasi_view();
+        block_on(WasiMonotonicClockHost::now(&mut view.clocks()))
+    })
+}
+
+fn current_monotonic_resolution<U: Send + 'static, Ctx: WorkerCtx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+) -> wasmtime::Result<Duration> {
+    accessor.with(|mut access| {
+        let mut view = access.get().as_wasi_view();
+        block_on(WasiMonotonicClockHost::resolution(&mut view.clocks()))
+    })
+}
+
+impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWorkerCtx<Ctx>> {
+    async fn now(accessor: &Accessor<U, Self>) -> anyhow::Result<Instant> {
+        #[cfg(feature = "test-utils")]
+        let (skip_durability, owner_execution) = accessor.with(|mut access| {
+            let ctx = access.get();
+            (
+                ctx.test_should_skip_monotonic_clock_now_durability(),
+                ctx.owner_execution.clone(),
+            )
+        });
+        #[cfg(feature = "test-utils")]
+        if skip_durability {
+            return Ok(current_monotonic_time(accessor)?);
+        }
+        #[cfg(feature = "test-utils")]
+        owner_execution.test_before_monotonic_clock_now().await;
+
+        let result =
+            DurableCallSession::<host_functions::MonotonicClockNow, NotCancellable>::invoke_access(
+                accessor,
+                accessor.getter(),
                 HostRequestNoInput {},
                 DurableFunctionType::ReadLocal,
+                async || {
+                    Ok::<_, anyhow::Error>(HostResponseMonotonicClockTimestamp {
+                        nanos: current_monotonic_time(accessor)?,
+                    })
+                },
             )
-            .await?;
-
-        let result = handle
-            .run(self, async |ctx| -> wasmtime::Result<_> {
-                let mut view = ctx.as_wasi_view();
-                let nanos = Host::now(&mut view.clocks()).await?;
-                Ok(HostResponseMonotonicClockTimestamp { nanos })
-            })
             .await?;
 
         Ok(result.nanos)
     }
 
-    async fn resolution(&mut self) -> wasmtime::Result<Instant> {
-        let handle =
-            DurableCallSession::<host_functions::MonotonicClockResolution, NotCancellable>::start(
-                self,
-                HostRequestNoInput {},
-                DurableFunctionType::ReadLocal,
-            )
-            .await?;
-
-        let result = handle
-            .run(self, async |ctx| -> wasmtime::Result<_> {
-                let nanos = {
-                    let mut view = ctx.as_wasi_view();
-                    Host::resolution(&mut view.clocks()).await?
-                };
-                Ok(HostResponseMonotonicClockTimestamp { nanos })
-            })
-            .await?;
-
-        Ok(result.nanos)
-    }
-
-    async fn subscribe_instant(&mut self, when: Instant) -> wasmtime::Result<Resource<Pollable>> {
-        self.observe_function_call("monotonic_clock", "subscribe_instant");
-        let mut view = self.as_wasi_view();
-        Host::subscribe_instant(&mut view.clocks(), when).await
-    }
-
-    async fn subscribe_duration(
-        &mut self,
-        duration_in_nanos: Duration,
-    ) -> wasmtime::Result<Resource<Pollable>> {
-        let handle = DurableCallSession::<
-            host_functions::MonotonicClockSubscribeDuration,
+    async fn resolution(accessor: &Accessor<U, Self>) -> anyhow::Result<Duration> {
+        let result = DurableCallSession::<
+            host_functions::MonotonicClockResolution,
             NotCancellable,
-        >::start(
-            self,
-            HostRequestMonotonicClockDuration { duration_in_nanos },
+        >::invoke_access(
+            accessor,
+            accessor.getter(),
+            HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
+            async || {
+                Ok::<_, anyhow::Error>(HostResponseMonotonicClockTimestamp {
+                    nanos: current_monotonic_resolution(accessor)?,
+                })
+            },
         )
         .await?;
 
-        let now = handle
-            .run(self, async |ctx| -> wasmtime::Result<_> {
-                let nanos = {
-                    let mut view = ctx.as_wasi_view();
-                    Host::now(&mut view.clocks()).await?
-                };
-                Ok(HostResponseMonotonicClockTimestamp { nanos })
-            })
-            .await?;
+        Ok(result.nanos)
+    }
 
-        self.public_state
-            .worker()
+    async fn subscribe_instant(
+        accessor: &Accessor<U, Self>,
+        when: Instant,
+    ) -> anyhow::Result<Resource<Pollable>> {
+        Ok(accessor.with(|mut access| {
+            let ctx = access.get();
+            ctx.observe_function_call("monotonic_clock", "subscribe_instant");
+            let mut view = ctx.as_wasi_view();
+            block_on(WasiMonotonicClockHost::subscribe_instant(
+                &mut view.clocks(),
+                when,
+            ))
+        })?)
+    }
+
+    async fn subscribe_duration(
+        accessor: &Accessor<U, Self>,
+        duration_in_nanos: Duration,
+    ) -> anyhow::Result<Resource<Pollable>> {
+        let now = DurableCallSession::<
+            host_functions::MonotonicClockSubscribeDuration,
+            NotCancellable,
+        >::invoke_access(
+            accessor,
+            accessor.getter(),
+            HostRequestMonotonicClockDuration { duration_in_nanos },
+            DurableFunctionType::ReadLocal,
+            async || {
+                Ok::<_, anyhow::Error>(HostResponseMonotonicClockTimestamp {
+                    nanos: current_monotonic_time(accessor)?,
+                })
+            },
+        )
+        .await?;
+
+        let worker = accessor.with(|mut access| access.get().public_state.worker().clone());
+        worker
             .commit_oplog_and_update_state(CommitLevel::DurableOnly)
             .await;
         let when = now.nanos.saturating_add(duration_in_nanos);
-        let mut view = self.as_wasi_view();
-        Host::subscribe_instant(&mut view.clocks(), when).await
+        Ok(accessor.with(|mut access| {
+            let mut view = access.get().as_wasi_view();
+            block_on(WasiMonotonicClockHost::subscribe_instant(
+                &mut view.clocks(),
+                when,
+            ))
+        })?)
     }
 }

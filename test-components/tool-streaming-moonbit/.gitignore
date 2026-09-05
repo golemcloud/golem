@@ -1,0 +1,11 @@
+_build/
+.golem-sdk-role
+.mooncakes/
+golem-temp/
+component/golem_agents.mbt
+component/golem_clients.mbt
+component/golem_derive.mbt
+component/golem_reexports.mbt
+component/golem_tool_clients.mbt
+component/golem_tools.mbt
+component/pkg.generated.mbti

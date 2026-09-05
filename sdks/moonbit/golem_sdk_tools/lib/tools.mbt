@@ -868,11 +868,13 @@ fn hidden_or_public(ty : @syntax.Type) -> ToolParamType raise ToolParseError {
   match pt {
     Simple("@common.Principal" | "@agentCommon.Principal" | "@tool.Principal") =>
       Hidden(Principal)
+    Simple("@tool.ProviderStdout") => Hidden(OutputStream)
     Parameterized("@asyncCore.Stream" | "Stream", [_]) => Hidden(InputStream)
     Parameterized("@asyncCore.Sink" | "Sink", [_]) => Hidden(OutputStream)
     Simple(name) if name == "Principal" ||
       name == "InputStream" ||
-      name == "OutputStream" =>
+      name == "OutputStream" ||
+      name == "ProviderStdout" =>
       raise ToolParseError(
         "Hidden SDK type '" + name + "' must use its exact qualified name",
       )

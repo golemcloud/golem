@@ -206,7 +206,9 @@ fn[T] unwrap_tool_result(result : Result[T, ToolBuildError]) -> T {
 ///|
 test "subtree-only tool cannot be invoked as a top-level tool" {
   let def = canonical_test_def()
-  register_subtool_def_for_test(def)
+  register_subtool_def_invoker(def, async fn(_, _, _, _, _) {
+    Ok(invocation_result_empty())
+  })
   assert_true(
     get_registered_tool("root")
     is Err(@toolCommon.ToolError::InvalidToolName("root")),
@@ -720,18 +722,13 @@ test "deprojected child global does not consume a descendant local input" {
   let fields = decode_canonical_input_for_test(
     parent, parent_index, wire, "deproject parent",
   )
-  let child_index = child.command_index_by_path(["run"])
-  guard child_index is Some(child_index) else {
-    fail("expected child descendant command")
-  }
+  let child_index = child.command_index_by_path(["run"]).unwrap()
   let forwarded = forward_canonical_input(fields, child, child_index)
-  let child_input = decode_canonical_input_for_test(
-    child, child_index, forwarded, "deproject child",
+  let decoded = decode_canonical_input(
+    child, child_index, forwarded, "ranked child",
   )
-  let format : String = decode_canonical_field_for_test(
-    child_input, "format", "deproject child",
-  )
-  assert_eq(format, "local")
+  let leaf : String = decode_canonical_field(decoded, "format", "ranked child")
+  assert_eq(leaf, "local")
 }
 
 ///|
@@ -939,7 +936,9 @@ test "panic top-level registration rejects an existing private subtool name" {
       },
     ],
   }
-  register_subtool_def_for_test(def)
+  register_subtool_def_invoker(def, fn(_, _, _, _, _) {
+    Ok(invocation_result_empty())
+  })
   register_tool_def(def)
 }
 
@@ -1213,7 +1212,91 @@ test "normalization resolves value-is literals against inherited globals" {
   let format : OptionSpecDef = {
     long: "format",
     short: None,
-    aliases: ["f"],
+    aliases: [],
+    doc: doc("format"),
+    value_name: None,
+    shape: OptionShapeDef::Scalar(string),
+    default: None,
+    required: true,
+    env_var: None,
+  }
+  let child_raw : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "constraint-child",
+        aliases: [],
+        doc: doc("constraint child"),
+        globals: { options: [], flags: [], },
+        subcommands: [1],
+        body: None,
+      },
+      {
+        name: "run",
+        aliases: [],
+        doc: doc("run"),
+        globals: { options: [], flags: [], },
+        subcommands: [],
+        body: Some({
+          positionals: { fixed: [], tail: None, },
+          options: [],
+          flags: [],
+          constraints: [
+            ConstraintDef::RequiresAll([
+              RefDef::ValueIs({
+                name: "format",
+                value: ValueIsLiteralDef::Deferred(ToolLiteral::Scalar("json")),
+              }),
+            ]),
+          ],
+          stdin: None,
+          stdout: None,
+          result: None,
+          errors: [],
+          annotations: None,
+        }),
+      },
+    ],
+  }
+  let parent_raw : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "constraint-parent",
+        aliases: [],
+        doc: doc("constraint parent"),
+        globals: { options: [], flags: [], },
+        subcommands: [],
+        body: None,
+      },
+    ],
+  }
+  let parent = parent_raw
+    .graft_subtree(
+      child_raw,
+      "constraint-child",
+      { options: [format], flags: [], },
+      None,
+      None,
+      None,
+    )
+    .normalize_inherited_globals()
+  register_tool_def_invoker(parent, fn(_, _, _, _, _) {
+    Ok(invocation_result_empty())
+  })
+  let child = child_raw.normalize_inherited_globals()
+  register_subtool_def_invoker(child, fn(_, _, _, _, _) {
+    Ok(invocation_result_empty())
+  })
+}
+
+///|
+test "normalization does not resolve value-is literals by short form" {
+  let string = string_graph()
+  let format : OptionSpecDef = {
+    long: "format",
+    short: Some('f'),
+    aliases: [],
     doc: doc("format"),
     value_name: None,
     shape: OptionShapeDef::Scalar(string),
@@ -1269,13 +1352,18 @@ test "normalization resolves value-is literals against inherited globals" {
   guard ref_
     is RefDef::ValueIs(
       {
-        name: "format",
-        value: ValueIsLiteralDef::Resolved(@model.SchemaValue::String("json")),
+        name: "f",
+        value: ValueIsLiteralDef::Deferred(ToolLiteral::Scalar("json")),
       }
     ) else {
-    fail("expected resolved value-is constraint")
+    fail("short-only value-is reference was unexpectedly resolved")
   }
-  let _wire = normalized.to_tool()
+  try normalized.to_tool() catch {
+    UnresolvedValueIsLiteral("f") => ()
+    _ => fail("unexpected conversion error")
+  } noraise {
+    _ => fail("expected unresolved short-only value-is reference")
+  }
 }
 
 ///|
