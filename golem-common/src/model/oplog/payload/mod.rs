@@ -715,13 +715,23 @@ impl TryFrom<HostResponse> for HostResponseGolemRpcScheduledInvocationCompat {
 
 pub trait HostPayloadPair {
     type Req: Into<HostRequest>;
-    type Resp: Into<HostResponse> + TryFrom<HostResponse, Error = String> + Clone + Send + 'static;
+    type Resp: Into<HostResponse> + TryFrom<HostResponse, Error = String> + Send + 'static;
 
     const INTERFACE: &'static str;
     const FUNCTION: &'static str;
     const FQFN: &'static str;
 
     const HOST_FUNCTION_NAME: host_functions::HostFunctionName;
+
+    /// Recovers a typed response from the [`HostResponse`] produced from that same response.
+    fn unwrap_own_response(response: HostResponse) -> Self::Resp {
+        Self::Resp::try_from(response).unwrap_or_else(|error| {
+            unreachable!(
+                "host response created for {} could not be converted back: {error}",
+                Self::FQFN
+            )
+        })
+    }
 }
 
 pub mod host_functions {

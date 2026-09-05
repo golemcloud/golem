@@ -4507,9 +4507,11 @@ async fn prepare_end_entry<Pair: HostPayloadPair>(
     // cache so this changes neither the oplog representation nor same-process payload-read behavior.
     let response = Box::new(response);
     let prepared = tokio::task::spawn_blocking(move || {
-        let host_response: HostResponse = response.as_ref().clone().into();
+        let host_response: HostResponse = (*response).into();
         let bytes = golem_common::serialization::serialize(&host_response)?;
-        Ok::<_, String>(Box::new((response, bytes, Arc::new(host_response))))
+        let cached = Arc::new(host_response.clone());
+        let response = Box::new(Pair::unwrap_own_response(host_response));
+        Ok::<_, String>(Box::new((response, bytes, cached)))
     })
     .await
     .map_err(|err| {
