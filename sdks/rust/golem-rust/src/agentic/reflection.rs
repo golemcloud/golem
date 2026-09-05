@@ -60,6 +60,10 @@ impl SchemaRef {
         &self.root
     }
 
+    pub fn contains_stream(&self) -> bool {
+        super::schema_type_contains_stream(&self.root, &self.graph.defs)
+    }
+
     pub fn validate_value(&self, value: &SchemaValue) -> Result<(), GolemReflectError> {
         validate_value(&self.graph, &self.root, value).map_err(|errors| {
             GolemReflectError::InvalidSchemaValue {
@@ -786,6 +790,7 @@ impl ReflectedAgentMethod {
         &self,
         input: SchemaValue,
     ) -> Result<InvocationMetadata, GolemReflectError> {
+        self.reject_non_awaited_streams("trigger")?;
         self.definition.input.validate_value(&input)?;
         self.transport.trigger(&self.definition.raw.name, input)
     }
@@ -794,6 +799,12 @@ impl ReflectedAgentMethod {
         &self,
         input: SchemaValue,
     ) -> Result<PendingInvocation, GolemReflectError> {
+        if self.definition.input.contains_stream() {
+            return Err(GolemReflectError::InvalidType(format!(
+                "method `{}` has streaming input; use invoke_value or invoke_json",
+                self.definition.raw.name
+            )));
+        }
         self.definition.input.validate_value(&input)?;
         self.transport.pending(&self.definition.raw.name, input)
     }
@@ -803,9 +814,26 @@ impl ReflectedAgentMethod {
         at: ScheduledTime,
         input: SchemaValue,
     ) -> Result<ScheduledInvocation, GolemReflectError> {
+        self.reject_non_awaited_streams("schedule")?;
         self.definition.input.validate_value(&input)?;
         self.transport
             .schedule(at, &self.definition.raw.name, input)
+    }
+
+    fn reject_non_awaited_streams(&self, operation: &str) -> Result<(), GolemReflectError> {
+        if self.definition.input.contains_stream()
+            || self
+                .definition
+                .output
+                .as_ref()
+                .is_some_and(SchemaRef::contains_stream)
+        {
+            return Err(GolemReflectError::InvalidType(format!(
+                "{operation} is unavailable for streaming method `{}`",
+                self.definition.raw.name
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -1032,19 +1060,17 @@ impl RpcTransport {
         let input = crate::encode_schema_value_async(&input)
             .await
             .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
-        let result = self
-            .raw
-            .invoke_and_await(method, input, None)
-            .map_err(rpc_error_to_reflect)?;
-        let value = result
-            .result
+        let invocation = self.raw.async_invoke_and_await(method, input, None);
+        let metadata = self.metadata(invocation.metadata);
+        let value = invocation
+            .future
+            .get()
+            .await
+            .map_err(rpc_error_to_reflect)?
             .map(crate::decode_schema_value)
             .transpose()
             .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?;
-        Ok(Invocation {
-            metadata: self.metadata(result.metadata),
-            value,
-        })
+        Ok(Invocation { metadata, value })
     }
 
     fn trigger(
@@ -1276,6 +1302,21 @@ mod tests {
     }
 
     #[test]
+    fn schema_ref_detects_nested_streams() {
+        let scalar = SchemaRef::new(SchemaGraph::anonymous(SchemaType::string()));
+        let streaming = SchemaRef::new(SchemaGraph::anonymous(SchemaType::record(vec![
+            NamedFieldType {
+                name: "items".to_string(),
+                body: SchemaType::stream(Some(SchemaType::string())),
+                metadata: MetadataEnvelope::default(),
+            },
+        ])));
+
+        assert!(!scalar.contains_stream());
+        assert!(streaming.contains_stream());
+    }
+
+    #[test]
     fn caller_owned_contract_can_be_partial_and_lifecycle_free() {
         let definition = AgentClientDefinition::builder()
             .method::<String, u64>("lookup")
@@ -1371,8 +1412,11 @@ impl AgentClientDefinition {
                 parts.type_name
             )));
         }
+        let registered = host::get_agent_type(&parts.type_name)
+            .ok_or_else(|| GolemReflectError::AgentTypeNotFound(parts.type_name.clone()))?;
+        let component_id = crate::wire_component_id_to_schema(registered.implemented_by);
         let transport = RpcTransport::create(
-            agent_id.component_id.clone(),
+            component_id,
             parts.type_name,
             parts.constructor_value,
             parts.phantom_id,
@@ -1458,12 +1502,19 @@ where
     }
 
     pub fn trigger(&self, input: &I) -> Result<InvocationMetadata, GolemReflectError> {
+        self.reject_non_awaited_streams("trigger")?;
         let input = input.to_value();
         self.definition.input.validate_value(&input)?;
         self.transport.trigger(&self.definition.name, input)
     }
 
     pub fn pending(&self, input: &I) -> Result<TypedPendingInvocation<O>, GolemReflectError> {
+        if self.definition.input.contains_stream() {
+            return Err(GolemReflectError::InvalidType(format!(
+                "method `{}` has streaming input; use invoke",
+                self.definition.name
+            )));
+        }
         let input = input.to_value();
         self.definition.input.validate_value(&input)?;
         Ok(TypedPendingInvocation {
@@ -1478,9 +1529,26 @@ where
         at: ScheduledTime,
         input: &I,
     ) -> Result<ScheduledInvocation, GolemReflectError> {
+        self.reject_non_awaited_streams("schedule")?;
         let input = input.to_value();
         self.definition.input.validate_value(&input)?;
         self.transport.schedule(at, &self.definition.name, input)
+    }
+
+    fn reject_non_awaited_streams(&self, operation: &str) -> Result<(), GolemReflectError> {
+        if self.definition.input.contains_stream()
+            || self
+                .definition
+                .output
+                .as_ref()
+                .is_some_and(SchemaRef::contains_stream)
+        {
+            return Err(GolemReflectError::InvalidType(format!(
+                "{operation} is unavailable for streaming method `{}`",
+                self.definition.name
+            )));
+        }
+        Ok(())
     }
 }
 
