@@ -24,7 +24,7 @@ use golem_cli::model::app::ResolvedLocalServer;
 use golem_worker_executor::services::golem_config::ResourceUsageMeteringConfig;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::compat::map_local_server_startup_error;
 use crate::launch::{LaunchArgs, launch_golem_services};
@@ -53,15 +53,46 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     clean_data_dir(&ctx, &data_dir).await?;
                 };
 
-                let mut join_set = launch_golem_services(&launch_args)
-                    .await
-                    .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
+                // A single pinned signal future is shared by both phases below, so the
+                // handlers are installed once and a signal arriving between the two
+                // select! blocks is not lost.
+                let shutdown = shutdown_signal();
+                tokio::pin!(shutdown);
 
-                while let Some(res) = join_set.join_next().await {
-                    res??;
+                let launch_result = tokio::select! {
+                    res = launch_golem_services(&launch_args) => Some(res),
+                    _ = &mut shutdown => None,
+                };
+
+                let Some(launch_result) = launch_result else {
+                    info!("Received shutdown signal during startup, stopping Golem server");
+                    return Ok(());
+                };
+
+                let mut join_set =
+                    launch_result.map_err(|err| map_local_server_startup_error(err, &data_dir))?;
+
+                let run_result = tokio::select! {
+                    res = async {
+                        while let Some(res) = join_set.join_next().await {
+                            res??;
+                        }
+                        Ok::<(), anyhow::Error>(())
+                    } => Some(res),
+                    _ = &mut shutdown => None,
+                };
+
+                match run_result {
+                    Some(res) => res,
+                    None => {
+                        info!("Received shutdown signal, stopping Golem server");
+                        // Aborting the tasks drops the router task, which owns the worker
+                        // executor's RunDetails; its Drop cancels the graph-wide shutdown
+                        // token and stops the epoch thread.
+                        join_set.shutdown().await;
+                        Ok(())
+                    }
                 }
-
-                Ok(())
             }
             ServerSubcommand::Clean => {
                 let data_dir = data_dir_from_local_server(ctx.manifest_local_server())?;
@@ -238,6 +269,33 @@ async fn clean_data_dir(ctx: &Arc<Context>, data_dir: &Path) -> anyhow::Result<(
     tokio::fs::remove_dir_all(&data_dir)
         .await
         .map_err(|err| anyhow!("Failed cleaning data dir ({}): {}", data_dir.display(), err))
+}
+
+/// Resolves when the process receives a shutdown request.
+///
+/// Handlers must be installed explicitly: as PID 1 in a container the kernel
+/// does not apply default signal dispositions, so without this the standalone
+/// server cannot be stopped by SIGINT/SIGTERM (e.g. Ctrl+C or `docker stop`).
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        let mut sigint = signal(SignalKind::interrupt()).expect("Failed to install SIGINT handler");
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("Failed to install SIGTERM handler");
+
+        tokio::select! {
+            _ = sigint.recv() => {},
+            _ = sigterm.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+    }
 }
 
 #[cfg(test)]
