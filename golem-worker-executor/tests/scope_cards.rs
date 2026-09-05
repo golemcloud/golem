@@ -1223,6 +1223,13 @@ async fn replayed_wallet_authorization_uses_pinned_cards_until_live_transition(
         .await?
         .into_typed::<SchemaCardId>()?;
 
+    // The awaited promise completes inside the host call that ends replay, so the invocation
+    // result is published before the worker reaches its next card-event boundary and runs the
+    // replay-to-live liveness check. Wait for that check instead of racing it.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while authority.check_cards_count() == 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     assert_eq!(
         authority.check_cards_count(),
         1,
