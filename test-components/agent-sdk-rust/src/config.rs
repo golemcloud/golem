@@ -277,8 +277,19 @@ impl SecretHandleAgent for SecretHandleAgentImpl {
         Ok(Vec::new())
     }
 
-    async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
-        Ok(())
+    async fn load_snapshot(
+        _bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        let config = Config::<SecretHandleAgentConfig>::new();
+        Ok(Self {
+            secret: config
+                .get()
+                .expect("config access should be allowed")
+                .secret_path
+                .handle()
+                .expect("secret handle access should be allowed"),
+        })
     }
 }
 

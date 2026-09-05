@@ -23,6 +23,7 @@ pub struct AgentDefinitionAttributes {
     pub agent_is_durable: bool,
     pub http_mount: Option<TokenStream>,
     pub snapshotting: TokenStream,
+    pub snapshotting_enabled: bool,
 }
 
 pub fn parse_agent_definition_attributes(
@@ -35,6 +36,7 @@ pub fn parse_agent_definition_attributes(
     let mut snapshotting = quote! {
         golem_rust::golem_agentic::golem::agent::common::Snapshotting::Disabled
     };
+    let mut snapshotting_enabled = false;
     let mut http = ParsedHttpMount {
         mount: None,
         cors: vec![],
@@ -49,6 +51,7 @@ pub fn parse_agent_definition_attributes(
             agent_is_durable,
             http_mount: None,
             snapshotting,
+            snapshotting_enabled,
         });
     }
 
@@ -108,6 +111,7 @@ pub fn parse_agent_definition_attributes(
                 }) = &*assign.right
                 {
                     snapshotting = parse_snapshotting_value(lit)?;
+                    snapshotting_enabled = lit.value() != "disabled";
                     continue;
                 } else {
                     return Err(Error::new_spanned(
@@ -148,6 +152,7 @@ pub fn parse_agent_definition_attributes(
         agent_is_durable,
         http_mount: http_tokens,
         snapshotting,
+        snapshotting_enabled,
     })
 }
 

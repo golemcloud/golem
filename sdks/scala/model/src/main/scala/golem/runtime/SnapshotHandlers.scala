@@ -16,7 +16,28 @@
 
 package golem.runtime
 
+import golem.{Principal, Uuid}
+import golem.config.Config
+
 import scala.concurrent.Future
+
+/**
+ * Information available while constructing a fresh instance from a snapshot.
+ */
+final case class SnapshotRestoreContext(
+  identityFields: Vector[Any],
+  agentId: String,
+  phantomId: Option[Uuid],
+  restoredPrincipal: Principal,
+  private val freshConfig: Option[Config[_]]
+) {
+  def identity[A](index: Int): A = identityFields(index).asInstanceOf[A]
+
+  def config[A]: Config[A] = freshConfig match {
+    case Some(value) => value.asInstanceOf[Config[A]]
+    case None        => throw new IllegalStateException("This agent does not declare configuration")
+  }
+}
 
 /**
  * Payload returned by a snapshot save operation.
@@ -37,13 +58,12 @@ final case class SnapshotPayload(bytes: Array[Byte], mimeType: String)
  * @param save
  *   Serializes the current agent state into a [[SnapshotPayload]]
  * @param load
- *   Deserializes bytes into state and applies them to the agent instance. Takes
- *   the current instance and snapshot bytes, returns the (possibly new)
- *   instance to use going forward.
+ *   Constructs a fresh agent instance from the snapshot bytes and restore
+ *   context.
  */
 final case class SnapshotHandlers[Instance](
   save: Instance => Future[SnapshotPayload],
-  load: (Instance, Array[Byte]) => Future[Instance]
+  load: (Array[Byte], SnapshotRestoreContext) => Future[Instance]
 )
 
 object SnapshotHandlers {
@@ -61,14 +81,4 @@ object SnapshotHandlers {
         scala.concurrent.ExecutionContext.parasitic
       )
 
-  /**
-   * Wraps a raw `(Instance, Array[Byte]) => Future[Unit]` load function into
-   * the `(Instance, Array[Byte]) => Future[Instance]` form expected by
-   * [[SnapshotHandlers]].
-   */
-  def wrapLoad[Instance](
-    raw: (Instance, Array[Byte]) => Future[Unit]
-  ): (Instance, Array[Byte]) => Future[Instance] =
-    (instance: Instance, bytes: Array[Byte]) =>
-      raw(instance, bytes).map(_ => instance)(scala.concurrent.ExecutionContext.parasitic)
 }

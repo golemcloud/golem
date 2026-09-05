@@ -618,6 +618,91 @@ async fn automatic_snapshot_download_failure_recreates_replay_context(
 }
 
 #[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn failed_snapshot_load_during_auto_update_does_not_retry_automatic_snapshot(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let revision_two = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, revision_two.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(&worker_id, revision_two.revision, Duration::from_secs(30))
+        .await?;
+
+    let snapshots_before_invocation = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+        .count();
+    let loaded_manual_snapshot = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(loaded_manual_snapshot.into_typed::<u32>()?, 1);
+    let snapshots_after_invocation = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+        .count();
+    assert_eq!(snapshots_after_invocation, snapshots_before_invocation + 1);
+
+    let revision_four = executor
+        .update_component(&component.id, "it_agent_update_v4_release")
+        .await?;
+    let mut events = executor.capture_output(&worker_id).await?;
+    executor
+        .auto_update_worker(&worker_id, revision_four.revision, false)
+        .await?;
+    assert_snapshot_recovery_failed(&mut events, "Invalid snapshot - simulating failure").await;
+
+    let loaded_snapshot_revision = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    assert_eq!(loaded_snapshot_revision.into_typed::<u32>()?, 1);
+    assert_eq!(metadata.component_revision, revision_two.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 1));
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[test]
 #[tracing::instrument]
 async fn failing_auto_update_on_idle(
     last_unique_id: &LastUniqueId,

@@ -2380,7 +2380,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
     pub fn increase_memory(&mut self, delta: u64) {
         let (_, reconciling) = self.linear_memory.grow(delta, Instant::now());
-        if self.runtime == OwnerRuntime::Agent && self.state.is_live() && !reconciling {
+        if self.runtime == OwnerRuntime::Agent
+            && self.state.is_live()
+            && !self.state.snapshotting_mode
+            && !reconciling
+        {
             // This is called from the `memory.grow` async resource limiter, which
             // Wasmtime runs through a blocking libcall on the store's fiber. While
             // that libcall waits, the store cannot make progress, so nothing may be
@@ -3723,7 +3727,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 warn!("{error}");
                 Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
                 if snapshot_source == Some(SnapshotSource::Automatic) {
-                    return SnapshotRecoveryResult::Failed;
+                    return failed_snapshot_recovery(store);
                 }
                 if let Err(err) = store
                     .as_context_mut()
@@ -3733,7 +3737,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .await
                 {
                     warn!("Failed to restart replay state after invalid snapshot entry: {err}");
-                    return SnapshotRecoveryResult::Failed;
+                    return failed_snapshot_recovery(store);
                 }
                 return SnapshotRecoveryResult::NotAttempted;
             }
@@ -3755,7 +3759,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 warn!("{error}");
                 Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
                 if snapshot_source == Some(SnapshotSource::Automatic) {
-                    return SnapshotRecoveryResult::Failed;
+                    return failed_snapshot_recovery(store);
                 }
                 if let Err(err) = store
                     .as_context_mut()
@@ -3765,7 +3769,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .await
                 {
                     warn!("Failed to restart replay state after snapshot download failure: {err}");
-                    return SnapshotRecoveryResult::Failed;
+                    return failed_snapshot_recovery(store);
                 }
                 return SnapshotRecoveryResult::NotAttempted;
             }
@@ -3802,7 +3806,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     format!("Snapshot recovery failed to lower load-snapshot invocation: {err}");
                 warn!("{error}");
                 Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-                return SnapshotRecoveryResult::Failed;
+                return failed_snapshot_recovery(store);
             }
         };
 
@@ -3818,7 +3822,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let error = format!("Snapshot recovery failed to install invocation context: {err}");
             warn!("{error}");
             Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-            return SnapshotRecoveryResult::Failed;
+            return failed_snapshot_recovery(store);
         }
 
         store
@@ -3880,7 +3884,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if let Some(error) = failed {
             warn!("{error}; re-creating instance for full replay");
             Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-            SnapshotRecoveryResult::Failed
+            failed_snapshot_recovery(store)
         } else {
             debug!("Snapshot loaded successfully from oplog index {snapshot_index}");
             Self::emit_snapshot_recovery_event(store, snapshot_index, true, None);
@@ -3955,6 +3959,19 @@ enum SnapshotRecoveryResult {
     Success,
     NotAttempted,
     Failed,
+}
+
+fn failed_snapshot_recovery<Ctx: WorkerCtx>(
+    store: &(impl AsContext<Data = Ctx> + Send),
+) -> SnapshotRecoveryResult {
+    store
+        .as_context()
+        .data()
+        .get_public_state()
+        .worker()
+        .snapshot_recovery_disabled
+        .store(true, Ordering::Release);
+    SnapshotRecoveryResult::Failed
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -5939,16 +5956,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         record_resume_worker(start.elapsed());
                         result
                     }
-                    SnapshotRecoveryResult::Failed => {
-                        store
-                            .as_context()
-                            .data()
-                            .get_public_state()
-                            .worker()
-                            .snapshot_recovery_disabled
-                            .store(true, Ordering::Release);
-                        Ok(Some(RetryDecision::Immediate))
-                    }
+                    SnapshotRecoveryResult::Failed => Ok(Some(RetryDecision::Immediate)),
                 },
             }
         };

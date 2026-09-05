@@ -35,7 +35,10 @@ pub impl @agents.Snapshottable for CounterWithSnapshotAgent with save_snapshot(s
 
 ///|
 /// Custom snapshot: restore value from 8 big-endian bytes
-pub impl @agents.Snapshottable for CounterWithSnapshotAgent with load_snapshot(self, bytes) {
+pub fn CounterWithSnapshotAgent::load_snapshot(
+  bytes : Bytes,
+  context : @agents.SnapshotRestoreContext,
+) -> Result[CounterWithSnapshotAgent, String] {
   if bytes.length() != 8 {
     return Err("Expected an 8-byte long snapshot")
   }
@@ -43,8 +46,10 @@ pub impl @agents.Snapshottable for CounterWithSnapshotAgent with load_snapshot(s
   for i = 0; i < 8; i = i + 1 {
     v = v | (bytes[i].to_uint64() << ((7 - i) * 8))
   }
-  self.value = v
-  Ok(())
+  let name : String = context.identity(0) catch {
+    error => return Err(error.to_string())
+  }
+  Ok({ name, value: v })
 }
 
 ///|

@@ -154,19 +154,25 @@ pub fn syntax_type_to_param_type(
             match tys {
               More(ok, tail~) =>
                 match tail {
-                  More(err, ..) =>
-                    ResultType(
-                      syntax_type_to_param_type(ok),
-                      syntax_type_to_param_type(err),
-                    )
+                  More(err, tail=rest) =>
+                    if rest.is_empty() {
+                      ResultType(
+                        syntax_type_to_param_type(ok),
+                        syntax_type_to_param_type(err),
+                      )
+                    } else {
+                      raise AgentParseError(
+                        "Result type requires exactly two type parameters",
+                      )
+                    }
                   Empty =>
                     raise AgentParseError(
-                      "Result type requires two type parameters",
+                      "Result type requires exactly two type parameters",
                     )
                 }
               Empty =>
                 raise AgentParseError(
-                  "Result type requires two type parameters",
+                  "Result type requires exactly two type parameters",
                 )
             }
           } else if tys.is_empty() {
@@ -995,6 +1001,55 @@ fn extract_return_type(
 }
 
 ///|
+/// Validates the static snapshot restoration factory for an agent.
+fn validate_snapshot_loader(
+  fun_decl : @syntax.FunDecl,
+  agent_name : String,
+) -> Unit raise AgentParseError {
+  let expected_signature = "\{agent_name}::load_snapshot(Bytes, @agents.SnapshotRestoreContext) -> Result[\{agent_name}, String]"
+  let invalid_signature = fn() raise AgentParseError {
+    raise AgentParseError(
+      "Snapshot loader must have signature '\{expected_signature}'",
+    )
+  }
+  if !(fun_decl.vis is Pub(..)) ||
+    fun_decl.is_async is Some(_) ||
+    !fun_decl.quantifiers.is_empty() ||
+    !(fun_decl.error_type is @syntax.ErrorType::NoErrorType) {
+    invalid_signature()
+  }
+  let params : Array[ParamType] = []
+  for param in fun_decl.decl_params.unwrap_or(@list.List([])) {
+    match param {
+      Positional(binder~, ty=Some(ty)) if binder.name != "self" => {
+        let parsed = syntax_type_to_param_type(ty) catch {
+          _ => {
+            invalid_signature()
+            abort("")
+          }
+        }
+        params.push(parsed)
+      }
+      _ => invalid_signature()
+    }
+  }
+  guard params.length() == 2 &&
+    params[0] == Simple("Bytes") &&
+    params[1] == Simple("@agents.SnapshotRestoreContext") else {
+    invalid_signature()
+  }
+  let return_type = extract_return_type(fun_decl)
+  let has_expected_return = match return_type {
+    Some(ResultType(Simple(ok), Simple(err))) =>
+      (ok == agent_name || ok == "Self") && err == "String"
+    _ => false
+  }
+  if !has_expected_return {
+    invalid_signature()
+  }
+}
+
+///|
 /// Parses agent definitions from source files. Finds `#derive.agent` structs,
 /// their constructors, and public methods.
 pub fn parse_agents(
@@ -1008,7 +1063,8 @@ pub fn parse_agents(
     (Array[(String, ParamType)], String, String?),
   ] = Map([])
   let agent_methods : Map[String, Array[MethodInfo]] = Map([])
-  let agent_snapshottable : Map[String, Bool] = Map([])
+  let agent_snapshot_savers : Map[String, Bool] = Map([])
+  let agent_snapshot_loaders : Map[String, Bool] = Map([])
   let agent_json_derives : Map[String, Bool] = Map([])
   let agent_fields : Map[String, Array[(String, Bool)]] = Map([])
   let agent_mounts : Map[String, HttpMountInfo?] = Map([])
@@ -1091,7 +1147,7 @@ pub fn parse_agents(
       _ => ()
     }
   })
-  // Second pass: find ::new constructors, public methods, and fn init
+  // Second pass: find constructors, snapshot loaders, public methods, and fn init
   all_impls.each(impl_ => {
     match impl_ {
       TopFuncDef(fun_decl~, ..) => {
@@ -1109,6 +1165,9 @@ pub fn parse_agents(
                 let desc = if doc == "" { "Creates a new \{name}" } else { doc }
                 let hint = extract_prompt_hint(fun_decl.attrs)
                 agent_constructors[name] = (params, desc, hint)
+              } else if fun_decl.name.name == "load_snapshot" {
+                validate_snapshot_loader(fun_decl, name)
+                agent_snapshot_loaders[name] = true
               } else if fun_decl.vis is Pub(..) {
                 // Public method — check if first param is Self
                 let mut is_method = false
@@ -1173,7 +1232,7 @@ pub fn parse_agents(
       _ => ()
     }
   })
-  // Third pass: detect Snapshottable trait implementations
+  // Third pass: detect instance-based snapshot savers
   all_impls.each(fn(impl_) {
     match impl_ {
       TopImpl(trait_~, self_ty~, ..) => {
@@ -1187,7 +1246,7 @@ pub fn parse_agents(
               match constr_id.id {
                 Ident(name~) =>
                   if agent_names.contains(name) {
-                    agent_snapshottable[name] = true
+                    agent_snapshot_savers[name] = true
                   }
                 _ => ()
               }
@@ -1201,6 +1260,13 @@ pub fn parse_agents(
   // Validate
   let agents : Array[AgentInfo] = []
   for name, description in agent_names {
+    let has_snapshot_saver = agent_snapshot_savers.get(name).unwrap_or(false)
+    let has_snapshot_loader = agent_snapshot_loaders.get(name).unwrap_or(false)
+    if has_snapshot_saver != has_snapshot_loader {
+      raise AgentParseError(
+        "Agent '\{name}' must define both an @agents.Snapshottable save_snapshot implementation and a static load_snapshot factory",
+      )
+    }
     match agent_constructors.get(name) {
       Some((params, ctor_desc, ctor_hint)) => {
         let config_type = match find_config_param(params) {
@@ -1217,7 +1283,7 @@ pub fn parse_agents(
           constructor_prompt_hint: ctor_hint,
           methods: agent_methods.get(name).unwrap_or([]),
           has_init,
-          has_snapshottable: agent_snapshottable.get(name).unwrap_or(false),
+          has_snapshottable: has_snapshot_saver,
           has_json_derives: agent_json_derives.get(name).unwrap_or(false),
           fields: agent_fields.get(name).unwrap_or([]),
           http_mount: agent_mounts.get(name).unwrap_or(None),

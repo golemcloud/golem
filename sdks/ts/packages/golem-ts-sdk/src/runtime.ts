@@ -56,7 +56,7 @@ import {
   restoreDatabaseSync,
   serializeDatabaseSync,
 } from './internal/sqlite';
-import { decodeMultipart, encodeMultipart, MultipartPart } from './internal/multipart';
+import { encodeMultipart, MultipartPart } from './internal/multipart';
 import { compileSchema } from './schema/adapter';
 import { SchemaCodec } from './schema/codec';
 import { StandardSchemaV1 } from './schema/standardSchema';
@@ -137,9 +137,8 @@ export interface RegisteredAgent {
   configTree: ConfigGroupNode;
   /**
    * Typed snapshot-state schema from `snapshotting: { state }`. When set, the
-   * JSON snapshot is scoped to + validated by this schema (only the declared
-   * state fields of `this` are persisted); otherwise `this` is snapshotted by
-   * reflection.
+   * JSON snapshot is scoped to + validated by this schema. Without it,
+   * snapshotting requires custom save/load functions.
    */
   snapshotStateSchema?: StandardSchemaV1;
 }
@@ -452,7 +451,7 @@ function assembleAgentType(
 /**
  * Self-contained resolved agent (the decorator `ResolvedAgent` analog) exposing
  * exactly what the guest entry calls: `invoke` / `getAgentType` / `getId` /
- * `saveSnapshot` / `loadSnapshot`.
+ * `saveSnapshot`.
  */
 class ResolvedAgentImpl {
   constructor(
@@ -463,8 +462,7 @@ class ResolvedAgentImpl {
     private readonly agentId: ParsedAgentId,
     /** Optional user-supplied snapshot serializer (`implement({ snapshot })`). */
     private readonly customSnapshot?: {
-      save: () => Uint8Array | Promise<Uint8Array>;
-      load: (bytes: Uint8Array) => void | Promise<void>;
+      save?: () => Uint8Array | Promise<Uint8Array>;
     },
   ) {}
 
@@ -553,37 +551,49 @@ class ResolvedAgentImpl {
     }
   }
 
-  // Snapshot serialization. Three modes:
+  // Snapshot serialization. Two modes:
   //  - custom (`implement({ snapshot })`): user save/load own the bytes verbatim.
   //  - typed  (`snapshotting: { state }`): JSON of ONLY the schema-validated state
   //           fields of `this`, plus a `db:<field>` SQLite part per DatabaseSync.
-  //  - reflective (default): JSON of every plain field of `this` (skipping the
-  //           live `config` accessor + helpers), plus the same `db:` parts.
   // The principal/version envelope is added by the guest (`src/index.ts`).
   async saveSnapshot(): Promise<{ data: Uint8Array; mimeType: string }> {
-    if (this.customSnapshot) {
+    if (this.customSnapshot?.save) {
       const data = await this.customSnapshot.save.call(this.instance);
       return { data, mimeType: 'application/octet-stream' };
     }
-
-    // Attached SQLite databases (reflective in both remaining modes).
-    const databases: Array<{ name: string; bytes: Uint8Array }> = [];
-    const seen = new Set<unknown>();
-    for (const [k, val] of Object.entries(this.instance)) {
-      if (!isDatabaseSync(val)) continue;
-      if (seen.has(val)) {
-        throw `Multiple agent fields reference the same DatabaseSync instance (field "${k}").`;
-      }
-      seen.add(val);
-      if (!isAutocommitDatabaseSync(val)) {
-        throw `Cannot snapshot database "${k}": an open transaction exists. Commit or rollback before saving.`;
-      }
-      databases.push({ name: k, bytes: serializeDatabaseSync(val) });
+    if (!this.reg.snapshotStateSchema) {
+      throw 'snapshot saving requires a declared state schema or custom save/load functions';
     }
 
-    const state = this.reg.snapshotStateSchema
-      ? await validateSnapshotState(this.reg.snapshotStateSchema, this.instance)
-      : this.reflectiveState();
+    const databases: Array<{ name: string; bytes: Uint8Array }> = [];
+    const ordinaryState: Record<string, unknown> = {};
+    const seen = new Set<unknown>();
+    for (const [k, val] of Object.entries(this.instance)) {
+      if (k === 'config' || k === 'getId' || k === 'getPhantomId' || k === 'getPrincipal') continue;
+      if (isDatabaseSync(val)) {
+        if (seen.has(val)) {
+          throw `Multiple agent fields reference the same DatabaseSync instance (field "${k}").`;
+        }
+        seen.add(val);
+        if (!isAutocommitDatabaseSync(val)) {
+          throw `Cannot snapshot database "${k}": an open transaction exists. Commit or rollback before saving.`;
+        }
+        databases.push({ name: k, bytes: serializeDatabaseSync(val) });
+        continue;
+      }
+      if (
+        isInstance(val, StatementSync) ||
+        isInstance(val, Session) ||
+        isInstance(val, SQLTagStore)
+      ) {
+        throw `Cannot automatically snapshot resource field "${k}"; use custom save/load functions.`;
+      }
+      assertNoNestedSnapshotResources(val, k);
+      ordinaryState[k] = val;
+    }
+
+    const state = await validateSnapshotState(this.reg.snapshotStateSchema, ordinaryState, true);
+    assertJsonSnapshotValue(state, 'state');
 
     const stateJson = new TextEncoder().encode(JSON.stringify(state));
     if (databases.length === 0) {
@@ -600,64 +610,8 @@ class ResolvedAgentImpl {
     const { data, boundary } = encodeMultipart(parts);
     return { data, mimeType: `multipart/mixed; boundary=${boundary}` };
   }
-
-  /** Reflective state: plain, non-helper, non-SQLite fields of `this` (the live `config` accessor is never snapshotted). */
-  private reflectiveState(): Record<string, unknown> {
-    const state: Record<string, unknown> = {};
-    for (const [k, val] of Object.entries(this.instance)) {
-      if (typeof val === 'function') continue;
-      if (k === 'config') continue;
-      if (
-        isDatabaseSync(val) ||
-        isInstance(val, StatementSync) ||
-        isInstance(val, Session) ||
-        isInstance(val, SQLTagStore)
-      ) {
-        continue;
-      }
-      state[k] = val;
-    }
-    return state;
-  }
-
-  async loadSnapshot(bytes: Uint8Array, mimeType?: string): Promise<void> {
-    if (this.customSnapshot) {
-      await this.customSnapshot.load.call(this.instance, bytes);
-      return;
-    }
-    const applyState = async (json: string): Promise<void> => {
-      let parsed = JSON.parse(json) as Record<string, unknown>;
-      if (this.reg.snapshotStateSchema) {
-        parsed = await validateSnapshotState(this.reg.snapshotStateSchema, parsed);
-      } else {
-        delete parsed.config; // never let a stale snapshot clobber the live config accessor
-      }
-      Object.assign(this.instance, parsed);
-    };
-
-    if (mimeType && mimeType.startsWith('multipart/mixed')) {
-      const boundary = mimeType.match(/boundary=([^\s;]+)/)?.[1];
-      if (!boundary) throw 'multipart/mixed snapshot missing boundary parameter';
-      const parts = decodeMultipart(bytes, boundary);
-      const statePart = parts.find((p) => p.name === 'state');
-      if (!statePart) throw 'multipart snapshot missing "state" part';
-      await applyState(new TextDecoder().decode(statePart.body));
-      for (const p of parts) {
-        if (!p.name.startsWith('db:')) continue;
-        const field = this.instance[p.name.slice(3)];
-        if (isDatabaseSync(field)) restoreDatabase(field, p.body);
-      }
-      return;
-    }
-    await applyState(new TextDecoder().decode(bytes));
-  }
 }
 
-/**
- * Validate + scope a snapshot state object through the declared Standard Schema.
- * Undeclared fields (`config`, `getId`, …) are stripped, so only the declared
- * state is persisted/restored; a shape mismatch throws.
- */
 function isDatabaseSync(val: unknown): val is DatabaseSync {
   return val instanceof DatabaseSync;
 }
@@ -684,9 +638,70 @@ function isInstance(val: unknown, Ctor: Function): boolean {
   return typeof Ctor === 'function' && val instanceof Ctor;
 }
 
+function assertNoNestedSnapshotResources(
+  value: unknown,
+  path: string,
+  ancestors = new Set<object>(),
+): void {
+  if (typeof value === 'function') {
+    throw `Cannot automatically snapshot function field "${path}"; use custom save/load functions.`;
+  }
+  if (value === null || typeof value !== 'object') return;
+  if (
+    isDatabaseSync(value) ||
+    isInstance(value, StatementSync) ||
+    isInstance(value, Session) ||
+    isInstance(value, SQLTagStore)
+  ) {
+    throw `Cannot automatically snapshot nested resource field "${path}"; use custom save/load functions.`;
+  }
+  if (ancestors.has(value)) return;
+  ancestors.add(value);
+  for (const [key, nested] of Object.entries(value)) {
+    assertNoNestedSnapshotResources(nested, `${path}.${key}`, ancestors);
+  }
+  ancestors.delete(value);
+}
+
+function assertJsonSnapshotValue(
+  value: unknown,
+  path: string,
+  ancestors = new Set<object>(),
+): void {
+  if (
+    value === undefined ||
+    typeof value === 'function' ||
+    typeof value === 'symbol' ||
+    typeof value === 'bigint'
+  ) {
+    throw `Snapshot ${path} is not JSON-deserializable; use custom save/load functions.`;
+  }
+  if (typeof value === 'number' && !Number.isFinite(value)) {
+    throw `Snapshot ${path} is not JSON-deserializable; use custom save/load functions.`;
+  }
+  if (value === null || typeof value !== 'object') return;
+  if (ancestors.has(value)) {
+    throw `Snapshot ${path} contains a cycle; use custom save/load functions.`;
+  }
+  if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype) {
+    throw `Snapshot ${path} is not a plain JSON value; use custom save/load functions.`;
+  }
+  ancestors.add(value);
+  for (const [key, nested] of Object.entries(value)) {
+    assertJsonSnapshotValue(nested, `${path}.${key}`, ancestors);
+  }
+  ancestors.delete(value);
+}
+
+/**
+ * Validate a snapshot state object through the declared Standard Schema.
+ * Shape mismatches are rejected. During serialization, fields removed by the
+ * schema are also rejected as undeclared state.
+ */
 async function validateSnapshotState(
   schema: StandardSchemaV1,
   value: unknown,
+  rejectUndeclaredFields = false,
 ): Promise<Record<string, unknown>> {
   let result = schema['~standard'].validate(value);
   if (result instanceof Promise) result = await result;
@@ -695,62 +710,114 @@ async function validateSnapshotState(
       .map((i) => i.message)
       .join('; ')}`;
   }
-  return result.value as Record<string, unknown>;
+  const restored = result.value as Record<string, unknown>;
+  if (rejectUndeclaredFields && value !== null && typeof value === 'object') {
+    const declared = new Set(Object.keys(restored));
+    const undeclared = Object.keys(value).filter((key) => !declared.has(key));
+    if (undeclared.length > 0) {
+      throw `snapshot state contains undeclared fields: ${undeclared.join(', ')}`;
+    }
+  }
+  return restored;
 }
 
 /** Register the agent's initiator. On `initiate`, decode id, run `init`, wire handlers. */
 export function registerAgentInitiator(
   reg: RegisteredAgent,
-  impl: AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object>,
+  impl: AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object, boolean>,
 ): void {
   if (AgentInitiatorRegistry.exists(reg.name)) {
     throw new Error(`Agent "${reg.name}" already has an implementation`);
   }
+  const resolveContext = (
+    constructorInput: SchemaValue,
+    principal: HostPrincipal,
+  ):
+    | { tag: 'err'; val: AgentError }
+    | {
+        tag: 'ok';
+        val: {
+          idRecord: Record<string, unknown>;
+          agentId: ParsedAgentId;
+          phantomId: ReturnType<ParsedAgentId['parsed']>[2];
+          sdkPrincipal: ReturnType<typeof sdkPrincipalFromHost>;
+          config: ReturnType<typeof buildConfigAccessor>;
+        };
+      } => {
+    let idRecord: Record<string, unknown>;
+    try {
+      // Same cursor-based decode as `invoke`: an auto-injected `s.principal()`
+      // id field is filled from the separate `principal` arg and consumes no
+      // wire field. For the common all-user-supplied case this is identical to
+      // a positional read.
+      const hasUserSupplied = reg.idCodecs.some((ic) => ic.codec.autoInjected !== 'principal');
+      const fields = hasUserSupplied
+        ? (constructorInput as Extract<SchemaValue, { tag: 'record' }>).fields
+        : [];
+      idRecord = {};
+      let cursor = 0;
+      for (const ic of reg.idCodecs) {
+        idRecord[ic.name] =
+          ic.codec.autoInjected === 'principal'
+            ? sdkPrincipalFromHost(principal)
+            : ic.codec.fromValue(fields[cursor++]);
+      }
+    } catch (e) {
+      return {
+        tag: 'err',
+        val: createCustomError(
+          `Failed to deserialize constructor arguments for agent ${reg.name}: ${errorMessage(e)}`,
+        ),
+      };
+    }
+
+    const agentId = getRawSelfAgentId();
+    if (!agentId.value.startsWith(reg.name)) {
+      return {
+        tag: 'err',
+        val: createCustomError(
+          `Expected the container name to start with "${reg.name}", got "${agentId.value}"`,
+        ),
+      };
+    }
+    const [, , phantomId] = agentId.parsed();
+    const sdkPrincipal = sdkPrincipalFromHost(principal);
+
+    // Fresh-reading config accessor; shared by `init` (via context) and the
+    // handler `this`. Each getter re-fetches on access (config may change
+    // between invocations).
+    const config = buildConfigAccessor(reg.configTree);
+
+    return {
+      tag: 'ok',
+      val: { idRecord, agentId, phantomId, sdkPrincipal, config },
+    };
+  };
+
+  const complete = (
+    state: object,
+    context: Extract<ReturnType<typeof resolveContext>, { tag: 'ok' }>['val'],
+  ): ResolvedAgentImpl => {
+    const { agentId, phantomId, sdkPrincipal, config } = context;
+    const instance: Record<string, unknown> = { ...(state as Record<string, unknown>) };
+    instance.getId = () => agentId;
+    instance.getPhantomId = () => phantomId;
+    instance.getPrincipal = () => sdkPrincipal;
+    instance.config = config;
+    return new ResolvedAgentImpl(
+      reg,
+      instance,
+      impl.methods as Record<string, (...args: unknown[]) => unknown>,
+      agentId,
+      impl.snapshot,
+    );
+  };
+
   AgentInitiatorRegistry.register(reg.className, {
     async initiate(constructorInput: SchemaValue, principal: HostPrincipal) {
-      let idRecord: Record<string, unknown>;
-      try {
-        // Same cursor-based decode as `invoke`: an auto-injected `s.principal()`
-        // id field is filled from the separate `principal` arg and consumes no
-        // wire field. For the common all-user-supplied case this is identical to
-        // a positional read.
-        const hasUserSupplied = reg.idCodecs.some((ic) => ic.codec.autoInjected !== 'principal');
-        const fields = hasUserSupplied
-          ? (constructorInput as Extract<SchemaValue, { tag: 'record' }>).fields
-          : [];
-        idRecord = {};
-        let cursor = 0;
-        for (const ic of reg.idCodecs) {
-          idRecord[ic.name] =
-            ic.codec.autoInjected === 'principal'
-              ? sdkPrincipalFromHost(principal)
-              : ic.codec.fromValue(fields[cursor++]);
-        }
-      } catch (e) {
-        return {
-          tag: 'err',
-          val: createCustomError(
-            `Failed to deserialize constructor arguments for agent ${reg.name}: ${errorMessage(e)}`,
-          ),
-        };
-      }
-
-      const agentId = getRawSelfAgentId();
-      if (!agentId.value.startsWith(reg.name)) {
-        return {
-          tag: 'err',
-          val: createCustomError(
-            `Expected the container name to start with "${reg.name}", got "${agentId.value}"`,
-          ),
-        };
-      }
-      const [, , phantomId] = agentId.parsed();
-      const sdkPrincipal = sdkPrincipalFromHost(principal);
-
-      // Fresh-reading config accessor; shared by `init` (via context) and the
-      // handler `this`. Each getter re-fetches on access (config may change
-      // between invocations).
-      const config = buildConfigAccessor(reg.configTree);
+      const resolved = resolveContext(constructorInput, principal);
+      if (resolved.tag === 'err') return resolved;
+      const { idRecord, phantomId, sdkPrincipal, config } = resolved.val;
 
       // `init` may be synchronous or async (return a Promise); awaiting a plain
       // value is a no-op, so both forms work. The guest `initialize`/load-snapshot
@@ -770,22 +837,54 @@ export function registerAgentInitiator(
         };
       }
 
-      const instance: Record<string, unknown> = { ...(state as Record<string, unknown>) };
-      instance.getId = () => agentId;
-      instance.getPhantomId = () => phantomId;
-      instance.getPrincipal = () => sdkPrincipal;
-      instance.config = config;
-
       return {
         tag: 'ok',
-        val: new ResolvedAgentImpl(
-          reg,
-          instance,
-          impl.methods as Record<string, (...args: unknown[]) => unknown>,
-          agentId,
-          impl.snapshot,
-        ) as never,
+        val: complete(state, resolved.val) as never,
       };
+    },
+    async loadSnapshot(constructorInput, principal, bytes, _mimeType, databases) {
+      const resolved = resolveContext(constructorInput, principal);
+      if (resolved.tag === 'err') return resolved;
+      const { idRecord, phantomId, sdkPrincipal, config } = resolved.val;
+      let state: object;
+      try {
+        if (impl.snapshot?.load) {
+          const load = impl.snapshot.load;
+          state = await load(bytes, {
+            id: idRecord as never,
+            agentId: resolved.val.agentId,
+            principal: sdkPrincipal,
+            phantomId,
+            config,
+          });
+        } else if (reg.snapshotStateSchema) {
+          state = await validateSnapshotState(
+            reg.snapshotStateSchema,
+            JSON.parse(new TextDecoder().decode(bytes)),
+          );
+        } else {
+          throw new Error('snapshot restoration is not configured');
+        }
+
+        const restored = state as Record<string, unknown>;
+        for (const database of databases) {
+          let target = restored[database.name];
+          if (target === undefined) {
+            target = new DatabaseSync(':memory:');
+            restored[database.name] = target;
+          }
+          if (!isDatabaseSync(target)) {
+            throw new Error(`snapshot database field "${database.name}" is not a DatabaseSync`);
+          }
+          restoreDatabase(target, database.bytes);
+        }
+      } catch (e) {
+        return {
+          tag: 'err',
+          val: createCustomError(`Agent ${reg.name} restoration failed: ${errorMessage(e)}`),
+        };
+      }
+      return { tag: 'ok', val: complete(state, resolved.val) as never };
     },
   });
 }

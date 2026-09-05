@@ -19,7 +19,7 @@ import { ParsedAgentId } from '../agentId';
 
 /**
  * The minimal resolved-agent contract the guest runtime (`src/index.ts`) drives:
- * invoke a method, describe the agent type, and save/load snapshots. Produced by
+ * invoke a method, describe the agent type, and save snapshots. Produced by
  * an {@link AgentInitiator} and implemented by the runtime's resolved agent
  * (`src/agent/runtime.ts` `ResolvedAgentImpl`).
  */
@@ -32,5 +32,4 @@ export interface ResolvedAgent {
     principal: Principal,
   ): Promise<Result<SchemaValueTree | undefined, AgentError>>;
   saveSnapshot(): Promise<{ data: Uint8Array; mimeType: string }>;
-  loadSnapshot(bytes: Uint8Array, mimeType?: string): Promise<void>;
 }

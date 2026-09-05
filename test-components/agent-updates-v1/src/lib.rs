@@ -129,8 +129,11 @@ impl RevisionEnvAgent for RevisionEnvAgentImpl {
         Ok(Vec::new())
     }
 
-    async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
-        Ok(())
+    async fn load_snapshot(
+        _bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        Ok(Self)
     }
 }
 
@@ -170,13 +173,22 @@ impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
         Ok(vec![1])
     }
 
-    async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String> {
-        self.loaded_snapshot_revision = bytes
+    async fn load_snapshot(
+        bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        let loaded_snapshot_revision = bytes
             .first()
             .copied()
             .map(u32::from)
             .ok_or_else(|| "Missing snapshot revision".to_string())?;
-        Ok(())
+        Ok(Self {
+            loaded_snapshot_revision,
+            replay_revision: std::env::var("GOLEM_COMPONENT_REVISION")
+                .ok()
+                .and_then(|revision| revision.parse().ok())
+                .unwrap_or_default(),
+        })
     }
 }
 
