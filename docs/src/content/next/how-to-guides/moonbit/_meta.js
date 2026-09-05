@@ -9,7 +9,7 @@ export default {
   "golem-annotate-agent-moonbit": "Annotating Agent Methods (MoonBit)",
   "golem-atomic-block-moonbit": "Atomic Blocks and Durability Controls (MoonBit)",
   "golem-call-from-external-moonbit": "Calling Agents from External MoonBit Applications",
-  "golem-call-agent-reflectively-moonbit": "Calling Agents with Runtime Reflection (MoonBit)",
+  "golem-agent-reflection-moonbit": "Calling Agents with Runtime Reflection (MoonBit)",
   "golem-call-another-agent-moonbit": "Calling Another Agent (MoonBit)",
   "golem-configure-durability-moonbit": "Configuring Agent Durability (MoonBit)",
   "golem-add-cors-moonbit": "Configuring CORS for MoonBit HTTP Endpoints",

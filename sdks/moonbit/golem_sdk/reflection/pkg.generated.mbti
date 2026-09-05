@@ -13,6 +13,8 @@ import {
 // Values
 pub fn agent_id_from_wit(@types.AgentId) -> AgentId
 
+pub fn component_id_for(String) -> @types.ComponentId raise ReflectError
+
 pub fn get_agent_type(String) -> AgentType? raise ReflectError
 
 pub fn get_agent_type_by_agent_id(AgentId) -> AgentType? raise ReflectError
@@ -81,13 +83,13 @@ pub(all) struct CallerCodecClient {
   reusable_identity : AgentId?
   // private fields
 }
-pub fn CallerCodecClient::bind(AgentId) -> Self raise ReflectError
-pub fn[C : @schema.IntoSchema] CallerCodecClient::create(@types.ComponentId, String, C, phantom_id? : @types.Uuid?) -> Self raise ReflectError
+pub fn CallerCodecClient::bind(AgentId, String) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema] CallerCodecClient::create(String, C, phantom_id? : @types.Uuid?) -> Self raise ReflectError
 pub fn CallerCodecClient::drop(Self) -> Unit
 pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] CallerCodecClient::invoke(Self, String, I) -> Invocation[O]
 pub async fn[I : @schema.IntoSchema] CallerCodecClient::invoke_unit(Self, String, I) -> Invocation[Unit]
-pub fn[I : @schema.IntoSchema] CallerCodecClient::schedule(Self, @system-clock.Instant, String, I) -> ScheduledInvocation raise ReflectError
-pub fn[I : @schema.IntoSchema] CallerCodecClient::trigger(Self, String, I) -> InvocationMetadata raise ReflectError
+pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] CallerCodecClient::schedule(Self, @system-clock.Instant, String, I, @schema.TypeTag[O]) -> ScheduledInvocation raise ReflectError
+pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] CallerCodecClient::trigger(Self, String, I, @schema.TypeTag[O]) -> InvocationMetadata raise ReflectError
 
 pub(all) struct CreatedPhantomClient {
   agent_id : AgentId
@@ -143,6 +145,7 @@ pub(all) struct SchemaRef {
   graph : @schema_model.SchemaGraph
   root : @schema_model.SchemaType
 } derive(Eq, @debug.Debug)
+pub fn SchemaRef::contains_stream(Self) -> Bool
 pub fn SchemaRef::new(@schema_model.SchemaGraph) -> Self
 pub fn SchemaRef::pack_json(Self, Json) -> @schema_model.SchemaValue raise ReflectError
 pub fn SchemaRef::unpack_json(Self, @schema_model.SchemaValue) -> Json raise ReflectError
