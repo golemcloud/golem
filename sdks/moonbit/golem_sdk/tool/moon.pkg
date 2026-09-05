@@ -6,6 +6,7 @@ import {
   "golemcloud/golem_sdk/schema_model" @model,
   "golemcloud/golem_sdk/tool-core" @toolCore,
   "golemcloud/golem_sdk/schema_model_host" @model_host,
+  "moonbitlang/core/ref",
   "moonbitlang/core/strconv",
 }
 

@@ -49,6 +49,13 @@ pub mod validation;
 ))]
 pub mod wit;
 
+#[cfg(feature = "host")]
+#[derive(Clone, Debug)]
+pub struct UnderlyingToolHandleRep {
+    pub tool_name: String,
+    pub has_stdout: bool,
+}
+
 /// Index into [`CommandTree::nodes`].
 #[derive(
     Debug,

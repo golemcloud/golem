@@ -67,7 +67,7 @@ test "pure dispatcher, subtree authoring, and stdout support" {
   let stdout =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(input : @asyncCore.Stream[Byte], output : @asyncCore.Sink[Byte]) -> Unit { () }
+    #|pub fn Out::out(input : @asyncCore.Stream[Byte], output : @tool.ProviderStdout) -> Unit { () }
   let stdout_tools = @lib.parse_tools([("stdout.mbt", stdout)])
   let stdout_registration = @formatter.impls_to_string(
     @lib.generate_tool_registration(stdout_tools),
@@ -75,21 +75,34 @@ test "pure dispatcher, subtree authoring, and stdout support" {
   assert_true(stdout_registration.contains("stdout: Some("))
   assert_true(stdout_registration.contains("match __golem_stdin"))
   assert_true(
-    stdout_registration.contains(
-      "let (__golem_stdout, output) = @tool.new_stdout()",
-    ),
+    stdout_registration.contains("__golem_stdout : @tool.ProviderStdout?"),
   )
   assert_true(
-    stdout_registration.contains(
-      "@tool.invocation_result_stdout(__golem_stdout)",
-    ),
+    stdout_registration.contains("Some(__golem_output) => __golem_output"),
   )
+  assert_false(stdout_registration.contains("@tool.new_stdout()"))
+  assert_true(stdout_registration.contains("@tool.invocation_result_empty()"))
   let stdout_client = @formatter.impls_to_string(
     @lib.generate_tool_client_code(stdout_tools),
   )
-  assert_true(stdout_client.contains("@asyncCore.Stream[Byte]"))
-  assert_false(stdout_client.contains("output : @asyncCore.Sink[Byte]"))
-  assert_true(stdout_client.contains("@tool.decode_result_stdout_only"))
+  assert_true(stdout_client.contains("@tool.TypedToolInvocation[Unit"))
+  assert_false(stdout_client.contains("output : @tool.ProviderStdout"))
+  assert_true(stdout_client.contains("@tool.typed_invocation"))
+}
+
+///|
+test "async tool commands generate async provider invokers" {
+  let source =
+    #|#derive.tool
+    #|struct Streaming {}
+    #|pub async fn Streaming::stream(input : @asyncCore.Stream[Byte], output : @tool.ProviderStdout) -> UInt64 { 0UL }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(
+      @lib.parse_tools([("streaming.mbt", source)]),
+    ),
+  )
+  assert_true(generated.contains("async fn __golem_tool_invoke_Streaming"))
+  assert_true(generated.contains("Streaming::stream"))
 }
 
 ///|
@@ -97,17 +110,13 @@ test "labelled stdout is injected and returned by generated invoker" {
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(output~ : @asyncCore.Sink[Byte]) -> Unit { ignore(output) }
+    #|pub fn Out::out(output~ : @tool.ProviderStdout) -> Unit { ignore(output) }
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("stdout.mbt", source)])),
   )
-  assert_true(
-    generated.contains("let (__golem_stdout, output) = @tool.new_stdout()"),
-  )
+  assert_true(generated.contains("Some(__golem_output) => __golem_output"))
   assert_true(generated.contains("Out::out(output~)"))
-  assert_true(
-    generated.contains("@tool.invocation_result_stdout(__golem_stdout)"),
-  )
+  assert_true(generated.contains("@tool.invocation_result_empty()"))
 }
 
 ///|
@@ -115,18 +124,14 @@ test "stdout result does not reuse the stream handle owned by the tool method" {
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(output : @asyncCore.Sink[Byte]) -> Unit {
+    #|pub fn Out::out(output : @tool.ProviderStdout) -> Unit {
     #|  output.drop()
     #|}
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("stdout.mbt", source)])),
   )
-  assert_true(
-    generated.contains("let (__golem_stdout, output) = @tool.new_stdout()"),
-  )
-  assert_true(
-    generated.contains("@tool.invocation_result_stdout(__golem_stdout)"),
-  )
+  assert_true(generated.contains("Some(__golem_output) => __golem_output"))
+  assert_true(generated.contains("@tool.invocation_result_empty()"))
 }
 
 ///|
@@ -134,7 +139,7 @@ test "stdout parameter is not shadowed by a generated result binding" {
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(value : @asyncCore.Sink[Byte]) -> String {
+    #|pub fn Out::out(value : @tool.ProviderStdout) -> String {
     #|  ignore(value)
     #|  "ok"
     #|}
@@ -151,7 +156,12 @@ test "stdout parameter is not shadowed by a generated result binding" {
     .replace_all(old="\n", new="")
   assert_true(
     compact.contains(
-      "try{@tool.invocation_result_value_with_stdout(__golem_value,__golem_stdout,)}catch{@asyncCore.Cancelled::Cancelledaserror=>raiseerror",
+      "letvalue=match__golem_stdout{Some(__golem_output)=>__golem_output",
+    ),
+  )
+  assert_true(
+    compact.contains(
+      "try{@tool.invocation_result_value(__golem_value)}catch{@asyncCore.Cancelled::Cancelledaserror=>raiseerror",
     ),
   )
 }
@@ -161,7 +171,7 @@ test "stdout parameter cannot collide with reserved result binding" {
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(__golem_value : @asyncCore.Sink[Byte]) -> String {
+    #|pub fn Out::out(__golem_value : @tool.ProviderStdout) -> String {
     #|  ignore(__golem_value)
     #|  "ok"
     #|}
@@ -173,12 +183,12 @@ test "tool generated internals use runtime facades instead of consumer aliases" 
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(output : @asyncCore.Sink[Byte]) -> Unit { ignore(output) }
+    #|pub fn Out::out(output : @tool.ProviderStdout) -> Unit { ignore(output) }
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("stdout.mbt", source)])),
   )
   assert_true(generated.contains("@tool.Principal"))
-  assert_true(generated.contains("@tool.new_stdout()"))
+  assert_true(generated.contains("Some(__golem_output) => __golem_output"))
   assert_false(generated.contains("@common.Principal"))
   assert_false(generated.contains("@stdout.get_stdout()"))
 }
@@ -200,12 +210,12 @@ test "async tool commands use async ownership-aware invokers" {
 }
 
 ///|
-test "generated invokers create stdout only after fallible input decoding" {
+test "generated invokers claim stdout only after fallible input decoding" {
   let source =
     #|#derive.tool
     #|struct StreamAfterInput {}
     #|pub fn StreamAfterInput::run(
-    #|  output : @asyncCore.Sink[Byte],
+    #|  output : @tool.ProviderStdout,
     #|  value : String,
     #|) -> String {
     #|  ignore(output)
@@ -216,8 +226,31 @@ test "generated invokers create stdout only after fallible input decoding" {
       @lib.parse_tools([("stdout-after-input.mbt", source)]),
     ),
   )
-  let before_stdout = generated.split("@tool.new_stdout()").collect()[0]
+  let before_stdout = generated
+    .split("Some(__golem_output) => __golem_output")
+    .collect()[0]
   assert_true(before_stdout.contains("@tool.decode_canonical_field"))
+}
+
+///|
+test "generated missing attachment failures release decoded invocation inputs" {
+  let source =
+    #|#derive.tool
+    #|struct Streams {}
+    #|pub fn Streams::run(
+    #|  input : @asyncCore.Stream[Byte],
+    #|  output : @tool.ProviderStdout,
+    #|) -> Unit {
+    #|  ignore(input)
+    #|  ignore(output)
+    #|}
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("streams.mbt", source)])),
+  )
+  let helper_calls = generated.split("@tool.reject_decoded_invocation").length()
+  assert_true(helper_calls >= 3)
+  assert_true(generated.contains("\"required stdin stream is missing\""))
+  assert_true(generated.contains("\"required stdout stream is missing\""))
 }
 
 ///|
@@ -1376,7 +1409,7 @@ test "canonical MoonBit tools preserve the shared Rust and Scala contract" {
     dir: "../golem_sdk_example1/golem_moonbit_examples",
   }
   let tools = @lib.parse_tools(@lib.scan_package(package_info).files)
-  assert_eq(tools.length(), 5)
+  assert_eq(tools.length(), 6)
   let grep = canonical_tool(tools, "canonical-grep")
   assert_eq(grep.version, Some("2.0.0"))
   guard grep.root_command is Some(grep_root_index) else {
@@ -1435,7 +1468,7 @@ test "canonical MoonBit tools preserve the shared Rust and Scala contract" {
   let registration = @formatter.impls_to_string(
     @lib.generate_tool_registration(tools),
   )
-  assert_eq(registration.split("@tool.register_tool_def_invoker").length(), 4)
+  assert_eq(registration.split("@tool.register_tool_def_invoker").length(), 5)
   assert_eq(
     registration.split("@tool.register_subtool_def_invoker").length(),
     3,
