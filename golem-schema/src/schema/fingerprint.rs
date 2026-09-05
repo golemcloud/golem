@@ -99,6 +99,115 @@ pub fn schema_fingerprint_v1(
     Ok(SchemaFingerprintV1(*blake3::hash(&bytes).as_bytes()))
 }
 
+/// Resolves a stream element fingerprint against a pinned multi-root schema registry.
+///
+/// The returned graph is self-contained: its root is the matching element type and its
+/// definitions are the transitive closure reachable from that root. A unit stream element is
+/// represented by an empty tuple root.
+pub fn resolve_stream_element_schema_v1(
+    graph: &SchemaGraph,
+    fingerprint: SchemaFingerprintV1,
+) -> Result<Option<SchemaGraph>, SchemaFingerprintError> {
+    let mut elements = Vec::new();
+    collect_stream_elements(&graph.root, &mut elements);
+    for definition in &graph.defs {
+        collect_stream_elements(&definition.body, &mut elements);
+    }
+    for element in elements {
+        if schema_fingerprint_v1(graph, element)? == fingerprint {
+            let root = element.cloned().unwrap_or_else(synthetic_unit);
+            return Ok(Some(SchemaGraph {
+                defs: reachable_defs(graph, &root),
+                root,
+            }));
+        }
+    }
+    Ok(None)
+}
+
+fn collect_stream_elements<'a>(ty: &'a SchemaType, elements: &mut Vec<Option<&'a SchemaType>>) {
+    match ty {
+        SchemaType::Record { fields, .. } => {
+            for field in fields {
+                collect_stream_elements(&field.body, elements);
+            }
+        }
+        SchemaType::Variant { cases, .. } => {
+            for case in cases {
+                if let Some(payload) = &case.payload {
+                    collect_stream_elements(payload, elements);
+                }
+            }
+        }
+        SchemaType::Tuple {
+            elements: tuple_elements,
+            ..
+        } => {
+            for element in tuple_elements {
+                collect_stream_elements(element, elements);
+            }
+        }
+        SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+            collect_stream_elements(element, elements);
+        }
+        SchemaType::Map { key, value, .. } => {
+            collect_stream_elements(key, elements);
+            collect_stream_elements(value, elements);
+        }
+        SchemaType::Option { inner, .. } => collect_stream_elements(inner, elements),
+        SchemaType::Result { spec, .. } => {
+            if let Some(ok) = &spec.ok {
+                collect_stream_elements(ok, elements);
+            }
+            if let Some(err) = &spec.err {
+                collect_stream_elements(err, elements);
+            }
+        }
+        SchemaType::Union { spec, .. } => {
+            for branch in &spec.branches {
+                collect_stream_elements(&branch.body, elements);
+            }
+        }
+        SchemaType::Future { inner, .. } => {
+            if let Some(inner) = inner {
+                collect_stream_elements(inner, elements);
+            }
+        }
+        SchemaType::Stream { inner, .. } => {
+            elements.push(inner.as_deref());
+            if let Some(inner) = inner {
+                collect_stream_elements(inner, elements);
+            }
+        }
+        SchemaType::Secret { spec, .. } => collect_stream_elements(&spec.inner, elements),
+        SchemaType::Ref { .. }
+        | SchemaType::Bool { .. }
+        | SchemaType::S8 { .. }
+        | SchemaType::S16 { .. }
+        | SchemaType::S32 { .. }
+        | SchemaType::S64 { .. }
+        | SchemaType::U8 { .. }
+        | SchemaType::U16 { .. }
+        | SchemaType::U32 { .. }
+        | SchemaType::U64 { .. }
+        | SchemaType::F32 { .. }
+        | SchemaType::F64 { .. }
+        | SchemaType::Char { .. }
+        | SchemaType::String { .. }
+        | SchemaType::Enum { .. }
+        | SchemaType::Flags { .. }
+        | SchemaType::Text { .. }
+        | SchemaType::Binary { .. }
+        | SchemaType::Path { .. }
+        | SchemaType::Url { .. }
+        | SchemaType::Datetime { .. }
+        | SchemaType::Duration { .. }
+        | SchemaType::Quantity { .. }
+        | SchemaType::QuotaToken { .. }
+        | SchemaType::PermissionCard { .. } => {}
+    }
+}
+
 fn canonical_schema_bytes_v1(
     graph: &SchemaGraph,
     element: Option<&SchemaType>,
@@ -738,7 +847,10 @@ impl CborEncoder {
 
 #[cfg(test)]
 mod tests {
-    use super::{SchemaFingerprintError, canonical_schema_bytes_v1, schema_fingerprint_v1};
+    use super::{
+        SchemaFingerprintError, SchemaFingerprintV1, canonical_schema_bytes_v1,
+        resolve_stream_element_schema_v1, schema_fingerprint_v1,
+    };
     use crate::schema::{
         MetadataEnvelope, NamedFieldType, PermissionCardSpec, Role, SchemaGraph, SchemaType,
         SchemaTypeDef, TextRestrictions, TypeId,
@@ -892,5 +1004,56 @@ mod tests {
             schema_fingerprint_v1(&graph, Some(&duplicate)),
             Err(SchemaFingerprintError::DuplicateSetValue { .. })
         ));
+    }
+
+    #[test]
+    fn resolves_stream_element_fingerprints_to_self_contained_schema_graphs() {
+        let node_id = TypeId::new("example.node");
+        let node_ref = SchemaType::ref_to(node_id.clone());
+        let graph = SchemaGraph {
+            root: SchemaType::record(vec![
+                NamedFieldType {
+                    name: "nodes".to_string(),
+                    body: SchemaType::stream(Some(node_ref.clone())),
+                    metadata: MetadataEnvelope::default(),
+                },
+                NamedFieldType {
+                    name: "signals".to_string(),
+                    body: SchemaType::stream(None),
+                    metadata: MetadataEnvelope::default(),
+                },
+            ]),
+            defs: vec![SchemaTypeDef {
+                id: node_id.clone(),
+                name: Some("Node".to_string()),
+                body: SchemaType::record(vec![NamedFieldType {
+                    name: "next".to_string(),
+                    body: SchemaType::option(SchemaType::ref_to(node_id)),
+                    metadata: MetadataEnvelope::default(),
+                }]),
+            }],
+        };
+
+        let node_fingerprint = schema_fingerprint_v1(&graph, Some(&node_ref)).unwrap();
+        let resolved = resolve_stream_element_schema_v1(&graph, node_fingerprint)
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.root, node_ref);
+        assert_eq!(resolved.defs, graph.defs);
+
+        let unit_fingerprint = schema_fingerprint_v1(&graph, None).unwrap();
+        let resolved_unit = resolve_stream_element_schema_v1(&graph, unit_fingerprint)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            resolved_unit,
+            SchemaGraph::anonymous(SchemaType::tuple(Vec::new()))
+        );
+
+        assert!(
+            resolve_stream_element_schema_v1(&graph, SchemaFingerprintV1([0xff; 32]))
+                .unwrap()
+                .is_none()
+        );
     }
 }

@@ -822,17 +822,24 @@ impl EntityInvocationDurability {
                         resources: take_entity_resources(&monitor_body_resources),
                     }),
                 };
-                let retained_reconstruction = if let Err(failure) = &completed {
-                    on_completed_failure(failure.error.clone()).await;
-                    drop(monitor_reconstruction);
-                    None
-                } else {
-                    Some(monitor_reconstruction)
+                let retained_reconstruction = match &completed {
+                    Err(failure) => {
+                        on_completed_failure(failure.error.clone()).await;
+                        drop(monitor_reconstruction);
+                        None
+                    }
+                    Ok((_, terminal)) if terminal.is_replay_at_marker() => {
+                        Some(monitor_reconstruction)
+                    }
+                    Ok(_) => {
+                        drop(monitor_reconstruction);
+                        None
+                    }
                 };
                 let _ = completed_tx.send((completed, retained_reconstruction));
             });
             on_completed_started();
-            let (completed, mut retained_reconstruction) =
+            let (completed, retained_reconstruction) =
                 completed_rx
                     .await
                     .map_err(|error| EntityInvocationDurabilityFailure {
@@ -842,9 +849,6 @@ impl EntityInvocationDurability {
                         resources: take_entity_resources(&body_resources),
                     })?;
             let (reconstruction, terminal) = completed?;
-            if !terminal.is_replay_at_marker() {
-                drop(retained_reconstruction.take());
-            }
             terminal
                 .finish_access(store, get_ctx)
                 .await

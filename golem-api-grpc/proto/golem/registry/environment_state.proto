@@ -6,6 +6,8 @@ import "golem/component/agent.proto";
 import "golem/component/component_id.proto";
 import "golem/component/component_metadata.proto";
 import "golem/common/account_id.proto";
+import "golem/common/hash.proto";
+import "golem/common/uuid.proto";
 import "golem/registry/agent.proto";
 import "golem/registry/agent_secret.proto";
 import "golem/tool/tool.proto";
@@ -29,6 +31,18 @@ message ComponentToolSource {
   string component_name = 3;
 }
 
+message HostToolSource {
+  string host_tool_id = 1;
+  string implementation_version = 2;
+}
+
+message ToolSource {
+  oneof source {
+    ComponentToolSource component = 1;
+    HostToolSource host = 2;
+  }
+}
+
 message RegisteredTool {
   uint64 deployment_revision = 1;
   golem.tool.Tool definition = 2;
@@ -37,6 +51,9 @@ message RegisteredTool {
   golem.common.AccountId owner_account_id = 5;
   string owner_account_email = 6;
   string metadata_version = 7;
+  optional golem.common.UUID tool_release_id = 8;
+  golem.common.Hash metadata_digest = 9;
+  ToolSource tagged_source = 10;
 }
 
 message CompiledToolBinding {
@@ -52,6 +69,9 @@ message CompiledToolBinding {
   ComponentToolSource source = 10;
   string metadata_version = 11;
   ToolFilesystemAccess filesystem_access = 12;
+  optional golem.common.UUID tool_release_id = 13;
+  golem.common.Hash metadata_digest = 14;
+  ToolSource tagged_source = 15;
 }
 
 enum ToolFilesystemAccess {

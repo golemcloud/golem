@@ -47,6 +47,17 @@ use tracing::{Instrument, Level, debug, span};
 use wasmtime::component::Accessor;
 use wasmtime::{AsContextMut, StoreContextMut};
 
+/// Polls an invocation task outside Wasmtime's fiber and accessor TLS scopes, with enough native
+/// stack for the nested host futures. Each poll returns before the temporary stack is released.
+pub(crate) async fn with_invocation_stack<F: std::future::Future>(future: F) -> F::Output {
+    const STACK_SIZE: usize = 16 * 1024 * 1024;
+    let mut future = Box::pin(future);
+    std::future::poll_fn(|cx| {
+        stacker::maybe_grow(STACK_SIZE, STACK_SIZE, || future.as_mut().poll(cx))
+    })
+    .await
+}
+
 /// Describes how an invocation is being executed with respect to the oplog.
 #[allow(clippy::large_enum_variant)]
 pub enum InvocationMode {
@@ -1433,6 +1444,37 @@ mod tests {
     use golem_common::schema::schema_type::SchemaType;
     use std::collections::BTreeMap;
     use test_r::test;
+
+    #[test]
+    fn invocation_poll_stack_is_reestablished_after_suspension() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_stack_size(256 * 1024)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::spawn(async {
+                assert!(stacker::remaining_stack().unwrap() < 1024 * 1024);
+                let mut polls = 0;
+                let result = with_invocation_stack(std::future::poll_fn(|cx| {
+                    assert!(stacker::remaining_stack().unwrap() > 8 * 1024 * 1024);
+                    polls += 1;
+                    if polls < 3 {
+                        cx.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    } else {
+                        std::task::Poll::Ready(42)
+                    }
+                }))
+                .await;
+                assert_eq!(result, 42);
+                assert_eq!(polls, 3);
+                assert!(stacker::remaining_stack().unwrap() < 1024 * 1024);
+            })
+            .await
+            .unwrap();
+        });
+    }
 
     const AGENT_TYPE: &str = "test-agent";
     const METHOD_NAME: &str = "do-work";

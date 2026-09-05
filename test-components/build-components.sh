@@ -61,16 +61,16 @@ print_groups_json() {
   local i sep=""
   printf '['
   for ((i=1; i<=RUST_CHUNKS; i++)); do
-    printf '%s{"name":"rust-%d","needs-node":false}' "$sep" "$i"
+    printf '%s{"name":"rust-%d","needs-node":false,"needs-moonbit":false}' "$sep" "$i"
     sep=","
   done
   for ((i=1; i<=TS_CHUNKS; i++)); do
-    printf '%s{"name":"ts-%d","needs-node":true}' "$sep" "$i"
+    printf '%s{"name":"ts-%d","needs-node":true,"needs-moonbit":true}' "$sep" "$i"
     sep=","
   done
   printf '%s{"name":"scala","needs-node":false,"needs-scala":true,"expected-artifact":"golem_it_tool_streaming_scala.wasm"}' "$sep"
   printf ',{"name":"moonbit","needs-node":false,"needs-moonbit":true,"expected-artifact":"golem_it_tool_streaming_moonbit.wasm"}'
-  printf ',{"name":"benchmarks","needs-node":true}]\n'
+  printf ',{"name":"benchmarks","needs-node":true,"needs-moonbit":false}]\n'
 }
 
 clean_only=false

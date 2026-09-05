@@ -274,7 +274,18 @@ impl Drop for AcquisitionDrainGuard {
 
 struct OwnerToolOperationsState {
     owner_winner: Option<OwnerFailureWinner>,
+    owner_failure_cleanup: Option<OwnerFailureCleanupState>,
+    owner_failure_cleanup_complete: bool,
     operations: HashMap<u64, RegisteredOperation>,
+}
+
+struct OwnerFailureCleanupState {
+    operation_id: u64,
+    claimed: bool,
+}
+
+pub(crate) struct OwnerFailureCleanupToken {
+    operation_id: u64,
 }
 
 /// One arbitration domain for all accepted tool operations in an owner generation. Durable
@@ -302,6 +313,8 @@ impl OwnerToolOperations {
             next_id: AtomicU64::new(1),
             state: Mutex::new(OwnerToolOperationsState {
                 owner_winner: None,
+                owner_failure_cleanup: None,
+                owner_failure_cleanup_complete: false,
                 operations: HashMap::new(),
             }),
             changed: Notify::new(),
@@ -316,30 +329,32 @@ impl OwnerToolOperations {
     ) -> ProvisionalOwnerToolOperation {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let context = Arc::new(context);
-        tracing::debug!(
-            operation_id = id,
-            call_mode = ?context.call_mode,
-            filesystem = ?context.activation.filesystem(),
-            "Registered tool operation"
-        );
         let lease = Arc::new(OperationLease {
             handles: AtomicUsize::new(1),
         });
         let winner_tx = {
             let mut state = self.state.lock().unwrap();
-            let winner = if state.owner_winner.is_some() {
-                ToolOperationWinner::FencedByOwner
-            } else {
-                ToolOperationWinner::Open
-            };
-            let (winner_tx, _) = watch::channel(winner.clone());
+            if state.owner_winner.is_some() {
+                drop(state);
+                tracing::debug!(
+                    operation_id = id,
+                    call_mode = ?context.call_mode,
+                    filesystem = ?context.activation.filesystem(),
+                    "Rejected tool operation registration after owner failure"
+                );
+                return ProvisionalOwnerToolOperation {
+                    context,
+                    operation: None,
+                };
+            }
+            let (winner_tx, _) = watch::channel(ToolOperationWinner::Open);
             state.operations.insert(
                 id,
                 RegisteredOperation {
                     context: context.clone(),
                     lease: lease.clone(),
                     invocation_id: None,
-                    winner: winner.clone(),
+                    winner: ToolOperationWinner::Open,
                     winner_tx: winner_tx.clone(),
                     admission: BodyAdmissionState::Staging,
                     lane: LaneOwnership::None,
@@ -350,7 +365,14 @@ impl OwnerToolOperations {
             );
             winner_tx
         };
+        tracing::debug!(
+            operation_id = id,
+            call_mode = ?context.call_mode,
+            filesystem = ?context.activation.filesystem(),
+            "Registered tool operation"
+        );
         ProvisionalOwnerToolOperation {
+            context: context.clone(),
             operation: Some(OwnerToolOperation {
                 id,
                 context,
@@ -372,10 +394,20 @@ impl OwnerToolOperations {
             ));
         }
         state.owner_winner = None;
+        state.owner_failure_cleanup = None;
+        state.owner_failure_cleanup_complete = false;
         Ok(())
     }
 
     pub(crate) async fn select_owner_failure(&self, winner: OwnerFailureWinner) -> bool {
+        self.select_owner_failure_with_cleanup(winner, None).await
+    }
+
+    async fn select_owner_failure_with_cleanup(
+        &self,
+        winner: OwnerFailureWinner,
+        cleanup_operation_id: Option<u64>,
+    ) -> bool {
         loop {
             let wait = self.changed.notified();
             let selected = {
@@ -391,6 +423,11 @@ impl OwnerToolOperations {
                     None
                 } else {
                     state.owner_winner = Some(winner.clone());
+                    state.owner_failure_cleanup =
+                        cleanup_operation_id.map(|operation_id| OwnerFailureCleanupState {
+                            operation_id,
+                            claimed: false,
+                        });
                     let mut attachments = Vec::new();
                     for operation in state.operations.values_mut() {
                         if matches!(operation.winner, ToolOperationWinner::Open) {
@@ -455,6 +492,41 @@ impl OwnerToolOperations {
         self.changed.notify_waiters();
     }
 
+    pub(crate) async fn wait_owner_settled(&self) {
+        loop {
+            let changed = self.changed.notified();
+            if self.state.lock().unwrap().operations.is_empty() {
+                return;
+            }
+            changed.await;
+        }
+    }
+
+    pub(crate) fn complete_owner_failure_cleanup(&self, token: OwnerFailureCleanupToken) {
+        let mut state = self.state.lock().unwrap();
+        assert!(
+            state.owner_winner.is_some(),
+            "owner failure cleanup requires a selected failure"
+        );
+        assert!(
+            matches!(
+                state.owner_failure_cleanup,
+                Some(OwnerFailureCleanupState {
+                    operation_id,
+                    claimed: true,
+                }) if operation_id == token.operation_id
+            ),
+            "owner failure cleanup requires its claimed operation token"
+        );
+        assert!(
+            state.operations.is_empty(),
+            "owner failure cleanup requires every tool operation to settle"
+        );
+        state.owner_failure_cleanup_complete = true;
+        drop(state);
+        self.changed.notify_waiters();
+    }
+
     pub(crate) fn close_failed_attachments(&self) {
         let attachments = self
             .state
@@ -488,6 +560,14 @@ impl OwnerToolOperations {
 
     pub(crate) fn selected_owner_failure(&self) -> Option<OwnerFailureWinner> {
         self.state.lock().unwrap().owner_winner.clone()
+    }
+
+    pub(crate) fn interruptible_owner_failure(&self) -> Option<OwnerFailureWinner> {
+        let state = self.state.lock().unwrap();
+        state
+            .owner_failure_cleanup_complete
+            .then(|| state.owner_winner.clone())
+            .flatten()
     }
 
     pub(crate) fn commit_if_owner_open(&self, commit: impl FnOnce()) -> bool {
@@ -684,25 +764,24 @@ impl OwnerToolOperations {
 }
 
 pub(crate) struct ProvisionalOwnerToolOperation {
+    context: Arc<OwnerToolOperationContext>,
     operation: Option<OwnerToolOperation>,
 }
 
 impl ProvisionalOwnerToolOperation {
     pub(crate) fn context(&self) -> &OwnerToolOperationContext {
-        self.operation
-            .as_ref()
-            .expect("provisional tool operation was already consumed")
-            .context()
+        &self.context
+    }
+
+    pub(crate) fn is_rejected(&self) -> bool {
+        self.operation.is_none()
     }
 
     pub(crate) fn accept(
         mut self,
         invocation_id: EntityInvocationId,
     ) -> Option<OwnerToolOperation> {
-        let operation = self
-            .operation
-            .as_ref()
-            .expect("provisional tool operation was already consumed");
+        let operation = self.operation.as_ref()?;
         if !operation.accept(invocation_id) {
             return None;
         }
@@ -1282,6 +1361,11 @@ impl OwnerToolOperation {
                     return false;
                 } else {
                     state.owner_winner = Some(OwnerFailureWinner::Trap(trap.clone()));
+                    state.owner_failure_cleanup = Some(OwnerFailureCleanupState {
+                        operation_id: self.id,
+                        claimed: false,
+                    });
+                    let mut attachments = Vec::new();
                     for (id, operation) in state.operations.iter_mut() {
                         if matches!(operation.winner, ToolOperationWinner::Open) {
                             operation.winner = if *id == self.id {
@@ -1290,12 +1374,22 @@ impl OwnerToolOperation {
                                 ToolOperationWinner::FencedByOwner
                             };
                             operation.winner_tx.send_replace(operation.winner.clone());
+                            attachments.extend(
+                                operation
+                                    .stdin
+                                    .iter()
+                                    .chain(operation.stdout.iter())
+                                    .cloned(),
+                            );
                         }
                     }
-                    Some(())
+                    Some(attachments)
                 }
             };
-            if selected.is_some() {
+            if let Some(attachments) = selected {
+                for attachment in attachments {
+                    attachment.fence_owner();
+                }
                 tracing::debug!(
                     operation_id = self.id,
                     failure_kind = "trap",
@@ -1315,7 +1409,10 @@ impl OwnerToolOperation {
         );
         let selected = self
             .owner
-            .select_owner_failure(OwnerFailureWinner::Infrastructure(error))
+            .select_owner_failure_with_cleanup(
+                OwnerFailureWinner::Infrastructure(error),
+                Some(self.id),
+            )
             .await;
         tracing::debug!(
             operation_id = self.id,
@@ -1323,6 +1420,24 @@ impl OwnerToolOperation {
             "Tool operation classified an infrastructure failure"
         );
         selected
+    }
+
+    pub(crate) async fn select_failure(&self, winner: OwnerFailureWinner) -> bool {
+        self.owner
+            .select_owner_failure_with_cleanup(winner, Some(self.id))
+            .await
+    }
+
+    pub(crate) fn claim_owner_failure_cleanup(&self) -> Option<OwnerFailureCleanupToken> {
+        let mut state = self.owner.state.lock().unwrap();
+        let cleanup = state.owner_failure_cleanup.as_mut()?;
+        if cleanup.operation_id != self.id || cleanup.claimed {
+            return None;
+        }
+        cleanup.claimed = true;
+        Some(OwnerFailureCleanupToken {
+            operation_id: self.id,
+        })
     }
 
     fn begin_selection(&self, selecting: ToolOperationWinner) -> bool {
@@ -1803,6 +1918,8 @@ mod tests {
                     provision: ToolProvisionConfig::default(),
                     binding: Box::new(CompiledToolBinding {
                         deployment_revision,
+                        release_id: None,
+                        metadata_digest: Default::default(),
                         agent_type_name: golem_common::model::agent::AgentTypeName(
                             "Agent".to_string(),
                         ),
@@ -2551,6 +2668,79 @@ mod tests {
 
     #[test]
     #[timeout("30s")]
+    async fn owner_failure_becomes_interruptible_only_after_operation_cleanup() {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(context()), 2);
+        let sibling = accept_provisional(owner.create(context()), 3);
+        let waiting_owner = owner.clone();
+        let waiting =
+            tokio::spawn(async move { waiting_owner.wait_parent_settled(&parent()).await });
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
+
+        assert!(
+            operation
+                .select_infrastructure(WorkerExecutorError::runtime("owner failed"))
+                .await
+        );
+        let cleanup = operation
+            .claim_owner_failure_cleanup()
+            .expect("the selecting operation owns cleanup");
+        assert!(matches!(
+            sibling.winner_if_active(),
+            Some(ToolOperationWinner::FencedByOwner)
+        ));
+        owner.drain_owner_failure_lanes().await;
+        assert_eq!(owner.operation_count(), 2);
+        assert!(owner.interruptible_owner_failure().is_none());
+
+        operation.settle().await;
+        sibling.settle().await;
+        owner.wait_owner_settled().await;
+        owner.complete_owner_failure_cleanup(cleanup);
+
+        waiting.await.unwrap();
+        assert_eq!(owner.operation_count(), 0);
+        assert_eq!(owner.operation_removal_count(), 2);
+        assert!(matches!(
+            owner.interruptible_owner_failure(),
+            Some(OwnerFailureWinner::Infrastructure(_))
+        ));
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn owner_failure_seals_operation_creation_through_cleanup_completion() {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(context()), 2);
+        assert!(
+            operation
+                .select_infrastructure(WorkerExecutorError::runtime("owner failed"))
+                .await
+        );
+        let cleanup = operation
+            .claim_owner_failure_cleanup()
+            .expect("the selecting operation owns cleanup");
+
+        let during_cleanup = owner.create(context());
+        assert!(during_cleanup.is_rejected());
+        assert_eq!(owner.operation_count(), 1);
+
+        operation.settle().await;
+        owner.wait_owner_settled().await;
+        owner.complete_owner_failure_cleanup(cleanup);
+
+        let after_cleanup = owner.create(context());
+        assert!(after_cleanup.is_rejected());
+        assert_eq!(owner.operation_count(), 0);
+        assert!(matches!(
+            owner.interruptible_owner_failure(),
+            Some(OwnerFailureWinner::Infrastructure(_))
+        ));
+    }
+
+    #[test]
+    #[timeout("30s")]
     async fn settlement_wakes_parent_waiters_before_cancellable_lane_drain() {
         let owner = OwnerToolOperations::new();
         let operation = accept_provisional(owner.create(context()), 2);
@@ -2772,6 +2962,16 @@ mod tests {
         let owner = OwnerToolOperations::new();
         let trapped = accept_provisional(owner.create(context()), 2);
         let sibling = accept_provisional(owner.create(context()), 3);
+        let (trapped_stdin, _consumer, _) = attachment_pair(16, AttachmentMemory::inert());
+        let (trapped_stdout, _consumer, _) = attachment_pair(16, AttachmentMemory::inert());
+        let (sibling_stdin, _consumer, _) = attachment_pair(16, AttachmentMemory::inert());
+        let (sibling_stdout, _consumer, _) = attachment_pair(16, AttachmentMemory::inert());
+        let trapped_stdin = trapped_stdin.controller();
+        let trapped_stdout = trapped_stdout.controller();
+        let sibling_stdin = sibling_stdin.controller();
+        let sibling_stdout = sibling_stdout.controller();
+        assert!(trapped.attach(Some(trapped_stdin.clone()), Some(trapped_stdout.clone())));
+        assert!(sibling.attach(Some(sibling_stdin.clone()), Some(sibling_stdout.clone())));
         let trap = TrapType::Exit;
 
         assert!(trapped.select_trap(trap.clone()).await);
@@ -2787,6 +2987,9 @@ mod tests {
             owner.owner_winner(),
             Some(OwnerFailureWinner::Trap(TrapType::Exit))
         ));
+        for attachment in [trapped_stdin, trapped_stdout, sibling_stdin, sibling_stdout] {
+            assert!(attachment.metadata().owner_fenced);
+        }
     }
 
     #[test]

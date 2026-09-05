@@ -143,6 +143,20 @@ impl<R> EntityInvocationCompletion<R> {
 }
 
 impl EntityInvocationResources {
+    fn from_finished_body(
+        hosted: Option<Box<dyn RetainedEntityStore>>,
+        mut registration: EntitySlotRegistration,
+        permit: Option<OwnerInvocationPermit>,
+    ) -> Self {
+        registration.body_finished();
+        Self {
+            hosted,
+            registration: Some(registration),
+            permit,
+            lane_wait: None,
+        }
+    }
+
     pub(crate) async fn prepare_parent_end(&mut self) -> Result<(), WorkerExecutorError> {
         let Some(mut hosted) = self.hosted.take() else {
             return Ok(());
@@ -373,7 +387,7 @@ where
         activation_fingerprint = %scope.activation().fingerprint(),
         execution_mode = ?scope.mode(),
     );
-    let task = tokio::spawn(
+    let task = tokio::spawn(super::invocation::with_invocation_stack(
         async move {
             let mut metrics = EntityInvocationMetricsGuard::new(&scope);
             debug!("Entity invocation started");
@@ -394,12 +408,11 @@ where
                             metrics.finish(&result);
                             return EntityInvocationCompletion {
                                 result,
-                                resources: EntityInvocationResources {
+                                resources: EntityInvocationResources::from_finished_body(
                                     hosted,
-                                    registration: Some(registration),
+                                    registration,
                                     permit,
-                                    lane_wait: None,
-                                },
+                                ),
                             };
                         }
                     },
@@ -424,16 +437,15 @@ where
             debug!(succeeded = result.is_ok(), "Entity invocation finished");
             EntityInvocationCompletion {
                 result,
-                resources: EntityInvocationResources {
+                resources: EntityInvocationResources::from_finished_body(
                     hosted,
-                    registration: Some(registration),
+                    registration,
                     permit,
-                    lane_wait: None,
-                },
+                ),
             }
         }
         .instrument(span),
-    );
+    ));
     let abort = task.abort_handle();
     if let Err(error) = slot.attach_abort(&invocation_id, abort.clone()) {
         abort.abort();

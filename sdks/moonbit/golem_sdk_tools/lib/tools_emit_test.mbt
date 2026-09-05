@@ -151,6 +151,19 @@ test "stdout parameter is not shadowed by a generated result binding" {
       "@tool.invocation_result_value_with_stdout(value, value)",
     ),
   )
+  let compact = generated
+    .replace_all(old=" ", new="")
+    .replace_all(old="\n", new="")
+  assert_true(
+    compact.contains(
+      "letvalue=match__golem_stdout{Some(__golem_output)=>__golem_output",
+    ),
+  )
+  assert_true(
+    compact.contains(
+      "try{@tool.invocation_result_value(__golem_value)}catch{@asyncCore.Cancelled::Cancelledaserror=>raiseerror",
+    ),
+  )
 }
 
 ///|
@@ -582,6 +595,13 @@ test "custom tool errors encode the declared case payload" {
     generated.contains("try_into_typed_schema_value(__golem_payload)"),
   )
   assert_true(generated.contains("RunError::to_error_payload_value(error)"))
+  assert_true(
+    generated.split("@asyncCore.Cancelled::Cancelled as error").count() - 1 >= 2,
+  )
+  assert_true(
+    generated.split("@toolCommon.ToolError::InvalidResult(message)").count() - 1 >=
+    2,
+  )
 }
 
 ///|

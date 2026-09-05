@@ -16,7 +16,7 @@ use indoc::{formatdoc, indoc};
 use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
-use test_r::{inherit_test_dep, test, timeout};
+use test_r::{inherit_test_dep, tag, test, timeout};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
@@ -101,7 +101,132 @@ fn streaming_agent(name: &str) -> String {
     format!(r#"StreamingRpcTarget("{name}")"#)
 }
 
+async fn start_interrupting_websocket_proxy(
+    upstream: &str,
+    truncate_accepted_frame: bool,
+) -> (
+    String,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+    tokio::task::JoinHandle<()>,
+) {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let upstream = reqwest::Url::parse(upstream).unwrap();
+    let upstream_host = upstream.host_str().unwrap().to_string();
+    let upstream_port = upstream.port_or_known_default().unwrap();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let proxy_url = format!("http://{}", listener.local_addr().unwrap());
+    let websocket_claimed = Arc::new(AtomicBool::new(false));
+    let interruption_observed = Arc::new(AtomicBool::new(false));
+    let observed = interruption_observed.clone();
+    let handle = tokio::spawn(async move {
+        loop {
+            let (mut downstream, _) = listener.accept().await.unwrap();
+            let upstream_host = upstream_host.clone();
+            let websocket_claimed = websocket_claimed.clone();
+            let interruption_observed = interruption_observed.clone();
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let read = downstream.read(&mut buffer).await.unwrap();
+                    if read == 0 || request.len() + read > 64 * 1024 {
+                        return;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                let websocket = String::from_utf8_lossy(&request)
+                    .to_ascii_lowercase()
+                    .contains("upgrade: websocket");
+                let mut upstream =
+                    tokio::net::TcpStream::connect((upstream_host.as_str(), upstream_port))
+                        .await
+                        .unwrap();
+                upstream.write_all(&request).await.unwrap();
+
+                let interrupt = websocket
+                    && websocket_claimed
+                        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_ok();
+                if !interrupt {
+                    let _ = tokio::io::copy_bidirectional(&mut downstream, &mut upstream).await;
+                    return;
+                }
+
+                let (mut downstream_read, mut downstream_write) = downstream.into_split();
+                let (mut upstream_read, mut upstream_write) = upstream.into_split();
+                let client_to_server = async {
+                    let _ = tokio::io::copy(&mut downstream_read, &mut upstream_write).await;
+                };
+                let server_to_client = async {
+                    let mut seen = Vec::new();
+                    loop {
+                        let read = upstream_read.read(&mut buffer).await.unwrap();
+                        if read == 0 {
+                            return;
+                        }
+                        let previous_len = seen.len();
+                        seen.extend_from_slice(&buffer[..read]);
+                        if let Some(accepted_offset) = seen
+                            .windows(b"invocationAccepted".len())
+                            .position(|window| window == b"invocationAccepted")
+                        {
+                            let write_len = if truncate_accepted_frame {
+                                accepted_offset + b"invocationAccepted".len() - previous_len
+                            } else {
+                                read
+                            };
+                            downstream_write
+                                .write_all(&buffer[..write_len])
+                                .await
+                                .unwrap();
+                            interruption_observed.store(true, Ordering::SeqCst);
+                            return;
+                        }
+                        downstream_write.write_all(&buffer[..read]).await.unwrap();
+                        if seen.len() > 64 * 1024 {
+                            seen.drain(..seen.len() - 4096);
+                        }
+                    }
+                };
+                tokio::select! {
+                    _ = client_to_server => {}
+                    _ = server_to_client => {}
+                }
+            });
+        }
+    });
+    (proxy_url, observed, handle)
+}
+
+async fn run_generated_driver(command: std::process::Command) -> std::process::Output {
+    tokio::task::spawn_blocking(move || {
+        let mut command = command;
+        command.output().unwrap()
+    })
+    .await
+    .unwrap()
+}
+
+fn assert_generated_driver(output: std::process::Output, language: &str, marker: &str) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "{language} generated streaming driver failed\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+    );
+    assert!(
+        stdout.contains(marker),
+        "{language} generated streaming driver omitted {marker}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+    );
+}
+
 #[test]
+#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_streaming_invocation_cli_end_to_end() {
     let ctx = streaming_invocation_context().await;
@@ -503,12 +628,13 @@ async fn test_streaming_invocation_cli_end_to_end() {
     assert_eq!(toon.stdout_text().matches("@toon\n").count(), 4);
     assert_eq!(toon.stdout_text().matches("@end\n").count(), 4);
 
+    let malformed_input_agent = streaming_agent(&Uuid::new_v4().to_string());
     let malformed_input = ctx
         .cli_with_input(
             [
                 cmd::AGENT,
                 cmd::INVOKE,
-                &agent,
+                &malformed_input_agent,
                 "consume",
                 "-",
                 "--no-stream",
@@ -612,12 +738,13 @@ async fn test_streaming_invocation_cli_end_to_end() {
             .contains("parameter 'input' at line 33")
     );
 
+    let producer_error_agent = streaming_agent(&Uuid::new_v4().to_string());
     let producer_error = ctx
         .cli_with_input(
             [
                 cmd::AGENT,
                 cmd::INVOKE,
-                &agent,
+                &producer_error_agent,
                 "produce_error",
                 "--no-stream",
             ],
@@ -625,15 +752,20 @@ async fn test_streaming_invocation_cli_end_to_end() {
         )
         .await;
     assert!(!producer_error.success());
+    assert!(
+        producer_error.stderr_text().contains("Output stream"),
+        "producer stream failure was not reported: {:?}",
+        producer_error.stderr_text()
+    );
     assert!(producer_error.stdout_text().lines().any(|line| line == "1"));
-    assert!(producer_error.stderr_text().contains("Output stream"));
 
+    let sibling_error_agent = streaming_agent(&Uuid::new_v4().to_string());
     let sibling_error = ctx
         .cli_with_input(
             [
                 cmd::AGENT,
                 cmd::INVOKE,
-                &agent,
+                &sibling_error_agent,
                 "produce_sibling_error",
                 "--no-stream",
             ],
@@ -641,14 +773,20 @@ async fn test_streaming_invocation_cli_end_to_end() {
         )
         .await;
     assert!(!sibling_error.success());
-    assert!(sibling_error.stderr_text().contains("Output stream"));
+    assert!(
+        sibling_error.stderr_text().contains("Output stream"),
+        "sibling failure output was unexpected\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        sibling_error.stdout_text(),
+        sibling_error.stderr_text()
+    );
     assert!(sibling_error.stdout_text().contains("$[1]: 63"));
 
+    let broken_pipe_agent = streaming_agent(&Uuid::new_v4().to_string());
     let broken_pipe = ctx
         .cli_with_broken_stdout([
             cmd::AGENT,
             cmd::INVOKE,
-            &agent,
+            &broken_pipe_agent,
             "produce_byte_then_wait",
             "--stdout-format",
             "raw",
@@ -661,6 +799,141 @@ async fn test_streaming_invocation_cli_end_to_end() {
         broken_pipe.stderr_text()
     );
     assert!(!broken_pipe.stderr_text().contains("Broken pipe"));
+
+    let checkpoint_values = serde_json::to_string(&(0..5_000_u32).collect::<Vec<_>>()).unwrap();
+    let resume_agent = streaming_agent(&Uuid::new_v4().to_string());
+    let resume_checkpoint = ctx.cwd_path_join("resume-invocation-session.json");
+    let resume_checkpoint_args = vec![
+        cmd::AGENT.to_string(),
+        cmd::INVOKE.to_string(),
+        resume_agent.clone(),
+        "produce".to_string(),
+        checkpoint_values.clone(),
+        flag::FORMAT.to_string(),
+        "json".to_string(),
+        "--no-stream".to_string(),
+        "--save-session".to_string(),
+        resume_checkpoint.display().to_string(),
+    ];
+    let mut detached = ctx
+        .cli_process_after(resume_checkpoint_args, "\"kind\":\"item\"", Duration::ZERO)
+        .await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let persisted = std::fs::read(&resume_checkpoint)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                .is_some_and(|checkpoint| {
+                    checkpoint["deliveredOutputCursors"]
+                        .as_object()
+                        .is_some_and(|cursors| !cursors.is_empty())
+                });
+            if persisted {
+                break;
+            }
+            assert!(
+                detached.try_wait().unwrap().is_none(),
+                "the initial invocation completed before a delivery checkpoint was persisted"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the resume checkpoint was not persisted");
+    detached.start_kill().unwrap();
+    detached.wait().await.unwrap();
+
+    let saved_checkpoint: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&resume_checkpoint).unwrap()).unwrap();
+    assert!(
+        saved_checkpoint["deliveredOutputCursors"]
+            .as_object()
+            .is_some_and(|cursors| !cursors.is_empty()),
+        "checkpoint did not record the item emitted before interruption: {saved_checkpoint}"
+    );
+    let resumed = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::INVOKE,
+            &resume_agent,
+            "produce",
+            &checkpoint_values,
+            flag::FORMAT,
+            "json",
+            "--no-stream",
+            "--resume-session",
+            resume_checkpoint.to_str().unwrap(),
+        ])
+        .await;
+    assert!(
+        resumed.success(),
+        "checkpoint resume failed: {:?}",
+        resumed.stderr().collect::<Vec<_>>()
+    );
+    let resumed_events = resumed
+        .stdout()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        resumed_events
+            .iter()
+            .any(|event| { event["kind"] == "finished" && event["outcome"] == "success" })
+    );
+    assert!(
+        resumed_events
+            .iter()
+            .filter(|event| event["kind"] == "item")
+            .all(|event| event["offset"].as_u64().is_some_and(|offset| offset > 0)),
+        "resume replayed the item delivered before its checkpoint: {resumed_events:?}"
+    );
+
+    let takeover_agent = streaming_agent(&Uuid::new_v4().to_string());
+    let takeover_checkpoint = ctx.cwd_path_join("takeover-invocation-session.json");
+    let takeover_checkpoint_args = vec![
+        cmd::AGENT.to_string(),
+        cmd::INVOKE.to_string(),
+        takeover_agent.clone(),
+        "produce_byte_then_wait".to_string(),
+        flag::FORMAT.to_string(),
+        "json".to_string(),
+        "--no-stream".to_string(),
+        "--save-session".to_string(),
+        takeover_checkpoint.display().to_string(),
+    ];
+    let mut original_attachment = ctx
+        .cli_process_after(
+            takeover_checkpoint_args,
+            "\"kind\":\"item\"",
+            Duration::from_millis(25),
+        )
+        .await;
+    let mut takeover = ctx
+        .cli_process_after(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &takeover_agent,
+                "produce_byte_then_wait",
+                flag::FORMAT,
+                "json",
+                "--no-stream",
+                "--takeover-session",
+                takeover_checkpoint.to_str().unwrap(),
+            ],
+            "\"kind\":\"accepted\"",
+            Duration::ZERO,
+        )
+        .await;
+    assert!(
+        !tokio::time::timeout(Duration::from_secs(10), original_attachment.wait())
+            .await
+            .expect("the original attachment was not revoked by takeover")
+            .unwrap()
+            .success(),
+        "the revoked original attachment exited successfully"
+    );
+    takeover.start_kill().unwrap();
+    takeover.wait().await.unwrap();
 
     let interrupted_agent = streaming_agent(&Uuid::new_v4().to_string());
     #[cfg(unix)]
@@ -739,6 +1012,443 @@ async fn test_streaming_invocation_cli_end_to_end() {
 }
 
 #[test]
+#[tag(agents_streaming)]
+#[timeout("30 minutes")]
+async fn test_generated_streaming_bridges_end_to_end() {
+    let ctx = streaming_invocation_context().await;
+
+    for language in ["rust", "typescript", "scala", "moonbit"] {
+        let bridge_root = ctx.cwd_path_join(format!("{language}-streaming-bridge"));
+        let output = ctx
+            .cli([
+                cmd::GENERATE_BRIDGE,
+                flag::LANGUAGE,
+                language,
+                flag::AGENT_TYPE_NAME,
+                "StreamingRpcTarget",
+                flag::OUTPUT_DIR,
+                bridge_root.to_str().unwrap(),
+            ])
+            .await;
+        assert!(output.success_or_dump());
+        assert!(
+            bridge_root.join("streaming-rpc-target-client").exists(),
+            "generated {language} streaming bridge is missing"
+        );
+    }
+
+    let worker_service_url = ctx.worker_service_url();
+    let token = golem_client::LOCAL_WELL_KNOWN_TOKEN;
+
+    let rust_client = ctx.cwd_path_join("rust-streaming-bridge/streaming-rpc-target-client");
+    let mut rust_manifest = std::fs::OpenOptions::new()
+        .append(true)
+        .open(rust_client.join("Cargo.toml"))
+        .unwrap();
+    writeln!(
+        rust_manifest,
+        "\n[dev-dependencies]\nfutures-util = \"0.3\"\ntokio = {{ version = \"1\", features = [\"macros\", \"rt-multi-thread\", \"time\"] }}"
+    )
+    .unwrap();
+    let (rust_proxy, rust_interrupted, rust_proxy_task) =
+        start_interrupting_websocket_proxy(&worker_service_url, false).await;
+    let rust_driver = formatdoc! {r#"
+        use futures_util::{{stream, StreamExt, TryStreamExt}};
+        use golem_client::invocation_session::{{AgentBinary, AgentStream}};
+        use streaming_rpc_target_client::{{configure, GolemServer, NestedStreamInput, StreamingRpcTarget}};
+
+        fn input<T: Send + 'static>(values: Vec<T>) -> AgentStream<T> {{
+            AgentStream::input(stream::iter(values.into_iter().map(Ok::<_, std::io::Error>)))
+        }}
+
+        #[tokio::main]
+        async fn main() -> Result<(), Box<dyn std::error::Error>> {{
+            configure(
+                GolemServer::Custom {{
+                    url: "{rust_proxy}".parse()?,
+                    token: "{token}".to_string(),
+                }},
+                "streaming-invocation",
+                "local",
+            );
+            let agent = StreamingRpcTarget::get("rust-generated-e2e".to_string()).await?;
+
+            assert_eq!(agent.consume(input(vec![1_u32, 2, 3])).await?, vec![1, 2, 3]);
+            assert_eq!(agent.produce(vec![4, 5]).await?.try_collect::<Vec<_>>().await?, vec![4, 5]);
+            assert_eq!(agent.transform(input(vec![6_u32, 7])).await?.try_collect::<Vec<_>>().await?, vec![60, 70]);
+
+            let nested_input = NestedStreamInput {{
+                labels: input(vec!["left".to_string(), "right".to_string()]),
+                values: Some(input(vec![10_u32, 11])),
+            }};
+            assert_eq!(
+                agent.consume_nested(nested_input).await?,
+                (vec!["left".to_string(), "right".to_string()], vec![10, 11]),
+            );
+
+            let mut nested = agent.produce_nested_items().await?;
+            let mut labels = Vec::new();
+            let mut inner = Vec::new();
+            while let Some(item) = nested.next().await.transpose()? {{
+                labels.push(item.label);
+                inner.push(item.values.try_collect::<Vec<_>>().await?);
+            }}
+            assert_eq!(labels, vec!["first", "second"]);
+            assert_eq!(inner, vec![vec![1, 2], vec![3, 4, 5]]);
+
+            let binary = AgentBinary {{
+                bytes: vec![0, 1, 2, 253, 254, 255],
+                mime_type: None,
+            }};
+            let transformed = agent
+                .transform_binary(input(vec![binary.clone()]))
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+            assert_eq!(transformed, vec![binary]);
+
+            let byte_count = 2 * 1024 * 1024 + 17;
+            let bytes = (0..byte_count).map(|value| value as u8).collect::<Vec<_>>();
+            let transformed_bytes = agent
+                .transform_bytes(input(bytes.clone()))
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+            assert_eq!(transformed_bytes, bytes);
+
+            let mut cancelled = agent.produce_byte_then_wait().await?;
+            assert_eq!(
+                tokio::time::timeout(std::time::Duration::from_secs(10), cancelled.next())
+                    .await
+                    .map_err(|_| "timed out waiting for a lone packed output byte")?
+                    .transpose()?,
+                Some(1),
+            );
+            cancelled.cancel();
+            println!("RUST_STREAMING_BRIDGE_E2E_OK");
+            Ok(())
+        }}
+        "#};
+    std::fs::create_dir_all(rust_client.join("examples")).unwrap();
+    std::fs::write(rust_client.join("examples/e2e.rs"), rust_driver).unwrap();
+    let mut rust_command = std::process::Command::new("cargo");
+    rust_command
+        .args(["run", "--quiet", "--example", "e2e"])
+        .current_dir(&rust_client);
+    let rust_output = run_generated_driver(rust_command).await;
+    rust_proxy_task.abort();
+    assert_generated_driver(rust_output, "Rust", "RUST_STREAMING_BRIDGE_E2E_OK");
+    assert!(
+        rust_interrupted.load(std::sync::atomic::Ordering::SeqCst),
+        "Rust driver did not reach post-acceptance reconnect coverage"
+    );
+
+    let typescript_client =
+        ctx.cwd_path_join("typescript-streaming-bridge/streaming-rpc-target-client");
+    let (typescript_proxy, typescript_interrupted, typescript_proxy_task) =
+        start_interrupting_websocket_proxy(&worker_service_url, false).await;
+    let typescript_driver = formatdoc! {r#"
+        import assert from 'node:assert/strict'
+        import {{ agentStream }} from '@golemcloud/golem-ts-bridge'
+        import {{ configure, StreamingRpcTarget }} from './streaming-rpc-target-client.js'
+
+        const input = <T>(values: T[]) => agentStream((async function* () {{
+          for (const value of values) yield value
+        }})())
+        const collect = async <T>(values: AsyncIterable<T>) => {{
+          const result: T[] = []
+          for await (const value of values) result.push(value)
+          return result
+        }}
+
+        configure({{
+          server: {{ type: 'custom', url: '{typescript_proxy}', token: '{token}' }},
+          application: 'streaming-invocation',
+          environment: 'local',
+        }})
+        const agent = await StreamingRpcTarget.get('typescript-generated-e2e')
+        assert.deepEqual(await agent.consume(input([1, 2, 3])), [1, 2, 3])
+        assert.deepEqual(await collect(await agent.produce([4, 5])), [4, 5])
+        assert.deepEqual(await collect(await agent.transform(input([6, 7]))), [60, 70])
+        assert.deepEqual(
+          await agent.consumeNested({{ labels: input(['left', 'right']), values: input([10, 11]) }}),
+          [['left', 'right'], [10, 11]],
+        )
+
+        const labels: string[] = []
+        const inner: number[][] = []
+        for await (const item of await agent.produceNestedItems()) {{
+          labels.push(item.label)
+          inner.push(await collect(item.values))
+        }}
+        assert.deepEqual(labels, ['first', 'second'])
+        assert.deepEqual(inner, [[1, 2], [3, 4, 5]])
+
+        const binary = {{
+          bytes: Uint8Array.from([0, 1, 2, 253, 254, 255]),
+        }}
+        const binaryResult = await collect(await agent.transformBinary(input([binary])))
+        assert.deepEqual(Array.from(binaryResult[0].bytes), Array.from(binary.bytes))
+        assert.equal(binaryResult[0].mimeType, undefined)
+
+        const affine = await agent.produce([8, 9])
+        const firstConsumer = affine[Symbol.asyncIterator]()
+        assert.throws(() => affine[Symbol.asyncIterator](), /only be iterated once/)
+        assert.equal((await firstConsumer.next()).value, 8)
+        await firstConsumer.return?.()
+
+        const cancelled = await agent.produceByteThenWait()
+        const cancelConsumer = cancelled[Symbol.asyncIterator]()
+        assert.equal((await cancelConsumer.next()).value, 1)
+        await cancelConsumer.return?.()
+        console.log('TYPESCRIPT_STREAMING_BRIDGE_E2E_OK')
+        "#};
+    std::fs::write(typescript_client.join("e2e.ts"), typescript_driver).unwrap();
+    let mut typescript_install = std::process::Command::new("pnpm");
+    typescript_install
+        .args(["install", "--ignore-workspace"])
+        .current_dir(&typescript_client);
+    assert_generated_driver(
+        run_generated_driver(typescript_install).await,
+        "TypeScript install",
+        "",
+    );
+    let mut typescript_command = std::process::Command::new("pnpm");
+    typescript_command
+        .args(["exec", "tsx", "e2e.ts"])
+        .current_dir(&typescript_client);
+    let typescript_output = run_generated_driver(typescript_command).await;
+    typescript_proxy_task.abort();
+    assert_generated_driver(
+        typescript_output,
+        "TypeScript",
+        "TYPESCRIPT_STREAMING_BRIDGE_E2E_OK",
+    );
+    assert!(
+        typescript_interrupted.load(std::sync::atomic::Ordering::SeqCst),
+        "TypeScript driver did not reach post-acceptance reconnect coverage"
+    );
+
+    let scala_client = ctx.cwd_path_join("scala-streaming-bridge/streaming-rpc-target-client");
+    let (scala_proxy, scala_interrupted, scala_proxy_task) =
+        start_interrupting_websocket_proxy(&worker_service_url, false).await;
+    let scala_driver = formatdoc! {r#"
+        import golem.bridge.client.streaming_rpc_target.{{NestedStreamInput, StreamingRpcTargetClient}}
+        import golem.bridge.runtime.{{AgentBinary, AgentStream, AgentStreamStep, GolemServer, UInt}}
+        import scala.collection.mutable.ListBuffer
+        import scala.concurrent.{{Await, ExecutionContext, Future}}
+        import scala.concurrent.duration.*
+        import scala.util.Try
+
+        object Main {{
+          given ExecutionContext = ExecutionContext.global
+          val timeout = 90.seconds
+
+          def input[A](values: List[A]): AgentStream[A] = {{
+            var remaining = values
+            AgentStream.fromPull(() => Future.successful(remaining match {{
+              case head :: tail => remaining = tail; AgentStreamStep.Item(head)
+              case Nil => AgentStreamStep.End
+            }}))
+          }}
+
+          def collect[A](stream: AgentStream[A]): List[A] = {{
+            val consumer = Await.result(stream.consume(), timeout)
+            val values = ListBuffer.empty[A]
+            var done = false
+            while (!done) Await.result(consumer.pull(), timeout) match {{
+              case AgentStreamStep.Item(value) => values += value
+              case AgentStreamStep.End => done = true
+            }}
+            values.toList
+          }}
+
+          def main(args: Array[String]): Unit = {{
+            StreamingRpcTargetClient.configure(
+              GolemServer.Custom("{scala_proxy}", "{token}"),
+              "streaming-invocation",
+              "local",
+            )
+            val agent = Await.result(StreamingRpcTargetClient.get("scala-generated-e2e"), timeout)
+
+            assert(Await.result(agent.consume(input(List(UInt(1), UInt(2), UInt(3)))), timeout).map(_.value) == List(1, 2, 3))
+            assert(collect(Await.result(agent.produce(List(UInt(4), UInt(5))), timeout)).map(_.value) == List(4, 5))
+            assert(collect(Await.result(agent.transform(input(List(UInt(6), UInt(7)))), timeout)).map(_.value) == List(60, 70))
+            val nestedInput = NestedStreamInput(
+              input(List("left", "right")),
+              Some(input(List(UInt(10), UInt(11)))),
+            )
+            val nestedInputResult = Await.result(agent.consumeNested(nestedInput), timeout)
+            assert(nestedInputResult._1 == List("left", "right"))
+            assert(nestedInputResult._2.map(_.value) == List(10, 11))
+
+            val nested = collect(Await.result(agent.produceNestedItems(), timeout))
+            assert(nested.map(_.label) == List("first", "second"))
+            assert(nested.map(item => collect(item.values).map(_.value)) == List(List(1, 2), List(3, 4, 5)))
+
+            val binary = AgentBinary(Vector[Byte](0, 1, 2, -3, -2, -1), None)
+            assert(collect(Await.result(agent.transformBinary(input(List(binary))), timeout)) == List(binary))
+
+            val affine = Await.result(agent.produce(List(UInt(8), UInt(9))), timeout)
+            val firstConsumer = Await.result(affine.consume(), timeout)
+            assert(Try(Await.result(affine.consume(), timeout)).isFailure)
+            assert(Await.result(firstConsumer.pull(), timeout) == AgentStreamStep.Item(UInt(8)))
+            Await.result(firstConsumer.drop(), timeout)
+
+            val cancelled = Await.result(agent.produceByteThenWait(), timeout)
+            val cancelConsumer = Await.result(cancelled.consume(), timeout)
+            assert(Await.result(cancelConsumer.pull(), timeout).isInstanceOf[AgentStreamStep.Item[?]])
+            Await.result(cancelConsumer.cancel(), timeout)
+            println("SCALA_STREAMING_BRIDGE_E2E_OK")
+          }}
+        }}
+        "#};
+    let scala_main_dir = scala_client.join("src/main/scala");
+    std::fs::write(scala_main_dir.join("Main.scala"), scala_driver).unwrap();
+    let mut scala_command = std::process::Command::new("sbt");
+    scala_command
+        .args(["--batch", "runMain Main"])
+        .current_dir(&scala_client);
+    let scala_output = run_generated_driver(scala_command).await;
+    scala_proxy_task.abort();
+    assert_generated_driver(scala_output, "Scala", "SCALA_STREAMING_BRIDGE_E2E_OK");
+    assert!(
+        scala_interrupted.load(std::sync::atomic::Ordering::SeqCst),
+        "Scala driver did not reach post-acceptance reconnect coverage"
+    );
+
+    let moonbit_client = ctx.cwd_path_join("moonbit-streaming-bridge/streaming-rpc-target-client");
+    let mut moonbit_test_command = std::process::Command::new("moon");
+    moonbit_test_command
+        .args([
+            "test",
+            "--target",
+            "native",
+            "--deny-warn",
+            "runtime/ws_adapter",
+        ])
+        .current_dir(&moonbit_client);
+    let moonbit_test_output = run_generated_driver(moonbit_test_command).await;
+    assert!(
+        moonbit_test_output.status.success(),
+        "MoonBit WebSocket runtime tests failed\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        String::from_utf8_lossy(&moonbit_test_output.stdout),
+        String::from_utf8_lossy(&moonbit_test_output.stderr),
+    );
+    // Cut the accepted WebSocket frame during its payload to cover EOF after header parsing.
+    let (moonbit_proxy, moonbit_interrupted, moonbit_proxy_task) =
+        start_interrupting_websocket_proxy(&worker_service_url, true).await;
+    let moonbit_manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(moonbit_client.join("moon.mod.json")).unwrap(),
+    )
+    .unwrap();
+    let moonbit_module = moonbit_manifest["name"].as_str().unwrap();
+    let moonbit_main_pkg = formatdoc! {r#"
+        import {{
+          "moonbitlang/async",
+          "{moonbit_module}/client" @client,
+          "{moonbit_module}/runtime" @runtime,
+        }}
+
+        options(
+          "is-main": true,
+        )
+        "#};
+    let moonbit_driver = formatdoc! {r#"
+        fn uint_input(values : Array[UInt]) -> @runtime.AgentStream[UInt] {{
+          @runtime.AgentStream::from_next(fn() {{
+            if values.is_empty() {{ None }} else {{ Some(values.remove(0)) }}
+          }})
+        }}
+
+        fn string_input(values : Array[String]) -> @runtime.AgentStream[String] {{
+          @runtime.AgentStream::from_next(fn() {{
+            if values.is_empty() {{ None }} else {{ Some(values.remove(0)) }}
+          }})
+        }}
+
+        fn binary_input(values : Array[@runtime.AgentBinary]) -> @runtime.AgentStream[@runtime.AgentBinary] {{
+          @runtime.AgentStream::from_next(fn() {{
+            if values.is_empty() {{ None }} else {{ Some(values.remove(0)) }}
+          }})
+        }}
+
+        async fn collect_uint(stream : @runtime.AgentStream[UInt]) -> Array[UInt] raise {{
+          let result = []
+          while true {{
+            match stream.next() {{
+              Some(value) => result.push(value)
+              None => break
+            }}
+          }}
+          result
+        }}
+
+        async fn main {{
+          @client.StreamingRpcTarget::configure(
+            @runtime.Custom("{moonbit_proxy}", "{token}"),
+            "streaming-invocation",
+            "local",
+          )
+          let agent = @client.StreamingRpcTarget::get("moonbit-generated-e2e")
+          assert_eq(agent.consume(uint_input([1, 2, 3])), [1, 2, 3])
+          assert_eq(collect_uint(agent.produce([4, 5])), [4, 5])
+          assert_eq(collect_uint(agent.transform(uint_input([6, 7]))), [60, 70])
+
+          let nested_input = @client.NestedStreamInput::{{
+            labels: string_input(["left", "right"]),
+            values: Some(uint_input([10, 11])),
+          }}
+          assert_eq(agent.consume_nested(nested_input), (["left", "right"], [10, 11]))
+
+          let nested = agent.produce_nested_items()
+          let first = nested.next().unwrap()
+          let second = nested.next().unwrap()
+          assert_true(nested.next() is None)
+          assert_eq((first.label, collect_uint(first.values)), ("first", [1, 2]))
+          assert_eq((second.label, collect_uint(second.values)), ("second", [3, 4, 5]))
+
+          let binary = @runtime.AgentBinary::{{
+            bytes: Bytes::from_array([0, 1, 2, 253, 254, 255]),
+            mime_type: None,
+          }}
+          let transformed_binary = agent.transform_binary(binary_input([binary]))
+          assert_true(transformed_binary.next() == Some(binary))
+          assert_true(transformed_binary.next() is None)
+
+          let affine = agent.produce([8, 9])
+          assert_eq(affine.next(), Some(8))
+          affine.drop()
+          try affine.next() catch {{
+            _ => ()
+          }} noraise {{
+            _ => abort("expected the dropped stream to reject another read")
+          }}
+
+          let cancelled = agent.produce_byte_then_wait()
+          assert_eq(cancelled.next(), Some(1))
+          cancelled.cancel()
+          println("MOONBIT_STREAMING_BRIDGE_E2E_OK")
+        }}
+        "#};
+    let moonbit_main_dir = moonbit_client.join("main");
+    std::fs::create_dir_all(&moonbit_main_dir).unwrap();
+    std::fs::write(moonbit_main_dir.join("moon.pkg"), moonbit_main_pkg).unwrap();
+    std::fs::write(moonbit_main_dir.join("main.mbt"), moonbit_driver).unwrap();
+    let mut moonbit_command = std::process::Command::new("moon");
+    moonbit_command
+        .args(["run", "--target", "native", "--deny-warn", "main"])
+        .current_dir(&moonbit_client);
+    let moonbit_output = run_generated_driver(moonbit_command).await;
+    moonbit_proxy_task.abort();
+    assert_generated_driver(moonbit_output, "MoonBit", "MOONBIT_STREAMING_BRIDGE_E2E_OK");
+    assert!(
+        moonbit_interrupted.load(std::sync::atomic::Ordering::SeqCst),
+        "MoonBit driver did not reach post-acceptance reconnect coverage"
+    );
+}
+
+#[test]
 async fn test_rust_counter() {
     let mut ctx = TestContext::new();
     let app_name = "counter";
@@ -797,6 +1507,7 @@ async fn test_rust_counter() {
 /// direct guest ABI and native same-component agent RPC. This does not depend
 /// on generated cross-component bridges or public streaming bridge clients.
 #[test]
+#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_scala_streaming_rpc_e2e() {
     let mut ctx = TestContext::new();
@@ -1560,6 +2271,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 /// The invocation validates the generated command path and input encoding by
 /// calling the deployed provider and asserting its echo result.
 #[test]
+#[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]
 async fn test_rust_tool_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
@@ -1867,6 +2579,7 @@ async fn test_mixed_agent_and_tool_component_deployment_e2e() {
 /// linking against the generated crate. The deployment and invocation also prove
 /// the generated guest client reaches the worker executor's Wasm RPC path.
 #[test]
+#[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]
 async fn test_rust_agent_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
@@ -2032,6 +2745,7 @@ fn add_ts_guest_bridge_source(ctx: &TestContext, package_name: &str, generated_s
 }
 
 #[test]
+#[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]
 async fn test_ts_agent_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
@@ -2149,6 +2863,7 @@ async fn test_ts_agent_guest_bridge_e2e() {
 }
 
 #[test]
+#[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]
 async fn test_ts_tool_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
@@ -2310,6 +3025,7 @@ async fn test_ts_tool_guest_bridge_e2e() {
 }
 
 #[test]
+#[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]
 async fn test_moonbit_agent_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
@@ -2446,6 +3162,7 @@ async fn test_moonbit_agent_guest_bridge_e2e() {
 }
 
 #[test]
+#[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]
 async fn test_moonbit_tool_guest_bridge_e2e() {
     let mut ctx = TestContext::new();

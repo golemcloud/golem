@@ -22,6 +22,7 @@ tags:
 - name: Deployment
 - name: Environment
 - name: EnvironmentPluginGrants
+- name: EnvironmentToolGrants
 - name: HealthCheck
 - name: Login
   description: The login endpoints are implementing an OAuth2 flow.
@@ -35,6 +36,7 @@ tags:
 - name: RetryPolicies
 - name: Token
   description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
+- name: ToolReleases
 - name: Worker
 paths:
   /healthcheck:
@@ -1987,6 +1989,19 @@ paths:
       tags:
       - Agent
       summary: Invoke an agent through an attached live streaming session
+      description: |-
+        Upgrades to a WebSocket using the required `golem.agent-invocation.v1`
+        subprotocol. Text frames carry public v1 JSON lifecycle messages, while
+        binary frames carry the public v1 binary envelope. The bearer token is
+        authenticated before the upgrade and authorizes both start and resume.
+      parameters:
+      - name: Sec-WebSocket-Protocol
+        schema:
+          type: string
+        in: header
+        required: true
+        deprecated: false
+        explode: true
       responses:
         '101':
           description: A websocket response

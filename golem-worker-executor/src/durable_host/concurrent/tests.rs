@@ -201,6 +201,7 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
             durable_execution_state,
             "test:monotonic_clock::now",
         ),
+        executor_shutdown: tokio_util::sync::CancellationToken::new(),
         requires_agent_authority: false,
         agent_auth_ctx: None,
         drop_sink: Some(sink),
@@ -243,6 +244,7 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
             durable_execution_state,
             "test:monotonic_clock::now",
         ),
+        executor_shutdown: tokio_util::sync::CancellationToken::new(),
         requires_agent_authority: false,
         agent_auth_ctx: None,
         drop_sink: None,
@@ -296,6 +298,7 @@ async fn cleanup_after_terminal_keeps_live_permit_until_event_is_consumed() {
                 begin_index: idx(4),
                 function_type: DurableFunctionType::ReadRemote,
                 request_upload: PendingUpload::already_durable(),
+                executor_shutdown: tokio_util::sync::CancellationToken::new(),
                 atomic_lease: None,
                 trap_context: DurableCallTrapContext {
                     retry_from: idx(4),
@@ -1172,6 +1175,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
             begin_index: start_idx,
             function_type: DurableFunctionType::ReadRemote,
             request_upload: PendingUpload::already_durable(),
+            executor_shutdown: tokio_util::sync::CancellationToken::new(),
             atomic_lease: None,
             trap_context: DurableCallTrapContext {
                 retry_from: start_idx,
@@ -1328,6 +1332,19 @@ fn drop_not_cancellable_unfinished_signals_policy_violation() {
         }
         other => panic!("expected UnfinishedNotCancellable, got {other:?}"),
     }
+}
+
+#[test]
+fn executor_shutdown_leaves_unfinished_call_incomplete_for_replay() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    {
+        let handle = live_unfinished_handle::<NotCancellable>(idx(8), tx);
+        handle.executor_shutdown.cancel();
+    }
+    assert!(
+        rx.try_recv().is_err(),
+        "executor shutdown must not report cancellation or a policy violation"
+    );
 }
 
 #[test]
@@ -1749,6 +1766,7 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
         begin_index: idx(4),
         function_type: DurableFunctionType::ReadRemote,
         request_upload: PendingUpload::already_durable(),
+        executor_shutdown: tokio_util::sync::CancellationToken::new(),
         atomic_lease: unregistered_atomic_lease(Some(idx(3)), true),
         trap_context: DurableCallTrapContext {
             retry_from: idx(3),
@@ -1763,6 +1781,7 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
         begin_index: idx(8),
         function_type: DurableFunctionType::ReadRemote,
         request_upload: PendingUpload::already_durable(),
+        executor_shutdown: tokio_util::sync::CancellationToken::new(),
         atomic_lease: None,
         trap_context: DurableCallTrapContext {
             retry_from: idx(8),

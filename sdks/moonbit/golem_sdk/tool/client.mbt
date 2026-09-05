@@ -271,6 +271,14 @@ pub async fn[E] invoke_and_await(
   decode_error : (@model.TypedSchemaValue) -> Result[E, String],
 ) -> Result[InvocationResult, ToolError[E]] {
   let wire_input = @model.typed_schema_value_to_wit_async(input) catch {
+    @async-core.Cancelled::Cancelled as error => {
+      release_failed_tool_input(input, @model_host.resource_drops())
+      match stdin {
+        Some(stdin) => stdin.drop_sync()
+        None => ()
+      }
+      raise error
+    }
     e => {
       release_failed_tool_input(input, @model_host.resource_drops())
       match stdin {

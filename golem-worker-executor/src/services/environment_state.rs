@@ -25,8 +25,8 @@ use golem_common::model::entity::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::tool::{
-    CompiledToolBinding, RegisteredTool, ToolDeploymentState, ToolFilesystemAccess, ToolName,
-    ToolSource,
+    CompiledToolBinding, HostToolId, RegisteredTool, ToolDeploymentState, ToolFilesystemAccess,
+    ToolName, ToolProvisionConfig, ToolSource,
 };
 use golem_common::schema::tool::DiscoveredTool;
 use golem_service_base::clients::registry::RegistryService;
@@ -43,9 +43,23 @@ use std::time::Duration;
 
 type ToolDiscoveryCacheKey = (EnvironmentId, ComponentId, ComponentRevision);
 
+struct CachedToolDeployment {
+    state: ToolDeploymentState,
+    discovery: ToolDiscoverySnapshot,
+}
+
+impl From<ToolDeploymentState> for CachedToolDeployment {
+    fn from(state: ToolDeploymentState) -> Self {
+        Self {
+            discovery: state.clone().into(),
+            state,
+        }
+    }
+}
+
 struct ToolDiscoveryCache {
     values: Arc<
-        Cache<ToolDiscoveryCacheKey, (), Option<Arc<ToolDiscoverySnapshot>>, WorkerExecutorError>,
+        Cache<ToolDiscoveryCacheKey, (), Option<Arc<CachedToolDeployment>>, WorkerExecutorError>,
     >,
     invalidation_guard: Arc<tokio::sync::RwLock<()>>,
 }
@@ -70,10 +84,10 @@ impl ToolDiscoveryCache {
         &self,
         key: &ToolDiscoveryCacheKey,
         load: F,
-    ) -> Result<Option<Arc<ToolDiscoverySnapshot>>, WorkerExecutorError>
+    ) -> Result<Option<Arc<CachedToolDeployment>>, WorkerExecutorError>
     where
         F: FnOnce() -> Fut + Send + 'static,
-        Fut: Future<Output = Result<Option<Arc<ToolDiscoverySnapshot>>, WorkerExecutorError>>
+        Fut: Future<Output = Result<Option<Arc<CachedToolDeployment>>, WorkerExecutorError>>
             + Send
             + 'static,
     {
@@ -168,6 +182,26 @@ pub struct ToolActivationSnapshot {
     filesystem: FilesystemCapability,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum ToolActivationOutcome {
+    Ready(Box<ToolActivationSnapshot>),
+    NotBound,
+    NotRegistered,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ToolDispatchTarget {
+    Component(EntityActivation),
+    Host {
+        host_tool_id: HostToolId,
+        implementation_version: String,
+        deployment_revision: golem_common::model::deployment::DeploymentRevision,
+        provision: ToolProvisionConfig,
+        binding: Box<CompiledToolBinding>,
+        filesystem: FilesystemCapability,
+    },
+}
+
 impl ToolActivationSnapshot {
     pub fn registered_tool(&self) -> &RegisteredTool {
         &self.registered_tool
@@ -181,22 +215,35 @@ impl ToolActivationSnapshot {
         self.filesystem
     }
 
-    pub fn into_entity_activation(self) -> Result<EntityActivation, ToolDiscoveryError> {
-        let ToolSource::Component {
-            component_id,
-            component_revision,
-            ..
-        } = self.registered_tool.source;
-        EntityActivation::new(
-            ExecutableTarget::new(component_id, component_revision),
-            self.registered_tool.deployment_revision,
-            EntityActivationPolicy::Tool {
+    pub fn into_dispatch_target(self) -> Result<ToolDispatchTarget, ToolDiscoveryError> {
+        match self.registered_tool.source {
+            ToolSource::Component {
+                component_id,
+                component_revision,
+                ..
+            } => EntityActivation::new(
+                ExecutableTarget::new(component_id, component_revision),
+                self.registered_tool.deployment_revision,
+                EntityActivationPolicy::Tool {
+                    provision: self.registered_tool.provision,
+                    binding: Box::new(self.binding),
+                },
+                self.filesystem,
+            )
+            .map(ToolDispatchTarget::Component)
+            .map_err(|details| ToolDiscoveryError::InconsistentSnapshot { details }),
+            ToolSource::Host {
+                host_tool_id,
+                implementation_version,
+            } => Ok(ToolDispatchTarget::Host {
+                host_tool_id,
+                implementation_version,
+                deployment_revision: self.registered_tool.deployment_revision,
                 provision: self.registered_tool.provision,
                 binding: Box::new(self.binding),
-            },
-            self.filesystem,
-        )
-        .map_err(|details| ToolDiscoveryError::InconsistentSnapshot { details })
+                filesystem: self.filesystem,
+            }),
+        }
     }
 }
 
@@ -204,9 +251,9 @@ pub fn get_tool_activation_from_deployment(
     deployment: Option<&ToolDeploymentState>,
     agent_type: &AgentTypeName,
     tool_name: &ToolName,
-) -> Result<Option<ToolActivationSnapshot>, ToolDiscoveryError> {
+) -> Result<ToolActivationOutcome, ToolDiscoveryError> {
     let Some(deployment) = deployment else {
-        return Ok(None);
+        return Ok(ToolActivationOutcome::NotRegistered);
     };
     let binding = deployment
         .agent_tool_bindings
@@ -214,11 +261,14 @@ pub fn get_tool_activation_from_deployment(
         .and_then(|bindings| bindings.get(tool_name));
     let registered_tool = deployment.registered_tools.get(tool_name);
 
-    let Some(binding) = binding else {
-        return Ok(None);
-    };
     let Some(registered_tool) = registered_tool else {
-        return Err(ToolDiscoveryError::dangling_binding(agent_type, tool_name));
+        return match binding {
+            Some(_) => Err(ToolDiscoveryError::dangling_binding(agent_type, tool_name)),
+            None => Ok(ToolActivationOutcome::NotRegistered),
+        };
+    };
+    let Some(binding) = binding else {
+        return Ok(ToolActivationOutcome::NotBound);
     };
 
     let consistent = registered_tool.deployment_revision == deployment.deployment_revision
@@ -231,6 +281,8 @@ pub fn get_tool_activation_from_deployment(
         && binding.tool_name == *tool_name
         && binding.version == registered_tool.definition.version
         && binding.metadata_version == registered_tool.metadata_version
+        && binding.release_id == registered_tool.release_id
+        && binding.metadata_digest == registered_tool.metadata_digest
         && binding.account_id == registered_tool.owner_account_id
         && binding.account_email == registered_tool.owner_account_email
         && binding.source == registered_tool.source
@@ -267,11 +319,13 @@ pub fn get_tool_activation_from_deployment(
         }
     };
 
-    Ok(Some(ToolActivationSnapshot {
-        filesystem,
-        registered_tool: registered_tool.clone(),
-        binding: binding.clone(),
-    }))
+    Ok(ToolActivationOutcome::Ready(Box::new(
+        ToolActivationSnapshot {
+            filesystem,
+            registered_tool: registered_tool.clone(),
+            binding: binding.clone(),
+        },
+    )))
 }
 
 impl From<ToolDeploymentState> for ToolDiscoverySnapshot {
@@ -369,30 +423,15 @@ pub trait EnvironmentStateService: Send + Sync {
         environment_id: EnvironmentId,
     ) -> Result<Vec<NamedRetryPolicy>, WorkerExecutorError>;
 
-    async fn get_registered_tool(
-        &self,
-        _environment_id: EnvironmentId,
-        _tool_name: &ToolName,
-    ) -> Result<Option<RegisteredTool>, WorkerExecutorError> {
-        Ok(None)
-    }
-
-    async fn get_agent_tool_binding(
-        &self,
-        _environment_id: EnvironmentId,
-        _agent_type: &AgentTypeName,
-        _tool_name: &ToolName,
-    ) -> Result<Option<CompiledToolBinding>, WorkerExecutorError> {
-        Ok(None)
-    }
-
     async fn get_tool_activation(
         &self,
         _environment_id: EnvironmentId,
+        _component_id: ComponentId,
+        _component_revision: ComponentRevision,
         _agent_type: &AgentTypeName,
         _tool_name: &ToolName,
-    ) -> Result<Option<ToolActivationSnapshot>, ToolDiscoveryError> {
-        Ok(None)
+    ) -> Result<ToolActivationOutcome, ToolDiscoveryError> {
+        Ok(ToolActivationOutcome::NotRegistered)
     }
 
     async fn get_accessible_tools(
@@ -475,12 +514,12 @@ impl GrpcEnvironmentStateService {
             .await
     }
 
-    async fn get_tool_discovery_snapshot(
+    async fn get_tool_deployment_snapshot(
         &self,
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-    ) -> Result<Option<Arc<ToolDiscoverySnapshot>>, WorkerExecutorError> {
+    ) -> Result<Option<Arc<CachedToolDeployment>>, WorkerExecutorError> {
         let key = (environment_id, component_id, component_revision);
         let client = self.client.clone();
         self.cached_tool_discovery
@@ -544,43 +583,19 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
         Ok(environment_state.retry_policies.clone())
     }
 
-    async fn get_registered_tool(
-        &self,
-        environment_id: EnvironmentId,
-        tool_name: &ToolName,
-    ) -> Result<Option<RegisteredTool>, WorkerExecutorError> {
-        let environment_state = self.get_environment_state(environment_id).await?;
-        Ok(environment_state
-            .tool_deployment
-            .as_ref()
-            .and_then(|deployment| deployment.registered_tools.get(tool_name))
-            .cloned())
-    }
-
-    async fn get_agent_tool_binding(
-        &self,
-        environment_id: EnvironmentId,
-        agent_type: &AgentTypeName,
-        tool_name: &ToolName,
-    ) -> Result<Option<CompiledToolBinding>, WorkerExecutorError> {
-        let environment_state = self.get_environment_state(environment_id).await?;
-        Ok(environment_state
-            .tool_deployment
-            .as_ref()
-            .and_then(|deployment| deployment.agent_tool_bindings.get(agent_type))
-            .and_then(|bindings| bindings.get(tool_name))
-            .cloned())
-    }
-
     async fn get_tool_activation(
         &self,
         environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
         agent_type: &AgentTypeName,
         tool_name: &ToolName,
-    ) -> Result<Option<ToolActivationSnapshot>, ToolDiscoveryError> {
-        let environment_state = self.get_environment_state(environment_id).await?;
+    ) -> Result<ToolActivationOutcome, ToolDiscoveryError> {
+        let snapshot = self
+            .get_tool_deployment_snapshot(environment_id, component_id, component_revision)
+            .await?;
         get_tool_activation_from_deployment(
-            environment_state.tool_deployment.as_ref(),
+            snapshot.as_deref().map(|snapshot| &snapshot.state),
             agent_type,
             tool_name,
         )
@@ -594,9 +609,12 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
         agent_type: &AgentTypeName,
     ) -> Result<Vec<Arc<DiscoveredTool>>, ToolDiscoveryError> {
         let snapshot = self
-            .get_tool_discovery_snapshot(environment_id, component_id, component_revision)
+            .get_tool_deployment_snapshot(environment_id, component_id, component_revision)
             .await?;
-        get_accessible_tools_from_snapshot(snapshot.as_deref(), agent_type)
+        get_accessible_tools_from_snapshot(
+            snapshot.as_deref().map(|snapshot| &snapshot.discovery),
+            agent_type,
+        )
     }
 
     async fn get_accessible_tool(
@@ -608,9 +626,13 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
         tool_name: &ToolName,
     ) -> Result<Option<Arc<DiscoveredTool>>, ToolDiscoveryError> {
         let snapshot = self
-            .get_tool_discovery_snapshot(environment_id, component_id, component_revision)
+            .get_tool_deployment_snapshot(environment_id, component_id, component_revision)
             .await?;
-        get_accessible_tool_from_snapshot(snapshot.as_deref(), agent_type, tool_name)
+        get_accessible_tool_from_snapshot(
+            snapshot.as_deref().map(|snapshot| &snapshot.discovery),
+            agent_type,
+            tool_name,
+        )
     }
 
     async fn invalidate_environment(&self, environment_id: EnvironmentId) {
@@ -632,7 +654,8 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
 #[cfg(test)]
 mod tests {
     use super::{
-        ToolDiscoveryCache, ToolDiscoveryError, ToolDiscoverySnapshot,
+        CachedToolDeployment, ToolActivationOutcome, ToolActivationSnapshot, ToolDiscoveryCache,
+        ToolDiscoveryError, ToolDiscoverySnapshot, ToolDispatchTarget,
         get_accessible_tool_from_snapshot, get_accessible_tools_from_snapshot,
         get_tool_activation_from_deployment,
     };
@@ -643,10 +666,12 @@ mod tests {
         InitialAgentFile,
     };
     use golem_common::model::deployment::DeploymentRevision;
-    use golem_common::model::entity::FilesystemCapability;
+    use golem_common::model::entity::{
+        EntityActivationPolicy, ExecutableTarget, FilesystemCapability,
+    };
     use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::tool::{
-        CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolDeploymentState,
+        CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, ToolDeploymentState,
         ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
     };
     use golem_common::schema::SchemaGraph;
@@ -659,6 +684,7 @@ mod tests {
     fn registered_tool(name: &str, deployment_revision: DeploymentRevision) -> RegisteredTool {
         RegisteredTool {
             deployment_revision,
+            release_id: None,
             definition: Tool {
                 version: "1.0.0".to_string(),
                 commands: CommandTree {
@@ -682,6 +708,7 @@ mod tests {
             owner_account_id: AccountId::new(),
             owner_account_email: AccountEmail::new("owner@example.com"),
             metadata_version: "0.1.0".to_string(),
+            metadata_digest: Default::default(),
         }
     }
 
@@ -692,10 +719,12 @@ mod tests {
     ) -> CompiledToolBinding {
         CompiledToolBinding {
             deployment_revision: registered_tool.deployment_revision,
+            release_id: registered_tool.release_id,
             agent_type_name: agent_type.clone(),
             tool_name: tool_name.clone(),
             version: registered_tool.definition.version.clone(),
             metadata_version: registered_tool.metadata_version.clone(),
+            metadata_digest: registered_tool.metadata_digest,
             account_id: registered_tool.owner_account_id,
             account_email: registered_tool.owner_account_email.clone(),
             parameters: NormalizedJsonValue::new(serde_json::json!({})),
@@ -744,14 +773,27 @@ mod tests {
         )
     }
 
+    fn ready_activation(
+        deployment: &ToolDeploymentState,
+        agent_type: &AgentTypeName,
+        tool_name: &ToolName,
+    ) -> ToolActivationSnapshot {
+        match get_tool_activation_from_deployment(Some(deployment), agent_type, tool_name).unwrap()
+        {
+            ToolActivationOutcome::Ready(activation) => *activation,
+            outcome => panic!("expected ready activation, got {outcome:?}"),
+        }
+    }
+
     #[test]
     fn accessible_tools_join_bindings_and_registrations_in_name_order() {
         let (deployment, agent_a, agent_b) = deployment_state();
         let alpha = ToolName::try_from("alpha").unwrap();
         let beta = ToolName::try_from("beta").unwrap();
-        let ToolSource::Component { component_id, .. } =
-            &deployment.registered_tools[&alpha].source;
-        let expected_alpha_component = *component_id;
+        let expected_alpha_component = match &deployment.registered_tools[&alpha].source {
+            ToolSource::Component { component_id, .. } => *component_id,
+            ToolSource::Host { .. } => panic!("test fixture must be component-backed"),
+        };
         let snapshot = ToolDiscoverySnapshot::from(deployment);
 
         let agent_a_tools = get_accessible_tools_from_snapshot(Some(&snapshot), &agent_a).unwrap();
@@ -876,27 +918,89 @@ mod tests {
     }
 
     #[test]
-    fn activation_lookup_returns_one_coherent_registration_and_binding() {
-        let (deployment, agent_a, _) = deployment_state();
+    fn component_dispatch_uses_one_pinned_consumer_snapshot() {
+        let (mut deployment, agent_a, _) = deployment_state();
         let alpha = ToolName::try_from("alpha").unwrap();
 
-        let activation = get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha)
-            .unwrap()
-            .unwrap();
+        let activation = ready_activation(&deployment, &agent_a, &alpha);
+        let registered = activation.registered_tool().clone();
+        let binding = activation.binding().clone();
+        let expected_executable = match &registered.source {
+            ToolSource::Component {
+                component_id,
+                component_revision,
+                ..
+            } => ExecutableTarget::new(*component_id, *component_revision),
+            ToolSource::Host { .. } => panic!("test fixture must be component-backed"),
+        };
+        deployment.registered_tools.clear();
+        deployment.agent_tool_bindings.clear();
 
+        let ToolDispatchTarget::Component(entity) = activation.into_dispatch_target().unwrap()
+        else {
+            panic!("component source must dispatch through component activation")
+        };
+        assert_eq!(entity.executable(), &expected_executable);
+        assert_eq!(entity.deployment_revision(), registered.deployment_revision);
+        assert_eq!(entity.filesystem(), FilesystemCapability::Incapable);
         assert_eq!(
-            activation.registered_tool,
-            deployment.registered_tools[&alpha]
+            entity.policy(),
+            &EntityActivationPolicy::Tool {
+                provision: registered.provision,
+                binding: Box::new(binding),
+            }
         );
-        assert_eq!(
-            activation.binding,
-            deployment.agent_tool_bindings[&agent_a][&alpha]
+    }
+
+    #[test]
+    fn host_dispatch_preserves_exact_handler_and_consumer_policy() {
+        let (mut deployment, agent_a, _) = deployment_state();
+        let alpha = ToolName::try_from("alpha").unwrap();
+        let host_tool_id = HostToolId::try_from("native-search".to_string()).unwrap();
+        let implementation_version = "2026.08.28".to_string();
+        let registered = deployment.registered_tools.get_mut(&alpha).unwrap();
+        registered.source = ToolSource::Host {
+            host_tool_id: host_tool_id.clone(),
+            implementation_version: implementation_version.clone(),
+        };
+        registered.provision.env.insert(
+            "CONSUMER_CONFIGURATION".to_string(),
+            "preserved".to_string(),
         );
-        assert_eq!(activation.filesystem, FilesystemCapability::Incapable);
-        assert_eq!(
-            activation.into_entity_activation().unwrap().filesystem(),
-            FilesystemCapability::Incapable
-        );
+        let binding = deployment
+            .agent_tool_bindings
+            .get_mut(&agent_a)
+            .unwrap()
+            .get_mut(&alpha)
+            .unwrap();
+        binding.source = registered.source.clone();
+        binding.parameters = NormalizedJsonValue::new(serde_json::json!({
+            "consumer": "parameters"
+        }));
+        binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        let expected_provision = registered.provision.clone();
+        let expected_binding = binding.clone();
+        let expected_revision = deployment.deployment_revision;
+
+        let activation = ready_activation(&deployment, &agent_a, &alpha);
+        let ToolDispatchTarget::Host {
+            host_tool_id: actual_host_tool_id,
+            implementation_version: actual_implementation_version,
+            deployment_revision,
+            provision,
+            binding,
+            filesystem,
+        } = activation.into_dispatch_target().unwrap()
+        else {
+            panic!("host source must dispatch directly without a component activation")
+        };
+
+        assert_eq!(actual_host_tool_id, host_tool_id);
+        assert_eq!(actual_implementation_version, implementation_version);
+        assert_eq!(deployment_revision, expected_revision);
+        assert_eq!(provision, expected_provision);
+        assert_eq!(*binding, expected_binding);
+        assert_eq!(filesystem, FilesystemCapability::Capable);
     }
 
     #[test]
@@ -911,11 +1015,29 @@ mod tests {
             .unwrap()
             .filesystem_access = ToolFilesystemAccess::Allowed;
 
-        let activation = get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha)
-            .unwrap()
-            .unwrap();
+        let activation = ready_activation(&deployment, &agent_a, &alpha);
 
         assert_eq!(activation.filesystem(), FilesystemCapability::Capable);
+    }
+
+    #[test]
+    fn activation_lookup_distinguishes_not_registered_from_not_bound() {
+        let (deployment, agent_a, _) = deployment_state();
+        let unbound = ToolName::try_from("unbound").unwrap();
+        let missing = ToolName::try_from("missing").unwrap();
+
+        assert_eq!(
+            get_tool_activation_from_deployment(Some(&deployment), &agent_a, &unbound).unwrap(),
+            ToolActivationOutcome::NotBound
+        );
+        assert_eq!(
+            get_tool_activation_from_deployment(Some(&deployment), &agent_a, &missing).unwrap(),
+            ToolActivationOutcome::NotRegistered
+        );
+        assert_eq!(
+            get_tool_activation_from_deployment(None, &agent_a, &unbound).unwrap(),
+            ToolActivationOutcome::NotRegistered
+        );
     }
 
     #[test]
@@ -972,6 +1094,48 @@ mod tests {
     }
 
     #[test]
+    fn activation_lookup_rejects_mismatched_release_identity() {
+        let (mut deployment, agent_a, _) = deployment_state();
+        let alpha = ToolName::try_from("alpha").unwrap();
+        deployment
+            .agent_tool_bindings
+            .get_mut(&agent_a)
+            .unwrap()
+            .get_mut(&alpha)
+            .unwrap()
+            .release_id = Some(golem_common::model::tool_release::ToolReleaseId::new());
+
+        assert!(matches!(
+            get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha),
+            Err(ToolDiscoveryError::InconsistentSnapshot { .. })
+        ));
+    }
+
+    #[test]
+    fn activation_lookup_rejects_mismatched_metadata_digest() {
+        let (mut deployment, agent_a, _) = deployment_state();
+        let alpha = ToolName::try_from("alpha").unwrap();
+        let registered = &deployment.registered_tools[&alpha];
+        let mismatched_digest = golem_common::model::tool_release::tool_metadata_digest(
+            "other-metadata-version",
+            &registered.definition,
+        )
+        .unwrap();
+        deployment
+            .agent_tool_bindings
+            .get_mut(&agent_a)
+            .unwrap()
+            .get_mut(&alpha)
+            .unwrap()
+            .metadata_digest = mismatched_digest;
+
+        assert!(matches!(
+            get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha),
+            Err(ToolDiscoveryError::InconsistentSnapshot { .. })
+        ));
+    }
+
+    #[test]
     fn activation_lookup_rejects_registration_under_the_wrong_name() {
         let (mut deployment, agent_a, _) = deployment_state();
         let alpha = ToolName::try_from("alpha").unwrap();
@@ -1022,8 +1186,8 @@ mod tests {
             ComponentId::new(),
             ComponentRevision::try_from(1_u64).unwrap(),
         );
-        let stale_snapshot = Arc::new(ToolDiscoverySnapshot::from(deployment_state().0));
-        let fresh_snapshot = Arc::new(ToolDiscoverySnapshot::from(deployment_state().0));
+        let stale_snapshot = Arc::new(CachedToolDeployment::from(deployment_state().0));
+        let fresh_snapshot = Arc::new(CachedToolDeployment::from(deployment_state().0));
         let lookup_started = Arc::new(tokio::sync::Notify::new());
         let release_lookup = Arc::new(tokio::sync::Notify::new());
 
@@ -1094,8 +1258,8 @@ mod tests {
             ComponentId::new(),
             ComponentRevision::try_from(1_u64).unwrap(),
         );
-        let stale_snapshot = Arc::new(ToolDiscoverySnapshot::from(deployment_state().0));
-        let fresh_snapshot = Arc::new(ToolDiscoverySnapshot::from(deployment_state().0));
+        let stale_snapshot = Arc::new(CachedToolDeployment::from(deployment_state().0));
+        let fresh_snapshot = Arc::new(CachedToolDeployment::from(deployment_state().0));
         let lookup_started = Arc::new(tokio::sync::Notify::new());
         let release_lookup = Arc::new(tokio::sync::Notify::new());
 
@@ -1162,8 +1326,8 @@ mod tests {
             ComponentId::new(),
             ComponentRevision::try_from(1_u64).unwrap(),
         );
-        let stale_snapshot = Arc::new(ToolDiscoverySnapshot::from(deployment_state().0));
-        let fresh_snapshot = Arc::new(ToolDiscoverySnapshot::from(deployment_state().0));
+        let stale_snapshot = Arc::new(CachedToolDeployment::from(deployment_state().0));
+        let fresh_snapshot = Arc::new(CachedToolDeployment::from(deployment_state().0));
 
         let loaded_stale_snapshot = cache
             .get_or_insert(&key, {

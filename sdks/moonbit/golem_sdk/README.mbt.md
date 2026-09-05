@@ -94,7 +94,66 @@ pub(all) struct TaskInfo {
 }
 ```
 
-### 3. Define an agent tool
+### 3. Stream typed agent data
+
+Use `@schema.AgentStream[T]` in agent method parameters and results. Create a demand-driven
+producer with `AgentStream::produce`, and consume it one item at a time with `read`:
+
+```moonbit nocheck
+///|
+fn stream_values(values : Array[UInt]) -> @schema.AgentStream[UInt] {
+  @schema.AgentStream::produce(async fn(writer) {
+    for value in values {
+      match writer.write_one(value) {
+        @schema.Accepted => ()
+        @schema.PeerDropped => return
+      }
+    }
+  })
+}
+
+///|
+pub async fn Counter::sum(
+  self : Self,
+  input : @schema.AgentStream[UInt],
+) -> UInt {
+  let _ = self
+  defer input.drop()
+  let mut total = 0U
+  for ;; {
+    match input.read() {
+      Some(value) => total += value
+      None => return total
+    }
+  }
+}
+```
+
+A producer's normal return closes the writer, and `read` returns `None` only for that clean EOF or
+an explicit writer close. Each `Accepted` write waits for transport acceptance and therefore
+applies back-pressure; it does not mean the consumer has already processed the value. `write_one`
+and `write_all` consume all supplied values. If the consumer calls `drop`, unread values and their
+nested capabilities are released, and a later producer write returns `PeerDropped`. Peer drop is
+cooperative: it does not guarantee that unrelated pending producer work is interrupted.
+
+Stream endpoints have affine, send-once ownership even though MoonBit does not enforce affinity in
+its type system. An owner may read repeatedly, but encoding the stream as an invocation input or
+result transfers that endpoint. After clean EOF, `drop`, or transfer, do not read or send it again;
+repeated `drop` calls are harmless. Returning an unread input stream directly forwards the original
+endpoint without copying or pumping it; a partially read stream cannot be forwarded directly.
+Cancellation while producing, reading, writing, or forwarding propagates as canonical operation
+cancellation rather than EOF or an ordinary decode error.
+
+A producer failure traps the active operation; bare component-model streams do not have a
+recoverable error terminal. For recoverable application errors, stream `Result` values such as
+`@schema.AgentStream[Result[Reading, SensorError]]` and keep producing subsequent items as needed.
+
+Generated native RPC clients expose awaited methods for direct or recursively stream-bearing
+signatures. They do not generate `trigger_*`, `schedule_*`, or `schedule_cancelable_*` variants for
+those methods, and reject stream-bearing agent constructors because native client construction is
+synchronous.
+
+### 4. Define an agent tool
 
 An empty struct annotated with `#derive.tool` defines a tool. Its public static methods become the
 root command and subcommands. The method whose lower-kebab-case name matches the tool name is the
@@ -151,7 +210,7 @@ stdout; dropping it while still open selects `Abandoned`. See the
 [`golem_sdk_tools` documentation](https://mooncakes.io/docs/#/golemcloud/golem_sdk_tools/) and the
 canonical `grep`/`git` examples for the complete annotation surface.
 
-### 4. Define a tool middleware component
+### 5. Define a tool middleware component
 
 A **monomorphic middleware** presents one statically declared `#derive.tool` shape. Its generated
 typed underlying wrapper follows the expected tool shape. Omitting `expected` makes it equal to
@@ -292,7 +351,7 @@ runtime chain traversal and manifest placement are separate platform concerns.
 See `golem_sdk_example1/golem_tool_middleware_examples` for a complete pure component containing
 the policy, universal, and adapter forms above.
 
-### 5. Build and deploy
+### 6. Build and deploy
 
 Use `golem build` and `golem deploy` with a `golem.yaml` application manifest. See the [example project](https://github.com/golemcloud/moonbit-sdk/tree/main/golem_sdk_example1) for a complete setup.
 
@@ -300,7 +359,7 @@ Use `golem build` and `golem deploy` with a `golem.yaml` application manifest. S
 
 - **Agent registry** — register multiple agent types in a single component via `#derive.agent`
 - **Custom data types** — `#derive.golem_schema` implements every nexessary trait to use custom data types on the public interface of your agents
-- **Agent-to-agent RPC** — auto-generated client stubs (`CounterClient`) with awaited, fire-and-forget, and scheduled invocations
+- **Agent-to-agent RPC** — auto-generated client stubs (`CounterClient`); stream-bearing methods are awaited, while stream-free methods also support fire-and-forget and scheduled invocations
 - **Agent tools** — code-first tool descriptors, command trees, constraints, custom errors, runtime dispatch, and typed tool RPC clients via `#derive.tool`
 - **Tool middleware** — monomorphic policy/adapter middleware and universal transparent middleware with invocation-scoped underlying capabilities
 - **Multimodal input** — accept mixed text, binary, and custom modality data via `#derive.multimodal` and `@multimodal.Multimodal[T]`

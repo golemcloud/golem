@@ -282,11 +282,22 @@ fn registry_service_config(
                 },
             );
             accounts.insert(
-                "builtin-plugin-owner".to_string(),
+                "builtin_plugin_owner".to_string(),
                 PrecreatedAccount {
                     id: AccountId(uuid!("b0a654af-d67f-4d73-a824-cf75e122bfc0")),
                     name: "Builtin Plugin Owner".to_string(),
                     email: AccountEmail::new("builtin-plugin-owner@golem.cloud"),
+                    token: None,
+                    plan_id,
+                    role: AccountRole::BuiltinPluginOwner,
+                },
+            );
+            accounts.insert(
+                "builtin_tool_owner".to_string(),
+                PrecreatedAccount {
+                    id: AccountId(uuid!("58bda34c-10d4-4bfb-8abd-d5e67f09ba3c")),
+                    name: "Builtin Tool Owner".to_string(),
+                    email: AccountEmail::new("builtin-tool-owner@golem.cloud"),
                     token: None,
                     plan_id,
                     role: AccountRole::BuiltinPluginOwner,

@@ -98,8 +98,8 @@ use golem_worker_executor::preview2::golem::agent::host::{
     RpcError, ScheduledInvocationReceipt, WasmRpc,
 };
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
-use golem_worker_executor::services::active_agents::ActiveAgents;
 use golem_worker_executor::services::active_agents::memory_probe::FixedProbe;
+use golem_worker_executor::services::active_agents::{ActiveAgents, InvocationLoops};
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::{
@@ -172,7 +172,7 @@ use tokio::task::JoinSet;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tower::ServiceBuilder;
-use tracing::{Level, debug, info};
+use tracing::{Level, debug, info, warn};
 use uuid::{Uuid, uuid};
 use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{Engine, MemoryKind, ResourceLimiterAsync, Store};
@@ -850,6 +850,28 @@ impl TestWorkerExecutor {
             .gate_next_completed_entity_reconstruction(agent_id.clone())
     }
 
+    /// Pauses the next live entity body after its guest export returns but before its durable
+    /// terminal is selected.
+    pub fn gate_next_live_entity_body_completion(
+        &self,
+        agent_id: &AgentId,
+        entity_name: &str,
+    ) -> EntityReconstructionBodyGateHandle {
+        self.additional_test_deps
+            .gate_next_live_entity_body_completion(agent_id.clone(), entity_name.to_string())
+    }
+
+    /// Pauses the next matching incomplete-replay entity body after its guest export returns but
+    /// before the original durable Start receives a terminal.
+    pub fn gate_next_incomplete_entity_reconstruction(
+        &self,
+        agent_id: &AgentId,
+        entity_name: &str,
+    ) -> EntityReconstructionBodyGateHandle {
+        self.additional_test_deps
+            .gate_next_incomplete_entity_reconstruction(agent_id.clone(), entity_name.to_string())
+    }
+
     /// Pauses the next successful agent invocation after the guest call and its tail work finish,
     /// but before the success is persisted to the owner oplog.
     pub fn gate_next_agent_invocation_success(
@@ -1234,6 +1256,11 @@ pub struct TestContext {
     pub application_id: ApplicationId,
     // default environment id to use during tests
     pub default_environment_id: EnvironmentId,
+    /// Invocation loops of every executor started on this context. All of them share the
+    /// context's storage, so before a further executor is started, the loops of the already
+    /// shut-down ones must have exited: an in-process executor is not a process, and dropping it
+    /// does not by itself stop its workers from writing to their oplogs.
+    executor_invocation_loops: Arc<std::sync::Mutex<Vec<InvocationLoops>>>,
 }
 
 impl TestContext {
@@ -1257,11 +1284,45 @@ impl TestContext {
             account_token,
             application_id,
             default_environment_id,
+            executor_invocation_loops: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
     pub fn redis_prefix(&self) -> String {
         format!("test-{}-{}:", self.base_prefix, self.unique_id)
+    }
+
+    /// Waits until the workers of every shut-down executor previously started on this context
+    /// stopped executing. Executors that are still running are left alone.
+    async fn wait_for_shut_down_executors(&self) {
+        let previous = std::mem::take(&mut *self.executor_invocation_loops.lock().unwrap());
+        let mut still_running = Vec::new();
+        for loops in previous {
+            if !loops.is_shut_down() {
+                still_running.push(loops);
+                continue;
+            }
+            if tokio::time::timeout(Duration::from_secs(10), loops.wait_for_exit())
+                .await
+                .is_err()
+            {
+                warn!(
+                    "Invocation loops of a previous executor did not exit within 10s; \
+                     starting the next executor over the same storage anyway"
+                );
+            }
+        }
+        self.executor_invocation_loops
+            .lock()
+            .unwrap()
+            .extend(still_running);
+    }
+
+    fn register_executor(&self, invocation_loops: InvocationLoops) {
+        self.executor_invocation_loops
+            .lock()
+            .unwrap()
+            .push(invocation_loops);
     }
 }
 
@@ -1469,6 +1530,7 @@ async fn start_executor_with_config(
     // mutate per-worker test-only state, e.g. eviction).
     let additional_test_deps = AdditionalTestDeps::new();
 
+    context.wait_for_shut_down_executors().await;
     let details = run(
         config,
         prometheus.clone(),
@@ -1479,6 +1541,7 @@ async fn start_executor_with_config(
         &mut join_set,
     )
     .await?;
+    context.register_executor(details.invocation_loops.clone());
     let grpc_port = details.grpc_port;
     let leak_detector = details.leak_detector.clone();
     let details = Arc::new(details);
@@ -1911,8 +1974,12 @@ impl WorkerCtx for TestWorkerCtx {
     }
 
     fn entity_invocation_body_hook(&self) -> Option<Arc<dyn EntityInvocationBodyHook>> {
+        let entity_name = self
+            .durable_ctx
+            .entity_invocation_scope()
+            .map(|scope| scope.activation().entity().name().to_string());
         self.additional_test_deps
-            .entity_invocation_body_hook(self.agent_id.clone())
+            .entity_invocation_body_hook(self.agent_id.clone(), entity_name)
     }
 
     async fn create(
@@ -3918,11 +3985,49 @@ impl AdditionalTestDeps {
         &self,
         agent_id: AgentId,
     ) -> EntityReconstructionBodyGateHandle {
+        self.gate_next_entity_body_completion(
+            agent_id,
+            InvocationExecutionMode::ReplayingCompleted,
+            None,
+        )
+    }
+
+    fn gate_next_live_entity_body_completion(
+        &self,
+        agent_id: AgentId,
+        entity_name: String,
+    ) -> EntityReconstructionBodyGateHandle {
+        self.gate_next_entity_body_completion(
+            agent_id,
+            InvocationExecutionMode::Live,
+            Some(entity_name),
+        )
+    }
+
+    fn gate_next_incomplete_entity_reconstruction(
+        &self,
+        agent_id: AgentId,
+        entity_name: String,
+    ) -> EntityReconstructionBodyGateHandle {
+        self.gate_next_entity_body_completion(
+            agent_id,
+            InvocationExecutionMode::ReplayingIncomplete,
+            Some(entity_name),
+        )
+    }
+
+    fn gate_next_entity_body_completion(
+        &self,
+        agent_id: AgentId,
+        execution_mode: InvocationExecutionMode,
+        entity_name: Option<String>,
+    ) -> EntityReconstructionBodyGateHandle {
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
         let gate = Arc::new(EntityReconstructionBodyGate {
             entered_tx: std::sync::Mutex::new(Some(entered_tx)),
             release: tokio::sync::Semaphore::new(0),
-            execution_mode: Some(InvocationExecutionMode::ReplayingCompleted),
+            execution_mode: Some(execution_mode),
+            entity_name,
         });
         self.entity_reconstruction_body_gates
             .lock()
@@ -3964,6 +4069,7 @@ impl AdditionalTestDeps {
             entered_tx: std::sync::Mutex::new(Some(entered_tx)),
             release: tokio::sync::Semaphore::new(0),
             execution_mode: None,
+            entity_name: None,
         });
         self.entity_body_start_gates
             .lock()
@@ -3982,6 +4088,7 @@ impl AdditionalTestDeps {
     fn entity_invocation_body_hook(
         &self,
         agent_id: AgentId,
+        entity_name: Option<String>,
     ) -> Option<Arc<dyn EntityInvocationBodyHook>> {
         let gated = self
             .entity_reconstruction_body_gates
@@ -4001,6 +4108,7 @@ impl AdditionalTestDeps {
         (gated || start_gated || divergent).then(|| {
             Arc::new(TestEntityInvocationBodyHook {
                 agent_id,
+                entity_name,
                 gates: self.entity_reconstruction_body_gates.clone(),
                 start_gates: self.entity_body_start_gates.clone(),
                 divergences: self.divergent_entity_reconstructions.clone(),
@@ -4327,6 +4435,7 @@ struct EntityReconstructionBodyGate {
     entered_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     release: tokio::sync::Semaphore,
     execution_mode: Option<InvocationExecutionMode>,
+    entity_name: Option<String>,
 }
 
 struct AgentInvocationSuccessGate {
@@ -4416,6 +4525,7 @@ impl Drop for EntityReconstructionBodyGateHandle {
 
 struct TestEntityInvocationBodyHook {
     agent_id: AgentId,
+    entity_name: Option<String>,
     gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
     start_gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
     divergences: Arc<std::sync::Mutex<HashSet<AgentId>>>,
@@ -4462,14 +4572,17 @@ impl EntityInvocationBodyHook for TestEntityInvocationBodyHook {
     }
 
     async fn before_completion(&self, execution_mode: InvocationExecutionMode) {
-        let gate = self.gates.lock().unwrap().get(&self.agent_id).cloned();
-        if gate
-            .as_ref()
-            .is_some_and(|gate| gate.execution_mode != Some(execution_mode))
-        {
-            return;
-        }
-        let gate = self.gates.lock().unwrap().remove(&self.agent_id);
+        let gate = {
+            let mut gates = self.gates.lock().unwrap();
+            let matches = gates.get(&self.agent_id).is_some_and(|gate| {
+                gate.execution_mode == Some(execution_mode)
+                    && gate
+                        .entity_name
+                        .as_ref()
+                        .is_none_or(|expected| self.entity_name.as_ref() == Some(expected))
+            });
+            matches.then(|| gates.remove(&self.agent_id)).flatten()
+        };
         if let Some(gate) = gate {
             if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
                 let _ = entered_tx.send(());

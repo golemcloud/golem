@@ -34,11 +34,11 @@ pub fn[T : @schema.FromSchema, E] decode_result_with_stdout(@tool-core.Invocatio
 
 pub fn discover_tools() -> Array[@golemcloud/golem_sdk/interface/golem/tool/common.Tool]
 
-pub async fn encode_error_payload(@schema_model.TypedSchemaValue) -> @types.TypedSchemaValue raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+pub async fn encode_error_payload(@schema_model.TypedSchemaValue) -> @types.TypedSchemaValue
 
 pub fn encode_invocation_input(@schema_model.SchemaGraph, Array[@schema_model.SchemaValue]) -> @schema_model.TypedSchemaValue
 
-pub async fn[T : @schema.IntoSchema] encode_result_value(T) -> @types.TypedSchemaValue raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+pub async fn[T : @schema.IntoSchema] encode_result_value(T) -> @types.TypedSchemaValue
 
 pub fn[E] expect_no_stdout(@async-core.Stream[Byte]?) -> Result[Unit, ToolError[E]]
 
@@ -56,9 +56,9 @@ pub fn invocation_result_empty() -> @golemcloud/golem_sdk/interface/golem/tool/c
 
 pub fn invocation_result_stdout(@async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
-pub async fn[T : @schema.IntoSchema] invocation_result_value(T) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+pub async fn[T : @schema.IntoSchema] invocation_result_value(T) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
-pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(T, @async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(T, @async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
 pub async fn[E] invoke_and_await(@host.ToolRpc, Array[String], @schema_model.TypedSchemaValue, @async-core.Stream[Byte]?, (@schema_model.TypedSchemaValue) -> Result[E, String]) -> Result[@tool-core.InvocationResult, ToolError[E]]
 

@@ -148,6 +148,9 @@ pub struct DurableCallSession<Pair: HostPayloadPair, P: DropPolicy> {
     /// In-function retry decision logic. Also the home of the call's `DurableFunctionType` and
     /// captured `DurableExecutionState`.
     pub(super) retry: InFunctionRetryController,
+    /// Shared signal for process-equivalent executor teardown. See
+    /// [`DroppedCall::executor_shutdown`].
+    pub(super) executor_shutdown: tokio_util::sync::CancellationToken,
     /// Whether switching this call to live execution requires a recovered, synchronized agent
     /// permission-card authority boundary.
     pub(super) requires_agent_authority: bool,
@@ -2516,6 +2519,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             parked_undelivered_replay: false,
             execution_scope: executed.execution_scope,
             retry: executed.retry,
+            executor_shutdown: ctx.public_state.worker().shutdown_token(),
             requires_agent_authority: false,
             agent_auth_ctx: None,
             drop_sink: executed.drop_sink,
@@ -2792,6 +2796,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             begin_index: self.begin_index(),
             function_type: self.retry.function_type().clone(),
             request_upload: self.request_upload.clone(),
+            executor_shutdown: self.executor_shutdown.clone(),
             atomic_lease: self.execution_scope.atomic_lease.clone(),
             trap_context: self.trap_context(),
             live_call_permit,
@@ -4955,6 +4960,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             parked_undelivered_replay: false,
             execution_scope,
             retry: self.retry,
+            executor_shutdown: ctx.public_state.worker().shutdown_token(),
             requires_agent_authority: self.requires_agent_authority,
             agent_auth_ctx: self.agent_auth_ctx,
             drop_sink: self.drop_sink,
@@ -4989,7 +4995,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                     .await?
             }
         };
-        Ok(self.finish_replay(replay))
+        Ok(self.finish_replay(ctx, replay))
     }
 
     pub(crate) async fn start_replay_or_continue_live<Ctx: WorkerCtx>(
@@ -5008,7 +5014,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                 .await?;
             match outcome {
                 ReplayStartClaimOutcome::Claimed { handle, .. } => {
-                    return Ok(BegunCallReplayOutcome::Claimed(self.finish_replay(handle)));
+                    return Ok(BegunCallReplayOutcome::Claimed(
+                        self.finish_replay(ctx, handle),
+                    ));
                 }
                 outcome @ (ReplayStartClaimOutcome::ReplayEnded
                 | ReplayStartClaimOutcome::DeletedRegion) => {
@@ -5096,7 +5104,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         claim.with_observational_owner(self.execution_scope.observational_owner)
     }
 
-    fn finish_replay(self, replay: ReplayCallHandle) -> DurableCallSession<Pair, P> {
+    fn finish_replay<Ctx: WorkerCtx>(
+        self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        replay: ReplayCallHandle,
+    ) -> DurableCallSession<Pair, P> {
         let start_idx = replay.start_idx();
         // Replay handles never participate in the live in-flight member guard, but keep their
         // initiation-time region for trap/retry classification.
@@ -5116,6 +5128,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             parked_undelivered_replay: false,
             execution_scope,
             retry: self.retry,
+            executor_shutdown: ctx.public_state.worker().shutdown_token(),
             requires_agent_authority: self.requires_agent_authority,
             agent_auth_ctx: self.agent_auth_ctx,
             drop_sink: self.drop_sink,
@@ -5131,10 +5144,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for DurableCallSession<Pair, P> 
         if self.finished {
             return;
         }
+        if self.executor_shutdown.is_cancelled() {
+            self.execution_scope.release_atomic_lease();
+            tracing::debug!(
+                start_idx = %self.start_idx,
+                "durable call abandoned during executor shutdown"
+            );
+            return;
+        }
         if self.is_live {
             if self.persisted {
-                // A live call dropped without finish/cancel: run the compile-time drop policy.
                 let live_call_permit = self.live_call_permit.take();
+                // A live call dropped without finish/cancel: run the compile-time drop policy.
                 P::unfinished_drop(
                     self.dropped_call_snapshot(live_call_permit),
                     self.drop_sink.as_ref(),

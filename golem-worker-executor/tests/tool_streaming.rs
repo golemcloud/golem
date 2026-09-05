@@ -50,7 +50,7 @@ use golem_worker_executor::durable_host::tool::{
     ToolOwnerFailureMetadata,
 };
 use golem_worker_executor::services::environment_state::{
-    EnvironmentStateService, ToolActivationSnapshot, ToolDiscoveryError,
+    EnvironmentStateService, ToolActivationOutcome, ToolDiscoveryError,
 };
 use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
@@ -150,6 +150,8 @@ fn deployment_state(
             name,
             RegisteredTool {
                 deployment_revision,
+                release_id: None,
+                metadata_digest: Default::default(),
                 definition,
                 provision: ToolProvisionConfig::default(),
                 source: ToolSource::Component {
@@ -177,6 +179,8 @@ fn deployment_state(
                 name.clone(),
                 CompiledToolBinding {
                     deployment_revision,
+                    release_id: tool.release_id,
+                    metadata_digest: tool.metadata_digest,
                     agent_type_name: agent_type.clone(),
                     tool_name: name.clone(),
                     version: tool.definition.version.clone(),
@@ -303,18 +307,26 @@ impl EnvironmentStateService for ReorderedToolActivationService {
     async fn get_tool_activation(
         &self,
         environment_id: golem_common::model::environment::EnvironmentId,
+        component_id: golem_common::model::component::ComponentId,
+        component_revision: ComponentRevision,
         agent_type: &AgentTypeName,
         tool_name: &ToolName,
-    ) -> Result<Option<ToolActivationSnapshot>, ToolDiscoveryError> {
+    ) -> Result<ToolActivationOutcome, ToolDiscoveryError> {
         match self.activation_calls.fetch_add(1, Ordering::SeqCst) {
             0 => {
                 self.first_call_blocked.notify_one();
                 self.release_first_call.notified().await;
-                Ok(None)
+                Ok(ToolActivationOutcome::NotBound)
             }
             1 => {
                 self.inner
-                    .get_tool_activation(environment_id, agent_type, tool_name)
+                    .get_tool_activation(
+                        environment_id,
+                        component_id,
+                        component_revision,
+                        agent_type,
+                        tool_name,
+                    )
                     .await
             }
             ordinal => panic!(
@@ -3997,8 +4009,9 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         let mut reconstruction_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
         let mut reconstruction_body =
             executor.gate_next_completed_entity_reconstruction(&worker_id);
+        // Keep the original gate unresolved while recovery starts so the custom call cannot gain
+        // a terminal during teardown.
         executor.simulated_crash(&worker_id).await?;
-        drop(original_custom.release);
         let reconstruction_start = tokio::time::timeout(
             std::time::Duration::from_secs(30),
             reconstruction_claim.entered(),
@@ -4043,6 +4056,7 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
             .release
             .send(())
             .map_err(|_| anyhow::anyhow!("replayed custom-effect gate was dropped"))?;
+        drop(original_custom.release);
         Ok::<_, anyhow::Error>(())
     };
     let _ = tokio::try_join!(invocation, crash_and_validate)?;
@@ -4772,6 +4786,8 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
     let input = b"terminal-before-publication".to_vec();
     let output_path = "/capable-terminal-crash.bin";
+    let mut child_completion_gate =
+        executor.gate_next_live_entity_body_completion(&worker_id, "streaming");
 
     let call = executor.invoke_and_await_agent(
         &caller_component,
@@ -4788,6 +4804,18 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
         .map_err(|_| anyhow::anyhow!("original retained child checkpoint timed out"))?
         .ok_or_else(|| anyhow::anyhow!("crash checkpoint server stopped"))?;
         assert_eq!(original_child_gate.name, "capable-terminal-retained-child");
+        original_child_gate
+            .release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("original retained child gate dropped before release"))?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            child_completion_gate.entered(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("original retained child completion gate timed out"))?;
+        let mut replayed_child_completion =
+            executor.gate_next_incomplete_entity_reconstruction(&worker_id, "streaming");
 
         let terminal_boundary = tokio::time::timeout(std::time::Duration::from_secs(30), async {
             loop {
@@ -4854,7 +4882,18 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
                             )
                         })
                         .count();
-                    if durable_effects == 1 {
+                    let child_has_terminal = oplog.iter().any(|entry| {
+                        matches!(
+                            &entry.entry,
+                            PublicOplogEntry::End(params)
+                                if params.start_index == child_start
+                        ) || matches!(
+                            &entry.entry,
+                            PublicOplogEntry::Cancelled(params)
+                                if params.start_index == child_start
+                        )
+                    });
+                    if durable_effects == 1 && !child_has_terminal {
                         break (
                             outer_start,
                             child_start,
@@ -4885,16 +4924,14 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
             None,
         );
         executor.simulated_crash(&worker_id).await?;
-        drop(original_child_gate.release);
+        drop(child_completion_gate);
 
-        let replayed_child_gate = tokio::time::timeout(
+        tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            checkpoint_arrivals.recv(),
+            replayed_child_completion.entered(),
         )
         .await
-        .map_err(|_| anyhow::anyhow!("replayed retained child checkpoint timed out"))?
-        .ok_or_else(|| anyhow::anyhow!("crash checkpoint server stopped"))?;
-        assert_eq!(replayed_child_gate.name, "capable-terminal-retained-child");
+        .map_err(|_| anyhow::anyhow!("replayed retained child completion timed out"))?;
 
         tokio::time::timeout(std::time::Duration::from_secs(30), async {
             loop {
@@ -4917,10 +4954,7 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
         })
         .await
         .map_err(|_| anyhow::anyhow!("fresh capable replay attachments were not reconstructed"))?;
-        replayed_child_gate
-            .release
-            .send(())
-            .map_err(|_| anyhow::anyhow!("replayed retained child gate dropped before release"))?;
+        replayed_child_completion.release();
 
         let published_gate = tokio::time::timeout(
             std::time::Duration::from_secs(30),

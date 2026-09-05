@@ -25,6 +25,9 @@ use crate::services::deployment::{DeployValidationError, DeploymentError, Deploy
 use crate::services::domain_registration::DomainRegistrationError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
+use crate::services::environment_tool_grant::{
+    EnvironmentToolGrantError, EnvironmentToolValidationError,
+};
 use crate::services::http_api_deployment::HttpApiDeploymentError;
 use crate::services::mcp_deployment::McpDeploymentError;
 use crate::services::oauth2::OAuth2Error;
@@ -36,6 +39,7 @@ use crate::services::resource_definition::ResourceDefinitionError;
 use crate::services::retry_policy::RetryPolicyError;
 use crate::services::security_scheme::SecuritySchemeError;
 use crate::services::token::TokenError;
+use crate::services::tool_release::ToolReleaseError;
 use golem_common::base_model::api;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
@@ -212,11 +216,35 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
         DeployValidationError::ToolDefinitionNameMismatch { .. } => {
             api::error_code::deployment_validation::TOOL_DEFINITION_NAME_MISMATCH
         }
-        DeployValidationError::InvalidTool { .. } => {
+        DeployValidationError::InvalidTool { .. }
+        | DeployValidationError::ToolMetadataSerialization { .. } => {
             api::error_code::deployment_validation::INVALID_TOOL
         }
         DeployValidationError::DuplicateToolImplementation { .. } => {
             api::error_code::deployment_validation::DUPLICATE_TOOL_IMPLEMENTATION
+        }
+        DeployValidationError::ToolSourceCollision { .. } => {
+            api::error_code::deployment_validation::TOOL_SOURCE_COLLISION
+        }
+        DeployValidationError::RemoteToolUnavailable { .. } => {
+            api::error_code::deployment_validation::REMOTE_TOOL_UNAVAILABLE
+        }
+        DeployValidationError::RemoteToolNameMismatch { .. }
+        | DeployValidationError::RemoteToolDefinitionNameMismatch { .. }
+        | DeployValidationError::RemoteToolVersionMismatch { .. } => {
+            api::error_code::deployment_validation::REMOTE_TOOL_IDENTITY_MISMATCH
+        }
+        DeployValidationError::RemoteToolUnsupportedMetadataVersion { .. } => {
+            api::error_code::deployment_validation::REMOTE_TOOL_UNSUPPORTED_METADATA_VERSION
+        }
+        DeployValidationError::RemoteToolMetadataDigestMismatch { .. } => {
+            api::error_code::deployment_validation::REMOTE_TOOL_METADATA_DIGEST_MISMATCH
+        }
+        DeployValidationError::InvalidRemoteTool { .. } => {
+            api::error_code::deployment_validation::INVALID_REMOTE_TOOL
+        }
+        DeployValidationError::RemoteToolBindingUnknownAgent { .. } => {
+            api::error_code::deployment_validation::REMOTE_TOOL_BINDING_UNKNOWN_AGENT
         }
         DeployValidationError::ToolBindingUnknownAgent { .. } => {
             api::error_code::deployment_validation::TOOL_BINDING_UNKNOWN_AGENT
@@ -489,6 +517,9 @@ impl From<EnvironmentError> for ApiError {
             EnvironmentError::EnvironmentWithNameAlreadyExists => {
                 Self::conflict(api::error_code::ENVIRONMENT_ALREADY_EXISTS, error)
             }
+            EnvironmentError::MutableToolGrantsInVersionCheckedEnvironment => {
+                Self::bad_request(api::error_code::ENVIRONMENT_TOOL_GRANT_CONFLICT, error)
+            }
             EnvironmentError::ConcurrentModification => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
             }
@@ -614,6 +645,9 @@ impl From<ComponentError> for ApiError {
             ),
             ComponentError::ConcurrentUpdate => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
+            }
+            ComponentError::ComponentSourceInUse(_) => {
+                Self::conflict(api::error_code::COMPONENT_IN_USE, error)
             }
             ComponentError::ParentEnvironmentNotFound(_) => {
                 Self::not_found(api::error_code::ENVIRONMENT_NOT_FOUND, error)
@@ -851,6 +885,99 @@ impl From<EnvironmentPluginGrantError> for ApiError {
     }
 }
 
+impl From<ToolReleaseError> for ApiError {
+    fn from(value: ToolReleaseError) -> Self {
+        let error = value.to_safe_string();
+        match value {
+            ToolReleaseError::ToolReleaseNotFound(_) => {
+                Self::not_found(api::error_code::TOOL_RELEASE_NOT_FOUND, error)
+            }
+            ToolReleaseError::ReferencedToolReleaseNotFound => {
+                Self::not_found(api::error_code::REFERENCED_TOOL_RELEASE_NOT_FOUND, error)
+            }
+            ToolReleaseError::ParentAccountNotFound(_) => {
+                Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
+            }
+            ToolReleaseError::PublicationToolNotFound(_) => {
+                Self::bad_request(api::error_code::TOOL_PUBLICATION_TOOL_NOT_FOUND, error)
+            }
+            ToolReleaseError::DuplicatePublication(_) => {
+                Self::bad_request(api::error_code::DUPLICATE_TOOL_PUBLICATION, error)
+            }
+            ToolReleaseError::PublicationOwnerMismatch(_) => {
+                Self::bad_request(api::error_code::TOOL_PUBLICATION_OWNER_MISMATCH, error)
+            }
+            ToolReleaseError::PublicationHostSource(_) => Self::bad_request(
+                api::error_code::TOOL_PUBLICATION_HOST_SOURCE_NOT_SUPPORTED,
+                error,
+            ),
+            ToolReleaseError::ImmutableReleaseConflict => {
+                Self::conflict(api::error_code::TOOL_RELEASE_IMMUTABLE_CONFLICT, error)
+            }
+            ToolReleaseError::DePublishedReleaseRequiresExplicitRestore
+            | ToolReleaseError::ToolReleaseNotPublished
+            | ToolReleaseError::ToolReleaseNotDePublished => {
+                Self::conflict(api::error_code::TOOL_RELEASE_LIFECYCLE_CONFLICT, error)
+            }
+            ToolReleaseError::ProtectedToolRelease => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
+            ToolReleaseError::Unauthorized(inner) => inner.into(),
+            ToolReleaseError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<EnvironmentToolGrantError> for ApiError {
+    fn from(value: EnvironmentToolGrantError) -> Self {
+        let error = value.to_safe_string();
+        match value {
+            EnvironmentToolGrantError::ParentEnvironmentNotFound(_) => {
+                Self::not_found(api::error_code::ENVIRONMENT_NOT_FOUND, error)
+            }
+            EnvironmentToolGrantError::EnvironmentToolGrantNotFound(_) => {
+                Self::not_found(api::error_code::ENVIRONMENT_TOOL_GRANT_NOT_FOUND, error)
+            }
+            EnvironmentToolGrantError::ReferencedToolReleaseNotFound => {
+                Self::not_found(api::error_code::REFERENCED_TOOL_RELEASE_NOT_FOUND, error)
+            }
+            EnvironmentToolGrantError::GrantAlreadyExists => Self::conflict(
+                api::error_code::ENVIRONMENT_TOOL_GRANT_ALREADY_EXISTS,
+                error,
+            ),
+            EnvironmentToolGrantError::GrantNotDeleted(_)
+            | EnvironmentToolGrantError::AdministratorManagedToolGrant(_) => {
+                Self::conflict(api::error_code::ENVIRONMENT_TOOL_GRANT_CONFLICT, error)
+            }
+            EnvironmentToolGrantError::ConcurrentModification => {
+                Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
+            }
+            EnvironmentToolGrantError::ProtectedToolGrant(_) => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
+            EnvironmentToolGrantError::Unauthorized(inner) => inner.into(),
+            EnvironmentToolGrantError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<EnvironmentToolValidationError> for ApiError {
+    fn from(value: EnvironmentToolValidationError) -> Self {
+        match value {
+            EnvironmentToolValidationError::Grant(error) => error.into(),
+            EnvironmentToolValidationError::Publication(error) => error.into(),
+        }
+    }
+}
+
 impl From<DeploymentWriteError> for ApiError {
     fn from(value: DeploymentWriteError) -> Self {
         let error: String = value.to_safe_string();
@@ -893,6 +1020,12 @@ impl From<DeploymentWriteError> for ApiError {
             }
             DeploymentWriteError::EnvironmentNotYetDeployed => {
                 Self::conflict(api::error_code::ENVIRONMENT_NOT_DEPLOYED, error)
+            }
+            DeploymentWriteError::ToolReleaseImmutableConflict => {
+                Self::conflict(api::error_code::TOOL_RELEASE_IMMUTABLE_CONFLICT, error)
+            }
+            DeploymentWriteError::ToolReleaseDePublishedConflict => {
+                Self::conflict(api::error_code::TOOL_RELEASE_LIFECYCLE_CONFLICT, error)
             }
 
             DeploymentWriteError::Unauthorized(inner) => inner.into(),
@@ -1340,6 +1473,119 @@ mod tests {
         match api_error {
             ApiError::Conflict(body) => {
                 assert_eq!(body.0.code, api::error_code::CONCURRENT_UPDATE);
+            }
+            other => panic!("Expected Conflict, got: {other:?}"),
+        }
+    }
+
+    fn status_and_code(api_error: ApiError) -> (&'static str, String) {
+        match api_error {
+            ApiError::BadRequest(body) => ("bad_request", body.0.code),
+            ApiError::NotFound(body) => ("not_found", body.0.code),
+            other => panic!("Expected bad request or not found, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_release_errors_use_specific_codes() {
+        use golem_common::model::tool::ToolName;
+        use golem_common::model::tool_release::ToolReleaseId;
+
+        let tool_name = ToolName::try_from("echo").unwrap();
+        let cases = [
+            (
+                ToolReleaseError::ToolReleaseNotFound(ToolReleaseId::new()),
+                "not_found",
+                api::error_code::TOOL_RELEASE_NOT_FOUND,
+            ),
+            (
+                ToolReleaseError::ReferencedToolReleaseNotFound,
+                "not_found",
+                api::error_code::REFERENCED_TOOL_RELEASE_NOT_FOUND,
+            ),
+            (
+                ToolReleaseError::PublicationToolNotFound(tool_name.clone()),
+                "bad_request",
+                api::error_code::TOOL_PUBLICATION_TOOL_NOT_FOUND,
+            ),
+            (
+                ToolReleaseError::DuplicatePublication(tool_name.clone()),
+                "bad_request",
+                api::error_code::DUPLICATE_TOOL_PUBLICATION,
+            ),
+            (
+                ToolReleaseError::PublicationOwnerMismatch(tool_name.clone()),
+                "bad_request",
+                api::error_code::TOOL_PUBLICATION_OWNER_MISMATCH,
+            ),
+            (
+                ToolReleaseError::PublicationHostSource(tool_name),
+                "bad_request",
+                api::error_code::TOOL_PUBLICATION_HOST_SOURCE_NOT_SUPPORTED,
+            ),
+        ];
+
+        for (error, expected_status, expected_code) in cases {
+            let (status, code) = status_and_code(error.into());
+            assert_eq!(status, expected_status);
+            assert_eq!(code, expected_code);
+        }
+    }
+
+    #[test]
+    fn environment_tool_grant_errors_distinguish_grants_from_releases() {
+        use golem_common::model::environment_tool_grant::EnvironmentToolGrantId;
+
+        let (status, code) = status_and_code(
+            EnvironmentToolGrantError::EnvironmentToolGrantNotFound(EnvironmentToolGrantId::new())
+                .into(),
+        );
+        assert_eq!(status, "not_found");
+        assert_eq!(code, api::error_code::ENVIRONMENT_TOOL_GRANT_NOT_FOUND);
+
+        let (status, code) =
+            status_and_code(EnvironmentToolGrantError::ReferencedToolReleaseNotFound.into());
+        assert_eq!(status, "not_found");
+        assert_eq!(code, api::error_code::REFERENCED_TOOL_RELEASE_NOT_FOUND);
+    }
+
+    #[test]
+    fn deployment_tool_not_found_keeps_tool_not_found_code() {
+        use golem_common::model::tool::ToolName;
+
+        let (status, code) = status_and_code(
+            DeploymentError::ToolNotFound(ToolName::try_from("echo").unwrap()).into(),
+        );
+        assert_eq!(status, "not_found");
+        assert_eq!(code, api::error_code::TOOL_NOT_FOUND);
+    }
+
+    #[test]
+    fn deployment_tool_release_immutable_conflict_uses_specific_code() {
+        let api_error = ApiError::from(DeploymentWriteError::ToolReleaseImmutableConflict);
+
+        match api_error {
+            ApiError::Conflict(body) => {
+                assert_eq!(
+                    body.0.code,
+                    api::error_code::TOOL_RELEASE_IMMUTABLE_CONFLICT
+                );
+            }
+            other => panic!("Expected Conflict, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deployment_tool_release_de_published_conflict_uses_specific_code() {
+        let api_error = ApiError::from(DeploymentWriteError::ToolReleaseDePublishedConflict);
+
+        match api_error {
+            ApiError::Conflict(body) => {
+                assert_eq!(
+                    body.0.code,
+                    api::error_code::TOOL_RELEASE_LIFECYCLE_CONFLICT
+                );
+                assert!(body.0.error.contains("de-published"));
             }
             other => panic!("Expected Conflict, got: {other:?}"),
         }

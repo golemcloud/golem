@@ -156,10 +156,12 @@ fn test_entity_activation(entity: &AgentEntity) -> EntityActivation {
             provision: ToolProvisionConfig::default(),
             binding: Box::new(CompiledToolBinding {
                 deployment_revision,
+                release_id: None,
                 agent_type_name: AgentTypeName("Agent".to_string()),
                 tool_name: tool_name.clone(),
                 version: "1".to_string(),
                 metadata_version: "1".to_string(),
+                metadata_digest: Default::default(),
                 account_id: AccountId::new(),
                 account_email: AccountEmail::new("owner@example.com"),
                 parameters: NormalizedJsonValue::new(serde_json::json!({})),
