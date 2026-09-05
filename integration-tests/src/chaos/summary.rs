@@ -56,6 +56,7 @@ use crate::chaos::ownership::OwnershipSample;
 use crate::chaos::probe::{KeyProbe, SkipReason};
 use crate::chaos::reachability::ReachabilityReport;
 use crate::chaos::relay::RelayReport;
+use crate::chaos::resolution::ResolutionReport;
 use crate::chaos::resurrection::ResurrectionReport;
 use crate::chaos::rollback::RollbackReport;
 use crate::chaos::skew::SkewReport;
@@ -606,6 +607,10 @@ pub struct ChaosSummary {
     /// clock away from the rest of the cluster. `None` everywhere else.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skew: Option<SkewReport>,
+    /// The name-resolution account, for the one scenario that stops a name
+    /// resolving on one executor. `None` everywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<ResolutionReport>,
     /// The truncation account, for scenarios that revert agent state. Absent
     /// for scenarios that do not, for the same reason as `scheduleFires`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -773,6 +778,7 @@ impl ChaosSummary {
             reachability: None,
             relay: None,
             skew: None,
+            resolution: None,
             truncation: None,
             resurrection: None,
             rollback: None,
@@ -892,6 +898,19 @@ impl ChaosSummary {
         self.attention.extend(report.attention_lines());
         self.notes.extend(report.note_lines());
         self.skew = Some(report);
+        self
+    }
+
+    /// Attaches the name-resolution account.
+    ///
+    /// Same split as [`Self::with_skew`], and the notes matter more here than
+    /// anywhere else: S4's expected result is that nothing changed, so without
+    /// a line saying what was compared, a clean result and a run that injected
+    /// nothing are the same document.
+    pub fn with_resolution(mut self, report: ResolutionReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.resolution = Some(report);
         self
     }
 

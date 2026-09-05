@@ -1088,6 +1088,154 @@ scenarios:
   # invocations it asked to take back. Afterwards there are two legal values and
   # nothing between them, which is why S7's findings fail the run outright.
   #
+  # S4 — the shard manager's name stops resolving on one worker-executor
+  # (GOL-373).
+  #
+  # The second control of the set, next to S2, and the one whose expected result
+  # is hardest to distinguish from a run that measured nothing.
+  #
+  # The executor holds one connection to the shard manager, built by
+  # `GrpcClient::new` with an idle TTL of `Duration::MAX`
+  # (golem-service-base/src/grpc/client.rs). DNS is consulted when that
+  # connection is established and never again while it lives, so NXDOMAIN
+  # against a live channel should cost nothing at all. Establishing that is the
+  # point: "a transient DNS outage costs us nothing" is a claim worth holding
+  # evidence for rather than reading off the source. MF2 (GOL-537) is the
+  # companion that takes the connection away first and forces a re-resolution
+  # while the name is poisoned.
+  #
+  # ── What the fault can reach ─────────────────────────────────────────────────
+  #
+  # Two things, and neither is what the ticket first assumed. `register` once at
+  # startup, and quota lease renewal every ten seconds. The executor never calls
+  # `get_routing_table` — only worker-service does — and ownership and health
+  # checks are both pushed shard-manager to executor, so the executor's own
+  # resolver cannot affect either. "Without ownership loss" is right, but because
+  # a DNS problem here cannot get near ownership, not because ownership survives
+  # one.
+  #
+  # ── What proves the fault landed ─────────────────────────────────────────────
+  #
+  # Nothing in this file, and nothing the driver can see. The whole scenario
+  # expects flat numbers, so an unapplied fault and a correctly applied one
+  # produce the same result — the shape that cost a window on S2 and again on
+  # S19. The workflow proves it separately, before the baseline: it puts a
+  # busybox pod under the same DNSChaos with the same patterns and requires the
+  # poisoned name to fail and an external name to still resolve. See
+  # docs/runbooks/cloud-chaos-s4.md in golem-cloud.
+  #
+  # ── Infrastructure this needs, which no other scenario does ──────────────────
+  #
+  # A Chaos Mesh DNS server, network policy in both directions around it, and a
+  # target whose root filesystem is writable — chaos-daemon injects by writing a
+  # backup and a temp file into the container's /etc, so it cannot inject into a
+  # read-only root at all. The first two are Flux-managed and must be on
+  # golem-cloud's main before a run; the third the workflow patches on and off
+  # around the run. All three are in the runbook.
+  - code: S4
+    name: executor-shard-manager-dns-failure
+    enabled: true
+
+    fault:
+      kind: dns-failure
+      target: worker-executor
+      # One executor, and the workflow narrows the selector to the pod the driver
+      # named. The other executor is not a spare: the headline number is this
+      # one's quota latency as a percentage of the other's over the same window,
+      # so `all` would leave the run with nothing to divide by.
+      mode: one
+      # Must equal phases.faultSecs, for S16's reason: Chaos Mesh recovers a
+      # DNSChaos on its own `duration` while the workflow holds the phase for
+      # faultSecs, so a shorter value here leaves the tail of the fault phase
+      # measuring an executor whose resolver was already back.
+      durationSecs: 300
+
+    phases:
+      # Long enough for cold starts and route warm-up to settle, and for several
+      # lease renewals to have gone round undisturbed, so the baseline the
+      # recovery reading is taken against is a steady state.
+      baselineSecs: 300
+      # Thirty renewal cycles. Sized to the renewal loop rather than to a
+      # caller's timeout, because the renewal is the only executor traffic the
+      # poisoned name is on the path of, and one that never re-resolves has to
+      # be given many chances not to before "it never re-resolves" is worth
+      # saying.
+      faultSecs: 300
+      # Shorter than the fault window, unlike most scenarios here. There is no
+      # backlog to drain and no reassignment to settle — if the fault reached
+      # nothing there is nothing to come back from, and if it reached the quota
+      # stream a rebuilt connection is one renewal cycle away.
+      recoverySecs: 240
+
+    ownership:
+      # Shards must not move here: nothing in this fault touches the shard
+      # manager, and the executor's resolver is on the far side of every path
+      # that could. Sampled so that a run where they did move says so, since a
+      # reassignment would mean the two groups are no longer the ones the
+      # comparison was aimed with.
+      settleSecs: 120
+
+    workload:
+      # The population the fault can reach, split by shard ownership across the
+      # two executors so roughly 60 sit on the target and 60 are the control.
+      # The control half is the measurement, not a comfort — see `resolution`.
+      quotaAgents: 120
+      # Along for the exactly-once oracle. A duplicate execution is the headline
+      # guarantee, and the durable stream is the only one that can be read back
+      # exactly.
+      durableAgents: 60
+      # Zero on purpose. Nothing about a scheduled action, a promise, an
+      # ephemeral agent or a cross-pod call crosses the executor's own resolver,
+      # so each would add operations to the report without adding evidence.
+      scheduledAgents: 0
+      ephemeralAgents: 0
+      promiseAgents: 0
+      rpcAgents: 0
+      # Split evenly between the two active streams, so ~50 quota reservations a
+      # second. Far below the `chaos-quota` rate limit, deliberately: a refusal
+      # here has to mean a lease the executor could not renew, not a bucket the
+      # workload drained itself.
+      ratePerSec: 100
+
+    resolution:
+      # Mirrored from kubernetes/chaos/golem-dev/dnschaos-s4.yaml rather than read
+      # from it, because the driver never touches Kubernetes and an archived
+      # result should say what was made unresolvable without the manifest beside
+      # it. Nothing checks the two agree; the workflow's capability preflight is
+      # where that is established.
+      poisonedName: shard-manager.golem-release.svc.cluster.local
+      # How far above the *control executor's* p50, in the same window, this
+      # executor's quota p50 may sit before the run records `quota-degraded`.
+      #
+      # Against the other executor rather than against its own baseline, because
+      # a cost here would be concurrent with the fault: both halves run the same
+      # workload against the same shard manager at the same instant, so the
+      # difference between them is the fault and not the hour. 130 rather than
+      # something tighter because a quota p50 is tens of milliseconds and two
+      # populations of sixty agents do not agree to the percent.
+      degradationCeilingPercent: 130
+      # How far above its own baseline this executor's post-fault quota p50 may
+      # sit before the run records `quota-did-not-recover`. 150 for S19's reason:
+      # a tenth of a tens-of-milliseconds p50 is inside ordinary run-to-run
+      # spread.
+      #
+      # Both are recorded rather than failed. A quota stream that ran slower on
+      # the pod that could not resolve the shard manager is the most interesting
+      # result S4 could produce, and failing the run on it would bury it under a
+      # red cross instead of putting it in front of someone.
+      recoveryFloorPercent: 150
+
+    retryPolicy:
+      # Identical to the others. The consequence specific to this scenario is
+      # that there should be nothing for it to do: the fault is not expected to
+      # produce a transport error at all, so a retry that fires here is itself
+      # worth reading.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
   # Like S8, S10, S11 and S3 the driver names the pod and keeps driving the
   # agents on the other executor as a control group.
   - code: S7

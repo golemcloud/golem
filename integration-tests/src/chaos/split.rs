@@ -28,7 +28,9 @@
 //! refuse to proceed if that share is too small to mean anything, and re-check
 //! the division immediately before the fault is injected.
 
+use crate::chaos::history::{OperationRecord, Outcome, Stream};
 use crate::chaos::pinned::{owners_by_pod_in, pod_ip_of, routing_agent_id_in};
+use crate::chaos::summary::LatencyStats;
 use crate::chaos::workload::WorkloadContext;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
@@ -426,6 +428,119 @@ pub async fn verify_ownership(
 }
 
 /// The counters component's schedule targets, as S10 aims at them.
+/// One (stream, group, window) cell of a per-executor stream account.
+///
+/// Serialised into archived results as `skew.cells`, so the field names are
+/// load-bearing across runs that were written before this type had a second
+/// caller.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamCell {
+    pub stream: Stream,
+    pub group: Group,
+    pub window: Window,
+    pub submitted: u64,
+    pub confirmed: u64,
+    pub rejected: u64,
+    pub indeterminate: u64,
+    /// Latency over confirmed operations only, filed by completion time.
+    pub latency: LatencyStats,
+}
+
+#[derive(Default)]
+struct Tally {
+    submitted: u64,
+    confirmed: u64,
+    rejected: u64,
+    indeterminate: u64,
+    latencies: Vec<u64>,
+}
+
+/// Tallies one stream by which executor owned the agent and which side of the
+/// fault the operation fell on.
+///
+/// The one table both fault-on-one-executor accounts are built from — S19's
+/// clock skew and S4's DNS failure. Neither scenario's headline number is a
+/// count: both are asking whether the group on the faulted pod moved away from
+/// the group that was never touched, and that comparison only exists if both
+/// halves are tallied the same way.
+///
+/// Two decisions are baked in here rather than left to callers, so the two
+/// scenarios cannot answer them differently:
+///
+/// An agent the selection never saw is dropped rather than guessed at.
+/// Attributing it would put the fault's own damage into the control group,
+/// which is the one error that makes the comparison read backwards.
+///
+/// Latency is filed by **completion**, not submission. An operation held across
+/// the recovery edge was paid for on the far side of it, and filing it by
+/// submission would credit the fault window with a cost the recovery bore.
+pub fn stream_cells(
+    records: &[OperationRecord],
+    stream: Stream,
+    split: &PodSplit,
+    fault: Option<FaultWindow>,
+) -> Vec<StreamCell> {
+    let mut tallies: BTreeMap<(Group, Window), Tally> = BTreeMap::new();
+
+    for record in records.iter().filter(|r| r.stream == stream) {
+        let Some(group) = split.group_of(&record.agent) else {
+            continue;
+        };
+
+        let offered = tallies
+            .entry((group, Window::of(record.submitted_at, fault)))
+            .or_default();
+        offered.submitted += 1;
+        match record.outcome {
+            Outcome::Confirmed => offered.confirmed += 1,
+            Outcome::Rejected => offered.rejected += 1,
+            Outcome::Indeterminate => offered.indeterminate += 1,
+        }
+
+        if record.outcome == Outcome::Confirmed
+            && let Some(completed_at) = record.completed_at
+        {
+            tallies
+                .entry((group, Window::of(completed_at, fault)))
+                .or_default()
+                .latencies
+                .push(record.duration_ms);
+        }
+    }
+
+    tallies
+        .into_iter()
+        .map(|((group, window), tally)| StreamCell {
+            stream,
+            group,
+            window,
+            submitted: tally.submitted,
+            confirmed: tally.confirmed,
+            rejected: tally.rejected,
+            indeterminate: tally.indeterminate,
+            latency: LatencyStats::from_durations(tally.latencies),
+        })
+        .collect()
+}
+
+/// Post-fault p50 as a percentage of the baseline p50, on the faulted executor.
+///
+/// `None` when either window produced no confirmed operation there, or when the
+/// baseline p50 was zero — a percentage of nothing is not a recovery reading,
+/// and reporting one would be worse than reporting none.
+pub fn recovery_percent(cells: &[StreamCell]) -> Option<f64> {
+    let at = |window: Window| {
+        cells
+            .iter()
+            .find(|c| c.group == Group::OnPod && c.window == window)
+            .map(|c| c.latency.p50_ms as f64)
+    };
+    let baseline = at(Window::BeforeFault)?;
+    let after = at(Window::AfterFault)?;
+    (baseline > 0.0).then(|| round2(100.0 * after / baseline))
+}
+
 pub fn schedule_subject<'a>(ctx: &'a WorkloadContext) -> Subject<'a> {
     Subject {
         scenario: "S10",

@@ -115,17 +115,15 @@
 //! scheduled-fire and read-back oracles the scenario ends with, which is the
 //! right place for them: a duplicate is a duplicate whatever caused it.
 
-use crate::chaos::history::{OperationRecord, Outcome, Stream};
+use crate::chaos::history::{OperationRecord, Stream};
 use crate::chaos::pinned::routing_agent_id;
-use crate::chaos::split::{FaultWindow, Group, PodSplit, Window, round2};
-use crate::chaos::summary::LatencyStats;
+use crate::chaos::split::{self, FaultWindow, Group, PodSplit, Window};
 use crate::chaos::workload::{QUOTA_COUNTER_AGENT, WorkloadContext};
 use chrono::{DateTime, Utc};
 use golem_common::base_model::OplogIndex;
 use golem_common::model::oplog::PublicOplogEntry;
 use golem_test_framework::dsl::TestDsl;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -219,19 +217,12 @@ pub struct SkewFinding {
 }
 
 /// One (stream, group, window) cell of the quota account.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SkewCell {
-    pub stream: Stream,
-    pub group: Group,
-    pub window: Window,
-    pub submitted: u64,
-    pub confirmed: u64,
-    pub rejected: u64,
-    pub indeterminate: u64,
-    /// Latency over confirmed operations only, filed by completion time.
-    pub latency: LatencyStats,
-}
+///
+/// The table itself lives in [`crate::chaos::split`], because S4 asks the same
+/// question of the same stream with a different fault. Kept as an alias rather
+/// than renamed at the use sites: `skew.cells` is what archived results call
+/// this, and the name is what a reader looks for.
+pub use crate::chaos::split::StreamCell as SkewCell;
 
 /// The clock-skew account.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -365,52 +356,7 @@ pub struct SkewInputs<'a> {
 
 /// Builds the account.
 pub fn build(records: &[OperationRecord], inputs: SkewInputs<'_>) -> SkewReport {
-    let mut tallies: BTreeMap<(Group, Window), Tally> = BTreeMap::new();
-
-    for record in records.iter().filter(|r| r.stream == Stream::Quota) {
-        let Some(group) = inputs.split.group_of(&record.agent) else {
-            // An agent the selection never saw cannot be attributed to either
-            // side, and guessing would put the fault's own damage in the
-            // control group.
-            continue;
-        };
-
-        let offered = tallies
-            .entry((group, Window::of(record.submitted_at, inputs.fault)))
-            .or_default();
-        offered.submitted += 1;
-        match record.outcome {
-            Outcome::Confirmed => offered.confirmed += 1,
-            Outcome::Rejected => offered.rejected += 1,
-            Outcome::Indeterminate => offered.indeterminate += 1,
-        }
-
-        // Latency is filed by *completion*, not submission: an operation held
-        // across the recovery edge was paid for on the far side of it.
-        if record.outcome == Outcome::Confirmed
-            && let Some(completed_at) = record.completed_at
-        {
-            tallies
-                .entry((group, Window::of(completed_at, inputs.fault)))
-                .or_default()
-                .latencies
-                .push(record.duration_ms);
-        }
-    }
-
-    let cells: Vec<SkewCell> = tallies
-        .into_iter()
-        .map(|((group, window), tally)| SkewCell {
-            stream: Stream::Quota,
-            group,
-            window,
-            submitted: tally.submitted,
-            confirmed: tally.confirmed,
-            rejected: tally.rejected,
-            indeterminate: tally.indeterminate,
-            latency: LatencyStats::from_durations(tally.latencies),
-        })
-        .collect();
+    let cells = split::stream_cells(records, Stream::Quota, inputs.split, inputs.fault);
 
     // Classified here rather than by the caller, so the probes and the cells
     // answer "which side of the fault" the same way and cannot drift.
@@ -434,18 +380,9 @@ pub fn build(records: &[OperationRecord], inputs: SkewInputs<'_>) -> SkewReport 
         findings: Vec::new(),
     };
 
-    report.quota_recovery_percent = recovery_percent(&report);
+    report.quota_recovery_percent = split::recovery_percent(&report.cells);
     report.findings = findings(&report);
     report
-}
-
-#[derive(Default)]
-struct Tally {
-    submitted: u64,
-    confirmed: u64,
-    rejected: u64,
-    indeterminate: u64,
-    latencies: Vec<u64>,
 }
 
 /// Median offset over the readable probes taken inside the fault window, in one
@@ -469,19 +406,6 @@ fn median_offset(probes: &[ClockProbe], group: Group) -> Option<i64> {
     }
     offsets.sort_unstable();
     Some(offsets[offsets.len() / 2])
-}
-
-/// Post-fault p50 as a percentage of the baseline p50, on the skewed executor.
-fn recovery_percent(report: &SkewReport) -> Option<f64> {
-    let baseline = report
-        .cell(Group::OnPod, Window::BeforeFault)?
-        .latency
-        .p50_ms as f64;
-    let after = report
-        .cell(Group::OnPod, Window::AfterFault)?
-        .latency
-        .p50_ms as f64;
-    (baseline > 0.0).then(|| round2(100.0 * after / baseline))
 }
 
 fn findings(report: &SkewReport) -> Vec<SkewFinding> {
@@ -704,8 +628,9 @@ pub async fn probe_round(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chaos::history::Phase;
+    use crate::chaos::history::{Outcome, Phase};
     use chrono::TimeDelta;
+    use std::collections::BTreeMap;
     use test_r::test;
 
     const INJECTED_MS: i64 = -30_000;

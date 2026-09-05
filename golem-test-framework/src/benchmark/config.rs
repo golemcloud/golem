@@ -251,6 +251,10 @@ pub enum ChaosScenarioArg {
     /// Two executors cut off from each other while agents on one invoke agents
     /// on the other. The control: the link carries no traffic.
     S2,
+    /// One executor unable to resolve the shard manager's name, while its
+    /// connection to it stays up. The second control: that connection is built
+    /// once with an infinite idle TTL, so DNS is never consulted again.
+    S4,
     /// Executor pod kill while agents are having their state reverted.
     S7,
     /// Executor pod kill while agents are being deleted.

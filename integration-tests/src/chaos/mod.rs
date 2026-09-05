@@ -46,6 +46,7 @@ pub mod prep;
 pub mod probe;
 pub mod reachability;
 pub mod relay;
+pub mod resolution;
 pub mod result;
 pub mod resurrection;
 pub mod reverts;
@@ -99,6 +100,14 @@ pub enum ScenarioCode {
     /// no traffic, and a run that degrades is reporting a path the architecture
     /// says does not exist.
     S2,
+    /// One executor unable to resolve the shard manager's name, while its
+    /// connection to it stays up.
+    ///
+    /// The second control of the set. The executor builds that connection once
+    /// with an infinite idle TTL, so DNS is consulted at connect time and never
+    /// again — a name that stops resolving should reach nothing. MF2 is the
+    /// companion that takes the connection away first.
+    S4,
     /// Executor pod kill while agents are having their state reverted.
     S7,
     /// Executor pod kill while agents are being deleted.
@@ -199,6 +208,7 @@ impl ScenarioCode {
             ScenarioCode::S11 => "S11",
             ScenarioCode::S3 => "S3",
             ScenarioCode::S2 => "S2",
+            ScenarioCode::S4 => "S4",
             ScenarioCode::S7 => "S7",
             ScenarioCode::S6 => "S6",
             ScenarioCode::S9 => "S9",
@@ -222,10 +232,11 @@ impl ScenarioCode {
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 26] = [
+    pub const ALL: [ScenarioCode; 27] = [
         ScenarioCode::S1,
         ScenarioCode::S2,
         ScenarioCode::S3,
+        ScenarioCode::S4,
         ScenarioCode::S5,
         ScenarioCode::S6,
         ScenarioCode::S7,
@@ -769,6 +780,40 @@ pub struct SkewConfig {
     /// a single probe that caught a slow invocation would decide the run on its
     /// own.
     pub probes_per_round: u32,
+}
+
+/// Shape of the name-resolution scenario (GOL-373).
+///
+/// Two ceilings and the name they are about. Both are recorded rather than
+/// enforced, because "the quota stream got slower on the pod that could not
+/// resolve the shard manager" is a result to read, not a contract to break —
+/// what fails an S4 run is the exactly-once oracle and a shard assignment that
+/// moved.
+///
+/// The name is here rather than read from the Chaos Mesh manifest for the same
+/// reason `skew.injectedOffsetMs` is: the driver never touches Kubernetes, and a
+/// result that names what was poisoned is readable a year later without the
+/// manifest beside it. Nothing checks the two agree, and nothing can — see the
+/// workflow's DNS capability preflight, which is where that is established.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolutionConfig {
+    /// The name the fault makes unresolvable on the target executor.
+    pub poisoned_name: String,
+    /// How far above the *control executor's* p50, in the same window, the
+    /// target executor's quota p50 may sit before
+    /// [`resolution::ResolutionViolation::QuotaDegraded`] is recorded.
+    ///
+    /// Against the other executor rather than against its own baseline, because
+    /// a cost here would be concurrent with the fault: both halves run the same
+    /// workload against the same shard manager at the same instant, so the
+    /// difference between them is the fault and not the hour.
+    pub degradation_ceiling_percent: f64,
+    /// How far above its own baseline the target executor's post-fault quota
+    /// p50 may sit before
+    /// [`resolution::ResolutionViolation::QuotaDidNotRecover`] is recorded.
+    #[serde(default = "default_recovery_floor_percent")]
+    pub recovery_floor_percent: f64,
 }
 
 impl IsolationConfig {
@@ -1366,6 +1411,9 @@ pub struct ScenarioConfig {
     /// Clock-skew settings. Absent for scenarios that do not move a clock.
     #[serde(default)]
     pub skew: Option<SkewConfig>,
+    /// Name-resolution settings. Absent for scenarios that do not break DNS.
+    #[serde(default)]
+    pub resolution: Option<ResolutionConfig>,
     /// Storage-outage settings. Absent for scenarios that do not take a
     /// storage dependency away.
     #[serde(default)]
@@ -1848,6 +1896,36 @@ impl ScenarioConfig {
         Ok(())
     }
 
+    /// The name-resolution block. See [`Self::require_workload`].
+    pub fn require_resolution(&self) -> anyhow::Result<&ResolutionConfig> {
+        let config = self.resolution.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "chaos scenario {} needs a `resolution` block in the suite YAML",
+                self.code
+            )
+        })?;
+        // A ceiling at or below 100 is met by two executors performing
+        // identically, which is the expected result — so every clean run would
+        // report a finding and the one number that matters would stop meaning
+        // anything.
+        if config.degradation_ceiling_percent <= 100.0 {
+            anyhow::bail!(
+                "chaos scenario {}: resolution.degradationCeilingPercent is {}, and anything at \
+                 or below 100 is breached by two executors performing identically",
+                self.code,
+                config.degradation_ceiling_percent
+            );
+        }
+        if config.poisoned_name.trim().is_empty() {
+            anyhow::bail!(
+                "chaos scenario {}: resolution.poisonedName is empty, so an archived result \
+                 would not say what the run made unresolvable",
+                self.code
+            );
+        }
+        Ok(config)
+    }
+
     /// The clock-skew block. See [`Self::require_workload`].
     pub fn require_skew(&self) -> anyhow::Result<&SkewConfig> {
         let config = self.skew.as_ref().ok_or_else(|| {
@@ -2086,6 +2164,7 @@ mod tests {
                 rollback: None,
                 relay: None,
                 skew: None,
+                resolution: None,
                 storage: None,
                 composed: None,
                 ownership: None,
@@ -2127,6 +2206,7 @@ mod tests {
             rollback: None,
             relay: None,
             skew: None,
+            resolution: None,
             storage: None,
             composed: None,
             revert: Some(RevertConfig {
@@ -2218,6 +2298,7 @@ mod tests {
             rollback: None,
             relay: None,
             skew: None,
+            resolution: None,
             storage: Some(StorageConfig {
                 endpoint: endpoint.to_string(),
                 expect: OutageExpectation::WholeWorkload {
@@ -2468,6 +2549,54 @@ mod tests {
         }
     }
 
+    /// A DNS fault and a `resolution` block must arrive together.
+    ///
+    /// The same shape as the skew pairing above, and the failure it prevents is
+    /// worse here. A DNS fault with no block would run the one scenario in the
+    /// suite whose expected result is that nothing changed, and archive it with
+    /// no line saying what was compared — which is indistinguishable from a run
+    /// that injected nothing. A block on a scenario that breaks no name would
+    /// judge two executor groups against a ceiling for a fault neither of them
+    /// was under.
+    #[test]
+    fn exactly_the_dns_scenario_carries_a_resolution_block() {
+        let suite = ChaosSuite::load(suite_path()).unwrap();
+        for entry in &suite.scenarios {
+            let code = entry.scenario_code().unwrap();
+            assert_eq!(
+                entry.resolution.is_some(),
+                entry.fault.kind == "dns-failure",
+                "{code} injects a DNS failure without a resolution block, or carries one \
+                 without a DNS fault to judge against"
+            );
+        }
+    }
+
+    /// The poisoned name a DNS scenario reports must be the one the executor
+    /// actually dials.
+    ///
+    /// The suite mirrors it rather than reading the Chaos Mesh manifest, so
+    /// nothing else can catch a name that drifted. A mismatch would archive a
+    /// result claiming a name was made unresolvable when a different one was,
+    /// and the run would still pass — the executor never re-resolves either.
+    #[test]
+    fn the_poisoned_name_is_the_one_the_executor_dials() {
+        let suite = ChaosSuite::load(suite_path()).unwrap();
+        for entry in &suite.scenarios {
+            let Some(resolution) = entry.resolution.as_ref() else {
+                continue;
+            };
+            let code = entry.scenario_code().unwrap();
+            assert!(
+                resolution.poisoned_name.starts_with("shard-manager."),
+                "{code} poisons {}, but the only name the executor resolves towards the shard \
+                 manager is shard-manager.<namespace>.svc.cluster.local — see \
+                 GOLEM__SHARD_MANAGER__HOST on the worker-executor deployment",
+                resolution.poisoned_name
+            );
+        }
+    }
+
     /// The two relay scenarios must disagree about what their fault does.
     ///
     /// Both read the same cells and the same premium, and the only thing that
@@ -2655,6 +2784,11 @@ mod tests {
                     entry.require_workload().unwrap();
                     entry.require_scheduled().unwrap();
                     entry.require_skew().unwrap();
+                }
+                ScenarioCode::S4 => {
+                    entry.require_workload().unwrap();
+                    entry.require_resolution().unwrap();
+                    entry.require_ownership().unwrap();
                 }
                 ScenarioCode::S2 | ScenarioCode::S21 => {
                     entry.require_workload().unwrap();
