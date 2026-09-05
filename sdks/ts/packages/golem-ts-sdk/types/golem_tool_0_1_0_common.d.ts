@@ -427,7 +427,7 @@ declare module 'golem:tool/common@0.1.0' {
     scope: ToolMiddlewareScope;
   };
   /**
-   * Invocation contract — shared between guest and host
+   * Invocation contract — shared between guest and host.
    */
   export type ToolError =
   {

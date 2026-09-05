@@ -23,7 +23,8 @@ use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::entity::{
-    EntityActivation, EntityInvocationScope, FilesystemCapability, OwnerRuntime,
+    EntityActivation, EntityInvocationScope, FilesystemCapability, InvocationExecutionMode,
+    OwnerRuntime,
 };
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
@@ -646,6 +647,7 @@ impl WorkerCtx for DebugContext {
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<uuid::Uuid>,
         runtime: OwnerRuntime,
+        entity_execution_mode: Option<InvocationExecutionMode>,
         owner_execution: Arc<OwnerExecution>,
         owner_resources: Arc<OwnerRuntimeResources>,
         filesystem: FilesystemCapability,
@@ -693,8 +695,10 @@ impl WorkerCtx for DebugContext {
             u64::MAX,
             u64::MAX,
             runtime,
+            entity_execution_mode,
             owner_execution,
             owner_resources,
+            None,
             filesystem,
             executable_component,
             entity_activation,

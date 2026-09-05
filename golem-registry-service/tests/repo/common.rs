@@ -19,7 +19,7 @@ use futures::future::join_all;
 use golem_common::base_model::Empty;
 use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::base_model::component_metadata::KnownExports;
-use golem_common::model::account::{AccountId, AccountRevision, AccountSetPlan};
+use golem_common::model::account::{AccountEmail, AccountId, AccountRevision, AccountSetPlan};
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
@@ -31,7 +31,8 @@ use golem_common::model::card::{
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::{AgentTypeProvisionConfig, ComponentMetadata};
-use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::deployment::{DeploymentRevision, DeploymentSummary};
+use golem_common::model::diff::{self, Hashable};
 use golem_common::model::environment::{
     EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentUpdate,
 };
@@ -39,8 +40,12 @@ use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::plan::PlanId;
 use golem_common::model::tool::{
-    CompiledToolBinding, RegisteredTool, SecretKeyScope, TOOL_METADATA_WIT_VERSION,
+    CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, TOOL_METADATA_WIT_VERSION,
     ToolDeploymentMetadata, ToolName, ToolProvisionConfig, ToolSource,
+};
+use golem_common::model::tool_release::{
+    SystemToolAvailability, SystemToolReleaseProvision, ToolPublication, ToolPublicationPlanAction,
+    ToolReleaseId,
 };
 use golem_common::model::{AgentId, IdempotencyKey, OplogIndex};
 use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
@@ -55,6 +60,7 @@ use golem_registry_service::repo::environment::{
     DbEnvironmentRepo, EnvironmentExtRevisionRecord, EnvironmentRevisionRecord,
     EnvironmentVisibilityFilter, EnvironmentVisibilityScope,
 };
+use golem_registry_service::repo::environment_tool_grant::EnvironmentToolGrantRepoError;
 use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
 };
@@ -74,11 +80,12 @@ use golem_registry_service::repo::model::audit::{
 use golem_registry_service::repo::model::card::CardRecord;
 use golem_registry_service::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use golem_registry_service::repo::model::deployment::{
-    DeploymentAgentToolBindingRecord, DeploymentComponentRevisionRecord,
+    DeployRepoError, DeploymentAgentToolBindingRecord, DeploymentComponentRevisionRecord,
     DeploymentRegisteredAgentTypeRecord, DeploymentRegisteredToolRecord,
     DeploymentRevisionCreationRecord,
 };
 use golem_registry_service::repo::model::environment::EnvironmentRepoError;
+use golem_registry_service::repo::model::environment_tool_grant::EnvironmentToolGrantRecord;
 use golem_registry_service::repo::model::hash::SqlBlake3Hash;
 use golem_registry_service::repo::model::http_api_deployment::{
     HttpApiDeploymentData, HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
@@ -89,12 +96,17 @@ use golem_registry_service::repo::model::mcp_deployment::{
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plan::PlanRecord;
 use golem_registry_service::repo::model::plugin::PluginRecord;
+use golem_registry_service::repo::model::tool_release::{
+    TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_PUBLISHED,
+    TOOL_RELEASE_LIFECYCLE_SUPERSEDED, TOOL_RELEASE_SOURCE_COMPONENT, ToolReleaseRecord,
+};
 use golem_registry_service::repo::permission_share::DbPermissionShareRepo;
 use golem_registry_service::repo::plan::DbPlanRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::{
     ChangeEventId, NewRegistryChangeEvent, RegistryChangeEvent,
 };
+use golem_registry_service::repo::tool_release::{DbToolReleaseRepo, ToolReleaseRepoError};
 use golem_registry_service::services::component_object_store::ComponentObjectStore;
 use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
 use golem_registry_service::services::registry_change_notifier::{
@@ -110,6 +122,7 @@ use golem_registry_service::services::{
     environment::{EnvironmentError, EnvironmentService},
     permission_share::PermissionShareService,
     plan::PlanService,
+    tool_release::{ToolReleaseError, ToolReleaseService},
 };
 use golem_service_base::clients::registry::ResourceUsageMetering;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
@@ -4416,6 +4429,687 @@ fn make_test_tool(name: &str, version: &str) -> Tool {
     }
 }
 
+pub async fn test_component_delete_rejects_retained_source_references(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let owner_account_id = owner.revision.account_id;
+    let app = deps.create_application(owner_account_id).await;
+    let environment = deps.create_env(app.revision.application_id).await;
+    let environment_id = environment.revision.environment_id;
+
+    let release_component_name = format!("release-source-{}", new_repo_uuid());
+    let release_component = deps
+        .component_repo
+        .create(
+            environment_id,
+            &release_component_name,
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner_account_id),
+                size: 0.into(),
+                metadata: Blob::new(ComponentMetadata::from_parts(
+                    KnownExports::default(),
+                    Vec::new(),
+                    None,
+                    None,
+                    Vec::new(),
+                    BTreeMap::new(),
+                )),
+                object_store_key: String::new(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let release_source = ToolSource::Component {
+        component_id: ComponentId(release_component.revision.component_id),
+        component_revision: ComponentRevision::try_from(release_component.revision.revision_id)
+            .unwrap(),
+        component_name: golem_common::model::component::ComponentName(release_component_name),
+    };
+    let release_tool = make_test_tool("retained-release", "1.0.0");
+    deps.tool_release_repo
+        .create(
+            ToolReleaseRecord::from_registered_tool(
+                &RegisteredTool {
+                    deployment_revision: DeploymentRevision::INITIAL,
+                    release_id: None,
+                    metadata_digest: golem_common::model::tool_release::tool_metadata_digest(
+                        TOOL_METADATA_WIT_VERSION,
+                        &release_tool,
+                    )
+                    .unwrap(),
+                    definition: release_tool,
+                    provision: ToolProvisionConfig::default(),
+                    source: release_source,
+                    owner_account_id: AccountId(owner_account_id),
+                    owner_account_email: golem_common::model::account::AccountEmail::new(
+                        owner.revision.email.clone(),
+                    ),
+                    metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+                },
+                true,
+                AccountId(owner_account_id),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let release_source_deletion = deps
+        .component_repo
+        .delete(
+            owner_account_id,
+            release_component.revision.component_id,
+            release_component.revision.revision_id + 1,
+        )
+        .await;
+    let_assert!(Err(ComponentRepoError::ComponentSourceInUse) = release_source_deletion);
+
+    let snapshot_component_name = format!("snapshot-source-{}", new_repo_uuid());
+    let snapshot_component = deps
+        .component_repo
+        .create(
+            environment_id,
+            &snapshot_component_name,
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                ..release_component.revision.clone()
+            }
+            .with_updated_hash()
+            .unwrap(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    deps.full_deployment_repo
+        .deploy(
+            DeploymentRevisionCreationRecord {
+                environment_id,
+                deployment_revision_id: 1,
+                version: "snapshot-retention".to_string(),
+                hash: SqlBlake3Hash::empty(),
+                components: vec![DeploymentComponentRevisionRecord {
+                    environment_id,
+                    deployment_revision_id: 1,
+                    component_id: snapshot_component.revision.component_id,
+                    component_revision_id: snapshot_component.revision.revision_id,
+                }],
+                http_api_deployments: Vec::new(),
+                mcp_deployments: Vec::new(),
+                compiled_routes: Vec::new(),
+                compiled_mcp: Vec::new(),
+                registered_agent_types: Vec::new(),
+                tool_releases: Vec::new(),
+                registered_tools: Vec::new(),
+                agent_tool_bindings: Vec::new(),
+                created_agent_secrets: Vec::new(),
+                updated_agent_secrets: Vec::new(),
+                replaced_agent_secrets: Vec::new(),
+                created_resource_definitions: Vec::new(),
+                created_retry_policies: Vec::new(),
+                user_account_id: owner_account_id,
+            },
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+
+    let snapshot_source_deletion = deps
+        .component_repo
+        .delete(
+            owner_account_id,
+            snapshot_component.revision.component_id,
+            snapshot_component.revision.revision_id + 1,
+        )
+        .await;
+    let_assert!(Err(ComponentRepoError::ComponentSourceInUse) = snapshot_source_deletion);
+}
+
+pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let actor = AccountId(owner.revision.account_id);
+    let app = deps.create_application(actor.0).await;
+    let environment = deps.create_env(app.revision.application_id).await;
+    let protected_environment = deps.create_env(app.revision.application_id).await;
+    let mutable_grant_environment = deps.create_env(app.revision.application_id).await;
+    let component_name = format!("release-component-{}", new_repo_uuid());
+    let component = deps
+        .component_repo
+        .create(
+            environment.revision.environment_id,
+            &component_name,
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(actor.0),
+                size: 0.into(),
+                metadata: Blob::new(ComponentMetadata::from_parts(
+                    KnownExports::default(),
+                    Vec::new(),
+                    None,
+                    None,
+                    Vec::new(),
+                    BTreeMap::new(),
+                )),
+                object_store_key: String::new(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+
+    let definition = make_test_tool("phase-one-tool", "1.0.0");
+    let component_source = ToolSource::Component {
+        component_id: ComponentId(component.revision.component_id),
+        component_revision: ComponentRevision::try_from(component.revision.revision_id).unwrap(),
+        component_name: golem_common::model::component::ComponentName(component_name.clone()),
+    };
+    let registered = RegisteredTool {
+        deployment_revision: DeploymentRevision::INITIAL,
+        release_id: None,
+        definition: definition.clone(),
+        provision: ToolProvisionConfig::default(),
+        source: component_source.clone(),
+        owner_account_id: actor,
+        owner_account_email: golem_common::model::account::AccountEmail::new(
+            owner.revision.email.clone(),
+        ),
+        metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+        metadata_digest: Default::default(),
+    };
+    let component_record =
+        ToolReleaseRecord::from_registered_tool(&registered, true, actor).unwrap();
+    let component_release_id = component_record.tool_release_id;
+    let created = deps
+        .tool_release_repo
+        .create(component_record.clone())
+        .await
+        .unwrap();
+    assert_eq!(created.release, component_record);
+    let read = deps
+        .tool_release_repo
+        .get_by_id(component_release_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        read.release.component_id,
+        Some(component.revision.component_id)
+    );
+    assert_eq!(
+        read.release.component_revision,
+        Some(component.revision.revision_id)
+    );
+    assert_eq!(
+        read.release.component_name.as_deref(),
+        Some(component_name.as_str())
+    );
+    assert_eq!(read.release.source_kind, TOOL_RELEASE_SOURCE_COMPONENT);
+
+    let mut invalid_component = component_record.clone();
+    invalid_component.tool_release_id = new_repo_uuid();
+    invalid_component.tool_version = "invalid-component-fk".to_string();
+    invalid_component.component_id = Some(new_repo_uuid());
+    assert!(matches!(
+        deps.tool_release_repo
+            .create(invalid_component.clone())
+            .await,
+        Err(ToolReleaseRepoError::InternalError(_))
+    ));
+    assert!(
+        deps.tool_release_repo
+            .get_by_id(invalid_component.tool_release_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let host_record = ToolReleaseRecord::from_system_provision(
+        actor,
+        SystemToolReleaseProvision {
+            name: ToolName::try_from("protected-host-tool").unwrap(),
+            version: "2.0.0".to_string(),
+            source: ToolSource::Host {
+                host_tool_id: HostToolId::try_from("phase-one-host".to_string()).unwrap(),
+                implementation_version: "host-v1".to_string(),
+            },
+            definition: make_test_tool("protected-host-tool", "2.0.0"),
+            metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+            availability: SystemToolAvailability::Grantable,
+        },
+        actor,
+    )
+    .unwrap();
+    let host_release_id = host_record.tool_release_id;
+    let host = deps
+        .tool_release_repo
+        .create(host_record.clone())
+        .await
+        .unwrap();
+    assert_eq!(host.release, host_record);
+    assert_eq!(
+        deps.tool_release_repo
+            .get_by_coordinates(actor.0, "protected-host-tool", "2.0.0")
+            .await
+            .unwrap()
+            .unwrap()
+            .release,
+        host_record
+    );
+    let mut protected_without_availability = host_record.clone();
+    protected_without_availability.tool_release_id = new_repo_uuid();
+    protected_without_availability.tool_name = "protected-without-availability".to_string();
+    protected_without_availability.tool_version = "1.0.0".to_string();
+    protected_without_availability.system_availability = None;
+    assert!(matches!(
+        deps.tool_release_repo
+            .create(protected_without_availability)
+            .await,
+        Err(ToolReleaseRepoError::InternalError(_))
+    ));
+
+    let invalid_environment_grant = EnvironmentToolGrantRecord::creation(
+        EnvironmentId::new(),
+        ToolReleaseId(component_release_id),
+        false,
+        false,
+        false,
+        actor,
+    );
+    assert!(matches!(
+        deps.environment_tool_grant_repo
+            .create(invalid_environment_grant)
+            .await,
+        Err(EnvironmentToolGrantRepoError::InternalError(_))
+    ));
+    let invalid_release_grant = EnvironmentToolGrantRecord::creation(
+        EnvironmentId(environment.revision.environment_id),
+        ToolReleaseId::new(),
+        false,
+        false,
+        false,
+        actor,
+    );
+    assert!(matches!(
+        deps.environment_tool_grant_repo
+            .create(invalid_release_grant)
+            .await,
+        Err(EnvironmentToolGrantRepoError::ConcurrentModification)
+    ));
+
+    let mut mutable_release = component_record.clone();
+    mutable_release.tool_release_id = new_repo_uuid();
+    mutable_release.tool_version = "mutable-1.0.0".to_string();
+    mutable_release.immutable = false;
+    deps.tool_release_repo
+        .create(mutable_release.clone())
+        .await
+        .unwrap();
+    let mut loose_revision = mutable_grant_environment.revision.clone();
+    loose_revision.revision_id += 1;
+    loose_revision.version_check = false;
+    loose_revision.audit = DeletableRevisionAuditFields::new(actor.0);
+    let loose_environment = deps.environment_repo.update(loose_revision).await.unwrap();
+    let mutable_grant = EnvironmentToolGrantRecord::creation(
+        EnvironmentId(mutable_grant_environment.revision.environment_id),
+        ToolReleaseId(mutable_release.tool_release_id),
+        false,
+        false,
+        false,
+        actor,
+    );
+    deps.environment_tool_grant_repo
+        .create(mutable_grant.clone())
+        .await
+        .unwrap();
+
+    let mut strict_revision = loose_environment.revision.clone();
+    strict_revision.revision_id += 1;
+    strict_revision.version_check = true;
+    strict_revision.audit = DeletableRevisionAuditFields::new(actor.0);
+    assert!(matches!(
+        deps.environment_repo.update(strict_revision).await,
+        Err(EnvironmentRepoError::MutableToolGrantsInVersionCheckedEnvironment)
+    ));
+    assert!(
+        !deps
+            .environment_repo
+            .get_by_id(mutable_grant_environment.revision.environment_id, false)
+            .await
+            .unwrap()
+            .unwrap()
+            .revision
+            .version_check
+    );
+
+    assert!(
+        deps.environment_tool_grant_repo
+            .delete(mutable_grant.environment_tool_grant_id, actor.0, false)
+            .await
+            .unwrap()
+    );
+    deps.environment_repo
+        .update({
+            let mut revision = loose_environment.revision.clone();
+            revision.revision_id += 1;
+            revision.version_check = true;
+            revision.audit = DeletableRevisionAuditFields::new(actor.0);
+            revision
+        })
+        .await
+        .unwrap();
+    assert!(
+        deps.environment_tool_grant_repo
+            .restore(
+                mutable_grant.environment_tool_grant_id,
+                mutable_grant.environment_id,
+                mutable_grant.tool_release_id,
+                actor.0,
+                false,
+                None,
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    assert!(matches!(
+        deps.environment_tool_grant_repo
+            .create(EnvironmentToolGrantRecord::creation(
+                EnvironmentId(protected_environment.revision.environment_id),
+                ToolReleaseId(mutable_release.tool_release_id),
+                false,
+                false,
+                false,
+                actor,
+            ))
+            .await,
+        Err(EnvironmentToolGrantRepoError::ConcurrentModification)
+    ));
+
+    let ordinary_grant = EnvironmentToolGrantRecord::creation(
+        EnvironmentId(environment.revision.environment_id),
+        ToolReleaseId(component_release_id),
+        false,
+        true,
+        false,
+        actor,
+    );
+    let ordinary_grant_id = ordinary_grant.environment_tool_grant_id;
+    deps.environment_tool_grant_repo
+        .create(ordinary_grant.clone())
+        .await
+        .unwrap();
+
+    assert!(
+        deps.environment_tool_grant_repo
+            .delete(ordinary_grant_id, actor.0, false)
+            .await
+            .unwrap()
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .get_by_id(ordinary_grant_id, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .get_by_id(ordinary_grant_id, true)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(matches!(
+        deps.environment_tool_grant_repo
+            .create(EnvironmentToolGrantRecord::creation(
+                EnvironmentId(environment.revision.environment_id),
+                ToolReleaseId(component_release_id),
+                false,
+                false,
+                false,
+                actor,
+            ))
+            .await,
+        Err(EnvironmentToolGrantRepoError::GrantAlreadyExists)
+    ));
+    let restored_grant = deps
+        .environment_tool_grant_repo
+        .restore(
+            ordinary_grant_id,
+            ordinary_grant.environment_id,
+            ordinary_grant.tool_release_id,
+            actor.0,
+            true,
+            Some(true),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(restored_grant.automatic);
+    assert!(restored_grant.follow_coordinates);
+    let pinned_automatic_grant = deps
+        .environment_tool_grant_repo
+        .set_management(
+            ordinary_grant_id,
+            ordinary_grant.environment_id,
+            ordinary_grant.tool_release_id,
+            actor.0,
+            true,
+            false,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(pinned_automatic_grant.automatic);
+    assert!(!pinned_automatic_grant.follow_coordinates);
+    let administrator_managed_grant = deps
+        .environment_tool_grant_repo
+        .set_management(
+            ordinary_grant_id,
+            ordinary_grant.environment_id,
+            ordinary_grant.tool_release_id,
+            actor.0,
+            false,
+            false,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!administrator_managed_grant.automatic);
+    assert!(!administrator_managed_grant.follow_coordinates);
+    let retained_administrator_managed_grant = deps
+        .environment_tool_grant_repo
+        .set_management(
+            ordinary_grant_id,
+            ordinary_grant.environment_id,
+            ordinary_grant.tool_release_id,
+            actor.0,
+            true,
+            true,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!retained_administrator_managed_grant.automatic);
+    assert!(!retained_administrator_managed_grant.follow_coordinates);
+    assert!(
+        !deps
+            .environment_tool_grant_repo
+            .delete(ordinary_grant_id, actor.0, true)
+            .await
+            .unwrap()
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .delete(ordinary_grant_id, actor.0, false)
+            .await
+            .unwrap()
+    );
+    let automatically_restored_administrator_tombstone = deps
+        .environment_tool_grant_repo
+        .restore(
+            ordinary_grant_id,
+            ordinary_grant.environment_id,
+            ordinary_grant.tool_release_id,
+            actor.0,
+            true,
+            Some(true),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(automatically_restored_administrator_tombstone.automatic);
+    assert!(automatically_restored_administrator_tombstone.follow_coordinates);
+    assert!(
+        automatically_restored_administrator_tombstone
+            .grant_deleted_at
+            .is_none()
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .delete(ordinary_grant_id, actor.0, false)
+            .await
+            .unwrap()
+    );
+    let restored_administrator_managed_grant = deps
+        .environment_tool_grant_repo
+        .restore(
+            ordinary_grant_id,
+            ordinary_grant.environment_id,
+            ordinary_grant.tool_release_id,
+            actor.0,
+            false,
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!restored_administrator_managed_grant.automatic);
+    assert!(restored_administrator_managed_grant.follow_coordinates);
+
+    let mut protected_grant = EnvironmentToolGrantRecord::creation(
+        EnvironmentId(protected_environment.revision.environment_id),
+        ToolReleaseId(host_release_id),
+        true,
+        true,
+        false,
+        actor,
+    );
+    let protected_grant_id = protected_grant.environment_tool_grant_id;
+    protected_grant.audit = protected_grant.audit.into_deletion(actor.0);
+    deps.environment_tool_grant_repo
+        .create(protected_grant)
+        .await
+        .unwrap();
+    assert!(
+        deps.environment_tool_grant_repo
+            .get_by_id(protected_grant_id, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let restored_protected_grant = deps
+        .environment_tool_grant_repo
+        .restore_protected(
+            protected_grant_id,
+            protected_environment.revision.environment_id,
+            host_release_id,
+            AccountId::SYSTEM.0,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(restored_protected_grant.protected);
+    assert!(restored_protected_grant.grant_deleted_at.is_none());
+    assert!(
+        !deps
+            .environment_tool_grant_repo
+            .delete(protected_grant_id, actor.0, false)
+            .await
+            .unwrap()
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .set_management(
+                protected_grant_id,
+                protected_environment.revision.environment_id,
+                host_release_id,
+                actor.0,
+                false,
+                true,
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let de_published = deps
+        .tool_release_repo
+        .de_publish(component_release_id, actor.0)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        de_published.release.lifecycle,
+        TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .get_by_id(ordinary_grant_id, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .get_by_id(protected_grant_id, false)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(matches!(
+        deps.tool_release_repo.create(component_record).await,
+        Err(ToolReleaseRepoError::CoordinateAlreadyExists)
+    ));
+
+    let restored = deps
+        .tool_release_repo
+        .restore(component_release_id, actor.0)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(restored.release.lifecycle, TOOL_RELEASE_LIFECYCLE_PUBLISHED);
+    assert!(
+        deps.environment_tool_grant_repo
+            .get_by_id(ordinary_grant_id, false)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .get_by_id(ordinary_grant_id, true)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        deps.tool_release_repo
+            .de_publish(host_release_id, actor.0)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
 pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     let owner = deps.create_account().await;
     let owner_account_id = owner.revision.account_id;
@@ -4458,45 +5152,67 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     let deployment_creation = |deployment_revision_id: i64,
                                component_revision_id: i64,
                                version: &str,
-                               tools: Vec<Tool>| {
+                               tools: Vec<Tool>,
+                               published_tool: Option<&str>,
+                               immutable_release: bool| {
         let deployment_revision = DeploymentRevision::try_from(deployment_revision_id).unwrap();
         let source = ToolSource::Component {
             component_id: ComponentId(component_id),
             component_revision: ComponentRevision::try_from(component_revision_id).unwrap(),
             component_name: golem_common::model::component::ComponentName(component_name.clone()),
         };
-        let registered_tools = tools
+        let mut registered_tools = tools
             .into_iter()
-            .map(|definition| {
-                DeploymentRegisteredToolRecord::from_model(
-                    EnvironmentId(environment_id),
-                    RegisteredTool {
-                        deployment_revision,
-                        definition,
-                        provision: ToolProvisionConfig::default(),
-                        source: source.clone(),
-                        owner_account_id: AccountId(owner_account_id),
-                        owner_account_email: golem_common::model::account::AccountEmail::new(
-                            owner_account_email.clone(),
-                        ),
-                        metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
-                    },
+            .map(|definition| RegisteredTool {
+                deployment_revision,
+                release_id: None,
+                metadata_digest: golem_common::model::tool_release::tool_metadata_digest(
+                    TOOL_METADATA_WIT_VERSION,
+                    &definition,
                 )
+                .unwrap(),
+                definition,
+                provision: ToolProvisionConfig::default(),
+                source: source.clone(),
+                owner_account_id: AccountId(owner_account_id),
+                owner_account_email: golem_common::model::account::AccountEmail::new(
+                    owner_account_email.clone(),
+                ),
+                metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
             })
+            .collect::<Vec<_>>();
+        let tool_releases = published_tool
+            .map(|published_name| {
+                let registered_tool = registered_tools
+                    .iter_mut()
+                    .find(|tool| tool.definition.name() == Some(published_name))
+                    .unwrap();
+                let release = ToolReleaseRecord::from_registered_tool(
+                    registered_tool,
+                    immutable_release,
+                    AccountId(owner_account_id),
+                )
+                .unwrap();
+                registered_tool.release_id = Some(ToolReleaseId(release.tool_release_id));
+                release
+            })
+            .into_iter()
             .collect::<Vec<_>>();
         let alpha_name = ToolName::try_from("alpha").unwrap();
         let agent_tool_bindings = registered_tools
             .iter()
-            .find(|tool| tool.tool_name == alpha_name.as_str())
+            .find(|tool| tool.definition.name() == Some(alpha_name.as_str()))
             .map(|tool| {
                 DeploymentAgentToolBindingRecord::from_model(
                     EnvironmentId(environment_id),
                     CompiledToolBinding {
                         deployment_revision,
+                        release_id: tool.release_id,
                         agent_type_name: AgentTypeName(agent_type_name.clone()),
                         tool_name: alpha_name,
-                        version: tool.tool_definition.value().version.clone(),
+                        version: tool.definition.version.clone(),
                         metadata_version: tool.metadata_version.clone(),
+                        metadata_digest: tool.metadata_digest,
                         account_id: AccountId(owner_account_id),
                         account_email: golem_common::model::account::AccountEmail::new(
                             owner_account_email.clone(),
@@ -4512,6 +5228,18 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                 )
             })
             .into_iter()
+            .collect();
+        let registered_tools = registered_tools
+            .into_iter()
+            .map(|tool| {
+                let published = tool.definition.name() == published_tool;
+                DeploymentRegisteredToolRecord::from_model(
+                    EnvironmentId(environment_id),
+                    tool,
+                    published,
+                    None,
+                )
+            })
             .collect();
 
         DeploymentRevisionCreationRecord {
@@ -4542,6 +5270,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                 agent_type: Blob::new(make_test_agent_type(&agent_type_name)),
                 canonical_agent_type_name: agent_type_name.to_kebab_case(),
             }],
+            tool_releases,
             registered_tools,
             agent_tool_bindings,
             created_agent_secrets: Vec::new(),
@@ -4563,6 +5292,8 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                     make_test_tool("zeta", "1.0.0"),
                     make_test_tool("alpha", "1.0.0"),
                 ],
+                Some("zeta"),
+                true,
             ),
             false,
         )
@@ -4576,6 +5307,8 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                 component_revision_id,
                 "2.0.0",
                 vec![make_test_tool("alpha", "2.0.0")],
+                None,
+                true,
             ),
             false,
         )
@@ -4606,6 +5339,37 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     assert_eq!(exact_alpha.deployment_revision.get(), 1);
     assert_eq!(exact_alpha.definition.version, "1.0.0");
     assert_eq!(exact_alpha.metadata_version, TOOL_METADATA_WIT_VERSION);
+    let published_zeta = deps
+        .tool_release_repo
+        .get_by_coordinates(owner_account_id, "zeta", "1.0.0")
+        .await
+        .unwrap()
+        .unwrap();
+    let exact_zeta: RegisteredTool = deps
+        .full_deployment_repo
+        .get_deployment_registered_tool(environment_id, 1, "zeta")
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        exact_zeta.release_id,
+        Some(ToolReleaseId(published_zeta.release.tool_release_id))
+    );
+    let first_summary: DeploymentSummary = deps
+        .full_deployment_repo
+        .get_deployment_identity(environment_id, 1)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        first_summary.published_tools,
+        vec![ToolName::try_from("zeta").unwrap()]
+    );
+    assert!(first_summary.remote_tools.is_empty());
 
     let current: golem_common::model::tool::ToolDeploymentState = deps
         .full_deployment_repo
@@ -4641,7 +5405,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .update(
             ComponentRevisionRecord {
                 revision_id: updated_component_revision_id,
-                ..initial_component_revision
+                ..initial_component_revision.clone()
             }
             .with_updated_hash()
             .unwrap(),
@@ -4650,12 +5414,35 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .await
         .unwrap();
     deps.full_deployment_repo
+        .set_current_deployment(owner_account_id, environment_id, 1)
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let staged_after_component_update = deps
+        .full_deployment_repo
+        .get_staged_identity(environment_id)
+        .await
+        .unwrap()
+        .to_diffable()
+        .unwrap();
+    assert_eq!(
+        staged_after_component_update.published_tools,
+        ["zeta".to_string()].into_iter().collect()
+    );
+    assert!(staged_after_component_update.remote_tools.is_empty());
+
+    deps.full_deployment_repo
         .deploy(
             deployment_creation(
                 3,
                 updated_component_revision_id,
                 "3.0.0",
-                vec![make_test_tool("alpha", "3.0.0")],
+                vec![
+                    make_test_tool("alpha", "3.0.0"),
+                    make_test_tool("zeta", "1.0.0"),
+                ],
+                Some("zeta"),
+                true,
             ),
             false,
         )
@@ -4689,6 +5476,528 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .try_into()
         .unwrap();
     assert_eq!(latest_for_updated_component.deployment_revision.get(), 3);
+    let republished_zeta =
+        &latest_for_updated_component.registered_tools[&ToolName::try_from("zeta").unwrap()];
+    assert_eq!(
+        republished_zeta.release_id,
+        Some(ToolReleaseId(published_zeta.release.tool_release_id))
+    );
+    assert!(matches!(
+        &republished_zeta.source,
+        ToolSource::Component {
+            component_revision,
+            ..
+        } if *component_revision == ComponentRevision::try_from(updated_component_revision_id).unwrap()
+    ));
+    let remote_definition = make_test_tool("remote-search", "1.0.0");
+    let remote_source = ToolSource::Component {
+        component_id: ComponentId(component_id),
+        component_revision: ComponentRevision::try_from(component_revision_id).unwrap(),
+        component_name: golem_common::model::component::ComponentName(component_name.clone()),
+    };
+    let mut remote_registered_tool = RegisteredTool {
+        deployment_revision: DeploymentRevision::try_from(4_i64).unwrap(),
+        release_id: None,
+        definition: remote_definition.clone(),
+        provision: ToolProvisionConfig {
+            config: NormalizedJsonValue::new(serde_json::json!({ "consumer": true })),
+            ..ToolProvisionConfig::default()
+        },
+        source: remote_source.clone(),
+        owner_account_id: AccountId(owner_account_id),
+        owner_account_email: golem_common::model::account::AccountEmail::new(
+            owner_account_email.clone(),
+        ),
+        metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+        metadata_digest: golem_common::model::tool_release::tool_metadata_digest(
+            TOOL_METADATA_WIT_VERSION,
+            &remote_definition,
+        )
+        .unwrap(),
+    };
+    let remote_release = ToolReleaseRecord::from_registered_tool(
+        &remote_registered_tool,
+        true,
+        AccountId(owner_account_id),
+    )
+    .unwrap();
+    let remote_release_id = ToolReleaseId(remote_release.tool_release_id);
+    deps.tool_release_repo.create(remote_release).await.unwrap();
+    remote_registered_tool.release_id = Some(remote_release_id);
+    let remote_binding = CompiledToolBinding {
+        deployment_revision: DeploymentRevision::try_from(4_i64).unwrap(),
+        release_id: Some(remote_release_id),
+        agent_type_name: AgentTypeName(agent_type_name.clone()),
+        tool_name: ToolName::try_from("remote-search").unwrap(),
+        version: "1.0.0".to_string(),
+        metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+        metadata_digest: remote_registered_tool.metadata_digest,
+        account_id: AccountId(owner_account_id),
+        account_email: remote_registered_tool.owner_account_email.clone(),
+        parameters: NormalizedJsonValue::new(serde_json::json!({ "limit": 10 })),
+        secret_keys_readable: SecretKeyScope::All,
+        secret_keys_revealable: SecretKeyScope::All,
+        filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
+        source: remote_source,
+    };
+    let mut remote_deployment = deployment_creation(
+        4,
+        updated_component_revision_id,
+        "4.0.0",
+        Vec::new(),
+        None,
+        true,
+    );
+    let remote_hash = diff::remote_tool_deployments(
+        [remote_registered_tool.clone()],
+        [remote_binding.clone()],
+        &BTreeSet::new(),
+    )
+    .unwrap()["remote-search"]
+        .hash()
+        .unwrap();
+    remote_deployment.registered_tools = vec![DeploymentRegisteredToolRecord::from_model(
+        EnvironmentId(environment_id),
+        remote_registered_tool.clone(),
+        false,
+        Some(remote_hash),
+    )];
+    remote_deployment.agent_tool_bindings = vec![DeploymentAgentToolBindingRecord::from_model(
+        EnvironmentId(environment_id),
+        remote_binding,
+    )];
+    deps.full_deployment_repo
+        .deploy(remote_deployment, false)
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+
+    let remote_state: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_tool_deployment_state(environment_id, 4)
+        .await
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        remote_state.registered_tools[&ToolName::try_from("remote-search").unwrap()],
+        remote_registered_tool
+    );
+    let remote_summary: DeploymentSummary = deps
+        .full_deployment_repo
+        .get_deployment_identity(environment_id, 4)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(remote_summary.remote_tools.len(), 1);
+    assert_eq!(
+        remote_summary.remote_tools[0].name,
+        ToolName::try_from("remote-search").unwrap()
+    );
+    assert!(remote_summary.published_tools.is_empty());
+    assert_eq!(remote_summary.components.len(), 1);
+    assert_eq!(
+        remote_summary.components[0].revision,
+        ComponentRevision::try_from(updated_component_revision_id).unwrap()
+    );
+    let staged = deps
+        .full_deployment_repo
+        .get_staged_identity(environment_id)
+        .await
+        .unwrap()
+        .to_diffable()
+        .unwrap();
+    assert_eq!(staged.remote_tools.len(), 1);
+    assert!(staged.published_tools.is_empty());
+
+    let tool_release_service = match &deps.test_db {
+        TestDb::Postgres(pool) => ToolReleaseService::new(
+            Arc::new(DbToolReleaseRepo::new(pool.clone())),
+            deps.account_service(),
+            AccountId(owner_account_id),
+        ),
+        TestDb::Sqlite(pool) => ToolReleaseService::new(
+            Arc::new(DbToolReleaseRepo::new(pool.clone())),
+            deps.account_service(),
+            AccountId(owner_account_id),
+        ),
+    };
+    let original_zeta_id = published_zeta.release.tool_release_id;
+    tool_release_service
+        .de_publish(ToolReleaseId(original_zeta_id), &AuthCtx::System)
+        .await
+        .unwrap();
+    assert!(matches!(
+        tool_release_service
+            .de_publish(ToolReleaseId(original_zeta_id), &AuthCtx::System)
+            .await,
+        Err(ToolReleaseError::ToolReleaseNotPublished)
+    ));
+    assert!(matches!(
+        deps.full_deployment_repo
+            .deploy(
+                deployment_creation(
+                    5,
+                    updated_component_revision_id,
+                    "5.0.0",
+                    vec![make_test_tool("zeta", "1.0.0")],
+                    Some("zeta"),
+                    true,
+                ),
+                false,
+            )
+            .await,
+        Err(DeployRepoError::ToolReleaseDePublishedConflict)
+    ));
+    assert_eq!(
+        deps.tool_release_repo
+            .get_by_id(original_zeta_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .release
+            .lifecycle,
+        TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED
+    );
+    let mut changed_while_de_published = make_test_tool("zeta", "1.0.0");
+    changed_while_de_published.commands.nodes[0]
+        .aliases
+        .push("changed-while-de-published".to_string());
+    assert!(matches!(
+        deps.full_deployment_repo
+            .deploy(
+                deployment_creation(
+                    5,
+                    updated_component_revision_id,
+                    "5.0.0",
+                    vec![changed_while_de_published],
+                    Some("zeta"),
+                    false,
+                ),
+                false,
+            )
+            .await,
+        Err(DeployRepoError::ToolReleaseDePublishedConflict)
+    ));
+    assert_eq!(
+        deps.tool_release_repo
+            .get_by_id(original_zeta_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .release
+            .lifecycle,
+        TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED
+    );
+    tool_release_service
+        .restore(ToolReleaseId(original_zeta_id), &AuthCtx::System)
+        .await
+        .unwrap();
+    assert!(matches!(
+        tool_release_service
+            .restore(ToolReleaseId(original_zeta_id), &AuthCtx::System)
+            .await,
+        Err(ToolReleaseError::ToolReleaseNotDePublished)
+    ));
+
+    let mut failed_publication = deployment_creation(
+        5,
+        updated_component_revision_id,
+        "5.0.0",
+        vec![make_test_tool("atomic-rollback", "1.0.0")],
+        Some("atomic-rollback"),
+        true,
+    );
+    failed_publication.registered_tools[0].owner_account_id = new_repo_uuid();
+    assert!(
+        deps.full_deployment_repo
+            .deploy(failed_publication, false)
+            .await
+            .is_err()
+    );
+    assert!(
+        deps.tool_release_repo
+            .get_by_coordinates(owner_account_id, "atomic-rollback", "1.0.0")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let mut changed_zeta = make_test_tool("zeta", "1.0.0");
+    changed_zeta.commands.nodes[0]
+        .aliases
+        .push("changed-zeta".to_string());
+    deps.environment_tool_grant_repo
+        .create(EnvironmentToolGrantRecord::creation(
+            EnvironmentId(environment_id),
+            ToolReleaseId(original_zeta_id),
+            false,
+            false,
+            true,
+            AccountId(owner_account_id),
+        ))
+        .await
+        .unwrap();
+    let pinned_environment = deps.create_env(app.revision.application_id).await;
+    let pinned_grant = EnvironmentToolGrantRecord::creation(
+        EnvironmentId(pinned_environment.revision.environment_id),
+        ToolReleaseId(original_zeta_id),
+        false,
+        true,
+        false,
+        AccountId(owner_account_id),
+    );
+    let pinned_grant_id = pinned_grant.environment_tool_grant_id;
+    deps.environment_tool_grant_repo
+        .create(pinned_grant)
+        .await
+        .unwrap();
+    assert!(matches!(
+        deps.full_deployment_repo
+            .deploy(
+                deployment_creation(
+                    5,
+                    updated_component_revision_id,
+                    "5.0.0",
+                    vec![changed_zeta.clone()],
+                    Some("zeta"),
+                    false,
+                ),
+                false,
+            )
+            .await,
+        Err(DeployRepoError::ToolReleaseImmutableConflict)
+    ));
+    let loose_publisher = deps
+        .environment_repo
+        .update({
+            let mut revision = env.revision.clone();
+            revision.revision_id += 1;
+            revision.version_check = false;
+            revision.audit = DeletableRevisionAuditFields::new(owner_account_id);
+            revision
+        })
+        .await
+        .unwrap();
+    let consumer = deps.create_account().await;
+    let consumer_app = deps.create_application(consumer.revision.account_id).await;
+    let strict_consumer = deps.create_env(consumer_app.revision.application_id).await;
+    let strict_following_grant = EnvironmentToolGrantRecord::creation(
+        EnvironmentId(strict_consumer.revision.environment_id),
+        ToolReleaseId(original_zeta_id),
+        false,
+        false,
+        true,
+        AccountId(consumer.revision.account_id),
+    );
+    deps.environment_tool_grant_repo
+        .create(strict_following_grant.clone())
+        .await
+        .unwrap();
+    let loose_publisher = loose_publisher
+        .try_into_model(
+            ApplicationName(app.revision.name.clone()),
+            AccountId(owner_account_id),
+            AccountEmail::new(owner_account_email.clone()),
+        )
+        .unwrap();
+
+    let superseded_definition = make_test_tool("superseded-only", "1.0.0");
+    let mut superseded_record = deps
+        .tool_release_repo
+        .get_by_id(original_zeta_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .release;
+    superseded_record.tool_release_id = new_repo_uuid();
+    superseded_record.tool_name = "superseded-only".to_string();
+    superseded_record.tool_definition = Blob::new(superseded_definition.clone());
+    superseded_record.metadata_digest = golem_common::model::tool_release::tool_metadata_digest(
+        TOOL_METADATA_WIT_VERSION,
+        &superseded_definition,
+    )
+    .unwrap()
+    .into();
+    superseded_record.lifecycle = TOOL_RELEASE_LIFECYCLE_SUPERSEDED;
+    deps.tool_release_repo
+        .create(superseded_record)
+        .await
+        .unwrap();
+    let superseded_plan = tool_release_service
+        .plan_publications(
+            &loose_publisher,
+            vec![ToolPublication {
+                name: ToolName::try_from("superseded-only").unwrap(),
+                definition: superseded_definition,
+            }],
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    assert_eq!(superseded_plan.len(), 1);
+    assert_eq!(
+        superseded_plan[0].action,
+        ToolPublicationPlanAction::Publish
+    );
+    assert!(superseded_plan[0].reason.is_none());
+
+    let publication_plan = tool_release_service
+        .plan_publications(
+            &loose_publisher,
+            vec![ToolPublication {
+                name: ToolName::try_from("zeta").unwrap(),
+                definition: changed_zeta.clone(),
+            }],
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    assert_eq!(publication_plan.len(), 1);
+    assert_eq!(
+        publication_plan[0].action,
+        ToolPublicationPlanAction::Conflict
+    );
+    assert!(
+        publication_plan[0]
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("followed by a grant in a version-checked environment")
+    );
+    assert!(matches!(
+        deps.full_deployment_repo
+            .deploy(
+                deployment_creation(
+                    5,
+                    updated_component_revision_id,
+                    "5.0.0",
+                    vec![changed_zeta.clone()],
+                    Some("zeta"),
+                    false,
+                ),
+                false,
+            )
+            .await,
+        Err(DeployRepoError::ToolReleaseImmutableConflict)
+    ));
+
+    deps.environment_repo
+        .delete({
+            let mut revision = strict_consumer.revision.clone();
+            revision.revision_id += 1;
+            revision.audit = DeletableRevisionAuditFields::new(consumer.revision.account_id);
+            revision
+        })
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let publication_plan = tool_release_service
+        .plan_publications(
+            &loose_publisher,
+            vec![ToolPublication {
+                name: ToolName::try_from("zeta").unwrap(),
+                definition: changed_zeta.clone(),
+            }],
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    assert_eq!(publication_plan.len(), 1);
+    assert_eq!(
+        publication_plan[0].action,
+        ToolPublicationPlanAction::Publish,
+        "grants belonging to deleted environments must not constrain live publications"
+    );
+    deps.full_deployment_repo
+        .deploy(
+            deployment_creation(
+                5,
+                updated_component_revision_id,
+                "5.0.0",
+                vec![changed_zeta],
+                Some("zeta"),
+                false,
+            ),
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let replacement_zeta = deps
+        .tool_release_repo
+        .get_by_coordinates(owner_account_id, "zeta", "1.0.0")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(replacement_zeta.release.tool_release_id, original_zeta_id);
+    assert!(!replacement_zeta.release.immutable);
+    assert_eq!(
+        deps.tool_release_repo
+            .get_by_id(original_zeta_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .release
+            .lifecycle,
+        TOOL_RELEASE_LIFECYCLE_SUPERSEDED
+    );
+    assert!(matches!(
+        deps.environment_tool_grant_repo
+            .set_management(
+                pinned_grant_id,
+                pinned_environment.revision.environment_id,
+                original_zeta_id,
+                owner_account_id,
+                true,
+                true,
+            )
+            .await,
+        Err(EnvironmentToolGrantRepoError::ConcurrentModification)
+    ));
+    let pinned_grant = deps
+        .environment_tool_grant_repo
+        .get_by_id(pinned_grant_id, false)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        pinned_grant.release.release.tool_release_id,
+        original_zeta_id
+    );
+    assert!(pinned_grant.automatic);
+    assert!(!pinned_grant.follow_coordinates);
+
+    let stale_coordinate_grant = EnvironmentToolGrantRecord::creation(
+        EnvironmentId(environment_id),
+        ToolReleaseId(original_zeta_id),
+        false,
+        false,
+        true,
+        AccountId(owner_account_id),
+    );
+    assert!(
+        deps.environment_tool_grant_repo
+            .create(stale_coordinate_grant)
+            .await
+            .is_err()
+    );
+
+    let restore_result = tool_release_service
+        .restore(ToolReleaseId(original_zeta_id), &AuthCtx::System)
+        .await;
+    assert!(matches!(
+        restore_result,
+        Err(ToolReleaseError::ToolReleaseNotDePublished)
+    ));
+    assert!(matches!(
+        tool_release_service
+            .de_publish(ToolReleaseId(original_zeta_id), &AuthCtx::System)
+            .await,
+        Err(ToolReleaseError::ToolReleaseNotPublished)
+    ));
 
     deps.full_deployment_repo
         .set_current_deployment(owner_account_id, environment_id, 1)
@@ -4828,6 +6137,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         compiled_routes: vec![],
         compiled_mcp: vec![],
         registered_agent_types: vec![agent_type_record],
+        tool_releases: vec![],
         registered_tools: vec![],
         agent_tool_bindings: vec![],
         created_agent_secrets: vec![],

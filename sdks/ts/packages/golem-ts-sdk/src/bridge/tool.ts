@@ -1,45 +1,144 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1
 
-import { ToolRpc, type RpcError, type ToolError } from 'golem:tool/host@0.1.0';
+import {
+  ToolRpc,
+  createStdin,
+  createStdout,
+  type ByteStreamFailure,
+  type ByteStreamItem,
+  type FutureInvokeResult,
+  type RpcError,
+  type ToolError,
+} from 'golem:tool/host@0.1.0';
 import {
   preflightWitTypedSchemaValue,
   typedSchemaValueFromWit,
   typedSchemaValueToWit,
   type TypedSchemaValue,
 } from '../internal/schema-model';
-import { closeAsyncIterable } from '../internal/tool/asyncIterable';
+import {
+  mapSettledToolResult,
+  settleToolResult,
+  toolStreamFailureFromError,
+  type SettledToolResult,
+  type ToolInputStream,
+} from '../internal/tool/startedToolInvocation';
+
+export {
+  mapSettledToolResult,
+  resultFromSettledToolResult,
+  settleToolResult,
+  startedToolInvocation,
+  ToolStreamError,
+  type SettledToolResult,
+  type StartedToolInvocation,
+  type ToolInputStream,
+} from '../internal/tool/startedToolInvocation';
 
 export interface ToolInvocationResult {
   readonly result?: TypedSchemaValue;
-  readonly stdout?: AsyncIterable<number>;
 }
+
+export interface RawToolInvocation {
+  readonly stdout?: AsyncIterable<ByteStreamItem>;
+  readonly settledResult: Promise<
+    SettledToolResult<Awaited<ReturnType<FutureInvokeResult['get']>>>
+  >;
+  cancel(): void;
+}
+
 export interface ToolClientTransport {
-  invokeAndAwait(
+  start(
     commandPath: readonly string[],
-    input: Parameters<ToolRpc['invokeAndAwait']>[1],
-    stdin: AsyncIterable<number> | undefined,
-  ):
-    | Awaited<ReturnType<ToolRpc['invokeAndAwait']>>
-    | Promise<Awaited<ReturnType<ToolRpc['invokeAndAwait']>>>;
+    input: Parameters<ToolRpc['asyncInvokeAndAwait']>[1],
+    stdin: ToolInputStream | undefined,
+    stdout: boolean,
+  ): RawToolInvocation;
 }
 
 export function createToolClientTransport(toolName: string): ToolClientTransport {
   let rpc: ToolRpc | undefined;
   return {
-    invokeAndAwait(commandPath, input, stdin) {
+    start(commandPath, input, stdin, withStdout) {
       rpc ??= new ToolRpc(toolName);
-      return rpc.invokeAndAwait([...commandPath], input, stdin);
+      const inputEndpoints = stdin === undefined ? undefined : createStdin();
+      const outputEndpoints = withStdout ? createStdout() : undefined;
+      const future = rpc.asyncInvokeAndAwait(
+        [...commandPath],
+        input,
+        inputEndpoints?.[1],
+        outputEndpoints?.[0],
+      );
+      if (inputEndpoints) void pumpToolStdin(stdin!, inputEndpoints[0], inputEndpoints[2]);
+      const settledResult = settleToolResult(future.get());
+      return {
+        stdout: outputEndpoints?.[1],
+        settledResult,
+        cancel: () => future.cancel(),
+      };
     },
   };
 }
 
+async function pumpToolStdin(
+  source: ToolInputStream,
+  writer: ReturnType<typeof createStdin>[0],
+  closed: ReturnType<typeof createStdin>[2],
+): Promise<void> {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    reader = source.getReader();
+    const closure = closed.wait().then(() => ({ tag: 'closed' }) as const);
+    while (true) {
+      const next = await Promise.race([
+        reader.read().then((value) => ({ tag: 'next', value }) as const),
+        closure,
+      ]);
+      if (next.tag === 'closed') {
+        await reader.cancel();
+        return;
+      }
+      if (next.value.done) {
+        await writer.finish();
+        return;
+      }
+      if (!(next.value.value instanceof Uint8Array)) {
+        throw new TypeError('tool stdin yielded a non-byte chunk');
+      }
+      if (next.value.value.byteLength === 0) {
+        continue;
+      }
+      await writer.write(next.value.value);
+    }
+  } catch (error) {
+    const reason: ByteStreamFailure = toolStreamFailureFromError(error);
+    try {
+      await writer.fail(reason);
+    } catch {
+      // The consumer may have selected the terminal while the source failed.
+    }
+    try {
+      await reader?.cancel(error);
+    } catch {
+      // Source cancellation is best-effort after the attachment has failed.
+    }
+  } finally {
+    reader?.releaseLock();
+  }
+}
+
 export interface ToolClientRuntime {
-  invokeAndAwait(
+  start(
     commandPath: readonly string[],
     input: TypedSchemaValue,
-    stdin?: AsyncIterable<number>,
-  ): Promise<ToolInvocationResult>;
+    stdin: ToolInputStream | undefined,
+    stdout: boolean,
+  ): {
+    stdout?: AsyncIterable<ByteStreamItem>;
+    settledResult: Promise<SettledToolResult<ToolInvocationResult>>;
+    cancel(): void;
+  };
 }
 
 export function createToolClientRuntime(
@@ -47,28 +146,17 @@ export function createToolClientRuntime(
   transport: ToolClientTransport = createToolClientTransport(toolName),
 ): ToolClientRuntime {
   return {
-    async invokeAndAwait(commandPath, input, stdin) {
-      const result = await transport.invokeAndAwait(
-        commandPath,
-        typedSchemaValueToWit(input),
-        stdin,
-      );
-      try {
-        return {
-          result: result.result === undefined ? undefined : typedSchemaValueFromWit(result.result),
-          stdout: result.stdout,
-        };
-      } catch (error) {
-        await closeAsyncIterable(result.stdout);
-        throw error;
-      }
+    start(commandPath, input, stdin, stdout) {
+      const invocation = transport.start(commandPath, typedSchemaValueToWit(input), stdin, stdout);
+      return {
+        stdout: invocation.stdout,
+        settledResult: mapSettledToolResult(invocation.settledResult, (value) => ({
+          result: value.result === undefined ? undefined : typedSchemaValueFromWit(value.result),
+        })),
+        cancel: () => invocation.cancel(),
+      };
     },
   };
-}
-
-/** Close a returned stdout iterator when generated post-invocation validation fails. */
-export async function disposeToolStdout(stdout: AsyncIterable<number> | undefined): Promise<void> {
-  await closeAsyncIterable(stdout);
 }
 
 export type ToolRuntimeError<Declared> =
@@ -78,19 +166,15 @@ export type ToolRuntimeError<Declared> =
 function implementationObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
-
 function hasOwn(value: object, key: PropertyKey): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
-
 function isDenseStringList(value: unknown): value is string[] {
   if (!Array.isArray(value)) return false;
-  for (let i = 0; i < value.length; i++) {
+  for (let i = 0; i < value.length; i++)
     if (!(i in value) || typeof value[i] !== 'string') return false;
-  }
   return true;
 }
-
 function isTypedSchemaValue(value: unknown): boolean {
   try {
     preflightWitTypedSchemaValue(value as Parameters<typeof preflightWitTypedSchemaValue>[0]);
@@ -99,7 +183,6 @@ function isTypedSchemaValue(value: unknown): boolean {
     return false;
   }
 }
-
 function isToolError(value: unknown): value is ToolError {
   if (!implementationObject(value) || typeof value.tag !== 'string' || !hasOwn(value, 'val'))
     return false;
@@ -117,30 +200,23 @@ function isToolError(value: unknown): value is ToolError {
       return false;
   }
 }
-
-/**
- * Recognize host errors with a non-consuming decode-safety preflight. This is
- * not complete sanitization of fabricated ABI-impossible nested objects; a
- * successful result promises the unchanged payload is decodable at this trust
- * boundary.
- */
 export function isRpcError(value: unknown): value is RpcError {
-  if (!implementationObject(value) || typeof value.tag !== 'string' || !hasOwn(value, 'val'))
-    return false;
+  if (!implementationObject(value) || typeof value.tag !== 'string') return false;
   switch (value.tag) {
+    case 'cancelled':
+      return true;
     case 'protocol-error':
     case 'denied':
     case 'not-found':
     case 'remote-internal-error':
-      return typeof value.val === 'string';
+    case 'resource-exhausted':
+      return hasOwn(value, 'val') && typeof value.val === 'string';
     case 'remote-tool-error':
-      return isToolError(value.val);
+      return hasOwn(value, 'val') && isToolError(value.val);
     default:
       return false;
   }
 }
-
-/** Split a host RPC failure from a declared custom tool error without requiring a ToolDefinition. */
 export function splitToolRpcError<Declared>(
   error: RpcError,
   decodeCustomError: (payload: TypedSchemaValue) => Declared,
@@ -149,5 +225,4 @@ export function splitToolRpcError<Declared>(
     return { tag: 'rpc', error };
   return { tag: 'tool', error: decodeCustomError(typedSchemaValueFromWit(error.val.val)) };
 }
-
 export type { RpcError, ToolError };

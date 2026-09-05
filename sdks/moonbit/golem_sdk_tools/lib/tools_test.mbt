@@ -119,7 +119,7 @@ test "tool metadata, hidden types, result, and constraints" {
         #|#derive.tool("tool")
         #|struct Tool {}
         #|
-        #|pub fn Tool::execute(path : String, principal : @common.Principal, input : @asyncCore.Stream[Byte], output : @asyncCore.Sink[Byte]) -> String { ... }
+        #|pub fn Tool::execute(path : String, principal : @common.Principal, input : @asyncCore.Stream[Byte], output : @tool.ProviderStdout) -> String { ... }
         #|
       ),
     ),

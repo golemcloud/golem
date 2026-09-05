@@ -15,6 +15,7 @@ const GIB: u64 = 1024 * 1024 * 1024;
 struct TestClock {
     base: Instant,
     offset_nanos: AtomicU64,
+    sleep_deadline_nanos: AtomicU64,
     changed: tokio::sync::Notify,
 }
 
@@ -23,6 +24,7 @@ impl TestClock {
         Arc::new(Self {
             base,
             offset_nanos: AtomicU64::new(0),
+            sleep_deadline_nanos: AtomicU64::new(u64::MAX),
             changed: tokio::sync::Notify::new(),
         })
     }
@@ -35,6 +37,17 @@ impl TestClock {
         self.changed.notify_waiters();
         tokio::task::yield_now().await;
     }
+
+    async fn wait_for_sleep_until(&self, deadline: Duration) {
+        let deadline_nanos = u64::try_from(deadline.as_nanos()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while self.sleep_deadline_nanos.load(Ordering::Acquire) != deadline_nanos {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
 }
 
 impl MeteringClock for TestClock {
@@ -43,9 +56,15 @@ impl MeteringClock for TestClock {
     }
 
     fn sleep_until(&self, deadline: Instant) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.sleep_deadline_nanos.store(
+            u64::try_from(deadline.duration_since(self.base).as_nanos()).unwrap(),
+            Ordering::Release,
+        );
         Box::pin(async move {
             loop {
                 let changed = self.changed.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
                 if self.now() >= deadline {
                     return;
                 }
@@ -515,16 +534,19 @@ async fn failure_backoff_suspends_at_attempt_start_and_recovery_is_prospective()
     wait_for_calls(&reader, 1).await;
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(10)).await;
     clock.set(Duration::from_millis(10)).await;
     wait_for_calls(&reader, 2).await;
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(110)).await;
     clock.set(Duration::from_millis(109)).await;
     assert_eq!(reader.calls.load(Ordering::Acquire), 2);
     clock.set(Duration::from_millis(110)).await;
     wait_for_calls(&reader, 3).await;
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(200)).await;
     clock.set(Duration::from_millis(210)).await;
     wait_for_calls(&reader, 4).await;
     wait_for_observations_to_finish(&reader).await;

@@ -36,8 +36,7 @@ use golem_common::retries::get_delay;
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{Arc, Mutex};
 use tracing::warn;
 
 async fn retry_storage_op<T, F, Fut>(
@@ -279,8 +278,14 @@ pub struct CompressedOplogArchive {
     key: String,
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
     retry_config: RetryConfig,
+    /// A `std` mutex rather than an async lock: `read_source` and `append` are awaited both by
+    /// wasmtime store-polled futures (durable host calls) and by independent tokio tasks. Tokio's
+    /// fair locks hand ownership to a queued waiter at wake time, before it is polled, so a
+    /// store-polled future queued on an async lock could become its owner while the store is
+    /// unable to poll it (wasmtime#11869/#11870), wedging every other user of the cache. Every
+    /// critical section below is synchronous and never spans an `await`.
     #[allow(clippy::type_complexity)]
-    cache: RwLock<
+    cache: Mutex<
         EvictingCacheMap<
             OplogIndex,
             OplogEntry,
@@ -306,7 +311,7 @@ impl CompressedOplogArchive {
             key,
             indexed_storage,
             retry_config,
-            cache: RwLock::new(EvictingCacheMap::new()),
+            cache: Mutex::new(EvictingCacheMap::new()),
             level,
         }
     }
@@ -376,7 +381,7 @@ impl CompressedOplogArchive {
                 )
             },
         )?;
-        let mut cache = self.cache.write().await;
+        let mut cache = self.cache.lock().unwrap();
 
         let mut collected = Vec::new();
 
@@ -418,7 +423,7 @@ impl OplogArchive for CompressedOplogArchive {
 
         while last_idx >= idx {
             {
-                let mut cache = self.cache.write().await;
+                let mut cache = self.cache.lock().unwrap();
 
                 while let Some(entry) = cache.get(&last_idx) {
                     result.insert(last_idx, entry.clone());
@@ -462,7 +467,7 @@ impl OplogArchive for CompressedOplogArchive {
         // reached from host-call contexts (through ephemeral oplogs), and an async lock held
         // across IO by a store-polled future can deadlock the store (wasmtime#11869/#11870).
         {
-            let mut cache = self.cache.write().await;
+            let mut cache = self.cache.lock().unwrap();
             for (idx, entry) in chunk {
                 cache.insert(*idx, entry.clone());
             }

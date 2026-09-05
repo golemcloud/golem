@@ -22,6 +22,12 @@ use std::str::FromStr;
 #[derive(Clone, Copy, std::hash::Hash, PartialEq, Eq, Debug)]
 pub struct Hash(pub(crate) blake3::Hash);
 
+impl Default for Hash {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 impl Hash {
     pub fn new(hash: blake3::Hash) -> Self {
         Self(hash)
@@ -71,6 +77,32 @@ impl FromStr for Hash {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::try_from(s)
+    }
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinarySerializer for Hash {
+    fn serialize<Output: desert_rust::BinaryOutput>(
+        &self,
+        context: &mut desert_rust::SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        desert_rust::BinarySerializer::serialize(&self.0.as_bytes().to_vec(), context)
+    }
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinaryDeserializer for Hash {
+    fn deserialize(
+        context: &mut desert_rust::DeserializationContext<'_>,
+    ) -> desert_rust::Result<Self> {
+        let bytes = <Vec<u8> as desert_rust::BinaryDeserializer>::deserialize(context)?;
+        let bytes: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+            desert_rust::Error::DeserializationFailure(format!(
+                "Invalid BLAKE3 digest length: {}",
+                bytes.len()
+            ))
+        })?;
+        Ok(Self::new(blake3::Hash::from_bytes(bytes)))
     }
 }
 

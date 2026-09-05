@@ -619,7 +619,7 @@ impl CompletionDelivery {
         oplog: Arc<dyn Oplog>,
         start_idx: OplogIndex,
     ) -> Result<Self, WorkerExecutorError> {
-        let replay_state = ReplayState::new(
+        let replay_state = ReplayState::new_for_owner(
             golem_common::model::OwnedAgentId {
                 environment_id: golem_common::model::environment::EnvironmentId::new(),
                 agent_id: golem_common::model::AgentId {
@@ -630,6 +630,7 @@ impl CompletionDelivery {
             oplog.clone(),
             golem_common::model::regions::DeletedRegions::default(),
             None,
+            crate::durable_host::tool::operation::OwnerToolOperations::new(),
         )
         .await?;
         let recorder = CompletionMarkerRecorder::new(oplog, replay_state);

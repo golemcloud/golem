@@ -2244,6 +2244,81 @@ pub enum SerializableToolRpcError {
     NotFound(String),
     RemoteInternalError(String),
     RemoteToolError(Box<SerializableToolError>),
+    Cancelled,
+    ResourceExhausted(String),
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableEntityBodyExecution {
+    Executed,
+    Skipped,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableToolResultValue {
+    #[schema(binary())]
+    bytes: Vec<u8>,
+}
+
+impl SerializableToolResultValue {
+    pub fn from_typed(value: &TypedSchemaValue) -> Result<Self, String> {
+        serde_json::to_vec(value)
+            .map(|bytes| Self { bytes })
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn into_typed(self) -> Result<TypedSchemaValue, String> {
+        serde_json::from_slice(&self.bytes).map_err(|error| error.to_string())
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableToolStructuredResult {
+    pub result: Option<SerializableToolResultValue>,
+}
+
+/// Schema-native terminal of the generic tool entity invocation. Stdout is deliberately absent:
+/// attachment events and their terminal are owned by the live operation rather than the oplog
+/// response.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableToolOperationTerminal {
+    pub body_execution: SerializableEntityBodyExecution,
+    pub result: Result<SerializableToolStructuredResult, SerializableToolRpcError>,
 }
 
 #[derive(

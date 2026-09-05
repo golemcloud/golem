@@ -25,7 +25,7 @@ object ToolRegistrySpec extends ZIOSpecDefault {
   import ToolTestFixtures._
 
   private val noopInvoker: ToolRegistry.ToolInvoker =
-    (_, input, _, _) => Future.successful(Right(ToolInvocationResult(Some(input), None)))
+    (_, input, _, _, _) => Future.successful(Right(ToolInvocationResult(Some(input))))
 
   private def registrationError(tool: ExtendedToolType): Option[Throwable] =
     try {

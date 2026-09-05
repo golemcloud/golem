@@ -40,6 +40,7 @@ use tokio_util::task::TaskTracker;
 
 use tracing::{Instrument, debug};
 
+use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::services::HasAll;
 use crate::services::agent_filesystem::{AgentFilesystems, FilesystemStorageError};
 use crate::services::card_interest::{
@@ -50,10 +51,14 @@ use crate::services::golem_config::{
 };
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::worker::Worker;
-use crate::worker::entity_invocation::{EntityInvocationHandle, start_entity_invocation};
+use crate::worker::entity_invocation::{
+    EntityInvocationHandle, start_entity_invocation, start_pre_acquired_entity_invocation,
+};
 use crate::worker::entity_slot::ActiveEntityInvocationMetadata;
 use crate::worker::entity_slot::EntitySlot;
-use crate::worker::instance::{InstanceHost, OwnerExecution, OwnerRuntimeResources};
+use crate::worker::instance::{
+    EntityInvocationBody, InstanceHost, OwnerExecution, OwnerRuntimeResources,
+};
 use crate::worker::owner_lane::{EntityCallMode, OwnerInvocationId};
 use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::worker::{
@@ -71,7 +76,7 @@ use golem_common::model::entity::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::{AgentId, OwnedAgentId, Timestamp};
+use golem_common::model::{AgentId, OplogIndex, OwnedAgentId, Timestamp};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime::Store;
@@ -131,6 +136,9 @@ pub struct ActiveAgentEntityMetadata {
     pub owner_id: OwnedAgentId,
     pub accepting_entities: bool,
     pub slots: Vec<ActiveEntitySlotMetadata>,
+    pub lane: crate::worker::owner_lane::OwnerLaneMetadata,
+    pub tool_operations: crate::durable_host::tool::ToolOperationSetMetadata,
+    pub reached_oplog_marker: Option<OplogIndex>,
 }
 
 impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
@@ -217,6 +225,9 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             owner_id: self.owner_id.clone(),
             accepting_entities: self.accepting_entities.load(Ordering::Acquire),
             slots,
+            lane: self.execution.lane().metadata(),
+            tool_operations: self.execution.tool_operation_metadata(),
+            reached_oplog_marker: self.execution.reached_oplog_marker(),
         }
     }
 
@@ -240,15 +251,49 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             })
     }
 
-    pub(crate) fn fence_entity_bodies(&self) {
-        let entities = self.entities.lock().unwrap();
-        self.entity_fence_generation.fetch_add(1, Ordering::AcqRel);
-        self.accepting_entities.store(false, Ordering::Release);
-        for slot in entities.values() {
-            slot.fence();
+    pub(crate) async fn begin_fence_entity_bodies(&self, failure: OwnerFailureWinner) {
+        let tool_operations = self.execution.tool_operations();
+        debug!(
+            owner_id = %self.owner_id,
+            failure_kind = failure.kind_label(),
+            "Selecting owner failure for entity fence"
+        );
+        tool_operations.select_owner_failure(failure).await;
+        tool_operations.close_failed_attachments();
+        {
+            let entities = self.entities.lock().unwrap();
+            self.entity_fence_generation.fetch_add(1, Ordering::AcqRel);
+            self.accepting_entities.store(false, Ordering::Release);
+            for slot in entities.values() {
+                slot.fence();
+            }
         }
-        drop(entities);
         self.resources.fence_filesystem_generation();
+        debug!(owner_id = %self.owner_id, "Entity fence selected and resources closed");
+    }
+
+    pub(crate) async fn drain_fenced_entity_bodies(&self) {
+        let entities = self
+            .entities
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        debug!(owner_id = %self.owner_id, entity_slot_count = entities.len(), "Draining fenced entity bodies");
+        for slot in entities {
+            slot.wait_drained().await;
+        }
+        self.execution
+            .tool_operations()
+            .drain_owner_failure_lanes()
+            .await;
+        debug!(owner_id = %self.owner_id, "Fenced entity bodies drained");
+    }
+
+    pub(crate) async fn fence_entity_bodies(&self, failure: OwnerFailureWinner) {
+        self.begin_fence_entity_bodies(failure).await;
+        self.drain_fenced_entity_bodies().await;
     }
 
     /// Closes admission for an eviction decision if no entity invocation is active.
@@ -260,9 +305,10 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
     /// lifecycle fence.
     pub(crate) fn try_fence_idle_entity_bodies(&self) -> Option<Option<u64>> {
         let entities = self.entities.lock().unwrap();
-        if entities
-            .values()
-            .any(|slot| slot.active_invocation_count() != 0)
+        if self.execution.tool_operations().has_active_operations()
+            || entities
+                .values()
+                .any(|slot| slot.active_invocation_count() != 0)
         {
             return None;
         }
@@ -357,6 +403,50 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             finalize,
         )
     }
+
+    /// Starts a sidecar after its operation has already registered and acquired the existing owner
+    /// lane node. The operation retains that permit until its durable terminal is committed.
+    pub(crate) fn start_pre_acquired_entity_invocation<R, F, Finalize, Finalized>(
+        &self,
+        scope: EntityInvocationScope,
+        owner_component_metadata: Arc<golem_service_base::model::component::Component>,
+        mode: EntityCallMode,
+        invoke: F,
+        finalize: Finalize,
+    ) -> Result<EntityInvocationHandle<R>, WorkerExecutorError>
+    where
+        R: Send + 'static,
+        F: EntityInvocationBody<Ctx, R>,
+        Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
+        Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+    {
+        if !self.accepting_entities.load(Ordering::Acquire) {
+            return Err(WorkerExecutorError::runtime(
+                "Entity admission is fenced by owner lifecycle",
+            ));
+        }
+        if scope.owner_id() != &self.owner_id {
+            return Err(WorkerExecutorError::runtime(
+                "Entity invocation scope does not belong to the active owner",
+            ));
+        }
+        let slot = self.entity_slot_if_accepting(scope.invocation_id().entity())?;
+        let host = InstanceHost::new_entity(
+            &self.primary,
+            scope.activation(),
+            slot.clone(),
+            owner_component_metadata,
+        )?;
+        start_pre_acquired_entity_invocation(
+            host,
+            slot,
+            self.execution.lane(),
+            scope,
+            mode,
+            invoke,
+            finalize,
+        )
+    }
 }
 
 const INVOCATION_LOOP_DROP_STACK_SIZE: usize = 8 * 1024 * 1024;
@@ -396,7 +486,7 @@ impl InvocationLoops {
                     // can exhaust Tokio's default worker-thread stack.
                     stacker::grow(INVOCATION_LOOP_DROP_STACK_SIZE, move || drop(invocation_loop));
                 }
-                _ = &mut invocation_loop => {}
+                _ = crate::worker::invocation::with_invocation_stack(&mut invocation_loop) => {}
             }
         })
     }
@@ -660,7 +750,11 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
 
     pub async fn remove(&self, owned_agent_id: &OwnedAgentId) {
         if let Some(active_agent) = self.agents.get(owned_agent_id).await {
-            active_agent.fence_entity_bodies();
+            active_agent
+                .fence_entity_bodies(OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(
+                    Timestamp::now_utc(),
+                )))
+                .await;
             let worker = active_agent.primary();
             self.card_interest_index
                 .set_card_interest(worker.owned_agent_id().clone(), &[])

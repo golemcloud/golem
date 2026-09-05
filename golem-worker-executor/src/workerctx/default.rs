@@ -64,7 +64,9 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
-use golem_common::model::entity::{EntityInvocationScope, FilesystemCapability, OwnerRuntime};
+use golem_common::model::entity::{
+    EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
+};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
@@ -992,6 +994,7 @@ impl WorkerCtx for Context {
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
         runtime: OwnerRuntime,
+        entity_execution_mode: Option<InvocationExecutionMode>,
         owner_execution: Arc<crate::worker::instance::OwnerExecution>,
         owner_resources: Arc<crate::worker::instance::OwnerRuntimeResources>,
         filesystem_capability: FilesystemCapability,
@@ -1043,8 +1046,10 @@ impl WorkerCtx for Context {
             account_resource_limits.per_invocation_http_call_limit(),
             account_resource_limits.per_invocation_rpc_call_limit(),
             runtime,
+            entity_execution_mode,
             owner_execution,
             owner_resources,
+            None,
             filesystem_capability,
             executable_component,
             entity_activation,

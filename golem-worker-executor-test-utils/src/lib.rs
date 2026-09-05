@@ -41,15 +41,19 @@ use golem_common::model::card::{
 };
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{CanonicalFilePath, ComponentId};
-use golem_common::model::entity::{EntityInvocationScope, FilesystemCapability, OwnerRuntime};
+use golem_common::model::entity::{
+    EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{
-    AgentError, HostResponse, HostResponseP3HttpClientConsumeBodyChunk, OplogEntry, OplogPayload,
-    PayloadId, RawOplogPayload, TimestampedUpdateDescription, host_functions::HostFunctionName,
-    types::ObjectMetadata, types::SerializableP3HttpBodyChunk,
+    AgentError, HostResponse, HostResponseEntityInvocation,
+    HostResponseP3HttpClientConsumeBodyChunk, OplogEntry, OplogPayload, PayloadId, RawOplogPayload,
+    TimestampedUpdateDescription, host_functions::HostFunctionName, types::ObjectMetadata,
+    types::SerializableEntityBodyExecution, types::SerializableP3HttpBodyChunk,
+    types::SerializableToolOperationTerminal,
 };
 use golem_common::model::plan::PlanId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -60,7 +64,7 @@ use golem_common::model::{
 };
 use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
-use golem_common::schema::SchemaValue;
+use golem_common::schema::{FromSchema, IntoTypedSchemaValue, SchemaValue};
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -147,10 +151,10 @@ use golem_worker_executor::services::{HasAll, NoAdditionalDeps, rdbms};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    CallCountManagement, EntityInvocationManagement, ExternalOperations, FileSystemReading,
-    FuelManagement, InvocationContextManagement, InvocationHooks, InvocationManagement,
-    LogEventEmitBehaviour, P3HttpBodyProducerHook, StatusManagement, UpdateManagement, WorkerCtx,
-    WorkerFilesystemContext,
+    CallCountManagement, EntityInvocationBodyHook, EntityInvocationManagement, ExternalOperations,
+    FileSystemReading, FuelManagement, InvocationContextManagement, InvocationHooks,
+    InvocationManagement, LogEventEmitBehaviour, P3HttpBodyProducerHook, StatusManagement,
+    UpdateManagement, WorkerCtx, WorkerFilesystemContext,
 };
 use golem_worker_executor::{Bootstrap, RunDetails, bootstrap_and_run_worker_executor};
 use prometheus::Registry;
@@ -706,6 +710,17 @@ impl TestWorkerExecutor {
             .await
     }
 
+    pub async fn active_entity_metadata(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<golem_worker_executor::services::active_agents::ActiveAgentEntityMetadata> {
+        self.additional_test_deps
+            .active_agents
+            .get()?
+            .entity_metadata(owned_agent_id)
+            .await
+    }
+
     pub async fn store_component_with_id(
         &self,
         name: &str,
@@ -821,6 +836,233 @@ impl TestWorkerExecutor {
         self.additional_test_deps
             .defer_first_consume_body_reply(agent_id.clone())
             .await
+    }
+
+    /// Pauses the next completed historical entity reconstruction after its body returns but
+    /// before its completion is published to the reconstruction supervisor.
+    pub fn gate_next_completed_entity_reconstruction(
+        &self,
+        agent_id: &AgentId,
+    ) -> EntityReconstructionBodyGateHandle {
+        self.additional_test_deps
+            .gate_next_completed_entity_reconstruction(agent_id.clone())
+    }
+
+    /// Pauses the next live entity body after its guest export returns but before its durable
+    /// terminal is selected.
+    pub fn gate_next_live_entity_body_completion(
+        &self,
+        agent_id: &AgentId,
+        entity_name: &str,
+    ) -> EntityReconstructionBodyGateHandle {
+        self.additional_test_deps
+            .gate_next_live_entity_body_completion(agent_id.clone(), entity_name.to_string())
+    }
+
+    /// Pauses the next matching incomplete-replay entity body after its guest export returns but
+    /// before the original durable Start receives a terminal.
+    pub fn gate_next_incomplete_entity_reconstruction(
+        &self,
+        agent_id: &AgentId,
+        entity_name: &str,
+    ) -> EntityReconstructionBodyGateHandle {
+        self.additional_test_deps
+            .gate_next_incomplete_entity_reconstruction(agent_id.clone(), entity_name.to_string())
+    }
+
+    /// Pauses the next successful agent invocation after the guest call and its tail work finish,
+    /// but before the success is persisted to the owner oplog.
+    pub fn gate_next_agent_invocation_success(
+        &self,
+        agent_id: &AgentId,
+    ) -> AgentInvocationSuccessGateHandle {
+        self.additional_test_deps
+            .gate_next_agent_invocation_success(agent_id.clone())
+    }
+
+    /// Pauses the next entity body immediately before invoking its guest export.
+    pub fn gate_next_entity_body_start(
+        &self,
+        agent_id: &AgentId,
+    ) -> EntityReconstructionBodyGateHandle {
+        self.additional_test_deps
+            .gate_next_entity_body_start(agent_id.clone())
+    }
+
+    /// Pauses the next accessor monotonic-clock `now` call before it starts durability.
+    pub async fn gate_next_monotonic_clock_now(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<golem_worker_executor::worker::instance::ClockNowGateHandle> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
+        Ok(worker
+            .owner_execution()
+            .test_gate_next_monotonic_clock_now())
+    }
+
+    /// Pauses the next exclusive wall-clock `now` call before it starts durability.
+    pub async fn gate_next_wall_clock_now(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<golem_worker_executor::worker::instance::ClockNowGateHandle> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
+        Ok(worker.owner_execution().test_gate_next_wall_clock_now())
+    }
+
+    /// Makes the current generation's next monotonic-clock `now` call return its live value
+    /// without creating a durable record, so crash-tail tests can commit only earlier work.
+    pub async fn skip_next_monotonic_clock_now_durability(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<()> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
+        worker
+            .owner_execution()
+            .test_skip_next_monotonic_clock_now_durability();
+        Ok(())
+    }
+
+    /// Makes the current generation's next wall-clock `now` call return its live value
+    /// without creating a durable record, so crash-tail tests can commit only earlier work.
+    pub async fn skip_next_wall_clock_now_durability(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<()> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
+        worker
+            .owner_execution()
+            .test_skip_next_wall_clock_now_durability();
+        Ok(())
+    }
+
+    /// Mutates the next completed historical entity body's in-memory response before terminal
+    /// validation, without changing its recorded oplog terminal.
+    pub fn diverge_next_completed_entity_reconstruction(&self, agent_id: &AgentId) {
+        self.additional_test_deps
+            .diverge_next_completed_entity_reconstruction(agent_id.clone());
+    }
+
+    /// Pauses the next historical entity reconstruction immediately after its resolver-owned
+    /// reconstruction claim becomes visible.
+    pub fn gate_next_entity_reconstruction_claim(
+        &self,
+        agent_id: &AgentId,
+    ) -> EntityReconstructionClaimGateHandle {
+        self.additional_test_deps
+            .gate_next_entity_reconstruction_claim(agent_id.clone())
+    }
+
+    /// Drains a claimed reconstruction's recorded terminal, clamps the owner's replay cursor to
+    /// its tail, and returns the reconstruction-barrier future a primary transition awaits next.
+    pub async fn drain_terminal_clamp_then_reconstruction_barrier(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        start_index: OplogIndex,
+    ) -> anyhow::Result<impl Future<Output = ()> + Send + 'static> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
+        Ok(worker
+            .owner_execution()
+            .test_drain_terminal_clamp_then_reconstruction_barrier(start_index)
+            .await?)
+    }
+
+    /// Resolver-delivers a claimed reconstruction's recorded terminal without settling its body
+    /// validation fence.
+    pub async fn drain_reconstruction_terminal(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        start_index: OplogIndex,
+    ) -> anyhow::Result<()> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
+        Ok(worker
+            .owner_execution()
+            .test_drain_reconstruction_terminal(start_index)
+            .await?)
+    }
+
+    /// Waits for the exact recorded Start to be claimed by replay, then clamps the shared cursor
+    /// to its tail so the pending call follows its production incomplete-repair path.
+    pub async fn clamp_after_claim(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        start_index: OplogIndex,
+    ) -> anyhow::Result<()> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
+        Ok(worker
+            .owner_execution()
+            .test_clamp_after_claim(start_index)
+            .await?)
+    }
+
+    /// Whether the owner has published live admission after reconstruction settlement.
+    pub async fn owner_replay_is_live(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<bool> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
+        Ok(worker.owner_execution().test_replay_is_live().await?)
+    }
+
+    /// Whether the owner has clamped replay and is waiting to settle completed reconstructions.
+    pub async fn owner_replay_is_settling(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<bool> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
+        Ok(worker.owner_execution().test_replay_is_settling().await?)
+    }
+
+    /// Waits for the active owner generation to select a tool-owner failure and returns the same
+    /// tool-operation metadata exposed through active entity inspection.
+    pub async fn wait_for_tool_owner_failure(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<golem_worker_executor::durable_host::tool::ToolOperationSetMetadata> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
+        Ok(worker
+            .owner_execution()
+            .test_wait_for_tool_owner_failure()
+            .await)
     }
 
     /// Returns the per-worker memory requirement that the executor uses when
@@ -1603,6 +1845,23 @@ impl InvocationHooks for TestWorkerCtx {
         consumed_fuel: u64,
         output: &mut AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
+        if let Some(gate) = self
+            .additional_test_deps
+            .take_agent_invocation_success_gate(&self.agent_id)
+        {
+            self.durable_ctx.test_commit_pending_oplog_entries().await;
+            if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
+                let _ = entered_tx.send(());
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("agent invocation success gate was closed")
+                .forget();
+            if gate.abort_as_restart.load(Ordering::Acquire) {
+                return Err(InterruptKind::Restart.into());
+            }
+        }
         self.durable_ctx
             .on_agent_invocation_success(full_function_name, consumed_fuel, output)
             .await
@@ -1712,6 +1971,15 @@ impl WorkerCtx for TestWorkerCtx {
             .p3_http_body_producer_hook(self.agent_id.clone())
     }
 
+    fn entity_invocation_body_hook(&self) -> Option<Arc<dyn EntityInvocationBodyHook>> {
+        let entity_name = self
+            .durable_ctx
+            .entity_invocation_scope()
+            .map(|scope| scope.activation().entity().name().to_string());
+        self.additional_test_deps
+            .entity_invocation_body_hook(self.agent_id.clone(), entity_name)
+    }
+
     async fn create(
         _account_id: AccountId,
         owned_agent_id: OwnedAgentId,
@@ -1752,6 +2020,7 @@ impl WorkerCtx for TestWorkerCtx {
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
         runtime: OwnerRuntime,
+        entity_execution_mode: Option<InvocationExecutionMode>,
         owner_execution: Arc<golem_worker_executor::worker::instance::OwnerExecution>,
         owner_resources: Arc<golem_worker_executor::worker::instance::OwnerRuntimeResources>,
         filesystem_capability: FilesystemCapability,
@@ -1763,6 +2032,9 @@ impl WorkerCtx for TestWorkerCtx {
         // shells under memory-pressure eviction (#3393 T5).
         extra_deps.set_active_agents(active_agents.clone());
         let worker_agent_id = owned_agent_id.agent_id.clone();
+
+        let entity_reconstruction_claim_hook =
+            extra_deps.entity_reconstruction_claim_hook(worker_agent_id.clone());
 
         if !Arc::ptr_eq(&execution_status, &owner_resources.execution_status()) {
             return Err(WorkerExecutorError::runtime(
@@ -1810,8 +2082,10 @@ impl WorkerCtx for TestWorkerCtx {
             u64::MAX,
             u64::MAX,
             runtime,
+            entity_execution_mode,
             owner_execution,
             owner_resources,
+            entity_reconstruction_claim_hook,
             filesystem_capability,
             executable_component,
             entity_activation,
@@ -3673,6 +3947,15 @@ pub struct AdditionalTestDeps {
     consume_body_scope_start_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyScopeStartGate>>>,
     consume_body_scope_end_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyScopeEndGate>>>,
     consume_body_reply_defer_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyReplyDeferGate>>>,
+    entity_reconstruction_body_gates:
+        Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
+    entity_body_start_gates:
+        Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
+    divergent_entity_reconstructions: Arc<std::sync::Mutex<HashSet<AgentId>>>,
+    entity_reconstruction_claim_gates:
+        Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>,
+    agent_invocation_success_gates:
+        Arc<std::sync::Mutex<HashMap<AgentId, Arc<AgentInvocationSuccessGate>>>>,
     /// Captured once on first call to [`TestWorkerCtx::create`]. Used by the
     /// read-only test helpers (`worker_is_loaded`,
     /// `worker_eviction_class`, `worker_memory_requirement`) to observe
@@ -3701,8 +3984,177 @@ impl AdditionalTestDeps {
             consume_body_scope_start_gates: Arc::new(scc::HashMap::new()),
             consume_body_scope_end_gates: Arc::new(scc::HashMap::new()),
             consume_body_reply_defer_gates: Arc::new(scc::HashMap::new()),
+            entity_reconstruction_body_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            entity_body_start_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            divergent_entity_reconstructions: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            entity_reconstruction_claim_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            agent_invocation_success_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             active_agents: Arc::new(std::sync::OnceLock::new()),
         }
+    }
+
+    fn gate_next_completed_entity_reconstruction(
+        &self,
+        agent_id: AgentId,
+    ) -> EntityReconstructionBodyGateHandle {
+        self.gate_next_entity_body_completion(
+            agent_id,
+            InvocationExecutionMode::ReplayingCompleted,
+            None,
+        )
+    }
+
+    fn gate_next_live_entity_body_completion(
+        &self,
+        agent_id: AgentId,
+        entity_name: String,
+    ) -> EntityReconstructionBodyGateHandle {
+        self.gate_next_entity_body_completion(
+            agent_id,
+            InvocationExecutionMode::Live,
+            Some(entity_name),
+        )
+    }
+
+    fn gate_next_incomplete_entity_reconstruction(
+        &self,
+        agent_id: AgentId,
+        entity_name: String,
+    ) -> EntityReconstructionBodyGateHandle {
+        self.gate_next_entity_body_completion(
+            agent_id,
+            InvocationExecutionMode::ReplayingIncomplete,
+            Some(entity_name),
+        )
+    }
+
+    fn gate_next_entity_body_completion(
+        &self,
+        agent_id: AgentId,
+        execution_mode: InvocationExecutionMode,
+        entity_name: Option<String>,
+    ) -> EntityReconstructionBodyGateHandle {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(EntityReconstructionBodyGate {
+            entered_tx: std::sync::Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+            execution_mode: Some(execution_mode),
+            entity_name,
+        });
+        self.entity_reconstruction_body_gates
+            .lock()
+            .unwrap()
+            .insert(agent_id, gate.clone());
+        EntityReconstructionBodyGateHandle { entered_rx, gate }
+    }
+
+    fn gate_next_agent_invocation_success(
+        &self,
+        agent_id: AgentId,
+    ) -> AgentInvocationSuccessGateHandle {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(AgentInvocationSuccessGate {
+            entered_tx: std::sync::Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+            abort_as_restart: AtomicBool::new(false),
+        });
+        self.agent_invocation_success_gates
+            .lock()
+            .unwrap()
+            .insert(agent_id, gate.clone());
+        AgentInvocationSuccessGateHandle { entered_rx, gate }
+    }
+
+    fn take_agent_invocation_success_gate(
+        &self,
+        agent_id: &AgentId,
+    ) -> Option<Arc<AgentInvocationSuccessGate>> {
+        self.agent_invocation_success_gates
+            .lock()
+            .unwrap()
+            .remove(agent_id)
+    }
+
+    fn gate_next_entity_body_start(&self, agent_id: AgentId) -> EntityReconstructionBodyGateHandle {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(EntityReconstructionBodyGate {
+            entered_tx: std::sync::Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+            execution_mode: None,
+            entity_name: None,
+        });
+        self.entity_body_start_gates
+            .lock()
+            .unwrap()
+            .insert(agent_id, gate.clone());
+        EntityReconstructionBodyGateHandle { entered_rx, gate }
+    }
+
+    fn diverge_next_completed_entity_reconstruction(&self, agent_id: AgentId) {
+        self.divergent_entity_reconstructions
+            .lock()
+            .unwrap()
+            .insert(agent_id);
+    }
+
+    fn entity_invocation_body_hook(
+        &self,
+        agent_id: AgentId,
+        entity_name: Option<String>,
+    ) -> Option<Arc<dyn EntityInvocationBodyHook>> {
+        let gated = self
+            .entity_reconstruction_body_gates
+            .lock()
+            .unwrap()
+            .contains_key(&agent_id);
+        let start_gated = self
+            .entity_body_start_gates
+            .lock()
+            .unwrap()
+            .contains_key(&agent_id);
+        let divergent = self
+            .divergent_entity_reconstructions
+            .lock()
+            .unwrap()
+            .contains(&agent_id);
+        (gated || start_gated || divergent).then(|| {
+            Arc::new(TestEntityInvocationBodyHook {
+                agent_id,
+                entity_name,
+                gates: self.entity_reconstruction_body_gates.clone(),
+                start_gates: self.entity_body_start_gates.clone(),
+                divergences: self.divergent_entity_reconstructions.clone(),
+            }) as Arc<dyn EntityInvocationBodyHook>
+        })
+    }
+
+    fn gate_next_entity_reconstruction_claim(
+        &self,
+        agent_id: AgentId,
+    ) -> EntityReconstructionClaimGateHandle {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(EntityReconstructionClaimGate {
+            entered_tx: std::sync::Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        self.entity_reconstruction_claim_gates
+            .lock()
+            .unwrap()
+            .insert(agent_id, gate.clone());
+        EntityReconstructionClaimGateHandle { entered_rx, gate }
+    }
+
+    fn entity_reconstruction_claim_hook(
+        &self,
+        agent_id: AgentId,
+    ) -> Option<Arc<dyn golem_worker_executor::workerctx::EntityReconstructionClaimHook>> {
+        Some(Arc::new(TestEntityReconstructionClaimHook {
+            agent_id,
+            gates: self.entity_reconstruction_claim_gates.clone(),
+        })
+            as Arc<
+                dyn golem_worker_executor::workerctx::EntityReconstructionClaimHook,
+            >)
     }
 
     /// Arms a one-shot gate that pauses the given agent's next consume-body
@@ -3988,6 +4440,188 @@ impl Drop for ConsumeBodyChunkEndGateHandle {
     /// release because the gate fires at most once.
     fn drop(&mut self) {
         self.gate.release.add_permits(1);
+    }
+}
+
+struct EntityReconstructionBodyGate {
+    entered_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: tokio::sync::Semaphore,
+    execution_mode: Option<InvocationExecutionMode>,
+    entity_name: Option<String>,
+}
+
+struct AgentInvocationSuccessGate {
+    entered_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: tokio::sync::Semaphore,
+    abort_as_restart: AtomicBool,
+}
+
+struct EntityReconstructionClaimGate {
+    entered_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<OplogIndex>>>,
+    release: tokio::sync::Semaphore,
+}
+
+pub struct AgentInvocationSuccessGateHandle {
+    entered_rx: tokio::sync::oneshot::Receiver<()>,
+    gate: Arc<AgentInvocationSuccessGate>,
+}
+
+impl AgentInvocationSuccessGateHandle {
+    pub async fn entered(&mut self) {
+        (&mut self.entered_rx)
+            .await
+            .expect("the agent invocation success gate was dropped without firing");
+    }
+
+    pub fn release(&self) {
+        self.gate.release.add_permits(1);
+    }
+
+    pub fn abort_as_restart(&self) {
+        self.gate.abort_as_restart.store(true, Ordering::Release);
+        self.gate.release.add_permits(1);
+    }
+}
+
+impl Drop for AgentInvocationSuccessGateHandle {
+    fn drop(&mut self) {
+        self.gate.release.add_permits(1);
+    }
+}
+
+pub struct EntityReconstructionClaimGateHandle {
+    entered_rx: tokio::sync::oneshot::Receiver<OplogIndex>,
+    gate: Arc<EntityReconstructionClaimGate>,
+}
+
+impl EntityReconstructionClaimGateHandle {
+    pub async fn entered(&mut self) -> OplogIndex {
+        (&mut self.entered_rx)
+            .await
+            .expect("the entity reconstruction claim gate was dropped without firing")
+    }
+
+    pub fn release(&self) {
+        self.gate.release.add_permits(1);
+    }
+}
+
+impl Drop for EntityReconstructionClaimGateHandle {
+    fn drop(&mut self) {
+        self.gate.release.add_permits(1);
+    }
+}
+
+pub struct EntityReconstructionBodyGateHandle {
+    entered_rx: tokio::sync::oneshot::Receiver<()>,
+    gate: Arc<EntityReconstructionBodyGate>,
+}
+
+impl EntityReconstructionBodyGateHandle {
+    pub async fn entered(&mut self) {
+        (&mut self.entered_rx)
+            .await
+            .expect("the entity reconstruction body gate was dropped without firing");
+    }
+
+    pub fn release(&self) {
+        self.gate.release.add_permits(1);
+    }
+}
+
+impl Drop for EntityReconstructionBodyGateHandle {
+    fn drop(&mut self) {
+        self.gate.release.add_permits(1);
+    }
+}
+
+struct TestEntityInvocationBodyHook {
+    agent_id: AgentId,
+    entity_name: Option<String>,
+    gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
+    start_gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
+    divergences: Arc<std::sync::Mutex<HashSet<AgentId>>>,
+}
+
+struct TestEntityReconstructionClaimHook {
+    agent_id: AgentId,
+    gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>,
+}
+
+#[async_trait]
+impl golem_worker_executor::workerctx::EntityReconstructionClaimHook
+    for TestEntityReconstructionClaimHook
+{
+    async fn after_claim(&self, start_index: OplogIndex) {
+        let gate = self.gates.lock().unwrap().remove(&self.agent_id);
+        if let Some(gate) = gate {
+            if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
+                let _ = entered_tx.send(start_index);
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("entity reconstruction claim gate was closed")
+                .forget();
+        }
+    }
+}
+
+#[async_trait]
+impl EntityInvocationBodyHook for TestEntityInvocationBodyHook {
+    async fn before_invocation(&self, _execution_mode: InvocationExecutionMode) {
+        let gate = self.start_gates.lock().unwrap().remove(&self.agent_id);
+        if let Some(gate) = gate {
+            if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
+                let _ = entered_tx.send(());
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("entity body start gate was closed")
+                .forget();
+        }
+    }
+
+    async fn before_completion(&self, execution_mode: InvocationExecutionMode) {
+        let gate = {
+            let mut gates = self.gates.lock().unwrap();
+            let matches = gates.get(&self.agent_id).is_some_and(|gate| {
+                gate.execution_mode == Some(execution_mode)
+                    && gate
+                        .entity_name
+                        .as_ref()
+                        .is_none_or(|expected| self.entity_name.as_ref() == Some(expected))
+            });
+            matches.then(|| gates.remove(&self.agent_id)).flatten()
+        };
+        if let Some(gate) = gate {
+            if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
+                let _ = entered_tx.send(());
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("entity reconstruction body gate was closed")
+                .forget();
+        }
+    }
+
+    fn mutate_completed_reconstruction_response(
+        &self,
+        response: &mut HostResponseEntityInvocation,
+    ) {
+        if !self.divergences.lock().unwrap().remove(&self.agent_id) {
+            return;
+        }
+        if let Ok(value) = &response.result {
+            let mut terminal = SerializableToolOperationTerminal::from_value(value.value())
+                .expect("completed tool reconstruction response has a valid terminal");
+            terminal.body_execution = SerializableEntityBodyExecution::Skipped;
+            response.result = Ok(terminal
+                .into_typed_schema_value()
+                .expect("encode divergent completed tool reconstruction terminal"));
+        }
     }
 }
 

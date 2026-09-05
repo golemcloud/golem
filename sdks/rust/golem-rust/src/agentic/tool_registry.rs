@@ -18,6 +18,7 @@ use crate::golem_agentic::exports::golem::tool::guest::{
     InvocationResult, Tool, ToolError, TypedSchemaValue,
 };
 use crate::golem_agentic::golem::agent::common::Principal;
+use crate::golem_agentic::golem::tool::host::ToolStdoutWriter;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -29,8 +30,13 @@ pub type ToolInvokeFuture =
 pub type ToolInvokeFutureFor<'a> =
     Pin<Box<dyn Future<Output = Result<InvocationResult, ToolError>> + 'a>>;
 
-pub type ToolInvoker =
-    fn(Vec<String>, TypedSchemaValue, Option<InputStream>, Principal) -> ToolInvokeFuture;
+pub type ToolInvoker = fn(
+    Vec<String>,
+    TypedSchemaValue,
+    Option<InputStream>,
+    Option<ToolStdoutWriter>,
+    Principal,
+) -> ToolInvokeFuture;
 
 #[derive(Default)]
 pub struct State {
