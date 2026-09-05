@@ -11,6 +11,7 @@ type ToolInvoker = async (
   Array[String],
   @types.TypedSchemaValue,
   @async-core.Stream[Byte]?,
+  ProviderStdout?,
   @agentCommon.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError]
 
@@ -122,6 +123,7 @@ pub async fn invoke_registered_tool(
   command_path : Array[String],
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
+  stdout : ProviderStdout?,
   principal : @agentCommon.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   invoke_registered_tool_with_resource_drops(
@@ -129,6 +131,7 @@ pub async fn invoke_registered_tool(
     command_path,
     input,
     stdin,
+    stdout,
     principal,
     @model_host.resource_drops(),
   )
@@ -140,6 +143,7 @@ async fn invoke_registered_tool_with_resource_drops(
   command_path : Array[String],
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
+  stdout : ProviderStdout?,
   principal : @agentCommon.Principal,
   drops : @model.SchemaValueResourceDrops,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
@@ -162,7 +166,7 @@ async fn invoke_registered_tool_with_resource_drops(
     _ => ()
   }
   invoke_registered_invoker(
-    tool_name, command_path, input, stdin, principal, drops,
+    tool_name, command_path, input, stdin, stdout, principal, drops,
   )
 }
 
@@ -172,11 +176,12 @@ async fn invoke_registered_invoker(
   command_path : Array[String],
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
+  stdout : ProviderStdout?,
   principal : @agentCommon.Principal,
   drops : @model.SchemaValueResourceDrops,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   match state.invokers.get(tool_name) {
-    Some(invoker) => invoker(command_path, input, stdin, principal)
+    Some(invoker) => invoker(command_path, input, stdin, stdout, principal)
     None =>
       reject_wire_invocation_with_resource_drops(
         input,
@@ -193,6 +198,7 @@ pub async fn invoke_registered_subtool(
   command_path : Array[String],
   fields : Array[CanonicalInputValue],
   stdin : @async-core.Stream[Byte]?,
+  stdout : ProviderStdout?,
   principal : @agentCommon.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   invoke_registered_subtool_with_resource_drops(
@@ -200,6 +206,7 @@ pub async fn invoke_registered_subtool(
     command_path,
     fields,
     stdin,
+    stdout,
     principal,
     @model_host.resource_drops(),
   )
@@ -211,6 +218,7 @@ async fn invoke_registered_subtool_with_resource_drops(
   command_path : Array[String],
   fields : Array[CanonicalInputValue],
   stdin : @async-core.Stream[Byte]?,
+  stdout : ProviderStdout?,
   principal : @agentCommon.Principal,
   drops : @model.SchemaValueResourceDrops,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
@@ -239,7 +247,7 @@ async fn invoke_registered_subtool_with_resource_drops(
   }
   release_canonical_input_values(fields, drops)
   invoke_registered_invoker(
-    tool_name, command_path, input, stdin, principal, drops,
+    tool_name, command_path, input, stdin, stdout, principal, drops,
   )
 }
 

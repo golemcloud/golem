@@ -46,7 +46,7 @@ pub fn CanonicalGrep::canonical_grep(
   max_count : UInt?,
   files : Array[@schema.Path],
   stdin : @asyncCore.Stream[Byte],
-  stdout : @asyncCore.Sink[Byte],
+  stdout : @tool.ProviderStdout,
 ) -> Result[Array[CanonicalGrepHit], CanonicalGrepError] {
   ignore(case_sensitive)
   ignore(color)

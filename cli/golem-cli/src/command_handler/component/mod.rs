@@ -29,12 +29,13 @@ use crate::model::agent::action_result::{
     AgentDeleteAllView, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
 };
 use crate::model::app::BuildConfig;
-use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
+use crate::model::app::{ApplicationComponentSelectMode, ComponentDependency, DynamicHelpSections};
 use crate::model::app_raw;
 use crate::model::cascade::property::tool_bindings::ToolBindingState;
 use crate::model::component::{
     AgentTypeManifestProvisionConfig, ComponentDeployProperties, ComponentNameMatchKind,
-    ComponentRevisionSelection, ComponentView, SelectedComponents, ToolManifestDeploymentConfig,
+    ComponentRevisionSelection, ComponentView, PendingRemoteInitialFile, RemoteToolDeploymentPlan,
+    ResolvedManifestComponentsAndTools, SelectedComponents, ToolManifestDeploymentConfig,
     ToolManifestProvisionConfig, initial_permission_from_manifest_card,
     initial_permission_recipient_context,
 };
@@ -54,6 +55,7 @@ use crate::model::tool_deployment::{
     DiscoveredToolImplementation, ToolEntityPath, ToolImplementationSource, ToolValidationCode,
     ToolValidationIssue, ToolValidationPhase, add_tool_issues,
 };
+use crate::model::tool_release::ResolvedToolGrants;
 use crate::validation::ValidationBuilder;
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use futures_util::future::OptionFuture;
@@ -61,22 +63,29 @@ use golem_client::api::ComponentClient;
 use golem_client::model::{ComponentCreation, ComponentDto};
 use golem_common::cache::SimpleCache;
 use golem_common::model::account::AccountEmail;
+use golem_common::model::agent::AgentFileContentHash;
 use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{
-    AgentConfigEntryDto, ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
+    AgentConfigEntryDto, AgentFilePath, ComponentId, ComponentName, ComponentRevision,
+    ComponentUpdate, InitialAgentFile, InstalledPlugin, PluginPriority,
 };
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff;
 use golem_common::model::environment::EnvironmentName;
+use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
 use golem_common::model::json::NormalizedJsonValue;
-use golem_common::model::tool::{SecretKeyScope, ToolBindingInput, ToolName};
+use golem_common::model::plugin_registration::PluginSpecDto;
+use golem_common::model::tool::{
+    RemoteToolDeployment, SecretKeyScope, ToolBindingInput, ToolName, ToolProvisionConfig,
+};
+use golem_common::model::tool_release::{ToolReleaseById, ToolReleaseReference};
 use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::schema::tool::Tool;
 use golem_common::schema::tool::validation::validate_tool;
 use itertools::Itertools;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -798,11 +807,12 @@ impl ComponentCommandHandler {
         }
     }
 
-    pub async fn deployable_manifest_components(
+    pub async fn resolve_manifest_components_and_tools(
         &self,
         environment: &ResolvedEnvironmentIdentity,
-    ) -> anyhow::Result<BTreeMap<ComponentName, ComponentDeployProperties>> {
-        let (component_names, declared_agents) = {
+        resolved_tool_grants: &ResolvedToolGrants,
+    ) -> anyhow::Result<ResolvedManifestComponentsAndTools> {
+        let (component_names, declared_agents, has_remote_tools) = {
             let app_ctx = self.ctx.app_context_lock().await;
             let app = app_ctx.some_or_err()?;
             (
@@ -811,6 +821,10 @@ impl ComponentCommandHandler {
                     .agent_ids()
                     .cloned()
                     .collect::<BTreeSet<_>>(),
+                app.application()
+                    .remote_release_references()
+                    .next()
+                    .is_some(),
             )
         };
 
@@ -835,22 +849,39 @@ impl ComponentCommandHandler {
             .filter(|declared_agent| !exported_agents.contains_key(declared_agent))
             .collect::<BTreeSet<_>>();
 
-        self.resolve_manifest_tool_deployments(
-            environment,
-            &mut components,
-            &unknown_declared_agents,
-        )
-        .await?;
+        let (remote_tools, tools_to_publish) = self
+            .resolve_manifest_tool_deployments(
+                environment,
+                resolved_tool_grants,
+                &mut components,
+                &unknown_declared_agents,
+                has_remote_tools,
+            )
+            .await?;
 
-        Ok(components)
+        Ok(ResolvedManifestComponentsAndTools {
+            components,
+            remote_tools,
+            tools_to_publish,
+        })
     }
 
     async fn resolve_manifest_tool_deployments(
         &self,
         environment: &ResolvedEnvironmentIdentity,
+        resolved_tool_grants: &ResolvedToolGrants,
         components: &mut BTreeMap<ComponentName, ComponentDeployProperties>,
         unknown_declared_agents: &BTreeSet<AgentTypeName>,
-    ) -> anyhow::Result<()> {
+        has_remote_tools: bool,
+    ) -> anyhow::Result<(RemoteToolDeploymentPlan, BTreeSet<ToolName>)> {
+        let plugin_grants = if has_remote_tools {
+            self.ctx
+                .environment_handler()
+                .plugin_grants(environment)
+                .await?
+        } else {
+            HashMap::new()
+        };
         let app_ctx = self.ctx.app_context_lock().await;
         let app = app_ctx.some_or_err()?.application();
         let mut issues = Vec::new();
@@ -892,6 +923,15 @@ impl ComponentCommandHandler {
                         continue;
                     }
                 };
+                if let Some(declaration) = app.tool_declarations().get(&name)
+                    && declaration
+                        .value
+                        .component
+                        .as_ref()
+                        .is_some_and(|selected| selected != component_name)
+                {
+                    continue;
+                }
                 if let Err(errors) = validate_tool(definition) {
                     issues.push(ToolValidationIssue::error(
                         ToolValidationPhase::StructuralMetadata,
@@ -918,7 +958,56 @@ impl ComponentCommandHandler {
         }
 
         for (tool_name, declaration) in app.tool_declarations() {
-            if !implementations.contains_key(tool_name) {
+            let Some(release) = declaration.value.release.as_ref() else {
+                continue;
+            };
+            let release_reference = release.to_release_reference().map_err(anyhow::Error::msg)?;
+            let grant = resolved_tool_grants.get(&release_reference);
+            let Some(grant) = grant else {
+                issues.push(ToolValidationIssue::error(
+                    ToolValidationPhase::DeclarationDiscoveryIdentity,
+                    ToolValidationCode::ReleaseNotGranted,
+                    ToolEntityPath::tool(tool_name, "tools.release"),
+                    Some(declaration.source.clone()),
+                    "Published tool release was not found among the active grants for this environment",
+                ));
+                continue;
+            };
+            if &grant.release.name != tool_name {
+                issues.push(ToolValidationIssue::error(
+                    ToolValidationPhase::DeclarationDiscoveryIdentity,
+                    ToolValidationCode::InvalidName,
+                    ToolEntityPath::tool(tool_name, "tools.release"),
+                    Some(declaration.source.clone()),
+                    format!(
+                        "Declaration key must equal resolved published tool name '{}'",
+                        grant.release.name
+                    ),
+                ));
+            }
+            if let Err(errors) = validate_tool(&grant.release.definition) {
+                issues.push(ToolValidationIssue::error(
+                    ToolValidationPhase::StructuralMetadata,
+                    ToolValidationCode::InvalidDefinition,
+                    ToolEntityPath::tool(tool_name, "definition"),
+                    Some(declaration.source.clone()),
+                    errors.into_iter().map(|error| error.to_string()).join("; "),
+                ));
+                continue;
+            }
+            implementations.entry(tool_name.clone()).or_default().push(
+                DiscoveredToolImplementation {
+                    definition: grant.release.definition.clone(),
+                    implementation: ToolImplementationSource::RemoteRelease {
+                        grant: Box::new(grant.clone()),
+                    },
+                    diagnostic_source: Some(declaration.source.clone()),
+                },
+            );
+        }
+
+        for (tool_name, declaration) in app.tool_declarations() {
+            if declaration.value.release.is_none() && !implementations.contains_key(tool_name) {
                 issues.push(ToolValidationIssue::error(
                     ToolValidationPhase::DeclarationDiscoveryIdentity,
                     ToolValidationCode::MissingImplementation,
@@ -951,8 +1040,11 @@ impl ComponentCommandHandler {
                         "Tool is exported by multiple components: {}",
                         sources
                             .iter()
-                            .filter_map(|source| source.implementation.local_component_name())
-                            .map(ComponentName::as_str)
+                            .map(|source| match &source.implementation {
+                                ToolImplementationSource::Component { component_name } =>
+                                    component_name.as_str(),
+                                ToolImplementationSource::RemoteRelease { .. } => "remote release",
+                            })
                             .join(", ")
                     ),
                 ));
@@ -969,21 +1061,6 @@ impl ComponentCommandHandler {
             })
             .collect::<BTreeMap<_, _>>();
         let resolved_agents = app.resolve_agents(&agent_components)?;
-        let environment_bindings = resolve_tool_binding_map(
-            app.selected_environment()
-                .tools_merge_mode
-                .unwrap_or_default(),
-            app.selected_environment().tools.clone().unwrap_or_default(),
-        );
-
-        validate_tool_binding_references(
-            &mut issues,
-            &environment_bindings,
-            "environments.tools",
-            None,
-            app.selected_environment_source(),
-            &implementations,
-        );
         for agent_name in agent_components.keys() {
             if let Some(agent) = resolved_agents.agent(agent_name) {
                 validate_tool_binding_references(
@@ -997,9 +1074,77 @@ impl ComponentCommandHandler {
             }
         }
 
-        let owner = &environment.server_environment.owner_account_email;
+        let mut used_tools = BTreeSet::new();
+        for component_name in app.component_names() {
+            for dependency in &app.component(component_name).properties().dependencies {
+                if let ComponentDependency::Tool { tool_name, .. } = dependency {
+                    used_tools.insert(tool_name.clone());
+                }
+            }
+        }
+        used_tools.extend(
+            app.selected_published_tools()
+                .filter_map(|name| ToolName::try_from(name).ok()),
+        );
+        for agent_name in agent_components.keys() {
+            if let Some(agent) = resolved_agents.agent(agent_name) {
+                used_tools.extend(
+                    agent
+                        .tool_bindings()
+                        .keys()
+                        .filter_map(|name| ToolName::try_from(name.as_str()).ok()),
+                );
+            }
+        }
+        for (_, _, targets) in app.bridge_sdks().for_all_used_modes() {
+            let Some(tool_targets) = targets.tools else {
+                continue;
+            };
+            let matchers = tool_targets.clone().into_set();
+            if matchers.contains("*") {
+                used_tools.extend(app.tool_declarations().keys().cloned());
+                break;
+            }
+            for matcher in matchers {
+                if app
+                    .component_names()
+                    .any(|component_name| component_name.as_str() == matcher)
+                {
+                    used_tools.extend(
+                        implementations
+                            .iter()
+                            .filter(|(_, sources)| {
+                                sources.iter().any(|source| {
+                                    source.implementation.local_component_name().is_some_and(
+                                        |component_name| component_name.as_str() == matcher,
+                                    )
+                                })
+                            })
+                            .map(|(tool_name, _)| tool_name.clone()),
+                    );
+                } else if let Ok(tool_name) = ToolName::try_from(matcher) {
+                    used_tools.insert(tool_name);
+                }
+            }
+        }
+        for (tool_name, declaration) in app.tool_declarations() {
+            if !used_tools.contains(tool_name) {
+                issues.push(ToolValidationIssue::warning(
+                    ToolValidationPhase::BindingReferences,
+                    ToolValidationCode::UnusedDeclaration,
+                    ToolEntityPath::tool(tool_name, "tools"),
+                    Some(declaration.source.clone()),
+                    "Tool declaration is not referenced by a component dependency, agent binding, bridge target, or publication",
+                ));
+            }
+        }
+
+        let local_owner = &environment.server_environment.owner_account_email;
         let mut configs_by_component =
             BTreeMap::<ComponentName, BTreeMap<ToolName, ToolManifestDeploymentConfig>>::new();
+        let mut remote_tool_deployments = BTreeMap::new();
+        let mut diffable_remote_tool_deployments = BTreeMap::new();
+        let mut pending_remote_initial_files = Vec::new();
 
         for (tool_name, sources) in &implementations {
             let Some(source) = sources.as_slice().first() else {
@@ -1008,29 +1153,16 @@ impl ComponentCommandHandler {
             if sources.len() != 1 || !app.tool_declarations().contains_key(tool_name) {
                 continue;
             }
-            let Some(component_name) = source.implementation.local_component_name() else {
-                continue;
-            };
             let definition = &source.definition;
+            let owner = source
+                .implementation
+                .release_grant()
+                .map(|grant| &grant.release_owner.email)
+                .unwrap_or(local_owner);
             let declaration_source = app
                 .tool_declarations()
                 .get(tool_name)
                 .map(|declaration| declaration.source.clone());
-            let environment_binding =
-                environment_bindings
-                    .get(tool_name.as_str())
-                    .and_then(|state| {
-                        resolve_tool_binding_input(
-                            &mut issues,
-                            tool_name,
-                            definition,
-                            owner,
-                            state,
-                            "environments.tools",
-                            None,
-                            app.selected_environment_source(),
-                        )
-                    });
 
             let mut agent_bindings = BTreeMap::new();
             for agent_name in agent_components.keys() {
@@ -1040,23 +1172,6 @@ impl ComponentCommandHandler {
                 let Some(state) = agent.tool_bindings().get(tool_name.as_str()) else {
                     continue;
                 };
-                if let (Some(environment_version), Some(agent_version)) = (
-                    environment_bindings
-                        .get(tool_name.as_str())
-                        .and_then(|binding| binding.version.as_ref()),
-                    state.version.as_ref(),
-                ) && environment_version != agent_version
-                {
-                    issues.push(ToolValidationIssue::error(
-                        ToolValidationPhase::LocalResolution,
-                        ToolValidationCode::EnvironmentAgentVersionMismatch,
-                        ToolEntityPath::agent(agent_name, format!("tools.{tool_name}.version")),
-                        Some(agent.source().to_path_buf()),
-                        format!(
-                            "Environment version '{environment_version}' does not match agent version '{agent_version}'"
-                        ),
-                    ));
-                }
                 if let Some(binding) = resolve_tool_binding_input(
                     &mut issues,
                     tool_name,
@@ -1070,7 +1185,7 @@ impl ComponentCommandHandler {
                     validate_effective_tool_binding(
                         &mut issues,
                         tool_name,
-                        environment_binding.as_ref(),
+                        None,
                         &binding,
                         agent_name,
                         agent.source(),
@@ -1079,7 +1194,10 @@ impl ComponentCommandHandler {
                 }
             }
 
-            let provision = match app.resolve_tool_provision(tool_name, component_name) {
+            let provision = match match source.implementation.local_component_name() {
+                Some(component_name) => app.resolve_tool_provision(tool_name, component_name),
+                None => app.resolve_remote_tool_provision(tool_name),
+            } {
                 Ok(provision) => provision,
                 Err(error) => {
                     issues.push(ToolValidationIssue::error(
@@ -1112,15 +1230,20 @@ impl ComponentCommandHandler {
                 }
             }
             let config = resolve_json_value(
-                component_name,
+                "tool",
+                tool_name.as_str(),
                 "tool config",
                 provision
                     .properties
                     .config
                     .unwrap_or_else(|| serde_json::json!({})),
             );
-            let env = resolve_env_vars(component_name, &provision.properties.env);
-            let plugins = resolve_plugin_parameters(component_name, &provision.properties.plugins);
+            let env = resolve_env_vars("tool", tool_name.as_str(), &provision.properties.env);
+            let plugins = resolve_plugin_parameters(
+                "tool",
+                tool_name.as_str(),
+                &provision.properties.plugins,
+            );
             let (config, env, plugins) = match (config, env, plugins, files_valid) {
                 (Ok(config), Ok(env), Ok(plugins), true) => (config, env, plugins),
                 (config, env, plugins, _) => {
@@ -1140,22 +1263,91 @@ impl ComponentCommandHandler {
                 }
             };
 
-            configs_by_component
-                .entry(component_name.clone())
-                .or_default()
-                .insert(
-                    tool_name.clone(),
-                    ToolManifestDeploymentConfig {
-                        provision: ToolManifestProvisionConfig {
-                            config: NormalizedJsonValue::new(config),
-                            env,
-                            files: provision.properties.files,
-                            plugins,
-                        },
-                        environment_binding,
-                        agent_bindings,
-                    },
+            let manifest_config = ToolManifestDeploymentConfig {
+                provision: ToolManifestProvisionConfig {
+                    config: NormalizedJsonValue::new(config),
+                    env,
+                    files: provision.properties.files,
+                    plugins,
+                },
+                environment_binding: None,
+                agent_bindings,
+            };
+
+            if let Some(component_name) = source.implementation.local_component_name() {
+                configs_by_component
+                    .entry(component_name.clone())
+                    .or_default()
+                    .insert(tool_name.clone(), manifest_config);
+            } else if let Some(grant) = source.implementation.release_grant() {
+                let (provision, pending_files) = self
+                    .materialize_remote_tool_provision(
+                        tool_name,
+                        &manifest_config.provision,
+                        &plugin_grants,
+                    )
+                    .await?;
+                pending_remote_initial_files.extend(pending_files);
+                let request = RemoteToolDeployment {
+                    name: tool_name.clone(),
+                    release: ToolReleaseReference::ById(ToolReleaseById {
+                        release_id: grant.release.id,
+                    }),
+                    provision: provision.clone(),
+                    environment_binding: manifest_config.environment_binding.clone(),
+                    agent_bindings: manifest_config.agent_bindings.clone(),
+                };
+                let bindings = effective_remote_tool_bindings(
+                    &agent_components,
+                    manifest_config.environment_binding.as_ref(),
+                    &manifest_config.agent_bindings,
                 );
+                diffable_remote_tool_deployments.insert(
+                    tool_name.to_string(),
+                    diff::RemoteToolDeployment {
+                        release_id: grant.release.id,
+                        version: grant.release.version.clone(),
+                        source_digest: grant.release.source_digest,
+                        owner_account_id: grant.release_owner.id,
+                        owner_account_email: grant.release_owner.email.clone(),
+                        metadata_version: grant.release.metadata_version.clone(),
+                        metadata_digest: grant.release.metadata_digest,
+                        provision,
+                        bindings,
+                    }
+                    .into(),
+                );
+                remote_tool_deployments.insert(tool_name.clone(), request);
+            }
+        }
+
+        let published_tools = app
+            .selected_published_tools()
+            .map(ToolName::try_from)
+            .collect::<Result<BTreeSet<_>, _>>()
+            .map_err(anyhow::Error::msg)?;
+        for tool_name in &published_tools {
+            let local_count = implementations
+                .get(tool_name)
+                .into_iter()
+                .flatten()
+                .filter(|implementation| {
+                    implementation
+                        .implementation
+                        .local_component_name()
+                        .is_some()
+                })
+                .count();
+            if local_count != 1 {
+                issues.push(ToolValidationIssue::error(
+                    ToolValidationPhase::DeclarationDiscoveryIdentity,
+                    ToolValidationCode::MissingImplementation,
+                    ToolEntityPath::tool(tool_name, "toolReleases"),
+                    app.selected_published_tools_source()
+                        .map(std::path::Path::to_path_buf),
+                    format!("Published tool must resolve to exactly one local implementation, found {local_count}"),
+                ));
+            }
         }
 
         let mut validation = ValidationBuilder::new();
@@ -1173,7 +1365,104 @@ impl ComponentCommandHandler {
                 .tool_deployment_configs = tool_configs;
         }
 
-        Ok(())
+        let mut seen_initial_files = HashSet::new();
+        pending_remote_initial_files.retain(|file| seen_initial_files.insert(file.content_hash));
+
+        Ok((
+            RemoteToolDeploymentPlan {
+                deployments: remote_tool_deployments,
+                diffable_deployments: diffable_remote_tool_deployments,
+                pending_initial_files: pending_remote_initial_files,
+            },
+            published_tools,
+        ))
+    }
+
+    async fn materialize_remote_tool_provision(
+        &self,
+        tool_name: &ToolName,
+        provision: &ToolManifestProvisionConfig,
+        plugin_grants: &HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>,
+    ) -> anyhow::Result<(ToolProvisionConfig, Vec<PendingRemoteInitialFile>)> {
+        let plugins = provision
+            .plugins
+            .iter()
+            .enumerate()
+            .map(|(index, plugin)| {
+                let grant = plugin_grants
+                    .get(&PluginNameAndVersion {
+                        name: plugin.name.clone(),
+                        version: plugin.version.clone(),
+                    })
+                    .with_context(|| {
+                        format!(
+                            "Plugin {}/{} required by remote tool {} is not granted to this environment",
+                            plugin.name, plugin.version, tool_name
+                        )
+                    })?;
+                let PluginSpecDto::OplogProcessor(spec) = &grant.plugin.spec;
+                Ok(InstalledPlugin {
+                    environment_plugin_grant_id: grant.id,
+                    priority: PluginPriority(index as i32),
+                    parameters: plugin.parameters.clone().into_iter().collect(),
+                    plugin_registration_id: grant.plugin.id,
+                    plugin_name: grant.plugin.name.clone(),
+                    plugin_version: grant.plugin.version.clone(),
+                    oplog_processor_component_id: Some(spec.component_id),
+                    oplog_processor_component_revision: Some(spec.component_revision),
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        let files = provision
+            .files
+            .iter()
+            .map(|file| {
+                crate::model::app::InitialComponentFileSource::new(
+                    &file.file.source_path,
+                    &file.source,
+                )
+                .map(|source| crate::model::app::InitialComponentFile {
+                    source,
+                    target: crate::model::app::CanonicalFilePathWithPermissions {
+                        path: file.file.target_path.clone(),
+                        permissions: file.file.permissions.unwrap_or_default(),
+                    },
+                })
+                .map_err(anyhow::Error::msg)
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let loaded_files = IfsFileManager::new(self.ctx.file_download_client().clone())
+            .load_initial_files(&files)
+            .await?;
+        let mut initial_files = Vec::with_capacity(loaded_files.len());
+        let mut pending_files = Vec::with_capacity(loaded_files.len());
+        for file in loaded_files {
+            let content_hash = AgentFileContentHash(diff::Hash::new(file.content_hash));
+            let size = file.size;
+            initial_files.push(InitialAgentFile {
+                content_hash,
+                path: AgentFilePath::from_abs_str(file.target.path.as_abs_str())
+                    .map_err(anyhow::Error::msg)?,
+                permissions: file.target.permissions,
+                size,
+            });
+            pending_files.push(PendingRemoteInitialFile {
+                content: file.content,
+                content_hash,
+                size,
+            });
+        }
+
+        Ok((
+            ToolProvisionConfig {
+                config: provision.config.clone(),
+                env: provision.env.clone(),
+                plugins,
+                files: initial_files,
+            },
+            pending_files,
+        ))
     }
 
     pub async fn component_deploy_properties(
@@ -1217,7 +1506,11 @@ impl ComponentCommandHandler {
             agent_type_configs.insert(
                 agent_type.type_name.clone(),
                 AgentTypeManifestProvisionConfig {
-                    env: resolve_env_vars(component_name, resolved_agent.env())?,
+                    env: resolve_env_vars(
+                        "component",
+                        component_name.as_str(),
+                        resolved_agent.env(),
+                    )?,
                     config: resolve_config_values(
                         component_name,
                         &agent_type.type_name,
@@ -1235,7 +1528,11 @@ impl ComponentCommandHandler {
                         })?,
                     files_source: component.source().to_path_buf(),
                     files: resolved_agent.files().to_vec(),
-                    plugins: resolve_plugin_parameters(component_name, resolved_agent.plugins())?,
+                    plugins: resolve_plugin_parameters(
+                        "component",
+                        component_name.as_str(),
+                        resolved_agent.plugins(),
+                    )?,
                 },
             );
         }
@@ -1781,20 +2078,6 @@ impl ComponentCommandHandler {
     }
 }
 
-fn resolve_tool_binding_map(
-    merge_mode: crate::model::cascade::property::map::MapMergeMode,
-    bindings: indexmap::IndexMap<String, app_raw::ToolBinding>,
-) -> BTreeMap<String, ToolBindingState> {
-    match merge_mode {
-        crate::model::cascade::property::map::MapMergeMode::Remove => BTreeMap::new(),
-        crate::model::cascade::property::map::MapMergeMode::Upsert
-        | crate::model::cascade::property::map::MapMergeMode::Replace => bindings
-            .into_iter()
-            .map(|(name, binding)| (name, ToolBindingState::from_binding(binding)))
-            .collect(),
-    }
-}
-
 fn validate_tool_binding_references(
     issues: &mut Vec<ToolValidationIssue>,
     bindings: &BTreeMap<String, ToolBindingState>,
@@ -1974,6 +2257,21 @@ fn validate_effective_tool_binding(
     }
 }
 
+fn effective_remote_tool_bindings(
+    agent_components: &BTreeMap<AgentTypeName, ComponentName>,
+    environment: Option<&ToolBindingInput>,
+    agents: &BTreeMap<AgentTypeName, ToolBindingInput>,
+) -> BTreeMap<AgentTypeName, diff::EffectiveToolBinding> {
+    agent_components
+        .keys()
+        .filter_map(|agent_name| {
+            let agent = agents.get(agent_name);
+            diff::effective_tool_binding(environment, agent)
+                .map(|(binding, _)| (agent_name.clone(), binding))
+        })
+        .collect()
+}
+
 fn resolve_secret_scope(
     issues: &mut Vec<ToolValidationIssue>,
     layers: &[app_raw::ManifestSecretKeyScope],
@@ -2029,7 +2327,8 @@ fn resolve_secret_scope(
 }
 
 fn resolve_json_value(
-    component_name: &ComponentName,
+    subject_kind: &'static str,
+    subject_name: &str,
     value_kind: &str,
     value: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
@@ -2037,14 +2336,15 @@ fn resolve_json_value(
         .render_json_value(&value)
         .with_context(|| {
             format!(
-                "Failed to prepare {value_kind} for component {}",
-                component_name.as_str().log_color_highlight()
+                "Failed to prepare {value_kind} for {subject_kind} {}",
+                subject_name.log_color_highlight()
             )
         })
 }
 
 fn resolve_env_vars(
-    component_name: &ComponentName,
+    subject_kind: &'static str,
+    subject_name: &str,
     env: &BTreeMap<String, String>,
 ) -> anyhow::Result<BTreeMap<String, String>> {
     let renderer = crate::command_handler::template::EnvVarRenderer::new();
@@ -2052,7 +2352,7 @@ fn resolve_env_vars(
     let mut resolved_env = BTreeMap::new();
     let mut validation = ValidationBuilder::new();
     validation.with_context(
-        vec![("component", component_name.to_string())],
+        vec![(subject_kind, subject_name.to_string())],
         |validation| {
             for key in env.keys().sorted() {
                 let value = env.get(key).unwrap();
@@ -2099,8 +2399,8 @@ fn resolve_env_vars(
 
     validated_to_anyhow(
         &format!(
-            "Failed to prepare environment variables for component: {}",
-            component_name.as_str().log_color_highlight()
+            "Failed to prepare environment variables for {subject_kind}: {}",
+            subject_name.log_color_highlight()
         ),
         validation.build(resolved_env),
         None,
@@ -2108,7 +2408,8 @@ fn resolve_env_vars(
 }
 
 fn resolve_plugin_parameters(
-    component_name: &ComponentName,
+    subject_kind: &'static str,
+    subject_name: &str,
     plugins: &[app_raw::PluginInstallation],
 ) -> anyhow::Result<Vec<app_raw::PluginInstallation>> {
     let renderer = crate::command_handler::template::EnvVarRenderer::new();
@@ -2116,7 +2417,7 @@ fn resolve_plugin_parameters(
     let mut resolved_plugins = Vec::with_capacity(plugins.len());
     let mut validation = ValidationBuilder::new();
     validation.with_context(
-        vec![("component", component_name.to_string())],
+        vec![(subject_kind, subject_name.to_string())],
         |validation| {
             for plugin in plugins {
                 validation.with_context(
@@ -2182,8 +2483,8 @@ fn resolve_plugin_parameters(
 
     validated_to_anyhow(
         &format!(
-            "Failed to prepare plugin parameters for component: {}",
-            component_name.as_str().log_color_highlight()
+            "Failed to prepare plugin parameters for {subject_kind}: {}",
+            subject_name.log_color_highlight()
         ),
         validation.build(resolved_plugins),
         None,
@@ -2313,7 +2614,9 @@ fn collect_unused_agent_config_paths(
 
 #[cfg(test)]
 mod tool_binding_tests {
-    use super::{resolve_secret_scope, validate_effective_tool_binding};
+    use super::{
+        effective_remote_tool_bindings, resolve_secret_scope, validate_effective_tool_binding,
+    };
     use crate::model::app_raw::ManifestSecretKeyScope;
     use crate::model::tool_deployment::{
         ToolEntityPath, ToolValidationCode, ToolValidationSeverity,
@@ -2321,9 +2624,10 @@ mod tool_binding_tests {
     use golem_common::model::account::AccountEmail;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::agent_secret::CanonicalAgentSecretPath;
+    use golem_common::model::component::ComponentName;
     use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::tool::{SecretKeyScope, ToolBindingInput, ToolName};
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::path::Path;
     use test_r::test;
 
@@ -2409,5 +2713,30 @@ mod tool_binding_tests {
         assert_eq!(issues[0].code, ToolValidationCode::RevealableScopeNarrowed);
         assert_eq!(issues[0].severity, ToolValidationSeverity::Warning);
         assert_eq!(issues[0].source.as_deref(), Some(Path::new("agents.yaml")));
+    }
+
+    #[test]
+    fn remote_diff_binding_matches_server_parameter_merge_and_scope_intersection() {
+        let agent_name = AgentTypeName("CoderAgent".to_string());
+        let mut environment = binding(SecretKeyScope::All, keys(&["github", "gitlab"]));
+        environment.parameters =
+            NormalizedJsonValue::new(serde_json::json!({"shared": "environment", "base": 1}));
+        let mut agent = binding(keys(&["github"]), SecretKeyScope::All);
+        agent.parameters =
+            NormalizedJsonValue::new(serde_json::json!({"shared": "agent", "extra": 2}));
+
+        let bindings = effective_remote_tool_bindings(
+            &BTreeMap::from([(agent_name.clone(), ComponentName("component".to_string()))]),
+            Some(&environment),
+            &BTreeMap::from([(agent_name.clone(), agent)]),
+        );
+        let effective = bindings.get(&agent_name).unwrap();
+
+        assert_eq!(
+            effective.parameters.0,
+            serde_json::json!({"base": 1, "extra": 2, "shared": "agent"})
+        );
+        assert_eq!(effective.secret_keys_readable, keys(&["github"]));
+        assert_eq!(effective.secret_keys_revealable, keys(&["github"]));
     }
 }

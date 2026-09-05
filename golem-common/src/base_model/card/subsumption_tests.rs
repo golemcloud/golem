@@ -1600,6 +1600,11 @@ fn attenuation_accepts_fully_denied_ceiling_against_implicit_and_explicit_top() 
             AccountPluginResourcePattern::Any
         ),
         grant!(
+            AccountToolRelease,
+            AccountOwnerPattern::Any,
+            AccountToolReleaseResourcePattern::Any
+        ),
+        grant!(
             Application,
             ApplicationOwnerPattern::AnyApplications,
             ApplicationResourcePattern
@@ -1613,6 +1618,11 @@ fn attenuation_accepts_fully_denied_ceiling_against_implicit_and_explicit_top() 
             EnvironmentPluginGrant,
             EnvironmentOwnerPattern::AnyEnvironments,
             EnvironmentPluginGrantResourcePattern::Any
+        ),
+        grant!(
+            EnvironmentToolGrant,
+            EnvironmentOwnerPattern::AnyEnvironments,
+            EnvironmentToolGrantResourcePattern::Any
         ),
         grant!(
             EnvironmentDomainRegistration,
@@ -1680,7 +1690,7 @@ fn attenuation_accepts_fully_denied_ceiling_against_implicit_and_explicit_top() 
             AccountPermissionShareResourcePattern::Any
         ),
     ];
-    assert_eq!(universal.len(), 34);
+    assert_eq!(universal.len(), 36);
 
     let implicit_top = card(Vec::new(), Vec::new());
     let implicit_top_surface = DelegationSurface::from_cards(std::slice::from_ref(&implicit_top));

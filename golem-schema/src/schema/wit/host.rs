@@ -32,6 +32,7 @@ pub mod generated {
             "golem:core/types@2.0.0.secret": crate::schema::wit::SecretHandleRep,
             "golem:core/types@2.0.0.schema-value-stream": crate::schema::SchemaValueStreamHandleRep,
             "golem:core/types@2.0.0.permission-card": crate::schema::wit::PermissionCardHandleRep,
+            "golem:tool/common@0.1.0.underlying-tool": crate::schema::tool::UnderlyingToolHandleRep,
         },
     });
 }
