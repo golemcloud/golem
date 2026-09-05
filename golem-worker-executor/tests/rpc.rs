@@ -1179,6 +1179,213 @@ async fn durable_streaming_input_recovers_after_executor_restart(
 #[test]
 #[timeout("2 minutes")]
 #[tracing::instrument]
+async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completion(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let agent_id = agent_id!("StreamingRpcTarget", "resume-after-guest-drop");
+    let worker_agent_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
+    let input = golem_api_grpc::proto::golem::schema::SchemaValue {
+        value: Some(schema_value::Value::RecordValue(RecordValue {
+            fields: vec![golem_api_grpc::proto::golem::schema::SchemaValue {
+                value: Some(schema_value::Value::StreamReference(
+                    SchemaValueStreamReference { stream_id: 1 },
+                )),
+            }],
+        })),
+    };
+    let start_request = InvocationRequest {
+        request: Some(invocation_request::Request::Start(InvocationStart {
+            agent_id: Some(worker_agent_id.clone().into()),
+            method_name: Some("drop_input".to_string()),
+            input: Some(input),
+            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            environment_id: Some(component.environment_id.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
+            attempt_id: Some(uuid::Uuid::new_v4().into()),
+            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            ..Default::default()
+        })),
+    };
+
+    let mut state = InvocationSessionState::default();
+    state
+        .validate_trusted_request(&start_request)
+        .map_err(anyhow::Error::msg)?;
+    let (requests, receiver) = mpsc::channel(8);
+    requests.send(start_request.clone()).await?;
+    let mut responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let first = responses
+        .message()
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("streaming invocation ended before acceptance"))?;
+    state
+        .validate_response(&first)
+        .map_err(anyhow::Error::msg)?;
+    let first_accepted = match first.response {
+        Some(invocation_response::Response::Accepted(accepted)) => accepted,
+        other => anyhow::bail!("expected durable acceptance, got {other:?}"),
+    };
+    let first_mapping = first_accepted
+        .stream_mappings
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("durable acceptance omitted its input mapping"))?;
+
+    let mut first_input_cancelled = false;
+    let mut first_result = None;
+    while !state.is_complete() {
+        let response = responses
+            .message()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("first attempt closed before completion"))?;
+        state
+            .validate_response(&response)
+            .map_err(anyhow::Error::msg)?;
+        match response.response {
+            Some(invocation_response::Response::StreamCancel(cancel)) => {
+                assert_eq!(cancel.transport_stream_id, 1);
+                assert_eq!(cancel.role, StreamCancelRole::InputConsumer as i32);
+                first_input_cancelled = true;
+            }
+            Some(invocation_response::Response::Result(invocation_result)) => {
+                let value = match invocation_result.result {
+                    Some(invocation_session_result::Result::MethodResult(value)) => value,
+                    other => anyhow::bail!("expected method result, got {other:?}"),
+                };
+                first_result = Some(SchemaValue::try_from(value).map_err(anyhow::Error::msg)?);
+            }
+            Some(invocation_response::Response::Finished(finished)) => assert!(
+                matches!(
+                    finished.outcome,
+                    Some(invocation_session_completion::Outcome::Success(_))
+                ),
+                "unexpected first attempt completion: {finished:?}"
+            ),
+            Some(other) => anyhow::bail!("unexpected first attempt response: {other:?}"),
+            None => anyhow::bail!("empty first attempt response"),
+        }
+    }
+    assert!(
+        first_input_cancelled,
+        "the guest drop did not cancel the input stream"
+    );
+    assert_eq!(first_result, Some(SchemaValue::U64(42)));
+    drop(requests);
+    drop(responses);
+
+    let Some(invocation_request::Request::Start(start)) = start_request.request.as_ref() else {
+        anyhow::bail!("durable input resume request is not Start");
+    };
+    let resume_request = InvocationRequest {
+        request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
+            idempotency_key: start.idempotency_key.clone(),
+            agent_id: start.agent_id.clone(),
+            environment_id: start.environment_id,
+            attachment_id: first_accepted.attachment_id,
+            attempt_id: Some(uuid::Uuid::new_v4().into()),
+            expected_callee_fingerprint: start.expected_callee_fingerprint,
+            expected_epoch: first_accepted.epoch,
+            operation: ResumeOperation::Resume as i32,
+            cursors: Vec::new(),
+            auth_ctx: start.auth_ctx.clone(),
+            principal: start.principal.clone(),
+        })),
+    };
+    let mut final_state = InvocationSessionState::default();
+    final_state
+        .validate_trusted_request(&resume_request)
+        .map_err(anyhow::Error::msg)?;
+    let (requests, receiver) = mpsc::channel(8);
+    requests.send(resume_request).await?;
+    let mut responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let accepted = responses
+        .message()
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("resume ended before acceptance"))?;
+    final_state
+        .validate_response(&accepted)
+        .map_err(anyhow::Error::msg)?;
+    let accepted = match accepted.response {
+        Some(invocation_response::Response::Accepted(accepted)) => accepted,
+        other => anyhow::bail!("expected resume acceptance, got {other:?}"),
+    };
+    assert_eq!(accepted.attachment_id, first_accepted.attachment_id);
+    assert_ne!(accepted.attempt_id, first_accepted.attempt_id);
+    assert_eq!(accepted.epoch, first_accepted.epoch + 1);
+    assert_eq!(accepted.stream_mappings.len(), 1);
+    let mapping = accepted
+        .stream_mappings
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("resume acceptance omitted its input mapping"))?;
+    assert_eq!(mapping.transport_stream_id, 1);
+    assert_eq!(mapping.handle, first_mapping.handle);
+    assert!(
+        matches!(&mapping.high_water, Some(high_water) if high_water.terminal),
+        "resume acceptance did not announce the cancelled input as terminal: {mapping:?}"
+    );
+
+    let mut result = None;
+    while !final_state.is_complete() {
+        let response = responses
+            .message()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("resumed session closed before completion"))?;
+        final_state
+            .validate_response(&response)
+            .map_err(anyhow::Error::msg)?;
+        match response.response {
+            Some(invocation_response::Response::Result(invocation_result)) => {
+                let value = match invocation_result.result {
+                    Some(invocation_session_result::Result::MethodResult(value)) => value,
+                    other => anyhow::bail!("expected method result, got {other:?}"),
+                };
+                result = Some(SchemaValue::try_from(value).map_err(anyhow::Error::msg)?);
+            }
+            Some(invocation_response::Response::Finished(finished)) => assert!(
+                matches!(
+                    finished.outcome,
+                    Some(invocation_session_completion::Outcome::Success(_))
+                ),
+                "unexpected resumed completion: {finished:?}"
+            ),
+            Some(other) => anyhow::bail!("unexpected resumed session response: {other:?}"),
+            None => anyhow::bail!("empty resumed session response"),
+        }
+    }
+    assert_eq!(result, Some(SchemaValue::U64(42)));
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
 async fn reacquire_permits_restart_preserves_accepted_queued_live_invocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
