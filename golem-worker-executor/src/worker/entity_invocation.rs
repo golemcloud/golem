@@ -387,7 +387,7 @@ where
         activation_fingerprint = %scope.activation().fingerprint(),
         execution_mode = ?scope.mode(),
     );
-    let task = tokio::spawn(
+    let task = tokio::spawn(super::invocation::with_invocation_stack(
         async move {
             let mut metrics = EntityInvocationMetricsGuard::new(&scope);
             debug!("Entity invocation started");
@@ -445,7 +445,7 @@ where
             }
         }
         .instrument(span),
-    );
+    ));
     let abort = task.abort_handle();
     if let Err(error) = slot.attach_abort(&invocation_id, abort.clone()) {
         abort.abort();

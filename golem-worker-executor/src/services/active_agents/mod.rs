@@ -486,7 +486,7 @@ impl InvocationLoops {
                     // can exhaust Tokio's default worker-thread stack.
                     stacker::grow(INVOCATION_LOOP_DROP_STACK_SIZE, move || drop(invocation_loop));
                 }
-                _ = &mut invocation_loop => {}
+                _ = crate::worker::invocation::with_invocation_stack(&mut invocation_loop) => {}
             }
         })
     }
