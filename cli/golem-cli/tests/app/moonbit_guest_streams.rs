@@ -2,14 +2,13 @@ use crate::Tracing;
 use crate::app::{TestContext, cmd, flag};
 use golem_cli::{fs, versions};
 use indoc::{formatdoc, indoc};
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 
-#[test]
-#[timeout("20 minutes")]
-async fn test_moonbit_generated_guest_streams_e2e() {
+async fn moonbit_guest_streams_context() -> TestContext {
     let mut ctx = TestContext::new();
     ctx.start_server().await;
     fs::create_dir_all(ctx.cwd_path_join("moonbit-stream-bridge")).unwrap();
@@ -70,6 +69,8 @@ async fn test_moonbit_generated_guest_streams_e2e() {
             fn produce(&self) -> AgentStream<StreamItem>;
             fn forward(&self, bundle: StreamBundle) -> StreamBundle;
             fn nested(&self, input: AgentStream<AgentStream<StreamItem>>) -> AgentStream<AgentStream<StreamItem>>;
+            fn malformed(&self) -> AgentStream<u32>;
+            async fn drop_after_one(&self, input: AgentStream<u32>) -> u32;
             fn status(&self) -> String;
         }
         struct StreamProviderImpl;
@@ -90,6 +91,22 @@ async fn test_moonbit_generated_guest_streams_e2e() {
             }
             fn forward(&self, bundle: StreamBundle) -> StreamBundle { bundle }
             fn nested(&self, input: AgentStream<AgentStream<StreamItem>>) -> AgentStream<AgentStream<StreamItem>> { input }
+            fn malformed(&self) -> AgentStream<u32> {
+                let (mut writer, stream) = golem_rust::schema::wit::new_schema_value_stream();
+                spawn_local(async move {
+                    let first = golem_rust::schema::wit::encode_value(&golem_rust::schema::SchemaValue::U32(7)).expect("encode first item");
+                    if writer.write_one(first).await.is_some() { return; }
+                    let _ = writer.write_one(golem_rust::schema::wit::wire::SchemaValueTree {
+                        value_nodes: vec![], root: 0,
+                    }).await;
+                });
+                AgentStream::from_raw(stream)
+            }
+            async fn drop_after_one(&self, mut input: AgentStream<u32>) -> u32 {
+                let first = input.next().await.expect("read input").expect("first item");
+                drop(input);
+                first
+            }
             fn status(&self) -> String { "ready".into() }
         }
     "#}).unwrap();
@@ -115,6 +132,46 @@ async fn test_moonbit_generated_guest_streams_e2e() {
         struct StreamConsumer { name : String }
 
         fn StreamConsumer::new(name : String) -> StreamConsumer { { name, } }
+
+        pub async fn StreamConsumer::malformed(self : Self) -> @schema.AgentStream[UInt] {
+          @provider.StreamProviderClient::scoped(self.name, async fn(remote) {
+            let input = remote.malformed()
+            @schema.AgentStream::produce(async fn(writer) {
+              defer input.drop()
+              for ;; {
+                match input.read() {
+                  Some(value) => if writer.write_one(value) is @schema.PeerDropped { return }
+                  None => return
+                }
+              }
+            }, on_unstarted_drop=() => input.drop())
+          })
+        }
+
+        pub async fn StreamConsumer::peer_drop(self : Self) -> String {
+          @provider.StreamProviderClient::scoped(self.name, async fn(remote) {
+            let peer_dropped = Ref(false)
+            let accepted = Ref(0)
+            let input = @provider.produce_drop_after_one_input_0_stream(async fn(writer) {
+              for ;; {
+                match writer.write_one(23U) {
+                  @schema.Accepted => accepted.val += 1
+                  @schema.PeerDropped => { peer_dropped.val = true; return }
+                }
+              }
+            })
+            assert_eq(remote.drop_after_one(input), 23U)
+            // RPC round trips yield to transport cancellation without sleeps.
+            for _ in 0..<64 {
+              assert_eq(remote.status(), "ready")
+              if peer_dropped.val {
+                assert_true(accepted.val >= 1)
+                return "ok:peer-dropped"
+              }
+            }
+            fail("MoonBit producer did not observe PeerDropped after remote reader drop")
+          })
+        }
 
         pub async fn StreamConsumer::run(self : Self) -> String {
           @provider.StreamProviderClient::scoped(self.name, async fn(remote) {
@@ -156,6 +213,13 @@ async fn test_moonbit_generated_guest_streams_e2e() {
     .unwrap();
     assert!(ctx.cli([cmd::BUILD]).await.success_or_dump());
     assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+    ctx
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn test_moonbit_generated_guest_streams_e2e() {
+    let ctx = moonbit_guest_streams_context().await;
     let name = Uuid::new_v4();
     let outputs = ctx
         .cli([
@@ -168,4 +232,59 @@ async fn test_moonbit_generated_guest_streams_e2e() {
         .await;
     assert!(outputs.success_or_dump());
     assert!(outputs.stdout_contains("ok:ready"));
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn test_moonbit_generated_guest_streams_producer_failure() {
+    let ctx = moonbit_guest_streams_context().await;
+    let name = Uuid::new_v4();
+    let outputs = tokio::time::timeout(
+        Duration::from_secs(90),
+        ctx.cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &format!("StreamConsumer(\"{name}\")"),
+                "malformed",
+                "--no-stream",
+            ],
+            b"",
+        ),
+    )
+    .await
+    .expect("malformed producer did not terminate the invocation within 90 seconds");
+    assert!(!outputs.success(), "malformed producer became clean EOF");
+    assert!(
+        outputs.stdout_text().lines().any(|line| line == "7"),
+        "must deliver a valid item before the producer failure: {}",
+        outputs.stdout_text()
+    );
+    assert!(
+        outputs.stderr_text().contains("Output stream")
+            || outputs.stderr_text().contains("Invocation Failed"),
+        "expected stream/invocation failure, not an unrelated CLI error: {}",
+        outputs.stderr_text()
+    );
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn test_moonbit_generated_guest_streams_peer_drop() {
+    let ctx = moonbit_guest_streams_context().await;
+    let name = Uuid::new_v4();
+    let outputs = tokio::time::timeout(
+        Duration::from_secs(90),
+        ctx.cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("StreamConsumer(\"{name}\")"),
+            "peer_drop",
+        ]),
+    )
+    .await
+    .expect("readable-drop acknowledgement did not complete within 90 seconds");
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("ok:peer-dropped"));
 }
