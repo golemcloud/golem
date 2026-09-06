@@ -2303,7 +2303,7 @@ async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
     .with_rpc(ctx.rpc())
     .with_consumer_journal(worker.durable_stream_consumer_journal())
     .with_auth_ctx(auth_ctx)
-    .require_attachment_before_production();
+    .require_root_attachment_before_production();
     streams
         .recover_session_mappings()
         .await

@@ -3511,6 +3511,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         let foreign_mappings = request.foreign_mappings.clone();
+        for mapping in &foreign_mappings {
+            if producer.owns_handle_identity(&mapping.handle) {
+                producer
+                    .validate_handle(&mapping.handle)
+                    .await
+                    .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+            }
+        }
 
         let prepared = if let Some(prepared) = existing_prepared {
             let mut requested_attempt = request.attempt.clone();
@@ -3660,7 +3668,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let already_attached = attached.is_some();
 
         let streams = DurableSessionStreams::new(
-            producer,
+            producer.clone(),
             self.oplog.clone(),
             session_key,
             prepared.stream_mappings.iter().map(|mapping| {
@@ -3681,6 +3689,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             request.input_element_types,
         );
         for mapping in &foreign_mappings {
+            if producer.owns_handle_identity(&mapping.handle) {
+                continue;
+            }
             streams
                 .prepare_foreign_mapping(mapping.clone(), 1)
                 .await
@@ -3718,6 +3729,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .map_err(WorkerExecutorError::runtime)?;
         }
         for mapping in &foreign_mappings {
+            if producer.owns_handle_identity(&mapping.handle) {
+                continue;
+            }
             let mut retry_delay = Duration::from_millis(10);
             loop {
                 match streams.activate_foreign_mapping(mapping.clone(), 1).await {
@@ -4216,7 +4230,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .with_consumer_journal(self.durable_stream_consumer_journal())
         .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
         if requires_attachment {
-            streams = streams.require_attachment_before_production();
+            streams = streams.require_root_attachment_before_production();
         }
         streams
             .materialize_result(value, graph, root, component_revision)
