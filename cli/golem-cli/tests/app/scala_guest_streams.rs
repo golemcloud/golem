@@ -8,9 +8,7 @@ use golem_cli::{fs, versions};
 use indoc::{formatdoc, indoc};
 use test_r::{test, timeout};
 
-#[test]
-#[timeout("20 minutes")]
-async fn test_scala_agent_guest_streams_e2e() {
+async fn deployed_scala_streams_context() -> TestContext {
     let mut ctx = TestContext::new();
     ctx.start_server().await;
     fs::create_dir_all(ctx.cwd_path_join("scala-guest-streams")).unwrap();
@@ -66,6 +64,8 @@ async fn test_scala_agent_guest_streams_e2e() {
             fn forward(&self, input: Bundle) -> Bundle;
             fn nested(&self, input: AgentStream<AgentStream<Item>>) -> AgentStream<AgentStream<Item>>;
             fn produce(&self) -> AgentStream<Item>;
+            fn application_error(&self) -> AgentStream<Result<String, String>>;
+            fn malformed(&self) -> AgentStream<u32>;
             async fn consume(&self, input: AgentStream<Item>) -> String;
             async fn hold(&self, input: AgentStream<Item>) -> String;
             fn drop_input(&self, input: AgentStream<Item>) -> String;
@@ -84,6 +84,22 @@ async fn test_scala_agent_guest_streams_e2e() {
                     let _ = writer.write_all(vec![Item { label: "remote".into(), children: vec![] }]).await;
                 });
                 stream
+            }
+            fn application_error(&self) -> AgentStream<Result<String, String>> {
+                let (mut writer, stream) = AgentStream::new();
+                spawn_local(async move {
+                    writer.write_all([Ok("before".into()), Err("recoverable".into()), Ok("after".into())]).await.unwrap();
+                });
+                stream
+            }
+            fn malformed(&self) -> AgentStream<u32> {
+                let (mut writer, stream) = golem_rust::schema::wit::new_schema_value_stream();
+                spawn_local(async move {
+                    let _ = writer.write_one(golem_rust::schema::wit::wire::SchemaValueTree {
+                        value_nodes: vec![], root: 0,
+                    }).await;
+                });
+                AgentStream::from_raw(stream)
             }
             async fn consume(&self, input: AgentStream<Item>) -> String {
                 input.collect().await.unwrap().into_iter().map(|item| item.label).collect::<Vec<_>>().join(",")
@@ -115,6 +131,8 @@ async fn test_scala_agent_guest_streams_e2e() {
           def run(): Future[String]
           def nested(): Future[String]
           def cancel(): Future[String]
+          def recoverable(): Future[String]
+          def fatal(): Future[String]
         }
         @agentImplementation()
         final class StreamConsumerImpl(private val name: String) extends StreamConsumer {
@@ -180,6 +198,22 @@ async fn test_scala_agent_guest_streams_e2e() {
               "scala-cancel-ok"
             }
           }
+          def recoverable(): Future[String] = {
+            val provider = StreamProviderClient.get(name + "-recoverable")
+            for {
+              input <- provider.applicationError()
+              values <- collect(input)
+              ready <- provider.status()
+            } yield {
+              require(values == List(Right("before"), Left("recoverable"), Right("after")))
+              require(ready == "ready")
+              "scala-recoverable-ok"
+            }
+          }
+          def fatal(): Future[String] = {
+            val provider = StreamProviderClient.get(name + "-fatal")
+            provider.malformed().flatMap(collect).map(_ => "unexpected-clean-eof")
+          }
         }
     "#}).unwrap();
     // Guest bridge sources belong to the consumer, not the provider's discovery input.
@@ -191,6 +225,13 @@ async fn test_scala_agent_guest_streams_e2e() {
     assert!(output.success_or_dump());
     let output = ctx.cli([flag::YES, cmd::DEPLOY]).await;
     assert!(output.success_or_dump());
+    ctx
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn test_scala_agent_guest_streams_e2e() {
+    let ctx = deployed_scala_streams_context().await;
     let output = ctx
         .cli([
             flag::YES,
@@ -218,4 +259,50 @@ async fn test_scala_agent_guest_streams_e2e() {
         assert!(output.success_or_dump());
         assert!(output.stdout_contains(expected));
     }
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn test_scala_agent_guest_stream_producer_errors_e2e() {
+    let ctx = deployed_scala_streams_context().await;
+    let recoverable = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        ctx.cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "StreamConsumer(\"errors\")",
+            "recoverable",
+        ]),
+    )
+    .await
+    .expect("recoverable result-item invocation timed out");
+    assert!(recoverable.success_or_dump());
+    assert!(recoverable.stdout_contains("scala-recoverable-ok"));
+
+    let fatal = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        ctx.cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "StreamConsumer(\"fatal\")",
+            "fatal",
+        ]),
+    )
+    .await
+    .expect("fatal producer invocation timed out");
+    assert!(
+        !fatal.success(),
+        "malformed producer unexpectedly completed successfully"
+    );
+    assert!(
+        !fatal.stdout_contains("unexpected-clean-eof"),
+        "fatal producer was converted to clean EOF"
+    );
+    assert!(
+        fatal.stderr_contains("durable stream ended with error context"),
+        "expected a fatal stream operation failure: {}",
+        fatal.stderr().collect::<Vec<_>>().join("\n")
+    );
 }
