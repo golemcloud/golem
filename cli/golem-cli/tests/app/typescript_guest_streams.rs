@@ -10,17 +10,38 @@ inherit_test_dep!(Tracing);
 #[tag(agents_guest_bridge)]
 #[timeout("5 minutes")]
 async fn test_ts_native_stream_guest_bridge_e2e() {
-    native_stream_guest_bridge_e2e("run", "20:ready").await;
+    native_stream_guest_bridge_e2e("run", Ok("20:ready")).await;
 }
 
 #[test]
 #[tag(agents_guest_bridge)]
 #[timeout("5 minutes")]
 async fn test_ts_native_stream_forwarding_guest_bridge_e2e() {
-    native_stream_guest_bridge_e2e("forwardUnread", "9:ready").await;
+    native_stream_guest_bridge_e2e("forwardUnread", Ok("9:ready")).await;
 }
 
-async fn native_stream_guest_bridge_e2e(method_name: &str, expected: &str) {
+#[test]
+#[tag(agents_guest_bridge)]
+#[timeout("5 minutes")]
+async fn test_ts_native_stream_producer_error_guest_bridge_e2e() {
+    native_stream_guest_bridge_e2e("fatalProducer", Err("Invocation Failed")).await;
+}
+
+#[test]
+#[tag(agents_guest_bridge)]
+#[timeout("5 minutes")]
+async fn test_ts_native_stream_pending_cancel_guest_bridge_e2e() {
+    native_stream_guest_bridge_e2e("cancelPending", Ok("cancelled:ready")).await;
+}
+
+#[test]
+#[tag(agents_guest_bridge)]
+#[timeout("5 minutes")]
+async fn test_ts_native_stream_result_items_guest_bridge_e2e() {
+    native_stream_guest_bridge_e2e("recoverableItems", Ok("ok:1,err:recoverable,ok:2:ready")).await;
+}
+
+async fn native_stream_guest_bridge_e2e(method_name: &str, expected: Result<&str, &str>) {
     let mut ctx = TestContext::new();
     ctx.start_server().await;
     fs::create_dir_all(ctx.cwd_path_join("ts-native-streams")).unwrap();
@@ -63,7 +84,7 @@ async fn native_stream_guest_bridge_e2e(method_name: &str, expected: &str) {
     .unwrap();
     fs::write_str(ctx.cwd_path_join("provider/src/counter-agent.ts"), indoc! {r#"
         import { z } from 'zod';
-        import { AgentStream, defineAgent, method, s } from '@golemcloud/golem-ts-sdk';
+        import { AgentStream, defineAgent, method, Result, s } from '@golemcloud/golem-ts-sdk';
         const item = z.object({ label: z.string(), count: z.number() });
         const itemStream = s.stream(item) as unknown as z.ZodType<AgentStream<z.infer<typeof item>>>;
         const bundle = z.object({ siblings: z.array(itemStream), optional: z.optional(itemStream) });
@@ -74,6 +95,9 @@ async fn native_stream_guest_bridge_e2e(method_name: &str, expected: &str) {
             nested: method({ input: { items: s.stream(s.stream(item)) }, returns: s.stream(s.stream(item)) }),
             forward: method({ input: { bundle }, returns: bundle }),
             produce: method({ input: {}, returns: s.stream(item) }),
+            produceError: method({ input: {}, returns: s.stream(item) }),
+            results: method({ input: {}, returns: s.stream(s.result(z.number(), z.string())) }),
+            pending: method({ input: { items: s.stream(item) }, returns: z.string() }),
             status: method({ input: {}, returns: z.string() }),
           },
         });
@@ -84,6 +108,18 @@ async fn native_stream_guest_bridge_e2e(method_name: &str, expected: &str) {
             nested: ({ items }) => items,
             forward: ({ bundle }) => bundle,
             produce: () => AgentStream.from([{ label: 'remote', count: 9 }]),
+            produceError: () => AgentStream.from((async function* () {
+              yield { label: 'before-failure', count: 1 };
+              throw new Error('ts-guest-producer-failed');
+            })()),
+            results: () => AgentStream.from<Result<number, string>>([
+              Result.ok(1), Result.err('recoverable'), Result.ok(2),
+            ]),
+            async pending({ items }) {
+              for await (const _ of items) { /* Drain before the pending wait. */ }
+              await new Promise<void>((resolve) => setTimeout(resolve, 60_000));
+              return 'unexpected-completion';
+            },
             status: () => 'ready',
           },
         });
@@ -112,6 +148,9 @@ async fn native_stream_guest_bridge_e2e(method_name: &str, expected: &str) {
           methods: {
             run: method({ input: {}, returns: z.string() }),
             forwardUnread: method({ input: {}, returns: z.string() }),
+            fatalProducer: method({ input: {}, returns: z.string() }),
+            recoverableItems: method({ input: {}, returns: z.string() }),
+            cancelPending: method({ input: {}, returns: z.string() }),
           },
         });
         export const StreamConsumerImpl = StreamConsumer.implement({
@@ -153,6 +192,48 @@ async fn native_stream_guest_bridge_e2e(method_name: &str, expected: &str) {
               for await (const item of await b.echo(await a.produce())) count += item.count;
               return `${count}:${await b.status()}`;
             },
+            async fatalProducer() {
+              const stream = await StreamProvider.get('fatal').produceError();
+              for await (const _ of stream) { /* Fatal failure must reject, not reach EOF. */ }
+              return 'unexpected-clean-eof';
+            },
+            async recoverableItems() {
+              const provider = StreamProvider.get('recoverable');
+              const observed: string[] = [];
+              for await (const value of await provider.results()) {
+                observed.push('ok' in value ? `ok:${value.ok}` : `err:${value.err}`);
+              }
+              return `${observed.join(',')}:${await provider.status()}`;
+            },
+            async cancelPending() {
+              const controller = new AbortController();
+              const reason = new Error('cancel-pending-guest-rpc');
+              let drained!: () => void;
+              const inputDrained = new Promise<void>((resolve) => { drained = resolve; });
+              const input = AgentStream.from((async function* () {
+                yield { label: 'handshake', count: 1 };
+                drained();
+              })());
+              let settled = false;
+              const pending = StreamProvider.get('pending').pending.abortable(controller.signal, input)
+                .then(() => { settled = true; return 'unexpected-completion'; }, (error) => {
+                  settled = true;
+                  if (error !== reason) throw error;
+                  return 'cancelled';
+                });
+              // The producer advances only after its first write is accepted. Abort
+              // after this handshake, while the remote method is still awaiting.
+              await Promise.race([
+                inputDrained,
+                pending.then(() => { throw new Error('RPC settled before input drained'); }),
+              ]);
+              if (settled) throw new Error('RPC was not pending at cancellation');
+              controller.abort(reason);
+              const outcome = await pending;
+              if (outcome !== 'cancelled') throw new Error(outcome);
+              // Cancellation does not promise immediate cleanup of the remote worker.
+              return `${outcome}:${await StreamProvider.get('after-cancel').status()}`;
+            },
           },
         });
     "#}).unwrap();
@@ -169,6 +250,21 @@ async fn native_stream_guest_bridge_e2e(method_name: &str, expected: &str) {
             method_name,
         ])
         .await;
-    assert!(output.success_or_dump());
-    assert!(output.stdout_contains(expected));
+    match expected {
+        Ok(value) => {
+            assert!(output.success_or_dump());
+            assert!(output.stdout_contains(value));
+        }
+        Err(error) => {
+            assert!(
+                !output.success(),
+                "fatal producer failure was reported as clean EOF"
+            );
+            if !output.stderr_contains(error) {
+                output.dump();
+            }
+            assert!(output.stderr_contains(error));
+            assert!(!output.stdout_contains("unexpected-clean-eof"));
+        }
+    }
 }
