@@ -21,20 +21,23 @@ use crate::services::shard::ShardService;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
+use crate::worker::status::apply_durable_stream_session_record;
 use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
 use async_trait::async_trait;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord, FailedUpdateRecord,
-    IdempotencyKey, OwnedAgentId, ReceivedCardTransferIndex, ReceivedCardTransferState, ShardId,
+    AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord,
+    DurableStreamSessionIndex, DurableStreamSessionStatus, FailedUpdateRecord, IdempotencyKey,
+    OwnedAgentId, ReceivedCardTransferIndex, ReceivedCardTransferState, ShardId,
     SuccessfulUpdateRecord,
 };
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, Weak};
+use tokio::sync::Mutex as AsyncMutex;
 use tracing::debug;
 
 /// Hash field holding the bounded part of the cached `AgentStatusRecord` (everything except the
@@ -49,6 +52,17 @@ const STATUS_UPDATES_FIELD: &str = "updates";
 const STATUS_INVOCATION_RESULT_PREFIX: &str = "ir:";
 /// Prefix for per-transfer target receipt fields (`tr:{transfer_id}` -> receipt identity).
 const STATUS_RECEIVED_CARD_TRANSFER_PREFIX: &str = "tr:";
+const STREAM_SESSION_INDEX_METADATA_FIELD: &str = "metadata";
+const STREAM_SESSION_INDEX_FIELD_PREFIX: &str = "session:";
+
+#[derive(Clone, Debug, desert_rust::BinaryCodec)]
+struct DurableStreamSessionIndexMetadata {
+    covered_through: OplogIndex,
+}
+
+fn stream_session_index_field(key: &IdempotencyKey) -> String {
+    format!("{STREAM_SESSION_INDEX_FIELD_PREFIX}{}", key.value)
+}
 
 fn status_invocation_result_field(key: &IdempotencyKey) -> String {
     format!("{STATUS_INVOCATION_RESULT_PREFIX}{}", key.value)
@@ -265,6 +279,14 @@ pub trait WorkerService: Send + Sync {
 
     async fn remove_cached_status(&self, owned_agent_id: &OwnedAgentId);
 
+    async fn lookup_durable_stream_session(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        status: &AgentStatusRecord,
+        key: &IdempotencyKey,
+    ) -> Result<Option<DurableStreamSessionStatus>, String>;
+
     /// Returns the persisted [`AgentMode`] for the worker, if it exists.
     ///
     /// The mode is decided at worker create time and persisted in the `Create` oplog entry,
@@ -369,6 +391,26 @@ pub struct DefaultWorkerService {
     oplog_service: Arc<dyn OplogService>,
     component_service: Arc<dyn ComponentService>,
     config: Arc<GolemConfig>,
+    stream_session_index_locks: Arc<StdMutex<HashMap<OwnedAgentId, Weak<AsyncMutex<()>>>>>,
+}
+
+struct StreamSessionIndexLock {
+    registry: Arc<StdMutex<HashMap<OwnedAgentId, Weak<AsyncMutex<()>>>>>,
+    id: OwnedAgentId,
+    inner: Arc<AsyncMutex<()>>,
+}
+
+impl Drop for StreamSessionIndexLock {
+    fn drop(&mut self) {
+        let mut locks = self.registry.lock().unwrap();
+        if Arc::strong_count(&self.inner) == 1
+            && locks
+                .get(&self.id)
+                .is_some_and(|entry| entry.ptr_eq(&Arc::downgrade(&self.inner)))
+        {
+            locks.remove(&self.id);
+        }
+    }
 }
 
 impl DefaultWorkerService {
@@ -385,7 +427,157 @@ impl DefaultWorkerService {
             oplog_service,
             component_service,
             config,
+            stream_session_index_locks: Arc::new(StdMutex::new(HashMap::new())),
         }
+    }
+
+    fn stream_session_index_namespace(agent_id: &AgentId) -> KeyValueStorageNamespace {
+        KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
+            agent_id: agent_id.clone(),
+        }
+    }
+
+    fn stream_session_index_lock(&self, id: &OwnedAgentId) -> StreamSessionIndexLock {
+        let mut locks = self.stream_session_index_locks.lock().unwrap();
+        let inner = if let Some(lock) = locks.get(id).and_then(Weak::upgrade) {
+            lock
+        } else {
+            let lock = Arc::new(AsyncMutex::new(()));
+            locks.insert(id.clone(), Arc::downgrade(&lock));
+            lock
+        };
+        StreamSessionIndexLock {
+            registry: self.stream_session_index_locks.clone(),
+            id: id.clone(),
+            inner,
+        }
+    }
+
+    async fn clear_stream_session_index(&self, id: &OwnedAgentId) -> Result<(), String> {
+        let namespace = Self::stream_session_index_namespace(&id.agent_id);
+        let keys = self
+            .key_value_storage
+            .with("worker", "clear_stream_session_index")
+            .keys(namespace.clone())
+            .await?;
+        if !keys.is_empty() {
+            self.key_value_storage
+                .with("worker", "clear_stream_session_index")
+                .del_many(namespace, keys)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn catch_up_stream_session_index(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        horizon: OplogIndex,
+    ) -> Result<(), String> {
+        if mode == AgentMode::Ephemeral {
+            return Ok(());
+        }
+        let lock = self.stream_session_index_lock(id);
+        let _guard = lock.inner.lock().await;
+        let namespace = Self::stream_session_index_namespace(&id.agent_id);
+        let persisted: Option<Result<DurableStreamSessionIndexMetadata, String>> = self
+            .key_value_storage
+            .with_entity("worker", "read_stream_session_index", "metadata")
+            .get_attempt_deserialize(namespace.clone(), STREAM_SESSION_INDEX_METADATA_FIELD)
+            .await?;
+        let mut metadata = match persisted {
+            Some(Ok(value)) if value.covered_through <= horizon => value,
+            Some(Ok(_)) => return Ok(()), // A newer complete index is filtered at lookup.
+            Some(Err(_)) => {
+                self.clear_stream_session_index(id).await?;
+                DurableStreamSessionIndexMetadata {
+                    covered_through: OplogIndex::NONE,
+                }
+            }
+            None => DurableStreamSessionIndexMetadata {
+                covered_through: OplogIndex::NONE,
+            },
+        };
+        while metadata.covered_through < horizon {
+            let count = (horizon.as_u64() - metadata.covered_through.as_u64()).min(1024);
+            let entries = self
+                .oplog_service
+                .read_exact(id, mode, metadata.covered_through.next(), count)
+                .await;
+            if entries.is_empty() {
+                return Err(format!(
+                    "empty oplog range while indexing stream sessions for {id}"
+                ));
+            }
+            let mut updates: HashMap<IdempotencyKey, DurableStreamSessionStatus> = HashMap::new();
+            for (idx, entry) in &entries {
+                let OplogEntry::StreamSession { record, .. } = entry else {
+                    continue;
+                };
+                let decoded;
+                let record = match record {
+                    golem_common::model::oplog::OplogPayload::Inline(v) => v.as_ref(),
+                    golem_common::model::oplog::OplogPayload::SerializedInline {
+                        cached: Some(v),
+                        ..
+                    }
+                    | golem_common::model::oplog::OplogPayload::External {
+                        cached: Some(v), ..
+                    } => v.as_ref(),
+                    golem_common::model::oplog::OplogPayload::SerializedInline {
+                        bytes,
+                        cached: None,
+                    } => {
+                        decoded = deserialize(bytes)?;
+                        &decoded
+                    }
+                    golem_common::model::oplog::OplogPayload::External { cached: None, .. } => {
+                        unreachable!("stream session records are inline")
+                    }
+                };
+                let key = match record {
+                    golem_common::base_model::durable_stream::StreamSessionRecordV1::Prepared(v) => v.attempt.session_key.idempotency_key.clone(),
+                    golem_common::base_model::durable_stream::StreamSessionRecordV1::InvocationResult(v) => v.session_key.idempotency_key.clone(),
+                    golem_common::base_model::durable_stream::StreamSessionRecordV1::Finished(v) => v.session_key.idempotency_key.clone(),
+                    _ => continue,
+                };
+                if !updates.contains_key(&key) {
+                    let old: Option<Result<DurableStreamSessionStatus, String>> = self
+                        .key_value_storage
+                        .with_entity("worker", "read_stream_session_index", "session")
+                        .get_attempt_deserialize(
+                            namespace.clone(),
+                            &stream_session_index_field(&key),
+                        )
+                        .await?;
+                    updates.insert(key.clone(), old.transpose()?.unwrap_or_default());
+                }
+                let mut one = DurableStreamSessionIndex::default();
+                one.insert(key.clone(), updates.remove(&key).unwrap());
+                apply_durable_stream_session_record(&mut one, *idx, record);
+                updates.insert(key.clone(), one.get(&key).unwrap().clone());
+            }
+            metadata.covered_through = *entries.keys().max().unwrap();
+            let mut fields: Vec<(String, Vec<u8>)> = updates
+                .into_iter()
+                .filter(|(_, value)| value.first_prepared.is_some())
+                .map(|(k, v)| Ok((stream_session_index_field(&k), serialize(&v)?)))
+                .collect::<Result<_, String>>()?;
+            fields.push((
+                STREAM_SESSION_INDEX_METADATA_FIELD.into(),
+                serialize(&metadata)?,
+            ));
+            let refs: Vec<_> = fields
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_slice()))
+                .collect();
+            self.key_value_storage
+                .with_entity("worker", "advance_stream_session_index", "session")
+                .set_many_raw(namespace.clone(), &refs)
+                .await?;
+        }
+        Ok(())
     }
 
     async fn enum_workers_at_key(&self, key: &str) -> Vec<GetWorkerMetadataResult> {
@@ -826,6 +1018,9 @@ impl WorkerService for DefaultWorkerService {
             self.oplog_service.delete(owned_agent_id, agent_mode).await;
         }
         self.remove_cached_status(owned_agent_id).await;
+        self.clear_stream_session_index(owned_agent_id)
+            .await
+            .unwrap_or_else(|err| panic!("failed to remove durable stream session index: {err}"));
 
         let shard_assignment = self
             .shard_service
@@ -872,6 +1067,58 @@ impl WorkerService for DefaultWorkerService {
             });
     }
 
+    async fn lookup_durable_stream_session(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        status: &AgentStatusRecord,
+        key: &IdempotencyKey,
+    ) -> Result<Option<DurableStreamSessionStatus>, String> {
+        if let Some(value) = status.durable_stream_sessions.get(key) {
+            return Ok(Some(value.clone()));
+        }
+        if !status.durable_stream_sessions.has_history() || agent_mode == AgentMode::Ephemeral {
+            return Ok(None);
+        }
+        self.catch_up_stream_session_index(owned_agent_id, agent_mode, status.oplog_idx)
+            .await?;
+        let namespace = Self::stream_session_index_namespace(&owned_agent_id.agent_id);
+        let values = self
+            .key_value_storage
+            .with_entity("worker", "lookup_stream_session_index", "session")
+            .get_many_raw(
+                namespace,
+                vec![
+                    STREAM_SESSION_INDEX_METADATA_FIELD.into(),
+                    stream_session_index_field(key),
+                ],
+            )
+            .await?;
+        let Some(metadata) = values.first().and_then(Option::as_ref) else {
+            return Err("stream session index coverage is unavailable after catch-up".to_string());
+        };
+        let metadata: DurableStreamSessionIndexMetadata = deserialize(metadata)?;
+        if metadata.covered_through < status.oplog_idx {
+            return Err("stream session index coverage regressed after catch-up".to_string());
+        }
+        let Some(value) = values.get(1).and_then(Option::as_ref) else {
+            return Ok(None);
+        };
+        let mut value: DurableStreamSessionStatus = deserialize(value)?;
+        let horizon = status.oplog_idx;
+        for field in [
+            &mut value.first_prepared,
+            &mut value.prepared,
+            &mut value.invocation_result,
+            &mut value.finished,
+        ] {
+            if field.is_some_and(|idx| idx > horizon) {
+                *field = None;
+            }
+        }
+        Ok(value.first_prepared.map(|_| value))
+    }
+
     async fn get_agent_mode(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
         record_worker_call("get_agent_mode");
 
@@ -914,6 +1161,14 @@ impl WorkerService for DefaultWorkerService {
 
         debug!("Writing cached agent status for {owned_agent_id} to {status_value:?}");
 
+        if status_value.durable_stream_sessions.has_history() {
+            self.catch_up_stream_session_index(
+                owned_agent_id,
+                status_value.agent_mode,
+                status_value.oplog_idx,
+            )
+            .await?;
+        }
         self.write_split_status(
             owned_agent_id,
             Self::status_namespace(&owned_agent_id.agent_id),
@@ -954,6 +1209,14 @@ impl WorkerService for DefaultWorkerService {
             checkpoint.oplog_idx
         );
 
+        if checkpoint.durable_stream_sessions.has_history() {
+            self.catch_up_stream_session_index(
+                owned_agent_id,
+                checkpoint.agent_mode,
+                checkpoint.oplog_idx,
+            )
+            .await?;
+        }
         self.write_split_status(
             owned_agent_id,
             Self::checkpoint_namespace(&owned_agent_id.agent_id),
@@ -1032,6 +1295,9 @@ impl HasComponentService for DefaultWorkerService {
 }
 
 #[cfg(test)]
+mod session_index_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use bytes::Bytes;
@@ -1084,6 +1350,15 @@ mod tests {
             ReceivedCardTransferState::Received {
                 source_card_id: Some(CardId::new()),
                 card: stored_card(CardId::new()),
+            },
+        );
+        status.durable_stream_sessions.insert(
+            idempotency_key("stream-1"),
+            DurableStreamSessionStatus {
+                first_prepared: Some(OplogIndex::from_u64(30)),
+                prepared: Some(OplogIndex::from_u64(35)),
+                invocation_result: Some(OplogIndex::from_u64(40)),
+                finished: None,
             },
         );
         status.skipped_regions = DeletedRegions::from_regions([OplogRegion::from_index_range(

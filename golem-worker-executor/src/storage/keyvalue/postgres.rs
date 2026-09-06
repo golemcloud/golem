@@ -81,6 +81,12 @@ impl PostgresKeyValueStorage {
             KeyValueStorageNamespace::AgentStatusCheckpoint { agent_id } => {
                 format!("agent-status-checkpoint:{}", agent_id.to_redis_key())
             }
+            KeyValueStorageNamespace::AgentDurableStreamSessionIndex { agent_id } => {
+                format!(
+                    "agent:durable_stream_session_index:{}",
+                    agent_id.to_redis_key()
+                )
+            }
             KeyValueStorageNamespace::Promise { .. } => "promises".to_string(),
             KeyValueStorageNamespace::Schedule => "schedule".to_string(),
             KeyValueStorageNamespace::UserDefined {

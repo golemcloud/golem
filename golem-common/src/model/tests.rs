@@ -18,9 +18,10 @@ use crate::model::oplog::OplogIndex;
 use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
     AccountEmail, AccountId, AgentFilter, AgentFingerprint, AgentId, AgentMetadata, AgentMode,
-    AgentStatus, AgentStatusRecord, ComponentId, FilterComparator, IdempotencyKey,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex,
-    ReceivedCardTransferState, StringFilterComparator, Timestamp,
+    AgentStatus, AgentStatusRecord, ComponentId, DurableStreamSessionIndex,
+    DurableStreamSessionStatus, FilterComparator, IdempotencyKey, PendingInvocationRef,
+    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
+    StringFilterComparator, Timestamp,
 };
 use desert_rust::BinaryCodec;
 use serde::{Deserialize, Serialize};
@@ -28,6 +29,48 @@ use std::str::FromStr;
 use std::vec;
 use test_r::test;
 use uuid::{Uuid, uuid};
+
+#[test]
+fn durable_stream_session_index_retains_unfinished_and_bounded_recent_finished() {
+    let mut index = DurableStreamSessionIndex::default();
+    let unfinished = IdempotencyKey::new("unfinished".to_string());
+    index.insert(
+        unfinished.clone(),
+        DurableStreamSessionStatus {
+            first_prepared: Some(OplogIndex::from_u64(1)),
+            ..Default::default()
+        },
+    );
+    for n in 0..140 {
+        index.insert(
+            IdempotencyKey::new(format!("done-{n}")),
+            DurableStreamSessionStatus {
+                first_prepared: Some(OplogIndex::from_u64(n + 2)),
+                finished: Some(OplogIndex::from_u64(n + 1000)),
+                ..Default::default()
+            },
+        );
+    }
+    assert!(index.has_history());
+    assert!(index.get(&unfinished).is_some());
+    assert_eq!(
+        index
+            .iter()
+            .filter(|(_, value)| value.finished.is_some())
+            .count(),
+        128
+    );
+    assert!(
+        index
+            .get(&IdempotencyKey::new("done-0".to_string()))
+            .is_none()
+    );
+    assert!(
+        index
+            .get(&IdempotencyKey::new("done-139".to_string()))
+            .is_some()
+    );
+}
 
 #[test]
 fn timestamp_conversion() {

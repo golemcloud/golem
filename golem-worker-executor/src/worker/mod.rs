@@ -4074,6 +4074,59 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(records)
     }
 
+    async fn durable_stream_session_status(
+        &self,
+        idempotency_key: &IdempotencyKey,
+    ) -> Result<Option<golem_common::model::DurableStreamSessionStatus>, WorkerExecutorError> {
+        let status = self.last_known_status.load_full();
+        self.worker_service()
+            .lookup_durable_stream_session(
+                &self.owned_agent_id,
+                self.agent_mode(),
+                &status,
+                idempotency_key,
+            )
+            .await
+            .map_err(WorkerExecutorError::runtime)
+    }
+
+    async fn read_stream_session_record(
+        &self,
+        index: OplogIndex,
+    ) -> Result<StreamSessionRecordV1, WorkerExecutorError> {
+        let OplogEntry::StreamSession { record, .. } = self.oplog.read(index).await else {
+            return Err(WorkerExecutorError::runtime(format!(
+                "stream session index refers to a non-session entry at {index}"
+            )));
+        };
+        let record = self
+            .oplog
+            .download_payload(record)
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
+        validate_stream_session_record(&record)?;
+        Ok(record)
+    }
+
+    async fn prepared_stream_session(
+        &self,
+        idempotency_key: &IdempotencyKey,
+    ) -> Result<Option<StreamSessionPreparedRecordV1>, WorkerExecutorError> {
+        let Some(index) = self
+            .durable_stream_session_status(idempotency_key)
+            .await?
+            .and_then(|status| status.first_prepared)
+        else {
+            return Ok(None);
+        };
+        match self.read_stream_session_record(index).await? {
+            StreamSessionRecordV1::Prepared(record) => Ok(Some(record)),
+            _ => Err(WorkerExecutorError::runtime(
+                "stream session index does not refer to Prepared",
+            )),
+        }
+    }
+
     pub(crate) async fn rehydrate_durable_streaming_invocation(
         &self,
         invocation: AgentInvocation,
@@ -4081,33 +4134,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let Some(idempotency_key) = invocation.idempotency_key().cloned() else {
             return Ok(invocation);
         };
-        let current = self.oplog.current_oplog_index().await;
-        if !current.is_defined() {
-            return Ok(invocation);
-        }
-        let entries = self
-            .oplog
-            .read_exact(OplogIndex::INITIAL, current.as_u64())
-            .await;
-        let mut prepared = None;
-        for (_, entry) in entries {
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            let record = self
-                .oplog
-                .download_payload(record)
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
-            validate_stream_session_record(&record)?;
-            if let StreamSessionRecordV1::Prepared(candidate) = record
-                && candidate.attempt.session_key.idempotency_key == idempotency_key
-            {
-                prepared = Some(candidate);
-                break;
-            }
-        }
-        let Some(prepared) = prepared else {
+        let Some(prepared) = self.prepared_stream_session(&idempotency_key).await? else {
             return Ok(invocation);
         };
         if prepared.attempt.invocation.stream_handles.is_empty() {
@@ -4164,33 +4191,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         root: &golem_common::schema::SchemaType,
         component_revision: ComponentRevision,
     ) -> Result<golem_common::schema::SchemaValue, WorkerExecutorError> {
-        let current = self.oplog.current_oplog_index().await;
-        if !current.is_defined() {
-            return Ok(value);
-        }
-        let entries = self
-            .oplog
-            .read_exact(OplogIndex::INITIAL, current.as_u64())
-            .await;
-        let mut prepared = None;
-        for (_, entry) in entries {
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            let record = self
-                .oplog
-                .download_payload(record)
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
-            validate_stream_session_record(&record)?;
-            if let StreamSessionRecordV1::Prepared(candidate) = record
-                && candidate.attempt.session_key.idempotency_key == *idempotency_key
-            {
-                prepared = Some(candidate);
-                break;
-            }
-        }
-        let Some(prepared) = prepared else {
+        let Some(prepared) = self.prepared_stream_session(idempotency_key).await? else {
             if contains_stream(&value) {
                 return Err(WorkerExecutorError::runtime(
                     "live stream at a materializing invocation boundary without a durable Stream Session",
@@ -4246,47 +4247,33 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: &IdempotencyKey,
         result: Result<(), String>,
     ) -> Result<(), WorkerExecutorError> {
-        let current = self.oplog.current_oplog_index().await;
-        if !current.is_defined() {
-            return Ok(());
-        }
-        let mut prepared = None;
-        let mut result_mappings = Vec::new();
-        let mut finished = false;
-        for (_, entry) in self
-            .oplog
-            .read_exact(OplogIndex::INITIAL, current.as_u64())
-            .await
-        {
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            let record = self
-                .oplog
-                .download_payload(record)
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
-            validate_stream_session_record(&record)?;
-            if stream_session_record_key(&record)
-                .is_none_or(|key| key.idempotency_key != *idempotency_key)
-            {
-                continue;
-            }
-            match record {
-                StreamSessionRecordV1::Prepared(record) => prepared = Some(record),
-                StreamSessionRecordV1::InvocationResult(record) => {
-                    result_mappings = record.stream_mappings
-                }
-                StreamSessionRecordV1::Finished(_) => finished = true,
-                _ => {}
-            }
-        }
-        let Some(prepared) = prepared else {
+        let Some(status) = self.durable_stream_session_status(idempotency_key).await? else {
             return Ok(());
         };
-        if finished {
+        if status.finished.is_some() {
             return Ok(());
         }
+        let Some(index) = status.prepared else {
+            return Ok(());
+        };
+        let StreamSessionRecordV1::Prepared(prepared) =
+            self.read_stream_session_record(index).await?
+        else {
+            return Err(WorkerExecutorError::runtime(
+                "stream session index does not refer to Prepared",
+            ));
+        };
+        let result_mappings = match status.invocation_result {
+            Some(index) => match self.read_stream_session_record(index).await? {
+                StreamSessionRecordV1::InvocationResult(record) => record.stream_mappings,
+                _ => {
+                    return Err(WorkerExecutorError::runtime(
+                        "stream session index does not refer to InvocationResult",
+                    ));
+                }
+            },
+            None => Vec::new(),
+        };
         let mappings = prepared
             .stream_mappings
             .iter()
@@ -4316,38 +4303,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn recover_finished_durable_streaming_sessions(&self) -> Result<(), WorkerExecutorError> {
-        let current = self.oplog.current_oplog_index().await;
-        if !current.is_defined() {
-            return Ok(());
-        }
-        let mut unfinished = HashSet::new();
-        for (_, entry) in self
-            .oplog
-            .read_exact(OplogIndex::INITIAL, current.as_u64())
-            .await
-        {
-            let OplogEntry::StreamSession { record, .. } = entry else {
+        let status = self.last_known_status.load_full();
+        for (idempotency_key, session) in status.durable_stream_sessions.iter() {
+            if session.prepared.is_none() || session.finished.is_some() {
                 continue;
-            };
-            let record = self
-                .oplog
-                .download_payload(record)
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
-            validate_stream_session_record(&record)?;
-            match record {
-                StreamSessionRecordV1::Prepared(prepared) => {
-                    unfinished.insert(prepared.attempt.session_key.idempotency_key);
-                }
-                StreamSessionRecordV1::Finished(finished) => {
-                    unfinished.remove(&finished.session_key.idempotency_key);
-                }
-                _ => {}
             }
-        }
-
-        let status = self.get_last_known_status().await;
-        for idempotency_key in unfinished {
             let mut invocation_result = {
                 self.invocation_results
                     .read()

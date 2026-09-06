@@ -44,6 +44,10 @@ impl RedisKeyValueStorage {
                 "agent-status-checkpoint:{}",
                 agent_id.to_redis_key()
             )),
+            KeyValueStorageNamespace::AgentDurableStreamSessionIndex { agent_id } => Some(format!(
+                "agent:durable_stream_session_index:{}",
+                agent_id.to_redis_key()
+            )),
             KeyValueStorageNamespace::RunningWorkers => None,
             KeyValueStorageNamespace::Promise { .. } => Some("promises".to_string()),
             KeyValueStorageNamespace::Schedule => None,

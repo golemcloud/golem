@@ -47,13 +47,17 @@ use tracing::{Instrument, Level, debug, span};
 use wasmtime::component::Accessor;
 use wasmtime::{AsContextMut, StoreContextMut};
 
+pub(crate) const INVOCATION_STACK_SIZE: usize = 16 * 1024 * 1024;
+
 /// Polls an invocation task outside Wasmtime's fiber and accessor TLS scopes, with enough native
-/// stack for the nested host futures. Each poll returns before the temporary stack is released.
+/// stack for the nested host futures. Production runtime threads already have sufficient stack;
+/// smaller embedding runtimes grow a temporary stack that is released after each poll.
 pub(crate) async fn with_invocation_stack<F: std::future::Future>(future: F) -> F::Output {
-    const STACK_SIZE: usize = 16 * 1024 * 1024;
     let mut future = Box::pin(future);
     std::future::poll_fn(|cx| {
-        stacker::maybe_grow(STACK_SIZE, STACK_SIZE, || future.as_mut().poll(cx))
+        stacker::maybe_grow(INVOCATION_STACK_SIZE, INVOCATION_STACK_SIZE, || {
+            future.as_mut().poll(cx)
+        })
     })
     .await
 }
@@ -1382,6 +1386,33 @@ pub fn method_uses_streams(
     contains_stream(input) || method.uses_streams(&agent_type.schema)
 }
 
+/// Classifies session work using the executing component's input and output schemas, including
+/// input-only streams and optional streams that are absent from this invocation's values.
+pub(crate) fn invocation_uses_streams(
+    invocation: &AgentInvocation,
+    component_metadata: &ComponentMetadata,
+    agent_id: Option<&ParsedAgentId>,
+) -> bool {
+    let AgentInvocation::AgentMethod {
+        method_name, input, ..
+    } = invocation
+    else {
+        return false;
+    };
+    let method = resolve_agent_type(component_metadata, agent_id)
+        .ok()
+        .and_then(|agent_type| {
+            agent_type
+                .methods
+                .iter()
+                .find(|method| method.name == *method_name)
+                .map(|method| (agent_type, method))
+        });
+    // Missing metadata is not proof of a scalar invocation; preserve session failure handling
+    // while the normal lowering path reports the schema error.
+    method.is_none_or(|(agent_type, method)| method_uses_streams(agent_type, method, input))
+}
+
 pub fn validate_method_invocation(
     agent_type: &AgentTypeSchema,
     method: &AgentMethodSchema,
@@ -1444,6 +1475,32 @@ mod tests {
     use golem_common::schema::schema_type::SchemaType;
     use std::collections::BTreeMap;
     use test_r::test;
+
+    #[test]
+    fn invocation_poll_reuses_production_thread_stack() {
+        let runtime = crate::bootstrap::create_runtime().unwrap();
+        runtime.block_on(async {
+            tokio::spawn(async {
+                let mut polls = 0;
+                with_invocation_stack(std::future::poll_fn(|cx| {
+                    // A temporary stack would have less than INVOCATION_STACK_SIZE remaining.
+                    // Check every poll, including after suspension and possible task migration.
+                    assert!(stacker::remaining_stack().unwrap() >= INVOCATION_STACK_SIZE);
+                    polls += 1;
+                    if polls < 100 {
+                        cx.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    } else {
+                        std::task::Poll::Ready(())
+                    }
+                }))
+                .await;
+                assert_eq!(polls, 100);
+            })
+            .await
+            .unwrap();
+        });
+    }
 
     #[test]
     fn invocation_poll_stack_is_reestablished_after_suspension() {
@@ -1690,6 +1747,58 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn invocation_session_classification_covers_scalar_and_absent_streams() {
+        let optional_stream = SchemaType::option(SchemaType::stream(Some(SchemaType::u32())));
+        for (input_schema, output_schema, fields, expected) in [
+            (
+                InputSchema::Parameters(Vec::new()),
+                OutputSchema::Unit,
+                Vec::new(),
+                false,
+            ),
+            (
+                InputSchema::Parameters(vec![NamedField::user_supplied(
+                    "input",
+                    optional_stream.clone(),
+                )]),
+                OutputSchema::Unit,
+                vec![SchemaValue::Option { inner: None }],
+                true,
+            ),
+            (
+                InputSchema::Parameters(Vec::new()),
+                OutputSchema::Single(Box::new(optional_stream)),
+                Vec::new(),
+                true,
+            ),
+        ] {
+            let metadata = metadata_with_method(AgentMethodSchema {
+                name: METHOD_NAME.to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema,
+                output_schema,
+                http_endpoint: Vec::new(),
+                read_only: None,
+            });
+            let invocation = method_invocation(SchemaValue::Record { fields });
+            assert_eq!(
+                invocation_uses_streams(&invocation, &metadata, Some(&agent_id())),
+                expected
+            );
+        }
+        let mut unknown = method_invocation(SchemaValue::Record { fields: Vec::new() });
+        if let AgentInvocation::AgentMethod { method_name, .. } = &mut unknown {
+            *method_name = "missing".to_string();
+        }
+        assert!(invocation_uses_streams(
+            &unknown,
+            &metadata(),
+            Some(&agent_id())
+        ));
     }
 
     #[test]

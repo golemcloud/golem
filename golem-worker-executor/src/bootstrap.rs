@@ -28,6 +28,15 @@ test_r::enable!();
 
 pub struct ServerBootstrap;
 
+/// Creates a runtime with reusable native stacks for polling nested invocation futures.
+/// The extra headroom keeps the invocation stack guard from allocating a temporary stack per poll.
+pub fn create_runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(2 * crate::worker::invocation::INVOCATION_STACK_SIZE)
+        .enable_all()
+        .build()
+}
+
 #[async_trait]
 impl Bootstrap<Context> for ServerBootstrap {
     fn create_additional_deps(

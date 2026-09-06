@@ -713,6 +713,10 @@ pub enum KeyValueStorageNamespace {
     AgentStatusCheckpoint {
         agent_id: AgentId,
     },
+    /// Complete oplog-derived durable stream-session summaries and their coverage watermark.
+    AgentDurableStreamSessionIndex {
+        agent_id: AgentId,
+    },
     Promise {
         agent_id: AgentId,
     },

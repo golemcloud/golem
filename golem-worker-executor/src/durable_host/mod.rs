@@ -107,7 +107,8 @@ use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
-    AgentExportFuncs, InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
+    AgentExportFuncs, InvocationMode, InvokeResult, invocation_uses_streams,
+    invoke_observed_and_traced, lower_invocation,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::status::{
@@ -5511,10 +5512,19 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             .clone();
 
                         let worker = store.as_context().data().get_public_state().worker();
-                        let agent_invocation = worker
-                            .rehydrate_durable_streaming_invocation(agent_invocation)
-                            .await?;
                         let agent_id = store.as_context().data().parsed_agent_id();
+                        let uses_streams = invocation_uses_streams(
+                            &agent_invocation,
+                            &component_metadata,
+                            agent_id.as_ref(),
+                        );
+                        let agent_invocation = if uses_streams {
+                            worker
+                                .rehydrate_durable_streaming_invocation(agent_invocation)
+                                .await?
+                        } else {
+                            agent_invocation
+                        };
                         let lowered = lower_invocation(
                             agent_invocation,
                             &component_metadata,
@@ -5584,8 +5594,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                 result: mut invocation_result,
                                 consumed_fuel,
                             }) => {
-                                if let AgentInvocationResult::AgentMethod { output } =
-                                    &mut invocation_result
+                                if uses_streams
+                                    && let AgentInvocationResult::AgentMethod { output } =
+                                        &mut invocation_result
                                 {
                                     let (graph, root, component_revision) = {
                                         let component = store.data().component_metadata();
@@ -5673,7 +5684,8 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                 // here, in live mode, instead of in the invocation loop, so its
                                 // durable Stream Session must be finished here as well;
                                 // otherwise resumed session clients never observe completion.
-                                if store.as_context().data().durable_ctx().is_live()
+                                if uses_streams
+                                    && store.as_context().data().durable_ctx().is_live()
                                     && let Err(error) = worker
                                         .complete_durable_streaming_session(&idempotency_key)
                                         .await
@@ -5736,7 +5748,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                             // Like the invocation loop, permanently fail the
                                             // durable Stream Session of an invocation that was
                                             // interrupted by a crash and cannot be retried.
-                                            if store.as_context().data().durable_ctx().is_live() {
+                                            if uses_streams
+                                                && store.as_context().data().durable_ctx().is_live()
+                                            {
                                                 let _ = worker
                                                     .fail_durable_streaming_session(
                                                         &idempotency_key,

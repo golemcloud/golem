@@ -246,6 +246,16 @@ mod tests {
             None
         }
 
+        async fn lookup_durable_stream_session(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _status: &AgentStatusRecord,
+            _key: &golem_common::model::IdempotencyKey,
+        ) -> Result<Option<golem_common::model::DurableStreamSessionStatus>, String> {
+            unimplemented!()
+        }
+
         async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult> {
             Vec::new()
         }

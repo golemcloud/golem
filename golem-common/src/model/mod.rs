@@ -710,6 +710,7 @@ pub struct AgentStatusRecord {
     pub successful_updates: Vec<SuccessfulUpdateRecord>,
     pub invocation_results: HashMap<IdempotencyKey, OplogIndex>,
     pub received_card_transfers: ReceivedCardTransferIndex,
+    pub durable_stream_sessions: DurableStreamSessionIndex,
     pub current_idempotency_key: Option<IdempotencyKey>,
     pub component_revision: ComponentRevision,
     pub component_size: u64,
@@ -758,6 +759,7 @@ impl Default for AgentStatusRecord {
             successful_updates: Vec::new(),
             invocation_results: HashMap::new(),
             received_card_transfers: ReceivedCardTransferIndex::default(),
+            durable_stream_sessions: DurableStreamSessionIndex::default(),
             current_idempotency_key: None,
             component_revision: ComponentRevision::INITIAL,
             component_size: 0,
@@ -850,6 +852,91 @@ impl BinaryDeserializer for ReceivedCardTransferIndex {
                 .0
                 .collect::<desert_rust::Result<OrdMap<_, _>>>()?;
         Ok(Self(entries))
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct DurableStreamSessionStatus {
+    pub first_prepared: Option<OplogIndex>,
+    pub prepared: Option<OplogIndex>,
+    pub invocation_result: Option<OplogIndex>,
+    pub finished: Option<OplogIndex>,
+}
+
+pub const DURABLE_STREAM_SESSION_RECENT_CAPACITY: usize = 128;
+
+/// An oplog-derived index of unfinished sessions and a bounded set of recent completions.
+/// Values contain only oplog indices; canonical invocation and result payloads remain in the oplog.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DurableStreamSessionIndex {
+    sessions: OrdMap<String, Arc<DurableStreamSessionStatus>>,
+    /// True once this status has observed local session lifecycle history. A cache miss is therefore
+    /// not evidence that an older, completed session never existed.
+    has_history: bool,
+}
+
+impl DurableStreamSessionIndex {
+    pub fn get(&self, key: &IdempotencyKey) -> Option<&DurableStreamSessionStatus> {
+        self.sessions.get(&key.value).map(Arc::as_ref)
+    }
+
+    pub fn insert(&mut self, key: IdempotencyKey, status: DurableStreamSessionStatus) {
+        self.has_history = true;
+        let finished = status.finished.is_some();
+        self.sessions.insert(key.value, Arc::new(status));
+        if finished {
+            self.trim_completed();
+        }
+    }
+
+    pub fn has_history(&self) -> bool {
+        self.has_history
+    }
+
+    fn trim_completed(&mut self) {
+        let mut completed: Vec<_> = self
+            .sessions
+            .iter()
+            .filter_map(|(key, status)| status.finished.map(|finished| (finished, key.clone())))
+            .collect();
+        if completed.len() > DURABLE_STREAM_SESSION_RECENT_CAPACITY {
+            completed.sort_unstable();
+            let excess = completed.len() - DURABLE_STREAM_SESSION_RECENT_CAPACITY;
+            for (_, key) in completed.into_iter().take(excess) {
+                self.sessions.remove(&key);
+            }
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (IdempotencyKey, &DurableStreamSessionStatus)> {
+        self.sessions
+            .iter()
+            .map(|(key, status)| (IdempotencyKey::new(key.clone()), status.as_ref()))
+    }
+}
+
+impl BinarySerializer for DurableStreamSessionIndex {
+    fn serialize<Output: BinaryOutput>(
+        &self,
+        context: &mut SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        BinarySerializer::serialize(&self.has_history, context)?;
+        desert_rust::serialize_iterator(&mut self.sessions.iter(), context)
+    }
+}
+
+impl BinaryDeserializer for DurableStreamSessionIndex {
+    fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
+        let has_history = <bool as BinaryDeserializer>::deserialize(context)?;
+        let entries =
+            desert_rust::deserialize_iterator::<(String, Arc<DurableStreamSessionStatus>)>(context)
+                .0
+                .collect::<desert_rust::Result<OrdMap<_, _>>>()?;
+        Ok(Self {
+            sessions: entries,
+            has_history,
+        })
     }
 }
 

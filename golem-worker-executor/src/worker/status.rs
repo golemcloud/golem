@@ -1,5 +1,6 @@
 use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
 use golem_common::base_model::OplogIndex;
+use golem_common::base_model::durable_stream::StreamSessionRecordV1;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::AgentInvocationPayload;
 use golem_common::model::agent::AgentMode;
@@ -9,10 +10,11 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    AgentResourceDescription, AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
-    OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
-    RetryConfig, RetryPolicyState, SuccessfulUpdateRecord, Timestamp,
+    AgentResourceDescription, AgentStatus, AgentStatusRecord, DurableStreamSessionIndex,
+    FailedUpdateRecord, IdempotencyKey, OplogProcessorCheckpointState, OwnedAgentId,
+    PendingCardEventRef, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
+    ReceivedCardTransferIndex, ReceivedCardTransferState, RetryConfig, RetryPolicyState,
+    SuccessfulUpdateRecord, Timestamp,
 };
 use golem_common::serialization::deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -275,6 +277,8 @@ pub fn update_status_with_new_entries(
         calculate_pending_card_events(last_known.pending_card_events, &new_entries);
     let received_card_transfers =
         calculate_received_card_transfers(last_known.received_card_transfers, &new_entries);
+    let durable_stream_sessions =
+        calculate_durable_stream_sessions(last_known.durable_stream_sessions, &new_entries);
     let (
         pending_updates,
         failed_updates,
@@ -344,6 +348,7 @@ pub fn update_status_with_new_entries(
         successful_updates,
         invocation_results,
         received_card_transfers,
+        durable_stream_sessions,
         current_idempotency_key,
         component_revision,
         component_size,
@@ -920,6 +925,83 @@ fn calculate_received_card_transfers(
     }
 
     transfers
+}
+
+// Session lifecycle follows raw durable stream history, including entries inside guest jumps.
+// Unlike invocation results, external stream effects cannot be undone by a logical oplog deletion;
+// worker revert rejects any worker with durable stream history.
+fn calculate_durable_stream_sessions(
+    mut sessions: DurableStreamSessionIndex,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> DurableStreamSessionIndex {
+    fn apply(
+        sessions: &mut DurableStreamSessionIndex,
+        oplog_idx: OplogIndex,
+        record: &StreamSessionRecordV1,
+    ) {
+        apply_durable_stream_session_record(sessions, oplog_idx, record);
+    }
+
+    for (oplog_idx, entry) in entries {
+        let OplogEntry::StreamSession { record, .. } = entry else {
+            continue;
+        };
+        match record {
+            OplogPayload::Inline(record) => apply(&mut sessions, *oplog_idx, record),
+            OplogPayload::SerializedInline {
+                cached: Some(record),
+                ..
+            }
+            | OplogPayload::External {
+                cached: Some(record),
+                ..
+            } => apply(&mut sessions, *oplog_idx, record),
+            OplogPayload::SerializedInline {
+                bytes,
+                cached: None,
+            } => {
+                let record = deserialize::<StreamSessionRecordV1>(bytes)
+                    .expect("stream session records are valid inline payloads");
+                apply(&mut sessions, *oplog_idx, &record);
+            }
+            OplogPayload::External { cached: None, .. } => {
+                unreachable!("stream session records are always stored inline")
+            }
+        }
+    }
+    sessions
+}
+
+pub(crate) fn apply_durable_stream_session_record(
+    sessions: &mut DurableStreamSessionIndex,
+    oplog_idx: OplogIndex,
+    record: &StreamSessionRecordV1,
+) {
+    let key = match record {
+        StreamSessionRecordV1::Prepared(record) => &record.attempt.session_key.idempotency_key,
+        StreamSessionRecordV1::InvocationResult(record) => &record.session_key.idempotency_key,
+        StreamSessionRecordV1::Finished(record) => &record.session_key.idempotency_key,
+        _ => return,
+    };
+    let mut status = match sessions.get(key) {
+        Some(status) => status.clone(),
+        None if matches!(record, StreamSessionRecordV1::Prepared(_)) => Default::default(),
+        // Caller-side results do not have a local Prepared/Finished lifecycle. Retaining them
+        // as unfinished sessions would make the status grow with every outgoing invocation.
+        None => return,
+    };
+    match record {
+        StreamSessionRecordV1::Prepared(_) => {
+            status.first_prepared.get_or_insert(oplog_idx);
+            status.prepared = Some(oplog_idx);
+        }
+        StreamSessionRecordV1::InvocationResult(_) => status.invocation_result = Some(oplog_idx),
+        StreamSessionRecordV1::Finished(_) => {
+            status.finished.get_or_insert(oplog_idx);
+        }
+        _ => unreachable!(),
+    }
+    sessions.insert(key.clone(), status);
 }
 
 #[allow(clippy::type_complexity)]
