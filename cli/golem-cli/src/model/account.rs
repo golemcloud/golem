@@ -252,6 +252,12 @@ impl MessageWithFields for AccountLimitsView {
         let limit = &self.policy.max_storage_per_agent;
         let mut fields = FieldsBuilder::new();
         fields.fmt_field("Account ID", &self.policy.account_id, format_main_id);
+        fields
+            .field("Monthly usage mode", &self.policy.monthly_usage_mode)
+            .field(
+                "Overage allowed by plan",
+                &self.policy.overage_allowed_by_plan,
+            );
         add_monthly_limit_fields(
             &mut fields,
             "Monthly compute",
@@ -561,7 +567,7 @@ mod tests {
         AccountResourcePolicy, AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod,
         MemoryLimit, MeteringStatus, MonthlyComputeLimit, MonthlyComputeUnit, MonthlyLimitBehavior,
         MonthlyMemoryLimit, MonthlyMemoryUnit, MonthlyResourceLimits, MonthlyStorageLimit,
-        MonthlyStorageUnit, StorageLimit,
+        MonthlyStorageUnit, MonthlyUsageMode, StorageLimit,
     };
     use proptest::prelude::*;
     use test_r::test;
@@ -670,6 +676,9 @@ mod tests {
             account_id: golem_common::model::account::AccountId(uuid!(
                 "e71a6160-4144-4720-9e34-e5943458d129"
             )),
+            monthly_usage_mode: MonthlyUsageMode::HardLimit,
+            overage_allowed_by_plan: false,
+            latest_owner_transition: None,
             monthly: MonthlyResourceLimits {
                 compute_gcu: MonthlyComputeLimit {
                     metering: MeteringStatus::Enabled,
@@ -725,6 +734,8 @@ mod tests {
         assert_eq!(limits.message(), "Account resource policy");
         let fields = limits.fields();
         for expected in [
+            ("Monthly usage mode", "hardLimit"),
+            ("Overage allowed by plan", "false"),
             ("Monthly compute amount", "10 GCU"),
             ("Monthly compute usage", "3.5 GCU"),
             ("Monthly compute remaining", "6.5 GCU"),

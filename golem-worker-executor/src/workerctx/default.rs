@@ -119,6 +119,10 @@ struct FuelTracker {
     pub(self) ephemeral_overdraft_limit: u64,
     /// Locally prepaid overdraft fuel for the current invocation.
     pub(self) ephemeral_overdraft_prepaid: u64,
+    /// Overdraft reservations retained by the revision under which they were granted.
+    pub(self) ephemeral_overdraft_borrows: Vec<(u64, u64)>,
+    /// Revision of the currently refundable account-pool reservation.
+    pub(self) account_borrow_revision: Option<u64>,
     /// Whether the currently outstanding partial batch came from local ephemeral overdraft.
     pub(self) last_borrow_was_ephemeral_overdraft: bool,
 }
@@ -131,6 +135,8 @@ impl FuelTracker {
             fuel_to_borrow,
             ephemeral_overdraft_limit,
             ephemeral_overdraft_prepaid: 0,
+            ephemeral_overdraft_borrows: Vec::new(),
+            account_borrow_revision: None,
             last_borrow_was_ephemeral_overdraft: false,
         }
     }
@@ -159,8 +165,9 @@ impl FuelTracker {
         self.prepaid_gauge_floor = current_gauge.saturating_sub(self.fuel_to_borrow);
     }
 
-    pub(self) fn on_account_borrow_success(&mut self, current_gauge: u64) {
+    pub(self) fn on_account_borrow_success(&mut self, current_gauge: u64, revision: u64) {
         self.on_borrow_success(current_gauge);
+        self.account_borrow_revision = Some(revision);
         self.last_borrow_was_ephemeral_overdraft = false;
     }
 
@@ -168,6 +175,7 @@ impl FuelTracker {
         &mut self,
         current_gauge: u64,
         amount: u64,
+        revision: u64,
     ) -> Result<(), AgentError> {
         let next_prepaid = self.ephemeral_overdraft_prepaid.saturating_add(amount);
         if next_prepaid > self.ephemeral_overdraft_limit {
@@ -178,6 +186,14 @@ impl FuelTracker {
             ))
         } else {
             self.ephemeral_overdraft_prepaid = next_prepaid;
+            if let Some((last_revision, prepaid)) = self.ephemeral_overdraft_borrows.last_mut()
+                && *last_revision == revision
+            {
+                *prepaid = prepaid.saturating_add(amount);
+            } else {
+                self.ephemeral_overdraft_borrows.push((revision, amount));
+            }
+            self.account_borrow_revision = None;
             self.on_borrow_success(current_gauge);
             self.last_borrow_was_ephemeral_overdraft = true;
             Ok(())
@@ -192,17 +208,17 @@ impl FuelTracker {
         self.last_borrow_was_ephemeral_overdraft
     }
 
-    pub(self) fn consumed_ephemeral_overdraft(&mut self, unused: u64) -> u64 {
-        let consumed_overdraft = if self.last_borrow_was_ephemeral_overdraft {
-            self.ephemeral_overdraft_prepaid.saturating_sub(unused)
-        } else {
-            self.ephemeral_overdraft_prepaid
-        };
+    pub(self) fn consumed_ephemeral_overdraft(&mut self, unused: u64) -> Vec<(u64, u64)> {
+        if self.last_borrow_was_ephemeral_overdraft
+            && let Some((_, prepaid)) = self.ephemeral_overdraft_borrows.last_mut()
+        {
+            *prepaid = prepaid.saturating_sub(unused);
+        }
 
         self.ephemeral_overdraft_prepaid = 0;
         self.last_borrow_was_ephemeral_overdraft = false;
 
-        consumed_overdraft
+        std::mem::take(&mut self.ephemeral_overdraft_borrows)
     }
 
     fn ensure_fuel(
@@ -215,9 +231,9 @@ impl FuelTracker {
             return Ok(());
         }
         let amount_to_borrow = self.determine_amount_to_borrow(current_level);
-        let success = resource_limit_entry.borrow_fuel(amount_to_borrow);
-        if success {
-            self.on_account_borrow_success(current_level);
+        let borrow_result = resource_limit_entry.borrow_fuel_with_revision(amount_to_borrow);
+        if let Ok(revision) = borrow_result {
+            self.on_account_borrow_success(current_level, revision);
             debug!(amount = amount_to_borrow, "Borrowed fuel");
             Ok(())
         } else if agent_mode == AgentMode::Ephemeral {
@@ -229,13 +245,17 @@ impl FuelTracker {
                 ));
             }
 
-            self.try_borrow_ephemeral_overdraft(current_level, amount_to_borrow)
-                .inspect(|_| {
-                    debug!(
-                        amount = amount_to_borrow,
-                        "Borrowed ephemeral overdraft fuel"
-                    );
-                })
+            self.try_borrow_ephemeral_overdraft(
+                current_level,
+                amount_to_borrow,
+                borrow_result.expect_err("failed account borrow must retain its revision"),
+            )
+            .inspect(|_| {
+                debug!(
+                    amount = amount_to_borrow,
+                    "Borrowed ephemeral overdraft fuel"
+                );
+            })
         } else {
             Err(AgentError::EphemeralCannotSuspend(
                 EphemeralCannotSuspendError {
@@ -282,12 +302,19 @@ impl FuelTracker {
     fn settle_fuel(&mut self, resource_limit_entry: &AtomicResourceEntry, current_level: u64) {
         let unused = self.take_unused_to_return(current_level);
         if unused > 0 && !self.last_borrow_was_ephemeral_overdraft() {
-            resource_limit_entry.return_fuel(unused);
+            let revision = self
+                .account_borrow_revision
+                .take()
+                .expect("refundable account fuel must retain its revision");
+            resource_limit_entry.return_fuel_for_revision(unused, revision);
             debug!(amount = unused, "Returned fuel");
         }
-        let consumed_overdraft = self.consumed_ephemeral_overdraft(unused);
-        if consumed_overdraft > 0 {
-            resource_limit_entry.record_overdraft_debt(consumed_overdraft);
+        for (revision, consumed_overdraft) in self.consumed_ephemeral_overdraft(unused) {
+            let Some(consumed_overdraft) = std::num::NonZeroU64::new(consumed_overdraft) else {
+                continue;
+            };
+            let consumed_overdraft = consumed_overdraft.get();
+            resource_limit_entry.record_overdraft_debt_for_revision(consumed_overdraft, revision);
             debug!(
                 amount = consumed_overdraft,
                 "Recorded ephemeral overdraft fuel debt"
@@ -1296,6 +1323,96 @@ mod tests {
         assert_eq!(ft.take_unused_to_return(settled_gauge), 0);
         assert_eq!(ft.on_return(settled_gauge), 0);
         assert!(ft.needs_borrow(settled_gauge));
+    }
+
+    #[test]
+    fn ephemeral_overdraft_accepts_its_exact_limit_and_rejects_one_more() {
+        let mut tracker = FuelTracker::new(FUEL_TO_BORROW, FUEL_TO_BORROW);
+
+        tracker
+            .try_borrow_ephemeral_overdraft(INITIAL, FUEL_TO_BORROW, 0)
+            .unwrap();
+        assert!(
+            tracker
+                .try_borrow_ephemeral_overdraft(INITIAL, 1, 0)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn fully_consumed_account_reservation_can_be_settled_repeatedly() {
+        let entry = AtomicResourceEntry::new(100_000, 0, 0, 0, 0);
+        let mut tracker = fuel_tracker();
+        tracker
+            .ensure_fuel(&entry, AgentMode::Durable, INITIAL)
+            .unwrap();
+        let fully_consumed_gauge = INITIAL - FUEL_TO_BORROW;
+
+        tracker.settle_fuel(&entry, fully_consumed_gauge);
+        tracker.settle_fuel(&entry, fully_consumed_gauge);
+
+        assert_eq!(entry.fuel_delta(), FUEL_TO_BORROW as i64);
+    }
+
+    #[test]
+    fn account_fuel_refunds_keep_the_borrow_revision_across_mode_changes() {
+        let entry = AtomicResourceEntry::new(100_000, 0, 0, 0, 0);
+        let mut tracker = fuel_tracker();
+
+        tracker
+            .ensure_fuel(&entry, AgentMode::Durable, INITIAL)
+            .unwrap();
+        entry.update_usage_revision_for_test(1);
+        tracker.settle_fuel(&entry, INITIAL - 4_000);
+
+        let pre_opt_in_borrow = entry.capture_usage_update_for_test();
+        let pre_opt_in_refund = entry.capture_usage_update_for_test();
+        assert_eq!(pre_opt_in_borrow.monthly_usage_mode_revision, 0);
+        assert_eq!(pre_opt_in_borrow.fuel_delta, 10_000);
+        assert_eq!(pre_opt_in_refund.monthly_usage_mode_revision, 0);
+        assert_eq!(pre_opt_in_refund.fuel_delta, -6_000);
+
+        tracker
+            .ensure_fuel(&entry, AgentMode::Durable, INITIAL - 4_000)
+            .unwrap();
+        entry.update_usage_revision_for_test(2);
+        tracker.settle_fuel(&entry, INITIAL - 7_000);
+
+        let pre_opt_out_borrow = entry.capture_usage_update_for_test();
+        let pre_opt_out_refund = entry.capture_usage_update_for_test();
+        assert_eq!(pre_opt_out_borrow.monthly_usage_mode_revision, 1);
+        assert_eq!(pre_opt_out_borrow.fuel_delta, 10_000);
+        assert_eq!(pre_opt_out_refund.monthly_usage_mode_revision, 1);
+        assert_eq!(pre_opt_out_refund.fuel_delta, -7_000);
+    }
+
+    #[test]
+    fn ephemeral_overdraft_keeps_each_accrual_revision_across_mode_changes() {
+        let entry = AtomicResourceEntry::new(1, 0, 0, 0, 0);
+        let mut tracker = fuel_tracker();
+
+        tracker
+            .ensure_fuel(&entry, AgentMode::Ephemeral, INITIAL)
+            .unwrap();
+        entry.update_usage_revision_for_test(1);
+        tracker
+            .ensure_fuel(&entry, AgentMode::Ephemeral, INITIAL - 10_000)
+            .unwrap();
+        entry.update_usage_revision_for_test(2);
+        tracker
+            .ensure_fuel(&entry, AgentMode::Ephemeral, INITIAL - 20_000)
+            .unwrap();
+        tracker.settle_fuel(&entry, INITIAL - 24_000);
+
+        let pre_opt_in_debt = entry.capture_usage_update_for_test();
+        let pre_opt_out_debt = entry.capture_usage_update_for_test();
+        let post_opt_out_debt = entry.capture_usage_update_for_test();
+        assert_eq!(pre_opt_in_debt.monthly_usage_mode_revision, 0);
+        assert_eq!(pre_opt_in_debt.fuel_delta, 10_000);
+        assert_eq!(pre_opt_out_debt.monthly_usage_mode_revision, 1);
+        assert_eq!(pre_opt_out_debt.fuel_delta, 10_000);
+        assert_eq!(post_opt_out_debt.monthly_usage_mode_revision, 2);
+        assert_eq!(post_opt_out_debt.fuel_delta, 4_000);
     }
 
     #[test]

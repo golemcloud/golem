@@ -181,6 +181,7 @@ impl Default for RegistryServiceConfig {
                 monthly_memory_gb_seconds: 0,
                 monthly_durable_storage_gb_month: 0,
                 monthly_ephemeral_storage_gb_month: 0,
+                overage_eligible: false,
                 max_memory_per_agent: 1024 * 1024 * 1024, // 1 GB
                 max_memory_per_agent_ceiling: default_unlimited(),
                 max_memory_per_agent_user_configurable: false,
@@ -500,6 +501,7 @@ pub struct PrecreatedPlan {
     pub monthly_memory_gb_seconds: u64,
     pub monthly_durable_storage_gb_month: u64,
     pub monthly_ephemeral_storage_gb_month: u64,
+    pub overage_eligible: bool,
     pub max_memory_per_agent: u64,
     #[serde(default = "default_unlimited")]
     pub max_memory_per_agent_ceiling: u64,
@@ -585,6 +587,7 @@ mod tests {
         assert_eq!(plan.monthly_memory_gb_seconds, 0);
         assert_eq!(plan.monthly_durable_storage_gb_month, 0);
         assert_eq!(plan.monthly_ephemeral_storage_gb_month, 0);
+        assert!(!plan.overage_eligible);
     }
 
     /// An omitted ceiling follows the configured per-agent storage default.

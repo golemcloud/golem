@@ -17,8 +17,10 @@ pub mod error;
 use self::error::LimitExceededError;
 use super::account::{AccountError, AccountService};
 use crate::repo::account_usage::AccountUsageRepo;
+use crate::repo::account_usage::SetMonthlyUsageModeError;
 use crate::repo::model::account_usage::{
-    AccountUsage as RepoAccountUsage, AccountUsageRecord, UsageType,
+    AccountMonthlyUsageMode, AccountUsage as RepoAccountUsage, AccountUsageRecord,
+    MonthlyUsageAttribution, UsageType,
 };
 use crate::services::account_usage::error::AccountUsageError;
 use chrono::{TimeZone, Utc};
@@ -27,7 +29,8 @@ use golem_common::model::account_usage::{
     AccountResourcePolicy, AccountUsage, AccountUsageMetering, AccountUsageMetrics,
     AccountUsagePeriod, MeteringStatus, MonthlyComputeLimit, MonthlyComputeUnit,
     MonthlyLimitBehavior, MonthlyMemoryLimit, MonthlyMemoryUnit, MonthlyPlanAmounts,
-    MonthlyResourceLimits, MonthlyStorageLimit, MonthlyStorageUnit, byte_seconds_to_gb_month,
+    MonthlyResourceLimits, MonthlyStorageLimit, MonthlyStorageUnit, MonthlyUsageMode,
+    MonthlyUsageModeTransition, MonthlyUsageModeTransitionSource, byte_seconds_to_gb_month,
     fuel_to_gcu,
 };
 use golem_common::model::card::owner::AccountOwnerPattern;
@@ -44,6 +47,10 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ResourceUsageUpdate {
+    pub monthly_usage_mode_revision: u64,
+    pub memory_byte_nanoseconds_remainder: u64,
+    pub durable_storage_byte_nanoseconds_remainder: u64,
+    pub ephemeral_storage_byte_nanoseconds_remainder: u64,
     pub fuel_delta: i64,
     pub http_call_count_delta: u64,
     pub rpc_call_count_delta: u64,
@@ -51,6 +58,17 @@ pub struct ResourceUsageUpdate {
     pub ephemeral_storage_byte_seconds_delta: i64,
     pub memory_gb_seconds_delta: i64,
     pub metering: ResourceUsageMetering,
+}
+
+fn monthly_usage_attribution(update: &ResourceUsageUpdate) -> MonthlyUsageAttribution {
+    MonthlyUsageAttribution {
+        revision: update.monthly_usage_mode_revision,
+        memory_byte_nanoseconds_remainder: update.memory_byte_nanoseconds_remainder,
+        durable_storage_byte_nanoseconds_remainder: update
+            .durable_storage_byte_nanoseconds_remainder,
+        ephemeral_storage_byte_nanoseconds_remainder: update
+            .ephemeral_storage_byte_nanoseconds_remainder,
+    }
 }
 
 pub struct AccountUsageService {
@@ -219,6 +237,8 @@ impl AccountUsageService {
                         UsageType::MonthlyMemoryGbSeconds,
                         update.memory_gb_seconds_delta,
                     );
+                    account_usage.monthly_usage_attribution =
+                        Some(monthly_usage_attribution(&update));
                     account_usage.metering = Some(update.metering);
 
                     tracing::debug!(
@@ -233,7 +253,8 @@ impl AccountUsageService {
                     );
 
                     match self.account_usage_repo.add(&account_usage).await {
-                        Ok(()) => {
+                        Ok(current_revision) => {
+                            account_usage.monthly_usage_mode_revision = current_revision;
                             limits_of_updated_accounts
                                 .insert(account_id, account_usage.resource_limits());
                         }
@@ -252,6 +273,7 @@ impl AccountUsageService {
                     limits_of_updated_accounts.insert(
                         account_id,
                         ResourceLimits {
+                            monthly_usage_mode_revision: 0,
                             available_fuel: 0,
                             max_memory_per_worker: 0,
                             max_table_elements_per_worker: 0,
@@ -319,8 +341,67 @@ impl AccountUsageService {
             .account_usage_repo
             .get_usage_report(account_id.0, AccountUsagePeriod::current())
             .await?;
+        let monthly_usage_mode = self
+            .account_usage_repo
+            .get_monthly_usage_mode(account_id.0)
+            .await?
+            .ok_or(AccountUsageError::AccountNotfound(account_id))?;
 
-        Self::resource_policy(account_id, account_usage, report)
+        Self::resource_policy(account_id, account_usage, report, monthly_usage_mode)
+    }
+
+    pub async fn set_monthly_usage_mode(
+        &self,
+        account_id: AccountId,
+        target: MonthlyUsageMode,
+        auth: &AuthCtx,
+    ) -> Result<MonthlyUsageModeTransition, AccountUsageError> {
+        let account = self
+            .account_service
+            .get(account_id, auth)
+            .await
+            .map_err(map_account_error(account_id))?;
+        authorize_account_usage_permission(auth, &account.email, AccountUsageVerb::Update)?;
+
+        let source = match auth {
+            AuthCtx::User(user) if user.account_id == account_id => {
+                MonthlyUsageModeTransitionSource::Owner
+            }
+            AuthCtx::AdminImpersonation(ctx)
+                if ctx.target_account_id == account_id && target == MonthlyUsageMode::HardLimit =>
+            {
+                MonthlyUsageModeTransitionSource::Administrator
+            }
+            AuthCtx::System
+            | AuthCtx::User(_)
+            | AuthCtx::Agent(_)
+            | AuthCtx::AdminImpersonation(_) => {
+                return Err(AccountUsageError::MonthlyUsageModeChangeNotAllowed);
+            }
+        };
+
+        self.account_usage_repo
+            .set_monthly_usage_mode(account_id.0, target, auth.actor_account_id().0, source)
+            .await
+            .map_err(|error| match error {
+                SetMonthlyUsageModeError::AccountNotFound(_) => {
+                    AccountUsageError::AccountNotfound(account_id)
+                }
+                SetMonthlyUsageModeError::OverageNotEligible => {
+                    AccountUsageError::OverageNotEligible
+                }
+                SetMonthlyUsageModeError::ModeUnchanged(mode) => {
+                    AccountUsageError::MonthlyUsageModeUnchanged(mode)
+                }
+                SetMonthlyUsageModeError::InvalidConsentSource
+                | SetMonthlyUsageModeError::InvalidConsentActor => {
+                    AccountUsageError::MonthlyUsageModeChangeNotAllowed
+                }
+                SetMonthlyUsageModeError::Repo(error) => error.into(),
+            })
+            .map(
+                crate::repo::model::account_usage::PersistedMonthlyUsageModeTransition::into_public,
+            )
     }
 
     pub async fn get_usage_for_period(
@@ -410,6 +491,7 @@ impl AccountUsageService {
         account_id: AccountId,
         account_usage: RepoAccountUsage,
         report: AccountUsageRecord,
+        monthly_usage_mode: AccountMonthlyUsageMode,
     ) -> Result<AccountResourcePolicy, AccountUsageError> {
         let plan_amounts = MonthlyPlanAmounts {
             compute_gcu: account_usage.plan.monthly_compute_gcu.get(),
@@ -440,29 +522,36 @@ impl AccountUsageService {
 
         Ok(AccountResourcePolicy {
             account_id,
+            monthly_usage_mode: monthly_usage_mode.mode,
+            overage_allowed_by_plan: monthly_usage_mode.overage_eligible,
+            latest_owner_transition: monthly_usage_mode.latest_owner_transition,
             monthly: MonthlyResourceLimits {
                 compute_gcu: compute_limit(
                     metering.compute,
                     plan_amounts.compute_gcu,
                     resolved.compute_fuel,
                     report.compute_fuel,
+                    monthly_usage_mode.mode,
                 ),
                 memory_gb_seconds: memory_limit(
                     metering.memory,
                     plan_amounts.memory_gb_seconds,
                     report.memory_gb_seconds,
+                    monthly_usage_mode.mode,
                 ),
                 durable_storage_gb_month: storage_limit_policy(
                     metering.durable_storage,
                     plan_amounts.durable_storage_gb_month,
                     resolved.durable_storage_byte_seconds,
                     report.durable_storage_byte_seconds,
+                    monthly_usage_mode.mode,
                 ),
                 ephemeral_storage_gb_month: storage_limit_policy(
                     metering.ephemeral_storage,
                     plan_amounts.ephemeral_storage_gb_month,
                     resolved.ephemeral_storage_byte_seconds,
                     report.ephemeral_storage_byte_seconds,
+                    monthly_usage_mode.mode,
                 ),
             },
             max_memory_per_agent: account_usage.max_memory_per_worker,
@@ -528,6 +617,7 @@ fn compute_limit(
     monthly_amount: u64,
     amount_fuel: u64,
     usage_fuel: u64,
+    mode: MonthlyUsageMode,
 ) -> MonthlyComputeLimit {
     match metering {
         MeteringStatus::Enabled => MonthlyComputeLimit {
@@ -536,7 +626,7 @@ fn compute_limit(
             usage: Some(fuel_to_gcu(usage_fuel)),
             remaining: Some(fuel_to_gcu(amount_fuel.saturating_sub(usage_fuel))),
             unit: MonthlyComputeUnit::Gcu,
-            behavior: Some(MonthlyLimitBehavior::HardLimit),
+            behavior: Some(monthly_limit_behavior(mode)),
         },
         MeteringStatus::Disabled => MonthlyComputeLimit {
             metering,
@@ -557,7 +647,12 @@ fn compute_limit(
     }
 }
 
-fn memory_limit(metering: MeteringStatus, monthly_amount: u64, usage: u64) -> MonthlyMemoryLimit {
+fn memory_limit(
+    metering: MeteringStatus,
+    monthly_amount: u64,
+    usage: u64,
+    mode: MonthlyUsageMode,
+) -> MonthlyMemoryLimit {
     match metering {
         MeteringStatus::Enabled => MonthlyMemoryLimit {
             metering,
@@ -565,7 +660,7 @@ fn memory_limit(metering: MeteringStatus, monthly_amount: u64, usage: u64) -> Mo
             usage: Some(usage),
             remaining: Some(monthly_amount.saturating_sub(usage)),
             unit: MonthlyMemoryUnit::GbSeconds,
-            behavior: Some(MonthlyLimitBehavior::HardLimit),
+            behavior: Some(monthly_limit_behavior(mode)),
         },
         MeteringStatus::Disabled => MonthlyMemoryLimit {
             metering,
@@ -591,6 +686,7 @@ fn storage_limit_policy(
     monthly_amount: u64,
     amount_byte_seconds: u64,
     usage_byte_seconds: u64,
+    mode: MonthlyUsageMode,
 ) -> MonthlyStorageLimit {
     match metering {
         MeteringStatus::Enabled => MonthlyStorageLimit {
@@ -601,7 +697,7 @@ fn storage_limit_policy(
                 amount_byte_seconds.saturating_sub(usage_byte_seconds),
             )),
             unit: MonthlyStorageUnit::GbMonth,
-            behavior: Some(MonthlyLimitBehavior::HardLimit),
+            behavior: Some(monthly_limit_behavior(mode)),
         },
         MeteringStatus::Disabled => MonthlyStorageLimit {
             metering,
@@ -619,6 +715,13 @@ fn storage_limit_policy(
             unit: MonthlyStorageUnit::GbMonth,
             behavior: None,
         },
+    }
+}
+
+fn monthly_limit_behavior(mode: MonthlyUsageMode) -> MonthlyLimitBehavior {
+    match mode {
+        MonthlyUsageMode::HardLimit => MonthlyLimitBehavior::HardLimit,
+        MonthlyUsageMode::AllowOverage => MonthlyLimitBehavior::IncludedAllowance,
     }
 }
 
@@ -687,6 +790,7 @@ mod tests {
             monthly_memory_gb_seconds: NumericU64::new(u64::MAX),
             monthly_durable_storage_gb_month: NumericU64::new(0),
             monthly_ephemeral_storage_gb_month: NumericU64::new(0),
+            overage_eligible: false,
             max_table_elements_per_worker: NumericU64::new(u64::MAX),
             max_disk_space_per_worker_enabled: false,
             max_disk_space_per_worker: NumericU64::new(u64::MAX),
@@ -733,6 +837,8 @@ mod tests {
                 user_configurable: false,
             },
             metering: None,
+            monthly_usage_mode_revision: 0,
+            monthly_usage_attribution: None,
             changes: BTreeMap::new(),
         }
     }
@@ -763,6 +869,24 @@ mod tests {
         }
     }
 
+    fn hard_limit_mode() -> AccountMonthlyUsageMode {
+        AccountMonthlyUsageMode {
+            mode: MonthlyUsageMode::HardLimit,
+            revision: 0,
+            overage_eligible: false,
+            latest_owner_transition: None,
+        }
+    }
+
+    fn allow_overage_mode() -> AccountMonthlyUsageMode {
+        AccountMonthlyUsageMode {
+            mode: MonthlyUsageMode::AllowOverage,
+            revision: 1,
+            overage_eligible: true,
+            latest_owner_transition: None,
+        }
+    }
+
     #[test]
     fn resource_policy_resolves_enabled_dimensions_in_internal_units() {
         let usage = make_policy_usage();
@@ -773,6 +897,7 @@ mod tests {
             account_id,
             usage,
             make_policy_report(Some(ResourceUsageMetering::all_enabled())),
+            hard_limit_mode(),
         )
         .unwrap();
 
@@ -814,8 +939,10 @@ mod tests {
             account_id,
             usage,
             make_policy_report(Some(ResourceUsageMetering::default())),
+            allow_overage_mode(),
         )
         .unwrap();
+        assert_eq!(policy.monthly_usage_mode, MonthlyUsageMode::AllowOverage);
         let value = serde_json::to_value(policy).unwrap();
 
         for dimension in [
@@ -837,9 +964,13 @@ mod tests {
     fn resource_policy_exposes_only_amount_when_metering_is_unknown() {
         let usage = make_policy_usage();
         let account_id = AccountId(usage.account_id);
-        let policy =
-            AccountUsageService::resource_policy(account_id, usage, make_policy_report(None))
-                .unwrap();
+        let policy = AccountUsageService::resource_policy(
+            account_id,
+            usage,
+            make_policy_report(None),
+            hard_limit_mode(),
+        )
+        .unwrap();
         let value = serde_json::to_value(policy).unwrap();
 
         for (dimension, monthly_amount) in [

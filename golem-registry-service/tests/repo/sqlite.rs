@@ -41,14 +41,24 @@ inherit_test_dep!(Tracing);
 // Deps setup --------------------------------------------------------------------------------------
 
 pub struct SqliteDb {
-    pub db_path: String,
     pub pool: SqlitePool,
+    _db_dir: tempfile::TempDir,
 }
 
 impl SqliteDb {
     pub async fn new() -> Self {
-        tempfile::tempfile().unwrap();
-        let db_path = format!("/tmp/golem-registry-{}.db", new_repo_uuid());
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("golem-registry-");
+        let db_dir = match std::env::var_os("RUST_TEST_TMPDIR") {
+            Some(root) => builder.tempdir_in(root),
+            None => builder.tempdir(),
+        }
+        .unwrap();
+        let db_path = db_dir
+            .path()
+            .join(format!("{}.db", new_repo_uuid()))
+            .to_string_lossy()
+            .into_owned();
         let db_config = DbSqliteConfig {
             database: db_path.clone(),
             max_connections: 3,
@@ -66,13 +76,10 @@ impl SqliteDb {
 
         info!("Created sqlite database pool, database path: {}", db_path);
 
-        Self { db_path, pool }
-    }
-}
-
-impl Drop for SqliteDb {
-    fn drop(&mut self) {
-        std::fs::remove_file(&self.db_path).unwrap();
+        Self {
+            pool,
+            _db_dir: db_dir,
+        }
     }
 }
 
@@ -290,6 +297,21 @@ async fn test_account_usage(deps: &Deps) {
 #[test]
 async fn test_account_usage_history(deps: &Deps) {
     crate::repo::common::test_account_usage_history(deps).await;
+}
+
+#[test]
+async fn test_monthly_usage_mode_transitions(deps: &Deps) {
+    crate::repo::common::test_monthly_usage_mode_transitions(deps).await;
+}
+
+#[test]
+async fn test_monthly_usage_attribution_uses_accrual_revision(deps: &Deps) {
+    crate::repo::common::test_monthly_usage_attribution_uses_accrual_revision(deps).await;
+}
+
+#[test]
+async fn test_monthly_usage_mode_consent_invariants(deps: &Deps) {
+    crate::repo::common::test_monthly_usage_mode_consent_invariants(deps).await;
 }
 
 #[test]

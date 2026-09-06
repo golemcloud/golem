@@ -313,9 +313,10 @@ impl DbAccountResourceOverrideRepo<PostgresPool> {
     pub(crate) async fn lock_accounts_for_plan_in_tx(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         plan_id: Uuid,
-    ) -> RepoResult<()> {
-        tx.fetch_all(
-            sqlx::query(indoc! { r#"
+    ) -> RepoResult<Vec<Uuid>> {
+        let accounts: Vec<(Uuid,)> = tx
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
                 SELECT accounts.account_id
                 FROM accounts
                 JOIN account_revisions
@@ -326,10 +327,13 @@ impl DbAccountResourceOverrideRepo<PostgresPool> {
                 ORDER BY accounts.account_id
                 FOR UPDATE OF accounts
             "# })
-            .bind(plan_id),
-        )
-        .await?;
-        Ok(())
+                .bind(plan_id),
+            )
+            .await?;
+        Ok(accounts
+            .into_iter()
+            .map(|(account_id,)| account_id)
+            .collect())
     }
 
     pub(crate) async fn lock_plan_policies_in_tx(
@@ -394,9 +398,10 @@ impl DbAccountResourceOverrideRepo<SqlitePool> {
     pub(crate) async fn lock_accounts_for_plan_in_tx(
         tx: &mut PoolLabelledTransaction<SqlitePool>,
         plan_id: Uuid,
-    ) -> RepoResult<()> {
-        tx.fetch_all(
-            sqlx::query(indoc! { r#"
+    ) -> RepoResult<Vec<Uuid>> {
+        let accounts: Vec<(Uuid,)> = tx
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
                 SELECT accounts.account_id
                 FROM accounts
                 JOIN account_revisions
@@ -406,10 +411,13 @@ impl DbAccountResourceOverrideRepo<SqlitePool> {
                   AND accounts.deleted_at IS NULL
                 ORDER BY accounts.account_id
             "# })
-            .bind(plan_id),
-        )
-        .await?;
-        Ok(())
+                .bind(plan_id),
+            )
+            .await?;
+        Ok(accounts
+            .into_iter()
+            .map(|(account_id,)| account_id)
+            .collect())
     }
 
     pub(crate) async fn lock_plan_policies_in_tx(

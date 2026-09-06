@@ -87,6 +87,22 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::account_usage::MonthlyLimitBehavior",
             ),
             (
+                "MonthlyUsageMode",
+                "golem_common::model::account_usage::MonthlyUsageMode",
+            ),
+            (
+                "MonthlyUsageModeTransitionSource",
+                "golem_common::model::account_usage::MonthlyUsageModeTransitionSource",
+            ),
+            (
+                "MonthlyUsageModeTransition",
+                "golem_common::model::account_usage::MonthlyUsageModeTransition",
+            ),
+            (
+                "SetMonthlyUsageMode",
+                "golem_common::model::account_usage::SetMonthlyUsageMode",
+            ),
+            (
                 "MonthlyComputeUnit",
                 "golem_common::model::account_usage::MonthlyComputeUnit",
             ),

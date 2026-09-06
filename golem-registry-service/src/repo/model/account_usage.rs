@@ -14,10 +14,14 @@
 
 use crate::repo::model::plan::PlanRecord;
 use chrono::{DateTime, Utc};
-use golem_common::model::account_usage::{AccountUsagePeriod, StorageLimit};
+use golem_common::model::account_usage::{
+    AccountUsagePeriod, MonthlyUsageMode, MonthlyUsageModeTransition,
+    MonthlyUsageModeTransitionSource, StorageLimit,
+};
 use golem_service_base::clients::registry::ResourceUsageMetering;
 use golem_service_base::model::ResourceLimits;
 use golem_service_base::repo::NumericU64;
+use golem_service_base::repo::{RepoError, RepoResult};
 use sqlx::FromRow;
 use std::collections::BTreeMap;
 use strum_macros::EnumIter;
@@ -112,7 +116,17 @@ pub struct AccountUsage {
     pub storage_limit: StorageLimit,
     pub max_memory_per_worker: golem_common::model::account_usage::MemoryLimit,
     pub metering: Option<ResourceUsageMetering>,
+    pub monthly_usage_mode_revision: u64,
+    pub monthly_usage_attribution: Option<MonthlyUsageAttribution>,
     pub changes: BTreeMap<UsageType, i64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MonthlyUsageAttribution {
+    pub revision: u64,
+    pub memory_byte_nanoseconds_remainder: u64,
+    pub durable_storage_byte_nanoseconds_remainder: u64,
+    pub ephemeral_storage_byte_nanoseconds_remainder: u64,
 }
 
 #[derive(FromRow, Debug, Clone, PartialEq)]
@@ -121,6 +135,7 @@ pub struct AccountUsagePlan {
     pub plan: PlanRecord,
     pub storage_override_value: Option<NumericU64>,
     pub max_memory_override_value: Option<NumericU64>,
+    pub monthly_usage_mode_revision: NumericU64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,6 +147,145 @@ pub struct AccountUsageRecord {
     pub compute_fuel: u64,
     pub memory_gb_seconds: u64,
     pub metering: Option<ResourceUsageMetering>,
+}
+
+#[derive(FromRow, Debug, Clone, PartialEq, Eq)]
+pub struct MonthlyUsageModeStateRecord {
+    pub mode: String,
+    pub revision: NumericU64,
+    pub overage_eligible: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccountMonthlyUsageMode {
+    pub mode: MonthlyUsageMode,
+    pub revision: u64,
+    pub overage_eligible: bool,
+    pub latest_owner_transition: Option<MonthlyUsageModeTransition>,
+}
+
+impl MonthlyUsageModeStateRecord {
+    pub fn mode(&self) -> RepoResult<MonthlyUsageMode> {
+        let persisted_mode = monthly_usage_mode(&self.mode)?;
+        if persisted_mode == MonthlyUsageMode::AllowOverage && !self.overage_eligible {
+            Ok(MonthlyUsageMode::HardLimit)
+        } else {
+            Ok(persisted_mode)
+        }
+    }
+}
+
+#[derive(FromRow, Debug, Clone, PartialEq)]
+pub struct MonthlyUsageModeTransitionRecord {
+    pub revision: NumericU64,
+    pub actor_account_id: Uuid,
+    pub changed_at: golem_service_base::repo::SqlDateTime,
+    pub source: String,
+    pub previous_mode: String,
+    pub new_mode: String,
+    pub period_year: i32,
+    pub period_month: i32,
+    pub compute_fuel: NumericU64,
+    pub memory_gb_seconds: NumericU64,
+    pub durable_storage_byte_seconds: NumericU64,
+    pub ephemeral_storage_byte_seconds: NumericU64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MonthlyUsageTransitionBaseline {
+    pub period: AccountUsagePeriod,
+    pub compute_fuel: u64,
+    pub memory_gb_seconds: u64,
+    pub durable_storage_byte_seconds: u64,
+    pub ephemeral_storage_byte_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PersistedMonthlyUsageModeTransition {
+    pub revision: u64,
+    pub actor_account_id: golem_common::model::account::AccountId,
+    pub changed_at: DateTime<Utc>,
+    pub source: MonthlyUsageModeTransitionSource,
+    pub previous_mode: MonthlyUsageMode,
+    pub new_mode: MonthlyUsageMode,
+    pub usage_baseline: MonthlyUsageTransitionBaseline,
+}
+
+impl PersistedMonthlyUsageModeTransition {
+    pub fn into_public(self) -> MonthlyUsageModeTransition {
+        MonthlyUsageModeTransition {
+            actor_account_id: self.actor_account_id,
+            changed_at: self.changed_at,
+            source: self.source,
+            previous_mode: self.previous_mode,
+            new_mode: self.new_mode,
+        }
+    }
+}
+
+impl MonthlyUsageModeTransitionRecord {
+    pub fn into_model(self) -> RepoResult<PersistedMonthlyUsageModeTransition> {
+        Ok(PersistedMonthlyUsageModeTransition {
+            revision: self.revision.get(),
+            actor_account_id: golem_common::model::account::AccountId(self.actor_account_id),
+            changed_at: self.changed_at.into_utc(),
+            source: monthly_usage_mode_transition_source(&self.source)?,
+            previous_mode: monthly_usage_mode(&self.previous_mode)?,
+            new_mode: monthly_usage_mode(&self.new_mode)?,
+            usage_baseline: MonthlyUsageTransitionBaseline {
+                period: AccountUsagePeriod {
+                    year: self.period_year,
+                    month: u32::try_from(self.period_month).expect("stored month is valid"),
+                },
+                compute_fuel: self.compute_fuel.get(),
+                memory_gb_seconds: self.memory_gb_seconds.get(),
+                durable_storage_byte_seconds: self.durable_storage_byte_seconds.get(),
+                ephemeral_storage_byte_seconds: self.ephemeral_storage_byte_seconds.get(),
+            },
+        })
+    }
+}
+
+pub fn monthly_usage_mode(value: &str) -> RepoResult<MonthlyUsageMode> {
+    match value {
+        "hard_limit" => Ok(MonthlyUsageMode::HardLimit),
+        "allow_overage" => Ok(MonthlyUsageMode::AllowOverage),
+        _ => Err(RepoError::InternalError(anyhow::anyhow!(
+            "Unknown persisted monthly usage mode: {value}"
+        ))),
+    }
+}
+
+pub fn monthly_usage_mode_str(value: MonthlyUsageMode) -> &'static str {
+    match value {
+        MonthlyUsageMode::HardLimit => "hard_limit",
+        MonthlyUsageMode::AllowOverage => "allow_overage",
+    }
+}
+
+pub fn monthly_usage_mode_transition_source(
+    value: &str,
+) -> RepoResult<MonthlyUsageModeTransitionSource> {
+    match value {
+        "owner" => Ok(MonthlyUsageModeTransitionSource::Owner),
+        "administrator" => Ok(MonthlyUsageModeTransitionSource::Administrator),
+        "plan_eligibility_removed" => Ok(MonthlyUsageModeTransitionSource::PlanEligibilityRemoved),
+        "ineligible_plan_assigned" => Ok(MonthlyUsageModeTransitionSource::IneligiblePlanAssigned),
+        _ => Err(RepoError::InternalError(anyhow::anyhow!(
+            "Unknown persisted monthly usage mode transition source: {value}"
+        ))),
+    }
+}
+
+pub fn monthly_usage_mode_transition_source_str(
+    value: MonthlyUsageModeTransitionSource,
+) -> &'static str {
+    match value {
+        MonthlyUsageModeTransitionSource::Owner => "owner",
+        MonthlyUsageModeTransitionSource::Administrator => "administrator",
+        MonthlyUsageModeTransitionSource::PlanEligibilityRemoved => "plan_eligibility_removed",
+        MonthlyUsageModeTransitionSource::IneligiblePlanAssigned => "ineligible_plan_assigned",
+    }
 }
 
 impl AccountUsageRecord {
@@ -228,6 +382,7 @@ impl AccountUsage {
             rpc_limit.saturating_sub(self.final_value(UsageType::MonthlyRpcCalls));
 
         ResourceLimits {
+            monthly_usage_mode_revision: self.monthly_usage_mode_revision,
             available_fuel,
             max_memory_per_worker: self.max_memory_per_worker.effective_value,
             max_table_elements_per_worker: self.plan.max_table_elements_per_worker.get(),
@@ -245,10 +400,17 @@ impl AccountUsage {
 
 #[cfg(test)]
 mod tests {
-    use super::{AccountUsageRecord, UsageType};
+    use super::{
+        AccountUsageRecord, MonthlyUsageModeStateRecord, MonthlyUsageModeTransitionRecord,
+        UsageType, monthly_usage_mode, monthly_usage_mode_transition_source,
+    };
     use chrono::{DateTime, Utc};
-    use golem_common::model::account_usage::AccountUsagePeriod;
+    use golem_common::model::account_usage::{
+        AccountUsagePeriod, MonthlyUsageMode, MonthlyUsageModeTransitionSource,
+    };
+    use golem_service_base::repo::{NumericU64, SqlDateTime};
     use test_r::test;
+    use uuid::Uuid;
 
     fn timestamp(seconds: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(seconds, 0).unwrap()
@@ -284,5 +446,114 @@ mod tests {
         record.apply_metering(true, false, true, timestamp(150));
 
         assert_eq!(record.as_of, Some(timestamp(200)));
+    }
+
+    #[test]
+    fn unknown_persisted_transition_source_is_rejected() {
+        assert!(monthly_usage_mode_transition_source("unknown").is_err());
+    }
+
+    #[test]
+    fn persisted_transition_sources_are_parsed_explicitly() {
+        for (persisted, expected) in [
+            ("owner", MonthlyUsageModeTransitionSource::Owner),
+            (
+                "administrator",
+                MonthlyUsageModeTransitionSource::Administrator,
+            ),
+            (
+                "plan_eligibility_removed",
+                MonthlyUsageModeTransitionSource::PlanEligibilityRemoved,
+            ),
+            (
+                "ineligible_plan_assigned",
+                MonthlyUsageModeTransitionSource::IneligiblePlanAssigned,
+            ),
+        ] {
+            assert_eq!(
+                monthly_usage_mode_transition_source(persisted).unwrap(),
+                expected
+            );
+        }
+    }
+
+    fn transition_record(previous_mode: &str, new_mode: &str) -> MonthlyUsageModeTransitionRecord {
+        MonthlyUsageModeTransitionRecord {
+            revision: NumericU64::new(1),
+            actor_account_id: Uuid::nil(),
+            changed_at: SqlDateTime::new(timestamp(100)),
+            source: "owner".to_string(),
+            previous_mode: previous_mode.to_string(),
+            new_mode: new_mode.to_string(),
+            period_year: 2026,
+            period_month: 4,
+            compute_fuel: NumericU64::new(0),
+            memory_gb_seconds: NumericU64::new(0),
+            durable_storage_byte_seconds: NumericU64::new(0),
+            ephemeral_storage_byte_seconds: NumericU64::new(0),
+        }
+    }
+
+    #[test]
+    fn persisted_monthly_usage_modes_are_parsed_explicitly() {
+        assert_eq!(
+            monthly_usage_mode("hard_limit").unwrap(),
+            MonthlyUsageMode::HardLimit
+        );
+        assert_eq!(
+            monthly_usage_mode("allow_overage").unwrap(),
+            MonthlyUsageMode::AllowOverage
+        );
+    }
+
+    #[test]
+    fn ineligible_allow_overage_state_falls_back_to_hard_limit() {
+        let state = MonthlyUsageModeStateRecord {
+            mode: "allow_overage".to_string(),
+            revision: NumericU64::new(1),
+            overage_eligible: false,
+        };
+
+        assert_eq!(state.mode().unwrap(), MonthlyUsageMode::HardLimit);
+    }
+
+    #[test]
+    fn eligible_allow_overage_state_is_preserved() {
+        let state = MonthlyUsageModeStateRecord {
+            mode: "allow_overage".to_string(),
+            revision: NumericU64::new(1),
+            overage_eligible: true,
+        };
+
+        assert_eq!(state.mode().unwrap(), MonthlyUsageMode::AllowOverage);
+    }
+
+    #[test]
+    fn unknown_persisted_current_monthly_usage_mode_is_rejected() {
+        let state = MonthlyUsageModeStateRecord {
+            mode: "unknown".to_string(),
+            revision: NumericU64::new(1),
+            overage_eligible: false,
+        };
+
+        assert!(state.mode().is_err());
+    }
+
+    #[test]
+    fn unknown_persisted_previous_monthly_usage_mode_is_rejected() {
+        assert!(
+            transition_record("unknown", "hard_limit")
+                .into_model()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn unknown_persisted_new_monthly_usage_mode_is_rejected() {
+        assert!(
+            transition_record("hard_limit", "unknown")
+                .into_model()
+                .is_err()
+        );
     }
 }

@@ -20,6 +20,9 @@ use golem_common::base_model::Empty;
 use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::account::{AccountId, AccountRevision, AccountSetPlan};
+use golem_common::model::account_usage::{
+    AccountUsagePeriod, MonthlyUsageMode, MonthlyUsageModeTransitionSource,
+};
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
@@ -50,7 +53,7 @@ use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_resource_override::{
     OverridePolicyViolation, SetAccountResourceOverrideError,
 };
-use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
+use golem_registry_service::repo::account_usage::{DbAccountUsageRepo, SetMonthlyUsageModeError};
 use golem_registry_service::repo::application::DbApplicationRepo;
 use golem_registry_service::repo::card::{CardRepo, DbCardRepo};
 use golem_registry_service::repo::component::{ComponentRepo, DbComponentRepo};
@@ -65,7 +68,9 @@ use golem_registry_service::repo::model::account::{
 use golem_registry_service::repo::model::account_resource_override::{
     AccountResourceOverrideDimension, AccountResourceOverrideReason, AccountResourceOverrideRecord,
 };
-use golem_registry_service::repo::model::account_usage::{UsageTracking, UsageType};
+use golem_registry_service::repo::model::account_usage::{
+    MonthlyUsageAttribution, UsageTracking, UsageType,
+};
 use golem_registry_service::repo::model::agent_secrets::{
     AgentSecretCreationRecord, AgentSecretRevisionRecord,
 };
@@ -106,7 +111,7 @@ use golem_registry_service::services::registry_change_notifier::{
 };
 use golem_registry_service::services::{
     account::AccountService,
-    account_usage::AccountUsageService,
+    account_usage::{AccountUsageService, ResourceUsageUpdate},
     application::ApplicationService,
     card::{AccountCardFilter, CardError, CardService},
     component::ComponentService,
@@ -4265,26 +4270,29 @@ pub async fn test_atomic_user_override_set_validates_current_policy(deps: &Deps)
     );
 }
 
-async fn wait_for_postgres_lock(pool: &PostgresPool, query_fragment: &str) {
+async fn wait_for_postgres_locks(pool: &PostgresPool, query_fragment: &str, expected: i64) {
     let pattern = format!("%{query_fragment}%");
     for _ in 0..100 {
         let mut api = pool.with_ro("test", "wait_for_override_policy_lock");
-        if api
-            .fetch_optional(
-                sqlx::query(
-                    "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE $1",
+        let (count,): (i64,) = api
+            .fetch_one_as(
+                sqlx::query_as(
+                    "SELECT COUNT(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE $1",
                 )
                 .bind(&pattern),
             )
             .await
-            .unwrap()
-            .is_some()
-        {
+            .unwrap();
+        if count >= expected {
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    panic!("timed out waiting for PostgreSQL lock matching {query_fragment}");
+    panic!("timed out waiting for {expected} PostgreSQL locks matching {query_fragment}");
+}
+
+async fn wait_for_postgres_lock(pool: &PostgresPool, query_fragment: &str) {
+    wait_for_postgres_locks(pool, query_fragment, 1).await;
 }
 
 pub async fn test_atomic_user_override_set_racing_account_plan_change(deps: &Deps) {
@@ -4515,6 +4523,7 @@ async fn create_disk_override_plan(deps: &Deps, account_id: Uuid, user_configura
             monthly_memory_gb_seconds: 1024.into(),
             monthly_durable_storage_gb_month: 2.into(),
             monthly_ephemeral_storage_gb_month: 3.into(),
+            overage_eligible: false,
             max_table_elements_per_worker: 16384.into(),
             max_disk_space_per_worker_enabled: true,
             max_disk_space_per_worker: 1024.into(),
@@ -4890,6 +4899,836 @@ pub async fn test_account_usage_history(deps: &Deps) {
     assert_eq!(
         service_history[0].usage.metering.memory,
         golem_common::model::account_usage::MeteringStatus::Disabled
+    );
+}
+
+pub async fn test_monthly_usage_mode_transitions(deps: &Deps) {
+    let mut plan = deps
+        .plan_repo
+        .get_by_id(deps.test_plan_id())
+        .await
+        .unwrap()
+        .unwrap();
+    plan.overage_eligible = true;
+    deps.plan_repo.create_or_update(plan.clone()).await.unwrap();
+
+    let account = deps.create_account().await;
+    let account_id = account.revision.account_id;
+    let initial = deps
+        .account_usage_repo
+        .get_monthly_usage_mode(account_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(initial.mode, MonthlyUsageMode::HardLimit);
+    assert!(initial.overage_eligible);
+    assert!(initial.latest_owner_transition.is_none());
+
+    let mut usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    usage.add_change(UsageType::MonthlyGasLimit, 11);
+    usage.add_change(UsageType::MonthlyMemoryGbSeconds, 13);
+    usage.add_change(UsageType::MonthlyDurableAgentStorageByteSeconds, 17);
+    usage.add_change(UsageType::MonthlyEphemeralStorageByteSeconds, 19);
+    deps.account_usage_repo.add(&usage).await.unwrap();
+
+    let enabled = deps
+        .account_usage_repo
+        .set_monthly_usage_mode(
+            account_id,
+            MonthlyUsageMode::AllowOverage,
+            account_id,
+            MonthlyUsageModeTransitionSource::Owner,
+        )
+        .await
+        .unwrap();
+    assert_eq!(enabled.previous_mode, MonthlyUsageMode::HardLimit);
+    assert_eq!(enabled.new_mode, MonthlyUsageMode::AllowOverage);
+    assert_eq!(enabled.revision, 1);
+    assert_eq!(enabled.source, MonthlyUsageModeTransitionSource::Owner);
+    assert_eq!(enabled.usage_baseline.compute_fuel, 11);
+    assert_eq!(enabled.usage_baseline.memory_gb_seconds, 13);
+    assert_eq!(enabled.usage_baseline.durable_storage_byte_seconds, 17);
+    assert_eq!(enabled.usage_baseline.ephemeral_storage_byte_seconds, 19);
+
+    assert!(matches!(
+        deps.account_usage_repo
+            .set_monthly_usage_mode(
+                account_id,
+                MonthlyUsageMode::AllowOverage,
+                account_id,
+                MonthlyUsageModeTransitionSource::Owner,
+            )
+            .await,
+        Err(SetMonthlyUsageModeError::ModeUnchanged(
+            MonthlyUsageMode::AllowOverage
+        ))
+    ));
+    assert_eq!(
+        deps.account_usage_repo
+            .get_monthly_usage_mode_transitions(account_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let mut additional_usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    additional_usage.add_change(UsageType::MonthlyGasLimit, 2);
+    additional_usage.add_change(UsageType::MonthlyMemoryGbSeconds, 3);
+    additional_usage.add_change(UsageType::MonthlyDurableAgentStorageByteSeconds, 5);
+    additional_usage.add_change(UsageType::MonthlyEphemeralStorageByteSeconds, 7);
+    deps.account_usage_repo
+        .add(&additional_usage)
+        .await
+        .unwrap();
+
+    let disabled = deps
+        .account_usage_repo
+        .set_monthly_usage_mode(
+            account_id,
+            MonthlyUsageMode::HardLimit,
+            account_id,
+            MonthlyUsageModeTransitionSource::Owner,
+        )
+        .await
+        .unwrap();
+    assert_eq!(disabled.usage_baseline.compute_fuel, 13);
+    assert_eq!(disabled.revision, 2);
+    assert_eq!(disabled.usage_baseline.memory_gb_seconds, 16);
+    assert_eq!(disabled.usage_baseline.durable_storage_byte_seconds, 22);
+    assert_eq!(disabled.usage_baseline.ephemeral_storage_byte_seconds, 26);
+
+    deps.account_usage_repo
+        .set_monthly_usage_mode(
+            account_id,
+            MonthlyUsageMode::AllowOverage,
+            account_id,
+            MonthlyUsageModeTransitionSource::Owner,
+        )
+        .await
+        .unwrap();
+    let administrator_disabled = deps
+        .account_usage_repo
+        .set_monthly_usage_mode(
+            account_id,
+            MonthlyUsageMode::HardLimit,
+            AccountId::SYSTEM.0,
+            MonthlyUsageModeTransitionSource::Administrator,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        administrator_disabled.source,
+        MonthlyUsageModeTransitionSource::Administrator
+    );
+    deps.account_usage_repo
+        .set_monthly_usage_mode(
+            account_id,
+            MonthlyUsageMode::AllowOverage,
+            account_id,
+            MonthlyUsageModeTransitionSource::Owner,
+        )
+        .await
+        .unwrap();
+    plan.overage_eligible = false;
+    deps.plan_repo.create_or_update(plan).await.unwrap();
+
+    let state = deps
+        .account_usage_repo
+        .get_monthly_usage_mode(account_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.mode, MonthlyUsageMode::HardLimit);
+    assert!(!state.overage_eligible);
+    assert!(matches!(
+        deps.account_usage_repo
+            .set_monthly_usage_mode(
+                account_id,
+                MonthlyUsageMode::AllowOverage,
+                account_id,
+                MonthlyUsageModeTransitionSource::Owner,
+            )
+            .await,
+        Err(SetMonthlyUsageModeError::OverageNotEligible)
+    ));
+    assert_eq!(
+        state.latest_owner_transition.unwrap().new_mode,
+        MonthlyUsageMode::AllowOverage
+    );
+    let transitions = deps
+        .account_usage_repo
+        .get_monthly_usage_mode_transitions(account_id)
+        .await
+        .unwrap();
+    assert_eq!(transitions.len(), 6);
+    assert_eq!(
+        transitions
+            .iter()
+            .map(|transition| transition.revision)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4, 5, 6]
+    );
+    assert_eq!(
+        transitions[3].source,
+        MonthlyUsageModeTransitionSource::Administrator
+    );
+    assert_eq!(
+        transitions.last().unwrap().source,
+        MonthlyUsageModeTransitionSource::PlanEligibilityRemoved
+    );
+    assert_eq!(
+        transitions.last().unwrap().new_mode,
+        MonthlyUsageMode::HardLimit
+    );
+
+    let mut eligible_plan = deps
+        .plan_repo
+        .get_by_id(deps.test_plan_id())
+        .await
+        .unwrap()
+        .unwrap();
+    eligible_plan.overage_eligible = true;
+    deps.plan_repo
+        .create_or_update(eligible_plan.clone())
+        .await
+        .unwrap();
+    let assigned_account = deps.create_account().await;
+    deps.account_usage_repo
+        .set_monthly_usage_mode(
+            assigned_account.revision.account_id,
+            MonthlyUsageMode::AllowOverage,
+            assigned_account.revision.account_id,
+            MonthlyUsageModeTransitionSource::Owner,
+        )
+        .await
+        .unwrap();
+    let ineligible_plan_id = new_repo_uuid();
+    eligible_plan.plan_id = ineligible_plan_id;
+    eligible_plan.name = format!("INELIGIBLE_PLAN_{ineligible_plan_id}");
+    eligible_plan.overage_eligible = false;
+    deps.plan_repo
+        .create_or_update(eligible_plan)
+        .await
+        .unwrap();
+    deps.account_service()
+        .set_plan(
+            AccountId(assigned_account.revision.account_id),
+            AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: PlanId(ineligible_plan_id),
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    let assigned_state = deps
+        .account_usage_repo
+        .get_monthly_usage_mode(assigned_account.revision.account_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(assigned_state.mode, MonthlyUsageMode::HardLimit);
+    assert!(!assigned_state.overage_eligible);
+    let assigned_transitions = deps
+        .account_usage_repo
+        .get_monthly_usage_mode_transitions(assigned_account.revision.account_id)
+        .await
+        .unwrap();
+    assert_eq!(assigned_transitions.len(), 2);
+    assert_eq!(
+        assigned_transitions.last().unwrap().source,
+        MonthlyUsageModeTransitionSource::IneligiblePlanAssigned
+    );
+}
+
+pub async fn test_plan_eligibility_downgrade_serializes_with_account_assignment(deps: &Deps) {
+    let TestDb::Postgres(pool) = &deps.test_db else {
+        panic!("this race depends on PostgreSQL row-lock semantics");
+    };
+    let pool = pool.clone();
+
+    let mut source_plan = deps
+        .plan_repo
+        .get_by_id(deps.test_plan_id())
+        .await
+        .unwrap()
+        .unwrap();
+    source_plan.overage_eligible = true;
+    deps.plan_repo
+        .create_or_update(source_plan.clone())
+        .await
+        .unwrap();
+
+    let destination_plan_id = new_repo_uuid();
+    let mut destination_plan = source_plan;
+    destination_plan.plan_id = destination_plan_id;
+    destination_plan.name = format!("OVERAGE_PLAN_{destination_plan_id}");
+    deps.plan_repo
+        .create_or_update(destination_plan.clone())
+        .await
+        .unwrap();
+
+    let account = deps.create_account().await;
+    let account_id = account.revision.account_id;
+    deps.account_usage_repo
+        .set_monthly_usage_mode(
+            account_id,
+            MonthlyUsageMode::AllowOverage,
+            account_id,
+            MonthlyUsageModeTransitionSource::Owner,
+        )
+        .await
+        .unwrap();
+
+    let mut blocker = pool
+        .with_rw("test", "block_plan_eligibility_downgrade")
+        .begin()
+        .await
+        .unwrap();
+    blocker
+        .execute(
+            sqlx::query("SELECT plan_id FROM plans WHERE plan_id = $1 FOR UPDATE")
+                .bind(destination_plan_id),
+        )
+        .await
+        .unwrap();
+
+    let assignment_task = tokio::spawn({
+        let account_service = deps.account_service();
+        async move {
+            account_service
+                .set_plan(
+                    AccountId(account_id),
+                    AccountSetPlan {
+                        current_revision: AccountRevision::INITIAL,
+                        plan: PlanId(destination_plan_id),
+                    },
+                    &AuthCtx::System,
+                )
+                .await
+        }
+    });
+    wait_for_postgres_lock(&pool, "FROM plans").await;
+
+    destination_plan.overage_eligible = false;
+    let downgrade_task = tokio::spawn({
+        let plan_repo = DbPlanRepo::new(pool.clone());
+        async move { plan_repo.create_or_update(destination_plan).await }
+    });
+    wait_for_postgres_locks(&pool, "plans", 2).await;
+    blocker.commit().await.unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), assignment_task)
+        .await
+        .expect("account Plan assignment remained blocked")
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), downgrade_task)
+        .await
+        .expect("Plan eligibility downgrade remained blocked")
+        .unwrap()
+        .unwrap();
+
+    let state = deps
+        .account_usage_repo
+        .get_monthly_usage_mode(account_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.mode, MonthlyUsageMode::HardLimit);
+    assert!(!state.overage_eligible);
+    let transitions = deps
+        .account_usage_repo
+        .get_monthly_usage_mode_transitions(account_id)
+        .await
+        .unwrap();
+    assert_eq!(transitions.len(), 2);
+    assert_eq!(
+        transitions.last().unwrap().source,
+        MonthlyUsageModeTransitionSource::PlanEligibilityRemoved
+    );
+
+    let mut destination_plan = deps
+        .plan_repo
+        .get_by_id(destination_plan_id)
+        .await
+        .unwrap()
+        .unwrap();
+    destination_plan.overage_eligible = true;
+    deps.plan_repo
+        .create_or_update(destination_plan)
+        .await
+        .unwrap();
+    assert_eq!(
+        deps.account_usage_repo
+            .get_monthly_usage_mode(account_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .mode,
+        MonthlyUsageMode::HardLimit
+    );
+}
+
+async fn record_compute_usage_at_revision(deps: &Deps, account_id: Uuid, revision: u64, fuel: i64) {
+    let mut usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    usage.monthly_usage_attribution = Some(MonthlyUsageAttribution {
+        revision,
+        memory_byte_nanoseconds_remainder: 0,
+        durable_storage_byte_nanoseconds_remainder: 0,
+        ephemeral_storage_byte_nanoseconds_remainder: 0,
+    });
+    usage.add_change(UsageType::MonthlyGasLimit, fuel);
+    deps.account_usage_repo.add(&usage).await.unwrap();
+}
+
+async fn compute_usage_by_revision(deps: &Deps, account_id: Uuid) -> Vec<(i64, i64)> {
+    match &deps.test_db {
+        TestDb::Postgres(pool) => pool
+            .with_ro("test", "compute_usage_by_revision")
+            .fetch_all_as(
+                sqlx::query_as(
+                    "SELECT CAST(revision AS BIGINT), CAST(SUM(compute_fuel_delta) AS BIGINT) FROM account_monthly_usage_mode_attribution WHERE account_id = $1 GROUP BY revision ORDER BY revision",
+                )
+                .bind(account_id),
+            )
+            .await
+            .unwrap(),
+        TestDb::Sqlite(pool) => pool
+            .with_ro("test", "compute_usage_by_revision")
+            .fetch_all_as(
+                sqlx::query_as(
+                    "SELECT CAST(revision AS BIGINT), CAST(SUM(compute_fuel_delta) AS BIGINT) FROM account_monthly_usage_mode_attribution WHERE account_id = $1 GROUP BY revision ORDER BY revision",
+                )
+                .bind(account_id),
+            )
+            .await
+            .unwrap(),
+    }
+}
+
+async fn fractional_usage_by_revision(deps: &Deps, account_id: Uuid) -> Vec<(i64, i64, i64, i64)> {
+    let query = "SELECT CAST(revision AS BIGINT), CAST(SUM(memory_byte_nanoseconds_remainder) AS BIGINT), CAST(SUM(durable_storage_byte_nanoseconds_remainder) AS BIGINT), CAST(SUM(ephemeral_storage_byte_nanoseconds_remainder) AS BIGINT) FROM account_monthly_usage_mode_attribution WHERE account_id = $1 GROUP BY revision ORDER BY revision";
+    match &deps.test_db {
+        TestDb::Postgres(pool) => pool
+            .with_ro("test", "fractional_usage_by_revision")
+            .fetch_all_as(sqlx::query_as(query).bind(account_id))
+            .await
+            .unwrap(),
+        TestDb::Sqlite(pool) => pool
+            .with_ro("test", "fractional_usage_by_revision")
+            .fetch_all_as(sqlx::query_as(query).bind(account_id))
+            .await
+            .unwrap(),
+    }
+}
+
+async fn direct_consent_insert_is_rejected(
+    deps: &Deps,
+    account_id: Uuid,
+    revision: i64,
+    actor_account_id: Uuid,
+    source: &str,
+) -> bool {
+    let sql = "INSERT INTO account_monthly_usage_mode_transitions (transition_id, account_id, revision, actor_account_id, source, changed_at, previous_mode, new_mode, period_year, period_month, compute_fuel, memory_gb_seconds, durable_storage_byte_seconds, ephemeral_storage_byte_seconds) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, 'hard_limit', 'allow_overage', 2026, 1, 0, 0, 0, 0)";
+    match &deps.test_db {
+        TestDb::Postgres(pool) => pool
+            .with_rw("test", "direct_invalid_consent_insert")
+            .execute(
+                sqlx::query(sql)
+                    .bind(Uuid::new_v4())
+                    .bind(account_id)
+                    .bind(revision)
+                    .bind(actor_account_id)
+                    .bind(source),
+            )
+            .await
+            .is_err(),
+        TestDb::Sqlite(pool) => pool
+            .with_rw("test", "direct_invalid_consent_insert")
+            .execute(
+                sqlx::query(sql)
+                    .bind(Uuid::new_v4())
+                    .bind(account_id)
+                    .bind(revision)
+                    .bind(actor_account_id)
+                    .bind(source),
+            )
+            .await
+            .is_err(),
+    }
+}
+
+pub async fn test_monthly_usage_mode_consent_invariants(deps: &Deps) {
+    let mut plan = deps
+        .plan_repo
+        .get_by_id(deps.test_plan_id())
+        .await
+        .unwrap()
+        .unwrap();
+    plan.overage_eligible = true;
+    deps.plan_repo.create_or_update(plan).await.unwrap();
+
+    let account_id = deps.create_account().await.revision.account_id;
+    let other_account_id = deps.create_account().await.revision.account_id;
+    assert!(matches!(
+        deps.account_usage_repo
+            .set_monthly_usage_mode(
+                account_id,
+                MonthlyUsageMode::AllowOverage,
+                account_id,
+                MonthlyUsageModeTransitionSource::Administrator,
+            )
+            .await,
+        Err(SetMonthlyUsageModeError::InvalidConsentSource)
+    ));
+    assert!(matches!(
+        deps.account_usage_repo
+            .set_monthly_usage_mode(
+                account_id,
+                MonthlyUsageMode::AllowOverage,
+                other_account_id,
+                MonthlyUsageModeTransitionSource::Owner,
+            )
+            .await,
+        Err(SetMonthlyUsageModeError::InvalidConsentActor)
+    ));
+
+    assert!(
+        direct_consent_insert_is_rejected(deps, account_id, 100, account_id, "administrator",)
+            .await
+    );
+    assert!(
+        direct_consent_insert_is_rejected(deps, account_id, 101, other_account_id, "owner").await
+    );
+}
+
+pub async fn test_monthly_usage_attribution_uses_accrual_revision(deps: &Deps) {
+    use golem_registry_service::services::account_usage::ResourceUsageUpdate;
+    use golem_service_base::clients::registry::ResourceUsageMetering;
+    use golem_service_base::model::auth::AuthCtx;
+
+    let mut plan = deps
+        .plan_repo
+        .get_by_id(deps.test_plan_id())
+        .await
+        .unwrap()
+        .unwrap();
+    plan.overage_eligible = true;
+    deps.plan_repo.create_or_update(plan).await.unwrap();
+
+    let account_id = deps.create_account().await.revision.account_id;
+    let mut zero_usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    zero_usage.add_change(UsageType::MonthlyGasLimit, 0);
+    deps.account_usage_repo.add(&zero_usage).await.unwrap();
+    assert!(
+        deps.account_usage_repo
+            .get_usage_report(account_id, AccountUsagePeriod::current())
+            .await
+            .unwrap()
+            .as_of
+            .is_none()
+    );
+
+    record_compute_usage_at_revision(deps, account_id, 0, 10).await;
+
+    deps.account_usage_repo
+        .set_monthly_usage_mode(
+            account_id,
+            MonthlyUsageMode::AllowOverage,
+            account_id,
+            MonthlyUsageModeTransitionSource::Owner,
+        )
+        .await
+        .unwrap();
+    record_compute_usage_at_revision(deps, account_id, 0, 20).await;
+    record_compute_usage_at_revision(deps, account_id, 1, 30).await;
+
+    deps.account_usage_repo
+        .set_monthly_usage_mode(
+            account_id,
+            MonthlyUsageMode::HardLimit,
+            account_id,
+            MonthlyUsageModeTransitionSource::Owner,
+        )
+        .await
+        .unwrap();
+    record_compute_usage_at_revision(deps, account_id, 1, 40).await;
+    record_compute_usage_at_revision(deps, account_id, 2, 50).await;
+
+    let mut delayed_update = HashMap::new();
+    delayed_update.insert(
+        AccountId(account_id),
+        ResourceUsageUpdate {
+            monthly_usage_mode_revision: 1,
+            memory_byte_nanoseconds_remainder: 0,
+            durable_storage_byte_nanoseconds_remainder: 0,
+            ephemeral_storage_byte_nanoseconds_remainder: 0,
+            fuel_delta: 60,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
+            metering: ResourceUsageMetering::all_enabled(),
+        },
+    );
+    let response = deps
+        .account_usage_service()
+        .update_resource_usage(delayed_update, &AuthCtx::System)
+        .await
+        .unwrap();
+    let limits = response.0.get(&AccountId(account_id)).unwrap();
+    assert_eq!(limits.monthly_usage_mode_revision, 2);
+
+    let mut remainder_update = HashMap::new();
+    remainder_update.insert(
+        AccountId(account_id),
+        ResourceUsageUpdate {
+            monthly_usage_mode_revision: 1,
+            memory_byte_nanoseconds_remainder: 11,
+            durable_storage_byte_nanoseconds_remainder: 22,
+            ephemeral_storage_byte_nanoseconds_remainder: 33,
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
+            metering: ResourceUsageMetering::all_enabled(),
+        },
+    );
+    let response = deps
+        .account_usage_service()
+        .update_resource_usage(remainder_update, &AuthCtx::System)
+        .await
+        .unwrap();
+    let limits = response.0.get(&AccountId(account_id)).unwrap();
+    assert_eq!(limits.monthly_usage_mode_revision, 2);
+
+    assert_eq!(
+        compute_usage_by_revision(deps, account_id).await,
+        vec![(0, 30), (1, 130), (2, 50)]
+    );
+    assert_eq!(
+        fractional_usage_by_revision(deps, account_id).await,
+        vec![(0, 0, 0, 0), (1, 11, 22, 33), (2, 0, 0, 0)]
+    );
+
+    let mut future_usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    future_usage.monthly_usage_attribution = Some(MonthlyUsageAttribution {
+        revision: 3,
+        memory_byte_nanoseconds_remainder: 0,
+        durable_storage_byte_nanoseconds_remainder: 0,
+        ephemeral_storage_byte_nanoseconds_remainder: 0,
+    });
+    future_usage.add_change(UsageType::MonthlyGasLimit, 60);
+    assert!(deps.account_usage_repo.add(&future_usage).await.is_err());
+}
+
+pub async fn test_monthly_usage_mode_baseline_serializes_with_usage_updates(deps: &Deps) {
+    let TestDb::Postgres(pool) = &deps.test_db else {
+        panic!("this race depends on PostgreSQL row-lock semantics");
+    };
+    let pool = pool.clone();
+    let mut plan = deps
+        .plan_repo
+        .get_by_id(deps.test_plan_id())
+        .await
+        .unwrap()
+        .unwrap();
+    plan.overage_eligible = true;
+    deps.plan_repo.create_or_update(plan).await.unwrap();
+
+    let account = deps.create_account().await;
+    let account_id = account.revision.account_id;
+    let mut usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    usage.add_change(UsageType::MonthlyGasLimit, 11);
+
+    let mut blocker = pool
+        .with_rw("test", "block_monthly_usage_mode_transition")
+        .begin()
+        .await
+        .unwrap();
+    blocker
+        .execute(
+            sqlx::query("SELECT account_id FROM accounts WHERE account_id = $1 FOR UPDATE")
+                .bind(account_id),
+        )
+        .await
+        .unwrap();
+
+    let transition_task = tokio::spawn({
+        let account_usage_repo = deps.account_usage_repo.clone();
+        async move {
+            account_usage_repo
+                .set_monthly_usage_mode(
+                    account_id,
+                    MonthlyUsageMode::AllowOverage,
+                    account_id,
+                    MonthlyUsageModeTransitionSource::Owner,
+                )
+                .await
+        }
+    });
+    wait_for_postgres_lock(&pool, "SELECT account_id").await;
+
+    let usage_task = tokio::spawn({
+        let account_usage_repo = deps.account_usage_repo.clone();
+        async move { account_usage_repo.add(&usage).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(!usage_task.is_finished());
+    blocker.commit().await.unwrap();
+
+    let transition = tokio::time::timeout(std::time::Duration::from_secs(5), transition_task)
+        .await
+        .expect("monthly usage mode transition remained blocked")
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), usage_task)
+        .await
+        .expect("usage update remained blocked")
+        .unwrap()
+        .unwrap();
+    assert_eq!(transition.usage_baseline.compute_fuel, 0);
+    assert_eq!(
+        deps.account_usage_repo
+            .get_usage_report(account_id, AccountUsagePeriod::current())
+            .await
+            .unwrap()
+            .compute_fuel,
+        11
+    );
+}
+
+pub async fn test_resource_usage_response_uses_revision_observed_under_account_lock(deps: &Deps) {
+    let TestDb::Postgres(pool) = &deps.test_db else {
+        panic!("this race depends on PostgreSQL row-lock semantics");
+    };
+    let pool = pool.clone();
+    let mut plan = deps
+        .plan_repo
+        .get_by_id(deps.test_plan_id())
+        .await
+        .unwrap()
+        .unwrap();
+    plan.overage_eligible = true;
+    deps.plan_repo.create_or_update(plan).await.unwrap();
+
+    let account = deps.create_account().await;
+    let account_id = account.revision.account_id;
+    let mut blocker = pool
+        .with_rw("test", "block_resource_usage_and_mode_transition")
+        .begin()
+        .await
+        .unwrap();
+    blocker
+        .execute(
+            sqlx::query("SELECT account_id FROM accounts WHERE account_id = $1 FOR UPDATE")
+                .bind(account_id),
+        )
+        .await
+        .unwrap();
+
+    let transition_task = tokio::spawn({
+        let account_usage_repo = deps.account_usage_repo.clone();
+        async move {
+            account_usage_repo
+                .set_monthly_usage_mode(
+                    account_id,
+                    MonthlyUsageMode::AllowOverage,
+                    account_id,
+                    MonthlyUsageModeTransitionSource::Owner,
+                )
+                .await
+        }
+    });
+    wait_for_postgres_locks(&pool, "SELECT account_id", 1).await;
+
+    let update_task = tokio::spawn({
+        let account_usage_service = deps.account_usage_service();
+        async move {
+            account_usage_service
+                .update_resource_usage(
+                    HashMap::from([(
+                        AccountId(account_id),
+                        ResourceUsageUpdate {
+                            monthly_usage_mode_revision: 0,
+                            memory_byte_nanoseconds_remainder: 0,
+                            durable_storage_byte_nanoseconds_remainder: 0,
+                            ephemeral_storage_byte_nanoseconds_remainder: 0,
+                            fuel_delta: 11,
+                            http_call_count_delta: 0,
+                            rpc_call_count_delta: 0,
+                            durable_storage_byte_seconds_delta: 0,
+                            ephemeral_storage_byte_seconds_delta: 0,
+                            memory_gb_seconds_delta: 0,
+                            metering: ResourceUsageMetering::all_enabled(),
+                        },
+                    )]),
+                    &AuthCtx::System,
+                )
+                .await
+        }
+    });
+    wait_for_postgres_locks(&pool, "SELECT account_id", 2).await;
+    blocker.commit().await.unwrap();
+
+    let transition = tokio::time::timeout(std::time::Duration::from_secs(5), transition_task)
+        .await
+        .expect("monthly usage mode transition remained blocked")
+        .unwrap()
+        .unwrap();
+    let response = tokio::time::timeout(std::time::Duration::from_secs(5), update_task)
+        .await
+        .expect("resource usage update remained blocked")
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(transition.revision, 1);
+    assert_eq!(
+        response
+            .0
+            .get(&AccountId(account_id))
+            .unwrap()
+            .monthly_usage_mode_revision,
+        1
+    );
+    assert_eq!(
+        compute_usage_by_revision(deps, account_id).await,
+        vec![(0, 11)]
     );
 }
 
@@ -6043,6 +6882,10 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
     updates.insert(
         account_id,
         ResourceUsageUpdate {
+            monthly_usage_mode_revision: 0,
+            memory_byte_nanoseconds_remainder: 0,
+            durable_storage_byte_nanoseconds_remainder: 0,
+            ephemeral_storage_byte_nanoseconds_remainder: 0,
             fuel_delta: 0,
             http_call_count_delta: 10,
             rpc_call_count_delta: 0,
@@ -6077,6 +6920,10 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
     updates.insert(
         account_id,
         ResourceUsageUpdate {
+            monthly_usage_mode_revision: 0,
+            memory_byte_nanoseconds_remainder: 0,
+            durable_storage_byte_nanoseconds_remainder: 0,
+            ephemeral_storage_byte_nanoseconds_remainder: 0,
             fuel_delta: 0,
             http_call_count_delta: 4990,
             rpc_call_count_delta: 0,
@@ -6102,6 +6949,10 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
     updates.insert(
         account_id,
         ResourceUsageUpdate {
+            monthly_usage_mode_revision: 0,
+            memory_byte_nanoseconds_remainder: 0,
+            durable_storage_byte_nanoseconds_remainder: 0,
+            ephemeral_storage_byte_nanoseconds_remainder: 0,
             fuel_delta: 0,
             http_call_count_delta: 1,
             rpc_call_count_delta: 0,
@@ -6126,6 +6977,10 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
     updates.insert(
         account_id,
         ResourceUsageUpdate {
+            monthly_usage_mode_revision: 0,
+            memory_byte_nanoseconds_remainder: 0,
+            durable_storage_byte_nanoseconds_remainder: 0,
+            ephemeral_storage_byte_nanoseconds_remainder: 0,
             fuel_delta: 0,
             http_call_count_delta: 0,
             rpc_call_count_delta: 0,
@@ -6143,6 +6998,10 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
     updates.insert(
         account_id,
         ResourceUsageUpdate {
+            monthly_usage_mode_revision: 0,
+            memory_byte_nanoseconds_remainder: 0,
+            durable_storage_byte_nanoseconds_remainder: 0,
+            ephemeral_storage_byte_nanoseconds_remainder: 0,
             fuel_delta: 0,
             http_call_count_delta: 0,
             rpc_call_count_delta: 0,
@@ -6202,6 +7061,10 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
     updates.insert(
         account_id,
         ResourceUsageUpdate {
+            monthly_usage_mode_revision: 0,
+            memory_byte_nanoseconds_remainder: 0,
+            durable_storage_byte_nanoseconds_remainder: 0,
+            ephemeral_storage_byte_nanoseconds_remainder: 0,
             fuel_delta: 0,
             http_call_count_delta: 0,
             rpc_call_count_delta: 100,
@@ -6236,6 +7099,10 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
     updates.insert(
         account_id,
         ResourceUsageUpdate {
+            monthly_usage_mode_revision: 0,
+            memory_byte_nanoseconds_remainder: 0,
+            durable_storage_byte_nanoseconds_remainder: 0,
+            ephemeral_storage_byte_nanoseconds_remainder: 0,
             fuel_delta: 0,
             http_call_count_delta: 0,
             rpc_call_count_delta: 4900,
@@ -6261,6 +7128,10 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
     updates.insert(
         account_id,
         ResourceUsageUpdate {
+            monthly_usage_mode_revision: 0,
+            memory_byte_nanoseconds_remainder: 0,
+            durable_storage_byte_nanoseconds_remainder: 0,
+            ephemeral_storage_byte_nanoseconds_remainder: 0,
             fuel_delta: 0,
             http_call_count_delta: 0,
             rpc_call_count_delta: 1,
@@ -6299,6 +7170,10 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
     http_updates.insert(
         a1,
         ResourceUsageUpdate {
+            monthly_usage_mode_revision: 0,
+            memory_byte_nanoseconds_remainder: 0,
+            durable_storage_byte_nanoseconds_remainder: 0,
+            ephemeral_storage_byte_nanoseconds_remainder: 0,
             fuel_delta: 0,
             http_call_count_delta: 50,
             rpc_call_count_delta: 0,
@@ -6311,6 +7186,10 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
     http_updates.insert(
         a2,
         ResourceUsageUpdate {
+            monthly_usage_mode_revision: 0,
+            memory_byte_nanoseconds_remainder: 0,
+            durable_storage_byte_nanoseconds_remainder: 0,
+            ephemeral_storage_byte_nanoseconds_remainder: 0,
             fuel_delta: 0,
             http_call_count_delta: 200,
             rpc_call_count_delta: 0,
@@ -6343,6 +7222,10 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
     rpc_updates.insert(
         a3,
         ResourceUsageUpdate {
+            monthly_usage_mode_revision: 0,
+            memory_byte_nanoseconds_remainder: 0,
+            durable_storage_byte_nanoseconds_remainder: 0,
+            ephemeral_storage_byte_nanoseconds_remainder: 0,
             fuel_delta: 0,
             http_call_count_delta: 0,
             rpc_call_count_delta: 300,
@@ -6355,6 +7238,10 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
     rpc_updates.insert(
         a4,
         ResourceUsageUpdate {
+            monthly_usage_mode_revision: 0,
+            memory_byte_nanoseconds_remainder: 0,
+            durable_storage_byte_nanoseconds_remainder: 0,
+            ephemeral_storage_byte_nanoseconds_remainder: 0,
             fuel_delta: 0,
             http_call_count_delta: 0,
             rpc_call_count_delta: 1000,

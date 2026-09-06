@@ -31,6 +31,33 @@ declare_enums! {
         /// No usage producer has reported the metering state for this period yet.
         Unknown,
     }
+
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, derive_more::Display,
+)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[display(rename_all = "camelCase")]
+pub enum MonthlyUsageMode {
+    HardLimit,
+    AllowOverage,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, derive_more::Display,
+)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[display(rename_all = "camelCase")]
+pub enum MonthlyUsageModeTransitionSource {
+    Owner,
+    Administrator,
+    PlanEligibilityRemoved,
+    IneligiblePlanAssigned,
 }
 
 #[derive(
@@ -53,6 +80,7 @@ pub enum StorageLimitDisabledReason {
 #[display(rename_all = "camelCase")]
 pub enum MonthlyLimitBehavior {
     HardLimit,
+    IncludedAllowance,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -177,8 +205,25 @@ declare_structs! {
     }
 
     #[cfg_attr(feature = "full", oai(example))]
+    pub struct MonthlyUsageModeTransition {
+        pub actor_account_id: AccountId,
+        pub changed_at: DateTime<Utc>,
+        pub source: MonthlyUsageModeTransitionSource,
+        pub previous_mode: MonthlyUsageMode,
+        pub new_mode: MonthlyUsageMode,
+    }
+
+    pub struct SetMonthlyUsageMode {
+        pub mode: MonthlyUsageMode,
+    }
+
+    #[cfg_attr(feature = "full", oai(example, skip_serializing_if_is_none))]
     pub struct AccountResourcePolicy {
         pub account_id: AccountId,
+        pub monthly_usage_mode: MonthlyUsageMode,
+        pub overage_allowed_by_plan: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub latest_owner_transition: Option<MonthlyUsageModeTransition>,
         pub monthly: MonthlyResourceLimits,
         pub max_memory_per_agent: MemoryLimit,
         pub max_storage_per_agent: StorageLimit,
@@ -322,10 +367,27 @@ impl StorageLimit {
 }
 
 #[cfg(feature = "full")]
+impl poem_openapi::types::Example for MonthlyUsageModeTransition {
+    fn example() -> Self {
+        Self {
+            actor_account_id: AccountId(uuid::Uuid::from_u128(1)),
+            changed_at: DateTime::from_timestamp(1_700_000_000, 0)
+                .expect("example timestamp is valid"),
+            source: MonthlyUsageModeTransitionSource::Owner,
+            previous_mode: MonthlyUsageMode::AllowOverage,
+            new_mode: MonthlyUsageMode::HardLimit,
+        }
+    }
+}
+
+#[cfg(feature = "full")]
 impl poem_openapi::types::Example for AccountResourcePolicy {
     fn example() -> Self {
         Self {
             account_id: AccountId(uuid::Uuid::from_u128(1)),
+            monthly_usage_mode: MonthlyUsageMode::HardLimit,
+            overage_allowed_by_plan: false,
+            latest_owner_transition: None,
             monthly: MonthlyResourceLimits {
                 compute_gcu: MonthlyComputeLimit {
                     metering: MeteringStatus::Enabled,
@@ -475,9 +537,10 @@ mod tests {
     use super::{
         AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod, BYTE_SECONDS_PER_GB_MONTH,
         EFFECTIVELY_UNLIMITED_STORAGE_LIMIT, FUEL_PER_GCU, MemoryLimit, MeteringStatus,
-        MonthlyComputeUnit, MonthlyMemoryUnit, MonthlyPlanAmountError, MonthlyPlanAmounts,
-        MonthlyStorageUnit, PERIOD_FORMAT_ERROR, ResolvedMonthlyPlanAmounts, StorageLimit,
-        StorageLimitDisabledReason, byte_seconds_to_gb_month, fuel_to_gcu,
+        MonthlyComputeUnit, MonthlyLimitBehavior, MonthlyMemoryUnit, MonthlyPlanAmountError,
+        MonthlyPlanAmounts, MonthlyStorageUnit, MonthlyUsageMode, MonthlyUsageModeTransitionSource,
+        PERIOD_FORMAT_ERROR, ResolvedMonthlyPlanAmounts, StorageLimit, StorageLimitDisabledReason,
+        byte_seconds_to_gb_month, fuel_to_gcu,
     };
     use chrono::Utc;
     use std::str::FromStr;
@@ -657,6 +720,24 @@ mod tests {
         assert!(serde_json::from_str::<MonthlyComputeUnit>(r#""GB-seconds""#).is_err());
         assert!(serde_json::from_str::<MonthlyMemoryUnit>(r#""GB-month""#).is_err());
         assert!(serde_json::from_str::<MonthlyStorageUnit>(r#""GCU""#).is_err());
+    }
+
+    #[test]
+    fn monthly_usage_mode_uses_public_camel_case_values() {
+        assert_eq!(MonthlyUsageMode::HardLimit.to_string(), "hardLimit");
+        assert_eq!(MonthlyUsageMode::AllowOverage.to_string(), "allowOverage");
+        assert_eq!(
+            serde_json::to_value(MonthlyUsageMode::AllowOverage).unwrap(),
+            serde_json::json!("allowOverage")
+        );
+        assert_eq!(
+            serde_json::to_value(MonthlyUsageModeTransitionSource::PlanEligibilityRemoved).unwrap(),
+            serde_json::json!("planEligibilityRemoved")
+        );
+        assert_eq!(
+            serde_json::to_value(MonthlyLimitBehavior::IncludedAllowance).unwrap(),
+            serde_json::json!("includedAllowance")
+        );
     }
 
     #[test]

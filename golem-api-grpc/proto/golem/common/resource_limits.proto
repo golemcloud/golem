@@ -17,6 +17,7 @@ message ResourceLimits {
   uint64 oplog_writes_per_second = 10;
   // True only when the registry applied the corresponding batch update.
   bool usage_update_applied = 11;
+  uint64 monthly_usage_mode_revision = 12;
 }
 
 message AccountResourceLimitsEntry {

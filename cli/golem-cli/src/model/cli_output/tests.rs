@@ -3306,7 +3306,7 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
                             Some(plan_default),
                             Some(effective_value as f64),
                             Some(ceiling as f64),
-                            Some(golem_common::model::account_usage::MonthlyLimitBehavior::HardLimit),
+                            Some(golem_common::model::account_usage::MonthlyLimitBehavior::IncludedAllowance),
                         ),
                         golem_common::model::account_usage::MeteringStatus::Disabled => {
                             (None, None, None, None)
@@ -3318,6 +3318,17 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
                     crate::model::account::AccountLimitsView::new(
                         golem_common::model::account_usage::AccountResourcePolicy {
                             account_id: golem_common::model::account::AccountId(account_id),
+                            monthly_usage_mode: golem_common::model::account_usage::MonthlyUsageMode::AllowOverage,
+                            overage_allowed_by_plan: true,
+                            latest_owner_transition: Some(
+                                golem_common::model::account_usage::MonthlyUsageModeTransition {
+                                    actor_account_id: golem_common::model::account::AccountId(account_id),
+                                    changed_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                                    source: golem_common::model::account_usage::MonthlyUsageModeTransitionSource::Owner,
+                                    previous_mode: golem_common::model::account_usage::MonthlyUsageMode::HardLimit,
+                                    new_mode: golem_common::model::account_usage::MonthlyUsageMode::AllowOverage,
+                                },
+                            ),
                             monthly: golem_common::model::account_usage::MonthlyResourceLimits {
                                 compute_gcu: golem_common::model::account_usage::MonthlyComputeLimit {
                                     metering,

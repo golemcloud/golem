@@ -814,8 +814,8 @@ paths:
         capacity. Disabled dimensions omit the monthly amount, usage, remaining capacity, and
         behavior. `unknown` means no producer has reported metering state; it does not mean disabled
         or measured zero. Compute uses GCU, allocated linear memory uses GB-seconds, storage uses
-        GB-month, and per-agent limits use bytes. The effective monthly behavior in this version is
-        `hardLimit`.
+        GB-month, and per-agent limits use bytes. Monthly behavior is `hardLimit` or
+        `includedAllowance`, according to the account's current usage mode.
       parameters:
       - name: account_id
         schema:
@@ -878,6 +878,85 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_account_limits
+  /v1/accounts/{account_id}/monthly-usage-mode:
+    put:
+      tags:
+      - RegistryService
+      - Account
+      summary: Explicitly enter or leave paid-overage mode.
+      description: |-
+        Only the account owner can enable overage, and the current Plan Row must permit it.
+        Administrators impersonating the account may force `hardLimit`, but cannot enable overage.
+        Each successful transition records immutable consent history. Requests that repeat the
+        current mode are rejected and do not add history.
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/SetMonthlyUsageMode'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/MonthlyUsageModeTransition'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: set_account_monthly_usage_mode
   /v1/accounts/{account_id}/resource-overrides/max-storage-per-agent:
     put:
       tags:
@@ -8830,6 +8909,8 @@ components:
       title: AccountResourcePolicy
       required:
       - accountId
+      - monthlyUsageMode
+      - overageAllowedByPlan
       - monthly
       - maxMemoryPerAgent
       - maxStoragePerAgent
@@ -8837,6 +8918,12 @@ components:
         accountId:
           type: string
           format: uuid
+        monthlyUsageMode:
+          $ref: '#/components/schemas/MonthlyUsageMode'
+        overageAllowedByPlan:
+          type: boolean
+        latestOwnerTransition:
+          $ref: '#/components/schemas/MonthlyUsageModeTransition'
         monthly:
           $ref: '#/components/schemas/MonthlyResourceLimits'
         maxMemoryPerAgent:
@@ -8886,6 +8973,8 @@ components:
             remaining: 7500
             unit: GB-seconds
             usage: 2500
+        monthlyUsageMode: hardLimit
+        overageAllowedByPlan: false
     AccountRole:
       type: string
       enum:
@@ -12180,6 +12269,7 @@ components:
       type: string
       enum:
       - hardLimit
+      - includedAllowance
     MonthlyMemoryLimit:
       type: object
       title: MonthlyMemoryLimit
@@ -12249,6 +12339,46 @@ components:
       type: string
       enum:
       - GB-month
+    MonthlyUsageMode:
+      type: string
+      enum:
+      - hardLimit
+      - allowOverage
+    MonthlyUsageModeTransition:
+      type: object
+      title: MonthlyUsageModeTransition
+      required:
+      - actorAccountId
+      - changedAt
+      - source
+      - previousMode
+      - newMode
+      properties:
+        actorAccountId:
+          type: string
+          format: uuid
+        changedAt:
+          type: string
+          format: date-time
+        source:
+          $ref: '#/components/schemas/MonthlyUsageModeTransitionSource'
+        previousMode:
+          $ref: '#/components/schemas/MonthlyUsageMode'
+        newMode:
+          $ref: '#/components/schemas/MonthlyUsageMode'
+      example:
+        actorAccountId: 00000000-0000-0000-0000-000000000001
+        changedAt: 2023-11-14T22:13:20+00:00
+        newMode: hardLimit
+        previousMode: allowOverage
+        source: owner
+    MonthlyUsageModeTransitionSource:
+      type: string
+      enum:
+      - owner
+      - administrator
+      - planEligibilityRemoved
+      - ineligiblePlanAssigned
     NamedField:
       type: object
       required:
@@ -12995,6 +13125,7 @@ components:
       - monthlyMemoryGbSeconds
       - monthlyDurableStorageGbMonth
       - monthlyEphemeralStorageGbMonth
+      - overageAllowedByPlan
       - maxMemoryPerAgent
       - maxMemoryPerAgentCeiling
       - maxMemoryPerAgentUserConfigurable
@@ -13045,6 +13176,8 @@ components:
         monthlyEphemeralStorageGbMonth:
           type: integer
           format: uint64
+        overageAllowedByPlan:
+          type: boolean
         maxMemoryPerAgent:
           type: integer
           format: uint64
@@ -15248,6 +15381,14 @@ components:
         value:
           type: integer
           format: uint64
+    SetMonthlyUsageMode:
+      type: object
+      title: SetMonthlyUsageMode
+      required:
+      - mode
+      properties:
+        mode:
+          $ref: '#/components/schemas/MonthlyUsageMode'
     SetStorageLimit:
       type: object
       title: SetStorageLimit

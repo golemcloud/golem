@@ -15,11 +15,13 @@
 use crate::repo::account_resource_override::{
     DbAccountResourceOverrideRepo, OverridePolicy, OverrideReconciliationScope,
 };
+use crate::repo::account_usage::DbAccountUsageRepo;
 use crate::repo::model::plan::PlanRecord;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use golem_common::model::account_usage::MonthlyUsageModeTransitionSource;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
@@ -115,11 +117,13 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
         self.with_tx("create_or_update", |tx| {
             async move {
                 let plan_id = plan.plan_id;
+                // Existing members are locked before the Plan row to match account-side writes.
                 DbAccountResourceOverrideRepo::<PostgresPool>::lock_accounts_for_plan_in_tx(
                     tx, plan_id,
                 )
                 .await?;
                 let override_policies = OverridePolicy::for_plan(&plan);
+                let overage_eligible = plan.overage_eligible;
                 tx.execute(
                     sqlx::query(indoc! { r#"
                         INSERT INTO plans (
@@ -127,6 +131,7 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                             max_memory_per_worker_ceiling, max_memory_per_worker_user_configurable,
                             monthly_compute_gcu, monthly_memory_gb_seconds,
                             monthly_durable_storage_gb_month, monthly_ephemeral_storage_gb_month,
+                            overage_eligible,
                             max_table_elements_per_worker, max_disk_space_per_worker_enabled, max_disk_space_per_worker,
                             max_disk_space_per_worker_ceiling, max_disk_space_per_worker_user_configurable,
                             max_concurrent_agents_per_executor,
@@ -137,7 +142,7 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                             monthly_http_call_limit, monthly_rpc_call_limit,
                             oplog_writes_per_second
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
                         ON CONFLICT (plan_id) DO UPDATE SET
                             name = $2,
                             max_memory_per_worker = $3,
@@ -147,24 +152,25 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                             monthly_memory_gb_seconds = $7,
                             monthly_durable_storage_gb_month = $8,
                             monthly_ephemeral_storage_gb_month = $9,
-                            max_table_elements_per_worker = $10,
-                            max_disk_space_per_worker_enabled = $11,
-                            max_disk_space_per_worker = $12,
-                            max_disk_space_per_worker_ceiling = $13,
-                            max_disk_space_per_worker_user_configurable = $14,
-                            max_concurrent_agents_per_executor = $15,
-                            total_app_count = $16,
-                            total_env_count = $17,
-                            total_component_count = $18,
-                            total_worker_connection_count = $19,
-                            total_component_storage_bytes = $20,
-                            monthly_gas_limit = $21,
-                            monthly_component_upload_limit_bytes = $22,
-                            per_invocation_http_call_limit = $23,
-                            per_invocation_rpc_call_limit = $24,
-                            monthly_http_call_limit = $25,
-                            monthly_rpc_call_limit = $26,
-                            oplog_writes_per_second = $27
+                            overage_eligible = $10,
+                            max_table_elements_per_worker = $11,
+                            max_disk_space_per_worker_enabled = $12,
+                            max_disk_space_per_worker = $13,
+                            max_disk_space_per_worker_ceiling = $14,
+                            max_disk_space_per_worker_user_configurable = $15,
+                            max_concurrent_agents_per_executor = $16,
+                            total_app_count = $17,
+                            total_env_count = $18,
+                            total_component_count = $19,
+                            total_worker_connection_count = $20,
+                            total_component_storage_bytes = $21,
+                            monthly_gas_limit = $22,
+                            monthly_component_upload_limit_bytes = $23,
+                            per_invocation_http_call_limit = $24,
+                            per_invocation_rpc_call_limit = $25,
+                            monthly_http_call_limit = $26,
+                            monthly_rpc_call_limit = $27,
+                            oplog_writes_per_second = $28
                     "#})
                     .bind(plan.plan_id)
                     .bind(plan.name)
@@ -175,6 +181,7 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                     .bind(plan.monthly_memory_gb_seconds)
                     .bind(plan.monthly_durable_storage_gb_month)
                     .bind(plan.monthly_ephemeral_storage_gb_month)
+                    .bind(plan.overage_eligible)
                     .bind(plan.max_table_elements_per_worker)
                     .bind(plan.max_disk_space_per_worker_enabled)
                     .bind(plan.max_disk_space_per_worker)
@@ -195,6 +202,25 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                     .bind(plan.oplog_writes_per_second)
                 )
                 .await?;
+
+                // An assignment may have committed while this transaction waited for the Plan row.
+                let account_ids =
+                    DbAccountResourceOverrideRepo::<PostgresPool>::lock_accounts_for_plan_in_tx(
+                        tx, plan_id,
+                    )
+                    .await?;
+
+                if !overage_eligible {
+                    for account_id in account_ids {
+                        DbAccountUsageRepo::<PostgresPool>::force_hard_limit_in_tx(
+                            tx,
+                            account_id,
+                            golem_common::model::account::AccountId::SYSTEM.0,
+                            MonthlyUsageModeTransitionSource::PlanEligibilityRemoved,
+                        )
+                        .await?;
+                    }
+                }
 
                 DbAccountResourceOverrideRepo::<PostgresPool>::reconcile_in_tx(
                     tx,
@@ -220,6 +246,7 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                         max_memory_per_worker_ceiling, max_memory_per_worker_user_configurable,
                         monthly_compute_gcu, monthly_memory_gb_seconds,
                         monthly_durable_storage_gb_month, monthly_ephemeral_storage_gb_month,
+                        overage_eligible,
                         max_table_elements_per_worker, max_disk_space_per_worker_enabled, max_disk_space_per_worker,
                         max_disk_space_per_worker_ceiling, max_disk_space_per_worker_user_configurable,
                         max_concurrent_agents_per_executor,
@@ -251,6 +278,7 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                     max_memory_per_worker_ceiling, max_memory_per_worker_user_configurable,
                     monthly_compute_gcu, monthly_memory_gb_seconds,
                     monthly_durable_storage_gb_month, monthly_ephemeral_storage_gb_month,
+                    overage_eligible,
                     max_table_elements_per_worker, max_disk_space_per_worker_enabled, max_disk_space_per_worker,
                     max_disk_space_per_worker_ceiling, max_disk_space_per_worker_user_configurable,
                     max_concurrent_agents_per_executor,

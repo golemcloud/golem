@@ -34,6 +34,7 @@ declare_structs! {
         pub monthly_memory_gb_seconds: u64,
         pub monthly_durable_storage_gb_month: u64,
         pub monthly_ephemeral_storage_gb_month: u64,
+        pub overage_allowed_by_plan: bool,
         pub max_memory_per_agent: u64,
         pub max_memory_per_agent_ceiling: u64,
         pub max_memory_per_agent_user_configurable: bool,

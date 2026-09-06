@@ -81,6 +81,7 @@ impl PlanService {
                 monthly_memory_gb_seconds: plan.monthly_memory_gb_seconds,
                 monthly_durable_storage_gb_month: plan.monthly_durable_storage_gb_month,
                 monthly_ephemeral_storage_gb_month: plan.monthly_ephemeral_storage_gb_month,
+                overage_allowed_by_plan: plan.overage_eligible,
                 max_memory_per_agent: plan.max_memory_per_agent,
                 max_memory_per_agent_ceiling: plan.max_memory_per_agent_ceiling,
                 max_memory_per_agent_user_configurable: plan.max_memory_per_agent_user_configurable,
@@ -208,6 +209,7 @@ fn plan_record(plan: Plan, executor_monthly_gas_limit: u64) -> PlanRecord {
         monthly_memory_gb_seconds: plan.monthly_memory_gb_seconds.into(),
         monthly_durable_storage_gb_month: plan.monthly_durable_storage_gb_month.into(),
         monthly_ephemeral_storage_gb_month: plan.monthly_ephemeral_storage_gb_month.into(),
+        overage_eligible: plan.overage_allowed_by_plan,
         max_table_elements_per_worker: plan.max_table_elements_per_worker.into(),
         max_disk_space_per_worker_enabled: plan.max_storage_per_agent_enabled,
         max_disk_space_per_worker: plan.max_storage_per_agent.into(),
@@ -294,6 +296,7 @@ mod tests {
         plan.monthly_memory_gb_seconds = 3;
         plan.monthly_durable_storage_gb_month = 5;
         plan.monthly_ephemeral_storage_gb_month = 7;
+        plan.overage_eligible = true;
         service
             .create_initial_plans(&HashMap::from([("test".to_string(), plan.clone())]))
             .await
@@ -304,12 +307,15 @@ mod tests {
         assert_eq!(seeded.monthly_memory_gb_seconds.get(), 3);
         assert_eq!(seeded.monthly_durable_storage_gb_month.get(), 5);
         assert_eq!(seeded.monthly_ephemeral_storage_gb_month.get(), 7);
+        assert!(seeded.overage_eligible);
+        assert!(Plan::from(seeded).overage_allowed_by_plan);
 
         plan.max_storage_per_agent_enabled = false;
         plan.monthly_compute_gcu = 11;
         plan.monthly_memory_gb_seconds = 13;
         plan.monthly_durable_storage_gb_month = 17;
         plan.monthly_ephemeral_storage_gb_month = 19;
+        plan.overage_eligible = false;
         service
             .create_initial_plans(&HashMap::from([("test".to_string(), plan)]))
             .await
@@ -320,6 +326,7 @@ mod tests {
         assert_eq!(updated.monthly_memory_gb_seconds.get(), 13);
         assert_eq!(updated.monthly_durable_storage_gb_month.get(), 17);
         assert_eq!(updated.monthly_ephemeral_storage_gb_month.get(), 19);
+        assert!(!updated.overage_eligible);
     }
 
     #[test]

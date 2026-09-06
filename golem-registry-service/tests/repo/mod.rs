@@ -175,6 +175,7 @@ impl Deps {
                 monthly_memory_gb_seconds: 6000.into(),
                 monthly_durable_storage_gb_month: 3.into(),
                 monthly_ephemeral_storage_gb_month: 4.into(),
+                overage_eligible: false,
                 max_table_elements_per_worker: 16384.into(),
                 max_disk_space_per_worker_enabled: true,
                 max_disk_space_per_worker: 1073741824.into(),

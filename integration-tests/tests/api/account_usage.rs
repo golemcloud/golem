@@ -16,14 +16,17 @@ use anyhow::Context;
 use chrono::{DateTime, Utc};
 use golem_client::api::{
     RegistryServiceClearAccountStorageOverrideError, RegistryServiceClient,
-    RegistryServiceGetAccountLimitsError, RegistryServiceSetAccountStorageOverrideError,
+    RegistryServiceGetAccountLimitsError, RegistryServiceSetAccountMonthlyUsageModeError,
+    RegistryServiceSetAccountStorageOverrideError,
 };
 use golem_common::model::account::{AccountId, AccountRevision, AccountSetPlan};
 use golem_common::model::account_usage::{
     AccountUsagePeriod, BYTE_SECONDS_PER_GB_MONTH, MemoryLimit, MeteringStatus, MonthlyComputeUnit,
-    MonthlyLimitBehavior, MonthlyMemoryUnit, MonthlyStorageUnit, SetMemoryLimit, SetStorageLimit,
+    MonthlyLimitBehavior, MonthlyMemoryUnit, MonthlyStorageUnit, MonthlyUsageMode,
+    MonthlyUsageModeTransitionSource, SetMemoryLimit, SetMonthlyUsageMode, SetStorageLimit,
     StorageLimit,
 };
+use golem_common::model::auth::TokenCreation;
 use golem_service_base::clients::registry::{
     GrpcRegistryService, GrpcRegistryServiceConfig, RegistryService as _, ResourceUsageMetering,
     ResourceUsageUpdate,
@@ -168,6 +171,10 @@ async fn account_usage_reports_all_customer_dimensions(
             .batch_update_resource_usage(HashMap::from([(
                 AccountId(user.account_id.0),
                 ResourceUsageUpdate {
+                    monthly_usage_mode_revision: 0,
+                    memory_byte_nanoseconds_remainder: 0,
+                    durable_storage_byte_nanoseconds_remainder: 0,
+                    ephemeral_storage_byte_nanoseconds_remainder: 0,
                     fuel_delta,
                     http_call_count_delta: 0,
                     rpc_call_count_delta: 0,
@@ -217,6 +224,9 @@ async fn account_usage_reports_all_customer_dimensions(
         .get_account_limits(&user.account_id.0)
         .await?;
     assert_eq!(limits.account_id, user.account_id);
+    assert_eq!(limits.monthly_usage_mode, MonthlyUsageMode::HardLimit);
+    assert!(limits.overage_allowed_by_plan);
+    assert!(limits.latest_owner_transition.is_none());
     assert_eq!(limits.monthly.compute_gcu.metering, MeteringStatus::Enabled);
     assert_eq!(limits.monthly.compute_gcu.monthly_amount, Some(5));
     assert_eq!(limits.monthly.compute_gcu.usage, Some(1.5));
@@ -309,6 +319,197 @@ async fn account_usage_reports_all_customer_dimensions(
 
 #[test]
 #[tracing::instrument]
+async fn account_owner_explicitly_changes_monthly_usage_mode(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let registry = deps.registry_service();
+    let client = registry.client(&user.token).await;
+    registry_client(deps)
+        .batch_update_resource_usage(HashMap::from([(
+            AccountId(user.account_id.0),
+            ResourceUsageUpdate {
+                monthly_usage_mode_revision: 0,
+                memory_byte_nanoseconds_remainder: 0,
+                durable_storage_byte_nanoseconds_remainder: 0,
+                ephemeral_storage_byte_nanoseconds_remainder: 0,
+                fuel_delta: 0,
+                http_call_count_delta: 0,
+                rpc_call_count_delta: 0,
+                durable_storage_byte_seconds_delta: 0,
+                ephemeral_storage_byte_seconds_delta: 0,
+                memory_gb_seconds_delta: 0,
+                metering: ResourceUsageMetering::all_enabled(),
+            },
+        )]))
+        .await?;
+
+    let enabled = client
+        .set_account_monthly_usage_mode(
+            &user.account_id.0,
+            &SetMonthlyUsageMode {
+                mode: MonthlyUsageMode::AllowOverage,
+            },
+        )
+        .await?;
+    assert_eq!(enabled.actor_account_id, user.account_id);
+    assert_eq!(enabled.source, MonthlyUsageModeTransitionSource::Owner);
+    assert_eq!(enabled.previous_mode, MonthlyUsageMode::HardLimit);
+    assert_eq!(enabled.new_mode, MonthlyUsageMode::AllowOverage);
+
+    let limits = client.get_account_limits(&user.account_id.0).await?;
+    assert_eq!(limits.monthly_usage_mode, MonthlyUsageMode::AllowOverage);
+    assert!(limits.overage_allowed_by_plan);
+    assert_eq!(
+        limits.monthly.compute_gcu.behavior,
+        Some(MonthlyLimitBehavior::IncludedAllowance)
+    );
+    assert_eq!(
+        limits.monthly.memory_gb_seconds.behavior,
+        Some(MonthlyLimitBehavior::IncludedAllowance)
+    );
+    assert_eq!(
+        limits.monthly.durable_storage_gb_month.behavior,
+        Some(MonthlyLimitBehavior::IncludedAllowance)
+    );
+    assert_eq!(
+        limits.monthly.ephemeral_storage_gb_month.behavior,
+        Some(MonthlyLimitBehavior::IncludedAllowance)
+    );
+    assert_eq!(limits.latest_owner_transition, Some(enabled.clone()));
+
+    let error = client
+        .set_account_monthly_usage_mode(
+            &user.account_id.0,
+            &SetMonthlyUsageMode {
+                mode: MonthlyUsageMode::AllowOverage,
+            },
+        )
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceSetAccountMonthlyUsageModeError::Error400(body)) =
+        error
+    else {
+        panic!("expected unchanged-mode error, got {error:?}")
+    };
+    assert_eq!(body.code, "MONTHLY_USAGE_MODE_UNCHANGED");
+    assert_eq!(
+        body.errors,
+        vec!["Monthly usage mode is already allowOverage".to_string()]
+    );
+
+    let disabled = client
+        .set_account_monthly_usage_mode(
+            &user.account_id.0,
+            &SetMonthlyUsageMode {
+                mode: MonthlyUsageMode::HardLimit,
+            },
+        )
+        .await?;
+    assert_eq!(disabled.previous_mode, MonthlyUsageMode::AllowOverage);
+    assert_eq!(disabled.new_mode, MonthlyUsageMode::HardLimit);
+
+    client
+        .set_account_monthly_usage_mode(
+            &user.account_id.0,
+            &SetMonthlyUsageMode {
+                mode: MonthlyUsageMode::AllowOverage,
+            },
+        )
+        .await?;
+    let admin = deps.admin().await;
+    let admin_client = admin.registry_service_client().await;
+    let impersonation = admin_client
+        .create_impersonation_token(
+            &user.account_id.0,
+            &TokenCreation {
+                expires_at: Utc::now() + chrono::Duration::minutes(5),
+            },
+        )
+        .await?;
+    let impersonated_client = registry.client(&impersonation.secret).await;
+    let forced = impersonated_client
+        .set_account_monthly_usage_mode(
+            &user.account_id.0,
+            &SetMonthlyUsageMode {
+                mode: MonthlyUsageMode::HardLimit,
+            },
+        )
+        .await?;
+    assert_eq!(forced.actor_account_id, admin.account_id);
+    assert_eq!(
+        forced.source,
+        MonthlyUsageModeTransitionSource::Administrator
+    );
+    let error = impersonated_client
+        .set_account_monthly_usage_mode(
+            &user.account_id.0,
+            &SetMonthlyUsageMode {
+                mode: MonthlyUsageMode::AllowOverage,
+            },
+        )
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceSetAccountMonthlyUsageModeError::Error403(body)) =
+        error
+    else {
+        panic!("expected administrator-consent error, got {error:?}")
+    };
+    assert_eq!(body.code, "MONTHLY_USAGE_MODE_CHANGE_NOT_ALLOWED");
+    assert_eq!(
+        body.error,
+        "Only an account owner may enable overage; administrators may only force hardLimit"
+    );
+
+    client
+        .set_account_monthly_usage_mode(
+            &user.account_id.0,
+            &SetMonthlyUsageMode {
+                mode: MonthlyUsageMode::AllowOverage,
+            },
+        )
+        .await?;
+    admin_client
+        .set_account_plan(
+            &user.account_id.0,
+            &AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: deps.registry_service().low_disk_space_plan(),
+            },
+        )
+        .await?;
+    let downgraded = client.get_account_limits(&user.account_id.0).await?;
+    assert_eq!(downgraded.monthly_usage_mode, MonthlyUsageMode::HardLimit);
+    assert!(!downgraded.overage_allowed_by_plan);
+    assert_eq!(
+        downgraded.latest_owner_transition.unwrap().new_mode,
+        MonthlyUsageMode::AllowOverage
+    );
+    let error = client
+        .set_account_monthly_usage_mode(
+            &user.account_id.0,
+            &SetMonthlyUsageMode {
+                mode: MonthlyUsageMode::AllowOverage,
+            },
+        )
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceSetAccountMonthlyUsageModeError::Error400(body)) =
+        error
+    else {
+        panic!("expected ineligible-plan error, got {error:?}")
+    };
+    assert_eq!(body.code, "MONTHLY_USAGE_MODE_NOT_ELIGIBLE");
+    assert_eq!(
+        body.errors,
+        vec!["The account's current plan does not permit paid overage".to_string()]
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn account_usage_history_is_authenticated_and_empty_for_new_account(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
@@ -345,6 +546,10 @@ async fn account_usage_history_is_authenticated_and_empty_for_new_account(
         .batch_update_resource_usage(HashMap::from([(
             AccountId(user.account_id.0),
             ResourceUsageUpdate {
+                monthly_usage_mode_revision: 0,
+                memory_byte_nanoseconds_remainder: 0,
+                durable_storage_byte_nanoseconds_remainder: 0,
+                ephemeral_storage_byte_nanoseconds_remainder: 0,
                 fuel_delta: 0,
                 http_call_count_delta: 0,
                 rpc_call_count_delta: 0,
@@ -381,6 +586,10 @@ async fn account_usage_history_is_authenticated_and_empty_for_new_account(
         .batch_update_resource_usage(HashMap::from([(
             AccountId(user.account_id.0),
             ResourceUsageUpdate {
+                monthly_usage_mode_revision: 0,
+                memory_byte_nanoseconds_remainder: 0,
+                durable_storage_byte_nanoseconds_remainder: 0,
+                ephemeral_storage_byte_nanoseconds_remainder: 0,
                 fuel_delta: 0,
                 http_call_count_delta: 0,
                 rpc_call_count_delta: 0,
@@ -442,6 +651,20 @@ async fn account_storage_override_endpoints_hide_foreign_accounts(
     assert!(matches!(
         error,
         golem_client::Error::Item(RegistryServiceGetAccountLimitsError::Error404(_))
+    ));
+
+    let error = client
+        .set_account_monthly_usage_mode(
+            &foreign_user.account_id.0,
+            &SetMonthlyUsageMode {
+                mode: MonthlyUsageMode::AllowOverage,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        golem_client::Error::Item(RegistryServiceSetAccountMonthlyUsageModeError::Error404(_))
     ));
 
     let error = client

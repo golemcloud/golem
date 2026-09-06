@@ -252,6 +252,7 @@ fn registry_service_config(
                     monthly_memory_gb_seconds: 0,
                     monthly_durable_storage_gb_month: 0,
                     monthly_ephemeral_storage_gb_month: 0,
+                    overage_eligible: false,
                     max_memory_per_agent: u64::MAX,
                     max_memory_per_agent_ceiling: u64::MAX,
                     max_memory_per_agent_user_configurable: true,

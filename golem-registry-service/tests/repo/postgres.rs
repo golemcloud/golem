@@ -509,6 +509,48 @@ async fn test_account_usage_history(#[dimension(postgres_variant)] deps: &Deps) 
 }
 
 #[test]
+async fn test_monthly_usage_mode_transitions(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_monthly_usage_mode_transitions(deps).await;
+}
+
+#[test]
+async fn test_plan_eligibility_downgrade_serializes_with_account_assignment(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_plan_eligibility_downgrade_serializes_with_account_assignment(deps)
+        .await;
+}
+
+#[test]
+async fn test_monthly_usage_attribution_uses_accrual_revision(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_monthly_usage_attribution_uses_accrual_revision(deps).await;
+}
+
+#[test]
+async fn test_monthly_usage_mode_consent_invariants(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_monthly_usage_mode_consent_invariants(deps).await;
+}
+
+#[test]
+async fn test_monthly_usage_mode_baseline_serializes_with_usage_updates(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_monthly_usage_mode_baseline_serializes_with_usage_updates(deps).await;
+}
+
+#[test]
+async fn test_resource_usage_response_uses_revision_observed_under_account_lock(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_resource_usage_response_uses_revision_observed_under_account_lock(
+        deps,
+    )
+    .await;
+}
+
+#[test]
 async fn test_account_resource_override_resolution(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_account_resource_override_resolution(deps).await;
 }

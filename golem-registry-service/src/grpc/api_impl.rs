@@ -211,6 +211,12 @@ impl RegistryServiceGrpcApi {
                 Ok::<_, GrpcApiError>((
                     account_id,
                     ResourceUsageUpdate {
+                        monthly_usage_mode_revision: u.monthly_usage_mode_revision,
+                        memory_byte_nanoseconds_remainder: u.memory_byte_nanoseconds_remainder,
+                        durable_storage_byte_nanoseconds_remainder: u
+                            .durable_storage_byte_nanoseconds_remainder,
+                        ephemeral_storage_byte_nanoseconds_remainder: u
+                            .ephemeral_storage_byte_nanoseconds_remainder,
                         fuel_delta: u.fuel_delta,
                         http_call_count_delta: u.http_call_count_delta,
                         rpc_call_count_delta: u.rpc_call_count_delta,

@@ -21,7 +21,7 @@ use golem_common::base_model::api;
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
     AccountResourcePolicy, AccountUsage, DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS, MemoryLimit,
-    SetMemoryLimit, SetStorageLimit, StorageLimit,
+    MonthlyUsageModeTransition, SetMemoryLimit, SetMonthlyUsageMode, SetStorageLimit, StorageLimit,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -139,8 +139,8 @@ impl AccountUsageApi {
     /// capacity. Disabled dimensions omit the monthly amount, usage, remaining capacity, and
     /// behavior. `unknown` means no producer has reported metering state; it does not mean disabled
     /// or measured zero. Compute uses GCU, allocated linear memory uses GB-seconds, storage uses
-    /// GB-month, and per-agent limits use bytes. The effective monthly behavior in this version is
-    /// `hardLimit`.
+    /// GB-month, and per-agent limits use bytes. Monthly behavior is `hardLimit` or
+    /// `includedAllowance`, according to the account's current usage mode.
     #[oai(
         path = "/:account_id/limits",
         method = "get",
@@ -160,6 +160,38 @@ impl AccountUsageApi {
             .instrument(record.span.clone())
             .await?;
         record.result(Ok(Json(policy)))
+    }
+
+    /// Explicitly enter or leave paid-overage mode.
+    ///
+    /// Only the account owner can enable overage, and the current Plan Row must permit it.
+    /// Administrators impersonating the account may force `hardLimit`, but cannot enable overage.
+    /// Each successful transition records immutable consent history. Requests that repeat the
+    /// current mode are rejected and do not add history.
+    #[oai(
+        path = "/:account_id/monthly-usage-mode",
+        method = "put",
+        operation_id = "set_account_monthly_usage_mode"
+    )]
+    async fn set_monthly_usage_mode(
+        &self,
+        account_id: Path<AccountId>,
+        request: Json<SetMonthlyUsageMode>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<MonthlyUsageModeTransition>> {
+        let record = recorded_http_api_request!(
+            "set_account_monthly_usage_mode",
+            account_id = account_id.0.to_string()
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let response = self
+            .account_usage_service
+            .set_monthly_usage_mode(account_id.0, request.0.mode, &auth)
+            .instrument(record.span.clone())
+            .await
+            .map(Json)
+            .map_err(ApiError::from);
+        record.result(response)
     }
 
     /// Set a storage-per-agent override for the authenticated account owner.

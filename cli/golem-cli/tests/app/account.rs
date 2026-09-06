@@ -5,7 +5,7 @@ use golem_cli::{fs, versions};
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
     AccountUsageMetering, AccountUsagePeriod, MemoryLimit, MeteringStatus, MonthlyLimitBehavior,
-    MonthlyResourceLimits, StorageLimit, StorageLimitDisabledReason,
+    MonthlyResourceLimits, MonthlyUsageMode, StorageLimit, StorageLimitDisabledReason,
 };
 use indoc::{formatdoc, indoc};
 use serde::Deserialize;
@@ -50,6 +50,8 @@ struct AccountLimitsView {
     #[serde(rename = "$type")]
     kind: String,
     account_id: AccountId,
+    monthly_usage_mode: MonthlyUsageMode,
+    overage_allowed_by_plan: bool,
     monthly: MonthlyResourceLimits,
     max_storage_per_agent: StorageLimit,
     max_memory_per_agent: MemoryLimit,
@@ -277,6 +279,8 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
         .expect("account limits show produced no JSON output");
     assert_eq!(limits.kind, "account.limits.show");
     assert_eq!(limits.account_id.0, account_id);
+    assert_eq!(limits.monthly_usage_mode, MonthlyUsageMode::HardLimit);
+    assert!(!limits.overage_allowed_by_plan);
     assert_eq!(limits.monthly.compute_gcu.monthly_amount, Some(5));
     assert_eq!(limits.monthly.compute_gcu.usage, Some(1.5));
     assert_eq!(limits.monthly.compute_gcu.remaining, Some(3.5));
@@ -317,6 +321,9 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
 
     let output = ctx.cli([cmd::ACCOUNT, "limits", "show"]).await;
     assert!(output.success_or_dump());
+    assert!(output.stdout_contains("Monthly usage mode"));
+    assert!(output.stdout_contains("hardLimit"));
+    assert!(output.stdout_contains("Overage allowed by plan"));
     assert!(output.stdout_contains("Monthly compute amount:"));
     assert!(output.stdout_contains("5 GCU"));
     assert!(output.stdout_contains("Monthly compute usage:"));

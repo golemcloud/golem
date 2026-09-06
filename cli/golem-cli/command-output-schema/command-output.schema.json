@@ -358,6 +358,8 @@
       "required": [
         "$type",
         "accountId",
+        "monthlyUsageMode",
+        "overageAllowedByPlan",
         "monthly",
         "maxStoragePerAgent",
         "maxMemoryPerAgent"
@@ -368,6 +370,15 @@
         },
         "accountId": {
           "type": "string"
+        },
+        "monthlyUsageMode": {
+          "$ref": "#/definitions/MonthlyUsageMode"
+        },
+        "overageAllowedByPlan": {
+          "type": "boolean"
+        },
+        "latestOwnerTransition": {
+          "$ref": "#/definitions/MonthlyUsageModeTransition"
         },
         "monthly": {
           "$ref": "#/definitions/MonthlyResourceLimits"
@@ -907,7 +918,49 @@
     },
     "MonthlyLimitBehavior": {
       "type": "string",
-      "enum": ["hardLimit"]
+      "enum": ["hardLimit", "includedAllowance"]
+    },
+    "MonthlyUsageMode": {
+      "type": "string",
+      "enum": ["hardLimit", "allowOverage"]
+    },
+    "MonthlyUsageModeTransitionSource": {
+      "type": "string",
+      "enum": [
+        "owner",
+        "administrator",
+        "planEligibilityRemoved",
+        "ineligiblePlanAssigned"
+      ]
+    },
+    "MonthlyUsageModeTransition": {
+      "type": "object",
+      "required": [
+        "actorAccountId",
+        "changedAt",
+        "source",
+        "previousMode",
+        "newMode"
+      ],
+      "properties": {
+        "actorAccountId": {
+          "type": "string"
+        },
+        "changedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source": {
+          "$ref": "#/definitions/MonthlyUsageModeTransitionSource"
+        },
+        "previousMode": {
+          "$ref": "#/definitions/MonthlyUsageMode"
+        },
+        "newMode": {
+          "$ref": "#/definitions/MonthlyUsageMode"
+        }
+      },
+      "additionalProperties": false
     },
     "MemoryLimit": {
       "type": "object",

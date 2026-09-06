@@ -29,7 +29,7 @@ use golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_STORAGE_LIMIT;
 use golem_common::model::agent::AgentMode;
 use golem_service_base::clients::registry::{RegistryService, ResourceUsageUpdate};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
@@ -43,6 +43,7 @@ use tracing::{Instrument, error, info_span};
 #[derive(Debug)]
 pub struct AtomicResourceEntry {
     metering: ResourceUsageMeteringConfig,
+    usage_revision_state: Mutex<UsageRevisionState>,
     // Current (cached) value of the account level fuel limits
     fuel: AtomicU64,
     // any local fuel consumption that was not yet sent to the server
@@ -138,10 +139,17 @@ impl Drop for AgentFilesystemLimitRegistration {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 struct CapturedUsageUpdate {
     update: ResourceUsageUpdate,
     durable_memory_gb_seconds_delta: i64,
     ephemeral_memory_gb_seconds_delta: i64,
+}
+
+#[derive(Debug)]
+struct UsageRevisionState {
+    current_revision: u64,
+    pending: VecDeque<CapturedUsageUpdate>,
 }
 
 #[derive(Debug)]
@@ -176,6 +184,9 @@ struct CapturedAccountUsage {
     ephemeral_memory_gb_seconds: i64,
     durable_storage_byte_seconds: i64,
     ephemeral_storage_byte_seconds: i64,
+    memory_byte_nanoseconds_remainder: u64,
+    durable_storage_byte_nanoseconds_remainder: u64,
+    ephemeral_storage_byte_nanoseconds_remainder: u64,
 }
 
 impl AccountUsageAccumulator {
@@ -255,7 +266,7 @@ impl AccountUsageAccumulator {
         })
     }
 
-    fn capture(&mut self) -> CapturedAccountUsage {
+    fn capture(&mut self, include_remainders: bool) -> CapturedAccountUsage {
         let (durable_memory, ephemeral_memory) = self.memory.as_mut().map_or((0, 0), |memory| {
             let durable = take_bounded(&mut memory.durable_memory_gb_seconds, i64::MAX as u128);
             let ephemeral = take_bounded(
@@ -280,6 +291,21 @@ impl AccountUsageAccumulator {
             ephemeral_memory_gb_seconds: ephemeral_memory as i64,
             durable_storage_byte_seconds: durable_storage as i64,
             ephemeral_storage_byte_seconds: ephemeral_storage as i64,
+            memory_byte_nanoseconds_remainder: self.memory.as_mut().map_or(0, |memory| {
+                capture_remainder(&mut memory.remainder, include_remainders)
+            }),
+            durable_storage_byte_nanoseconds_remainder: self.storage.as_mut().map_or(
+                0,
+                |storage| {
+                    capture_remainder(&mut storage.durable_storage_remainder, include_remainders)
+                },
+            ),
+            ephemeral_storage_byte_nanoseconds_remainder: self.storage.as_mut().map_or(
+                0,
+                |storage| {
+                    capture_remainder(&mut storage.ephemeral_storage_remainder, include_remainders)
+                },
+            ),
         }
     }
 }
@@ -294,6 +320,14 @@ fn take_bounded(pending: &mut u128, maximum: u128) -> u128 {
     let captured = (*pending).min(maximum);
     *pending -= captured;
     captured
+}
+
+fn capture_remainder(remainder: &mut u128, capture: bool) -> u64 {
+    if capture {
+        std::mem::take(remainder) as u64
+    } else {
+        0
+    }
 }
 
 impl AtomicResourceEntry {
@@ -397,8 +431,43 @@ impl AtomicResourceEntry {
         oplog_writes_per_second: u64,
         metering: ResourceUsageMeteringConfig,
     ) -> Self {
+        Self::new_with_all_limits_metering_and_revision(
+            fuel,
+            max_memory,
+            max_table_elements,
+            max_disk_space,
+            per_invocation_http_call_limit,
+            per_invocation_rpc_call_limit,
+            available_http_calls,
+            available_rpc_calls,
+            max_concurrent_agents_per_executor,
+            oplog_writes_per_second,
+            metering,
+            0,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_all_limits_metering_and_revision(
+        fuel: u64,
+        max_memory: usize,
+        max_table_elements: usize,
+        max_disk_space: u64,
+        per_invocation_http_call_limit: u64,
+        per_invocation_rpc_call_limit: u64,
+        available_http_calls: u64,
+        available_rpc_calls: u64,
+        max_concurrent_agents_per_executor: u64,
+        oplog_writes_per_second: u64,
+        metering: ResourceUsageMeteringConfig,
+        monthly_usage_mode_revision: u64,
+    ) -> Self {
         Self {
             metering,
+            usage_revision_state: Mutex::new(UsageRevisionState {
+                current_revision: monthly_usage_mode_revision,
+                pending: VecDeque::new(),
+            }),
             fuel: AtomicU64::new(if metering.compute { fuel } else { u64::MAX }),
             delta: AtomicI64::new(0),
             in_flight_delta: AtomicI64::new(0),
@@ -453,15 +522,25 @@ impl AtomicResourceEntry {
     }
 
     fn effective_fuel(&self) -> u64 {
+        let revision_state = self.usage_revision_state.lock().unwrap();
+        self.effective_fuel_with_revision_state(&revision_state)
+    }
+
+    fn effective_fuel_with_revision_state(&self, revision_state: &UsageRevisionState) -> u64 {
         if !self.metering.compute {
             return u64::MAX;
         }
         let fuel = self.fuel.load(Ordering::Acquire);
         let delta = self.delta.load(Ordering::Acquire);
         let in_flight = self.in_flight_delta.load(Ordering::Acquire);
+        let pending = revision_state
+            .pending
+            .iter()
+            .map(|captured| captured.update.fuel_delta as i128)
+            .sum::<i128>();
 
         // compute sum as i128 to avoid overflow
-        let sum = fuel as i128 + delta as i128 + in_flight as i128;
+        let sum = fuel as i128 + delta as i128 + in_flight as i128 + pending;
 
         sum.max(0).min(u64::MAX as i128) as u64
     }
@@ -472,13 +551,19 @@ impl AtomicResourceEntry {
     }
 
     pub fn borrow_fuel(&self, amount: u64) -> bool {
+        self.borrow_fuel_with_revision(amount).is_ok()
+    }
+
+    pub(crate) fn borrow_fuel_with_revision(&self, amount: u64) -> Result<u64, u64> {
+        let revision_state = self.usage_revision_state.lock().unwrap();
+        let revision = revision_state.current_revision;
         if !self.metering.compute {
-            return true;
+            return Ok(revision);
         }
-        let available = self.effective_fuel();
+        let available = self.effective_fuel_with_revision_state(&revision_state);
 
         if amount == 0 {
-            return true;
+            return Ok(revision);
         };
 
         if amount <= available {
@@ -489,9 +574,9 @@ impl AtomicResourceEntry {
                 })
                 .ok();
             record_fuel_borrow(amount);
-            true
+            Ok(revision)
         } else {
-            false
+            Err(revision)
         }
     }
 
@@ -500,30 +585,70 @@ impl AtomicResourceEntry {
     }
 
     pub fn return_fuel(&self, amount: u64) {
+        let revision = self.usage_revision_state.lock().unwrap().current_revision;
+        self.return_fuel_for_revision(amount, revision);
+    }
+
+    pub(crate) fn return_fuel_for_revision(&self, amount: u64, revision: u64) {
         if !self.metering.compute {
             return;
         }
         let amt_i64 = amount.min(i64::MAX as u64) as i64;
-        self.delta
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| {
-                Some(d.saturating_sub(amt_i64))
-            })
-            .ok();
+        self.record_fuel_delta_for_revision(revision, -amt_i64);
         record_fuel_return(amount);
     }
 
     pub fn record_overdraft_debt(&self, amount: u64) {
+        let revision = self.usage_revision_state.lock().unwrap().current_revision;
+        self.record_overdraft_debt_for_revision(amount, revision);
+    }
+
+    pub(crate) fn record_overdraft_debt_for_revision(&self, amount: u64, revision: u64) {
         if !self.metering.compute || amount == 0 {
             return;
         }
 
         let amt_i64 = amount.min(i64::MAX as u64) as i64;
-        self.delta
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| {
-                Some(d.saturating_add(amt_i64))
-            })
-            .ok();
+        self.record_fuel_delta_for_revision(revision, amt_i64);
         record_ephemeral_overdraft_fuel(amount);
+    }
+
+    fn record_fuel_delta_for_revision(&self, revision: u64, fuel_delta: i64) {
+        let mut revision_state = self.usage_revision_state.lock().unwrap();
+        assert!(
+            revision <= revision_state.current_revision,
+            "fuel usage references future revision {revision}; current revision is {}",
+            revision_state.current_revision
+        );
+        if revision == revision_state.current_revision {
+            self.delta
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
+                    Some(delta.saturating_add(fuel_delta))
+                })
+                .ok();
+        } else {
+            revision_state.pending.push_back(CapturedUsageUpdate {
+                update: ResourceUsageUpdate {
+                    monthly_usage_mode_revision: revision,
+                    memory_byte_nanoseconds_remainder: 0,
+                    durable_storage_byte_nanoseconds_remainder: 0,
+                    ephemeral_storage_byte_nanoseconds_remainder: 0,
+                    fuel_delta,
+                    http_call_count_delta: 0,
+                    rpc_call_count_delta: 0,
+                    durable_storage_byte_seconds_delta: 0,
+                    ephemeral_storage_byte_seconds_delta: 0,
+                    memory_gb_seconds_delta: 0,
+                    metering: golem_service_base::clients::registry::ResourceUsageMetering {
+                        compute: self.metering.compute,
+                        memory: self.metering.memory,
+                        filesystem: self.metering.filesystem,
+                    },
+                },
+                durable_memory_gb_seconds_delta: 0,
+                ephemeral_memory_gb_seconds_delta: 0,
+            });
+        }
     }
 
     pub fn max_memory_limit(&self) -> usize {
@@ -616,6 +741,7 @@ impl AtomicResourceEntry {
             && amount > 0
             && let Some(accumulator) = &self.account_usage_accumulator
         {
+            let _revision_state = self.usage_revision_state.lock().unwrap();
             accumulator
                 .lock()
                 .unwrap()
@@ -632,6 +758,7 @@ impl AtomicResourceEntry {
         let Some(accumulator) = &self.account_usage_accumulator else {
             return;
         };
+        let _revision_state = self.usage_revision_state.lock().unwrap();
         let mut accumulator = accumulator.lock().unwrap();
         if self.metering.memory && memory_gb_seconds > 0 {
             accumulator.add_memory(mode, memory_gb_seconds as u128);
@@ -650,6 +777,7 @@ impl AtomicResourceEntry {
         let Some(accumulator) = &self.account_usage_accumulator else {
             return;
         };
+        let _revision_state = self.usage_revision_state.lock().unwrap();
         let mut accumulator = accumulator.lock().unwrap();
         if self.metering.memory {
             accumulator.add_memory_settlement(mode, memory);
@@ -686,6 +814,7 @@ impl AtomicResourceEntry {
         if !self.metering.filesystem || remainder == 0 {
             return;
         }
+        let _revision_state = self.usage_revision_state.lock().unwrap();
         self.account_usage_accumulator
             .as_ref()
             .expect("filesystem metering is enabled")
@@ -716,6 +845,12 @@ impl AtomicResourceEntry {
 
     fn capture_usage_update(&self, refresh_threshold_secs: i64) -> Option<CapturedUsageUpdate> {
         self.flush_active_resource_usage();
+        let mut revision_state = self.usage_revision_state.lock().unwrap();
+        if let Some(captured) = revision_state.pending.pop_front() {
+            self.mark_in_flight(&captured);
+            return Some(captured);
+        }
+
         let active = (self.metering.compute && self.delta.load(Ordering::Acquire) != 0)
             || self
                 .account_usage_accumulator
@@ -729,6 +864,16 @@ impl AtomicResourceEntry {
             return None;
         }
 
+        let captured = self.capture_current_usage(revision_state.current_revision, false);
+        self.mark_in_flight(&captured);
+        Some(captured)
+    }
+
+    fn capture_current_usage(
+        &self,
+        monthly_usage_mode_revision: u64,
+        include_remainders: bool,
+    ) -> CapturedUsageUpdate {
         let fuel_delta = if self.metering.compute {
             self.delta.swap(0, Ordering::AcqRel)
         } else {
@@ -738,7 +883,7 @@ impl AtomicResourceEntry {
             .account_usage_accumulator
             .as_ref()
             .map_or_else(CapturedAccountUsage::default, |accumulator| {
-                accumulator.lock().unwrap().capture()
+                accumulator.lock().unwrap().capture(include_remainders)
             });
         let memory_gb_seconds_delta = captured_usage.memory_gb_seconds;
         let durable_memory_gb_seconds_delta = captured_usage.durable_memory_gb_seconds;
@@ -747,50 +892,14 @@ impl AtomicResourceEntry {
         let ephemeral_storage_byte_seconds_delta = captured_usage.ephemeral_storage_byte_seconds;
         let http_count = self.unsynced_http_calls.swap(0, Ordering::AcqRel);
         let rpc_count = self.unsynced_rpc_calls.swap(0, Ordering::AcqRel);
-        if http_count > 0 {
-            self.syncing_http_calls
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-                    Some(count.saturating_add(http_count))
-                })
-                .ok();
-        }
-        if rpc_count > 0 {
-            self.syncing_rpc_calls
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-                    Some(count.saturating_add(rpc_count))
-                })
-                .ok();
-        }
-        if fuel_delta != 0 {
-            self.in_flight_delta
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
-                    Some(delta.saturating_add(fuel_delta))
-                })
-                .ok();
-        }
-        if memory_gb_seconds_delta != 0 {
-            self.in_flight_memory_gb_seconds_delta
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
-                    Some(delta.saturating_add(memory_gb_seconds_delta))
-                })
-                .ok();
-        }
-        if durable_memory_gb_seconds_delta != 0 {
-            self.in_flight_durable_memory_gb_seconds_delta
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
-                    Some(delta.saturating_add(durable_memory_gb_seconds_delta))
-                })
-                .ok();
-        }
-        if ephemeral_memory_gb_seconds_delta != 0 {
-            self.in_flight_ephemeral_memory_gb_seconds_delta
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
-                    Some(delta.saturating_add(ephemeral_memory_gb_seconds_delta))
-                })
-                .ok();
-        }
-        Some(CapturedUsageUpdate {
+        CapturedUsageUpdate {
             update: ResourceUsageUpdate {
+                monthly_usage_mode_revision,
+                memory_byte_nanoseconds_remainder: captured_usage.memory_byte_nanoseconds_remainder,
+                durable_storage_byte_nanoseconds_remainder: captured_usage
+                    .durable_storage_byte_nanoseconds_remainder,
+                ephemeral_storage_byte_nanoseconds_remainder: captured_usage
+                    .ephemeral_storage_byte_nanoseconds_remainder,
                 fuel_delta,
                 memory_gb_seconds_delta,
                 http_call_count_delta: http_count,
@@ -805,7 +914,95 @@ impl AtomicResourceEntry {
             },
             durable_memory_gb_seconds_delta,
             ephemeral_memory_gb_seconds_delta,
-        })
+        }
+    }
+
+    fn mark_in_flight(&self, captured: &CapturedUsageUpdate) {
+        if captured.update.http_call_count_delta > 0 {
+            self.syncing_http_calls
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                    Some(count.saturating_add(captured.update.http_call_count_delta))
+                })
+                .ok();
+        }
+        if captured.update.rpc_call_count_delta > 0 {
+            self.syncing_rpc_calls
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                    Some(count.saturating_add(captured.update.rpc_call_count_delta))
+                })
+                .ok();
+        }
+        if captured.update.fuel_delta != 0 {
+            self.in_flight_delta
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
+                    Some(delta.saturating_add(captured.update.fuel_delta))
+                })
+                .ok();
+        }
+        if captured.update.memory_gb_seconds_delta != 0 {
+            self.in_flight_memory_gb_seconds_delta
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
+                    Some(delta.saturating_add(captured.update.memory_gb_seconds_delta))
+                })
+                .ok();
+        }
+        if captured.durable_memory_gb_seconds_delta != 0 {
+            self.in_flight_durable_memory_gb_seconds_delta
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
+                    Some(delta.saturating_add(captured.durable_memory_gb_seconds_delta))
+                })
+                .ok();
+        }
+        if captured.ephemeral_memory_gb_seconds_delta != 0 {
+            self.in_flight_ephemeral_memory_gb_seconds_delta
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
+                    Some(delta.saturating_add(captured.ephemeral_memory_gb_seconds_delta))
+                })
+                .ok();
+        }
+    }
+
+    fn update_usage_revision(&self, new_revision: u64) {
+        self.flush_active_resource_usage();
+        let mut revision_state = self.usage_revision_state.lock().unwrap();
+        if revision_state.current_revision == new_revision {
+            return;
+        }
+
+        loop {
+            let active = (self.metering.compute && self.delta.load(Ordering::Acquire) != 0)
+                || self
+                    .account_usage_accumulator
+                    .as_ref()
+                    .is_some_and(|accumulator| accumulator.lock().unwrap().is_active())
+                || self.unsynced_http_calls.load(Ordering::Acquire) > 0
+                || self.unsynced_rpc_calls.load(Ordering::Acquire) > 0;
+            if !active {
+                break;
+            }
+            let captured = self.capture_current_usage(revision_state.current_revision, false);
+            revision_state.pending.push_back(captured);
+        }
+        let captured = self.capture_current_usage(revision_state.current_revision, true);
+        if captured.update.memory_byte_nanoseconds_remainder != 0
+            || captured.update.durable_storage_byte_nanoseconds_remainder != 0
+            || captured.update.ephemeral_storage_byte_nanoseconds_remainder != 0
+        {
+            revision_state.pending.push_back(captured);
+        }
+        revision_state.current_revision = new_revision;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn update_usage_revision_for_test(&self, new_revision: u64) {
+        self.update_usage_revision(new_revision);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn capture_usage_update_for_test(&self) -> ResourceUsageUpdate {
+        self.capture_usage_update(i64::MAX)
+            .expect("expected a pending resource usage update")
+            .update
     }
 
     #[cfg(test)]
@@ -824,6 +1021,7 @@ impl AtomicResourceEntry {
             && amount > 0
             && let Some(accumulator) = &self.account_usage_accumulator
         {
+            let _revision_state = self.usage_revision_state.lock().unwrap();
             accumulator.lock().unwrap().add_memory(mode, amount as u128);
         }
     }
@@ -832,6 +1030,7 @@ impl AtomicResourceEntry {
         if self.metering.memory
             && let Some(accumulator) = &self.account_usage_accumulator
         {
+            let _revision_state = self.usage_revision_state.lock().unwrap();
             accumulator
                 .lock()
                 .unwrap()
@@ -883,20 +1082,46 @@ impl AtomicResourceEntry {
     /// have been made but not yet synced (unsynced) or are currently being synced
     /// (syncing).
     pub fn remaining_http_calls(&self) -> u64 {
+        let revision_state = self.usage_revision_state.lock().unwrap();
+        self.remaining_http_calls_with_revision_state(&revision_state)
+    }
+
+    fn remaining_http_calls_with_revision_state(&self, revision_state: &UsageRevisionState) -> u64 {
         let available = self
             .available_http_calls_from_server
             .load(Ordering::Acquire);
         let unsynced = self.unsynced_http_calls.load(Ordering::Acquire);
         let syncing = self.syncing_http_calls.load(Ordering::Acquire);
-        available.saturating_sub(unsynced).saturating_sub(syncing)
+        let pending = revision_state
+            .pending
+            .iter()
+            .map(|captured| captured.update.http_call_count_delta)
+            .fold(0, u64::saturating_add);
+        available
+            .saturating_sub(unsynced)
+            .saturating_sub(syncing)
+            .saturating_sub(pending)
     }
 
     /// Returns the number of RPC calls remaining in this billing period.
     pub fn remaining_rpc_calls(&self) -> u64 {
+        let revision_state = self.usage_revision_state.lock().unwrap();
+        self.remaining_rpc_calls_with_revision_state(&revision_state)
+    }
+
+    fn remaining_rpc_calls_with_revision_state(&self, revision_state: &UsageRevisionState) -> u64 {
         let available = self.available_rpc_calls_from_server.load(Ordering::Acquire);
         let unsynced = self.unsynced_rpc_calls.load(Ordering::Acquire);
         let syncing = self.syncing_rpc_calls.load(Ordering::Acquire);
-        available.saturating_sub(unsynced).saturating_sub(syncing)
+        let pending = revision_state
+            .pending
+            .iter()
+            .map(|captured| captured.update.rpc_call_count_delta)
+            .fold(0, u64::saturating_add);
+        available
+            .saturating_sub(unsynced)
+            .saturating_sub(syncing)
+            .saturating_sub(pending)
     }
 
     /// Records one outgoing HTTP call against the monthly account quota.
@@ -904,7 +1129,8 @@ impl AtomicResourceEntry {
     /// Returns `false` when the remaining HTTP call budget is zero,
     /// signalling that the worker should be suspended at the next opportunity.
     pub fn record_http_call(&self) -> bool {
-        if self.remaining_http_calls() == 0 {
+        let revision_state = self.usage_revision_state.lock().unwrap();
+        if self.remaining_http_calls_with_revision_state(&revision_state) == 0 {
             return false;
         }
         self.unsynced_http_calls
@@ -919,7 +1145,8 @@ impl AtomicResourceEntry {
     ///
     /// Returns `false` when the remaining RPC call budget is zero.
     pub fn record_rpc_call(&self) -> bool {
-        if self.remaining_rpc_calls() == 0 {
+        let revision_state = self.usage_revision_state.lock().unwrap();
+        if self.remaining_rpc_calls_with_revision_state(&revision_state) == 0 {
             return false;
         }
         self.unsynced_rpc_calls
@@ -1236,6 +1463,7 @@ impl ResourceLimitsGrpc {
         if let Some(cell) = self.entries.read_async(&account_id, |_, e| e.clone()).await
             && let Some(entry) = cell.get()
         {
+            entry.update_usage_revision(updated_limits.monthly_usage_mode_revision);
             if self.metering.compute {
                 entry.in_flight_delta.store(0, Ordering::Release);
                 entry
@@ -1345,7 +1573,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
             .get_or_try_init(|| async {
                 let fetched = self.fetch_resource_limits(account_id).await?;
                 Ok::<Arc<AtomicResourceEntry>, WorkerExecutorError>(Arc::new(
-                    AtomicResourceEntry::new_with_all_limits_and_metering(
+                    AtomicResourceEntry::new_with_all_limits_metering_and_revision(
                         fetched.available_fuel,
                         fetched.max_memory_per_worker as usize,
                         fetched.max_table_elements_per_worker as usize,
@@ -1357,6 +1585,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
                         fetched.max_concurrent_agents_per_executor,
                         fetched.oplog_writes_per_second,
                         self.metering,
+                        fetched.monthly_usage_mode_revision,
                     ),
                 ))
             })
@@ -1438,6 +1667,27 @@ mod tests {
     use uuid::Uuid;
 
     test_r::enable!();
+
+    fn metered_entry_with_revision(revision: u64) -> AtomicResourceEntry {
+        AtomicResourceEntry::new_with_all_limits_metering_and_revision(
+            10_000,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            ResourceUsageMeteringConfig {
+                compute: true,
+                memory: true,
+                filesystem: true,
+            },
+            revision,
+        )
+    }
 
     #[test]
     async fn filesystem_limit_update_is_delivered_to_registered_target() {
@@ -1528,23 +1778,25 @@ mod tests {
         );
 
         assert_eq!(
-            accumulator.capture(),
+            accumulator.capture(false),
             CapturedAccountUsage {
                 memory_gb_seconds: i64::MAX,
                 durable_memory_gb_seconds: i64::MAX,
                 ephemeral_memory_gb_seconds: 0,
                 durable_storage_byte_seconds: i64::MAX,
                 ephemeral_storage_byte_seconds: 0,
+                ..Default::default()
             }
         );
         assert_eq!(
-            accumulator.capture(),
+            accumulator.capture(false),
             CapturedAccountUsage {
                 memory_gb_seconds: 7,
                 durable_memory_gb_seconds: 7,
                 ephemeral_memory_gb_seconds: 0,
                 durable_storage_byte_seconds: 7,
                 ephemeral_storage_byte_seconds: 0,
+                ..Default::default()
             }
         );
         assert!(!accumulator.is_active());
@@ -1553,6 +1805,287 @@ mod tests {
     // -------------------------------------------------------------------------
     // AtomicResourceEntry
     // -------------------------------------------------------------------------
+
+    #[test]
+    fn delayed_pre_opt_in_usage_keeps_its_accrual_revision() {
+        let entry = metered_entry_with_revision(3);
+        assert!(entry.borrow_fuel(100));
+        entry.record_resource_usage(AgentMode::Durable, 10, 30);
+        entry.record_resource_usage(AgentMode::Ephemeral, 5, 7);
+        assert!(entry.record_http_call());
+        assert!(entry.record_rpc_call());
+
+        entry.update_usage_revision(4);
+        assert_eq!(entry.effective_fuel(), 10_100);
+        assert!(entry.borrow_fuel(200));
+        entry.record_resource_usage(AgentMode::Durable, 20, 40);
+
+        let before_opt_in = entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        assert_eq!(before_opt_in.update.monthly_usage_mode_revision, 3);
+        assert_eq!(before_opt_in.update.fuel_delta, 100);
+        assert_eq!(before_opt_in.update.memory_gb_seconds_delta, 15);
+        assert_eq!(before_opt_in.update.http_call_count_delta, 1);
+        assert_eq!(before_opt_in.update.rpc_call_count_delta, 1);
+        assert_eq!(before_opt_in.update.durable_storage_byte_seconds_delta, 30);
+        assert_eq!(before_opt_in.update.ephemeral_storage_byte_seconds_delta, 7);
+        assert_eq!(entry.in_flight_delta.load(Ordering::Acquire), 100);
+        assert_eq!(entry.syncing_http_calls.load(Ordering::Acquire), 1);
+        assert_eq!(entry.syncing_rpc_calls.load(Ordering::Acquire), 1);
+        assert_eq!(
+            entry
+                .in_flight_memory_gb_seconds_delta
+                .load(Ordering::Acquire),
+            15
+        );
+        assert_eq!(
+            entry
+                .in_flight_durable_memory_gb_seconds_delta
+                .load(Ordering::Acquire),
+            10
+        );
+        assert_eq!(
+            entry
+                .in_flight_ephemeral_memory_gb_seconds_delta
+                .load(Ordering::Acquire),
+            5
+        );
+        let after_opt_in = entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        assert_eq!(after_opt_in.update.monthly_usage_mode_revision, 4);
+        assert_eq!(after_opt_in.update.fuel_delta, 200);
+        assert_eq!(after_opt_in.update.memory_gb_seconds_delta, 20);
+        assert_eq!(after_opt_in.update.durable_storage_byte_seconds_delta, 40);
+    }
+
+    #[test]
+    fn revision_rotation_captures_each_usage_dimension_independently() {
+        let compute = metered_entry_with_revision(1);
+        assert!(compute.borrow_fuel(1));
+        compute.update_usage_revision(2);
+        let compute_update = compute
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        assert_eq!(compute_update.update.monthly_usage_mode_revision, 1);
+        assert_eq!(compute_update.update.fuel_delta, 1);
+
+        let memory = metered_entry_with_revision(1);
+        memory.record_memory_gb_seconds(AgentMode::Durable, 2);
+        memory.update_usage_revision(2);
+        let memory_update = memory
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        assert_eq!(memory_update.update.monthly_usage_mode_revision, 1);
+        assert_eq!(memory_update.update.memory_gb_seconds_delta, 2);
+
+        let http = metered_entry_with_revision(1);
+        assert!(http.record_http_call());
+        http.update_usage_revision(2);
+        let http_update = http
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        assert_eq!(http_update.update.monthly_usage_mode_revision, 1);
+        assert_eq!(http_update.update.http_call_count_delta, 1);
+
+        let rpc = metered_entry_with_revision(1);
+        assert!(rpc.record_rpc_call());
+        rpc.update_usage_revision(2);
+        let rpc_update = rpc
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        assert_eq!(rpc_update.update.monthly_usage_mode_revision, 1);
+        assert_eq!(rpc_update.update.rpc_call_count_delta, 1);
+    }
+
+    #[test]
+    fn repeated_revision_rotations_preserve_fractional_settlement_remainders() {
+        let entry = metered_entry_with_revision(3);
+        entry.record_memory_settlement(
+            AgentMode::Durable,
+            ByteTimeSettlement {
+                units: 0,
+                remainder: BYTE_NANOSECONDS_PER_GB_SECOND - 1,
+            },
+        );
+        entry.update_usage_revision(4);
+
+        entry.record_resource_settlement(
+            AgentMode::Durable,
+            ByteTimeSettlement::default(),
+            ByteTimeSettlement {
+                units: 0,
+                remainder: 1_000_000_000 - 1,
+            },
+        );
+        entry.update_usage_revision(5);
+
+        entry.record_resource_settlement(
+            AgentMode::Ephemeral,
+            ByteTimeSettlement::default(),
+            ByteTimeSettlement {
+                units: 0,
+                remainder: 1_000_000_000 - 1,
+            },
+        );
+        entry.update_usage_revision(6);
+
+        entry.record_memory_settlement(
+            AgentMode::Durable,
+            ByteTimeSettlement {
+                units: 0,
+                remainder: 1,
+            },
+        );
+        entry.record_resource_settlement(
+            AgentMode::Durable,
+            ByteTimeSettlement::default(),
+            ByteTimeSettlement {
+                units: 0,
+                remainder: 1,
+            },
+        );
+        entry.record_resource_settlement(
+            AgentMode::Ephemeral,
+            ByteTimeSettlement::default(),
+            ByteTimeSettlement {
+                units: 0,
+                remainder: 1,
+            },
+        );
+        entry.update_usage_revision(7);
+
+        let revision_3 = entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        assert_eq!(revision_3.update.monthly_usage_mode_revision, 3);
+        assert_eq!(
+            revision_3.update.memory_byte_nanoseconds_remainder,
+            BYTE_NANOSECONDS_PER_GB_SECOND as u64 - 1
+        );
+        assert_eq!(
+            revision_3.update.durable_storage_byte_nanoseconds_remainder,
+            0
+        );
+        assert_eq!(
+            revision_3
+                .update
+                .ephemeral_storage_byte_nanoseconds_remainder,
+            0
+        );
+
+        let revision_4 = entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        assert_eq!(revision_4.update.monthly_usage_mode_revision, 4);
+        assert_eq!(revision_4.update.memory_byte_nanoseconds_remainder, 0);
+        assert_eq!(
+            revision_4.update.durable_storage_byte_nanoseconds_remainder,
+            1_000_000_000 - 1
+        );
+        assert_eq!(
+            revision_4
+                .update
+                .ephemeral_storage_byte_nanoseconds_remainder,
+            0
+        );
+
+        let revision_5 = entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        assert_eq!(revision_5.update.monthly_usage_mode_revision, 5);
+        assert_eq!(revision_5.update.memory_byte_nanoseconds_remainder, 0);
+        assert_eq!(
+            revision_5.update.durable_storage_byte_nanoseconds_remainder,
+            0
+        );
+        assert_eq!(
+            revision_5
+                .update
+                .ephemeral_storage_byte_nanoseconds_remainder,
+            1_000_000_000 - 1
+        );
+
+        let revision_6 = entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        assert_eq!(revision_6.update.monthly_usage_mode_revision, 6);
+        assert_eq!(revision_6.update.memory_byte_nanoseconds_remainder, 1);
+        assert_eq!(
+            revision_6.update.durable_storage_byte_nanoseconds_remainder,
+            1
+        );
+        assert_eq!(
+            revision_6
+                .update
+                .ephemeral_storage_byte_nanoseconds_remainder,
+            1
+        );
+
+        assert_eq!(
+            revision_3.update.memory_byte_nanoseconds_remainder
+                + revision_6.update.memory_byte_nanoseconds_remainder,
+            BYTE_NANOSECONDS_PER_GB_SECOND as u64
+        );
+        assert_eq!(
+            revision_4.update.durable_storage_byte_nanoseconds_remainder
+                + revision_6.update.durable_storage_byte_nanoseconds_remainder,
+            1_000_000_000
+        );
+        assert_eq!(
+            revision_5
+                .update
+                .ephemeral_storage_byte_nanoseconds_remainder
+                + revision_6
+                    .update
+                    .ephemeral_storage_byte_nanoseconds_remainder,
+            1_000_000_000
+        );
+    }
+
+    #[test]
+    fn delayed_pre_disable_usage_keeps_its_accrual_revision() {
+        let entry = metered_entry_with_revision(8);
+        assert!(entry.borrow_fuel(100));
+        entry.record_storage_byte_seconds(AgentMode::Durable, 10);
+
+        entry.update_usage_revision(9);
+        assert!(entry.borrow_fuel(200));
+        entry.record_storage_byte_seconds(AgentMode::Durable, 20);
+
+        let before_disable = entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        assert_eq!(before_disable.update.monthly_usage_mode_revision, 8);
+        assert_eq!(before_disable.update.fuel_delta, 100);
+        assert_eq!(before_disable.update.durable_storage_byte_seconds_delta, 10);
+        let after_disable = entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        assert_eq!(after_disable.update.monthly_usage_mode_revision, 9);
+        assert_eq!(after_disable.update.fuel_delta, 200);
+        assert_eq!(after_disable.update.durable_storage_byte_seconds_delta, 20);
+    }
+
+    #[test]
+    fn revision_refresh_does_not_relabel_in_flight_usage() {
+        let entry = metered_entry_with_revision(12);
+        assert!(entry.borrow_fuel(100));
+        let in_flight = entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+
+        entry.update_usage_revision(13);
+        assert!(entry.borrow_fuel(200));
+
+        assert_eq!(in_flight.update.monthly_usage_mode_revision, 12);
+        let next = entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        assert_eq!(next.update.monthly_usage_mode_revision, 13);
+        assert_eq!(next.update.fuel_delta, 200);
+    }
 
     #[test]
     fn disabled_usage_dimensions_accumulate_and_export_zero() {
@@ -2143,6 +2676,7 @@ mod tests {
             max_concurrent_agents_per_executor: u64::MAX,
             oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             usage_update_applied: true,
+            monthly_usage_mode_revision: 0,
         });
 
         let svc = make_grpc(mock.clone());
@@ -2169,6 +2703,7 @@ mod tests {
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
+                monthly_usage_mode_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2203,6 +2738,7 @@ mod tests {
             max_concurrent_agents_per_executor: u64::MAX,
             oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             usage_update_applied: true,
+            monthly_usage_mode_revision: 0,
         });
         let mut updated = HashMap::new();
         updated.insert(
@@ -2219,6 +2755,7 @@ mod tests {
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
+                monthly_usage_mode_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2318,6 +2855,7 @@ mod tests {
                     max_concurrent_agents_per_executor: u64::MAX,
                     oplog_writes_per_second: u64::MAX,
                     usage_update_applied: true,
+                    monthly_usage_mode_revision: 0,
                 })),
                 batch_update_result: Mutex::new(Ok(AccountResourceLimits(HashMap::new()))),
                 last_batch_updates: Mutex::new(HashMap::new()),
@@ -2716,6 +3254,7 @@ mod tests {
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
+                monthly_usage_mode_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2759,6 +3298,7 @@ mod tests {
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
+                monthly_usage_mode_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2803,6 +3343,27 @@ mod tests {
     }
 
     #[test]
+    async fn registry_response_revision_is_used_by_the_next_batch() {
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+        let id = account_id();
+        let mut current_limits = mock.get_limits_result.lock().unwrap().clone().unwrap();
+        current_limits.monthly_usage_mode_revision = 1;
+        let mut updated = HashMap::new();
+        updated.insert(id, current_limits);
+        mock.set_batch_update_response(AccountResourceLimits(updated));
+        let svc = make_grpc(mock.clone());
+        let entry = svc.initialize_account(id).await.unwrap();
+
+        assert!(entry.borrow_fuel(100));
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+        assert_eq!(mock.last_batch_update(id).monthly_usage_mode_revision, 0);
+
+        assert!(entry.borrow_fuel(100));
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+        assert_eq!(mock.last_batch_update(id).monthly_usage_mode_revision, 1);
+    }
+
+    #[test]
     async fn send_batch_success_refreshes_fuel_and_clears_in_flight() {
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         let id = account_id();
@@ -2822,6 +3383,7 @@ mod tests {
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
+                monthly_usage_mode_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2857,6 +3419,7 @@ mod tests {
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
+                monthly_usage_mode_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2959,6 +3522,7 @@ mod tests {
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
+                monthly_usage_mode_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2992,6 +3556,7 @@ mod tests {
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
+                monthly_usage_mode_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -3052,6 +3617,7 @@ mod tests {
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
+                monthly_usage_mode_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -3092,6 +3658,7 @@ mod tests {
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
+                monthly_usage_mode_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -3166,6 +3733,7 @@ mod tests {
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
+                monthly_usage_mode_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -3199,6 +3767,7 @@ mod tests {
             max_concurrent_agents_per_executor: limit,
             oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             usage_update_applied: true,
+            monthly_usage_mode_revision: 0,
         });
         mock
     }
@@ -3250,6 +3819,7 @@ mod tests {
                 max_concurrent_agents_per_executor: 10,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
+                monthly_usage_mode_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -3285,6 +3855,7 @@ mod tests {
                 max_concurrent_agents_per_executor: 3,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
+                monthly_usage_mode_revision: 0,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));

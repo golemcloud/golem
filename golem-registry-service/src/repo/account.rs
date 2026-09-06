@@ -15,6 +15,7 @@
 use super::model::account::{
     AccountBySecretRecord, AccountExtRevisionRecord, AccountRevisionRecord,
 };
+use crate::repo::account_usage::DbAccountUsageRepo;
 use crate::repo::card::DbCardRepo;
 use crate::repo::model::BindFields;
 pub use crate::repo::model::account::AccountRecord;
@@ -29,6 +30,7 @@ use crate::repo::{
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
+use golem_common::model::account_usage::MonthlyUsageModeTransitionSource;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
@@ -328,6 +330,14 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                                     revision.plan_id
                                 )
                             })?;
+                        let (overage_eligible,): (bool,) = tx
+                            .fetch_one_as(
+                                sqlx::query_as(
+                                    "SELECT overage_eligible FROM plans WHERE plan_id = $1",
+                                )
+                                .bind(revision.plan_id),
+                            )
+                            .await?;
                         let account = Self::update_in_tx(tx, revision.clone()).await?;
                         DbAccountResourceOverrideRepo::<PostgresPool>::reconcile_in_tx(
                             tx,
@@ -335,6 +345,15 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                             override_policies,
                         )
                         .await?;
+                        if !overage_eligible {
+                            DbAccountUsageRepo::<PostgresPool>::force_hard_limit_in_tx(
+                                tx,
+                                revision.account_id,
+                                revision.audit.created_by,
+                                MonthlyUsageModeTransitionSource::IneligiblePlanAssigned,
+                            )
+                            .await?;
+                        }
 
                         Ok(account)
                     }

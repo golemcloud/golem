@@ -149,6 +149,7 @@ Path|Method|Protected
   "monthlyMemoryGbSeconds": 0,
   "monthlyDurableStorageGbMonth": 0,
   "monthlyEphemeralStorageGbMonth": 0,
+  "overageAllowedByPlan": true,
   "maxMemoryPerAgent": 0,
   "maxMemoryPerAgentCeiling": 0,
   "maxMemoryPerAgentUserConfigurable": true,
@@ -354,8 +355,8 @@ per-agent safety limits. Enabled monthly dimensions report measured usage and re
 capacity. Disabled dimensions omit the monthly amount, usage, remaining capacity, and
 behavior. `unknown` means no producer has reported metering state; it does not mean disabled
 or measured zero. Compute uses GCU, allocated linear memory uses GB-seconds, storage uses
-GB-month, and per-agent limits use bytes. The effective monthly behavior in this version is
-`hardLimit`.
+GB-month, and per-agent limits use bytes. Monthly behavior is `hardLimit` or
+`includedAllowance`, according to the account's current usage mode.
 
 
 
@@ -413,7 +414,40 @@ GB-month, and per-agent limits use bytes. The effective monthly behavior in this
       "unit": "GB-seconds",
       "usage": 2500
     }
-  }
+  },
+  "monthlyUsageMode": "hardLimit",
+  "overageAllowedByPlan": false
+}
+```
+
+## Explicitly enter or leave paid-overage mode.
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/monthly-usage-mode`|PUT|Yes
+
+Only the account owner can enable overage, and the current Plan Row must permit it.
+Administrators impersonating the account may force `hardLimit`, but cannot enable overage.
+Each successful transition records immutable consent history. Requests that repeat the
+current mode are rejected and do not add history.
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "mode": "hardLimit"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "actorAccountId": "00000000-0000-0000-0000-000000000001",
+  "changedAt": "2023-11-14T22:13:20+00:00",
+  "newMode": "hardLimit",
+  "previousMode": "allowOverage",
+  "source": "owner"
 }
 ```
 

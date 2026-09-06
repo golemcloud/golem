@@ -405,6 +405,16 @@ impl From<AccountUsageError> for ApiError {
             AccountUsageError::AccountNotfound(_) => {
                 Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
             }
+            AccountUsageError::OverageNotEligible => {
+                Self::bad_request(api::error_code::MONTHLY_USAGE_MODE_NOT_ELIGIBLE, error)
+            }
+            AccountUsageError::MonthlyUsageModeUnchanged(_) => {
+                Self::bad_request(api::error_code::MONTHLY_USAGE_MODE_UNCHANGED, error)
+            }
+            AccountUsageError::MonthlyUsageModeChangeNotAllowed => Self::forbidden(
+                api::error_code::MONTHLY_USAGE_MODE_CHANGE_NOT_ALLOWED,
+                error,
+            ),
             AccountUsageError::Unauthorized(inner) => inner.into(),
             AccountUsageError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,

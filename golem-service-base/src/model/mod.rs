@@ -140,6 +140,7 @@ pub struct WorkersMetadataRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceLimits {
+    pub monthly_usage_mode_revision: u64,
     pub available_fuel: u64,
     pub max_memory_per_worker: u64,
     pub max_table_elements_per_worker: u64,
@@ -180,6 +181,7 @@ const UNLIMITED_OPLOG_WRITES_PER_SECOND: u64 = 1_000_000_000_000_000_000;
 impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimits {
     fn from(value: ResourceLimits) -> Self {
         Self {
+            monthly_usage_mode_revision: value.monthly_usage_mode_revision,
             available_fuel: value.available_fuel,
             max_memory_per_worker: value.max_memory_per_worker,
             max_table_elements_per_worker: value.max_table_elements_per_worker,
@@ -198,6 +200,7 @@ impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimi
 impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimits {
     fn from(value: golem_api_grpc::proto::golem::common::ResourceLimits) -> Self {
         Self {
+            monthly_usage_mode_revision: value.monthly_usage_mode_revision,
             available_fuel: value.available_fuel,
             max_memory_per_worker: value.max_memory_per_worker,
             max_table_elements_per_worker: value.max_table_elements_per_worker,
@@ -514,6 +517,7 @@ mod tests {
             max_concurrent_agents_per_executor: 0,
             oplog_writes_per_second: 0,
             usage_update_applied: false,
+            monthly_usage_mode_revision: 0,
         };
 
         let converted: super::ResourceLimits = proto.into();
@@ -539,11 +543,13 @@ mod tests {
             max_concurrent_agents_per_executor: 7,
             oplog_writes_per_second: 500,
             usage_update_applied: true,
+            monthly_usage_mode_revision: 6,
         };
 
         let converted: super::ResourceLimits = proto.into();
 
         assert_eq!(converted.max_concurrent_agents_per_executor, 7);
         assert_eq!(converted.oplog_writes_per_second, 500);
+        assert_eq!(converted.monthly_usage_mode_revision, 6);
     }
 }

@@ -193,6 +193,10 @@ async fn env_vars(
             "11".to_string(),
         )
         .with(
+            "GOLEM__INITIAL_PLANS__DEFAULT__OVERAGE_ELIGIBLE",
+            "true".to_string(),
+        )
+        .with(
             "GOLEM__INITIAL_PLANS__UNLIMITED__PLAN_ID",
             admin_plan_id.to_string(),
         )
@@ -239,6 +243,10 @@ async fn env_vars(
         .with(
             "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
             "0".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__UNLIMITED__OVERAGE_ELIGIBLE",
+            "false".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_UPLOAD_LIMIT",
@@ -305,6 +313,10 @@ async fn env_vars(
             "0".to_string(),
         )
         .with(
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__OVERAGE_ELIGIBLE",
+            "false".to_string(),
+        )
+        .with(
             "GOLEM__INITIAL_PLANS__LOW_FUEL__MONTHLY_UPLOAD_LIMIT",
             "10000000000000000".to_string(),
         )
@@ -368,6 +380,10 @@ async fn env_vars(
         .with(
             "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
             "50".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__OVERAGE_ELIGIBLE",
+            "false".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_STORAGE_PER_AGENT",
@@ -455,6 +471,10 @@ async fn env_vars(
             "0".to_string(),
         )
         .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__OVERAGE_ELIGIBLE",
+            "false".to_string(),
+        )
+        .with(
             "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_UPLOAD_LIMIT",
             "10000000000000000".to_string(),
         )
@@ -526,6 +546,10 @@ async fn env_vars(
         .with(
             "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
             "0".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__OVERAGE_ELIGIBLE",
+            "false".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_UPLOAD_LIMIT",
