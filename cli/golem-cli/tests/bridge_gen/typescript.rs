@@ -175,6 +175,57 @@ fn guest_durable_agent_compiles() {
 }
 
 #[test]
+fn guest_native_streams_compile() {
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("guest-streaming-agent-guest-client");
+    let mut generator = TypeScriptBridgeGenerator::new_with_mode(
+        crate::bridge_gen::fixtures::guest_streaming_agent_type("typescript"),
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    )
+    .unwrap();
+    generator.generate().unwrap();
+    let source =
+        std::fs::read_to_string(package_dir.join("guest-streaming-agent-guest-client.ts")).unwrap();
+    assert!(source.contains("base.agentStreamToHandle"));
+    assert!(source.contains("base.agentStreamFromHandle"));
+    assert!(source.contains("satisfies base.SchemaCodec"));
+    assert!(source.contains("get graph()"));
+    assert!(!source.contains("createStreamingRemoteMethod"));
+    std::fs::write(
+        package_dir.join("usage.ts"),
+        r#"
+import { guest as base } from '@golemcloud/golem-ts-sdk';
+import { GuestStreamingAgent } from './guest-streaming-agent-guest-client';
+async function exercise() {
+  const client = GuestStreamingAgent.get('native');
+  const items = base.AgentStream.from([{ label: 'root', children: [] }]);
+  const nested = await client.nested(base.AgentStream.from([items]));
+  await client.nested(nested); // unread direct forwarding
+  const bundle = await client.exchange('label', await client.produce());
+  await client.forward(bundle);
+  await client.recursive({ tag: 'branch', val: [{ tag: 'leaf', val: await client.produce() }] });
+  for await (const item of await client.produce()) { const label: string = item.label; void label; }
+  await client.consume.abortable(new AbortController().signal, base.AgentStream.from(['x']));
+  client.status.trigger();
+  // @ts-expect-error native streams only support awaited RPC
+  client.consume.trigger(base.AgentStream.from(['x']));
+  // @ts-expect-error native stream outputs cannot be scheduled
+  client.produce.schedule({ seconds: 0n, nanoseconds: 0 });
+  // @ts-expect-error recursive stream methods cannot be scheduled
+  client.recursive.scheduleCancelable({ seconds: 0n, nanoseconds: 0 }, { tag: 'branch', val: [] });
+}
+void exercise;
+"#,
+    )
+    .unwrap();
+    install_and_build(&package_dir);
+}
+
+#[test]
 fn guest_agent_generated_names_do_not_collide_with_schema_names() {
     let dir = TempDir::new().unwrap();
     generate_and_compile_with_mode(

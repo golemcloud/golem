@@ -978,6 +978,41 @@ impl TypeScriptBridgeGenerator {
         } else {
             result.clone()
         };
+        if method.uses_streams(&self.agent_type.schema) {
+            let invoke = if ephemeral {
+                "invokeAndAwaitWithMetadata"
+            } else {
+                "invokeAndAwait"
+            };
+            let decode_result = if ephemeral {
+                "base.ownSchemaValueStreams(__result.value); return { metadata: __result.metadata, value: __decode(__result.value) };"
+            } else {
+                "base.ownSchemaValueStreams(__result); return __decode(__result);"
+            };
+            writer.write_doc(&format!(
+                "{}\n\nNative streams move into this awaited call and cannot be reused. Returned streams are lazy; unread forwarding preserves the endpoint. Use abortable(signal, ...) for cancellation. Trigger and schedule are unavailable for stream methods.",
+                method.description
+            ));
+            writer.write_line(formatdoc! {"
+                readonly {member_name}: {{
+                  (...args: [{args}]): Promise<{await_result}>;
+                  abortable(signal: AbortSignal, ...args: [{args}]): Promise<{await_result}>;
+                }} = (() => {{
+                  const __encode = {encode};
+                  const __decode = {decode};
+                  const __await = async (signal: AbortSignal | undefined, ...__args: [{args}]): Promise<{await_result}> => {{
+                    base.throwIfAborted(signal);
+                    const __result = await base.withNativeStreamScope(() => __encode(__args),
+                      __value => this.resolved.{invoke}({method_name}, __value, signal));
+                    return base.withNativeStreamScope(() => {{ {decode_result} }});
+                  }};
+                  return Object.assign((...__args: [{args}]) => __await(undefined, ...__args), {{
+                    abortable: (signal: AbortSignal, ...__args: [{args}]) => __await(signal, ...__args),
+                  }});
+                }})();
+            "});
+            return Ok(());
+        }
         let trigger_result = if ephemeral {
             "base.RemoteInvocationResult['metadata']"
         } else {
@@ -2861,6 +2896,14 @@ impl TypeScriptBridgeGenerator {
                 format!("((n: any) => base.datetimeToISOString(n.value))({value})")
             }
             SchemaType::Duration { .. } => format!("((n: any) => n.nanoseconds)({value})"),
+            SchemaType::Stream {
+                inner: Some(inner), ..
+            } => format!(
+                "base.agentStreamFromHandle<{}>(({} as Extract<base.SchemaValue, {{ tag: 'stream' }}>).handle, {})",
+                self.type_reference(inner)?,
+                value,
+                self.guest_stream_item_codec(inner)?
+            ),
             SchemaType::Ref { .. } => anyhow::bail!(
                 "Unresolved SchemaType::Ref reached guest decode; value expr = {value}"
             ),
@@ -3269,6 +3312,12 @@ impl TypeScriptBridgeGenerator {
                 format!("{{ tag: 'datetime', value: base.datetimeFromISOString({value}) }}")
             }
             SchemaType::Duration { .. } => format!("{{ tag: 'duration', nanoseconds: {value} }}"),
+            SchemaType::Stream {
+                inner: Some(inner), ..
+            } => format!(
+                "{{ tag: 'stream', handle: base.agentStreamToHandle({value}, {}) }}",
+                self.guest_stream_item_codec(inner)?
+            ),
             SchemaType::Ref { .. } => anyhow::bail!(
                 "Unresolved SchemaType::Ref reached guest encode; value expr = {value}"
             ),
@@ -3285,6 +3334,17 @@ impl TypeScriptBridgeGenerator {
             ),
         };
         Ok(rendered)
+    }
+
+    fn guest_stream_item_codec(&self, typ: &SchemaType) -> anyhow::Result<String> {
+        let graph = projected_schema_graph(self.type_naming.graph(), typ);
+        let graph = self.schema_graphs.borrow_mut().intern(graph);
+        Ok(format!(
+            "({{ get graph() {{ return {graph}; }}, toValue: (item: any): base.SchemaValue => ({}), fromValue: (item: base.SchemaValue): {} => ({}) }} satisfies base.SchemaCodec)",
+            self.encode_schema_value("item", typ)?,
+            self.type_reference(typ)?,
+            self.decode_schema_value("item", typ)?
+        ))
     }
 
     /// Inline schema-native encode for a single [`SchemaType`], without the

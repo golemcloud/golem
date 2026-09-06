@@ -30,3 +30,7 @@ export type UnstructuredBinaryType<MT extends string[] | string = string> =
 export * from './schema';
 export * from './agent';
 export * from './tool';
+export { AgentStream, agentStreamToHandle, agentStreamFromHandle } from '../schema/agentStream';
+export type { SchemaCodec } from '../schema/codec';
+export { withNativeStreamScope, ownSchemaValueStreams } from '../internal/schema-model/streamScope';
+export { throwIfAborted } from '../internal/pollableUtils';
