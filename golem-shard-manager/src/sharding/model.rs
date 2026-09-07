@@ -157,6 +157,11 @@ pub struct ExecutorShards {
 pub struct ShardLeaseGrant {
     pub shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     pub expires_at: DateTime<Utc>,
+    /// The revision of the persisted state `shard_epochs` was read from. Every delivery of a
+    /// shard set carries it, and the executor applies a delivery only if its revision is at least
+    /// the last one it applied, so a renewal response and a push that cross on the network cannot
+    /// leave the older set in place.
+    pub revision: ShardLeaseRevision,
 }
 
 /// The acknowledgement of a registration: the granted lease plus the cluster shard count, which
@@ -177,6 +182,8 @@ pub struct ShardAssignmentPush {
     pub shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     pub expires_at: DateTime<Utc>,
     pub number_of_shards: usize,
+    /// See [`ShardLeaseGrant::revision`].
+    pub revision: ShardLeaseRevision,
 }
 
 pub type ExecutorAddrs = BTreeMap<ExecutorId, ExecutorAddr>;
@@ -256,6 +263,7 @@ impl ShardLeaseState {
                 .map(|(shard_id, entry)| (*shard_id, entry.epoch))
                 .collect(),
             expires_at: lease.expires_at,
+            revision: self.revision,
         })
     }
 
@@ -269,6 +277,7 @@ impl ShardLeaseState {
                 shard_epochs: grant.shard_epochs,
                 expires_at: grant.expires_at,
                 number_of_shards: self.number_of_shards,
+                revision: grant.revision,
             })
     }
 

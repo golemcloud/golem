@@ -195,6 +195,9 @@ message AssignShardsRequest {
   // Total number of shards in the cluster; never 0 — the executor divides by
   // it in check_worker.
   uint32 number_of_shards = 4;
+  // The revision of the shard manager's persisted state this set was read
+  // from; see golem.shardmanager.v1.RegisterSuccess.revision.
+  uint64 revision = 5;
 }
 
 message AssignShardsResponse {

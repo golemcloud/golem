@@ -259,6 +259,7 @@ impl WorkerExecutorServiceDefault {
                 })
                 .collect(),
             lease_ttl: Some(lease_ttl_to_proto(assignment.expires_at, Utc::now())),
+            revision: assignment.revision.0,
             number_of_shards: assignment.number_of_shards as u32,
         };
 

@@ -20,14 +20,14 @@ message QuotaError {
   }
 }
 
-// Failure of a shard lease operation (RenewShardLease, Deregister). Mirrors
-// QuotaError above, arm for arm: lease_not_found means the manager has no lease
-// for this executor_id, stale_epoch means the asserted set did not match and
-// nothing was renewed, internal is everything else.
+// Failure of a shard lease operation (RenewShardLease, Deregister).
+// lease_not_found means the manager has no lease for this executor_id;
+// internal is everything else. A claim that does not match the manager's view
+// is not a failure: the renewal is granted and the response carries the set
+// the manager holds for this executor, which the executor adopts.
 message ShardLeaseError {
   oneof error {
     golem.common.ErrorBody lease_not_found = 1;
-    golem.common.ErrorBody stale_epoch = 2;
     golem.common.ErrorBody internal = 3;
   }
 }

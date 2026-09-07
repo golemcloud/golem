@@ -2108,6 +2108,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
                 seconds: 3600,
                 nanos: 0,
             }),
+            revision: 1,
             number_of_shards: 1,
         })
         .await?

@@ -307,23 +307,30 @@ impl ShardManagement {
                 return Err(ShardManagerError::ShardLeaseNotFound { executor_id });
             }
 
-            // The whole claim is validated before anything is renewed. Revoked, moved and
-            // wrong-epoch all land here: in each case there is no epoch this claimant could have
-            // sent that would still be current for that shard.
-            for (shard_id, provided) in claimed {
-                let expected = shard_state
-                    .shard_assignments
-                    .get(shard_id)
-                    .filter(|entry| entry.executor_id == executor_id)
-                    .map(|entry| entry.epoch);
-                if expected != Some(*provided) {
-                    return Err(ShardManagerError::StaleShardEpoch {
-                        executor_id,
-                        shard_id: *shard_id,
-                        expected,
-                        provided: *provided,
-                    });
-                }
+            // The claim is what the executor believes it holds, not a condition of the renewal.
+            // A claim that does not match is an executor that missed a push, and the grant this
+            // returns is the manager's set, which the executor adopts - so the renewal is the
+            // guaranteed second delivery path for a push that was lost. Refusing it would only
+            // hold the executor on a picture the manager already knows is wrong. The mismatch is
+            // logged because it is the one signal that pushes to this executor are not landing.
+            let mismatched: Vec<ShardId> = claimed
+                .iter()
+                .filter(|(shard_id, provided)| {
+                    shard_state
+                        .shard_assignments
+                        .get(*shard_id)
+                        .filter(|entry| entry.executor_id == executor_id)
+                        .map(|entry| entry.epoch)
+                        != Some(**provided)
+                })
+                .map(|(shard_id, _)| *shard_id)
+                .collect();
+            if !mismatched.is_empty() {
+                warn!(
+                    executor_id = %executor_id,
+                    mismatched_shards = mismatched.iter().join(", "),
+                    "Shard lease claim does not match the manager's view; renewing and correcting"
+                );
             }
 
             if !shard_state.renew_lease(executor_id, now, lease_ttl) {
@@ -464,7 +471,7 @@ impl ShardManagement {
             //   - the rebalance plan is calculated,
             // but the rebalance plan is NOT applied yet. The lock is then released for apply.
             let now = Utc::now();
-            let (base, mut rebalance, full_assignment_executors, addrs) = self
+            let (mut base, mut rebalance, full_assignment_executors, addrs) = self
                 .mutate_and_persist(|current_shard_state| {
                     // Every pass begins by reaping the leases that lapsed since the last one.
                     // Removing a lease drops its shard assignments, so the plan computed below
@@ -507,6 +514,13 @@ impl ShardManagement {
                     )
                 })
                 .await?;
+
+            // `base` was cloned inside the closure, before that persist bumped the revision, so it
+            // is one behind the state it reflects whenever the pass wrote anything. Stamp it with
+            // the revision the state was actually stored under: `execute_rebalance` builds its
+            // pushes from `base` and bumps once more, so they name the revision the apply below
+            // lands at, and a renewal read from either persisted state loses to them.
+            base.revision = self.shard_state.read().await.revision;
 
             debug!(rebalance=%rebalance, "Applying rebalance plan");
             let rebalance_failures =
@@ -773,6 +787,10 @@ impl ShardManagement {
         // is what turns "plan + base" into the exact set each gaining executor is to hold. Its
         // stale-push report is the live apply's to make, not this copy's.
         let _ = planned.apply_rebalance(rebalance);
+        // The live apply persists this set one revision on from `base`, so that is the revision
+        // these pushes carry: a renewal read from `base` itself then loses to them on the executor
+        // instead of tying and undoing the push. Bumping the probe copy costs nothing.
+        planned.bump_revision()?;
         let pushes = pushes_for(
             &planned,
             rebalance.get_assignments().assignments.keys().copied(),

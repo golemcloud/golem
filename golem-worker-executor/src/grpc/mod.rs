@@ -82,7 +82,8 @@ use golem_common::model::worker::{
 };
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata,
-    AgentStatus, IdempotencyKey, OwnedAgentId, ScanCursor, ShardEpoch, ShardId, Timestamp,
+    AgentStatus, IdempotencyKey, OwnedAgentId, ScanCursor, ShardDeliveryOutcome, ShardEpoch,
+    ShardId, ShardLeaseRevision, Timestamp,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
@@ -174,7 +175,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .shard_manager_service()
             .set_assignment_changed_hook(Arc::new(move || {
                 let services = hook_services.clone();
-                Box::pin(async move { Ctx::on_shard_assignment_changed(&services).await })
+                Box::pin(async move { Self::apply_shard_assignment_effects(&services).await })
             }));
 
         let pod_name = std::env::var_os("POD_NAME").map(|s| s.to_string_lossy().to_string());
@@ -189,9 +190,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             shard_assignment.number_of_shards,
             &shard_assignment.shard_epochs,
             shard_assignment.expires_at,
+            shard_assignment.revision,
         );
 
-        Ctx::on_shard_assignment_changed(&worker_executor)
+        Self::apply_shard_assignment_effects(&worker_executor)
             .await
             .map_err(wasmtime::Error::from_anyhow)?;
 
@@ -1046,13 +1048,41 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         )
         .map_err(WorkerExecutorError::invalid_request)?;
 
-        self.shard_service()
-            .assign_shards(number_of_shards, &shard_epochs, Some(expires_at))?;
+        let revision = ShardLeaseRevision(request.revision);
+        if let ShardDeliveryOutcome::Stale { delivered, applied } = self
+            .shard_service()
+            .assign_shards(number_of_shards, &shard_epochs, Some(expires_at), revision)?
+        {
+            // Crossed on the network with a newer delivery, which has already
+            // been applied; applying this one would put the older set back.
+            tracing::warn!(
+                %delivered,
+                %applied,
+                "Ignoring an AssignShards push older than the last delivery applied"
+            );
+            return Ok(());
+        }
 
+        Self::apply_shard_assignment_effects(self).await?;
+
+        Ok(())
+    }
+
+    /// The one receipt path for a delivered shard set, whichever way it came:
+    /// a registration, an `AssignShards` push, or a renewal response that
+    /// corrected the set. Sweeps the agents whose shard went away, then hands
+    /// the executor the new set to recover agents for. Both halves run for
+    /// every path, because a renewal can narrow the set as well as widen it:
+    /// a path without the sweep would leave agents running on shards this
+    /// executor no longer owns.
+    pub(crate) async fn apply_shard_assignment_effects<T>(this: &T) -> Result<(), anyhow::Error>
+    where
+        T: HasAll<Ctx> + Send + Sync + 'static,
+    {
         // Pure set membership on purpose: a lapsed lease must not restart every
         // running agent. Draining on lease loss is ticket 5's.
-        for (agent_id, worker_details) in self.active_agents().snapshot().await {
-            if self.shard_service().check_worker(&agent_id).is_err()
+        for (agent_id, worker_details) in this.active_agents().snapshot().await {
+            if this.shard_service().check_worker(&agent_id).is_err()
                 && let Some(mut await_interrupted) = worker_details
                     .set_interrupting(InterruptKind::Restart)
                     .await
@@ -1061,9 +1091,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         }
 
-        Ctx::on_shard_assignment_changed(self).await?;
-
-        Ok(())
+        Ctx::on_shard_assignment_changed(this).await
     }
 
     async fn get_agent_metadata_internal(

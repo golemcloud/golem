@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use crate::sharding::leader_election::LeaseLost;
-use crate::sharding::model::{ExecutorId, ShardEpoch};
-use golem_common::model::ShardId;
+use crate::sharding::model::ExecutorId;
 use golem_common::retriable_error::IsRetriableError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::repo::RepoError;
@@ -40,20 +39,6 @@ pub enum ShardManagerError {
     ConcurrentModification,
     #[error("No shard lease for executor {executor_id}")]
     ShardLeaseNotFound { executor_id: ExecutorId },
-    #[error(
-        "Stale shard epoch for shard {shard_id} claimed by executor {executor_id} (provided: \
-         {provided}, current: {})",
-        .expected.map(|epoch| epoch.to_string())
-            .unwrap_or_else(|| "not owned by this executor".to_string())
-    )]
-    StaleShardEpoch {
-        executor_id: ExecutorId,
-        shard_id: ShardId,
-        /// `None` when the shard is unassigned or has moved to another executor: there is no epoch
-        /// this claimant could have sent that would have been accepted.
-        expected: Option<ShardEpoch>,
-        provided: ShardEpoch,
-    },
     #[error(
         "Leadership lost: the election key {leader_key} is no longer held at creation revision \
          {create_revision}"
@@ -98,17 +83,6 @@ impl ShardManagerError {
             Self::ShardLeaseNotFound { executor_id } => Self::ShardLeaseNotFound {
                 executor_id: *executor_id,
             },
-            Self::StaleShardEpoch {
-                executor_id,
-                shard_id,
-                expected,
-                provided,
-            } => Self::StaleShardEpoch {
-                executor_id: *executor_id,
-                shard_id: *shard_id,
-                expected: *expected,
-                provided: *provided,
-            },
             Self::LeadershipLost {
                 leader_key,
                 create_revision,
@@ -140,9 +114,6 @@ impl IsRetriableError for ShardManagerError {
             // The executor holds no lease at all, so the same request can only be refused again;
             // recovery is a fresh registration, which is a different call.
             ShardManagerError::ShardLeaseNotFound { .. } => false,
-            // `with_retriable_errors` re-invokes with the same claim, and the claim is what was
-            // refused. The executor's own next renewal, with a corrected set, is the retry.
-            ShardManagerError::StaleShardEpoch { .. } => false,
             // Another replica holds the leadership now; no retry here can take it back.
             ShardManagerError::LeadershipLost { .. } => false,
             // A campaigner holds nothing yet: a fresh lease and a new campaign is full recovery.
@@ -230,8 +201,7 @@ mod tests {
     use test_r::test;
 
     use super::ShardManagerError;
-    use crate::sharding::model::{ExecutorId, ShardEpoch};
-    use golem_common::model::ShardId;
+    use crate::sharding::model::ExecutorId;
     use golem_common::retriable_error::IsRetriableError;
 
     #[test]
@@ -250,15 +220,6 @@ mod tests {
         assert!(
             !ShardManagerError::ShardLeaseNotFound {
                 executor_id: ExecutorId(uuid::Uuid::from_u128(1)),
-            }
-            .is_retriable()
-        );
-        assert!(
-            !ShardManagerError::StaleShardEpoch {
-                executor_id: ExecutorId(uuid::Uuid::from_u128(1)),
-                shard_id: ShardId::new(3),
-                expected: Some(ShardEpoch(2)),
-                provided: ShardEpoch(1),
             }
             .is_retriable()
         );

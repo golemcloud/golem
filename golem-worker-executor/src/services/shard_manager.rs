@@ -17,7 +17,9 @@ use crate::services::shutdown::Shutdown;
 use async_trait::async_trait;
 use chrono::Utc;
 use futures::future::BoxFuture;
-use golem_common::model::{ShardAssignment, ShardEpoch, ShardId};
+use golem_common::model::{
+    ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision,
+};
 use golem_service_base::clients::shard_manager::{ShardLeaseError, ShardManagerError};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -222,22 +224,37 @@ impl GrpcShardManagerService {
 
     /// Applies a granted lease and returns the cadence for the next pass.
     ///
-    /// A renewal that comes back with a set this executor did not hold is the
-    /// shard manager correcting a push this executor never received, so it is
-    /// an assignment change like any other and has to recover agents for the
-    /// new shards. Every other delivery path announces (`register`,
-    /// `assign_shards`, the re-registration after a lost lease); adopting a wider
-    /// set silently would leave those shards owned but unserved until the next
-    /// push happened to arrive.
+    /// The grant is the shard manager's set for this executor. Normally that
+    /// is exactly what was claimed, and only the lease clock moves. When it is
+    /// not, the manager is correcting a push this executor never received,
+    /// wider or narrower, and it is an assignment change like any other: the
+    /// hook runs the same sweep-and-recover the push path does. A grant older
+    /// than the last delivery applied crossed with a push on the network and
+    /// is ignored whole, or it would put the older set back.
     async fn adopt_lease(
         &self,
         shard_epochs: BTreeMap<ShardId, ShardEpoch>,
         expires_at: Option<chrono::DateTime<Utc>>,
+        revision: ShardLeaseRevision,
     ) -> RenewalDelay {
         let shard_epochs: HashMap<ShardId, ShardEpoch> = shard_epochs.into_iter().collect();
-        match self.shard_service.update_lease(&shard_epochs, expires_at) {
-            Ok(true) => self.announce_assignment_changed().await,
-            Ok(false) => {}
+        match self
+            .shard_service
+            .update_lease(&shard_epochs, expires_at, revision)
+        {
+            Ok(ShardDeliveryOutcome::Applied { set_changed: true }) => {
+                info!(
+                    %revision,
+                    "Shard lease renewal corrected the shard set; sweeping and recovering agents"
+                );
+                self.announce_assignment_changed().await
+            }
+            Ok(ShardDeliveryOutcome::Applied { set_changed: false }) => {}
+            Ok(ShardDeliveryOutcome::Stale { delivered, applied }) => warn!(
+                %delivered,
+                %applied,
+                "Ignoring a shard lease renewal older than the last delivery applied"
+            ),
             Err(error) => warn!(%error, "Failed to apply a renewed shard lease"),
         }
         let cadence = renewal_interval_for(expires_at, Utc::now());
@@ -290,6 +307,7 @@ impl ShardManagerService for GrpcShardManagerService {
             number_of_shards,
             shard_epochs: registration.lease.shard_epochs.into_iter().collect(),
             expires_at: registration.lease.expires_at,
+            revision: registration.lease.revision,
         };
 
         // Started here rather than by the caller because this is the first
@@ -315,16 +333,9 @@ impl ShardManagerService for GrpcShardManagerService {
 
         let executor_id = self.executor_id();
         match self.client.renew_shard_lease(executor_id, claim).await {
-            Ok(lease) => self.adopt_lease(lease.shard_epochs, lease.expires_at).await,
-            Err(ShardLeaseError::StaleEpoch(details)) => {
-                // The manager's view of this executor's shards moved on. Keep
-                // the current set and retry: the correction arrives as an
-                // AssignShards push, not through the renewal.
-                warn!(
-                    details,
-                    "Shard lease renewal rejected as stale, keeping the current assignment"
-                );
-                self.next_retry_delay()
+            Ok(lease) => {
+                self.adopt_lease(lease.shard_epochs, lease.expires_at, lease.revision)
+                    .await
             }
             Err(ShardLeaseError::LeaseNotFound(details)) => {
                 // The manager no longer knows this executor. Drop every shard
@@ -351,6 +362,7 @@ impl ShardManagerService for GrpcShardManagerService {
                                 assignment.number_of_shards,
                                 &assignment.shard_epochs,
                                 assignment.expires_at,
+                                assignment.revision,
                             );
                             info!(
                                 executor_id = %fresh_executor_id,
@@ -487,6 +499,7 @@ mod tests {
             lease: ShardLease {
                 shard_epochs: claim(shard_epochs),
                 expires_at,
+                revision: ShardLeaseRevision(1),
             },
         }
     }
@@ -676,6 +689,7 @@ mod tests {
             assignment.number_of_shards,
             &assignment.shard_epochs,
             assignment.expires_at,
+            assignment.revision,
         );
 
         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -702,6 +716,7 @@ mod tests {
             Ok(ShardLease {
                 shard_epochs: claimed,
                 expires_at: Some(granted_expiry),
+                revision: ShardLeaseRevision(1),
             })
         }));
         let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
@@ -709,6 +724,7 @@ mod tests {
             SHARDS,
             &epochs([(0, 7), (3, 2)]),
             Some(Utc::now() + ChronoDuration::seconds(10)),
+            ShardLeaseRevision(1),
         );
 
         let delay = service.renew_shard_lease().await;
@@ -728,35 +744,6 @@ mod tests {
             delay > Duration::from_secs(90) && delay <= Duration::from_secs(100),
             "the next pass is one third of the granted TTL, got {delay:?}"
         );
-    }
-
-    /// A stale claim renews nothing. The executor keeps what it has and
-    /// retries; the correction arrives as an `AssignShards` push.
-    #[test]
-    async fn a_stale_epoch_keeps_the_current_set_and_retries() {
-        let mock = Arc::new(
-            MockShardManager::new()
-                .with_renew(|_, _| Err(ShardLeaseError::StaleEpoch("moved on".to_string()))),
-        );
-        let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
-        let expires_at = Utc::now() + ChronoDuration::seconds(60);
-        shard_service.register(SHARDS, &epochs([(0, 7), (3, 2)]), Some(expires_at));
-
-        let delay = service.renew_shard_lease().await;
-
-        let assignment = shard_service.current_assignment().unwrap();
-        assert_eq!(
-            assignment.shard_epochs,
-            epochs([(0, 7), (3, 2)]),
-            "a stale renewal must not drop the set the executor still holds"
-        );
-        assert_eq!(assignment.expires_at, Some(expires_at));
-        assert_eq!(
-            delay,
-            Some(MIN_RENEWAL_INTERVAL),
-            "and it must be retried, not given up on"
-        );
-        assert_eq!(mock.renew_calls().len(), 1);
     }
 
     /// An unknown lease clears the assignment (leaving
@@ -787,6 +774,7 @@ mod tests {
             assignment.number_of_shards,
             &assignment.shard_epochs,
             assignment.expires_at,
+            assignment.revision,
         );
         let original_executor_id = mock.register_calls()[0];
 
@@ -814,27 +802,94 @@ mod tests {
     /// hook, or every renewal would trigger a
     /// recovery sweep.
     #[test]
-    async fn a_renewal_that_widens_the_set_announces_it_and_an_unchanged_one_does_not() {
+    async fn a_renewal_that_changes_the_set_announces_it_and_an_unchanged_one_does_not() {
         let granted_expiry = Utc::now() + ChronoDuration::seconds(300);
-        let widened = Arc::new(AtomicBool::new(false));
-        let widen = widened.clone();
+        // `None` echoes the claim; `Some` is the manager correcting it.
+        let correction: Arc<StdMutex<Option<BTreeMap<ShardId, ShardEpoch>>>> =
+            Arc::new(StdMutex::new(None));
+        let correct = correction.clone();
         let mock = Arc::new(MockShardManager::new().with_renew(move |_, claimed| {
-            // First renewal echoes the claim; the second hands back an extra
-            // shard the executor never knew it owned.
-            let mut shard_epochs = claimed;
-            if widen.load(Ordering::SeqCst) {
-                shard_epochs.insert(ShardId::new(4), ShardEpoch(9));
-            }
+            let shard_epochs = correct.lock().unwrap().clone().unwrap_or(claimed);
             Ok(ShardLease {
                 shard_epochs,
                 expires_at: Some(granted_expiry),
+                revision: ShardLeaseRevision(1),
             })
         }));
         let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
         shard_service.register(
             SHARDS,
-            &epochs([(0, 7)]),
+            &epochs([(0, 7), (3, 2)]),
             Some(Utc::now() + ChronoDuration::seconds(30)),
+            ShardLeaseRevision(1),
+        );
+
+        let announced = Arc::new(AtomicUsize::new(0));
+        let count = announced.clone();
+        service.set_assignment_changed_hook(Arc::new(move || {
+            let count = count.clone();
+            Box::pin(async move {
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        }));
+
+        service.renew_shard_lease().await;
+        assert_eq!(
+            announced.load(Ordering::SeqCst),
+            0,
+            "an unchanged set is a lease-clock refresh, not an assignment change"
+        );
+
+        // wider: a shard this executor never knew it owned
+        *correction.lock().unwrap() = Some(claim([(0, 7), (3, 2), (4, 9)]));
+        service.renew_shard_lease().await;
+        assert_eq!(
+            announced.load(Ordering::SeqCst),
+            1,
+            "a widened set must recover agents for the shards it just gained"
+        );
+        assert_eq!(
+            shard_service.current_assignment().unwrap().shard_epochs,
+            epochs([(0, 7), (3, 2), (4, 9)])
+        );
+
+        // narrower: a shard the manager has given to someone else
+        *correction.lock().unwrap() = Some(claim([(0, 7), (4, 9)]));
+        service.renew_shard_lease().await;
+        assert_eq!(
+            announced.load(Ordering::SeqCst),
+            2,
+            "a narrowed set must sweep the agents on the shard it just lost"
+        );
+        assert_eq!(
+            shard_service.current_assignment().unwrap().shard_epochs,
+            epochs([(0, 7), (4, 9)]),
+            "and the narrower set is what the executor now serves"
+        );
+    }
+
+    /// Two deliveries can cross on the network. A renewal response read from
+    /// an older state than a push the executor has already applied must be
+    /// ignored whole, or it would put the older set back and, worse, announce
+    /// that as a change.
+    #[test]
+    async fn a_renewal_older_than_the_last_applied_delivery_is_ignored() {
+        let mock = Arc::new(MockShardManager::new().with_renew(move |_, _| {
+            Ok(ShardLease {
+                shard_epochs: claim([(0, 7)]),
+                expires_at: Some(Utc::now() + ChronoDuration::seconds(300)),
+                revision: ShardLeaseRevision(4),
+            })
+        }));
+        let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
+        // the push at revision 5 landed first and widened the set
+        let pushed_expiry = Some(Utc::now() + ChronoDuration::seconds(30));
+        shard_service.register(
+            SHARDS,
+            &epochs([(0, 7), (4, 9)]),
+            pushed_expiry,
+            ShardLeaseRevision(5),
         );
 
         let announced = Arc::new(AtomicBool::new(false));
@@ -848,22 +903,21 @@ mod tests {
         }));
 
         service.renew_shard_lease().await;
-        assert!(
-            !announced.load(Ordering::SeqCst),
-            "an unchanged set is a lease-clock refresh, not an assignment change"
-        );
 
-        widened.store(true, Ordering::SeqCst);
-        service.renew_shard_lease().await;
-
-        assert!(
-            announced.load(Ordering::SeqCst),
-            "a widened set must recover agents for the shards it just gained"
+        let assignment = shard_service.current_assignment().unwrap();
+        assert_eq!(
+            assignment.shard_epochs,
+            epochs([(0, 7), (4, 9)]),
+            "the older renewal narrowed the set the newer push had just widened"
         );
         assert_eq!(
-            shard_service.current_assignment().unwrap().shard_epochs,
-            epochs([(0, 7), (4, 9)]),
-            "and the wider set is what the executor now serves"
+            assignment.expires_at, pushed_expiry,
+            "ignored whole, expiry included"
+        );
+        assert_eq!(assignment.revision, ShardLeaseRevision(5));
+        assert!(
+            !announced.load(Ordering::SeqCst),
+            "an ignored delivery is not an assignment change"
         );
     }
 
@@ -889,6 +943,7 @@ mod tests {
             SHARDS,
             &epochs([(0, 1)]),
             Some(Utc::now() + ChronoDuration::seconds(60)),
+            ShardLeaseRevision(1),
         );
 
         service.renew_shard_lease().await;
@@ -924,6 +979,7 @@ mod tests {
             SHARDS,
             &epochs([(0, 1)]),
             Some(Utc::now() + ChronoDuration::seconds(1)),
+            ShardLeaseRevision(1),
         );
 
         let first = service.renew_shard_lease().await;
@@ -968,6 +1024,7 @@ mod tests {
                 Ok(ShardLease {
                     shard_epochs: claimed,
                     expires_at: Some(Utc::now() + ChronoDuration::seconds(30)),
+                    revision: ShardLeaseRevision(1),
                 })
             } else {
                 Err(ShardLeaseError::InternalServerError("down".to_string()))
@@ -978,6 +1035,7 @@ mod tests {
             SHARDS,
             &epochs([(0, 1)]),
             Some(Utc::now() + ChronoDuration::seconds(300)),
+            ShardLeaseRevision(1),
         );
 
         let mut delays = Vec::new();

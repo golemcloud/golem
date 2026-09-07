@@ -70,6 +70,12 @@ message RegisterSuccess {
   // machines' clocks are never compared: the executor anchors it to its own
   // clock on receipt.
   google.protobuf.Duration lease_ttl = 3;
+  // The revision of the shard manager's persisted state this set was read
+  // from. Every delivery of a shard set carries one - this, AssignShards and
+  // ShardLease - and the executor applies a delivery only if its revision is at
+  // least the last one it applied, so two deliveries that cross on the network
+  // cannot leave the older set in place.
+  uint64 revision = 4;
 }
 
 // An executor's shard lease: the complete set of shards it owns with the epoch
@@ -78,12 +84,17 @@ message ShardLease {
   repeated golem.shardmanager.ShardEpochEntry shard_epochs = 1;
   // See RegisterSuccess.lease_ttl.
   google.protobuf.Duration lease_ttl = 2;
+  // See RegisterSuccess.revision.
+  uint64 revision = 3;
 }
 
-// Extends the executor's shard lease before it expires. shard_epochs must be
-// exactly the set the executor was last told it holds: every entry must exist,
-// be owned by this executor, and be at that epoch, or the whole renewal fails
-// with stale_epoch and nothing is renewed. Renewal never advances an epoch.
+// Extends the executor's shard lease before it expires. shard_epochs is the
+// set the executor believes it holds. It is what the executor is proving it is
+// alive for, not a condition of the renewal: a claim that does not match the
+// manager's view is renewed all the same, and the response carries the set the
+// manager holds for this executor, which the executor adopts. That makes the
+// renewal a guaranteed second delivery path for a push that was lost, and it
+// means a renewal never advances an epoch.
 message RenewShardLeaseRequest {
   string executor_id = 1;
   repeated golem.shardmanager.ShardEpochEntry shard_epochs = 2;

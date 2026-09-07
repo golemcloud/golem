@@ -30,7 +30,7 @@ use golem_common::model::protobuf::{
     lease_expiry_from_ttl, shard_epochs_from_proto, shard_epochs_to_proto,
 };
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
-use golem_common::model::{RetryConfig, RoutingTable, ShardEpoch, ShardId};
+use golem_common::model::{RetryConfig, RoutingTable, ShardEpoch, ShardId, ShardLeaseRevision};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::with_retries;
 use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
@@ -62,9 +62,11 @@ pub trait ShardManager: Send + Sync {
         executor_id: Uuid,
     ) -> Result<ShardRegistration, ShardManagerError>;
 
-    /// Extends this executor's shard lease. `shard_epochs` must be exactly the
-    /// set the executor was last told it holds; any mismatch fails the whole
-    /// renewal with `StaleEpoch` and renews nothing.
+    /// Extends this executor's shard lease. `shard_epochs` is the set the
+    /// executor believes it holds; it is not a condition of the renewal. A
+    /// claim that does not match the manager's view is renewed all the same,
+    /// and the returned lease carries the manager's set, which the caller
+    /// adopts exactly as it would an `AssignShards` push.
     async fn renew_shard_lease(
         &self,
         executor_id: Uuid,
@@ -133,6 +135,11 @@ pub struct ShardLease {
     /// manager's clock is never compared against ours.
     /// `None` means the lease never expires.
     pub expires_at: Option<DateTime<Utc>>,
+    /// The revision of the shard manager's persisted state this set was read
+    /// from; the executor applies a delivery only if it is at least the last
+    /// one applied, so a renewal and a push that cross cannot leave the older
+    /// set in place.
+    pub revision: ShardLeaseRevision,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::shardmanager::v1::ShardLease> for ShardLease {
@@ -144,6 +151,7 @@ impl TryFrom<golem_api_grpc::proto::golem::shardmanager::v1::ShardLease> for Sha
         Ok(Self {
             shard_epochs: shard_epochs_from_proto(value.shard_epochs)?,
             expires_at: expires_at_from_ttl(value.lease_ttl)?,
+            revision: ShardLeaseRevision(value.revision),
         })
     }
 }
@@ -292,6 +300,7 @@ impl ShardManager for GrpcShardManager {
                                         .map_err(ShardManagerError::ConversionError)?,
                                     expires_at: expires_at_from_ttl(success.lease_ttl)
                                         .map_err(ShardManagerError::ConversionError)?,
+                                    revision: ShardLeaseRevision(success.revision),
                                 },
                             })
                         }
@@ -671,14 +680,14 @@ impl From<&'static str> for QuotaError {
     }
 }
 
-/// The failure arms of `RenewShardLease` and `Deregister`. Mirrors `QuotaError`
-/// arm for arm; the executor branches on the arm, never on the message string.
+/// The failure arms of `RenewShardLease` and `Deregister`; the executor
+/// branches on the arm, never on the message string. There is no stale-epoch
+/// arm: a claim that does not match the manager's view is renewed and
+/// corrected in the response, not refused.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ShardLeaseError {
     #[error("Shard lease not found: {0}")]
     LeaseNotFound(String),
-    #[error("Stale shard epoch: {0}")]
-    StaleEpoch(String),
     #[error("Conversion error: {0}")]
     ConversionError(String),
     #[error("Internal server error: {0}")]
@@ -701,7 +710,6 @@ impl SafeDisplay for ShardLeaseError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::LeaseNotFound(_) => self.to_string(),
-            Self::StaleEpoch(_) => self.to_string(),
             Self::ConversionError(_) => self.to_string(),
             Self::InternalServerError(_) => "Internal error".to_string(),
             Self::InternalClientError(_) => "Internal error".to_string(),
@@ -720,7 +728,6 @@ impl From<golem_api_grpc::proto::golem::shardmanager::v1::ShardLeaseError> for S
         use golem_api_grpc::proto::golem::shardmanager::v1::shard_lease_error::Error;
         match value.error {
             Some(Error::LeaseNotFound(body)) => Self::LeaseNotFound(body.error),
-            Some(Error::StaleEpoch(body)) => Self::StaleEpoch(body.error),
             Some(Error::Internal(body)) => Self::InternalServerError(body.error),
             None => Self::internal_client_error("Missing error field"),
         }

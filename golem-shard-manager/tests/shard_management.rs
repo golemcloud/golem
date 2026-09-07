@@ -1741,20 +1741,20 @@ async fn renewing_twice_with_the_same_epochs_moves_nothing() {
 }
 
 #[test]
-// The whole claim is validated before anything is renewed, and a claim that does not match is
-// refused in one piece: a revoked shard, a shard that moved elsewhere and a wrong epoch all mean
-// the executor's picture is stale, and renewing the parts that happen to still be right would
-// extend a lease on a picture the manager knows is wrong.
-async fn a_stale_claim_renews_nothing_and_leaves_the_expiry_untouched() {
+// The claim is what the executor believes it holds, not a condition of the renewal. A wrong epoch,
+// another executor's shard and a released shard are all an executor that missed a push, and
+// refusing its renewal would only hold it on a picture the manager knows is wrong. It is renewed,
+// and the grant carries the manager's set: the renewal is the guaranteed second delivery path for a
+// push that was lost. Only an executor the manager has never heard of is refused.
+async fn a_mismatched_claim_is_renewed_and_corrected() {
     let worker_executors = Arc::new(TestWorkerExecutors::default());
     let (shard_management, persistence, mut join_set) =
         new_shard_management(balanced_pair(), worker_executors.clone()).await;
 
     let before = persistence.latest().await;
-    let expiry_before = expiry_of(&before, executor(1));
-    let writes_before = persistence.write_count().await;
+    let truth = claim_of(&before, executor(1));
 
-    // an executor the manager has never heard of
+    // an executor the manager has never heard of: still the one refusal
     let err = shard_management
         .renew_shard_lease(executor(9), &BTreeMap::new())
         .await
@@ -1768,42 +1768,26 @@ async fn a_stale_claim_renews_nothing_and_leaves_the_expiry_untouched() {
     );
 
     // a wrong epoch, alongside a claim entry that is perfectly valid
-    let mut wrong_epoch = claim_of(&before, executor(1));
+    let mut wrong_epoch = truth.clone();
     wrong_epoch.insert(ShardId::new(1), ShardEpoch(7));
-    let err = shard_management
+    let expiry_before = expiry_of(&persistence.latest().await, executor(1));
+    let grant = shard_management
         .renew_shard_lease(executor(1), &wrong_epoch)
         .await
-        .expect_err("a claim at the wrong epoch must be refused");
-    assert!(
-        matches!(
-            err,
-            ShardManagerError::StaleShardEpoch {
-                shard_id,
-                expected: Some(ShardEpoch(0)),
-                provided: ShardEpoch(7),
-                ..
-            } if shard_id == ShardId::new(1)
-        ),
-        "got {err:?}"
+        .expect("a claim at the wrong epoch is renewed and corrected");
+    assert_eq!(
+        grant.shard_epochs, truth,
+        "the grant is the manager's set, not the claim"
     );
+    assert!(grant.expires_at > expiry_before, "the lease was extended");
 
     // a shard that belongs to another executor
     let moved = BTreeMap::from([(ShardId::new(2), ShardEpoch(0))]);
-    let err = shard_management
+    let grant = shard_management
         .renew_shard_lease(executor(1), &moved)
         .await
-        .expect_err("claiming another executor's shard must be refused");
-    assert!(
-        matches!(
-            err,
-            ShardManagerError::StaleShardEpoch {
-                shard_id,
-                expected: None,
-                ..
-            } if shard_id == ShardId::new(2)
-        ),
-        "got {err:?}"
-    );
+        .expect("claiming another executor's shard is renewed and corrected");
+    assert_eq!(grant.shard_epochs, truth);
 
     // ...and a shard nobody owns any more. Deregistering executor 2 releases its shards without
     // waking the loop, so they stay unassigned for the rest of this test.
@@ -1815,38 +1799,44 @@ async fn a_stale_claim_renews_nothing_and_leaves_the_expiry_untouched() {
         (ShardId::new(0), ShardEpoch(0)),
         (ShardId::new(2), ShardEpoch(0)),
     ]);
-    let err = shard_management
+    let grant = shard_management
         .renew_shard_lease(executor(1), &revoked)
         .await
-        .expect_err("claiming a released shard must be refused");
-    assert!(
-        matches!(
-            err,
-            ShardManagerError::StaleShardEpoch {
-                shard_id,
-                expected: None,
-                ..
-            } if shard_id == ShardId::new(2)
-        ),
-        "got {err:?}"
-    );
+        .expect("claiming a released shard is renewed and corrected");
+    assert_eq!(grant.shard_epochs, truth);
 
-    // Nothing was renewed by any of them: the expiry is exactly where it was, shard 0 - valid in
-    // two of the refused claims - never moved, and the only write was the deregistration's.
+    // None of the corrections moved anything: executor 1's set and epochs are exactly what they
+    // were, only its lease clock moved, and executor 2's released shards stayed released.
     let after = persistence.latest().await;
+    assert_eq!(claim_of(&after, executor(1)), truth);
+    assert!(expiry_of(&after, executor(1)) > expiry_before);
+    assert_eq!(after.get_unassigned_shards(), shard_ids(&[2, 3]));
+
+    join_set.abort_all();
+}
+
+#[test]
+// Every delivery carries the revision of the persisted state its set was read from, so the executor
+// can order a push and a renewal response that cross on the network. A renewal reads the state as
+// it is at that moment; the renewal itself is then persisted one revision on.
+async fn a_grant_carries_the_revision_of_the_state_it_was_read_from() {
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let (shard_management, persistence, mut join_set) =
+        new_shard_management(balanced_pair(), worker_executors.clone()).await;
+
+    let before = persistence.latest().await;
+    let grant = shard_management
+        .renew_shard_lease(executor(1), &claim_of(&before, executor(1)))
+        .await
+        .expect("a valid claim should have been renewed");
+
     assert_eq!(
-        expiry_of(&after, executor(1)),
-        expiry_before,
-        "a refused renewal extended the lease anyway"
+        grant.revision, before.revision,
+        "the grant names the persisted revision its set was read from"
     );
-    assert_eq!(
-        claim_of(&after, executor(1)),
-        claim_of(&before, executor(1))
-    );
-    assert_eq!(
-        persistence.write_count().await,
-        writes_before + 1,
-        "a refused renewal was persisted"
+    assert!(
+        persistence.latest().await.revision > grant.revision,
+        "the renewal itself was then persisted one revision on"
     );
 
     join_set.abort_all();
@@ -1916,77 +1906,55 @@ async fn a_lease_that_lapsed_before_its_renewal_is_not_found() {
 }
 
 #[test]
-// Reaping lapsed leases runs in a write of its own, ahead of the renewal. A stale claim from one
-// executor is refused without a write, and that refusal must not take another executor's reaping
-// down with it: the lapsed lease is gone and its shards released whatever the renewal then decides.
-// The loop is stopped first so that the lapse is observed by the renewal path and not by a tick.
-async fn a_refused_renewal_does_not_discard_the_reaping_of_another_lapsed_lease() {
+// Reaping lapsed leases runs in a write of its own, ahead of the renewal. The one refusal left - an
+// executor the manager does not know - lands after the reap and writes nothing, and it must not
+// take the reaping down with it: the lapsed leases are gone and their shards released whatever the
+// renewal then decides. The loop is stopped first so that the lapse is observed by the renewal
+// path and not by a tick.
+async fn a_refused_renewal_does_not_discard_the_reaping_of_lapsed_leases() {
     let worker_executors = Arc::new(TestWorkerExecutors::default());
     let (shard_management, persistence, mut join_set) = start_shard_management(
         balanced_pair(),
         worker_executors.clone(),
-        Duration::from_secs(2),
+        Duration::from_secs(1),
     )
     .await;
 
     join_set.abort_all();
     while join_set.join_next().await.is_some() {}
-
     let before = persistence.latest().await;
-    let claimed = claim_of(&before, executor(1));
+    assert!(before.has_executor(executor(1)) && before.has_executor(executor(2)));
 
-    // Keep executor 1 alive past executor 2's expiry: after this, 1 lapses at about +3.0 s while 2
-    // still lapses at +2.0 s.
-    tokio::time::sleep(Duration::from_millis(1000)).await;
-    shard_management
-        .renew_shard_lease(executor(1), &claimed)
-        .await
-        .expect("a valid claim should have been renewed");
-
-    // At about +2.4 s executor 2 has lapsed and executor 1 has not.
-    tokio::time::sleep(Duration::from_millis(1400)).await;
-    assert!(
-        persistence.latest().await.has_executor(executor(2)),
-        "nothing should have reaped executor 2 yet: the loop is stopped and no renewal has run"
-    );
+    // Both leases lapse, and nothing has reaped them: the loop is stopped.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert!(persistence.latest().await.has_executor(executor(2)));
     let writes_before = persistence.write_count().await;
 
-    // A stale claim from executor 1 is refused and renews nothing...
-    let mut stale = claimed.clone();
-    stale.insert(ShardId::new(0), ShardEpoch(7));
+    // An unknown executor's renewal is refused and writes nothing...
     let err = shard_management
-        .renew_shard_lease(executor(1), &stale)
+        .renew_shard_lease(executor(9), &BTreeMap::new())
         .await
-        .expect_err("a claim at the wrong epoch must be refused");
+        .expect_err("an unknown executor holds no lease to renew");
     assert!(
-        matches!(err, ShardManagerError::StaleShardEpoch { .. }),
+        matches!(err, ShardManagerError::ShardLeaseNotFound { .. }),
         "got {err:?}"
     );
 
-    // ...and yet executor 2's lapsed lease was reaped, in a write of its own.
+    // ...and yet the lapsed leases were reaped, in a write of their own.
     let after = persistence.latest().await;
     assert!(
-        !after.has_executor(executor(2)),
-        "the refused renewal discarded the reaping of executor 2's lapsed lease"
+        !after.has_executor(executor(1)) && !after.has_executor(executor(2)),
+        "the refused renewal discarded the reaping of the lapsed leases"
     );
     assert_eq!(
         after.get_unassigned_shards(),
-        shard_ids(&[2, 3]),
-        "executor 2's shards were not released along with its lease"
+        shard_ids(&[0, 1, 2, 3]),
+        "the lapsed leases' shards were not released along with them"
     );
     assert_eq!(
         persistence.write_count().await,
         writes_before + 1,
         "the reaping must land as exactly one write, with none for the refused renewal"
-    );
-    assert!(
-        after.has_executor(executor(1)),
-        "the live executor must be untouched by another's reaping"
-    );
-    assert_eq!(
-        claim_of(&after, executor(1)),
-        claimed,
-        "a refused renewal must not move executor 1's epochs"
     );
 }
 
@@ -2091,6 +2059,37 @@ async fn deregistering_an_executor_re_homes_its_shards_within_one_tick() {
         .expect("a graceful deregistration should have been persisted");
 
     wait_for_local_assignment(&worker_executors, staying_pod, shard_ids(&[0, 1, 2, 3])).await;
+
+    // The push that re-homed the shards is built from a probe copy before the live apply, and
+    // carries the revision that apply lands at - so a persisted state exists at exactly that
+    // revision holding exactly that set. A renewal read from the pre-apply state then loses to
+    // the push on the executor instead of tying with it and undoing it.
+    let last_push = worker_executors
+        .pushes_to(staying_pod)
+        .await
+        .pop()
+        .expect("the staying executor should have been pushed its full set");
+    assert_eq!(
+        last_push
+            .shard_epochs
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        shard_ids(&[0, 1, 2, 3])
+    );
+    let persisted_at_that_revision = persistence
+        .writes
+        .lock()
+        .await
+        .iter()
+        .find(|(_, written)| written.revision == last_push.revision)
+        .map(|(_, written)| written.shards_for_executor(executor(2)))
+        .expect("a state was persisted at the revision the push names");
+    assert_eq!(
+        persisted_at_that_revision,
+        Some(shard_ids(&[0, 1, 2, 3])),
+        "the push names a revision whose persisted state does not hold the set it delivered"
+    );
 
     let after = persistence.latest().await;
     assert!(!after.has_executor(executor(1)));

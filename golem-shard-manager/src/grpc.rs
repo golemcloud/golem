@@ -127,6 +127,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
                     number_of_shards: ack.number_of_shards as u32,
                     shard_epochs: shard_epoch_entries(&ack.grant.shard_epochs),
                     lease_ttl: Some(lease_ttl_to_proto(ack.grant.expires_at, Utc::now())),
+                    revision: ack.grant.revision.0,
                 },
             )),
             Err(error) => {
@@ -163,6 +164,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
                 golem::shardmanager::v1::ShardLease {
                     shard_epochs: shard_epoch_entries(&grant.shard_epochs),
                     lease_ttl: Some(lease_ttl_to_proto(grant.expires_at, Utc::now())),
+                    revision: grant.revision.0,
                 },
             ),
             Err(error) => {

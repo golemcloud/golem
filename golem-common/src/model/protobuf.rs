@@ -863,7 +863,7 @@ pub fn from_protobuf_resource_description(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ShardAssignment, ShardEpoch, ShardId};
+    use crate::model::{ShardAssignment, ShardEpoch, ShardId, ShardLeaseRevision};
     use std::collections::HashMap;
     use test_r::test;
 
@@ -889,7 +889,7 @@ mod tests {
         assert_eq!(received, pushed);
 
         let mut assignment = ShardAssignment::default();
-        assignment.set_shards(1024, &received, None);
+        assignment.set_shards(1024, &received, None, ShardLeaseRevision(1));
 
         assert_eq!(assignment.epoch_of(&ShardId::new(0)), Some(ShardEpoch(1)));
         assert_eq!(assignment.epoch_of(&ShardId::new(7)), Some(ShardEpoch(42)));

@@ -1072,6 +1072,7 @@ mod tests {
             1,
             &HashMap::from([(ShardId::new(0), ShardEpoch::default())]),
             None,
+            golem_common::model::ShardLeaseRevision::default(),
         );
         result
     }
