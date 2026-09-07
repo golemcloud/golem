@@ -108,7 +108,7 @@ async fn stored_oplog_batch_matches(
     namespace: &IndexedStorageNamespace,
     key: &str,
     expected: &[(u64, Bytes)],
-) -> bool {
+) -> Option<bool> {
     let first_id = expected.first().expect("non-empty oplog batch").0;
     let last_id = expected.last().expect("non-empty oplog batch").0;
     retry_storage_op(retry_config, "append_reconcile", key, || {
@@ -118,7 +118,13 @@ async fn stored_oplog_batch_matches(
                 .with_entity("oplog", "append_reconcile", "entry")
                 .read_raw(namespace, key, first_id, last_id)
                 .await
-                .map(|actual| stored_batch_matches(actual, expected))
+                .map(|actual| {
+                    if actual.is_empty() {
+                        None
+                    } else {
+                        Some(stored_batch_matches(actual, expected))
+                    }
+                })
         }
     })
     .await
@@ -203,6 +209,24 @@ async fn retry_oplog_append(
             }
         };
 
+        if write_may_have_committed {
+            match stored_oplog_batch_matches(
+                retry_config,
+                indexed_storage,
+                namespace,
+                key,
+                append.entries(),
+            )
+            .await
+            {
+                Some(true) => return,
+                Some(false) => panic!(
+                    "Indexed storage operation '{op_name}' failed for key '{key}' and the indeterminate write did not match storage: {error}"
+                ),
+                None => {}
+            }
+        }
+
         if retryable && let Some(delay) = get_delay(retry_config, attempts) {
             record_oplog_storage_retry(op_name);
             warn!(
@@ -215,26 +239,6 @@ async fn retry_oplog_append(
             );
             tokio::time::sleep(delay).await;
             continue;
-        }
-
-        if write_may_have_committed
-            && stored_oplog_batch_matches(
-                retry_config,
-                indexed_storage,
-                namespace,
-                key,
-                append.entries(),
-            )
-            .await
-        {
-            warn!(
-                op = op_name,
-                key = key,
-                attempts,
-                error = %error,
-                "Accepted an oplog append after its indeterminate result matched storage"
-            );
-            return;
         }
 
         if write_may_have_committed {

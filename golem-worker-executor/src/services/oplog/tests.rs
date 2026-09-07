@@ -530,6 +530,8 @@ struct ReadCountingIndexedStorage {
     reads: AtomicUsize,
     discard_compressed_appends: bool,
     read_error: Option<IndexedStorageError>,
+    read_failures: StdMutex<VecDeque<IndexedStorageError>>,
+    hidden_reads: AtomicUsize,
     append_failures: StdMutex<VecDeque<InjectedAppendFailure>>,
     append_many_failures: StdMutex<VecDeque<InjectedAppendFailure>>,
     append_attempts: AtomicUsize,
@@ -782,6 +784,16 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         self.count_read();
         if let Some(error) = &self.read_error {
             return Err(error.clone());
+        }
+        if let Some(error) = self.read_failures.lock().unwrap().pop_front() {
+            return Err(error);
+        }
+        if self
+            .hidden_reads
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            return Ok(Vec::new());
         }
         self.inner
             .read(
@@ -1563,7 +1575,7 @@ async fn initial_append_committed_then_indeterminate_is_reconciled(_tracing: &Tr
     let oplog = create_append_reconciliation_oplog(&service, "reconcile-initial-append").await;
 
     assert_eq!(oplog.current_oplog_index().await, OplogIndex::INITIAL);
-    assert_eq!(indexed_storage.append_attempts(), 2);
+    assert_eq!(indexed_storage.append_attempts(), 1);
     assert_eq!(indexed_storage.reads(), 1);
 }
 
@@ -1581,13 +1593,13 @@ async fn retried_append_many_accepts_only_the_same_serialized_batch(_tracing: &T
     oplog.commit(CommitLevel::Always).await;
 
     assert_eq!(oplog.current_oplog_index().await, OplogIndex::from_u64(3));
-    assert_eq!(indexed_storage.append_many_attempts(), 2);
+    assert_eq!(indexed_storage.append_many_attempts(), 1);
     assert_eq!(indexed_storage.reads(), 1);
     assert!(indexed_storage.append_many_reused_batch());
 }
 
 #[test]
-async fn indeterminate_append_before_write_retries_without_reconciliation(_tracing: &Tracing) {
+async fn indeterminate_append_before_write_retries_after_empty_read_back(_tracing: &Tracing) {
     let indexed_storage = Arc::new(ReadCountingIndexedStorage::new());
     let service = append_reconciliation_service(indexed_storage.clone()).await;
     let oplog = create_append_reconciliation_oplog(&service, "uncommitted-append-retry").await;
@@ -1600,7 +1612,8 @@ async fn indeterminate_append_before_write_retries_without_reconciliation(_traci
     oplog.commit(CommitLevel::Always).await;
 
     assert_eq!(indexed_storage.append_many_attempts(), 2);
-    assert_eq!(indexed_storage.reads(), 0);
+    assert_eq!(indexed_storage.reads(), 1);
+    assert!(indexed_storage.append_many_reused_batch());
     assert_eq!(oplog.read(OplogIndex::from_u64(2)).await, entry);
 }
 
@@ -1611,6 +1624,7 @@ async fn exhausted_retries_after_committed_indeterminate_append_reconcile(_traci
     let oplog = create_append_reconciliation_oplog(&service, "exhausted-append-retries").await;
     indexed_storage.reset();
     indexed_storage.reset_append_observations();
+    indexed_storage.hidden_reads.store(2, Ordering::Relaxed);
     indexed_storage.inject_append_many_failures([
         InjectedAppendFailure::CommitThenIndeterminate,
         InjectedAppendFailure::TransientBeforeWrite,
@@ -1621,7 +1635,7 @@ async fn exhausted_retries_after_committed_indeterminate_append_reconcile(_traci
     oplog.commit(CommitLevel::Always).await;
 
     assert_eq!(indexed_storage.append_many_attempts(), 3);
-    assert_eq!(indexed_storage.reads(), 1);
+    assert_eq!(indexed_storage.reads(), 3);
 }
 
 #[test]
@@ -1633,6 +1647,7 @@ async fn permanent_retry_failure_after_committed_indeterminate_append_reconciles
     let oplog = create_append_reconciliation_oplog(&service, "permanent-after-indeterminate").await;
     indexed_storage.reset();
     indexed_storage.reset_append_observations();
+    indexed_storage.hidden_reads.store(1, Ordering::Relaxed);
     indexed_storage.inject_append_many_failures([
         InjectedAppendFailure::CommitThenIndeterminate,
         InjectedAppendFailure::PermanentBeforeWrite,
@@ -1642,8 +1657,49 @@ async fn permanent_retry_failure_after_committed_indeterminate_append_reconciles
     oplog.commit(CommitLevel::Always).await;
 
     assert_eq!(indexed_storage.append_many_attempts(), 2);
-    assert_eq!(indexed_storage.reads(), 1);
+    assert_eq!(indexed_storage.reads(), 2);
     assert_eq!(oplog.current_oplog_index().await, OplogIndex::from_u64(2));
+}
+
+#[test]
+async fn reconciliation_retries_read_failures_without_resubmitting_append(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(ReadCountingIndexedStorage::new());
+    let service = append_reconciliation_service(indexed_storage.clone()).await;
+    let oplog = create_append_reconciliation_oplog(&service, "read-failure-reconciliation").await;
+    indexed_storage.reset();
+    indexed_storage.reset_append_observations();
+    indexed_storage.inject_append_many_failure(InjectedAppendFailure::CommitThenIndeterminate);
+    indexed_storage
+        .read_failures
+        .lock()
+        .unwrap()
+        .push_back(IndexedStorageError::Transient(
+            "connection lost during read-back".to_string(),
+        ));
+
+    oplog.add(OplogEntry::suspend()).await;
+    oplog.commit(CommitLevel::Always).await;
+
+    assert_eq!(indexed_storage.append_many_attempts(), 1);
+    assert_eq!(indexed_storage.reads(), 2);
+}
+
+#[test]
+async fn conflict_after_initially_empty_reconciliation_accepts_exact_batch(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(ReadCountingIndexedStorage::new());
+    let service = append_reconciliation_service(indexed_storage.clone()).await;
+    let oplog = create_append_reconciliation_oplog(&service, "late-commit-reconciliation").await;
+    indexed_storage.reset();
+    indexed_storage.reset_append_observations();
+    indexed_storage.inject_append_many_failure(InjectedAppendFailure::CommitThenIndeterminate);
+    indexed_storage.hidden_reads.store(1, Ordering::Relaxed);
+
+    oplog.add(OplogEntry::suspend()).await;
+    oplog.commit(CommitLevel::Always).await;
+
+    assert_eq!(indexed_storage.append_many_attempts(), 2);
+    assert_eq!(indexed_storage.reads(), 2);
+    assert!(indexed_storage.append_many_reused_batch());
 }
 
 #[test]
@@ -1708,7 +1764,7 @@ async fn incomplete_read_back_after_indeterminate_append_remains_fatal(_tracing:
     oplog.add(OplogEntry::exited()).await;
     assert_panics(oplog.commit(CommitLevel::Always)).await;
 
-    assert_eq!(indexed_storage.append_many_attempts(), 2);
+    assert_eq!(indexed_storage.append_many_attempts(), 1);
     assert_eq!(indexed_storage.reads(), 1);
 }
 
@@ -1725,7 +1781,7 @@ async fn differing_read_back_after_indeterminate_append_remains_fatal(_tracing: 
     oplog.add(OplogEntry::suspend()).await;
     assert_panics(oplog.commit(CommitLevel::Always)).await;
 
-    assert_eq!(indexed_storage.append_many_attempts(), 2);
+    assert_eq!(indexed_storage.append_many_attempts(), 1);
     assert_eq!(indexed_storage.reads(), 1);
 }
 

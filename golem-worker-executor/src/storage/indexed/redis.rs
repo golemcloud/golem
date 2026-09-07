@@ -20,6 +20,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use fred::error::ErrorKind;
 use fred::prelude::{Key, Value};
+use fred::types::config::Options;
 use fred::types::streams::XCapKind;
 use golem_common::metrics::redis::{record_redis_deserialized_size, record_redis_serialized_size};
 use golem_common::redis::{RedisError, RedisPool};
@@ -120,8 +121,24 @@ impl RedisIndexedStorage {
                 .contains("ID specified in XADD is equal or smaller than")
         {
             IndexedStorageError::Conflict(error.to_string())
-        } else if primary_oplog_insert && matches!(error.kind(), ErrorKind::IO) {
+        } else if primary_oplog_insert
+            && matches!(
+                error.kind(),
+                ErrorKind::IO | ErrorKind::Timeout | ErrorKind::Canceled
+            )
+        {
             IndexedStorageError::Indeterminate(error.to_string())
+        } else {
+            IndexedStorageError::Other(error.to_string())
+        }
+    }
+
+    fn classify_read_error(error: RedisError) -> IndexedStorageError {
+        if matches!(
+            error.kind(),
+            ErrorKind::IO | ErrorKind::Timeout | ErrorKind::Canceled
+        ) {
+            IndexedStorageError::Transient(error.to_string())
         } else {
             IndexedStorageError::Other(error.to_string())
         }
@@ -231,6 +248,10 @@ impl IndexedStorage for RedisIndexedStorage {
     ) -> Result<(), IndexedStorageError> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
         let primary_oplog_insert = matches!(&namespace, IndexedStorageNamespace::OpLog { .. });
+        let options = primary_oplog_insert.then_some(Options {
+            max_attempts: Some(1),
+            ..Default::default()
+        });
 
         let _: String = self
             .redis
@@ -241,6 +262,7 @@ impl IndexedStorage for RedisIndexedStorage {
                 None,
                 id.to_string(),
                 (Key::from(Self::KEY), Value::Bytes(Bytes::from(value))),
+                options.as_ref(),
             )
             .await
             .map_err(|error| Self::classify_append_error(error, primary_oplog_insert))?;
@@ -258,6 +280,10 @@ impl IndexedStorage for RedisIndexedStorage {
     ) -> Result<(), IndexedStorageError> {
         if !pairs.is_empty() {
             let primary_oplog_insert = matches!(namespace, IndexedStorageNamespace::OpLog { .. });
+            let options = primary_oplog_insert.then_some(Options {
+                max_attempts: Some(1),
+                ..Default::default()
+            });
             let mut redis_pairs = Vec::with_capacity(pairs.len());
             for (id, value) in pairs.iter() {
                 record_redis_serialized_size(svc_name, entity_name, value.len());
@@ -274,6 +300,7 @@ impl IndexedStorage for RedisIndexedStorage {
                     false,
                     None,
                     redis_pairs,
+                    options.as_ref(),
                 )
                 .await
                 .map_err(|error| Self::classify_append_error(error, primary_oplog_insert))?;
@@ -324,7 +351,7 @@ impl IndexedStorage for RedisIndexedStorage {
             .with(svc_name, api_name)
             .xrange(Self::composite_key(namespace, key), start_id, end_id, None)
             .await
-            .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+            .map_err(Self::classify_read_error)?;
 
         let result = self.process_stream(svc_name, entity_name, items)?;
         Ok(result)
@@ -343,7 +370,7 @@ impl IndexedStorage for RedisIndexedStorage {
             .with(svc_name, api_name)
             .xrange(Self::composite_key(namespace, key), "-", "+", Some(1))
             .await
-            .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+            .map_err(Self::classify_read_error)?;
 
         let result = self.process_stream(svc_name, entity_name, items)?;
         Ok(result.into_iter().next())
@@ -382,7 +409,7 @@ impl IndexedStorage for RedisIndexedStorage {
             .with(svc_name, api_name)
             .xrange(Self::composite_key(namespace, key), id, "+", Some(1))
             .await
-            .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+            .map_err(Self::classify_read_error)?;
 
         let result = self.process_stream(svc_name, entity_name, items)?;
         Ok(result.into_iter().next())
@@ -448,5 +475,27 @@ mod tests {
             RedisIndexedStorage::classify_append_error(error, true),
             IndexedStorageError::Indeterminate(_)
         ));
+    }
+
+    #[test]
+    fn primary_oplog_xadd_timeout_and_cancellation_are_indeterminate() {
+        for kind in [ErrorKind::Timeout, ErrorKind::Canceled] {
+            let error = RedisError::new(kind, "outcome is unknown");
+            assert!(matches!(
+                RedisIndexedStorage::classify_append_error(error, true),
+                IndexedStorageError::Indeterminate(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn xrange_connection_errors_are_transient() {
+        for kind in [ErrorKind::IO, ErrorKind::Timeout, ErrorKind::Canceled] {
+            let error = RedisError::new(kind, "read can be retried");
+            assert!(matches!(
+                RedisIndexedStorage::classify_read_error(error),
+                IndexedStorageError::Transient(_)
+            ));
+        }
     }
 }
