@@ -112,10 +112,14 @@ pub(crate) struct DurableSessionStreams {
 #[derive(Clone, Default, desert_rust::BinaryCodec)]
 pub struct SessionControlMetadata {
     pub(crate) covered_through: OplogIndex,
+    pub(crate) recovery_slot: Option<u64>,
+    pub(crate) prepared: Option<OplogIndex>,
+    pub(crate) initial_attached: Option<OplogIndex>,
     malformed_record: bool,
     explicit_mappings: HashSet<(u64, DurableStreamHandleV1, SessionStreamRoleV1)>,
     persisted_mappings: HashSet<(u64, DurableStreamHandleV1, SessionStreamRoleV1)>,
     recoverable_mappings: Vec<(OplogIndex, StreamSessionMappingRecordV1)>,
+    acceptance_mappings: Vec<StreamSessionMappingRecordV1>,
     caller_attempt: Option<AttemptId>,
     caller_attempt_conflict: bool,
     pub(crate) invocation_result: Option<OplogIndex>,
@@ -133,6 +137,8 @@ pub struct SessionControlMetadata {
     >,
     visible_mappings: HashSet<(u64, DurableStreamHandleV1, SessionStreamRoleV1)>,
     topology_error: Option<String>,
+    finalized_attachments:
+        HashMap<(AttachmentId, golem_common::model::StreamId), StreamAttachmentKeyV1>,
     pub(crate) consumer_record_counts: HashMap<golem_common::model::StreamId, u64>,
     pub(crate) consumer_deleting:
         Option<golem_common::model::durable_stream::StreamConsumerDeletingRecordV1>,
@@ -149,6 +155,68 @@ struct SessionTopologyMetadata {
 }
 
 impl SessionControlMetadata {
+    pub(crate) fn acceptance_mappings(&self) -> Result<Vec<StreamSessionMappingRecordV1>, String> {
+        if self.malformed_record {
+            return Err("unsupported or malformed durable Stream Session record version".into());
+        }
+        if let Some(error) = &self.topology_error {
+            return Err(error.clone());
+        }
+        Ok(self.acceptance_mappings.clone())
+    }
+
+    pub(crate) fn needs_topology_recovery(
+        &self,
+        owner: &golem_common::model::OwnedAgentId,
+        key: &StreamSessionKeyV1,
+    ) -> bool {
+        self.malformed_record
+            || self.topology_error.is_some()
+            || (self.prepared.is_some() && self.finished.is_none())
+            || self.topologies.values().any(|topology| {
+                let local = key.callee_environment_id == owner.environment_id
+                    && key.callee == owner.agent_id
+                    && key.callee_fingerprint == topology.attachment.expected_consumer_fingerprint;
+                !(local && self.finished.is_some())
+                    && self.finalized_attachments.get(&(
+                        topology.attachment.attachment_id,
+                        topology.attachment.stream_id,
+                    )) != Some(&topology.attachment)
+            })
+    }
+
+    pub(crate) fn recovery_topologies(
+        &self,
+        owner: &golem_common::model::OwnedAgentId,
+        key: &StreamSessionKeyV1,
+    ) -> Result<Vec<(StreamAttachmentKeyV1, StreamSessionMappingRecordV1)>, String> {
+        if self.malformed_record {
+            return Err("unsupported or malformed durable Stream Session record version".into());
+        }
+        if let Some(error) = &self.topology_error {
+            return Err(error.clone());
+        }
+        Ok(self
+            .topologies
+            .values()
+            .filter(|topology| {
+                let local = key.callee_environment_id == owner.environment_id
+                    && key.callee == owner.agent_id
+                    && key.callee_fingerprint == topology.attachment.expected_consumer_fingerprint;
+                !(local && self.finished.is_some())
+                    && (!local
+                        || self
+                            .topology_epoch
+                            .is_none_or(|epoch| epoch == topology.attachment.epoch))
+                    && self.finalized_attachments.get(&(
+                        topology.attachment.attachment_id,
+                        topology.attachment.stream_id,
+                    )) != Some(&topology.attachment)
+            })
+            .map(|topology| (topology.attachment.clone(), topology.mapping.clone()))
+            .collect())
+    }
+
     pub(crate) fn topology_status(
         &self,
         attachment: &StreamAttachmentKeyV1,
@@ -210,6 +278,29 @@ impl SessionControlMetadata {
         if let StreamSessionRecordV1::ConsumerDeleting(record) = record {
             self.consumer_deleting = Some(record.clone());
         }
+        if let StreamSessionRecordV1::Prepared(record) = record
+            && &record.attempt.session_key == key
+        {
+            if self.prepared.is_some() {
+                self.topology_error.get_or_insert_with(|| {
+                    "durable Stream Session contains multiple Prepared records".into()
+                });
+            } else {
+                self.prepared = Some(index);
+            }
+        }
+        if let StreamSessionRecordV1::AttachmentFinalized(record) = record
+            && &record.key.session_key == key
+        {
+            let slot = (record.key.attachment_id, record.key.stream_id);
+            if self
+                .finalized_attachments
+                .get(&slot)
+                .is_none_or(|old| old.epoch <= record.key.epoch)
+            {
+                self.finalized_attachments.insert(slot, record.key.clone());
+            }
+        }
         let consumer_stream = match record {
             StreamSessionRecordV1::ConsumerItemValue(record) if &record.session_key == key => {
                 Some(record.stream_id)
@@ -227,6 +318,13 @@ impl SessionControlMetadata {
         }
         match record {
             StreamSessionRecordV1::Attached(record) if &record.session_key == key => {
+                if self.initial_attached.is_some() {
+                    self.topology_error.get_or_insert_with(|| {
+                        "durable Stream Session contains multiple Attached records".into()
+                    });
+                } else {
+                    self.initial_attached = Some(index);
+                }
                 self.topology_epoch = Some(record.epoch);
             }
             StreamSessionRecordV1::ResumeAttempt(record) if &record.attempt.session_key == key => {
@@ -354,6 +452,11 @@ impl SessionControlMetadata {
             }
             _ => &[],
         };
+        for mapping in mappings {
+            if !self.acceptance_mappings.contains(mapping) {
+                self.acceptance_mappings.push(mapping.clone());
+            }
+        }
         if matches!(
             record,
             StreamSessionRecordV1::Prepared(_)
@@ -794,7 +897,9 @@ impl DurableSessionStreams {
         }
     }
 
-    async fn authoritative_attachment_state(&self) -> Result<(u64, AttemptId, bool), String> {
+    pub(crate) async fn authoritative_attachment_state(
+        &self,
+    ) -> Result<(u64, AttemptId, bool), String> {
         let raw = self
             .oplog
             .raw_durable_stream_session_status(&self.session_key)
@@ -1155,7 +1260,7 @@ impl DurableSessionStreams {
         self.insert_mapping(mapping.transport_stream_id, mapping.handle, mapping.role)
     }
 
-    async fn require_local_session_attachment(
+    pub(crate) async fn require_local_session_attachment(
         &self,
         attachment: &StreamAttachmentKeyV1,
     ) -> Result<(), String> {

@@ -14,6 +14,7 @@
 
 use crate::durable_host::durable_session::SessionControlMetadata;
 use crate::services::oplog::OplogService;
+use crate::services::worker::DurableStreamRecoveryMetadata;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
@@ -31,6 +32,21 @@ use tokio::sync::Mutex as AsyncMutex;
 pub(super) const METADATA_FIELD: &str = "coverage";
 const SESSION_FIELD_PREFIX: &str = "session:";
 pub(crate) const CONSUMER_JOURNAL_INDEX_PAGE_SIZE: u64 = 256;
+const RECOVERY_CATALOGUE_PAGE_SIZE: u64 = 256;
+
+fn recovery_catalogue_field(page: u64) -> String {
+    format!("recovery:{page}")
+}
+
+fn stream_resume_index_field(
+    key: &StreamSessionKeyV1,
+    attempt: golem_common::model::durable_stream::AttemptId,
+) -> Result<String, String> {
+    Ok(format!(
+        "resume:{}",
+        hex::encode(serialize(&(key, attempt))?)
+    ))
+}
 
 fn stream_control_index_field(key: &StreamSessionKeyV1) -> Result<String, String> {
     Ok(format!("control:{}", hex::encode(serialize(key)?)))
@@ -48,9 +64,10 @@ fn consumer_journal_index_field(
     ))
 }
 
-#[derive(Clone, Debug, desert_rust::BinaryCodec)]
+#[derive(Clone, Debug, Default, desert_rust::BinaryCodec)]
 pub(super) struct Metadata {
     pub(super) covered_through: OplogIndex,
+    pub(super) recovery_session_count: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -87,6 +104,224 @@ impl Drop for IndexLock {
 }
 
 impl StreamSessionIndexService {
+    pub async fn lookup_resume_offset(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        key: &StreamSessionKeyV1,
+        attempt: golem_common::model::durable_stream::AttemptId,
+    ) -> Result<Option<OplogIndex>, String> {
+        let this = self.clone();
+        let id = id.clone();
+        let key = key.clone();
+        tokio::spawn(async move {
+            let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
+            let horizon = oplog.get_last_index(&id, mode).await;
+            this.catch_up_inner(&id, mode, horizon).await?;
+            let offset: Option<OplogIndex> = this
+                .kv
+                .with_entity("stream_session_index", "lookup_resume", "attempt")
+                .get(
+                    Self::namespace(&id),
+                    &stream_resume_index_field(&key, attempt)?,
+                )
+                .await?;
+            Ok(offset.filter(|index| *index <= horizon))
+        })
+        .await
+        .map_err(|error| format!("durable resume lookup task failed: {error}"))?
+    }
+
+    pub async fn lookup_recovery_metadata(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> Result<DurableStreamRecoveryMetadata, String> {
+        let this = self.clone();
+        let id = id.clone();
+        tokio::spawn(async move {
+            let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
+            let horizon = oplog.get_last_index(&id, mode).await;
+            this.catch_up_inner(&id, mode, horizon).await?;
+            let namespace = Self::namespace(&id);
+            let mut requested_pages = 0;
+            let (covered_through, keys, consumer_deleting) = loop {
+                let mut names = vec![METADATA_FIELD.into(), "consumer-deleting".into()];
+                names.extend((0..requested_pages).map(recovery_catalogue_field));
+                let fields = this
+                    .kv
+                    .with_entity("stream_session_index", "read_recovery", "page")
+                    .get_many_raw(namespace.clone(), names)
+                    .await?;
+                let metadata: Metadata = fields[0]
+                    .as_ref()
+                    .map(|bytes| deserialize(bytes))
+                    .transpose()?
+                    .unwrap_or_default();
+                if metadata.covered_through < horizon {
+                    return Err("recovery catalogue coverage is unavailable".into());
+                }
+                let needed_pages = metadata
+                    .recovery_session_count
+                    .div_ceil(RECOVERY_CATALOGUE_PAGE_SIZE);
+                if needed_pages > requested_pages {
+                    requested_pages = needed_pages;
+                    continue;
+                }
+                let mut keys = Vec::new();
+                for page in 0..needed_pages {
+                    let entries: Vec<StreamSessionKeyV1> = deserialize(
+                        fields[page as usize + 2]
+                            .as_ref()
+                            .ok_or("recovery catalogue page is missing")?,
+                    )?;
+                    let needed = (metadata.recovery_session_count
+                        - page * RECOVERY_CATALOGUE_PAGE_SIZE)
+                        .min(RECOVERY_CATALOGUE_PAGE_SIZE);
+                    if entries.len() as u64 != needed {
+                        return Err("recovery catalogue page does not match its coverage".into());
+                    }
+                    keys.extend(entries);
+                }
+                let deleting = fields[1]
+                    .as_ref()
+                    .map(|bytes| deserialize(bytes))
+                    .transpose()?;
+                break (metadata.covered_through, keys, deleting);
+            };
+            let mut sessions = Vec::with_capacity(keys.len());
+            for keys in keys.chunks(RECOVERY_CATALOGUE_PAGE_SIZE as usize) {
+                let mut fields = vec![METADATA_FIELD.into()];
+                fields.extend(
+                    keys.iter()
+                        .map(stream_control_index_field)
+                        .collect::<Result<Vec<_>, _>>()?,
+                );
+                let values = this
+                    .kv
+                    .with_entity("stream_session_index", "read_recovery", "session")
+                    .get_many_raw(namespace.clone(), fields)
+                    .await?;
+                let coverage: Metadata = deserialize(
+                    values[0]
+                        .as_ref()
+                        .ok_or("recovery catalogue coverage is missing")?,
+                )?;
+                for (key, value) in keys.iter().zip(values.iter().skip(1)) {
+                    let mut control: SessionControlMetadata = deserialize(
+                        value
+                            .as_ref()
+                            .ok_or("recovery catalogue session is missing")?,
+                    )?;
+                    control.covered_through = coverage.covered_through;
+                    sessions.push((key.clone(), control));
+                }
+            }
+            Ok(DurableStreamRecoveryMetadata {
+                covered_through,
+                sessions,
+                consumer_deleting,
+            })
+        })
+        .await
+        .map_err(|error| format!("durable recovery metadata task failed: {error}"))?
+    }
+
+    async fn recovery_page<'a>(
+        &self,
+        namespace: &KeyValueStorageNamespace,
+        pages: &'a mut HashMap<u64, Vec<StreamSessionKeyV1>>,
+        page: u64,
+    ) -> Result<&'a mut Vec<StreamSessionKeyV1>, String> {
+        if !pages.contains_key(&page) {
+            let keys = self
+                .kv
+                .with_entity("stream_session_index", "read_recovery", "page")
+                .get(namespace.clone(), &recovery_catalogue_field(page))
+                .await?
+                .unwrap_or_default();
+            pages.insert(page, keys);
+        }
+        Ok(pages.get_mut(&page).unwrap())
+    }
+
+    async fn update_recovery_catalogue(
+        &self,
+        id: &OwnedAgentId,
+        namespace: &KeyValueStorageNamespace,
+        controls: &mut HashMap<StreamSessionKeyV1, SessionControlMetadata>,
+        metadata: &mut Metadata,
+    ) -> Result<HashMap<u64, Vec<StreamSessionKeyV1>>, String> {
+        let mut pages = HashMap::new();
+        let keys: Vec<_> = controls.keys().cloned().collect();
+        for key in keys {
+            let control = controls.get(&key).unwrap();
+            match (
+                control.recovery_slot,
+                control.needs_topology_recovery(id, &key),
+            ) {
+                (None, true) => {
+                    let slot = metadata.recovery_session_count;
+                    let page = self
+                        .recovery_page(namespace, &mut pages, slot / RECOVERY_CATALOGUE_PAGE_SIZE)
+                        .await?;
+                    if page.len() as u64 != slot % RECOVERY_CATALOGUE_PAGE_SIZE {
+                        return Err("recovery catalogue page does not match its coverage".into());
+                    }
+                    page.push(key.clone());
+                    controls.get_mut(&key).unwrap().recovery_slot = Some(slot);
+                    metadata.recovery_session_count =
+                        slot.checked_add(1).ok_or("recovery catalogue overflow")?;
+                }
+                (Some(slot), false) => {
+                    let last = metadata
+                        .recovery_session_count
+                        .checked_sub(1)
+                        .ok_or("empty recovery catalogue has a session slot")?;
+                    let moved = self
+                        .recovery_page(namespace, &mut pages, last / RECOVERY_CATALOGUE_PAGE_SIZE)
+                        .await?
+                        .pop()
+                        .ok_or("recovery catalogue tail is missing")?;
+                    if slot != last {
+                        let page = self
+                            .recovery_page(
+                                namespace,
+                                &mut pages,
+                                slot / RECOVERY_CATALOGUE_PAGE_SIZE,
+                            )
+                            .await?;
+                        let entry = page
+                            .get_mut((slot % RECOVERY_CATALOGUE_PAGE_SIZE) as usize)
+                            .ok_or("recovery catalogue session slot is missing")?;
+                        if entry != &key {
+                            return Err(
+                                "recovery catalogue session slot identifies another session".into(),
+                            );
+                        }
+                        *entry = moved.clone();
+                        if !controls.contains_key(&moved) {
+                            let control = self
+                                .kv
+                                .with_entity("stream_session_index", "read_recovery", "session")
+                                .get(namespace.clone(), &stream_control_index_field(&moved)?)
+                                .await?
+                                .ok_or("recovery catalogue refers to a missing session")?;
+                            controls.insert(moved.clone(), control);
+                        }
+                        controls.get_mut(&moved).unwrap().recovery_slot = Some(slot);
+                    } else if moved != key {
+                        return Err("recovery catalogue tail identifies another session".into());
+                    }
+                    controls.get_mut(&key).unwrap().recovery_slot = None;
+                    metadata.recovery_session_count = last;
+                }
+                _ => {}
+            }
+        }
+        Ok(pages)
+    }
+
     pub async fn read_consumer_page(
         &self,
         id: &OwnedAgentId,
@@ -314,6 +549,7 @@ impl StreamSessionIndexService {
                 .transpose()?
                 .unwrap_or(Metadata {
                     covered_through: OplogIndex::NONE,
+                    ..Default::default()
                 });
             if metadata.covered_through >= horizon {
                 return Ok(());
@@ -331,6 +567,7 @@ impl StreamSessionIndexService {
                 let mut updates = HashMap::<IdempotencyKey, DurableStreamSessionStatus>::new();
                 let mut controls = HashMap::<StreamSessionKeyV1, SessionControlMetadata>::new();
                 let mut journal_pages = HashMap::<String, Vec<OplogIndex>>::new();
+                let mut resume_offsets = HashMap::<String, OplogIndex>::new();
                 let mut consumer_deleting = None;
                 for (idx, entry) in &entries {
                     let OplogEntry::StreamSession { record, .. } = entry else {
@@ -360,6 +597,20 @@ impl StreamSessionIndexService {
                     };
                     if let StreamSessionRecordV1::ConsumerDeleting(record) = record {
                         consumer_deleting = Some(record.clone());
+                    }
+                    if let StreamSessionRecordV1::ResumeAttempt(record) = record {
+                        let field = stream_resume_index_field(
+                            &record.attempt.session_key,
+                            record.attempt.attempt_id,
+                        )?;
+                        if !resume_offsets.contains_key(&field) {
+                            let old: Option<OplogIndex> = self
+                                .kv
+                                .with_entity("stream_session_index", "read_resume", "attempt")
+                                .get(namespace.clone(), &field)
+                                .await?;
+                            resume_offsets.insert(field, old.unwrap_or(*idx));
+                        }
                     }
                     if let Some(key) = crate::worker::stream_session_record_key(record) {
                         if !controls.contains_key(key) {
@@ -435,6 +686,9 @@ impl StreamSessionIndexService {
                         status.apply_record(*idx, record);
                     }
                 }
+                let recovery_pages = self
+                    .update_recovery_catalogue(id, &namespace, &mut controls, &mut metadata)
+                    .await?;
                 metadata.covered_through = *entries.keys().max().unwrap();
                 let mut fields: Vec<(String, Vec<u8>)> = updates
                     .into_iter()
@@ -446,6 +700,12 @@ impl StreamSessionIndexService {
                 }
                 for (field, page) in journal_pages {
                     fields.push((field, serialize(&page)?));
+                }
+                for (field, offset) in resume_offsets {
+                    fields.push((field, serialize(&offset)?));
+                }
+                for (page, keys) in recovery_pages {
+                    fields.push((recovery_catalogue_field(page), serialize(&keys)?));
                 }
                 if let Some(record) = consumer_deleting {
                     fields.push(("consumer-deleting".into(), serialize(&record)?));

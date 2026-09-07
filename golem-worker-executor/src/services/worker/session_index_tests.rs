@@ -469,6 +469,243 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         0,
         "journal index pages must not fetch payloads or oplog ranges"
     );
+
+    let mut active = Vec::new();
+    for number in 0..320 {
+        let record = prepared_record(&id, &IdempotencyKey::new(format!("recover-{number}")));
+        let StreamSessionRecordV1::Prepared(prepared) = &record else {
+            unreachable!();
+        };
+        active.push(prepared.attempt.session_key.clone());
+        append_session(oplog.as_ref(), record).await;
+    }
+    oplog.commit(CommitLevel::Always).await;
+    let recovery = reopened
+        .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
+        .await
+        .unwrap();
+    assert_eq!(recovery.sessions.len(), 320);
+    let mut cache = crate::worker::DurableTopologyRecoveryCache::default();
+    storage.reset();
+    cache
+        .refresh(
+            oplog.as_ref(),
+            &reopened,
+            &id,
+            AgentMode::Durable,
+            key.callee_fingerprint,
+        )
+        .await
+        .unwrap();
+    assert_eq!(cache.sessions.len(), 320);
+    assert_eq!(
+        storage.reads(),
+        1,
+        "cold recovery uses the catalogue, not agent history"
+    );
+    cache.dirty.clear();
+    storage.reset();
+    cache
+        .refresh(
+            oplog.as_ref(),
+            &reopened,
+            &id,
+            AgentMode::Durable,
+            key.callee_fingerprint,
+        )
+        .await
+        .unwrap();
+    assert!(cache.dirty.is_empty());
+    assert_eq!(
+        storage.reads(),
+        0,
+        "unchanged recovery has no storage reads"
+    );
+
+    let record = prepared_record(&id, &IdempotencyKey::new("raw-recovery".into()));
+    let StreamSessionRecordV1::Prepared(prepared) = &record else {
+        unreachable!();
+    };
+    let raw_key = prepared.attempt.session_key.clone();
+    active.push(raw_key.clone());
+    append_session(oplog.as_ref(), record).await;
+    cache
+        .refresh(
+            oplog.as_ref(),
+            &reopened,
+            &id,
+            AgentMode::Durable,
+            key.callee_fingerprint,
+        )
+        .await
+        .unwrap();
+    assert!(
+        cache.sessions.contains_key(&raw_key),
+        "raw preparation must be visible before commit"
+    );
+    assert_eq!(cache.dirty, HashSet::from([raw_key]));
+    oplog.commit(CommitLevel::Always).await;
+    storage.reset();
+    cache
+        .refresh(
+            oplog.as_ref(),
+            &reopened,
+            &id,
+            AgentMode::Durable,
+            key.callee_fingerprint,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        cache.sessions.len(),
+        321,
+        "commit buffer drain must not discard raw metadata"
+    );
+    assert_eq!(storage.reads(), 0);
+
+    for key in active.iter().take(260) {
+        append_session(
+            oplog.as_ref(),
+            StreamSessionRecordV1::Finished(StreamSessionFinishedRecordV1 {
+                format_version: 1,
+                session_key: key.clone(),
+                result: Ok(()),
+            }),
+        )
+        .await;
+    }
+    oplog.commit(CommitLevel::Always).await;
+    let recovery = reopened
+        .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
+        .await
+        .unwrap();
+    assert_eq!(
+        recovery
+            .sessions
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect::<HashSet<_>>(),
+        active[260..].iter().cloned().collect()
+    );
+    let restarted = make_service();
+    storage.reset();
+    let recovery = restarted
+        .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
+        .await
+        .unwrap();
+    assert_eq!(recovery.sessions.len(), 61);
+    assert_eq!(
+        storage.reads(),
+        1,
+        "reopened catalogue must not reconstruct completed sessions"
+    );
+    cache
+        .refresh(
+            oplog.as_ref(),
+            &reopened,
+            &id,
+            AgentMode::Durable,
+            key.callee_fingerprint,
+        )
+        .await
+        .unwrap();
+    assert_eq!(cache.sessions.len(), 61);
+    for key in active.iter().skip(260) {
+        append_session(
+            oplog.as_ref(),
+            StreamSessionRecordV1::Finished(StreamSessionFinishedRecordV1 {
+                format_version: 1,
+                session_key: key.clone(),
+                result: Ok(()),
+            }),
+        )
+        .await;
+    }
+    oplog.commit(CommitLevel::Always).await;
+    assert!(
+        restarted
+            .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
+            .await
+            .unwrap()
+            .sessions
+            .is_empty()
+    );
+
+    let mut historical = Vec::new();
+    for epoch in 1..=2100 {
+        let attempt = AttemptId(uuid::Uuid::new_v4());
+        let offset = append_session(
+            oplog.as_ref(),
+            StreamSessionRecordV1::ResumeAttempt(
+                golem_common::model::durable_stream::StreamSessionResumeAttemptRecordV1 {
+                    format_version: 1,
+                    attempt: golem_common::model::durable_stream::ResumeAttemptDescriptorV1 {
+                        format_version: 1,
+                        operation:
+                            golem_common::model::durable_stream::StreamResumeOperationV1::Takeover,
+                        session_key: key.clone(),
+                        attachment_id: AttachmentId::primary(
+                            id.environment_id,
+                            &id.agent_id,
+                            &key.idempotency_key,
+                        )
+                        .unwrap(),
+                        expected_callee_fingerprint: key.callee_fingerprint,
+                        attempt_id: attempt,
+                        expected_epoch: epoch,
+                        effective_identity: vec![],
+                        cursors: vec![],
+                        live_join_buffer_events: 1,
+                    },
+                    accepted_epoch: epoch + 1,
+                },
+            ),
+        )
+        .await;
+        historical.push((attempt, offset));
+    }
+    oplog.commit(CommitLevel::Always).await;
+
+    assert_eq!(
+        restarted
+            .lookup_durable_stream_resume_offset(&id, AgentMode::Durable, &key, historical[0].0)
+            .await
+            .unwrap(),
+        Some(historical[0].1)
+    );
+    restarted
+        .lookup_durable_stream_control_metadata(&id, AgentMode::Durable, &key)
+        .await
+        .unwrap();
+    storage.reset();
+    for (attempt, offset) in [historical[0], historical[1025], historical[2099]] {
+        assert_eq!(
+            restarted
+                .lookup_durable_stream_resume_offset(&id, AgentMode::Durable, &key, attempt)
+                .await
+                .unwrap(),
+            Some(offset)
+        );
+    }
+    let mut other_key = key.clone();
+    other_key.callee_fingerprint = AgentFingerprint::new();
+    assert_eq!(
+        restarted
+            .lookup_durable_stream_resume_offset(
+                &id,
+                AgentMode::Durable,
+                &other_key,
+                historical[0].0
+            )
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        storage.reads(),
+        4,
+        "historical attempts only capture the committed tip, without history or payload reads"
+    );
 }
 
 #[test]
@@ -512,6 +749,7 @@ async fn covered_physical_index_resolves_evicted_session_and_definitively_misses
     let old_status = completed(2, 3);
     let metadata = Metadata {
         covered_through: OplogIndex::from_u64(300),
+        ..Metadata::default()
     };
     let metadata_bytes = serialize(&metadata).unwrap();
     let status_bytes = serialize(&old_status).unwrap();

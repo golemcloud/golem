@@ -63,6 +63,13 @@ fn status_received_card_transfer_field(transfer_id: &uuid::Uuid) -> String {
 /// The result of computing a status cache write: `(fields_to_set, field_names_to_delete)`.
 type StatusFieldWrites = (Vec<(String, Vec<u8>)>, Vec<String>);
 
+pub struct DurableStreamRecoveryMetadata {
+    pub(crate) covered_through: OplogIndex,
+    pub(crate) sessions: Vec<(StreamSessionKeyV1, SessionControlMetadata)>,
+    pub(crate) consumer_deleting:
+        Option<golem_common::model::durable_stream::StreamConsumerDeletingRecordV1>,
+}
+
 /// The unbounded parts of an [`AgentStatusRecord`] that are stored separately from `core`. They are
 /// taken out of the record (`mem::take`) before serializing `core`, so this never clones the large
 /// fields.
@@ -294,6 +301,24 @@ pub trait WorkerService: Send + Sync {
         _page: u64,
     ) -> Result<Vec<OplogIndex>, String> {
         Err("durable stream consumer index is unavailable".into())
+    }
+
+    async fn lookup_durable_stream_resume_offset(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _key: &StreamSessionKeyV1,
+        _attempt: golem_common::model::durable_stream::AttemptId,
+    ) -> Result<Option<OplogIndex>, String> {
+        Err("durable stream resume index is unavailable".into())
+    }
+
+    async fn lookup_durable_stream_recovery_metadata(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+    ) -> Result<DurableStreamRecoveryMetadata, String> {
+        Err("durable stream recovery index is unavailable".into())
     }
 
     /// Returns the persisted [`AgentMode`] for the worker, if it exists.
@@ -721,6 +746,28 @@ impl DefaultWorkerService {
 
 #[async_trait]
 impl WorkerService for DefaultWorkerService {
+    async fn lookup_durable_stream_recovery_metadata(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<DurableStreamRecoveryMetadata, String> {
+        self.stream_session_index
+            .lookup_recovery_metadata(owned_agent_id, agent_mode)
+            .await
+    }
+
+    async fn lookup_durable_stream_resume_offset(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        key: &StreamSessionKeyV1,
+        attempt: golem_common::model::durable_stream::AttemptId,
+    ) -> Result<Option<OplogIndex>, String> {
+        self.stream_session_index
+            .lookup_resume_offset(owned_agent_id, agent_mode, key, attempt)
+            .await
+    }
+
     async fn lookup_durable_stream_control_metadata(
         &self,
         owned_agent_id: &OwnedAgentId,
