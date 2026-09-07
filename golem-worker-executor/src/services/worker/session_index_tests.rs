@@ -709,6 +709,202 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
 }
 
 #[test]
+async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
+    use golem_common::model::durable_stream::*;
+    use golem_schema::schema::SchemaFingerprintV1;
+    let (service, _, oplog_service) = service_with_oplog().await;
+    let owner = owned_agent("consumer", ComponentId::new());
+    let remote = owned_agent("remote", ComponentId::new());
+    let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
+    let key = session_key(&remote, &IdempotencyKey::new("remote-session".into()));
+    let consumer = session_key(&owner, &IdempotencyKey::new("consumer-invocation".into()));
+    let mut mappings = Vec::new();
+    let mut attachments = Vec::new();
+    for transport_stream_id in 0..2 {
+        let handle = DurableStreamHandleV1 {
+            format_version: 1,
+            stream_id: StreamId(uuid::Uuid::new_v4()),
+            producer_environment_id: remote.environment_id,
+            producer: remote.agent_id.clone(),
+            expected_producer_fingerprint: key.callee_fingerprint,
+            source_invocation: key.clone(),
+            component_revision: ComponentRevision::INITIAL,
+            element_schema_fingerprint: SchemaFingerprintV1([0; 32]),
+        };
+        let mapping = StreamSessionMappingRecordV1 {
+            transport_stream_id,
+            handle: handle.clone(),
+            role: SessionStreamRoleV1::Output,
+        };
+        let attachment = StreamAttachmentKeyV1 {
+            attachment_id: AttachmentId::primary(
+                remote.environment_id,
+                &remote.agent_id,
+                &key.idempotency_key,
+            )
+            .unwrap(),
+            stream_id: handle.stream_id,
+            epoch: 1,
+            session_key: key.clone(),
+            producer_environment_id: remote.environment_id,
+            producer: remote.agent_id.clone(),
+            expected_producer_fingerprint: key.callee_fingerprint,
+            consumer_environment_id: owner.environment_id,
+            consumer: owner.agent_id.clone(),
+            expected_consumer_fingerprint: consumer.callee_fingerprint,
+            consumer_invocation: consumer.clone(),
+        };
+        for record in [
+            StreamSessionRecordV1::TopologyPrepared(StreamTopologyPreparedRecordV1 {
+                format_version: 1,
+                session_key: key.clone(),
+                attachment: attachment.clone(),
+                mapping: mapping.clone(),
+            }),
+            StreamSessionRecordV1::TopologyActivated(StreamTopologyActivatedRecordV1 {
+                format_version: 1,
+                session_key: key.clone(),
+                attachment: attachment.clone(),
+                mapping: mapping.clone(),
+            }),
+        ] {
+            assert!(record.has_supported_format());
+            append_session(oplog.as_ref(), record).await;
+        }
+        mappings.push(mapping);
+        attachments.push(attachment);
+    }
+    oplog.commit(CommitLevel::Always).await;
+    let mut cache = crate::worker::DurableTopologyRecoveryCache::default();
+    cache
+        .refresh(
+            oplog.as_ref(),
+            &service,
+            &owner,
+            AgentMode::Durable,
+            consumer.callee_fingerprint,
+        )
+        .await
+        .unwrap();
+    assert_eq!(cache.sessions.len(), 1);
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecordV1::ConsumerTerminal(StreamConsumerTerminalRecordV1 {
+            format_version: 1,
+            session_key: key.clone(),
+            stream_id: attachments[0].stream_id,
+            source_offset: StreamOffsetV1::new(OplogIndex::from_u64(100), 0),
+            consumer_read_ordinal: 0,
+            terminal: StreamConsumerTerminalV1::End(StreamEndResultV1::Ok),
+        }),
+    )
+    .await;
+    cache
+        .refresh(
+            oplog.as_ref(),
+            &service,
+            &owner,
+            AgentMode::Durable,
+            consumer.callee_fingerprint,
+        )
+        .await
+        .unwrap();
+    let pending = cache.sessions[&key]
+        .recovery_topologies(&owner, &key)
+        .unwrap();
+    assert_eq!(
+        pending.len(),
+        1,
+        "closing one stream must retain the other stream"
+    );
+    assert_eq!(pending[0].0.stream_id, attachments[1].stream_id);
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecordV1::SourceUnavailable(StreamSourceUnavailableRecordV1 {
+            format_version: 1,
+            key: attachments[1].clone(),
+            source_offset: StreamOffsetV1::new(OplogIndex::from_u64(101), 0),
+            consumer_read_ordinal: 0,
+        }),
+    )
+    .await;
+    cache
+        .refresh(
+            oplog.as_ref(),
+            &service,
+            &owner,
+            AgentMode::Durable,
+            consumer.callee_fingerprint,
+        )
+        .await
+        .unwrap();
+    assert!(
+        cache.sessions.is_empty(),
+        "raw closure must retire resident recovery work"
+    );
+    oplog.commit(CommitLevel::Always).await;
+    assert!(
+        service
+            .lookup_durable_stream_recovery_metadata(&owner, AgentMode::Durable)
+            .await
+            .unwrap()
+            .sessions
+            .is_empty()
+    );
+    let metadata = service
+        .lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, &key)
+        .await
+        .unwrap();
+    assert_eq!(
+        metadata
+            .topology_status(&attachments[0], Some(&mappings[0]))
+            .unwrap(),
+        crate::durable_host::durable_stream::ConsumerAttachmentStatus::Active,
+        "retiring recovery must preserve historical topology evidence"
+    );
+    for (mut attachment, mapping) in attachments.into_iter().zip(mappings) {
+        attachment.epoch = 2;
+        append_session(
+            oplog.as_ref(),
+            StreamSessionRecordV1::TopologyPrepared(StreamTopologyPreparedRecordV1 {
+                format_version: 1,
+                session_key: key.clone(),
+                attachment,
+                mapping,
+            }),
+        )
+        .await;
+    }
+    oplog.commit(CommitLevel::Always).await;
+    cache
+        .refresh(
+            oplog.as_ref(),
+            &service,
+            &owner,
+            AgentMode::Durable,
+            consumer.callee_fingerprint,
+        )
+        .await
+        .unwrap();
+    assert!(cache.sessions.is_empty());
+    let mut restarted = crate::worker::DurableTopologyRecoveryCache::default();
+    restarted
+        .refresh(
+            oplog.as_ref(),
+            &service,
+            &owner,
+            AgentMode::Durable,
+            consumer.callee_fingerprint,
+        )
+        .await
+        .unwrap();
+    assert!(
+        restarted.sessions.is_empty(),
+        "later epochs must not reopen journal-closed streams"
+    );
+}
+
+#[test]
 fn bounded_status_evicts_old_completed_sessions_but_retains_unfinished_session() {
     let mut index = DurableStreamSessionIndex::default();
     let old = IdempotencyKey::new("oldest".into());
@@ -1252,7 +1448,6 @@ async fn raw_cold_reopen_ignores_stale_supplied_status_and_recovers_committed_re
     assert_eq!(status.attachment_attached, Some(true));
 }
 
-// PROVISIONAL bug_finder reproducer: independent oplog actors must observe shared committed authority.
 #[test]
 async fn raw_cached_lookup_observes_takeover_committed_by_another_oplog_actor() {
     let (_worker_service, _kv, oplog_service) = service_with_oplog().await;

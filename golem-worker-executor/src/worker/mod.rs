@@ -567,6 +567,8 @@ impl DurableTopologyRecoveryCache {
                         | StreamSessionRecordV1::TopologyPrepared(_)
                         | StreamSessionRecordV1::TopologyActivated(_)
                         | StreamSessionRecordV1::AttachmentFinalized(_)
+                        | StreamSessionRecordV1::ConsumerTerminal(_)
+                        | StreamSessionRecordV1::SourceUnavailable(_)
                         | StreamSessionRecordV1::Finished(_)
                 ) {
                     continue;
@@ -3785,6 +3787,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             request.input_element_types,
         );
         for mapping in &foreign_mappings {
+            if streams
+                .has_journaled_consumer_terminal(mapping)
+                .await
+                .map_err(WorkerExecutorError::runtime)?
+            {
+                continue;
+            }
             streams
                 .prepare_foreign_mapping(mapping.clone(), 1)
                 .await
@@ -3822,6 +3831,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .map_err(WorkerExecutorError::runtime)?;
         }
         for mapping in &foreign_mappings {
+            if streams
+                .has_journaled_consumer_terminal(mapping)
+                .await
+                .map_err(WorkerExecutorError::runtime)?
+            {
+                continue;
+            }
             let mut retry_delay = Duration::from_millis(10);
             loop {
                 match streams.activate_foreign_mapping(mapping.clone(), 1).await {
@@ -4000,6 +4016,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if streams.ensure_current_attachment().await.is_ok() {
                     for mapping in &mappings {
                         if !producer.owns_handle_identity(&mapping.handle) {
+                            if mapping.role == SessionStreamRoleV1::Input
+                                && streams
+                                    .has_journaled_consumer_terminal(mapping)
+                                    .await
+                                    .map_err(WorkerExecutorError::runtime)?
+                            {
+                                continue;
+                            }
                             streams
                                 .prepare_foreign_mapping(mapping.clone(), existing.accepted_epoch)
                                 .await
@@ -4083,6 +4107,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let streams = make_streams(accepted_epoch, attempt.attempt_id)?;
         for mapping in &mappings {
             if !producer.owns_handle_identity(&mapping.handle) {
+                if mapping.role == SessionStreamRoleV1::Input
+                    && streams
+                        .has_journaled_consumer_terminal(mapping)
+                        .await
+                        .map_err(WorkerExecutorError::runtime)?
+                {
+                    continue;
+                }
                 streams
                     .prepare_foreign_mapping(mapping.clone(), accepted_epoch)
                     .await

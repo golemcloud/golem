@@ -139,6 +139,7 @@ pub struct SessionControlMetadata {
     topology_error: Option<String>,
     finalized_attachments:
         HashMap<(AttachmentId, golem_common::model::StreamId), StreamAttachmentKeyV1>,
+    closed_consumer_streams: HashSet<golem_common::model::StreamId>,
     pub(crate) consumer_record_counts: HashMap<golem_common::model::StreamId, u64>,
     pub(crate) consumer_deleting:
         Option<golem_common::model::durable_stream::StreamConsumerDeletingRecordV1>,
@@ -178,6 +179,9 @@ impl SessionControlMetadata {
                     && key.callee == owner.agent_id
                     && key.callee_fingerprint == topology.attachment.expected_consumer_fingerprint;
                 !(local && self.finished.is_some())
+                    && !self
+                        .closed_consumer_streams
+                        .contains(&topology.attachment.stream_id)
                     && self.finalized_attachments.get(&(
                         topology.attachment.attachment_id,
                         topology.attachment.stream_id,
@@ -204,6 +208,9 @@ impl SessionControlMetadata {
                     && key.callee == owner.agent_id
                     && key.callee_fingerprint == topology.attachment.expected_consumer_fingerprint;
                 !(local && self.finished.is_some())
+                    && !self
+                        .closed_consumer_streams
+                        .contains(&topology.attachment.stream_id)
                     && (!local
                         || self
                             .topology_epoch
@@ -315,6 +322,13 @@ impl SessionControlMetadata {
         };
         if let Some(stream) = consumer_stream {
             *self.consumer_record_counts.entry(stream).or_default() += 1;
+            if matches!(
+                record,
+                StreamSessionRecordV1::ConsumerTerminal(_)
+                    | StreamSessionRecordV1::SourceUnavailable(_)
+            ) {
+                self.closed_consumer_streams.insert(stream);
+            }
         }
         match record {
             StreamSessionRecordV1::Attached(record) if &record.session_key == key => {
@@ -1412,6 +1426,33 @@ impl DurableSessionStreams {
         Ok(())
     }
 
+    pub(crate) async fn has_journaled_consumer_terminal(
+        &self,
+        mapping: &StreamSessionMappingRecordV1,
+    ) -> Result<bool, String> {
+        let metadata = self.current_control_metadata().await?;
+        if !metadata
+            .closed_consumer_streams
+            .contains(&mapping.handle.stream_id)
+        {
+            return Ok(false);
+        }
+        if metadata.malformed_record {
+            return Err("unsupported or malformed durable Stream Session record version".into());
+        }
+        if let Some(error) = &metadata.topology_error {
+            return Err(error.clone());
+        }
+        if !metadata.persisted_mappings.contains(&(
+            mapping.transport_stream_id,
+            mapping.handle.clone(),
+            mapping.role,
+        )) {
+            return Err("closed consumer stream has no matching persisted mapping".into());
+        }
+        Ok(true)
+    }
+
     async fn validate_recovered_mapping(
         &self,
         mapping: &StreamSessionMappingRecordV1,
@@ -1422,6 +1463,9 @@ impl DurableSessionStreams {
                 .validate_handle(&mapping.handle)
                 .await
                 .map_err(|error| error.to_string());
+        }
+        if self.has_journaled_consumer_terminal(mapping).await? {
+            return Ok(());
         }
         let attachment = self.attachment_key(&mapping.handle, self.attachment_epoch)?;
         if self.topology_state(&attachment, Some(mapping)).await?
@@ -6157,6 +6201,172 @@ mod tests {
 
         drop(input);
         assert!(drop_events.try_recv().is_err());
+    }
+
+    #[test]
+    async fn closed_foreign_journal_replays_after_source_finalization_and_epoch_change() {
+        let source = identity();
+        let source_oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            source_oplog.clone(),
+            source.environment_id,
+            source.agent_id.clone(),
+            source.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let handle = producer
+            .register(registration(
+                &source,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: source.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKindV1::InvocationOutput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        let mut consumer = identity();
+        consumer.agent_id.agent_id = "closed-journal-consumer".into();
+        consumer.fingerprint = AgentFingerprint::new();
+        consumer.invocation.callee = consumer.agent_id.clone();
+        consumer.invocation.callee_fingerprint = consumer.fingerprint;
+        let oplog = Arc::new(TestOplog::default());
+        let local = DurableStreamProducer::load(
+            oplog.clone(),
+            consumer.environment_id,
+            consumer.agent_id.clone(),
+            consumer.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let streams =
+            DurableSessionStreams::new(local, oplog.clone(), source.invocation.clone(), [])
+                .with_consumer_invocation(consumer.invocation.clone())
+                .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())));
+        let attachment = streams.attachment_key(&handle, 1).unwrap();
+        let mapping = StreamSessionMappingRecordV1 {
+            transport_stream_id: 1,
+            handle: handle.clone(),
+            role: SessionStreamRoleV1::Output,
+        };
+        for record in [
+            StreamSessionRecordV1::TopologyPrepared(StreamTopologyPreparedRecordV1 {
+                format_version: 1,
+                session_key: source.invocation.clone(),
+                attachment: attachment.clone(),
+                mapping: mapping.clone(),
+            }),
+            StreamSessionRecordV1::TopologyActivated(StreamTopologyActivatedRecordV1 {
+                format_version: 1,
+                session_key: source.invocation.clone(),
+                attachment: attachment.clone(),
+                mapping: mapping.clone(),
+            }),
+            StreamSessionRecordV1::Mapping(
+                golem_common::model::durable_stream::StreamSessionMappingUpdateRecordV1 {
+                    format_version: 1,
+                    session_key: source.invocation.clone(),
+                    mapping: mapping.clone(),
+                },
+            ),
+        ] {
+            assert!(record.has_supported_format());
+            streams.append_record(record).await;
+        }
+        producer
+            .prepare_attachment(attachment.clone(), 100)
+            .await
+            .unwrap();
+        producer
+            .activate_attachment(attachment.clone(), 100)
+            .await
+            .unwrap();
+        producer
+            .end(handle.stream_id, 0, StreamEndResultV1::Ok)
+            .await
+            .unwrap();
+        let source_offset = producer
+            .input_high_water(handle.stream_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .resulting_offset;
+        streams
+            .append_record(StreamSessionRecordV1::ConsumerTerminal(
+                StreamConsumerTerminalRecordV1 {
+                    format_version: 1,
+                    session_key: source.invocation.clone(),
+                    stream_id: handle.stream_id,
+                    source_offset,
+                    consumer_read_ordinal: 0,
+                    terminal: StreamConsumerTerminalV1::End(StreamEndResultV1::Ok),
+                },
+            ))
+            .await;
+        streams.commit_consumer_journal().await.unwrap();
+        producer.finalize_attachment(attachment.clone(), golem_common::model::durable_stream::StreamAttachmentFinalizationReasonV1::ConsumerFinalized, 101).await.unwrap();
+        let mut next_attachment = attachment;
+        next_attachment.epoch = 2;
+        assert!(
+            producer
+                .prepare_attachment(next_attachment, 102)
+                .await
+                .is_err()
+        );
+        drop(streams);
+        drop(producer);
+        drop(source_oplog);
+
+        // Reconstruct after the journal commit but before delivering the terminal to the guest.
+        let local = DurableStreamProducer::load(
+            oplog.clone(),
+            consumer.environment_id,
+            consumer.agent_id,
+            consumer.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let restarted = DurableSessionStreams::new(local, oplog.clone(), source.invocation, [])
+            .with_consumer_invocation(consumer.invocation)
+            .with_attachment(2, AttemptId(Uuid::new_v4()))
+            .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)));
+        restarted.recover_session_mappings().await.unwrap();
+        assert!(
+            restarted
+                .has_journaled_consumer_terminal(&mapping)
+                .await
+                .unwrap()
+        );
+        let mut wrong_mapping = mapping;
+        wrong_mapping.handle.expected_producer_fingerprint = AgentFingerprint::new();
+        assert!(
+            restarted
+                .has_journaled_consumer_terminal(&wrong_mapping)
+                .await
+                .is_err()
+        );
+        let endpoint = restarted
+            .endpoint(handle, 0, SessionStreamRoleV1::Output)
+            .await
+            .unwrap();
+        assert!(
+            endpoint.reader.is_none(),
+            "closed replay must not open a remote source"
+        );
+        let mut replay = DurableInputProducer::new(endpoint);
+        replay.begin_receive();
+        let (_, event, _, journaled, _) = replay.pending.take().unwrap().await.unwrap();
+        assert!(journaled);
+        assert!(matches!(
+            event.unwrap().payload,
+            CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok)
+        ));
     }
 
     #[test]
