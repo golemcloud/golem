@@ -14,7 +14,8 @@
 
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateSecuritySchemeError,
-    RegistryServiceGetSecuritySchemeError, RegistryServiceListEnvironmentSecuritySchemesError,
+    RegistryServiceGetEnvironmentSecuritySchemeError, RegistryServiceGetSecuritySchemeError,
+    RegistryServiceListEnvironmentSecuritySchemesError,
 };
 use golem_common::model::Empty;
 use golem_common::model::security_scheme::{
@@ -177,6 +178,18 @@ async fn other_users_cannot_see_security_scheme(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceGetSecuritySchemeError::Error404(_)
+            ))
+        ));
+    }
+
+    {
+        let result = client_2
+            .get_environment_security_scheme(&env.id.0, &security_scheme.name.0)
+            .await;
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServiceGetEnvironmentSecuritySchemeError::Error404(_)
             ))
         ));
     }

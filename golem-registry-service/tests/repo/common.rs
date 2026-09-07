@@ -1749,7 +1749,7 @@ pub async fn test_agent_secret_get_revision_include_deleted(deps: &Deps) {
     check!(get_agent_secret_initial_revision(deps, &secret, true).await);
 }
 
-pub async fn test_atomic_retry_policy_and_agent_secret_lookups(deps: &Deps) {
+pub async fn test_retry_policy_and_agent_secret_natural_key_lookups(deps: &Deps) {
     use golem_common::model::retry_policy::{RetryPolicyId, RetryPolicyRevision};
     use golem_registry_service::repo::model::retry_policy::{
         RetryPolicyCreationRecord, RetryPolicyRepoError,

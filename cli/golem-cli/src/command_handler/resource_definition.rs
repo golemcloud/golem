@@ -142,7 +142,14 @@ impl ResourceDefinitionCommandHandler {
                 .resources
                 .get_environment_resource(&environment.environment_id.0, &name)
                 .await
-                .map_service_error()?;
+                .map_service_error_not_found_as_opt()?;
+
+            let Some(resource) = resource else {
+                log_error(format!(
+                    "Resource definition '{name}' not found in environment"
+                ));
+                bail!(NonSuccessfulExit);
+            };
 
             Ok(resource)
         } else if let Some(id) = id {

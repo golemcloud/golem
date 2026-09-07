@@ -1,15 +1,10 @@
 # Api Domain API
 
 ## List all domain registrations in the environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/domain-registrations`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -26,13 +21,10 @@ Path|Method|Protected
 ```
 
 ## Create a new domain registration in the environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/domain-registrations`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -52,15 +44,10 @@ Path|Method|Protected
 ```
 
 ## Get a domain registration in an environment by domain.
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/domain-registrations/{domain}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -73,15 +60,10 @@ Path|Method|Protected
 ```
 
 ## Get domain registration by id
+
 Path|Method|Protected
 ---|---|---
 `/v1/domain-registrations/{domain_registration_id}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -94,17 +76,10 @@ Path|Method|Protected
 ```
 
 ## Delete domain registration
+
 Path|Method|Protected
 ---|---|---
 `/v1/domain-registrations/{domain_registration_id}`|DELETE|Yes
-
-
-
-
-
-
-
-
 ## Api Domain API Errors
 Status Code|Description|Body
 ---|---|---

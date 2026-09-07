@@ -1,15 +1,10 @@
 # Retry Policies API
 
 ## Get all retry policies of the environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/retry-policies`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -30,13 +25,10 @@ Path|Method|Protected
 ```
 
 ## Create a new retry policy
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/retry-policies`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -63,15 +55,10 @@ Path|Method|Protected
 ```
 
 ## Get a retry policy in an environment by name.
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/retry-policies/{retry_policy_name}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -88,15 +75,10 @@ Path|Method|Protected
 ```
 
 ## Get retry policy by id.
+
 Path|Method|Protected
 ---|---|---
 `/v1/retry-policies/{retry_policy_id}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -113,19 +95,16 @@ Path|Method|Protected
 ```
 
 ## Delete retry policy
+
 Path|Method|Protected
 ---|---|---
 `/v1/retry-policies/{retry_policy_id}`|DELETE|Yes
-
-
 
 **Query Parameters**
 
 Name|Type|Required|Description
 ---|---|---|---
 current_revision|integer|Yes|-
-
-
 
 **Example Response JSON**
 
@@ -142,13 +121,10 @@ current_revision|integer|Yes|-
 ```
 
 ## Update retry policy
+
 Path|Method|Protected
 ---|---|---
 `/v1/retry-policies/{retry_policy_id}`|PATCH|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy

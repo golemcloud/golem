@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::command::plugin::PluginSubcommand;
-use crate::command::shared_args::AccountScopeArgs;
+use crate::command::shared_args::AccountScopeOptionalArgs;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::MapServiceError;
@@ -64,9 +64,9 @@ impl PluginCommandHandler {
         }
     }
 
-    async fn cmd_list(&self, account: AccountScopeArgs) -> anyhow::Result<()> {
+    async fn cmd_list(&self, account: AccountScopeOptionalArgs) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
-        let explicit_scope = account.account.is_some() || account.account_id.is_some();
+        let explicit_scope = account.is_explicit();
         let account_id = self
             .ctx
             .account_handler()
@@ -133,7 +133,7 @@ impl PluginCommandHandler {
         name: Option<String>,
         version: Option<String>,
         id: Option<Uuid>,
-        account: AccountScopeArgs,
+        account: AccountScopeOptionalArgs,
     ) -> anyhow::Result<()> {
         let client = self.ctx.golem_clients().await?;
         let result = if let Some(id) = id {
@@ -164,7 +164,7 @@ impl PluginCommandHandler {
     async fn cmd_register(
         &self,
         manifest: PathBufOrStdin,
-        account: AccountScopeArgs,
+        account: AccountScopeOptionalArgs,
     ) -> anyhow::Result<()> {
         let manifest = manifest.read_to_string()?;
         let manifest: PluginManifest = serde_yaml::from_str(&manifest)
@@ -231,7 +231,7 @@ impl PluginCommandHandler {
         name: Option<String>,
         version: Option<String>,
         id: Option<Uuid>,
-        account: AccountScopeArgs,
+        account: AccountScopeOptionalArgs,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
 

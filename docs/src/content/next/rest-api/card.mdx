@@ -1,11 +1,10 @@
 # Card API
 
 ## List cards owned by an account.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/cards`|GET|Yes
-
-
 
 **Query Parameters**
 
@@ -15,8 +14,6 @@ include_root|boolean|No|-
 include_permission_shares|boolean|No|-
 include_environment_defaults|boolean|No|-
 include_agent_initials|boolean|No|-
-
-
 
 **Example Response JSON**
 
@@ -52,15 +49,10 @@ include_agent_initials|boolean|No|-
 ```
 
 ## Get a card by id.
+
 Path|Method|Protected
 ---|---|---
 `/v1/cards/{card_id}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -94,15 +86,10 @@ Path|Method|Protected
 ```
 
 ## Revoke a card and all of its descendants.
+
 Path|Method|Protected
 ---|---|---
 `/v1/cards/{card_id}`|DELETE|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 

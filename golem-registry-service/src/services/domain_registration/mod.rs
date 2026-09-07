@@ -194,7 +194,7 @@ impl DomainRegistrationService {
         Ok(domain_registration)
     }
 
-    pub async fn get_in_environment_by_id(
+    pub async fn get_in_environment_by_domain(
         &self,
         environment_id: EnvironmentId,
         domain: &Domain,

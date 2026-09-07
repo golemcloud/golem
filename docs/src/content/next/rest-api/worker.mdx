@@ -1,6 +1,7 @@
 # Worker API
 
 ## Get metadata of multiple workers
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers`|GET|Yes
@@ -33,8 +34,6 @@ filter|array|No|Filter for worker metadata in form of `property op value`. Can b
 cursor|string|No|Count of listed values, default: 50
 count|integer|No|Position where to start listing, if not provided, starts from the beginning. It is used to get the next page of results. To get next page, use the cursor returned in the response
 precise|boolean|No|Precision in relation to worker status, if true, calculate the most up-to-date status for each worker, default is false
-
-
 
 **Example Response JSON**
 
@@ -163,6 +162,7 @@ precise|boolean|No|Precision in relation to worker status, if true, calculate th
 ```
 
 ## Launch a new worker.
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers`|POST|Yes
@@ -173,8 +173,6 @@ The parameters in the request are the following:
 - `name` is the name of the created worker. This has to be unique, but only for a given component
 - `args` is a list of strings which appear as command line arguments for the worker
 - `env` is a list of key-value pairs (represented by arrays) which appear as environment variables for the worker
-
-
 
 **Example Request JSON**
 ```json copy
@@ -201,6 +199,7 @@ The parameters in the request are the following:
 ```
 
 ## Get metadata of a worker
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/{agent_name}`|GET|Yes
@@ -220,10 +219,6 @@ Returns metadata about an existing worker:
 - `Retrying` if the worker failed, and an automatic retry was scheduled for it
 - `Failed` if the worker failed and there are no more retries scheduled for it
 - `Exited` if the worker explicitly exited using the exit WASI function
-
-
-
-
 
 **Example Response JSON**
 
@@ -344,15 +339,12 @@ Returns metadata about an existing worker:
 ```
 
 ## Delete a worker
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/{agent_name}`|DELETE|Yes
 
 Interrupts and deletes an existing worker.
-
-
-
-
 
 **Example Response JSON**
 
@@ -361,6 +353,7 @@ Interrupts and deletes an existing worker.
 ```
 
 ## Complete a promise
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/{agent_name}/complete`|POST|Yes
@@ -368,8 +361,6 @@ Path|Method|Protected
 Completes a promise with a given custom array of bytes.
 The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
 The data field is sent back to the worker, and it has no predefined meaning.
-
-
 
 **Example Request JSON**
 ```json copy
@@ -388,6 +379,7 @@ true
 ```
 
 ## Interrupt a worker
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/{agent_name}/interrupt`|POST|Yes
@@ -403,8 +395,6 @@ Name|Type|Required|Description
 ---|---|---|---
 recovery-immediately|boolean|No|if true will simulate a worker recovery. Defaults to false.
 
-
-
 **Example Response JSON**
 
 ```json copy
@@ -412,6 +402,7 @@ recovery-immediately|boolean|No|if true will simulate a worker recovery. Default
 ```
 
 ## Advanced search for workers
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/find`|POST|Yes
@@ -435,8 +426,6 @@ Path|Method|Protected
 Returns metadata about an existing component workers:
 - `workers` list of workers metadata
 - `cursor` cursor for next request, if cursor is empty/null, there are no other values
-
-
 
 **Example Request JSON**
 ```json copy
@@ -582,15 +571,10 @@ Returns metadata about an existing component workers:
 ```
 
 ## Resume a worker
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/{agent_name}/resume`|POST|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -599,13 +583,10 @@ Path|Method|Protected
 ```
 
 ## Update a worker
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/{agent_name}/update`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -623,11 +604,10 @@ Path|Method|Protected
 ```
 
 ## Get the oplog of a worker
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/{agent_name}/oplog`|GET|Yes
-
-
 
 **Query Parameters**
 
@@ -637,8 +617,6 @@ from|integer|No|-
 count|integer|Yes|-
 cursor|#/components/schemas/OplogCursor|No|-
 query|string|No|-
-
-
 
 **Example Response JSON**
 
@@ -754,15 +732,10 @@ query|string|No|-
 ```
 
 ## List files in a worker
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/{agent_name}/files/{file_name}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -781,15 +754,12 @@ Path|Method|Protected
 ```
 
 ## Get the wallet (active permission cards) of a worker.
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/{agent_name}/wallet`|GET|Yes
 
 Activates the worker if it is not already active.
-
-
-
-
 
 **Example Response JSON**
 
@@ -825,19 +795,15 @@ Activates the worker if it is not already active.
 ```
 
 ## Get contents of a file in a worker
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/{agent_name}/file-contents/{file_name}`|GET|Yes
 
-
-
-
-
-
-
 **Response Body:** `WASM Binary File`
 
 ## Activate a plugin
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/{agent_name}/activate-plugin`|POST|Yes
@@ -850,8 +816,6 @@ Name|Type|Required|Description
 ---|---|---|---
 plugin-priority|integer|Yes|-
 
-
-
 **Example Response JSON**
 
 ```json copy
@@ -859,6 +823,7 @@ plugin-priority|integer|Yes|-
 ```
 
 ## Deactivate a plugin
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/{agent_name}/deactivate-plugin`|POST|Yes
@@ -871,8 +836,6 @@ Name|Type|Required|Description
 ---|---|---|---
 plugin-priority|integer|Yes|-
 
-
-
 **Example Response JSON**
 
 ```json copy
@@ -880,13 +843,12 @@ plugin-priority|integer|Yes|-
 ```
 
 ## Revert a worker
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/{agent_name}/revert`|POST|Yes
 
 Reverts a worker by undoing either the last few invocations or the last few recorded oplog entries.
-
-
 
 **Example Request JSON**
 ```json copy
@@ -903,13 +865,12 @@ Reverts a worker by undoing either the last few invocations or the last few reco
 ```
 
 ## Fork a worker
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/{agent_name}/fork`|POST|Yes
 
 Fork a worker by creating a new worker with the oplog up to the provided index
-
-
 
 **Example Request JSON**
 ```json copy
@@ -929,15 +890,12 @@ Fork a worker by creating a new worker with the oplog up to the provided index
 ```
 
 ## Cancels a pending invocation if it has not started yet
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/{agent_name}/invocations/{idempotency_key}`|DELETE|Yes
 
 The invocation to be cancelled is identified by the idempotency key passed to the invoke API.
-
-
-
-
 
 **Example Response JSON**
 
@@ -948,17 +906,10 @@ The invocation to be cancelled is identified by the idempotency key passed to th
 ```
 
 ## Connect to a worker using a websocket and stream events
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/{agent_name}/connect`|GET|No
-
-
-
-
-
-
-
-
 ## Worker API Errors
 Status Code|Description|Body
 ---|---|---

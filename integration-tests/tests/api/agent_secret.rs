@@ -14,7 +14,8 @@
 
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateAgentSecretError,
-    RegistryServiceDeleteAgentSecretError, RegistryServiceUpdateAgentSecretError,
+    RegistryServiceDeleteAgentSecretError, RegistryServiceGetEnvironmentAgentSecretError,
+    RegistryServiceUpdateAgentSecretError,
 };
 use golem_common::model::agent_secret::{
     AgentSecretCreation, AgentSecretPath, AgentSecretRevision, AgentSecretUpdate,
@@ -64,6 +65,18 @@ async fn create_agent_secret_with_value(deps: &EnvBasedTestDependencies) -> anyh
             .get_environment_agent_secret(&env.id.0, &result.path.0)
             .await?;
         assert_eq!(fetched_secret, result);
+
+        let other_user = deps.user().await?;
+        let other_client = deps.registry_service().client(&other_user.token).await;
+        let other_result = other_client
+            .get_environment_agent_secret(&env.id.0, &result.path.0)
+            .await;
+        assert_matches!(
+            other_result,
+            Err(golem_client::Error::Item(
+                RegistryServiceGetEnvironmentAgentSecretError::Error404(_)
+            ))
+        );
     }
 
     {

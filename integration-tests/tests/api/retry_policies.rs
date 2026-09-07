@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_client::api::RegistryServiceClient;
+use golem_client::api::{RegistryServiceClient, RegistryServiceGetEnvironmentRetryPolicyError};
 use golem_common::base_model::retry_policy::{
     ApiCountBoxPolicy, ApiPeriodicPolicy, ApiPredicate, ApiPredicateTrue, ApiPredicateValue,
     ApiPropertyComparison, ApiRetryPolicy, ApiTextValue,
@@ -122,6 +122,18 @@ async fn create_and_get_retry_policy(deps: &EnvBasedTestDependencies) -> anyhow:
             .get_environment_retry_policy(&env.id.0, &created.name)
             .await?;
         assert_eq!(fetched, created);
+
+        let other_user = deps.user().await?;
+        let other_client = deps.registry_service().client(&other_user.token).await;
+        let other_result = other_client
+            .get_environment_retry_policy(&env.id.0, &created.name)
+            .await;
+        assert!(matches!(
+            other_result,
+            Err(golem_client::Error::Item(
+                RegistryServiceGetEnvironmentRetryPolicyError::Error404(_)
+            ))
+        ));
     }
 
     {

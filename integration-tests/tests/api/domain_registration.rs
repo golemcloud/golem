@@ -15,6 +15,7 @@
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateDomainRegistrationError,
     RegistryServiceGetDomainRegistrationError,
+    RegistryServiceGetEnvironmentDomainRegistrationError,
     RegistryServiceListEnvironmentDomainRegistrationsError,
 };
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
@@ -134,6 +135,18 @@ async fn other_users_cannot_see_domain(deps: &EnvBasedTestDependencies) -> anyho
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceGetDomainRegistrationError::Error404(_)
+            ))
+        ));
+    }
+
+    {
+        let result = client_2
+            .get_environment_domain_registration(&env.id.0, &domain.domain.0)
+            .await;
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServiceGetEnvironmentDomainRegistrationError::Error404(_)
             ))
         ));
     }

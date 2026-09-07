@@ -169,7 +169,7 @@ impl DomainRegistrationsApi {
     ) -> ApiResult<Json<DomainRegistration>> {
         Ok(Json(
             self.domain_registration_service
-                .get_in_environment_by_id(environment_id, &domain, &auth)
+                .get_in_environment_by_domain(environment_id, &domain, &auth)
                 .await?,
         ))
     }

@@ -1,15 +1,10 @@
 # Component API
 
 ## List all components in the environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/components`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -69,13 +64,12 @@ Path|Method|Protected
 ```
 
 ## Create a new component in the environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/components`|POST|Yes
 
 The request body is encoded as multipart/form-data containing metadata and the WASM binary.
-
-
 
 **Request Form**: `multipart/form-data`
 
@@ -150,15 +144,10 @@ The request body is encoded as multipart/form-data containing metadata and the W
 ```
 
 ## Get a component in the environment by name
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/components/{component_name}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -214,15 +203,10 @@ Path|Method|Protected
 ```
 
 ## List all components in a specific deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/deployments/{deployment_revision}/components`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -282,15 +266,10 @@ Path|Method|Protected
 ```
 
 ## Get component in a deployment by name
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/deployments/{deployment_revision}/components/{component_name}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -346,15 +325,10 @@ Path|Method|Protected
 ```
 
 ## Get a component by id
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -410,11 +384,10 @@ Path|Method|Protected
 ```
 
 ## Delete the component
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}`|DELETE|Yes
-
-
 
 **Query Parameters**
 
@@ -422,18 +395,13 @@ Name|Type|Required|Description
 ---|---|---|---
 current_revision|integer|Yes|-
 
-
-
-
-
 ## Update a component
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}`|PATCH|Yes
 
 The request body is encoded as multipart/form-data containing metadata and the WASM binary.
-
-
 
 **Request Form**: `multipart/form-data`
 
@@ -1547,15 +1515,10 @@ The request body is encoded as multipart/form-data containing metadata and the W
 ```
 
 ## Get specific revision of a component
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/revisions/{revision}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -1611,15 +1574,10 @@ Path|Method|Protected
 ```
 
 ## Get the component wasm binary of a specific revision
+
 Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/revisions/{revision}/wasm`|GET|Yes
-
-
-
-
-
-
 
 **Response Body:** `WASM Binary File`
 ## Component API Errors

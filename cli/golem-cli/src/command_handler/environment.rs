@@ -147,10 +147,12 @@ impl EnvironmentCommandHandler {
                     let account = self
                         .ctx
                         .account_handler()
-                        .select_account_or_err(crate::command::shared_args::AccountScopeArgs {
-                            account: Some(account.clone()),
-                            account_id: None,
-                        })
+                        .select_account_or_err(
+                            crate::command::shared_args::AccountScopeOptionalArgs {
+                                account: Some(account.clone()),
+                                account_id: None,
+                            },
+                        )
                         .await?;
                     let application = self
                         .ctx
@@ -244,7 +246,7 @@ impl EnvironmentCommandHandler {
                 let account = self
                     .ctx
                     .account_handler()
-                    .select_account_or_err(crate::command::shared_args::AccountScopeArgs {
+                    .select_account_or_err(crate::command::shared_args::AccountScopeOptionalArgs {
                         account: Some(account_email.clone()),
                         account_id: None,
                     })

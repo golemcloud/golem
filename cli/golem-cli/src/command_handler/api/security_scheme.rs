@@ -15,12 +15,15 @@
 use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
+use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
+use crate::log::log_error;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::http_api::security::{
     HttpSecuritySchemeCreateView, HttpSecuritySchemeDeleteView, HttpSecuritySchemeGetView,
     HttpSecuritySchemeListView, HttpSecuritySchemeUpdateView,
 };
+use anyhow::bail;
 use golem_client::api::ApiSecurityClient;
 use golem_client::model::{SecuritySchemeCreation, SecuritySchemeDto, SecuritySchemeUpdate};
 use golem_common::model::Empty;
@@ -188,7 +191,15 @@ impl ApiSecuritySchemeCommandHandler {
             .api_security
             .get_environment_security_scheme(&environment.environment_id.0, &security_scheme_name.0)
             .await
-            .map_service_error()?;
+            .map_service_error_not_found_as_opt()?;
+
+        let Some(result) = result else {
+            log_error(format!(
+                "HTTP API Security Scheme {} not found.",
+                security_scheme_name.0
+            ));
+            bail!(NonSuccessfulExit);
+        };
 
         Ok(result)
     }

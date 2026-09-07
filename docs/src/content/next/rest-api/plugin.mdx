@@ -1,15 +1,10 @@
 # Plugin API
 
 ## List all plugins registered in account
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/plugins`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -35,13 +30,10 @@ Path|Method|Protected
 ```
 
 ## Register a new plugin
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/plugins`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -79,15 +71,10 @@ Path|Method|Protected
 ```
 
 ## Get an account plugin by name and version.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/plugins/{plugin_name}/{plugin_version}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -109,15 +96,10 @@ Path|Method|Protected
 ```
 
 ## Get a plugin by id
+
 Path|Method|Protected
 ---|---|---
 `/v1/plugins/{plugin_id}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -139,15 +121,10 @@ Path|Method|Protected
 ```
 
 ## Delete a plugin
+
 Path|Method|Protected
 ---|---|---
 `/v1/plugins/{plugin_id}`|DELETE|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 

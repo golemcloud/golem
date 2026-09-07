@@ -1133,13 +1133,19 @@ pub mod shared_args {
     }
 
     #[derive(Debug, Args)]
-    pub struct AccountScopeArgs {
+    pub struct AccountScopeOptionalArgs {
         /// Account email
         #[arg(long, conflicts_with = "account_id")]
         pub account: Option<String>,
         /// Account ID
         #[arg(long, conflicts_with = "account")]
         pub account_id: Option<AccountId>,
+    }
+
+    impl AccountScopeOptionalArgs {
+        pub fn is_explicit(&self) -> bool {
+            self.account.is_some() || self.account_id.is_some()
+        }
     }
 }
 
@@ -2220,7 +2226,7 @@ pub mod retry_policy {
 }
 
 pub mod plugin {
-    use crate::command::shared_args::AccountScopeArgs;
+    use crate::command::shared_args::AccountScopeOptionalArgs;
     use crate::model::input::PathBufOrStdin;
     use clap::Subcommand;
     use uuid::Uuid;
@@ -2231,7 +2237,7 @@ pub mod plugin {
         #[command(after_help = crate::command_examples::PLUGIN_LIST)]
         List {
             #[command(flatten)]
-            account: AccountScopeArgs,
+            account: AccountScopeOptionalArgs,
         },
         /// Get plugin details
         #[command(after_help = crate::command_examples::PLUGIN_GET)]
@@ -2254,13 +2260,13 @@ pub mod plugin {
             #[arg(long, required_unless_present_all = ["name", "version"], conflicts_with_all = ["name", "version", "account", "account_id"])]
             id: Option<Uuid>,
             #[command(flatten)]
-            account: AccountScopeArgs,
+            account: AccountScopeOptionalArgs,
         },
         /// Register a new plugin for the account
         #[command(after_help = crate::command_examples::PLUGIN_REGISTER)]
         Register {
             #[command(flatten)]
-            account: AccountScopeArgs,
+            account: AccountScopeOptionalArgs,
             #[arg(
                 help = crate::command_glossary::PLUGIN_MANIFEST_SHORT,
                 long_help = crate::command_glossary::PLUGIN_MANIFEST_LONG,
@@ -2289,7 +2295,7 @@ pub mod plugin {
             #[arg(long, required_unless_present_all = ["name", "version"], conflicts_with_all = ["name", "version", "account", "account_id"])]
             id: Option<Uuid>,
             #[command(flatten)]
-            account: AccountScopeArgs,
+            account: AccountScopeOptionalArgs,
         },
     }
 }
@@ -2425,7 +2431,7 @@ pub mod api_token {
 }
 
 pub mod account {
-    use crate::command::shared_args::AccountScopeArgs;
+    use crate::command::shared_args::AccountScopeOptionalArgs;
     use clap::{Args, Subcommand};
     use golem_common::model::account_usage::{
         AccountUsagePeriod, DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS,
@@ -2438,7 +2444,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_USAGE_SHOW)]
         Show {
             #[command(flatten)]
-            account: AccountScopeArgs,
+            account: AccountScopeOptionalArgs,
 
             /// Billing period in YYYY-MM format.
             #[arg(long)]
@@ -2448,7 +2454,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_USAGE_HISTORY)]
         History {
             #[command(flatten)]
-            account: AccountScopeArgs,
+            account: AccountScopeOptionalArgs,
 
             /// Number of closed periods to show.
             #[arg(long, default_value_t = DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS)]
@@ -2462,13 +2468,13 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_LIMITS_SHOW)]
         Show {
             #[command(flatten)]
-            account: AccountScopeArgs,
+            account: AccountScopeOptionalArgs,
         },
         /// Set one storage or memory limit.
         #[command(after_help = crate::command_examples::ACCOUNT_LIMITS_SET)]
         Set {
             #[command(flatten)]
-            account: AccountScopeArgs,
+            account: AccountScopeOptionalArgs,
 
             /// Maximum storage per agent in bytes. Cannot exceed the plan ceiling.
             #[arg(
@@ -2494,7 +2500,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_LIMITS_UNSET)]
         Unset {
             #[command(flatten)]
-            account: AccountScopeArgs,
+            account: AccountScopeOptionalArgs,
 
             /// Clear the maximum storage per-agent override.
             #[arg(
@@ -2530,7 +2536,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_LIST)]
         List {
             #[command(flatten)]
-            account: AccountScopeArgs,
+            account: AccountScopeOptionalArgs,
 
             /// List permission shares targeting the account instead of owned by the account.
             #[arg(long)]
@@ -2546,7 +2552,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_GET_BY_NAME)]
         GetByName {
             #[command(flatten)]
-            account: AccountScopeArgs,
+            account: AccountScopeOptionalArgs,
 
             /// Permission share name.
             name: String,
@@ -2555,7 +2561,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_PERMISSION_SHARE_NEW)]
         New {
             #[command(flatten)]
-            account: AccountScopeArgs,
+            account: AccountScopeOptionalArgs,
 
             /// Target account email receiving the permissions.
             target_account_email: String,
@@ -2593,7 +2599,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_GET)]
         Get {
             #[command(flatten)]
-            account: AccountScopeArgs,
+            account: AccountScopeOptionalArgs,
         },
         /// Update some information about the account.
         ///
@@ -2601,7 +2607,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_UPDATE)]
         Update {
             #[command(flatten)]
-            account: AccountScopeArgs,
+            account: AccountScopeOptionalArgs,
             /// New name to set for the account.
             account_name: String,
         },
@@ -2617,7 +2623,7 @@ pub mod account {
         #[command(after_help = crate::command_examples::ACCOUNT_DELETE)]
         Delete {
             #[command(flatten)]
-            account: AccountScopeArgs,
+            account: AccountScopeOptionalArgs,
         },
         /// Show current or historical account usage.
         Usage {
@@ -2638,7 +2644,7 @@ pub mod account {
 }
 
 pub mod card {
-    use crate::command::shared_args::AccountScopeArgs;
+    use crate::command::shared_args::AccountScopeOptionalArgs;
     use crate::model::agent::RawAgentId;
     use clap::Subcommand;
     use golem_common::model::card::CardId;
@@ -2649,7 +2655,7 @@ pub mod card {
         #[command(after_help = crate::command_examples::CARD_LIST)]
         List {
             #[command(flatten)]
-            account: AccountScopeArgs,
+            account: AccountScopeOptionalArgs,
 
             /// List cards in an agent's wallet instead of account-owned cards. Activates the agent if not already active.
             #[arg(long, conflicts_with_all = ["account", "account_id"])]

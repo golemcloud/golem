@@ -439,10 +439,10 @@ async fn test_agent_secret_get_revision_include_deleted(
 }
 
 #[test]
-async fn test_atomic_retry_policy_and_agent_secret_lookups(
+async fn test_retry_policy_and_agent_secret_natural_key_lookups(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
-    crate::repo::common::test_atomic_retry_policy_and_agent_secret_lookups(deps).await;
+    crate::repo::common::test_retry_policy_and_agent_secret_natural_key_lookups(deps).await;
 }
 
 #[test]

@@ -1,15 +1,10 @@
 # Environment Tool Grants API
 
 ## List active tool grants in an environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/tools`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -451,13 +446,10 @@ Path|Method|Protected
 ```
 
 ## Grant an exact published tool release to an environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/tools`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -943,13 +935,10 @@ Path|Method|Protected
 ```
 
 ## Validate environment tool grants and publications without changing them
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/tools/validate`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -1425,15 +1414,10 @@ Path|Method|Protected
 ```
 
 ## Get an active environment tool grant
+
 Path|Method|Protected
 ---|---|---
 `/v1/environment-tools/{grant_id}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -1908,13 +1892,10 @@ Path|Method|Protected
 ```
 
 ## Delete an environment tool grant
+
 Path|Method|Protected
 ---|---|---
 `/v1/environment-tools/{grant_id}`|DELETE|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -1923,18 +1904,11 @@ Path|Method|Protected
 }
 ```
 
-
-
 ## Restore a deleted environment tool grant
+
 Path|Method|Protected
 ---|---|---
 `/v1/environment-tools/{grant_id}/restore`|POST|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 

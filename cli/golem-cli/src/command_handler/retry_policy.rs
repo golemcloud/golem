@@ -15,7 +15,9 @@
 use crate::command::retry_policy::RetryPolicySubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
+use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
+use crate::log::log_error;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::retry_policy::{
     RetryPolicyCreateView, RetryPolicyDeleteView, RetryPolicyGetView, RetryPolicyListView,
@@ -139,7 +141,12 @@ impl RetryPolicyCommandHandler {
                 .retry_policies
                 .get_environment_retry_policy(&environment.environment_id.0, &name)
                 .await
-                .map_service_error()?;
+                .map_service_error_not_found_as_opt()?;
+
+            let Some(result) = result else {
+                log_error(format!("Retry policy '{name}' not found in environment"));
+                bail!(NonSuccessfulExit);
+            };
 
             Ok(result)
         } else if let Some(id) = id {

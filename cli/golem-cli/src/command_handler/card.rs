@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::command::card::CardSubcommand;
-use crate::command::shared_args::AccountScopeArgs;
+use crate::command::shared_args::AccountScopeOptionalArgs;
 use crate::command_handler::Handlers;
 use crate::command_handler::agent::AgentCommandHandler;
 use crate::context::Context;
@@ -104,7 +104,7 @@ impl CardCommandHandler {
 
     async fn cmd_list(
         &self,
-        account: AccountScopeArgs,
+        account: AccountScopeOptionalArgs,
         agent: Option<RawAgentId>,
         filter: CardListFilter,
     ) -> anyhow::Result<()> {

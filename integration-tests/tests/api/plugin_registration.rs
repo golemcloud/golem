@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use golem_client::api::{
-    RegistryServiceClient, RegistryServiceCreatePluginError, RegistryServiceGetPluginByIdError,
+    RegistryServiceClient, RegistryServiceCreatePluginError, RegistryServiceGetAccountPluginError,
+    RegistryServiceGetPluginByIdError,
 };
 use golem_common::model::base64::Base64;
 use golem_common::model::permission_share::{
@@ -81,6 +82,16 @@ async fn can_create_and_fetch_plugins(deps: &EnvBasedTestDependencies) -> anyhow
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceGetPluginByIdError::Error404(_)
+            ))
+        ));
+
+        let result = client_2
+            .get_account_plugin(&user.account_id.0, &plugin.name, &plugin.version)
+            .await;
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServiceGetAccountPluginError::Error404(_)
             ))
         ));
     }

@@ -38,16 +38,39 @@ golem plugin get --id <PLUGIN_ID>
 
 ## Register a plugin
 
-Register from a JSON manifest path, or use `-` to read it from standard input:
+Register from a JSON or YAML manifest path, or use `-` to read it from standard input:
 
 ```shell copy
-golem plugin register ./my-plugin.json
-cat my-plugin.json | golem plugin register -
+golem plugin register ./my-plugin.yaml
+cat my-plugin.yaml | golem plugin register -
 ```
 
 Use `--account` or `--account-id` to register for an explicitly selected account. Otherwise the authenticated account is used.
 
-The manifest contains `name`, `version`, `description`, `icon`, `homepage`, and an oplog-processor `specs` object.
+The manifest has these fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | Yes | Plugin name |
+| `version` | Yes | Plugin version |
+| `description` | Yes | Short description shown in plugin listings |
+| `icon` | Yes | Path to the icon file uploaded with the registration |
+| `homepage` | Yes | Plugin homepage URL |
+| `specs` | Yes | Type-specific plugin definition |
+
+The registry currently accepts oplog-processor plugins. Their `specs` object identifies the component and revision that process agent oplog entries:
+
+```yaml
+name: my-oplog-processor
+version: 1.0.0
+description: Exports selected oplog entries
+icon: ./plugin.svg
+homepage: https://example.com/my-oplog-processor
+specs:
+  type: OplogProcessor
+  componentId: 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890
+  componentRevision: 0
+```
 
 ## Unregister a plugin
 

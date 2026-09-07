@@ -163,12 +163,14 @@ golem plugin unregister --id 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890
 
 The name and version form requires both positional values and accepts `--account` or `--account-id`. The `--id` form conflicts with the positional identity and account scope. A positional UUID is a name, not an ID; use `--id` explicitly.
 
-Register a plugin from a JSON manifest, optionally for an explicit account:
+Register a plugin from a JSON or YAML manifest, optionally for an explicit account:
 
 ```shell
-golem plugin register ./my-plugin.json
-golem plugin register ./my-plugin.json --account owner@example.com
+golem plugin register ./my-plugin.yaml
+golem plugin register ./my-plugin.yaml --account owner@example.com
 ```
+
+The manifest requires `name`, `version`, `description`, `icon`, `homepage`, and `specs`. The registry currently accepts `OplogProcessor` specs, which identify the oplog-processor component with `componentId` and `componentRevision`.
 
 Plugin installation is declarative. The retired `component plugin` and `project plugin` workflows are not available. Define installations in `golem.yaml`; `golem deploy` reconciles the manifest with deployed state.
 
