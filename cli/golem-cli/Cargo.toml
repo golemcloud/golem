@@ -68,6 +68,7 @@ itertools = { workspace = true }
 jsonschema = { workspace = true }
 lenient_bool = { workspace = true }
 minijinja = { workspace = true }
+parse-size = { workspace = true }
 phf = { workspace = true }
 portable-pty = { workspace = true }
 prettyplease = { workspace = true }

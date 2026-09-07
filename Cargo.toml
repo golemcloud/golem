@@ -185,6 +185,7 @@ opentelemetry = "0.30.0"
 opentelemetry-otlp = { version = "0.30.0" }
 opentelemetry-prometheus-text-exporter = "=0.2.0"
 opentelemetry_sdk = "0.30.0"
+parse-size = "1.1.0"
 phf = { version = "0.11.3", features = ["macros"] }
 pin-project = "1.1.10"
 pgvector = { version = "=0.4.1", features = ["sqlx", "halfvec"] }

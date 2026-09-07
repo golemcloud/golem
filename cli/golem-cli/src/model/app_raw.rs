@@ -909,8 +909,12 @@ impl DeploymentSubdomain {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LocalServer {
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub memory_budget: Option<std::num::NonZeroU64>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        with = "crate::model::byte_size::optional"
+    )]
+    pub system_memory_override: Option<std::num::NonZeroU64>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub router_addr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -2390,7 +2394,7 @@ mod test {
         )
             .prop_map(
                 |(
-                    memory_budget,
+                    system_memory_override,
                     router_addr,
                     router_port,
                     custom_request_port,
@@ -2399,7 +2403,7 @@ mod test {
                     data_dir,
                     agent_filesystem_root,
                 )| LocalServer {
-                    memory_budget,
+                    system_memory_override,
                     router_addr,
                     router_port,
                     custom_request_port,
@@ -3230,7 +3234,7 @@ mod test {
             app: test-app
 
             localServer:
-              memoryBudget: 2147483648
+              systemMemoryOverride: 2 GiB
               routerAddr: 127.0.0.1
               routerPort: 9882
               customRequestPort: 9008
@@ -3243,7 +3247,10 @@ mod test {
         let app = Application::from_yaml_str(source).unwrap();
         let local_server = app.local_server.expect("localServer should be parsed");
 
-        assert_eq!(local_server.memory_budget.unwrap().get(), 2147483648);
+        assert_eq!(
+            local_server.system_memory_override.unwrap().get(),
+            2147483648
+        );
         assert_eq!(local_server.router_addr.as_deref(), Some("127.0.0.1"));
         assert_eq!(local_server.router_port, Some(9882));
         assert_eq!(local_server.custom_request_port, Some(9008));
@@ -3263,9 +3270,15 @@ mod test {
     }
 
     #[test]
-    fn local_server_memory_budget_rejects_invalid_values() {
-        for value in ["0", "-1", "1.5", "18446744073709551616", "'2 GiB'"] {
-            let source = format!("app: test-app\nlocalServer:\n  memoryBudget: {value}\n");
+    fn local_server_system_memory_override_rejects_invalid_values() {
+        for value in [
+            "'0 B'",
+            "'-1 MB'",
+            "'18446744073709551616 B'",
+            "'garbage'",
+            "2147483648",
+        ] {
+            let source = format!("app: test-app\nlocalServer:\n  systemMemoryOverride: {value}\n");
             assert!(
                 Application::from_yaml_str(&source).is_err(),
                 "accepted {value}"

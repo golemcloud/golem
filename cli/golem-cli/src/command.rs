@@ -2702,16 +2702,17 @@ pub mod server {
     use crate::config::{
         DEFAULT_LOCAL_CUSTOM_REQUEST_PORT, DEFAULT_LOCAL_MCP_PORT, DEFAULT_LOCAL_ROUTER_PORT,
     };
+    use anyhow::Context;
     use clap::{Args, Subcommand};
     use std::path::PathBuf;
 
-    #[derive(Clone, Debug, Args, Default)]
+    #[derive(Debug, Args, Default)]
     pub struct RunArgs {
-        /// Memory budget in bytes for local agent admission and eviction.
-        /// Overrides GOLEM_LOCAL_SERVER_MEMORY_BUDGET and localServer.memoryBudget.
+        /// Override detected system memory for agent admission and eviction (e.g. 2GiB or 500MB).
+        /// Overrides GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE and localServer.systemMemoryOverride.
         /// The executor reserves 20% for host overhead. This is not a hard RSS limit.
-        #[clap(long)]
-        pub memory_budget: Option<std::num::NonZeroU64>,
+        #[clap(long, value_parser = crate::model::byte_size::parse_positive)]
+        pub system_memory_override: Option<std::num::NonZeroU64>,
 
         /// Address to serve the main API on, defaults to 0.0.0.0
         #[clap(long)]
@@ -2761,6 +2762,31 @@ pub mod server {
     }
 
     impl RunArgs {
+        pub fn with_env_overrides(self) -> anyhow::Result<Self> {
+            self.with_env_overrides_from(|name| std::env::var(name))
+        }
+
+        fn with_env_overrides_from(
+            mut self,
+            get_env: impl FnOnce(&str) -> Result<String, std::env::VarError>,
+        ) -> anyhow::Result<Self> {
+            if self.system_memory_override.is_none() {
+                const NAME: &str = "GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE";
+                match get_env(NAME) {
+                    Ok(value) => {
+                        self.system_memory_override = Some(
+                            crate::model::byte_size::parse_positive(&value)
+                                .map_err(anyhow::Error::msg)
+                                .with_context(|| format!("Failed to parse {NAME}: {value}"))?,
+                        );
+                    }
+                    Err(std::env::VarError::NotPresent) => {}
+                    Err(err) => return Err(err).with_context(|| format!("Failed to read {NAME}")),
+                }
+            }
+            Ok(self)
+        }
+
         pub fn router_addr(&self) -> &str {
             self.router_addr.as_deref().unwrap_or("0.0.0.0")
         }
@@ -2789,6 +2815,106 @@ pub mod server {
         /// DESTRUCTIVE: Permanently deletes the local server data directory, including all components, agents and oplogs created via the local server. Uses localServer.dataDir from the discovered manifest, or the platform default when no manifest is loaded. The resolved directory is shown for confirmation; use -Y/--yes to skip the prompt. Pass -X to ignore manifest configuration. Filesystem roots are always rejected. This action is irreversible.
         #[command(after_help = crate::command_examples::SERVER_CLEAN)]
         Clean,
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::RunArgs;
+        use crate::model::app_raw::Application;
+        use clap::Parser;
+        use test_r::test;
+
+        #[derive(Parser)]
+        struct ServerCommand {
+            #[command(flatten)]
+            args: RunArgs,
+        }
+
+        #[test]
+        fn local_server_system_memory_override_parses_sizes_consistently() {
+            for (value, expected) in [
+                ("1mb", 1_000_000),
+                ("1MB", 1_000_000),
+                ("1 MiB", 1_048_576),
+                ("2GiB", 2_147_483_648),
+                ("1.5GiB", 1_610_612_736),
+                ("1", 1),
+                ("18446744073709551615 B", u64::MAX),
+            ] {
+                let flag =
+                    ServerCommand::try_parse_from(["server", "--system-memory-override", value])
+                        .unwrap()
+                        .args;
+                let env = RunArgs::default()
+                    .with_env_overrides_from(|name| {
+                        assert_eq!(name, "GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE");
+                        Ok(value.to_string())
+                    })
+                    .unwrap();
+                let manifest = Application::from_yaml_str(&format!(
+                    "app: test-app\nlocalServer:\n  systemMemoryOverride: '{value}'\n"
+                ))
+                .unwrap()
+                .local_server
+                .unwrap();
+                assert_eq!(flag.system_memory_override.unwrap().get(), expected);
+                assert_eq!(env.system_memory_override, flag.system_memory_override);
+                assert_eq!(manifest.system_memory_override, flag.system_memory_override);
+            }
+        }
+
+        #[test]
+        fn local_server_system_memory_override_validates_flag_and_env() {
+            for value in [
+                "0",
+                "0MB",
+                "-1",
+                "invalid",
+                "18446744073709551616 B",
+                "100EiB",
+            ] {
+                assert!(
+                    ServerCommand::try_parse_from([
+                        "server",
+                        &format!("--system-memory-override={value}"),
+                    ])
+                    .is_err(),
+                    "accepted flag {value}"
+                );
+                let error = RunArgs::default()
+                    .with_env_overrides_from(|_| Ok(value.into()))
+                    .unwrap_err();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE")
+                );
+            }
+            assert!(
+                RunArgs::default()
+                    .with_env_overrides_from(|_| {
+                        Err(std::env::VarError::NotUnicode(std::ffi::OsString::from(
+                            "invalid",
+                        )))
+                    })
+                    .is_err()
+            );
+        }
+
+        #[test]
+        fn local_server_system_memory_override_flag_precedes_env() {
+            let args = ServerCommand::try_parse_from(["server", "--system-memory-override=2GiB"])
+                .unwrap()
+                .args;
+            let args = args
+                .with_env_overrides_from(|_| panic!("flag must bypass environment lookup"))
+                .unwrap();
+            assert_eq!(args.system_memory_override.unwrap().get(), 2_147_483_648);
+            let args = RunArgs::default()
+                .with_env_overrides_from(|_| Err(std::env::VarError::NotPresent))
+                .unwrap();
+            assert_eq!(args.system_memory_override, None);
+        }
     }
 }
 
@@ -3112,7 +3238,7 @@ mod test {
 
     #[test]
     #[cfg(feature = "server-commands")]
-    fn local_server_memory_budget_requires_positive_bytes() {
+    fn local_server_system_memory_override_requires_positive_bytes() {
         use clap::Parser;
         for value in ["1", "2147483648", "18446744073709551615"] {
             assert!(
@@ -3120,19 +3246,19 @@ mod test {
                     "golem",
                     "server",
                     "run",
-                    "--memory-budget",
+                    "--system-memory-override",
                     value
                 ])
                 .is_ok()
             );
         }
-        for value in ["0", "-1", "1.5", "2GiB", "18446744073709551616"] {
+        for value in ["0", "-1", "invalid", "18446744073709551616"] {
             assert!(
                 GolemCliCommand::try_parse_from([
                     "golem",
                     "server",
                     "run",
-                    "--memory-budget",
+                    "--system-memory-override",
                     value
                 ])
                 .is_err()

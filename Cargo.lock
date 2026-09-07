@@ -3749,6 +3749,7 @@ dependencies = [
  "lenient_bool",
  "log",
  "minijinja",
+ "parse-size",
  "phf 0.11.3",
  "portable-pty",
  "pretty_assertions",
@@ -7034,6 +7035,12 @@ dependencies = [
  "structmeta",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "parse-size"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "487f2ccd1e17ce8c1bfab3a65c89525af41cfad4c8659021a1e9a2aacd73b89b"
 
 [[package]]
 name = "pastey"

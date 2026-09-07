@@ -328,9 +328,9 @@ The generator reads only the release's safe tool definition and metadata digest.
   </Field>
 
   <Field meta={{
-    path: "localServer.memoryBudget",
+    path: "localServer.systemMemoryOverride",
   }}>
-    ***Optional positive integer, in bytes*** that sets the memory budget for local agent admission and eviction. For example, `2147483648` sets a 2 GiB budget; the executor uses 80% for admission and reserves 20% for host overhead. Precedence is `--memory-budget`, then `GOLEM_LOCAL_SERVER_MEMORY_BUDGET`, then this field, then automatic host/cgroup memory detection. This is not a hard process RSS limit: compilation and other host allocations can exceed the budget. Set a separate budget for each concurrent local server.
+    ***Optional positive byte-size string*** that overrides detected system memory for local agent admission and eviction, leaving room for other applications. For example, `2GiB` sets a 2 GiB budget; the executor uses 80% for admission and reserves 20% for host overhead. Flag, environment variable, and manifest accept the same case-insensitive units: `1mb` and `1MB` mean 1,000,000 bytes; `1MiB` means 1,048,576 bytes. Spaces and fractions such as `1.5 GiB` are accepted, with fractional bytes rounded to the nearest byte. Quote unitless byte values in YAML. Precedence is `--system-memory-override`, then `GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE`, then this field, then automatic host/cgroup memory detection. The value maps to the executor's `memory.system_memory_override`. This is not a hard process RSS limit: compilation and other host allocations can exceed the budget.
   </Field>
 
   <Field meta={{

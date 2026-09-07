@@ -521,7 +521,7 @@ pub struct ApplicationPreload {
 
 #[derive(Clone, Debug)]
 pub struct ResolvedLocalServer {
-    pub memory_budget: Option<std::num::NonZeroU64>,
+    pub system_memory_override: Option<std::num::NonZeroU64>,
     pub router_addr: Option<String>,
     pub router_port: Option<u16>,
     pub custom_request_port: Option<u16>,
@@ -542,7 +542,7 @@ impl ResolvedLocalServer {
 
     pub fn from_raw_with_base_dir(local_server: &app_raw::LocalServer, base_dir: &Path) -> Self {
         Self {
-            memory_budget: local_server.memory_budget,
+            system_memory_override: local_server.system_memory_override,
             router_addr: local_server.router_addr.clone(),
             router_port: local_server.router_port,
             custom_request_port: local_server.custom_request_port,

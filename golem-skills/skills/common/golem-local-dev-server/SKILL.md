@@ -29,7 +29,7 @@ golem server run
 | `--mcp-port <PORT>` | Port to serve the MCP server on | `9007` |
 | `--ports-file <PATH>` | Write discovered startup ports to this JSON file | _(none)_ |
 | `--data-dir <PATH>` | Directory to store data in | Platform-specific (see below) |
-| `--memory-budget <BYTES>` | Positive byte budget for agent admission and eviction; not a hard RSS limit | Environment variable, manifest, then host/cgroup detection |
+| `--system-memory-override <SIZE>` | Override detected system memory, e.g. `2GiB`; not a hard RSS limit | Environment variable, manifest, then host/cgroup detection |
 | `--clean` | Clean the data directory before starting | `false` |
 | `--agent-filesystem-root <PATH>` | Use deterministic agent filesystem directories rooted at the given path instead of random temp directories. Layout: `<root>/<environment_id>/<component_id>/<agent_name>/` | _(none)_ |
 
@@ -91,18 +91,18 @@ The application manifest can configure the built-in local preset in its `localSe
 
 #### Memory Budget
 
-Set a separate memory budget for each concurrent local server. Without an explicit budget, Golem detects host or cgroup memory; on macOS, independent servers each see the full host RAM.
+Override detected system memory to leave room for other applications and control how much memory a local server uses for agent admission and eviction. This is useful for everyday development, smaller machines, and running multiple servers. Without an override, Golem detects host or cgroup memory; on macOS, a local server sees the full host RAM.
 
 ```shell
-golem server run --memory-budget 2147483648
-GOLEM_LOCAL_SERVER_MEMORY_BUDGET=2147483648 golem server run
+golem server run --system-memory-override 2GiB
+GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE=2GiB golem server run
 ```
 
-The value is a positive integer number of bytes (2147483648 is 2 GiB). Precedence is the `--memory-budget` flag, then `GOLEM_LOCAL_SERVER_MEMORY_BUDGET`, then `localServer.memoryBudget` in the manifest, then automatic detection. The executor uses 80% of the budget for agent admission and eviction, leaving 20% for host overhead. This is not an OS-enforced process RSS limit; compilation and other host allocations can exceed it. Check the startup log's measured memory limit and monitor RSS under load.
+All three inputs use the same positive byte-size format. Units are case-insensitive: `1mb` and `1MB` mean 1,000,000 bytes; `1MiB` means 1,048,576 bytes. Spaces and fractional sizes such as `1.5 GiB` are accepted; fractional bytes are rounded to the nearest byte. A value without a unit means bytes. Quote unitless values in YAML. Precedence is the `--system-memory-override` flag, then `GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE`, then `localServer.systemMemoryOverride` in the manifest, then automatic detection. These map to the executor's `memory.system_memory_override`. The executor uses 80% for agent admission and eviction, leaving 20% for host overhead. This is not an OS-enforced process RSS limit; compilation and other host allocations can exceed it. Check the startup log's measured memory limit and monitor RSS under load.
 
 ```yaml
 localServer:
-  memoryBudget: 2147483648
+  systemMemoryOverride: 2GiB
 ```
 
 #### Manual Testing with Free Ports
