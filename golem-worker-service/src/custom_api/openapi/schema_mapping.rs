@@ -19,8 +19,8 @@
 //! for non-schema-bearing bodies/headers (binary bodies, enum'd strings, …).
 
 use golem_common::schema::graph::SchemaGraph;
-use golem_common::schema::render::to_openapi_components;
 use golem_common::schema::schema_type::SchemaType;
+use golem_schema::schema::render::to_openapi_components;
 use serde_json::{Map, Value, json};
 
 /// Render `(graph, ty)` to an OpenAPI 3.1 schema JSON value, merging every

@@ -25,7 +25,7 @@ impl TypedAgentConfigEntry {
     }
 
     pub fn to_flat_pair(&self) -> Option<(String, String)> {
-        crate::schema::render::to_json_value(
+        golem_schema::schema::render::to_json_value(
             self.value.graph(),
             self.value.root_type(),
             self.value.value(),

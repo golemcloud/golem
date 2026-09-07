@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::schema::graph::SchemaGraph;
-use crate::schema::render::json_schema::to_json_schema;
 use crate::schema::schema_type::{
     DiscriminatorRule, FieldDiscriminator, NamedFieldType, SchemaType, TextRestrictions,
     UnionBranch, UnionSpec, VariantCaseType,
 };
+use golem_schema::schema::render::json_schema::to_json_schema;
 use serde_json::{Value, json};
 use test_r::test;
 
@@ -810,9 +810,9 @@ mod agent_entry_points {
     };
     use crate::schema::metadata::Role;
     use crate::schema::render::json_schema::{
-        JsonSchemaConfig, input_schema_to_json_schema, output_schema_to_json_schema,
-        to_json_schema_with_config,
+        input_schema_to_json_schema, output_schema_to_json_schema,
     };
+    use golem_schema::schema::render::json_schema::{JsonSchemaConfig, to_json_schema_with_config};
     use test_r::test;
 
     #[test]

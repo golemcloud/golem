@@ -32,6 +32,7 @@ harness = false
 golem-api-grpc = { workspace = true }
 golem-client = { workspace = true }
 golem-common = { workspace = true, default-features = true }
+golem-schema = { workspace = true }
 
 # External deps
 anyhow = { workspace = true }

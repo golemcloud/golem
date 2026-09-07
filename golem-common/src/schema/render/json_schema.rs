@@ -5,14 +5,19 @@
 // You may obtain a copy of the License at
 //
 //     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Platform agent-schema projections over the shared schema renderer.
 
 use crate::schema::agent::{FieldSource, InputSchema, OutputSchema};
 use crate::schema::{MetadataEnvelope, NamedFieldType, SchemaGraph, SchemaType};
+use golem_schema::schema::render::json_schema::{JsonSchemaConfig, to_json_schema_with_config};
 use serde_json::Value;
-
-pub use golem_schema::schema::render::json_schema::*;
 
 /// Render an agent input schema as an object containing only user-supplied fields.
 pub fn input_schema_to_json_schema(

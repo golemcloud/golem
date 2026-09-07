@@ -17,9 +17,9 @@ use crate::mcp::invoke::{schema_binary_value_from_json, schema_text_value_from_j
 use golem_common::schema::agent::{FieldSource, InputSchema, NamedField};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::multimodal::multimodal_variant_cases;
-use golem_common::schema::render::json_value::from_json_value;
 use golem_common::schema::schema_type::{SchemaType, VariantCaseType};
 use golem_common::schema::schema_value::{SchemaValue, VariantValuePayload};
+use golem_schema::schema::render::json_value::from_json_value;
 use rmcp::model::JsonObject;
 use std::collections::HashMap;
 

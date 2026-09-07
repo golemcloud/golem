@@ -23,12 +23,12 @@ use golem_common::model::agent::ParsedAgentId;
 use golem_common::schema::agent::OutputSchema;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::multimodal::multimodal_variant_cases;
-use golem_common::schema::render::json_value::to_json_value_redacted;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::{
     BinaryValuePayload, SchemaValue, TextValuePayload, VariantValuePayload,
 };
 use golem_common::schema::unstructured::{UnstructuredOutput, decode_unstructured_output};
+use golem_schema::schema::render::json_value::to_json_value_redacted;
 use rmcp::ErrorData;
 use rmcp::model::{JsonObject, ReadResourceResult, ResourceContents};
 use std::sync::Arc;

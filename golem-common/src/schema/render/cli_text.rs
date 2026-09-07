@@ -22,12 +22,12 @@ use crate::schema::canonical;
 use crate::schema::graph::SchemaGraph;
 use crate::schema::host_managed::HostManagedKind;
 use crate::schema::metadata::TypeId;
-use crate::schema::render::error::RenderError;
-use crate::schema::render::walker::{SchemaWalker, walk};
 use crate::schema::schema_type::{
     DiscriminatorRule, ResultSpec, SchemaType, UnionBranch, VariantCaseType,
 };
 use crate::schema::schema_value::{ResultValuePayload, SchemaValue, UnionValuePayload};
+use golem_schema::schema::render::error::RenderError;
+use golem_schema::schema::render::walker::{SchemaWalker, walk};
 use std::collections::HashSet;
 
 /// Render a [`SchemaType`] as a concise text description.
@@ -341,9 +341,9 @@ impl SchemaWalker for CliTextRenderer {
 }
 
 fn drive<T>(
-    res: Result<T, crate::schema::render::walker::WalkerError<RenderError>>,
+    res: Result<T, golem_schema::schema::render::walker::WalkerError<RenderError>>,
 ) -> Result<T, RenderError> {
-    use crate::schema::render::walker::WalkerError;
+    use golem_schema::schema::render::walker::WalkerError;
     match res {
         Ok(v) => Ok(v),
         Err(WalkerError::Walker(e)) => Err(e),
