@@ -243,27 +243,37 @@ impl EnvironmentCommandHandler {
                 application_name,
                 environment_name,
             } => {
-                let account = self
+                let env_summary = self
                     .ctx
-                    .account_handler()
-                    .select_account_or_err(crate::command::shared_args::AccountScopeOptionalArgs {
-                        account: Some(account_email.clone()),
-                        account_id: None,
-                    })
-                    .await?;
-                let application = self
-                    .ctx
-                    .app_handler()
-                    .get_server_application_or_err(&account.id, application_name)
-                    .await?;
-                let environment = self
-                    .get_server_environment_or_err(&application.id, environment_name)
-                    .await?;
-                Ok(ResolvedEnvironmentIdentity::from_app_and_env(
-                    Some(environment_reference),
-                    application,
-                    environment,
-                ))
+                    .golem_clients()
+                    .await?
+                    .me
+                    .list_visible_environments(
+                        Some(account_email),
+                        Some(&application_name.0),
+                        Some(&environment_name.0),
+                    )
+                    .await
+                    .map_service_error()?
+                    .values
+                    .pop();
+
+                match env_summary {
+                    Some(env_summary) => Ok(ResolvedEnvironmentIdentity::from_summary(
+                        Some(environment_reference),
+                        env_summary,
+                    )),
+                    None => {
+                        log_error(format!(
+                            "Environment {} not found",
+                            environment_reference.to_string().log_color_highlight()
+                        ));
+
+                        self.show_available_application_environments().await?;
+
+                        bail!(NonSuccessfulExit);
+                    }
+                }
             }
         }
     }
