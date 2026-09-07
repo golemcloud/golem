@@ -2653,7 +2653,6 @@ impl DurableStreamProducer {
             .then(|| record.offsets.last().copied())
             .flatten();
         logical_payloads(&record.payload)
-            .into_iter()
             .zip(&record.offsets)
             .enumerate()
             .map(|(sub_index, (payload, offset))| {

@@ -233,14 +233,14 @@ impl StreamSessionIndexService {
         pages: &'a mut HashMap<u64, Vec<StreamSessionKeyV1>>,
         page: u64,
     ) -> Result<&'a mut Vec<StreamSessionKeyV1>, String> {
-        if !pages.contains_key(&page) {
+        if let std::collections::hash_map::Entry::Vacant(e) = pages.entry(page) {
             let keys = self
                 .kv
                 .with_entity("stream_session_index", "read_recovery", "page")
                 .get(namespace.clone(), &recovery_catalogue_field(page))
                 .await?
                 .unwrap_or_default();
-            pages.insert(page, keys);
+            e.insert(keys);
         }
         Ok(pages.get_mut(&page).unwrap())
     }
@@ -603,13 +603,15 @@ impl StreamSessionIndexService {
                             &record.attempt.session_key,
                             record.attempt.attempt_id,
                         )?;
-                        if !resume_offsets.contains_key(&field) {
+                        if let std::collections::hash_map::Entry::Vacant(entry) =
+                            resume_offsets.entry(field)
+                        {
                             let old: Option<OplogIndex> = self
                                 .kv
                                 .with_entity("stream_session_index", "read_resume", "attempt")
-                                .get(namespace.clone(), &field)
+                                .get(namespace.clone(), entry.key())
                                 .await?;
-                            resume_offsets.insert(field, old.unwrap_or(*idx));
+                            entry.insert(old.unwrap_or(*idx));
                         }
                     }
                     if let Some(key) = crate::worker::stream_session_record_key(record) {
