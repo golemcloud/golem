@@ -16,6 +16,7 @@ use super::component::ComponentService;
 use super::golem_config::GolemConfig;
 use super::{HasComponentService, HasConfig, HasOplogService};
 use crate::durable_host::durable_session::SessionControlMetadata;
+use crate::durable_host::durable_stream::metadata::{ProducerMetadataKey, ProducerMetadataRow};
 use crate::metrics::workers::record_worker_call;
 use crate::services::oplog::OplogService;
 use crate::services::shard::ShardService;
@@ -291,6 +292,15 @@ pub trait WorkerService: Send + Sync {
         _key: &StreamSessionKeyV1,
     ) -> Result<SessionControlMetadata, String> {
         Err("durable stream control metadata is unavailable".into())
+    }
+
+    async fn lookup_durable_stream_producer_metadata(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _keys: Vec<ProducerMetadataKey>,
+    ) -> Result<(OplogIndex, Vec<Option<ProducerMetadataRow>>), String> {
+        Err("durable stream producer metadata is unavailable".into())
     }
 
     async fn read_durable_stream_consumer_page(
@@ -746,6 +756,17 @@ impl DefaultWorkerService {
 
 #[async_trait]
 impl WorkerService for DefaultWorkerService {
+    async fn lookup_durable_stream_producer_metadata(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        keys: Vec<ProducerMetadataKey>,
+    ) -> Result<(OplogIndex, Vec<Option<ProducerMetadataRow>>), String> {
+        self.stream_session_index
+            .lookup_producer_metadata(owned_agent_id, agent_mode, keys)
+            .await
+    }
+
     async fn lookup_durable_stream_recovery_metadata(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -1179,7 +1200,7 @@ impl HasComponentService for DefaultWorkerService {
 }
 
 #[cfg(test)]
-mod session_index_tests;
+pub(crate) mod session_index_tests;
 
 #[cfg(test)]
 mod tests {

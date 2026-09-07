@@ -13,7 +13,10 @@
 // limitations under the License.
 
 use crate::durable_host::durable_session::SessionControlMetadata;
-use crate::services::oplog::OplogService;
+use crate::durable_host::durable_stream::metadata::{
+    ProducerMetadataKey, ProducerMetadataRow, project_producer_metadata,
+};
+use crate::services::oplog::{OplogService, OplogServiceOps};
 use crate::services::worker::DurableStreamRecoveryMetadata;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
@@ -23,7 +26,9 @@ use golem_common::base_model::durable_stream::{
 };
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
-use golem_common::model::{DurableStreamSessionStatus, IdempotencyKey, OwnedAgentId};
+use golem_common::model::{
+    AgentFingerprint, DurableStreamSessionStatus, IdempotencyKey, OwnedAgentId,
+};
 use golem_common::serialization::{deserialize, serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex, Weak};
@@ -68,6 +73,7 @@ fn consumer_journal_index_field(
 pub(super) struct Metadata {
     pub(super) covered_through: OplogIndex,
     pub(super) recovery_session_count: u64,
+    pub(super) producer_fingerprint: Option<AgentFingerprint>,
 }
 
 #[derive(Clone, Debug)]
@@ -104,6 +110,47 @@ impl Drop for IndexLock {
 }
 
 impl StreamSessionIndexService {
+    pub async fn lookup_producer_metadata(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        keys: Vec<ProducerMetadataKey>,
+    ) -> Result<(OplogIndex, Vec<Option<ProducerMetadataRow>>), String> {
+        let this = self.clone();
+        let id = id.clone();
+        tokio::spawn(async move {
+            let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
+            let horizon = oplog.get_last_index(&id, mode).await;
+            this.catch_up_inner(&id, mode, horizon).await?;
+            let mut fields = vec![METADATA_FIELD.to_string()];
+            for key in keys {
+                fields.push(key.field()?);
+            }
+            let values = this
+                .kv
+                .with_entity("stream_session_index", "lookup_producer", "metadata")
+                .get_many_raw(Self::namespace(&id), fields)
+                .await?;
+            let covered = values
+                .first()
+                .and_then(Option::as_ref)
+                .map(|bytes| deserialize::<Metadata>(bytes))
+                .transpose()?
+                .map_or(OplogIndex::NONE, |metadata| metadata.covered_through);
+            if covered < horizon {
+                return Err("producer metadata coverage is unavailable".into());
+            }
+            let rows = values
+                .into_iter()
+                .skip(1)
+                .map(|value| value.map(|bytes| deserialize(&bytes)).transpose())
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok((covered, rows))
+        })
+        .await
+        .map_err(|error| format!("producer metadata lookup task failed: {error}"))?
+    }
+
     pub async fn lookup_resume_offset(
         &self,
         id: &OwnedAgentId,
@@ -555,7 +602,7 @@ impl StreamSessionIndexService {
                 return Ok(());
             }
             let count = (horizon.as_u64() - metadata.covered_through.as_u64()).min(1024);
-            let entries = oplog
+            let mut entries = oplog
                 .read_exact(id, mode, metadata.covered_through.next(), count)
                 .await;
             if entries.is_empty() {
@@ -563,7 +610,46 @@ impl StreamSessionIndexService {
                     "empty oplog range while indexing stream sessions for {id}"
                 ));
             }
+            while let Some((last, OplogEntry::StreamRegistered { record, .. })) =
+                entries.last_key_value()
+            {
+                let record = oplog.download_payload(id, mode, record.clone()).await?;
+                if !matches!(
+                    record.coordinate,
+                    golem_common::model::durable_stream::StreamRegistrationCoordinateV1::Nested { .. }
+                ) || *last >= horizon
+                {
+                    break;
+                }
+                let next = oplog.read_exact(id, mode, last.next(), 1).await;
+                if next.is_empty() {
+                    return Err(
+                        "missing enclosing item while extending producer metadata chunk".into(),
+                    );
+                }
+                entries.extend(next);
+            }
+            if metadata.producer_fingerprint.is_none() {
+                metadata.producer_fingerprint = entries.values().find_map(|entry| match entry {
+                    OplogEntry::Create { instance_id, .. } => Some(AgentFingerprint(*instance_id)),
+                    _ => None,
+                });
+            }
             let fields = async {
+                let producer_fields = if let Some(fingerprint) = metadata.producer_fingerprint {
+                    project_producer_metadata(
+                        self.kv.as_ref(),
+                        namespace.clone(),
+                        oplog.as_ref(),
+                        id,
+                        mode,
+                        fingerprint,
+                        &entries,
+                    )
+                    .await?
+                } else {
+                    Vec::new()
+                };
                 let mut updates = HashMap::<IdempotencyKey, DurableStreamSessionStatus>::new();
                 let mut controls = HashMap::<StreamSessionKeyV1, SessionControlMetadata>::new();
                 let mut journal_pages = HashMap::<String, Vec<OplogIndex>>::new();
@@ -697,6 +783,7 @@ impl StreamSessionIndexService {
                     .filter(|(_, value)| value.first_prepared.is_some())
                     .map(|(key, value)| Ok((Self::field(&key), serialize(&value)?)))
                     .collect::<Result<_, String>>()?;
+                fields.extend(producer_fields);
                 for (key, value) in controls {
                     fields.push((stream_control_index_field(&key)?, serialize(&value)?));
                 }

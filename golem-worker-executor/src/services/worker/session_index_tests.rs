@@ -46,7 +46,7 @@ use nonempty_collections::nev;
 use std::sync::RwLock;
 use test_r::test;
 
-struct UnusedComponentService;
+pub(crate) struct UnusedComponentService;
 
 #[async_trait]
 impl ComponentService for UnusedComponentService {

@@ -706,20 +706,27 @@ impl IndexedStorage for ReadCountingIndexedStorage {
 
 /// `BlobStorage` decorator counting read-type operations and optionally failing a raw write.
 #[derive(Debug)]
-struct ReadCountingBlobStorage {
+pub(crate) struct ReadCountingBlobStorage {
     inner: InMemoryBlobStorage,
     reads: AtomicUsize,
     puts: AtomicUsize,
     fail_put: Option<usize>,
+    pause_read: std::sync::Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    >,
 }
 
 impl ReadCountingBlobStorage {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             inner: InMemoryBlobStorage::new(),
             reads: AtomicUsize::new(0),
             puts: AtomicUsize::new(0),
             fail_put: None,
+            pause_read: std::sync::Mutex::new(None),
         }
     }
 
@@ -729,14 +736,27 @@ impl ReadCountingBlobStorage {
             reads: AtomicUsize::new(0),
             puts: AtomicUsize::new(0),
             fail_put: Some(fail_put),
+            pause_read: std::sync::Mutex::new(None),
         }
     }
 
-    fn reads(&self) -> usize {
+    pub(crate) fn pause_next_read(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        *self.pause_read.lock().unwrap() = Some((started_tx, release_rx));
+        (started_rx, release_tx)
+    }
+
+    pub(crate) fn reads(&self) -> usize {
         self.reads.load(Ordering::Relaxed)
     }
 
-    fn reset(&self) {
+    pub(crate) fn reset(&self) {
         self.reads.store(0, Ordering::Relaxed)
     }
 
@@ -755,6 +775,11 @@ impl BlobStorage for ReadCountingBlobStorage {
         path: &Path,
     ) -> Result<Option<Vec<u8>>, anyhow::Error> {
         self.count_read();
+        let pause = self.pause_read.lock().unwrap().take();
+        if let Some((started, release)) = pause {
+            let _ = started.send(());
+            let _ = release.await;
+        }
         self.inner
             .get_raw(target_label, op_label, namespace, path)
             .await

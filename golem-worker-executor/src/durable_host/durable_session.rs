@@ -20,8 +20,7 @@ use crate::durable_host::durable_stream::{
     DurableStreamProducer, DurableStreamProducerError, NestedStreamWriteV1,
     ProducerOutputRegistrationV1, ProducerOutputSourceV1, ProducerRegistrationRequestV1,
     RoutedAttachedStreamSegmentSource, RoutedStreamAttachmentControl,
-    StreamAttachmentConsumerProbe, StreamAttachmentControl, StreamAttachmentStateV1,
-    StreamSegmentSource,
+    StreamAttachmentConsumerProbe, StreamAttachmentControl, StreamSegmentSource,
 };
 use crate::durable_host::schema_value_stream::StoreValueResolver;
 use crate::durable_host::stream_bus::{LiveStreamEventPayload, LiveStreamReceiveError};
@@ -141,6 +140,7 @@ pub struct SessionControlMetadata {
     finalized_attachments:
         HashMap<(AttachmentId, golem_common::model::StreamId), StreamAttachmentKeyV1>,
     closed_consumer_streams: HashSet<golem_common::model::StreamId>,
+    cancel_intents: HashMap<golem_common::model::StreamId, StreamConsumerCancelIntentRecordV1>,
     pub(crate) consumer_record_counts: HashMap<golem_common::model::StreamId, u64>,
     pub(crate) consumer_deleting:
         Option<golem_common::model::durable_stream::StreamConsumerDeletingRecordV1>,
@@ -285,6 +285,13 @@ impl SessionControlMetadata {
         self.malformed_record |= !record.has_supported_format();
         if let StreamSessionRecordV1::ConsumerDeleting(record) = record {
             self.consumer_deleting = Some(record.clone());
+        }
+        if let StreamSessionRecordV1::ConsumerCancelIntent(record) = record
+            && &record.session_key == key
+        {
+            self.cancel_intents
+                .entry(record.stream_id)
+                .or_insert_with(|| record.clone());
         }
         if let StreamSessionRecordV1::Prepared(record) = record
             && &record.attempt.session_key == key
@@ -1542,7 +1549,12 @@ impl DurableSessionStreams {
                 let auth_ctx = self.auth_ctx.clone().ok_or_else(|| {
                     "foreign durable stream consumer authorization is unavailable".to_string()
                 })?;
-                let source = RoutedAttachedStreamSegmentSource::new(rpc, mapping.clone(), auth_ctx);
+                let source = RoutedAttachedStreamSegmentSource::new(
+                    rpc,
+                    mapping.clone(),
+                    auth_ctx,
+                    self.producer.clone(),
+                );
                 source
                     .read_attached_segment(
                         &self.attachment_key(&mapping.handle, self.attachment_epoch)?,
@@ -1822,6 +1834,7 @@ impl DurableSessionStreams {
                             .producer
                             .handle_for_coordinate(&coordinate)
                             .await
+                            .map_err(|error| error.to_string())?
                             .as_ref()
                             != Some(&existing)
                     {
@@ -2064,30 +2077,12 @@ impl DurableSessionStreams {
             reason,
             details,
         };
-        let current = self.oplog.current_oplog_index().await;
-        let mut persisted_intent = None;
-        if current.is_defined() {
-            for (_, entry) in self
-                .oplog
-                .read_exact(
-                    golem_common::model::oplog::OplogIndex::INITIAL,
-                    current.as_u64(),
-                )
-                .await
-            {
-                let OplogEntry::StreamSession { record, .. } = entry else {
-                    continue;
-                };
-                if let StreamSessionRecordV1::ConsumerCancelIntent(existing) =
-                    self.download_record(record).await?
-                    && existing.session_key == self.session_key
-                    && existing.stream_id == mapping.handle.stream_id
-                {
-                    persisted_intent = Some(existing);
-                    break;
-                }
-            }
-        }
+        let persisted_intent = self
+            .current_control_metadata()
+            .await?
+            .cancel_intents
+            .get(&mapping.handle.stream_id)
+            .cloned();
         let intent = match persisted_intent {
             Some(existing) => existing,
             None => {
@@ -2400,6 +2395,7 @@ impl DurableSessionStreams {
                 .producer
                 .handle_for_coordinate(&request.coordinate)
                 .await
+                .map_err(|error| error.to_string())?
                 .is_none()
             {
                 new_stream_count += 1;
@@ -2423,6 +2419,7 @@ impl DurableSessionStreams {
                     .producer
                     .handle_for_coordinate(&request.coordinate)
                     .await
+                    .map_err(|error| error.to_string())?
                     .and_then(|handle| {
                         self.mapping_for_handle(&handle, SessionStreamRoleV1::Output)
                     });
@@ -3039,18 +3036,11 @@ impl DurableSessionStreams {
             let changed = self.producer.session_records_changed().notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
-            let active = StreamAttachmentControl::inspect_attachments(self.producer.as_ref())
+            let active = self
+                .producer
+                .has_active_attachment(&self.session_key, handle)
                 .await
-                .into_iter()
-                .any(|attachment| {
-                    attachment.key.session_key == self.session_key
-                        && attachment.key.stream_id == handle.stream_id
-                        && attachment.key.producer_environment_id == handle.producer_environment_id
-                        && attachment.key.producer == handle.producer
-                        && attachment.key.expected_producer_fingerprint
-                            == handle.expected_producer_fingerprint
-                        && attachment.state == StreamAttachmentStateV1::Active
-                });
+                .map_err(|error| error.to_string())?;
             if active {
                 return Ok(());
             }
@@ -3128,6 +3118,7 @@ impl DurableSessionStreams {
             .producer
             .has_open_forwarded_session_input(&self.session_key)
             .await
+            .map_err(|error| error.to_string())?
         {
             Ok(())
         } else {
@@ -3588,57 +3579,78 @@ impl DurableSessionStreams {
         handle: &DurableStreamHandleV1,
         through: golem_common::model::durable_stream::StreamOffsetV1,
     ) -> Result<(Vec<(u64, DurableStreamHandleV1)>, bool), String> {
-        let events = if self.producer.owns_handle_identity(handle) {
-            self.producer
-                .read_segment(handle, None, Some(through))
-                .await
-                .map_err(|error| error.to_string())?
-        } else {
-            let mapping = self
-                .mapping_for_handle(handle, SessionStreamRoleV1::Output)
-                .ok_or_else(|| "foreign durable stream has no session mapping".to_string())?;
-            let attachment = self.attachment_key(handle, self.attachment_epoch)?;
-            if self.topology_state(&attachment, Some(&mapping)).await?
-                != ConsumerAttachmentStatus::Active
-            {
-                return Err("foreign durable stream mapping is not topology-activated".to_string());
-            }
-            let rpc = self.rpc.clone().ok_or_else(|| {
-                "foreign durable stream source routing is unavailable".to_string()
-            })?;
-            let auth_ctx = self.auth_ctx.clone().ok_or_else(|| {
-                "foreign durable stream consumer authorization is unavailable".to_string()
-            })?;
-            RoutedAttachedStreamSegmentSource::new(rpc, mapping, auth_ctx)
+        let mut after = None;
+        let mut nested_streams = Vec::new();
+        let mut seen = HashSet::new();
+        loop {
+            let events = if self.producer.owns_handle_identity(handle) {
+                self.producer
+                    .read_segment(handle, after, Some(through))
+                    .await
+                    .map_err(|error| error.to_string())?
+            } else {
+                let mapping = self
+                    .mapping_for_handle(handle, SessionStreamRoleV1::Output)
+                    .ok_or_else(|| "foreign durable stream has no session mapping".to_string())?;
+                let attachment = self.attachment_key(handle, self.attachment_epoch)?;
+                if self.topology_state(&attachment, Some(&mapping)).await?
+                    != ConsumerAttachmentStatus::Active
+                {
+                    return Err(
+                        "foreign durable stream mapping is not topology-activated".to_string()
+                    );
+                }
+                let rpc = self.rpc.clone().ok_or_else(|| {
+                    "foreign durable stream source routing is unavailable".to_string()
+                })?;
+                let auth_ctx = self.auth_ctx.clone().ok_or_else(|| {
+                    "foreign durable stream consumer authorization is unavailable".to_string()
+                })?;
+                RoutedAttachedStreamSegmentSource::new(
+                    rpc,
+                    mapping,
+                    auth_ctx,
+                    self.producer.clone(),
+                )
                 .read_attached_segment(
                     &attachment,
                     handle,
                     Timestamp::now_utc().to_millis(),
-                    None,
+                    after,
                     Some(through),
                 )
                 .await
                 .map_err(|error| error.to_string())?
-        };
-        let terminal_cursor = events
-            .last()
-            .is_some_and(|event| event.offset == through && event.is_terminal());
-        let nested_streams = events
-            .into_iter()
-            .flat_map(|event| event.nested_handles)
-            .map(|nested_handle| {
-                let mapping = self
-                    .mapping_for_handle(&nested_handle, SessionStreamRoleV1::Output)
-                    .ok_or_else(|| {
-                        format!(
-                            "durable nested output stream {} has no session mapping",
-                            nested_handle.stream_id
-                        )
-                    })?;
-                Ok((mapping.transport_stream_id, nested_handle))
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        Ok((nested_streams, terminal_cursor))
+            };
+            let last = events
+                .last()
+                .ok_or_else(|| "stream replay ended before its requested cursor".to_string())?;
+            if after.is_some_and(|after| last.offset <= after) {
+                return Err("stream replay page did not advance its cursor".into());
+            }
+            after = Some(last.offset);
+            let terminal_cursor = last.is_terminal();
+            let page = events
+                .into_iter()
+                .flat_map(|event| event.nested_handles)
+                .filter(|handle| seen.insert(handle.stream_id))
+                .map(|nested_handle| {
+                    let mapping = self
+                        .mapping_for_handle(&nested_handle, SessionStreamRoleV1::Output)
+                        .ok_or_else(|| {
+                            format!(
+                                "durable nested output stream {} has no session mapping",
+                                nested_handle.stream_id
+                            )
+                        })?;
+                    Ok((mapping.transport_stream_id, nested_handle))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            nested_streams.extend(page);
+            if after == Some(through) {
+                return Ok((nested_streams, terminal_cursor));
+            }
+        }
     }
 
     pub(crate) async fn terminal_output_cursor_stream_ids(
@@ -3743,11 +3755,12 @@ impl DurableSessionStreams {
     ) -> Result<DurableStreamReader, String> {
         let reader = if self.producer.owns_handle_identity(&handle) {
             DurableStreamReader::Owned {
-                reader: self
-                    .producer
-                    .catch_up(handle.clone(), after)
-                    .await
-                    .map_err(|error| error.to_string())?,
+                reader: Box::new(
+                    self.producer
+                        .catch_up(handle.clone(), after)
+                        .await
+                        .map_err(|error| error.to_string())?,
+                ),
                 source: self.producer.clone(),
                 handle: Box::new(handle),
             }
@@ -3769,7 +3782,10 @@ impl DurableSessionStreams {
             })?;
             DurableStreamReader::Attached(Box::new(AttachedDurableCatchUpReader {
                 source: Arc::new(RoutedAttachedStreamSegmentSource::new(
-                    rpc, mapping, auth_ctx,
+                    rpc,
+                    mapping,
+                    auth_ctx,
+                    self.producer.clone(),
                 )),
                 attachment,
                 handle: handle.clone(),
@@ -4106,7 +4122,7 @@ fn validate_forwarded_durable_input_schemas(
 
 enum DurableStreamReader {
     Owned {
-        reader: DurableCatchUpReader,
+        reader: Box<DurableCatchUpReader>,
         source: Arc<DurableStreamProducer>,
         handle: Box<DurableStreamHandleV1>,
     },
@@ -4119,21 +4135,13 @@ impl DurableStreamReader {
         after: Option<golem_common::model::durable_stream::StreamOffsetV1>,
     ) -> Result<usize, DurableStreamProducerError> {
         match self {
-            Self::Owned { source, handle, .. } => source
-                .read_segment(handle, after, None)
-                .await
-                .map(|events| events.len()),
-            Self::Attached(reader) => reader
-                .source
-                .read_attached_segment(
-                    &reader.attachment,
-                    &reader.handle,
-                    Timestamp::now_utc().to_millis(),
-                    after,
-                    None,
-                )
-                .await
-                .map(|events| events.len()),
+            Self::Owned { source, handle, .. } => source.journal_lag_events(handle, after).await,
+            Self::Attached(reader) => {
+                reader
+                    .source
+                    .journal_lag_events(&reader.handle, after)
+                    .await
+            }
         }
     }
 
@@ -5446,6 +5454,7 @@ mod tests {
         let input_handle = producer
             .handle_for_coordinate(&input_coordinate)
             .await
+            .unwrap()
             .expect("the caller input stream must use union branch 1");
         drop(input_consumer);
 
@@ -5468,6 +5477,7 @@ mod tests {
         let result_handle = producer
             .handle_for_coordinate(&result_coordinate)
             .await
+            .unwrap()
             .expect("the callee result stream must use union branch 1");
 
         let reloaded = DurableStreamProducer::load(
@@ -5480,11 +5490,17 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            reloaded.handle_for_coordinate(&input_coordinate).await,
+            reloaded
+                .handle_for_coordinate(&input_coordinate)
+                .await
+                .unwrap(),
             Some(input_handle)
         );
         assert_eq!(
-            reloaded.handle_for_coordinate(&result_coordinate).await,
+            reloaded
+                .handle_for_coordinate(&result_coordinate)
+                .await
+                .unwrap(),
             Some(result_handle)
         );
     }
@@ -5528,7 +5544,7 @@ mod tests {
             .unwrap()
             .value;
         let mut reader = DurableStreamReader::Owned {
-            reader: producer.catch_up(handle.clone(), None).await.unwrap(),
+            reader: Box::new(producer.catch_up(handle.clone(), None).await.unwrap()),
             source: producer.clone(),
             handle: Box::new(handle.clone()),
         };
@@ -6127,6 +6143,11 @@ mod tests {
         assert_eq!(intents[0].role, StreamCancelRoleV1::InputProducer);
         assert_eq!(intents[0].reason, StreamCancelReasonV1::GuestDrop);
 
+        for _ in 0..2050 {
+            oplog.add(OplogEntry::interrupted()).await;
+        }
+        drop(guest.current_control_metadata().await.unwrap());
+        oplog.take_read_ranges();
         let after_cancellation = oplog.current_oplog_index().await;
         guest
             .cancel_stream(
@@ -6139,6 +6160,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(oplog.current_oplog_index().await, after_cancellation);
+        assert!(
+            oplog.take_read_ranges().is_empty(),
+            "repeated cancellation must reuse the indexed intent"
+        );
     }
 
     #[test]
@@ -8659,6 +8684,7 @@ mod tests {
                     recursive_value_path: Vec::new(),
                 })
                 .await
+                .unwrap()
                 .is_none()
         );
 
@@ -8704,6 +8730,7 @@ mod tests {
                     recursive_value_path: Vec::new(),
                 })
                 .await
+                .unwrap()
                 .is_none()
         );
 

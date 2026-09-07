@@ -1534,7 +1534,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     WorkerExecutorError::runtime(error.to_string())
                 }
             })?;
-        let diagnostics = producer.deletion_diagnostics().await;
+        let diagnostics = producer
+            .deletion_diagnostics()
+            .await
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         debug!(
             agent_id = %self.owned_agent_id,
             deleting = diagnostics.deleting,
@@ -4521,10 +4524,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         }
                     })
                 });
-                let producer = DurableStreamProducer::load_with_commit(
+                let producer = DurableStreamProducer::load_indexed_with_commit(
                     self.oplog.clone(),
-                    self.owned_agent_id.environment_id,
-                    self.owned_agent_id.agent_id.clone(),
+                    self.owned_agent_id.clone(),
                     self.initial_worker_metadata.fingerprint,
                     Some(
                         self.deps
@@ -4534,10 +4536,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             .get(),
                     ),
                     commit,
+                    self.worker_service(),
+                    self.agent_mode(),
                 )
                 .await
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-                producer.set_control_metadata_provider(self.worker_service(), self.agent_mode());
                 Ok(producer)
             })
             .await
