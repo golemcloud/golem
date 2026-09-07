@@ -2102,10 +2102,10 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
                 shard_id: Some(shard),
                 epoch: 0,
             }],
-            // A lease expiry is required on the wire, so send one far enough out
-            // that this round trip still does not depend on a clock.
-            expires_at: Some(prost_types::Timestamp {
-                seconds: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
+            // A lease TTL is required on the wire; one long enough that this
+            // round trip does not depend on timing.
+            lease_ttl: Some(prost_types::Duration {
+                seconds: 3600,
                 nanos: 0,
             }),
             number_of_shards: 1,

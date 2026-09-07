@@ -1916,6 +1916,81 @@ async fn a_lease_that_lapsed_before_its_renewal_is_not_found() {
 }
 
 #[test]
+// Reaping lapsed leases runs in a write of its own, ahead of the renewal. A stale claim from one
+// executor is refused without a write, and that refusal must not take another executor's reaping
+// down with it: the lapsed lease is gone and its shards released whatever the renewal then decides.
+// The loop is stopped first so that the lapse is observed by the renewal path and not by a tick.
+async fn a_refused_renewal_does_not_discard_the_reaping_of_another_lapsed_lease() {
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let (shard_management, persistence, mut join_set) = start_shard_management(
+        balanced_pair(),
+        worker_executors.clone(),
+        Duration::from_secs(2),
+    )
+    .await;
+
+    join_set.abort_all();
+    while join_set.join_next().await.is_some() {}
+
+    let before = persistence.latest().await;
+    let claimed = claim_of(&before, executor(1));
+
+    // Keep executor 1 alive past executor 2's expiry: after this, 1 lapses at about +3.0 s while 2
+    // still lapses at +2.0 s.
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    shard_management
+        .renew_shard_lease(executor(1), &claimed)
+        .await
+        .expect("a valid claim should have been renewed");
+
+    // At about +2.4 s executor 2 has lapsed and executor 1 has not.
+    tokio::time::sleep(Duration::from_millis(1400)).await;
+    assert!(
+        persistence.latest().await.has_executor(executor(2)),
+        "nothing should have reaped executor 2 yet: the loop is stopped and no renewal has run"
+    );
+    let writes_before = persistence.write_count().await;
+
+    // A stale claim from executor 1 is refused and renews nothing...
+    let mut stale = claimed.clone();
+    stale.insert(ShardId::new(0), ShardEpoch(7));
+    let err = shard_management
+        .renew_shard_lease(executor(1), &stale)
+        .await
+        .expect_err("a claim at the wrong epoch must be refused");
+    assert!(
+        matches!(err, ShardManagerError::StaleShardEpoch { .. }),
+        "got {err:?}"
+    );
+
+    // ...and yet executor 2's lapsed lease was reaped, in a write of its own.
+    let after = persistence.latest().await;
+    assert!(
+        !after.has_executor(executor(2)),
+        "the refused renewal discarded the reaping of executor 2's lapsed lease"
+    );
+    assert_eq!(
+        after.get_unassigned_shards(),
+        shard_ids(&[2, 3]),
+        "executor 2's shards were not released along with its lease"
+    );
+    assert_eq!(
+        persistence.write_count().await,
+        writes_before + 1,
+        "the reaping must land as exactly one write, with none for the refused renewal"
+    );
+    assert!(
+        after.has_executor(executor(1)),
+        "the live executor must be untouched by another's reaping"
+    );
+    assert_eq!(
+        claim_of(&after, executor(1)),
+        claimed,
+        "a refused renewal must not move executor 1's epochs"
+    );
+}
+
+#[test]
 // Lease expiries are persisted and absolute, so after any outage longer than one lease every stored
 // expiry is in the past. Without the startup re-grant the first pass's housekeeping would evict a
 // cluster whose executors had just answered the health check.

@@ -18,8 +18,9 @@ use golem_worker_executor::bootstrap;
 use golem_worker_executor::metrics;
 use golem_worker_executor::services::golem_config::{GolemConfig, make_config_loader};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::task::JoinSet;
-use tracing::info;
+use tracing::{info, warn};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -47,6 +48,11 @@ fn main() -> Result<(), anyhow::Error> {
     }
 }
 
+/// How long a termination signal waits for the shard lease deregistration to
+/// land before the process exits. It is one RPC to the shard manager; the lease
+/// expiring on its own is the fallback if it does not make it.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+
 async fn async_main(
     config: GolemConfig,
     prometheus: prometheus::Registry,
@@ -54,11 +60,59 @@ async fn async_main(
 ) -> Result<(), anyhow::Error> {
     let mut join_set = JoinSet::new();
 
-    let _run_details =
+    let run_details =
         bootstrap::run(config, prometheus, runtime.handle().clone(), &mut join_set).await?;
 
-    while let Some(res) = join_set.join_next().await {
-        res??
+    // Armed once, outside the loop: a signal that arrives while no listener is
+    // registered is not queued for the next one.
+    let terminated = termination_signal();
+    tokio::pin!(terminated);
+
+    loop {
+        tokio::select! {
+            joined = join_set.join_next() => match joined {
+                Some(res) => res??,
+                None => break,
+            },
+            _ = &mut terminated => {
+                info!("Termination signal received; shutting down");
+                break;
+            }
+        }
     }
+
+    // Trips the graph-wide token. The shard lease renewal loop answers it by
+    // deregistering, which lets the shard manager re-home this executor's
+    // shards now rather than after the lease expires - so the RPC is waited
+    // for instead of being cut off when the runtime is dropped.
+    run_details.shutdown.cancel();
+    if !run_details.shutdown.wait_for_tracked(SHUTDOWN_GRACE).await {
+        warn!(
+            grace = ?SHUTDOWN_GRACE,
+            "Background tasks did not finish within the shutdown grace period"
+        );
+    }
+    join_set.shutdown().await;
     Ok(())
+}
+
+/// Resolves on SIGTERM or SIGINT, which is how an orchestrator or a terminal
+/// stops this process. Other platforms get Ctrl-C.
+async fn termination_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut terminate =
+            signal(SignalKind::terminate()).expect("failed to install the SIGTERM handler");
+        let mut interrupt =
+            signal(SignalKind::interrupt()).expect("failed to install the SIGINT handler");
+        tokio::select! {
+            _ = terminate.recv() => {}
+            _ = interrupt.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }

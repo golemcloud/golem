@@ -27,7 +27,7 @@ use golem_api_grpc::proto::golem::shardmanager::v1::{
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::protobuf::{
-    lease_expiry_from_proto, shard_epochs_from_proto, shard_epochs_to_proto,
+    lease_expiry_from_ttl, shard_epochs_from_proto, shard_epochs_to_proto,
 };
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::model::{RetryConfig, RoutingTable, ShardEpoch, ShardId};
@@ -128,6 +128,9 @@ pub struct ShardRegistration {
 #[derive(Debug, Clone, Default)]
 pub struct ShardLease {
     pub shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+    /// On this executor's own clock. The wire carries the time left on the
+    /// lease, anchored here at the moment the message arrived, so the shard
+    /// manager's clock is never compared against ours.
     /// `None` means the lease never expires.
     pub expires_at: Option<DateTime<Utc>>,
 }
@@ -140,15 +143,17 @@ impl TryFrom<golem_api_grpc::proto::golem::shardmanager::v1::ShardLease> for Sha
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             shard_epochs: shard_epochs_from_proto(value.shard_epochs)?,
-            expires_at: expires_at_from_proto(value.expires_at)?,
+            expires_at: expires_at_from_ttl(value.lease_ttl)?,
         })
     }
 }
 
-pub(crate) fn expires_at_from_proto(
-    expires_at: Option<prost_types::Timestamp>,
+/// The receiving clock is read here, at the network boundary, because "now"
+/// for a TTL means the instant the message arrived.
+pub(crate) fn expires_at_from_ttl(
+    lease_ttl: Option<prost_types::Duration>,
 ) -> Result<Option<DateTime<Utc>>, String> {
-    lease_expiry_from_proto(expires_at, "expires_at")
+    lease_expiry_from_ttl(lease_ttl, Utc::now(), "lease_ttl").map(Some)
 }
 
 /// One entry in a batch renewal request.
@@ -285,7 +290,7 @@ impl ShardManager for GrpcShardManager {
                                 lease: ShardLease {
                                     shard_epochs: shard_epochs_from_proto(success.shard_epochs)
                                         .map_err(ShardManagerError::ConversionError)?,
-                                    expires_at: expires_at_from_proto(success.expires_at)
+                                    expires_at: expires_at_from_ttl(success.lease_ttl)
                                         .map_err(ShardManagerError::ConversionError)?,
                                 },
                             })

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::services::shard::ShardService;
+use crate::services::shutdown::Shutdown;
 use async_trait::async_trait;
 use chrono::Utc;
 use futures::future::BoxFuture;
@@ -22,7 +23,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 use std::time::Duration;
-use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -89,7 +89,7 @@ async fn sleep_or_park(delay: RenewalDelay) {
 pub struct GrpcShardManagerService {
     client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
     shard_service: Arc<dyn ShardService>,
-    shutdown_token: CancellationToken,
+    shutdown: Shutdown,
     /// The identity of this executor's shard lease. Regenerated whenever the
     /// manager answers `LeaseNotFound`, because from the manager's point of
     /// view this process is then a new instance at the same address.
@@ -115,12 +115,12 @@ impl GrpcShardManagerService {
     pub fn new(
         client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
         shard_service: Arc<dyn ShardService>,
-        shutdown_token: CancellationToken,
+        shutdown: Shutdown,
     ) -> Arc<Self> {
         Arc::new_cyclic(|me| Self {
             client,
             shard_service,
-            shutdown_token,
+            shutdown,
             executor_id: RwLock::new(Uuid::new_v4()),
             registration: RwLock::new(None),
             me: me.clone(),
@@ -178,8 +178,9 @@ impl GrpcShardManagerService {
     /// weak self-reference so the loop never keeps the service alive, and a
     /// `select!` over the shutdown token and the sleep. It differs in two
     /// places: the cadence is re-derived from each granted expiry rather than
-    /// fixed by config, and cancellation deregisters before it breaks (there is
-    /// no SIGTERM handler, so the in-process token is the only trigger).
+    /// fixed by config, and cancellation deregisters before it breaks (the
+    /// executor's `main` trips the token on a termination signal and waits for
+    /// this task, so a rolling deploy re-homes shards at once).
     fn start_renewal_loop(&self, first_delay: RenewalDelay) {
         if self.renewal_loop_started.swap(true, Ordering::SeqCst) {
             return;
@@ -189,8 +190,11 @@ impl GrpcShardManagerService {
             "Starting the shard lease renewal loop"
         );
         let svc_weak = self.me.clone();
-        let shutdown_token = self.shutdown_token.clone();
-        tokio::spawn(async move {
+        let shutdown_token = self.shutdown.token();
+        // Through the shutdown tracker rather than `tokio::spawn`: the shutdown
+        // arm below deregisters, and `main` waits for tracked tasks so that RPC
+        // lands before the runtime is torn down.
+        self.shutdown.spawn(async move {
             let mut renewal_delay = first_delay;
             loop {
                 tokio::select! {
@@ -290,8 +294,8 @@ impl ShardManagerService for GrpcShardManagerService {
 
         // Started here rather than by the caller because this is the first
         // point at which a lease exists, and started unconditionally so that a
-        // graceful shutdown always deregisters (R4: there is no SIGTERM
-        // handler). A grant with no expiry parks the loop on its shutdown arm
+        // graceful shutdown always deregisters (a termination signal trips the
+        // same token). A grant with no expiry parks the loop on its shutdown arm
         // and issues no RPCs at all.
         let cadence = renewal_interval_for(assignment.expires_at, Utc::now());
         self.record_granted(cadence);
@@ -637,17 +641,17 @@ mod tests {
     /// `renew_all()`.
     fn make_service(
         mock: Arc<MockShardManager>,
-        shutdown_token: CancellationToken,
+        shutdown: Shutdown,
     ) -> (Arc<GrpcShardManagerService>, Arc<ShardServiceDefault>) {
         let shard_service = Arc::new(ShardServiceDefault::new());
-        let service = GrpcShardManagerService::new(mock, shard_service.clone(), shutdown_token);
+        let service = GrpcShardManagerService::new(mock, shard_service.clone(), shutdown);
         (service, shard_service)
     }
 
     /// A grant that never expires has nothing to renew, so the
     /// loop's interval arm is pending forever and only shutdown can fire.
-    /// Deregister-on-shutdown must still work — it is the only graceful release
-    /// there is (R4: no SIGTERM handler).
+    /// Deregister-on-shutdown must still work — it is what a termination signal
+    /// ends up triggering.
     #[test]
     async fn a_never_expiring_grant_parks_the_loop_and_still_deregisters() {
         assert_eq!(
@@ -664,8 +668,8 @@ mod tests {
 
         let mock =
             Arc::new(MockShardManager::new().with_register(|_| Ok(registration(None, [(0, 0)]))));
-        let shutdown_token = CancellationToken::new();
-        let (service, shard_service) = make_service(mock.clone(), shutdown_token.clone());
+        let shutdown = Shutdown::new();
+        let (service, shard_service) = make_service(mock.clone(), shutdown.clone());
 
         let assignment = service.register(PORT, None).await.unwrap();
         shard_service.register(
@@ -680,7 +684,7 @@ mod tests {
             "a never-expiring lease must issue no renewal RPCs"
         );
 
-        shutdown_token.cancel();
+        shutdown.cancel();
         tokio::time::sleep(Duration::from_millis(250)).await;
         assert_eq!(
             mock.deregister_calls().len(),
@@ -700,7 +704,7 @@ mod tests {
                 expires_at: Some(granted_expiry),
             })
         }));
-        let (service, shard_service) = make_service(mock.clone(), CancellationToken::new());
+        let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
         shard_service.register(
             SHARDS,
             &epochs([(0, 7), (3, 2)]),
@@ -734,7 +738,7 @@ mod tests {
             MockShardManager::new()
                 .with_renew(|_, _| Err(ShardLeaseError::StaleEpoch("moved on".to_string()))),
         );
-        let (service, shard_service) = make_service(mock.clone(), CancellationToken::new());
+        let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
         let expires_at = Utc::now() + ChronoDuration::seconds(60);
         shard_service.register(SHARDS, &epochs([(0, 7), (3, 2)]), Some(expires_at));
 
@@ -766,7 +770,7 @@ mod tests {
                 .with_register(move |_| Ok(registration(Some(fresh_expiry), [(2, 5)])))
                 .with_renew(|_, _| Err(ShardLeaseError::LeaseNotFound("unknown".to_string()))),
         );
-        let (service, shard_service) = make_service(mock.clone(), CancellationToken::new());
+        let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
 
         let announced = Arc::new(AtomicBool::new(false));
         let flag = announced.clone();
@@ -826,7 +830,7 @@ mod tests {
                 expires_at: Some(granted_expiry),
             })
         }));
-        let (service, shard_service) = make_service(mock.clone(), CancellationToken::new());
+        let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
         shard_service.register(
             SHARDS,
             &epochs([(0, 7)]),
@@ -877,7 +881,7 @@ mod tests {
                 })
                 .with_renew(|_, _| Err(ShardLeaseError::LeaseNotFound("unknown".to_string()))),
         );
-        let (service, shard_service) = make_service(mock.clone(), CancellationToken::new());
+        let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
         // Registration arguments the re-register repeats; the client fails, so
         // nothing replaces the cleared assignment.
         assert!(service.register(PORT, None).await.is_err());
@@ -911,7 +915,7 @@ mod tests {
                 "unreachable".to_string(),
             ))
         }));
-        let (service, shard_service) = make_service(mock.clone(), CancellationToken::new());
+        let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
         let agent = agent_on_shard(0);
         // The window has to outlast a descheduling of this thread: the suite runs
         // ~1550 tests in parallel and the assert below is only meaningful while the
@@ -969,7 +973,7 @@ mod tests {
                 Err(ShardLeaseError::InternalServerError("down".to_string()))
             }
         }));
-        let (service, shard_service) = make_service(mock, CancellationToken::new());
+        let (service, shard_service) = make_service(mock, Shutdown::new());
         shard_service.register(
             SHARDS,
             &epochs([(0, 1)]),

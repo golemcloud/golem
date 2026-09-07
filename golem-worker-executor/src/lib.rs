@@ -193,16 +193,19 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         )?))
     }
 
+    /// Takes the whole [`services::shutdown::Shutdown`] rather than just its
+    /// token: the lease renewal loop has work to finish after the token trips
+    /// (it deregisters), so it spawns through the tracker that `main` waits on.
     fn create_shard_manager_service(
         &self,
         shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
         shard_service: Arc<dyn ShardService>,
-        shutdown_token: tokio_util::sync::CancellationToken,
+        shutdown: services::shutdown::Shutdown,
     ) -> Arc<dyn ShardManagerService> {
         crate::services::shard_manager::GrpcShardManagerService::new(
             shard_manager_client,
             shard_service,
-            shutdown_token,
+            shutdown,
         )
     }
 
@@ -554,7 +557,7 @@ pub async fn create_worker_executor_impl<
     bootstrap: &BootstrapImpl,
     runtime: Handle,
     lazy_worker_activator: &Arc<LazyWorkerActivator<Ctx>>,
-    shutdown_token: tokio_util::sync::CancellationToken,
+    shutdown: services::shutdown::Shutdown,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<
     (
@@ -565,6 +568,7 @@ pub async fn create_worker_executor_impl<
     ),
     anyhow::Error,
 > {
+    let shutdown_token = shutdown.token();
     let (redis, sqlite, key_value_storage): (
         Option<RedisPool>,
         Option<SqlitePool>,
@@ -866,7 +870,7 @@ pub async fn create_worker_executor_impl<
     let shard_manager_service = bootstrap.create_shard_manager_service(
         shard_manager_client.clone(),
         shard_service.clone(),
-        shutdown_token.clone(),
+        shutdown.clone(),
     );
 
     let quota_service = bootstrap.create_quota_service(
@@ -1104,7 +1108,7 @@ pub async fn bootstrap_and_run_worker_executor<
             bootstrap,
             runtime.clone(),
             &lazy_worker_activator,
-            shutdown.token(),
+            shutdown.clone(),
             join_set,
         )
         .await?;

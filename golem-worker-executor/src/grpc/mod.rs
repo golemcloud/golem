@@ -1037,14 +1037,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
 
-        let expires_at = golem_common::model::protobuf::lease_expiry_from_proto(
-            request.expires_at,
-            "AssignShardsRequest.expires_at",
+        // Anchored to this executor's clock at receipt, so the shard manager's
+        // clock is never compared against ours.
+        let expires_at = golem_common::model::protobuf::lease_expiry_from_ttl(
+            request.lease_ttl,
+            chrono::Utc::now(),
+            "AssignShardsRequest.lease_ttl",
         )
         .map_err(WorkerExecutorError::invalid_request)?;
 
         self.shard_service()
-            .assign_shards(number_of_shards, &shard_epochs, expires_at)?;
+            .assign_shards(number_of_shards, &shard_epochs, Some(expires_at))?;
 
         // Pure set membership on purpose: a lapsed lease must not restart every
         // running agent. Draining on lease loss is ticket 5's.

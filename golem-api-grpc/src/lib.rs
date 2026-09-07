@@ -114,7 +114,7 @@ mod tests {
             .expect("old-shape bytes must decode, not error");
 
         assert!(decoded.shard_epochs.is_empty());
-        assert_eq!(decoded.expires_at, None);
+        assert_eq!(decoded.lease_ttl, None);
         assert_eq!(decoded.number_of_shards, 0);
     }
 }

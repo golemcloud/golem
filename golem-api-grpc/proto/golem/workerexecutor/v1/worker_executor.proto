@@ -31,7 +31,7 @@ import "golem/worker/worker_filter.proto";
 import "golem/worker/worker_id.proto";
 import "golem/worker/worker_metadata.proto";
 import "golem/worker/worker_status.proto";
-import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
 
 service WorkerExecutor {
   rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);
@@ -187,9 +187,11 @@ message AssignShardsRequest {
   // The executor's complete shard set with epochs: hold exactly these, drop
   // everything else.
   repeated golem.shardmanager.ShardEpochEntry shard_epochs = 2;
-  // Absolute server time at which the executor's shard lease expires; past it
-  // the executor stops admitting work for these shards.
-  google.protobuf.Timestamp expires_at = 3;
+  // How long the executor's shard lease lasts from the moment this push is
+  // received; past it the executor stops admitting work for these shards. A
+  // duration rather than an absolute time so that the two machines' clocks
+  // are never compared: the executor anchors it to its own clock on receipt.
+  google.protobuf.Duration lease_ttl = 3;
   // Total number of shards in the cluster; never 0 — the executor divides by
   // it in check_worker.
   uint32 number_of_shards = 4;

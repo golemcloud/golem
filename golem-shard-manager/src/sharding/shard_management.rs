@@ -286,9 +286,12 @@ impl ShardManagement {
         let now = Utc::now();
         let lease_ttl = self.lease_ttl;
 
-        self.try_mutate_and_persist(move |shard_state| {
-            // First, so that a lease which lapsed before this renewal arrived is gone by the time
-            // it is looked up. `remove_executor` puts the freed shards on `pending_rebalance`.
+        // Reaped in a write of its own, ahead of the renewal: so that a lease which lapsed before
+        // this renewal arrived is gone by the time it is looked up, and so that a renewal refused
+        // below cannot discard the reaping along with it. `remove_executor` puts the freed shards
+        // on `pending_rebalance`. The no-op guard skips this write when nothing had lapsed, so the
+        // common path still costs a single write.
+        self.mutate_and_persist(move |shard_state| {
             for (expired_id, released) in shard_state.housekeep(now) {
                 warn!(
                     executor_id = %expired_id,
@@ -296,7 +299,10 @@ impl ShardManagement {
                     "Shard lease expired; releasing its shards"
                 );
             }
+        })
+        .await?;
 
+        self.try_mutate_and_persist(move |shard_state| {
             if !shard_state.has_executor(executor_id) {
                 return Err(ShardManagerError::ShardLeaseNotFound { executor_id });
             }

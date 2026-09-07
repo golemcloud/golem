@@ -18,15 +18,16 @@ use crate::quota::QuotaService;
 use crate::sharding::error::ShardManagerError;
 use crate::sharding::shard_management::ShardManagement;
 use crate::sharding::{ExecutorAddr, ExecutorId, RegisterAck, ShardEpoch};
+use chrono::Utc;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerService;
+use golem_common::model::protobuf::lease_ttl_to_proto;
 use golem_common::model::{Pod, ShardId};
 use golem_common::recorded_grpc_api_request;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::num::TryFromIntError;
 use std::sync::Arc;
-use std::time::SystemTime;
 use tonic::Response;
 use tracing::{Instrument, debug};
 use uuid::Uuid;
@@ -125,9 +126,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
                 golem::shardmanager::v1::RegisterSuccess {
                     number_of_shards: ack.number_of_shards as u32,
                     shard_epochs: shard_epoch_entries(&ack.grant.shard_epochs),
-                    expires_at: Some(prost_types::Timestamp::from(SystemTime::from(
-                        ack.grant.expires_at,
-                    ))),
+                    lease_ttl: Some(lease_ttl_to_proto(ack.grant.expires_at, Utc::now())),
                 },
             )),
             Err(error) => {
@@ -163,9 +162,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
             Ok(grant) => golem::shardmanager::v1::renew_shard_lease_response::Result::Success(
                 golem::shardmanager::v1::ShardLease {
                     shard_epochs: shard_epoch_entries(&grant.shard_epochs),
-                    expires_at: Some(prost_types::Timestamp::from(SystemTime::from(
-                        grant.expires_at,
-                    ))),
+                    lease_ttl: Some(lease_ttl_to_proto(grant.expires_at, Utc::now())),
                 },
             ),
             Err(error) => {

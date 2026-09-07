@@ -10,7 +10,7 @@ import public "golem/shardmanager/routing_table.proto";
 import public "golem/shardmanager/shard_epoch.proto";
 import public "golem/shardmanager/shard_id.proto";
 import public "golem/shardmanager/v1/shard_manager_error.proto";
-import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
 
 service ShardManagerService {
   rpc GetRoutingTable(GetRoutingTableRequest) returns (GetRoutingTableResponse);
@@ -65,15 +65,19 @@ message RegisterSuccess {
   // registration: nothing is assigned yet and AssignShards delivers the
   // initial set.
   repeated golem.shardmanager.ShardEpochEntry shard_epochs = 2;
-  // Absolute server time at which this executor's shard lease expires.
-  google.protobuf.Timestamp expires_at = 3;
+  // How long this executor's shard lease lasts from the moment this response
+  // is received. A duration rather than an absolute time so that the two
+  // machines' clocks are never compared: the executor anchors it to its own
+  // clock on receipt.
+  google.protobuf.Duration lease_ttl = 3;
 }
 
 // An executor's shard lease: the complete set of shards it owns with the epoch
-// of each, and the absolute time the lease lapses if it is not renewed.
+// of each, and how long the lease lasts from receipt if it is not renewed.
 message ShardLease {
   repeated golem.shardmanager.ShardEpochEntry shard_epochs = 1;
-  google.protobuf.Timestamp expires_at = 2;
+  // See RegisterSuccess.lease_ttl.
+  google.protobuf.Duration lease_ttl = 2;
 }
 
 // Extends the executor's shard lease before it expires. shard_epochs must be

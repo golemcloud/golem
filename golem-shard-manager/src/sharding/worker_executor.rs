@@ -18,17 +18,18 @@ use super::model::{
 };
 use crate::config::WorkerExecutorServiceConfig;
 use async_trait::async_trait;
+use chrono::Utc;
 use futures::future::BoxFuture;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::model::Pod;
 use golem_common::model::ShardId;
+use golem_common::model::protobuf::lease_ttl_to_proto;
 use golem_common::retries::with_retriable_errors;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::time::SystemTime;
 use tokio::time::error::Elapsed;
 use tokio::time::timeout;
 use tonic::Response;
@@ -257,9 +258,7 @@ impl WorkerExecutorServiceDefault {
                     epoch: epoch.0,
                 })
                 .collect(),
-            expires_at: Some(prost_types::Timestamp::from(SystemTime::from(
-                assignment.expires_at,
-            ))),
+            lease_ttl: Some(lease_ttl_to_proto(assignment.expires_at, Utc::now())),
             number_of_shards: assignment.number_of_shards as u32,
         };
 
