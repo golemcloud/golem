@@ -2818,104 +2818,7 @@ pub mod server {
     }
 
     #[cfg(test)]
-    mod tests {
-        use super::RunArgs;
-        use crate::model::app_raw::Application;
-        use clap::Parser;
-        use test_r::test;
-
-        #[derive(Parser)]
-        struct ServerCommand {
-            #[command(flatten)]
-            args: RunArgs,
-        }
-
-        #[test]
-        fn local_server_system_memory_override_parses_sizes_consistently() {
-            for (value, expected) in [
-                ("1mb", 1_000_000),
-                ("1MB", 1_000_000),
-                ("1 MiB", 1_048_576),
-                ("2GiB", 2_147_483_648),
-                ("1.5GiB", 1_610_612_736),
-                ("1", 1),
-                ("18446744073709551615 B", u64::MAX),
-            ] {
-                let flag =
-                    ServerCommand::try_parse_from(["server", "--system-memory-override", value])
-                        .unwrap()
-                        .args;
-                let env = RunArgs::default()
-                    .with_env_overrides_from(|name| {
-                        assert_eq!(name, "GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE");
-                        Ok(value.to_string())
-                    })
-                    .unwrap();
-                let manifest = Application::from_yaml_str(&format!(
-                    "app: test-app\nlocalServer:\n  systemMemoryOverride: '{value}'\n"
-                ))
-                .unwrap()
-                .local_server
-                .unwrap();
-                assert_eq!(flag.system_memory_override.unwrap().get(), expected);
-                assert_eq!(env.system_memory_override, flag.system_memory_override);
-                assert_eq!(manifest.system_memory_override, flag.system_memory_override);
-            }
-        }
-
-        #[test]
-        fn local_server_system_memory_override_validates_flag_and_env() {
-            for value in [
-                "0",
-                "0MB",
-                "-1",
-                "invalid",
-                "18446744073709551616 B",
-                "100EiB",
-            ] {
-                assert!(
-                    ServerCommand::try_parse_from([
-                        "server",
-                        &format!("--system-memory-override={value}"),
-                    ])
-                    .is_err(),
-                    "accepted flag {value}"
-                );
-                let error = RunArgs::default()
-                    .with_env_overrides_from(|_| Ok(value.into()))
-                    .unwrap_err();
-                assert!(
-                    error
-                        .to_string()
-                        .contains("GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE")
-                );
-            }
-            assert!(
-                RunArgs::default()
-                    .with_env_overrides_from(|_| {
-                        Err(std::env::VarError::NotUnicode(std::ffi::OsString::from(
-                            "invalid",
-                        )))
-                    })
-                    .is_err()
-            );
-        }
-
-        #[test]
-        fn local_server_system_memory_override_flag_precedes_env() {
-            let args = ServerCommand::try_parse_from(["server", "--system-memory-override=2GiB"])
-                .unwrap()
-                .args;
-            let args = args
-                .with_env_overrides_from(|_| panic!("flag must bypass environment lookup"))
-                .unwrap();
-            assert_eq!(args.system_memory_override.unwrap().get(), 2_147_483_648);
-            let args = RunArgs::default()
-                .with_env_overrides_from(|_| Err(std::env::VarError::NotPresent))
-                .unwrap();
-            assert_eq!(args.system_memory_override, None);
-        }
-    }
+    mod tests;
 }
 
 pub fn builtin_exec_subcommands() -> BTreeSet<String> {
@@ -3234,36 +3137,6 @@ mod test {
     #[test]
     fn builtin_app_subcommands_no_panic() {
         println!("{:?}", builtin_exec_subcommands())
-    }
-
-    #[test]
-    #[cfg(feature = "server-commands")]
-    fn local_server_system_memory_override_requires_positive_bytes() {
-        use clap::Parser;
-        for value in ["1", "2147483648", "18446744073709551615"] {
-            assert!(
-                GolemCliCommand::try_parse_from([
-                    "golem",
-                    "server",
-                    "run",
-                    "--system-memory-override",
-                    value
-                ])
-                .is_ok()
-            );
-        }
-        for value in ["0", "-1", "invalid", "18446744073709551616"] {
-            assert!(
-                GolemCliCommand::try_parse_from([
-                    "golem",
-                    "server",
-                    "run",
-                    "--system-memory-override",
-                    value
-                ])
-                .is_err()
-            );
-        }
     }
 
     #[test]
