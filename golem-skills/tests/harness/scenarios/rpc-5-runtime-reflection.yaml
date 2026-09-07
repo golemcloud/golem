@@ -165,6 +165,7 @@ steps:
       `methodName`, `jsonValue`, `callerCodec`, `reflectedValue`, and
       `directValue`. Make sure the project builds successfully.
     expectedSkills:
+      - "golem-agent-reflection"
       - "golem-agent-reflection-scala"
     verify:
       build: true
