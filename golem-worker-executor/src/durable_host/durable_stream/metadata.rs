@@ -855,6 +855,11 @@ impl DurableStreamProducer {
                 if metadata_ready && terminal_ready {
                     return Ok(index);
                 }
+            } else {
+                // A store-polled waiter must not reserve the mutex permit. Enqueuing another
+                // hydration task here can also keep competing callers permanently queued.
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                continue;
             }
             let producer = self
                 .self_weak
@@ -1880,5 +1885,54 @@ mod tests {
         .unwrap();
         assert_eq!(fixture.blobs.reads(), 1);
         suspended.await.unwrap();
+    }
+
+    #[test]
+    async fn suspended_contended_query_does_not_reserve_producer_index() {
+        let fixture = Fixture::new().await;
+        let producer = fixture.producer().await;
+        let handle = producer
+            .register(fixture.registration(0))
+            .await
+            .unwrap()
+            .value;
+        let held = producer.index.lock().await;
+        let mut suspended = Box::pin(producer.input_high_water(handle.stream_id));
+        assert!(futures::poll!(suspended.as_mut()).is_pending());
+        drop(held);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            producer.input_high_water(handle.stream_id),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        suspended.await.unwrap();
+    }
+
+    #[test]
+    async fn contended_warm_producer_queries_make_progress() {
+        let fixture = Fixture::new().await;
+        let producer = fixture.producer().await;
+        let handle = producer
+            .register(fixture.registration(0))
+            .await
+            .unwrap()
+            .value;
+        let held = producer.index.lock().await;
+        let mut queries = (0..16)
+            .map(|_| Box::pin(producer.input_high_water(handle.stream_id)))
+            .collect::<Vec<_>>();
+        for query in &mut queries {
+            assert!(futures::poll!(query.as_mut()).is_pending());
+        }
+        drop(held);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            futures::future::try_join_all(queries),
+        )
+        .await
+        .unwrap()
+        .unwrap();
     }
 }

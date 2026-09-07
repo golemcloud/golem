@@ -3587,6 +3587,15 @@ impl Oplog for TestOplog {
         self.oplog.current_oplog_index().await
     }
 
+    async fn raw_durable_stream_session_status(
+        &self,
+        session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+    ) -> golem_worker_executor::services::oplog::RawDurableStreamSessionStatus {
+        self.oplog
+            .raw_durable_stream_session_status(session_key)
+            .await
+    }
+
     async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
         self.oplog.last_added_non_hint_entry().await
     }
