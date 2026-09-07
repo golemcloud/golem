@@ -198,6 +198,17 @@ where
     let _ = reject_quota_handles_in_value_tree(input, dropper);
 }
 
+fn discard_owned_rpc_config<D>(
+    config: Vec<golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue>,
+    dropper: &mut D,
+) where
+    D: QuotaTokenHandleDropper + SecretHandleDropper + PermissionCardHandleDropper,
+{
+    for entry in config {
+        let _ = decode_typed_rejecting_quota_with(entry.value, dropper);
+    }
+}
+
 fn reject_non_await_scope_card<D>(
     scope_card: &Option<Resource<PermissionCardHandleRep>>,
     input: core_wire::SchemaValueTree,
@@ -249,6 +260,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             ))
             .await?
         else {
+            discard_owned_rpc_input(constructor, self);
+            discard_owned_rpc_config(config, self);
             return Ok(Err(RpcError::RemoteAgentError(WitAgentError::InvalidType(
                 agent_type_name,
             ))));
@@ -261,6 +274,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         ) {
             Ok(input) => input,
             Err(err) => {
+                discard_owned_rpc_config(config, self);
                 return Ok(Err(RpcError::RemoteAgentError(
                     WitAgentError::InvalidInput(format!("Invalid constructor input: {err}")),
                 )));
@@ -297,6 +311,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         ) {
             Ok(agent_id) => agent_id,
             Err(err) => {
+                discard_owned_rpc_config(config, self);
                 return Ok(Err(RpcError::RemoteAgentError(
                     WitAgentError::InvalidAgentId(err.to_string()),
                 )));
@@ -306,6 +321,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             match golem_common::model::AgentId::from_agent_id(component_id, &agent_id) {
                 Ok(agent_id) => agent_id,
                 Err(err) => {
+                    discard_owned_rpc_config(config, self);
                     return Ok(Err(RpcError::RemoteAgentError(
                         WitAgentError::InvalidAgentId(err.to_string()),
                     )));
@@ -331,7 +347,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         // DTO carries plain user JSON which
                         // `parse_worker_creation_agent_config` decodes with the
                         // schema graph (`from_json_value`).
-                        match golem_common::schema::render::to_json_value(
+                        match golem_schema::schema::render::to_json_value(
                             typed.graph(),
                             typed.root_type(),
                             typed.value(),
@@ -5091,6 +5107,58 @@ mod tests {
                 .get(&Resource::<PermissionCardHandleRep>::new_borrow(
                     input_card_rep
                 ))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn rejected_rpc_creation_drains_every_config_handle() {
+        let mut dropper = TableCapabilityDropper {
+            table: ResourceTable::new(),
+        };
+        let first = dropper
+            .table
+            .push(QuotaTokenHandleRep::new(()))
+            .expect("first config quota token should be inserted");
+        let second = dropper
+            .table
+            .push(QuotaTokenHandleRep::new(()))
+            .expect("second config quota token should be inserted");
+        let first_rep = first.rep();
+        let second_rep = second.rep();
+        let config = [first, second]
+            .into_iter()
+            .enumerate()
+            .map(|(index, handle)| {
+                golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue {
+                    path: vec![format!("config-{index}")],
+                    value: core_wire::TypedSchemaValue {
+                        graph: core_wire::SchemaGraph {
+                            type_nodes: vec![],
+                            defs: vec![],
+                            root: 0,
+                        },
+                        value: core_wire::SchemaValueTree {
+                            value_nodes: vec![core_wire::SchemaValueNode::QuotaTokenHandle(handle)],
+                            root: 0,
+                        },
+                    },
+                }
+            })
+            .collect();
+
+        discard_owned_rpc_config(config, &mut dropper);
+
+        assert!(
+            dropper
+                .table
+                .get(&Resource::<QuotaTokenHandleRep>::new_borrow(first_rep))
+                .is_err()
+        );
+        assert!(
+            dropper
+                .table
+                .get(&Resource::<QuotaTokenHandleRep>::new_borrow(second_rep))
                 .is_err()
         );
     }

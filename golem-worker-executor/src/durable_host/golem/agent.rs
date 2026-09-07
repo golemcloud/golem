@@ -407,6 +407,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         agent_id: AgentId,
     ) -> anyhow::Result<Option<RegisteredAgentTypeSchema>> {
+        let denied = self.state.is_live()
+            && super::v1x::agent_operation_denied(
+                self,
+                &agent_id,
+                AgentVerb::View,
+                golem_common::model::card::AgentResourcePattern::Empty,
+            )
+            .await?;
         let mut handle =
             DurableCallSession::<GolemAgentGetAgentTypeByAgentId, NotCancellable>::start(
                 self,
@@ -423,6 +431,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     CallReplayOutcome::Replayed(replayed) => break 'result replayed,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
+            }
+
+            if denied {
+                break 'result handle
+                    .complete(self, HostResponseGolemAgentAgentType { result: Ok(None) })
+                    .await?;
             }
 
             let result = loop {
