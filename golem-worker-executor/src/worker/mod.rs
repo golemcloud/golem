@@ -3255,7 +3255,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             };
 
             let mut caller_instance_guard = Some(instance_guard);
-            if let Some(idempotency_key) = timestamped_invocation.invocation.idempotency_key() {
+            if let Some(idempotency_key) = semantic_idempotency_key.as_ref() {
                 drop(caller_instance_guard.take());
                 loop {
                     let status = self.last_known_status.load_full();
