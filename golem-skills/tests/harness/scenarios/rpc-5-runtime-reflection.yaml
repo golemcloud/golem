@@ -100,6 +100,7 @@ steps:
       `method_name`, `json_value`, `caller_codec`, `reflected_value`, and
       `direct_value`. Make sure the project builds successfully.
     expectedSkills:
+      - "golem-agent-reflection"
       - "golem-agent-reflection-moonbit"
     verify:
       build: true
