@@ -34,19 +34,19 @@ const RENEWAL_INTERVAL_DIVISOR: u32 = 3;
 /// turn the loop into a busy loop. Also the first step of the retry backoff.
 const MIN_RENEWAL_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Absolute ceiling on the retry backoff (ruling E13), so a shard-manager
+/// Absolute ceiling on the retry backoff, so a shard-manager
 /// outage never becomes one RPC per second per executor. The effective ceiling
 /// is the smaller of this and the cadence the last granted lease implied.
 const MAX_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
 /// How long the renewal loop waits before its next pass. `None` parks the loop:
 /// the granted lease never expires, so there is nothing to renew and only the
-/// shutdown arm can fire (ruling E13).
+/// shutdown arm can fire.
 pub type RenewalDelay = Option<Duration>;
 
 /// Fired after a re-registration installs a fresh shard grant, so running
 /// agents are recovered for the new set exactly as the initial registration and
-/// `assign_shards_internal` do (ruling E15). Installed by
+/// `assign_shards_internal` do. Installed by
 /// `WorkerExecutorImpl::new`, which is the only place that can name `Ctx`.
 pub type ShardAssignmentChangedHook =
     Arc<dyn Fn() -> BoxFuture<'static, Result<(), anyhow::Error>> + Send + Sync>;
@@ -71,14 +71,14 @@ pub trait ShardManagerService: Send + Sync {
     async fn deregister(&self);
 
     /// Installs the hook fired when a re-registration replaces this executor's
-    /// shard assignment (ruling E15). No-op by default: an implementation that
+    /// shard assignment. No-op by default: an implementation that
     /// never re-registers has nothing to announce.
     fn set_assignment_changed_hook(&self, _hook: ShardAssignmentChangedHook) {}
 }
 
 /// The interval arm of the renewal loop. A `None` delay is a lease that never
 /// expires: the arm is pending forever, so the loop issues no RPCs at all and
-/// only the shutdown arm can fire (ruling E13).
+/// only the shutdown arm can fire.
 async fn sleep_or_park(delay: RenewalDelay) {
     match delay {
         Some(delay) => tokio::time::sleep(delay).await,
@@ -101,13 +101,13 @@ pub struct GrpcShardManagerService {
     /// the loop keeping this service alive.
     me: Weak<Self>,
     renewal_loop_started: AtomicBool,
-    /// Exponential backoff for failed renewals (ruling E13): doubles from
+    /// Exponential backoff for failed renewals: doubles from
     /// `MIN_RENEWAL_INTERVAL` up to `retry_cap()`, reset by every grant.
     retry_backoff: RwLock<Duration>,
     /// The cadence the last granted lease implied (`TTL / 3`), which caps the
     /// backoff so a retry never waits longer than the lease it is saving.
     granted_cadence: RwLock<Option<Duration>>,
-    /// Ruling E15: announced after a re-registration installs a fresh grant.
+    /// Announced after a re-registration installs a fresh grant.
     assignment_changed_hook: RwLock<Option<ShardAssignmentChangedHook>>,
 }
 
@@ -136,7 +136,7 @@ impl GrpcShardManagerService {
     }
 
     /// `min(last granted TTL / 3, 30 s)` — the ceiling the retry backoff climbs
-    /// to (ruling E13). Before anything has been granted there is no lease to
+    /// to. Before anything has been granted there is no lease to
     /// outlive, so only the absolute ceiling applies.
     fn retry_cap(&self) -> Duration {
         match *self.granted_cadence.read().unwrap() {
@@ -156,13 +156,13 @@ impl GrpcShardManagerService {
     }
 
     /// A granted lease resets the backoff to its first step and records the
-    /// cadence that caps it (ruling E13).
+    /// cadence that caps it.
     fn record_granted(&self, cadence: RenewalDelay) {
         *self.retry_backoff.write().unwrap() = MIN_RENEWAL_INTERVAL;
         *self.granted_cadence.write().unwrap() = cadence;
     }
 
-    /// Ruling E15: tell the executor its shard assignment changed, so running
+    /// Tell the executor its shard assignment changed, so running
     /// agents are recovered for the new set. A failure here is logged, never
     /// fatal — the lease itself is already installed.
     async fn announce_assignment_changed(&self) {
@@ -201,7 +201,7 @@ impl GrpcShardManagerService {
                         break;
                     }
                     // `None` parks here forever, so a never-expiring lease
-                    // issues no renewal RPCs at all (ruling E13).
+                    // issues no renewal RPCs at all.
                     _ = sleep_or_park(renewal_delay) => {}
                 }
                 let svc = match svc_weak.upgrade() {
@@ -222,7 +222,7 @@ impl GrpcShardManagerService {
     /// shard manager correcting a push this executor never received, so it is
     /// an assignment change like any other and has to recover agents for the
     /// new shards. Every other delivery path announces (`register`,
-    /// `assign_shards`, the re-registration in ruling E15); adopting a wider
+    /// `assign_shards`, the re-registration after a lost lease); adopting a wider
     /// set silently would leave those shards owned but unserved until the next
     /// push happened to arrive.
     async fn adopt_lease(
@@ -244,7 +244,7 @@ impl GrpcShardManagerService {
 
 /// `(expires_at - now) / 3`, floored, so three attempts fit inside one lease.
 ///
-/// Ruling E13: a lease that never expires yields `None`, which parks the
+/// A lease that never expires yields `None`, which parks the
 /// renewal loop instead of polling it — there is nothing to renew, and a
 /// polling loop would be one wasted RPC per second per executor.
 fn renewal_interval_for(
@@ -292,7 +292,7 @@ impl ShardManagerService for GrpcShardManagerService {
         // point at which a lease exists, and started unconditionally so that a
         // graceful shutdown always deregisters (R4: there is no SIGTERM
         // handler). A grant with no expiry parks the loop on its shutdown arm
-        // and issues no RPCs at all (ruling E13).
+        // and issues no RPCs at all.
         let cadence = renewal_interval_for(assignment.expires_at, Utc::now());
         self.record_granted(cadence);
         self.start_renewal_loop(cadence);
@@ -352,7 +352,7 @@ impl ShardManagerService for GrpcShardManagerService {
                                 executor_id = %fresh_executor_id,
                                 "Re-registered with the shard manager after a lost lease"
                             );
-                            // Ruling E15: the same announcement the initial
+                            // The same announcement the initial
                             // registration and `assign_shards_internal` make.
                             self.announce_assignment_changed().await;
                             renewal_interval_for(assignment.expires_at, Utc::now())
@@ -412,7 +412,7 @@ impl ShardManagerService for ShardManagerServiceSingleShard {
     }
 
     /// No lease to renew, and no expiry to poll against: the loop this service
-    /// never starts would park here anyway (ruling E13).
+    /// never starts would park here anyway.
     async fn renew_shard_lease(&self) -> RenewalDelay {
         None
     }
@@ -644,7 +644,7 @@ mod tests {
         (service, shard_service)
     }
 
-    /// Ruling E13: a grant that never expires has nothing to renew, so the
+    /// A grant that never expires has nothing to renew, so the
     /// loop's interval arm is pending forever and only shutdown can fire.
     /// Deregister-on-shutdown must still work — it is the only graceful release
     /// there is (R4: no SIGTERM handler).
@@ -653,7 +653,7 @@ mod tests {
         assert_eq!(
             renewal_interval_for(None, Utc::now()),
             None,
-            "ruling E13: a never-expiring lease must not be polled at all"
+            "a never-expiring lease must not be polled at all"
         );
         assert!(
             tokio::time::timeout(Duration::from_millis(20), sleep_or_park(None))
@@ -726,7 +726,7 @@ mod tests {
         );
     }
 
-    /// D10: a stale claim renews nothing. The executor keeps what it has and
+    /// A stale claim renews nothing. The executor keeps what it has and
     /// retries; the correction arrives as an `AssignShards` push.
     #[test]
     async fn a_stale_epoch_keeps_the_current_set_and_retries() {
@@ -755,7 +755,7 @@ mod tests {
         assert_eq!(mock.renew_calls().len(), 1);
     }
 
-    /// D10 + rulings E14/E15: an unknown lease clears the assignment (leaving
+    /// An unknown lease clears the assignment (leaving
     /// it lapsed), re-registers under a fresh UUID, and announces the new
     /// assignment so running agents are recovered.
     #[test]
@@ -796,7 +796,7 @@ mod tests {
         );
         assert!(
             announced.load(Ordering::SeqCst),
-            "ruling E15: the fresh grant must fire on_shard_assignment_changed"
+            "the fresh grant must fire on_shard_assignment_changed"
         );
         let assignment = shard_service.current_assignment().unwrap();
         assert_eq!(assignment.shard_epochs, epochs([(2, 5)]));
@@ -806,7 +806,8 @@ mod tests {
     /// A renewal that answers with shards this executor did not claim is the
     /// shard manager correcting a push that never arrived, so it has to recover
     /// agents for them exactly as a push would. The common path — the same set
-    /// back, per D4 — must NOT fire the hook, or every renewal would trigger a
+    /// back, because a renewal never advances an epoch — must NOT fire the
+    /// hook, or every renewal would trigger a
     /// recovery sweep.
     #[test]
     async fn a_renewal_that_widens_the_set_announces_it_and_an_unchanged_one_does_not() {
@@ -862,7 +863,7 @@ mod tests {
         );
     }
 
-    /// Ruling E14: while the re-registration has not succeeded, the cleared
+    /// While the re-registration has not succeeded, the cleared
     /// assignment must read as *lapsed*, not as never-expiring, so admission
     /// keeps refusing.
     #[test]
@@ -892,7 +893,7 @@ mod tests {
         assert!(assignment.is_empty(), "every shard is dropped");
         assert!(
             assignment.expires_at.is_some(),
-            "ruling E14: cleared means lapsed, never 'never expires'"
+            "cleared means lapsed, never 'never expires'"
         );
         assert!(!shard_service.is_ready());
         assert!(matches!(
@@ -901,7 +902,7 @@ mod tests {
         ));
     }
 
-    /// D10, transport class: nothing local changes, so the executor keeps
+    /// A transport failure changes nothing locally, so the executor keeps
     /// serving until its own `expires_at` passes and then fences itself.
     #[test]
     async fn a_transport_failure_serves_until_the_local_expiry_and_then_fences() {
@@ -947,7 +948,7 @@ mod tests {
         );
     }
 
-    /// Ruling E13: failed renewals back off exponentially from 1 s, capped by
+    /// Failed renewals back off exponentially from 1 s, capped by
     /// `min(last granted TTL / 3, 30 s)`, and a grant resets the backoff.
     #[test]
     async fn failed_renewals_back_off_exponentially_and_reset_on_a_grant() {

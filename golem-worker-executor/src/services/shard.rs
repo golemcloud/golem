@@ -29,7 +29,7 @@ pub trait ShardService: Send + Sync {
     /// the scheduler's poll loop, which admits work without going through
     /// `check_admission`.
     fn is_ready(&self) -> bool;
-    /// Full replace (plan D2): hold exactly `shard_epochs`, drop everything
+    /// Full replace: hold exactly `shard_epochs`, drop everything
     /// else, and adopt the lease expiry that came with them.
     fn assign_shards(
         &self,
@@ -60,7 +60,7 @@ pub trait ShardService: Send + Sync {
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: Option<DateTime<Utc>>,
     ) -> Result<bool, WorkerExecutorError>;
-    /// Drops every shard and lapses the lease (ruling E14). Used when the shard
+    /// Drops every shard and lapses the lease. Used when the shard
     /// manager no longer knows this executor's lease: it owns nothing and is
     /// not ready until a re-registration installs a fresh grant.
     fn clear_assignment(&self);
@@ -236,7 +236,7 @@ impl ShardService for ShardServiceDefault {
                     shard_ids_current = shard_assignment.shard_ids().join(", "),
                     "ShardService.clear_assignment"
                 );
-                // Ruling E14: lapsed as of now, not "never expires".
+                // Lapsed as of now, not "never expires".
                 shard_assignment.clear(now);
                 record_assigned_shard_count(0);
             }
@@ -316,7 +316,7 @@ mod tests {
         Some(Utc::now() + ChronoDuration::seconds(60))
     }
 
-    /// Plan D2: `AssignShards` says "your shards are exactly these". Anything
+    /// `AssignShards` says "your shards are exactly these". Anything
     /// absent is dropped, and the sweep in `assign_shards_internal` restarts
     /// exactly the agents the new set rejects.
     #[test]
@@ -343,8 +343,8 @@ mod tests {
         assert!(service.check_worker(&on_kept).is_ok());
     }
 
-    /// The self-fence. Ruling E12/E4: it surfaces as `ShardingNotReady`, which
-    /// the worker service answers by refreshing its routing table and retrying.
+    /// The self-fence. It surfaces as `ShardingNotReady`, which the worker
+    /// service answers by refreshing its routing table and retrying.
     #[test]
     fn admission_is_refused_once_the_lease_has_lapsed() {
         let agent = agent_on_shard(0);
@@ -393,7 +393,7 @@ mod tests {
         assert!(service.check_worker(&agent).is_ok());
     }
 
-    /// Ruling E14: clearing after `LeaseNotFound` leaves the lease lapsed, not
+    /// Clearing after `LeaseNotFound` leaves the lease lapsed, not
     /// never-expiring, so admission keeps refusing until a re-registration
     /// installs a fresh grant.
     #[test]
@@ -407,7 +407,7 @@ mod tests {
         assert!(assignment.is_empty(), "every shard is dropped");
         assert!(
             assignment.expires_at.is_some(),
-            "ruling E14: a cleared lease is lapsed, never 'never expires'"
+            "a cleared lease is lapsed, never 'never expires'"
         );
         assert!(!service.is_ready());
         assert!(matches!(

@@ -614,11 +614,11 @@ impl ShardAssignment {
     /// A granted renewal: the same set, at a new expiry.
     /// Applies a granted lease and reports whether the owned set moved.
     ///
-    /// A renewal normally returns exactly what was claimed (D4 keeps epochs
-    /// stable), so this is `false` on the common path. It is `true` when the
-    /// shard manager answered with a set this executor did not have — the
-    /// corrective delivery its docs describe — and the caller then has to
-    /// recover agents for it, exactly as an `AssignShards` push would.
+    /// A renewal normally returns exactly what was claimed, because a renewal
+    /// never advances an epoch, so this is `false` on the common path. It is
+    /// `true` when the shard manager answered with a set this executor did not
+    /// have — the corrective delivery its docs describe — and the caller then
+    /// has to recover agents for it, exactly as an `AssignShards` push would.
     pub fn update_lease(
         &mut self,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
@@ -640,7 +640,7 @@ impl ShardAssignment {
     /// **lapsed** as of `now`. Used when the shard manager no longer knows this
     /// executor's lease.
     ///
-    /// Ruling E14: the expiry is not reset to `None`, because `None` means
+    /// The expiry is not reset to `None`, because `None` means
     /// "never expires". A cleared assignment must read as not ready, so
     /// admission keeps refusing until a re-registration installs a fresh grant.
     pub fn clear(&mut self, now: DateTime<Utc>) {
@@ -2434,7 +2434,7 @@ mod shard_assignment_tests {
             .collect()
     }
 
-    /// Plan D2: the push says "exactly these"; anything absent is dropped.
+    /// The push says "exactly these"; anything absent is dropped.
     #[test]
     fn set_shards_replaces_the_set_rather_than_merging_into_it() {
         let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0), ShardId::new(1)]);
@@ -2446,7 +2446,7 @@ mod shard_assignment_tests {
         assert_eq!(assignment.len(), 1);
     }
 
-    /// Ruling E14: `clear()` lapses the lease as of `now`. `None` would mean
+    /// `clear()` lapses the lease as of `now`. `None` would mean
     /// "never expires", which would leave a fenced executor reading as ready.
     #[test]
     fn clear_lapses_the_lease_instead_of_making_it_unexpiring() {
@@ -2460,7 +2460,7 @@ mod shard_assignment_tests {
         assert_eq!(assignment.expires_at, Some(now));
         assert!(
             !assignment.lease_is_live(now),
-            "ruling E14: a cleared assignment is lapsed, not never-expiring"
+            "a cleared assignment is lapsed, not never-expiring"
         );
         assert!(!assignment.lease_is_live(now + ChronoDuration::seconds(1)));
     }

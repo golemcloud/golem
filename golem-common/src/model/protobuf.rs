@@ -140,10 +140,6 @@ impl From<golem::shardmanager::ShardId> for ShardId {
     }
 }
 
-/// Free functions rather than `From`/`TryFrom` impls: the natural Rust side of
-/// a `ShardEpochEntry` is the pair `(ShardId, ShardEpoch)`, and a tuple counts
-/// as foreign for the orphan rule, so neither direction can be written as a
-/// trait impl here.
 pub fn shard_epochs_to_proto(
     shard_epochs: impl IntoIterator<Item = (ShardId, ShardEpoch)>,
 ) -> Vec<golem::shardmanager::ShardEpochEntry> {
@@ -174,14 +170,6 @@ pub fn shard_epochs_from_proto<C: FromIterator<(ShardId, ShardEpoch)>>(
 }
 
 /// Decodes a lease expiry off the wire.
-///
-/// Total by construction. The obvious spelling — `SystemTime::try_from(ts)`
-/// then `DateTime::<Utc>::from` — is not: chrono's `From<SystemTime> for
-/// DateTime<Utc>` ends in `Utc.timestamp_opt(sec, nsec).unwrap()`
-/// (chrono-0.4.45, datetime/mod.rs:1931), `prost` will hand it any `seconds` a
-/// platform `SystemTime` can hold, and these crates are built with
-/// `panic = "abort"`. A single hostile or corrupted `expires_at` would take the
-/// process down rather than fail the RPC.
 pub fn lease_expiry_from_proto(
     expires_at: Option<prost_types::Timestamp>,
     field: &str,
@@ -194,18 +182,6 @@ pub fn lease_expiry_from_proto(
                 .map(Some)
                 .ok_or_else(|| format!("{field} is out of range"))
         }
-        // An absent `expires_at` is rejected rather than decoded.
-        //
-        // `None` is the executor's "this lease never expires" sentinel
-        // (`ShardAssignment::lease_is_live`, model/mod.rs), which exists for
-        // single-shard mode and the debugging service — neither of which decodes
-        // proto. But `expires_at` is a plain (non-`optional`) proto3 message
-        // field, so absent-on-the-wire would arrive here as that same `None` and
-        // silently turn the self-fence off for good: the executor would serve
-        // unfenced, and on a `RegisterSuccess` it would also park its renewal
-        // loop (ruling E13) while still reporting healthy. Every producing path
-        // sets the field, so absent is a bug in the sender, and a rejected RPC
-        // is how a bug should read.
         None => Err(format!("{field} is required")),
     }
 }
@@ -875,10 +851,10 @@ mod tests {
 
     test_r::enable!();
 
-    /// Ruling E17: the round trip goes through the free conversion functions
+    /// The round trip goes through the free conversion functions
     /// themselves — they are what `AssignShards` and `RenewShardLease` use on
-    /// both sides of the wire. Ruling E16: `epoch_of` is how a reader of the
-    /// pushed set gets a shard's ownership generation back out.
+    /// both sides of the wire. `epoch_of` is how a reader of the pushed set
+    /// gets a shard's ownership generation back out.
     #[test]
     fn epochs_survive_a_push_round_trip() {
         let pushed: HashMap<ShardId, ShardEpoch> = HashMap::from([

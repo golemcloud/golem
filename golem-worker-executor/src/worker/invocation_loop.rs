@@ -252,7 +252,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
         'outer: loop {
             self.release_terminal_interrupt().await;
-            // ADMISSION (CP-0 ruling E5): gates the start of a generation, so
+            // ADMISSION: gates the start of a generation, so
             // fencing refuses new generations and never interrupts a running one.
             if let Err(error) = self.parent.shard_service().check_admission(&agent_id) {
                 debug!(%agent_id, "Worker generation not started because its shard is not assigned");

@@ -480,7 +480,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             ));
         }
 
-        // ADMISSION (CP-0 ruling E2): this is the only ownership check on the
+        // ADMISSION: this is the only ownership check on the
         // fork path and it rejects rather than routing, so a fork started after
         // the lease lapsed must be refused.
         self.shard_service.check_admission(source_agent_id)?;

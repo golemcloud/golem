@@ -1183,7 +1183,7 @@ mod tests {
     }
 
     #[test]
-    // S11: `Register` writes outside the loop, so between the moment a plan's epochs were pushed to
+    // `Register` writes outside the loop, so between the moment a plan's epochs were pushed to
     // their target and the moment the plan is applied, a restarted instance registering at a known
     // address can inherit the same shard and mint the same epoch inline. Storing the carried epoch
     // then would leave two live executors on the same `(shard, epoch)`, which is exactly the pair

@@ -165,7 +165,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         info!(port, "Registering worker executor");
 
-        // Ruling E15: a re-registration after `LeaseNotFound` must announce the
+        // A re-registration after `LeaseNotFound` must announce the
         // new assignment exactly as this function and `assign_shards_internal`
         // do. The renewal loop cannot name `Ctx`, so it is handed this hook —
         // installed before `register`, which is what starts that loop.
@@ -1013,7 +1013,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(())
     }
 
-    /// Full replace (plan D2): the request carries this executor's complete
+    /// Full replace: the request carries this executor's complete
     /// shard set with epochs, the lease expiry, and the cluster's shard count.
     /// Anything absent from the set is dropped, and any agent whose shard went
     /// away is restarted — the sweep the RPC this one absorbs used to run.
